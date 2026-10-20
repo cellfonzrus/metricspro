@@ -332,6 +332,91 @@ def qualification_for(sched, org_qual):
     return dict(DEFAULT_QUALIFICATION), "default"
 
 
+# ── WHY a category does not qualify — a DECISION is not a FINDING (owner 2026-10-19) ───────────────
+# OWNER, verbatim: *"if home internet is not required to pay the multi month as defined inte h incentive
+# struture it shoud not appear as not paid and create confusion for teh user"*.
+#
+# THE CLASS, NOT THE INSTANCE. Every excluded chain used to be reported with one sentence that ASSERTED
+# a reason -- "that category is unchecked under Plan Installments" -- for all four ways a category can
+# fail to qualify. Three of them are somebody's decision, already made, and restating a decision every
+# month is noise that buries the one case that needs a human. The fourth is a config shape that never
+# stated an opinion at all, and that one is a real gap. So the engine must know WHICH, and nothing may
+# assert a reason it has not established (the §66 / §COMMCALC-09 posture, in its third shape here).
+BASIS_TENANT_SETTING = "tenant_setting"          # the org's stored switch says off -- they chose this
+BASIS_SCHEDULE_OVERRIDE = "schedule_override"    # THIS schedule's own list/dict says off
+BASIS_PLATFORM_DEFAULT = "platform_default"      # nobody stated it; the shipped default is off
+BASIS_UNSTATED = "unstated"                      # a LIST-shaped config simply never mentioned it
+
+# AN ALLOWLIST, and the direction matters: these are the bases that represent a decision somebody
+# actually made. Anything else -- including a basis a later migration invents and does not rule on --
+# reads as NOT decided and therefore AS A FINDING. The unknown case shouts; it never hides.
+_DECIDED_BASES = (BASIS_TENANT_SETTING, BASIS_SCHEDULE_OVERRIDE, BASIS_PLATFORM_DEFAULT)
+
+BASIS_SOURCE_PHRASE = {
+    BASIS_TENANT_SETTING: "it is switched off in this company's Plan Installments settings",
+    BASIS_SCHEDULE_OVERRIDE: "this schedule overrides the company setting and excludes it",
+    BASIS_PLATFORM_DEFAULT: "it is excluded by default and nobody has changed that",
+    BASIS_UNSTATED: ("this company's qualifying-category setting is stored as a list of included "
+                     "categories and never mentions it, so it was treated as excluded without "
+                     "anybody deciding so"),
+}
+
+
+def is_decided(basis) -> bool:
+    """True only for a basis on the allowlist -- a non-payment somebody chose. An unrecognised basis is
+    NOT decided, so a basis nobody has ruled on surfaces instead of being swallowed. PURE."""
+    return str(basis or "") in _DECIDED_BASES
+
+
+def is_actionable(basis) -> bool:
+    """True when this exclusion needs a human. The complement of `is_decided`, named so a caller reads
+    the intent rather than inverting a predicate at each site. PURE."""
+    return not is_decided(basis)
+
+
+def exclusion_reason(category_key, basis) -> str:
+    """The one sentence explaining why a category paid nothing, naming the REAL source. No caller
+    composes this text; `BASIS_SOURCE_PHRASE` is the only place the wording lives. PURE."""
+    label = CATEGORY_LABELS.get(str(category_key or ""), str(category_key or ""))
+    phrase = BASIS_SOURCE_PHRASE.get(str(basis or ""),
+                                     "the reason it is excluded could not be established")
+    return f"'{label}' paid no multi-month installment because {phrase}."
+
+
+def qualification_with_basis(sched, org_qual):
+    """(qualification, {category_key: basis}, source) for ONE schedule.
+
+    Same verdict as `qualification_for` -- the figures do not move -- plus, PER CATEGORY, which layer
+    decided it. The basis is only meaningful for a category that does NOT qualify; it is recorded for
+    every key so a caller never has to re-derive the layer. PURE.
+
+    The LIST shape is where the honest answer differs from the old one: a list of included categories
+    says nothing whatsoever about a category it omits, and the engine used to report those omissions as
+    "you unchecked it". They are `unstated`, and therefore a finding."""
+    qual = None
+    basis = {}
+    own = (sched or {}).get("qualifying_categories")
+    if isinstance(own, dict) and own:
+        qual = normalize_qualification(own)
+        for k in CATEGORY_KEYS:
+            basis[k] = BASIS_SCHEDULE_OVERRIDE if k in own else BASIS_PLATFORM_DEFAULT
+        return qual, basis, "schedule"
+    if isinstance(own, (list, tuple)) and len(own) > 0:
+        named = {str(x).strip().lower() for x in own}
+        qual = normalize_qualification(own)
+        for k in CATEGORY_KEYS:
+            basis[k] = BASIS_SCHEDULE_OVERRIDE if k in named else BASIS_UNSTATED
+        return qual, basis, "schedule"
+    if isinstance(org_qual, dict) and org_qual.get("_stored"):
+        stated = {k: v for k, v in org_qual.items() if k in CATEGORY_KEYS}
+        qual = normalize_qualification(stated)
+        for k in CATEGORY_KEYS:
+            basis[k] = BASIS_TENANT_SETTING if k in stated else BASIS_PLATFORM_DEFAULT
+        return qual, basis, "org"
+    return (dict(DEFAULT_QUALIFICATION),
+            {k: BASIS_PLATFORM_DEFAULT for k in CATEGORY_KEYS}, "default")
+
+
 # ── loaders (the only I/O in this module; every one degrades to the code default) ───────────────────
 def load_category_rules(client, org_id):
     """The org's own installment_category_rule rows + the built-in tail. Missing table (migration 245

@@ -45,6 +45,11 @@ LAYOUTS = (LAYOUT_THERMAL, LAYOUT_POS_FORMAT)
 #: Paper widths mig 725 allows, and the pixel width each prints at (the browser's own mapping).
 PAPER_PX = {58: 220, 80: 300}
 DEFAULT_PAPER_MM = 80
+
+#: How many characters of the printer's own font fit on each roll, for the renderer that writes to
+#: the printer directly (§POS-04). It lives beside PAPER_PX because it is the same fact about the
+#: same paper in the other medium's units, and `paper_options` still derives the offer from PAPER_PX.
+PAPER_COLS = {58: 32, 80: 48}
 DEFAULT_FONT_PX = 12
 DEFAULT_FOOTER = "Thank you for your business!"
 
@@ -287,69 +292,130 @@ def _esc(v) -> str:
     return _html.escape("" if v is None else str(v))
 
 
-def thermal_html(snap, template_v, brand=None, disclaimer_blocks=None, store_name="",
-                 fold_discount=False, tenant_name="", employee_name="") -> str:
-    """The 58/80 mm till slip — the layout this POS has always printed, now rendered in ONE place.
+def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name="",
+               fold_discount=False, tenant_name="", employee_name="") -> dict:
+    """THE CONTENT of a till slip: which lines print, in what order, with what figures.
 
-    Ported field for field from the register's own `buildReceiptHtml`, including the arithmetic that
-    keeps it adding up: `snap['subtotal']` is NET of line discounts, so when a separate Discounts row
-    prints, the Subtotal line shows the GROSS figure or Subtotal − Discounts + Tax would not equal the
-    total the customer paid.
+    WHY THIS EXISTS (owner 2026-10-20: *"the receipts will print to the thermal printer only if
+    desired by the user, there cannot be any harcoded rule so we need have a helper"*). A receipt
+    that goes to the printer as ESC/POS commands is a second MEDIUM, not a second receipt: the same
+    toggles decide the same lines and the same arithmetic has to hold. Were the byte stream to read
+    the snapshot and the template for itself, the two media would answer "what does this slip say"
+    twice and drift — the duplicate defect the house rules forbid. So the CONTENT is resolved once,
+    here, and `thermal_html` (paper and email, through a browser) and `receipt_escpos.payload` (the
+    printer, through the till helper) are two RENDERERS of this one model.
+
+    The arithmetic that keeps it adding up lives here too: `snap['subtotal']` is NET of line
+    discounts, so when a separate Discounts row prints, the Subtotal line shows the GROSS figure or
+    Subtotal − Discounts + Tax would not equal the total the customer paid.
     """
     t = template_v
     brand = brand or {}
-    width = PAPER_PX.get(t["paper_width_mm"], PAPER_PX[DEFAULT_PAPER_MM])
-    font = t["font_size_px"]
-    small = max(9, font - 2)
     show_discount_row = (not fold_discount) and t["show_discounts"] and snap["discount_total"] > 0
     display_subtotal = snap["subtotal"] + snap["discount_total"] if show_discount_row else snap["subtotal"]
     company = company_name(brand, tenant_name)
     head_name = company or store_name or "POS System"
 
-    rows = []
+    items = []
     for it in snap["items"]:
         unit = it["unit_price"] - it["discount"] if fold_discount else it["unit_price"]
+        items.append({
+            "description": it["description"],
+            "serial": it["serial"] if (t["show_serials"] and it["serial"]) else "",
+            "qty": it["qty"],
+            "unit_price": unit,
+            "less": it["discount"] if ((not fold_discount) and t["show_discounts"]
+                                       and it["discount"] > 0) else 0,
+            "line_total": it["line_total"],
+        })
+
+    head_lines = []
+    if t["show_store_name"] or company:
+        head_lines.append({"text": head_name, "strong": True})
+    head_lines += [{"text": ln} for ln in (brand.get("address_lines") or [])]
+    if brand.get("license_tax_ids"):
+        head_lines.append({"text": brand["license_tax_ids"]})
+    if t["header_text"]:
+        head_lines.append({"text": t["header_text"], "pre": True})
+    head_lines.append({"text": f'Transaction #{snap["transaction_id"]}'})
+    head_lines.append({"text": snap["date"]})
+    if t["show_customer"] and snap["customer_name"]:
+        head_lines.append({"text": f'Customer: {snap["customer_name"]}'})
+    if t["show_employee"] and employee_name:
+        head_lines.append({"text": f"Served by: {employee_name}"})
+    if snap["status"] == "voided":
+        head_lines.append({"text": "** VOIDED **", "strong": True})
+
+    totals = [{"label": "Subtotal", "value": display_subtotal}]
+    if show_discount_row:
+        totals.append({"label": "Discounts", "value": snap["discount_total"], "negative": True})
+    if t["show_tax_breakdown"]:
+        totals.append({"label": "Tax", "value": snap["tax_total"]})
+    totals.append({"label": "TOTAL", "value": snap["total"], "grand": True})
+
+    tendered = snap["tendered"] if snap["tendered"] is not None else snap["total"]
+    paid = [{"label": f'Paid ({snap["method"]})' if snap["method"] else "Paid", "value": tendered}]
+    if snap["change"] > 0:
+        paid.append({"label": "Change", "value": snap["change"]})
+
+    return {
+        "paper_width_mm": t["paper_width_mm"],
+        "head_lines": head_lines,
+        "items": items,
+        "totals": totals,
+        "paid": paid,
+        "footer": template_v["footer_text"],
+        "blocks": [{"text": d.get("text"), "signature": bool(d.get("signature"))}
+                   for d in (disclaimer_blocks or [])],
+    }
+
+
+def thermal_html(snap, template_v, brand=None, disclaimer_blocks=None, store_name="",
+                 fold_discount=False, tenant_name="", employee_name="") -> str:
+    """The 58/80 mm till slip as HTML — ONE of the two renderers of `slip_model`, the one a browser
+    prints and an email carries. Field for field what the register's own `buildReceiptHtml` used to
+    print, every figure now read from the model rather than recomputed here."""
+    t = template_v
+    m = slip_model(snap, template_v, brand=brand, disclaimer_blocks=disclaimer_blocks,
+                   store_name=store_name, fold_discount=fold_discount, tenant_name=tenant_name,
+                   employee_name=employee_name)
+    width = PAPER_PX.get(t["paper_width_mm"], PAPER_PX[DEFAULT_PAPER_MM])
+    font = t["font_size_px"]
+    small = max(9, font - 2)
+
+    rows = []
+    for it in m["items"]:
+        unit = it["unit_price"]
         serial = (f'<br><span class="serial">S/N: {_esc(it["serial"])}</span>'
-                  if t["show_serials"] and it["serial"] else "")
-        less = (f' &minus;{_money(it["discount"])}'
-                if (not fold_discount) and t["show_discounts"] and it["discount"] > 0 else "")
+                  if it["serial"] else "")
+        less = f' &minus;{_money(it["less"])}' if it["less"] else ""
         rows.append(
             f'<tr><td colspan="3" class="desc">{_esc(it["description"])}{serial}</td></tr>'
             f'<tr class="nums"><td>{_esc(it["qty"])} &times; {_money(unit)}{less}</td>'
             f'<td></td><td class="r">{_money(it["line_total"])}</td></tr>')
 
     blocks = []
-    for d in (disclaimer_blocks or []):
+    for d in m["blocks"]:
         sign = ('<div style="margin-top:16px">X ______________________<br>'
                 f'<span style="font-size:{small}px">Customer signature</span></div>'
-                if d.get("signature") else "")
-        blocks.append(f'<hr><div class="pre" style="font-size:{small}px">{_esc(d.get("text"))}</div>{sign}')
+                if d["signature"] else "")
+        blocks.append(f'<hr><div class="pre" style="font-size:{small}px">{_esc(d["text"])}</div>{sign}')
 
     header_bits = []
-    if t["show_store_name"] or company:
-        header_bits.append(f'<div class="store">{_esc(head_name)}</div>')
-    header_bits += [f"<div>{_esc(ln)}</div>" for ln in (brand.get("address_lines") or [])]
-    if brand.get("license_tax_ids"):
-        header_bits.append(f'<div>{_esc(brand["license_tax_ids"])}</div>')
-    if t["header_text"]:
-        header_bits.append(f'<div class="pre">{_esc(t["header_text"])}</div>')
-    header_bits.append(f'<div>Transaction #{_esc(snap["transaction_id"])}</div>')
-    header_bits.append(f'<div>{_esc(snap["date"])}</div>')
-    if t["show_customer"] and snap["customer_name"]:
-        header_bits.append(f'<div>Customer: {_esc(snap["customer_name"])}</div>')
-    if t["show_employee"] and employee_name:
-        header_bits.append(f'<div>Served by: {_esc(employee_name)}</div>')
-    if snap["status"] == "voided":
-        header_bits.append('<div class="void">** VOIDED **</div>')
+    for ln in m["head_lines"]:
+        cls = ("store" if ln.get("strong") and ln is m["head_lines"][0]
+               else "void" if ln.get("strong") else "pre" if ln.get("pre") else "")
+        attr = ' class="%s"' % cls if cls else ""
+        header_bits.append(f'<div{attr}>{_esc(ln["text"])}</div>')
 
-    paid_label = f'Paid ({_esc(snap["method"])})' if snap["method"] else "Paid"
-    tendered = snap["tendered"] if snap["tendered"] is not None else snap["total"]
-    change_row = (f'<tr><td>Change</td><td class="r">{_money(snap["change"])}</td></tr>'
-                  if snap["change"] > 0 else "")
-    tax_row = (f'<tr><td>Tax</td><td class="r">{_money(snap["tax_total"])}</td></tr>'
-               if t["show_tax_breakdown"] else "")
-    discount_row = (f'<tr><td>Discounts</td><td class="r">&minus;{_money(snap["discount_total"])}</td></tr>'
-                    if show_discount_row else "")
+    total_rows = []
+    for row in m["totals"]:
+        sign = "&minus;" if row.get("negative") else ""
+        klass = ' class="grand"' if row.get("grand") else ""
+        total_rows.append(f'<tr{klass}><td>{_esc(row["label"])}</td>'
+                          f'<td class="r">{sign}{_money(row["value"])}</td></tr>')
+    paid_rows = [f'<tr><td>{_esc(row["label"])}</td><td class="r">{_money(row["value"])}</td></tr>'
+                 for row in m["paid"]]
 
     return (
         f'<!doctype html><html><head><meta charset="utf-8">'
@@ -373,14 +439,9 @@ def thermal_html(snap, template_v, brand=None, disclaimer_blocks=None, store_nam
         "</style></head><body>"
         f'<div class="center">{"".join(header_bits)}</div>'
         f'<hr><table>{"".join(rows)}</table><hr>'
-        "<table>"
-        f'<tr><td>Subtotal</td><td class="r">{_money(display_subtotal)}</td></tr>'
-        f"{discount_row}{tax_row}"
-        f'<tr class="grand"><td>TOTAL</td><td class="r">{_money(snap["total"])}</td></tr>'
-        "</table><hr><table>"
-        f'<tr><td>{paid_label}</td><td class="r">{_money(tendered)}</td></tr>{change_row}'
-        "</table>"
-        f'<hr><div class="center pre">{_esc(template_v["footer_text"])}</div>{"".join(blocks)}'
+        f'<table>{"".join(total_rows)}</table><hr>'
+        f'<table>{"".join(paid_rows)}</table>'
+        f'<hr><div class="center pre">{_esc(m["footer"])}</div>{"".join(blocks)}'
         "</body></html>")
 
 
@@ -476,6 +537,115 @@ def html(snap, template_v, *, render_document=None, fmt=None, brand=None, discla
     return thermal_html(snap, template_v, brand=brand, disclaimer_blocks=disclaimer_blocks,
                         store_name=store_name, fold_discount=fold_discount,
                         tenant_name=tenant_name, employee_name=employee_name)
+
+
+# ── WHAT THIS PRINT USES ──────────────────────────────────────────────────────────────────────────
+# Owner 2026-10-19, verbatim: *"all stores should have the option to print the print in the required
+# format from the print receipt screen as there are receipts from the thermal printer also"*.
+#
+# WHAT WAS WRONG. The layout was a per-ORG stored setting and nothing else. One counter prints the
+# same sale on a thermal roll and, minutes later, on the office laser — and had no way to say so:
+# whichever layout the org had stored was the only one it could produce. An admin changing the org
+# setting to serve one counter changed it for every store.
+#
+# THE FIX IS ONE RESOLVER, not a second path. `print_choice` answers "which layout and which paper
+# does THIS print use", from three inputs in order: what the screen ASKED for, else what this STORE
+# declared, else what the ORG's template says. The asked-for value is validated against the SAME
+# `LAYOUTS` / `PAPER_PX` vocabularies the stored one is, so a request cannot reach a layout a
+# setting could not, and `source` names which of the three won so the screen can say it.
+
+
+def paper_options() -> list[dict]:
+    """The paper widths this renderer can produce — derived from PAPER_PX, never a second list."""
+    return [{"value": mm, "label": f"{mm} mm roll" if mm != DEFAULT_PAPER_MM else f"{mm} mm roll (standard)"}
+            for mm in sorted(PAPER_PX)]
+
+
+def clean_paper(value, default=DEFAULT_PAPER_MM) -> int:
+    """A requested paper width, or `default` when it is blank, unreadable or not one this renderer
+    can set. Never raises: an unusable width must not stop a store printing a receipt."""
+    try:
+        mm = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return mm if mm in PAPER_PX else default
+
+
+#: Where a printed copy GOES. `dialog` is the operating system's own print dialog, which every
+#: store has had all along; `direct` is the till printer itself, through the helper on the counter
+#: PC (§POS-04). Both are offered on every print — nothing here decides for a store.
+DEST_DIALOG = "dialog"
+DEST_DIRECT = "direct"
+DESTINATIONS = (DEST_DIALOG, DEST_DIRECT)
+
+
+def clean_destination(value, default=DEST_DIALOG) -> str:
+    """A requested destination, or `default` when it is blank or not one we can send to. An unknown
+    destination reads as the dialog, because a receipt the customer is waiting for must still come
+    out of something."""
+    v = str(value or "").strip().lower()
+    return v if v in DESTINATIONS else default
+
+
+def destination_options(printer_label="", helper_ready: bool = True) -> list:
+    """What the print screen offers, with the store's own printer named in the direct one so the
+    choice reads as "this counter's printer" rather than as a code word."""
+    machine = " ".join(str(printer_label or "").split())
+    direct = f"{machine} — straight to the printer" if machine else "Straight to the receipt printer"
+    return [
+        {"value": DEST_DIALOG, "label": "Print dialog (choose the printer)"},
+        {"value": DEST_DIRECT,
+         "label": direct if helper_ready else f"{direct} (no helper address set)"},
+    ]
+
+
+def print_choice(template_v, *, want_layout=None, want_paper=None, store_layout=None,
+                 store_paper=None, format_available: bool = True,
+                 want_destination=None, store_direct=False) -> dict:
+    """Which layout and paper THIS print uses, and where that came from.
+
+    Precedence: the screen's request (one print, nothing stored) → this store's own declaration →
+    the org's template. A request for something unusable does not fail and does not silently
+    substitute something else either: it resolves the same way a stored setting would and
+    `layout_note` carries the sentence saying what will actually come out of the printer.
+    """
+    layout_src = "request"
+    raw_layout = want_layout
+    if not str(raw_layout or "").strip():
+        raw_layout, layout_src = store_layout, "store"
+    if not str(raw_layout or "").strip():
+        raw_layout, layout_src = template_v.get("layout"), "org"
+    paper_src = "request"
+    raw_paper = want_paper
+    if not str(raw_paper or "").strip():
+        raw_paper, paper_src = store_paper, "store"
+    if not str(raw_paper or "").strip():
+        raw_paper, paper_src = template_v.get("paper_width_mm"), "org"
+    return {
+        "layout": clean_layout(raw_layout, format_available=format_available),
+        "layout_note": layout_note(raw_layout, format_available=format_available),
+        "layout_source": layout_src,
+        "paper_width_mm": clean_paper(raw_paper, template_v.get("paper_width_mm") or DEFAULT_PAPER_MM),
+        "paper_source": paper_src,
+        # The destination has only two answers: what this print asked for, else what the store set
+        # as its default (and a store that has not turned direct printing on has the dialog, which
+        # is what every store has today). There is no org-wide destination, because the helper runs
+        # on one counter's PC and nowhere else.
+        "destination": (clean_destination(want_destination)
+                        if str(want_destination or "").strip()
+                        else (DEST_DIRECT if store_direct else DEST_DIALOG)),
+        "destination_source": "request" if str(want_destination or "").strip() else "store",
+    }
+
+
+def with_choice(template_v, choice) -> dict:
+    """The template as the renderer should read it for THIS print — the chosen layout and paper laid
+    over the stored row. A copy, so one counter's choice cannot leak into the next print or into the
+    emailed copy of a different sale."""
+    out = dict(template_v)
+    out["layout"] = choice["layout"]
+    out["paper_width_mm"] = choice["paper_width_mm"]
+    return out
 
 
 def layout_options(format_label="") -> list[dict]:

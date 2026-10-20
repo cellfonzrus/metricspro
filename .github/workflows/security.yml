@@ -101,6 +101,20 @@ jobs:
       - name: harness_pos_grants_lock
         run: python backend/harness_pos_grants_lock.py
 
+  data-api-grants:
+    # Enforcing (index §CORE-13). Supabase stops auto-granting Data API access to new tables in
+    # `public` on 2026-10-30, and this backend reaches EVERY table through PostgREST — so an
+    # ungranted relation is invisible to the application, not just to the browser. A migration
+    # newer than the gate's cutoff must grant what it creates to service_role, in the same file.
+    name: A new table is granted by the migration that creates it (Data API)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: harness_data_api_grant_guard
+        run: python backend/harness_data_api_grant_guard.py
+
   ci-pipefail:
     # Enforcing: a failing harness must fail CI (index §19.25). Before 2026-09-24 every
     # `python3 harness_x.py | tee …` step ran without pipefail and passed on a red harness.

@@ -353,4 +353,49 @@ assert outf["overall"]["current_rev"] == out["overall"]["current_rev"]
 assert outf["overall"]["rev_pct"] == out["overall"]["rev_pct"]
 
 print("§F a change between two carried sheets is NOT MEASURED: PASSED ✅")
+
+# ══ §G A CARRIED MONTH'S OWN LABOUR MAKES THE CHANGE REAL AGAIN (owner 2026-10-20, §COMMCALC-23) ══
+# Once salary and rep commission come from each month's OWN payroll, two months that carry the same
+# rent are no longer one sheet compared with itself: the labour half of each figure is that month's
+# own measurement. Withholding the percent then would suppress a measurement, which is the same
+# defect as asserting an absence — §19.49 cuts both ways.
+assert sc.expense_change_measured("2026-08", "2026-08") is False, "no own labour ⇒ still one sheet"
+assert sc.expense_change_measured("2026-08", "2026-08", True, False) is True, \
+    "the base month's own payroll makes the two figures two measurements"
+assert sc.expense_change_measured("2026-08", "2026-08", False, True) is True
+assert sc.expense_change_measured("2026-08", "2026-08", True, True) is True
+# ...and it cannot manufacture a comparison out of nothing: the months must still be months.
+assert sc.expense_change_measured(None, None, False, False) is True
+# THE REGRESSION, through the real `build`: both windows carry August, and BOTH measured their own
+# labour — the live Luxelink shape on 2026-10-20 (September $242,305.37 vs October $198,299.57).
+exp_labour = dict(exp_both_carried,
+                  labour={"2026-08": {"measured": {"salary": True, "commission": True},
+                                      "by_half": {"salary": 112951.52, "commission": 12703.71}},
+                          "2026-07": {"measured": {"salary": True, "commission": True},
+                                      "by_half": {"salary": 79504.18, "commission": 2145.25}}})
+outh = sc.build(base, comp, rules, is_acc, vendors,
+                base_period="2026-08", compare_period="2026-07", mode="mom",
+                window_label="Full month", resolve_market=resolve_market,
+                expenses=exp_labour, store_key_of=fold)
+assert outh["expenses_meta"]["change_measured"] is True, \
+    "two carried months that each measured their own labour ARE two measurements"
+assert outh["expenses_meta"]["labour_measured"] is True
+assert outh["expenses_meta"]["labour"]["2026-08"]["by_half"]["salary"] == 112951.52
+# ...and a month whose payroll could NOT be read is reported, never counted as measured.
+outi = sc.build(base, comp, rules, is_acc, vendors,
+                base_period="2026-08", compare_period="2026-07", mode="mom",
+                window_label="Full month", resolve_market=resolve_market,
+                expenses=dict(exp_both_carried,
+                              labour={"2026-08": {"measured": {"salary": False,
+                                                               "commission": False}},
+                                      "2026-07": {"measured": {"salary": False,
+                                                               "commission": False}}}),
+                store_key_of=fold)
+assert outi["expenses_meta"]["labour_measured"] is False
+assert outi["expenses_meta"]["change_measured"] is False, \
+    "no month measured its own labour ⇒ back to one sheet compared with itself"
+# the sales side is STILL untouched by any of it
+assert outh["overall"]["rev_pct"] == out["overall"]["rev_pct"]
+
+print("§G a carried month's OWN labour makes the change real again: PASSED ✅")
 print("\nALL ASSERTIONS PASSED ✅")

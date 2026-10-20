@@ -21,25 +21,85 @@ export interface ReceiptEmailView {
   subject: string
 }
 
+/** One of the formats or paper widths the server says this store can print. */
+export interface PrintOption { value: string | number; label: string }
+
+/** What the print screen asked for FOR ONE PRINT (§POS-03). Blank = whatever the store declared,
+ *  else the company template. Nothing here is stored: the next print starts from the store's own
+ *  setting again, which is why a counter can print the till slip now and the office format next. */
+export interface PrintChoice {
+  layout?: string
+  paper_width_mm?: string | number
+  /** 'dialog' = the operating system's print dialog, as every store has always had. 'direct' = the
+   *  receipt printer itself, through the helper on this counter's PC (§POS-04). Blank = whatever
+   *  this store set as its default, which is the dialog until someone turns direct printing on. */
+  destination?: string
+}
+
 export interface SaleReceipt {
   html: string
   layout: string
   /** Set when the stored layout choice is not what will actually print (e.g. the tenant asked for
    *  its POS's layout but has declared no POS). Shown rather than silently fallen back on. */
   layout_note: string
+  /** Which of the three said so: this print's own request, this store, or the company template. */
+  layout_source: string
+  paper_width_mm: number
+  paper_source: string
+  /** The formats and widths this store may ask for — the server's own vocabulary, so the screen
+   *  never offers one the renderer cannot produce. */
+  layout_options: PrintOption[]
+  paper_options: PrintOption[]
+  /** The printer this store declared, in its own words (""  = none declared). */
+  printer_label: string
+  /** Where this copy is going, which of the two said so, and what the screen may offer. */
+  destination: string
+  destination_source: string
+  destination_options: PrintOption[]
+  /** Where the till helper listens on this counter's PC. */
+  helper_url: string
+  /** The printer's own bytes, sent ONLY when the destination is the printer. The register carries
+   *  them to the helper and never looks inside: the receipt is rendered on the server, in one
+   *  place, for the paper copy and the cut slip alike. */
+  escpos_base64: string
   email: ReceiptEmailView
   company_name: string
 }
 
+/** The choice as query string / body fields. One home, so the print path and the email path cannot
+ *  spell it differently and send a customer a copy of a receipt nobody printed. */
+function choiceParams(choice?: PrintChoice): Record<string, string> {
+  const out: Record<string, string> = {}
+  const layout = String(choice?.layout || '').trim()
+  const paper = String(choice?.paper_width_mm ?? '').trim()
+  const destination = String(choice?.destination || '').trim()
+  if (layout) out.layout = layout
+  if (paper) out.paper_width_mm = paper
+  if (destination) out.destination = destination
+  return out
+}
+
 /** The receipt of one sale. Throws with the server's own sentence, which already says what to do
  *  (a sale with no stored receipt, for instance, says only register sales carry one). */
-export async function fetchSaleReceipt(saleId: string): Promise<SaleReceipt> {
-  const r = await api(`/api/v1/pos/sales/${saleId}/receipt`)
+export async function fetchSaleReceipt(saleId: string, choice?: PrintChoice): Promise<SaleReceipt> {
+  const qs = new URLSearchParams(choiceParams(choice)).toString()
+  const r = await api(`/api/v1/pos/sales/${saleId}/receipt${qs ? `?${qs}` : ''}`)
   const rec = (r?.receipt || {}) as Partial<SaleReceipt>
   return {
     html: String(rec.html || ''),
     layout: String(rec.layout || 'thermal'),
     layout_note: String(rec.layout_note || ''),
+    layout_source: String(rec.layout_source || 'org'),
+    paper_width_mm: Number(rec.paper_width_mm || 80),
+    paper_source: String(rec.paper_source || 'org'),
+    layout_options: Array.isArray(rec.layout_options) ? rec.layout_options : [],
+    paper_options: Array.isArray(rec.paper_options) ? rec.paper_options : [],
+    printer_label: String(rec.printer_label || ''),
+    destination: String(rec.destination || 'dialog'),
+    destination_source: String(rec.destination_source || 'store'),
+    destination_options: Array.isArray(rec.destination_options) ? rec.destination_options : [],
+    helper_url: String(rec.helper_url || ''),
+    escpos_base64: String(rec.escpos_base64 || ''),
     email: {
       to: String(rec.email?.to || ''),
       to_source: (rec.email?.to_source || 'none') as ReceiptEmailView['to_source'],
@@ -51,11 +111,13 @@ export async function fetchSaleReceipt(saleId: string): Promise<SaleReceipt> {
   }
 }
 
-/** Email it. `to` blank = the address the server already showed (the customer's own). */
-export async function emailSaleReceipt(saleId: string, to?: string): Promise<{ to: string; from_name: string }> {
+/** Email it. `to` blank = the address the server already showed (the customer's own); `choice`
+ *  blank = the store's own setting. Passing the SAME choice the screen printed with is what keeps
+ *  the emailed copy identical to the paper one. */
+export async function emailSaleReceipt(saleId: string, to?: string, choice?: PrintChoice): Promise<{ to: string; from_name: string }> {
   const r = await api(`/api/v1/pos/sales/${saleId}/email-receipt`, {
     method: 'POST',
-    body: JSON.stringify({ to: (to || '').trim() || null }),
+    body: JSON.stringify({ to: (to || '').trim() || null, ...choiceParams(choice) }),
   })
   return { to: String(r?.to || ''), from_name: String(r?.from_name || '') }
 }
@@ -73,5 +135,32 @@ export function printReceiptHtml(html: string): void {
     iframe.contentWindow?.focus()
     iframe.contentWindow?.print()
     setTimeout(() => iframe.remove(), 2000)
+  }
+}
+
+/** Hand the printer's own bytes to the helper on this counter's PC (§POS-04).
+ *
+ *  THE HELPER IS THE ONLY THING THAT CAN DO THIS. A browser cannot speak to a USB till printer, so
+ *  a receipt that prints with no dialog has to go through a small program running beside it. This
+ *  throws a sentence a cashier can act on — the caller prints through the dialog instead, so a
+ *  helper that is not running costs a customer nothing. */
+export async function printViaHelper(helperUrl: string, escposBase64: string): Promise<void> {
+  if (!helperUrl) throw new Error('No till helper address is set for this store.')
+  if (!escposBase64) throw new Error('The server did not send printer commands for this receipt.')
+  let res: Response
+  try {
+    res = await fetch(helperUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ escpos_base64: escposBase64 }),
+    })
+  } catch {
+    // A refused connection is the ordinary case: the helper window is closed.
+    throw new Error('Could not reach the receipt printer helper on this PC. Is it running?')
+  }
+  let answer: { ok?: boolean; error?: string } = {}
+  try { answer = await res.json() } catch { answer = {} }
+  if (!res.ok || answer.ok !== true) {
+    throw new Error(answer.error || `The helper answered ${res.status}.`)
   }
 }

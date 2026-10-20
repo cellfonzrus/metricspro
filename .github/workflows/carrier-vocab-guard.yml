@@ -172,6 +172,9 @@ on:
       - "frontend/prove_one_domain.mjs"
       - "frontend/package-lock.json"
       - "backend/harness_one_domain_lock.py"
+      # §COMMCALC-24 — the gate's NAME-LIST lives here and three locks dereference it, so a change
+      # to it must re-run all of them.
+      - "backend/app/core/service_role.py"
       # index §40.12 — rule 8 locks these two, so a change to either must run the lock that guards it
       # (the §13e lesson: a job behind an allowlist that does not name its own subject skips silently).
       - "scripts/check_deploy_reachability.py"
@@ -263,6 +266,11 @@ on:
       # (named further down from §COMMCALC-10) and the one reader is the data_source row decorator in
       # commcalc/router.py (already named above for §12a.2a), so both re-run this job.
       - "backend/harness_terminal_status.py"
+      # §COMMCALC-24 — a live session is read where it LIVES. Same home (live_login, named
+      # further down from §COMMCALC-10) and the callers are the two routers already named above,
+      # so both re-run this job; app/main.py carries the forwarder the gate depends on.
+      - "backend/harness_live_session_host.py"
+      - "backend/app/main.py"
       - "backend/app/modules/commcalc/import_audit.py"
       - "backend/app/modules/commcalc/merchant_portals.py"
       - "backend/app/modules/core/import_health.py"
@@ -411,6 +419,9 @@ on:
       - "frontend/src/lib/pos-receipt.ts"
       - "frontend/src/lib/pos-config.ts"
       - "frontend/src/components/pos/ReceiptTemplateSection.tsx"
+      - "frontend/src/components/pos/PrintFormatPicker.tsx"
+      - "backend/app/modules/pos/receipt_escpos.py"
+      - "tools/pos-print-helper/receipt-helper.js"
       - "database/migrations/1089_pos_receipt_layout.sql"
       - "backend/harness_pos_stock_landing.py"
       - "backend/harness_pos_product_form_lock.py"
@@ -734,6 +745,14 @@ on:
       - "backend/harness_trade_in_basis.py"
       - "backend/app/modules/commcalc/trade_in_basis.py"
       - "database/migrations/1075_trade_in_basis_config.sql"
+      - "backend/harness_installment_exclusion_basis.py"
+      - "backend/harness_carrier_claim_value.py"
+      - "backend/app/modules/commcalc/carrier_claim_value.py"
+      - "backend/app/modules/commcalc/ma_recon.py"
+      - "backend/app/modules/commcalc/discrepancy_engine.py"
+      - "backend/app/modules/commcalc/installment_category.py"
+      - "backend/app/modules/commcalc/sale_installment_engine.py"
+      - "frontend/src/app/(platform)/commcalc/page.tsx"
       - "backend/harness_payout_slice_evidence.py"
       - "backend/app/modules/commcalc/payout_slice_evidence.py"
       - "backend/app/modules/commcalc/rep_incentive_range.py"
@@ -807,6 +826,12 @@ on:
       # wiring of it (_compute_gp and both commission-leg endpoints), the module graph and the
       # index, so a change to any of them must run it.
       - "backend/harness_gp_carrier_class_dereference.py"
+      # index §4a.3 / §4a.4 — the GP report and the P&L book the SAME MA commission dollars, and
+      # since 2026-10-19 they answer "is this a device department" out of the one home. The lock
+      # reads that home (`commcalc/gp_report.py`), the P&L classifier (`account/coa.py`), the GP
+      # Category Map screens in `commcalc/router.py` and the module graph, so a change to any of
+      # them must run it.
+      - "backend/harness_gp_pnl_commission_parity.py"
       # index §66 — a component reached on a FALLBACK BASIS is a placement of last resort, not
       # evidence about the dollar, so a keyword guess never overrides the org's own declaration.
       # The lock reads the home, both GP paths, the router's trend wiring, the P&L caller it
@@ -872,6 +897,12 @@ on:
       - "backend/harness_tile_snapshot.py"
       - "frontend/src/lib/tile-snapshot.ts"
       - "frontend/prove_tile_snapshot.mjs"
+      # index §COMMCALC-23 — a CARRIED expense month never inherits the platform's own labour rows;
+      # salary and rep commission come from the month's own actuals, on every surface that reads an
+      # expense sheet. The lock fails the build if a reader stops passing the labour vocabulary.
+      - "backend/harness_labour_actuals.py"
+      - "backend/app/modules/commcalc/labour_actuals.py"
+      - "backend/app/modules/commcalc/expenses_effective.py"
       - "frontend/src/lib/send-report.tsx"
       - "backend/app/modules/commcalc/expenses_effective.py"
       - "backend/app/modules/commcalc/labour_coverage.py"
@@ -1009,6 +1040,9 @@ jobs:
       - name: Run the terminal-status lock (a session that ends restores the row's real status; an in-flight claim cannot outlive its worker - index COMMCALC-13)
         working-directory: backend
         run: python3 harness_terminal_status.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the live-session-host lock (an endpoint that touches the session registry runs in the process that HAS it - index COMMCALC-24)
+        working-directory: backend
+        run: python3 harness_live_session_host.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the mapping-key lock (one derivation per statement type; no literal mapping key)
         working-directory: backend
         run: python3 harness_mapping_key_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1277,6 +1311,12 @@ jobs:
       - name: Run the stored-pay-slice evidence proof (a named slice of a stored pay row is a figure only when something computed it; a plan-mode row that says the plan paid while the subtotal of that pay is zero was never itemised, so its breakdown reads as UNKNOWN and never as $0.00 earned; no caller spells the test itself and neither plan-mode writer may stop itemising — owner report 2026-10-15, index §COMMCALC-09)
         working-directory: backend
         run: python3 harness_payout_slice_evidence.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the multi-month exclusion-basis proof (a device category that paid nothing says WHICH layer excluded it; a non-payment somebody CHOSE leaves the "did not pay" list while its money stays on screen; a list-shaped config states nothing about a category it omits, so that reads as a finding and never as "you unchecked it"; an unclassifiable activation is reported once, not twice; no caller writes the reason or names a basis — owner 2026-10-19, index §COMMCALC-21)
+        working-directory: backend
+        run: python3 harness_installment_exclusion_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the carrier-claim value proof (an unpaid activation is a CLAIM only when the statement covered its day and no declared rule explains it; a sale past the statement's reach and a day the statement skipped are FEED facts and are never filed; a claim is priced from what the carrier itself paid for the same contract family, with its sample size, and reads NOT MEASURED rather than $0.00 when no comparable backs it; an empty coverage map means unknown coverage, never a missing day; both writers of the discrepancy table dereference the one home and neither may write a hardcoded zero again - owner 2026-10-20, index §COMMCALC-22)
+        working-directory: backend
+        run: python3 harness_carrier_claim_value.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Run the attach-qualifier proof (a condition measured over the WHOLE SALE decides which DECLARED rate a line earns; the accessory test and the rule matcher are INJECTED so the module owns no classifier and reads no classifying column; an unmeasurable sale pays the FULL rate and is reported; a flat fallback on a percentage rule is refused; the plan save round-trips all eight columns or it would wipe them — owner 2026-10-12, index §COMMCALC-06)
         working-directory: backend
@@ -1335,6 +1375,9 @@ jobs:
       - name: Run the tile-snapshot lock (the figures at the top of a report can be SENT, through the one sender and one shared shape; and a change between two copies of one carried expense sheet is named NOT MEASURED in the mailed copy exactly as on screen, never printed as ± 0% — owner ask 2026-10-19, index §COMMCALC-19)
         working-directory: backend
         run: python3 harness_tile_snapshot.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the derived-labour actuals lock (a carried expense month inherits the rent and NOT the two rows the platform fills in itself; salary and rep commission come from the month's OWN actuals through one home that derives no dollars of its own, and an unmeasured half is reported as unknown rather than as a zero — owner directive 2026-10-20, index §COMMCALC-23)
+        working-directory: backend
+        run: python3 harness_labour_actuals.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the device-reimbursement reconciliation lock (the carrier statement and the distributor's reimbursement ledger are the SAME money, so claimed-above-paid is the exception and paid-above-claim is its own bucket, never netted; an absence is reported with its reason and never as a $0.00 difference; and a shortfall against a month whose statement arrived SHORT is withheld as not-measured rather than flagged against the store — owner 2026-10-08, index §19.53)
         working-directory: backend
         run: python3 harness_device_reimb_recon.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1362,6 +1405,9 @@ jobs:
       - name: Run the prospect feed-tally lock (a cheap answer is never held hostage by an expensive decoration — the evaluations list reads no feed rows and the per-feed, per-month tally loads beside it; the database's own grouping and the row-by-row fallback produce one identical shape through one accumulator; the evaluation's month pick dereferences the same tally instead of paging 137,374 rows to read two columns; and an uncounted prospect reports as UNREAD rather than as a prospect with nothing uploaded, so no cell prints a confident zero over 202,865 rows — owner report 2026-10-16, index §COMMCALC-TALLY)
         working-directory: backend
         run: python3 harness_prospect_feed_tally.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the GP/P&L device-department lock ("is this a device department" has ONE home — the org's own `accessory_config.box_departments` declaration, read by the P&L's classifier, by BOTH GP classification branches and by the GP Category Map screens; a module that compares a classification to 'device' itself fails the build, and the $111,464.09 Mar-Oct 2026 restatement rides along as the regression — owner decision 2026-10-19, index §4a.4)
+        working-directory: backend
+        run: python3 harness_gp_pnl_commission_parity.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the GP carrier-classification dereference lock (the Gross Profit report classifies no carrier dollar of its own — the comp-report keyword guess and the four pay-category literal compares are gone, the trend's self-declared COPY of them is gone, and $418,922.21 of August 2026 declared reimbursement no longer renders as commission while gross profit itself moves $0.00 — owner 2026-10-08, index §58.7)
         working-directory: backend
         run: python3 harness_gp_carrier_class_dereference.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1436,7 +1482,7 @@ jobs:
         working-directory: frontend
         run: node prove_one_domain.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
-  # THE SIDEBAR COLOUR-ROTATION PROOF (index §67a, owner ask 2026-10-19 "make the colors of the side
+  # THE SIDEBAR COLOUR-ROTATION PROOF (index §CORE-14, owner ask 2026-10-19 "make the colors of the side
   # menu alternate ... switch between logo colors so it stands out"). Reads the REAL globals.css and the
   # REAL platform layout.tsx as text (no npm install, no React): the palette has ONE home, the rows only
   # dereference it, the two sides agree on how many colours there are, neighbours never share one, and

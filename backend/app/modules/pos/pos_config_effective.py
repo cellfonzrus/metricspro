@@ -44,6 +44,24 @@ SERVER_DEFAULTS: dict[str, object] = {
     # the emailed receipt's own words
     "email_receipt_subject": "",
     "email_receipt_body": "",
+    # WHAT THIS STORE PRINTS ON (owner 2026-10-19). A store override, so one counter's thermal roll
+    # does not become every store's setting. RULE TWO: the printer is DECLARED, never branched on —
+    # `receipt_printer_label` is the store's own words for its printer ("Epson TM-T20III",
+    # "Citizen CT-S310II"), carried so the screen can say which printer it is sized for and so a
+    # later direct-to-printer route has one place to read it from. No printer make appears in code.
+    "receipt_printer_label": "",
+    # Blank = inherit the org template's width. A store that prints on a narrower roll says so here.
+    "receipt_paper_width_mm": "",
+    # Blank = inherit the org template's layout, i.e. the store accepts the company default.
+    "receipt_layout": "",
+    # DIRECT PRINTING (owner 2026-10-20: the receipts print to the thermal printer "only if desired
+    # by the user, there cannot be any harcoded rule"). OFF everywhere until a store turns it on, and
+    # even then it is only this store's DEFAULT: the print screen offers both destinations every
+    # time, and the printer dialog keeps working exactly as it does today.
+    "receipt_direct_print": False,
+    # Where the till helper listens on the counter PC. It is a setting, not a constant in code, so a
+    # store that runs it on another port says so without a release.
+    "receipt_helper_url": "http://127.0.0.1:9100/print",
 }
 
 #: Which disclaimer targets mean "print on a POS receipt" — the browser's own rule, stated once.
@@ -107,6 +125,24 @@ def brand(rows, store_code: str = "") -> dict:
                           (text(rows, f"brand_address_line{n}", store_code) for n in range(1, 6))
                           if ln],
         "license_tax_ids": text(rows, "brand_license_tax_ids", store_code),
+    }
+
+
+def printer(rows, store_code: str = "") -> dict:
+    """What this store prints receipts on, as the store declared it.
+
+    `label` is free text the store typed, never a key behaviour switches on. `paper_width_mm` and
+    `layout` are blank when the store accepts the company default — blank, not a guessed value, so
+    `sale_receipt.print_choice` can tell "this store asked for 58 mm" apart from "this store never
+    said", which is the difference between honouring a declaration and inventing one.
+    """
+    return {
+        "label": text(rows, "receipt_printer_label", store_code),
+        "paper_width_mm": text(rows, "receipt_paper_width_mm", store_code),
+        "layout": text(rows, "receipt_layout", store_code),
+        # Whether THIS store prints straight to the printer by default, and where its helper listens.
+        "direct": flag(rows, "receipt_direct_print", store_code),
+        "helper_url": text(rows, "receipt_helper_url", store_code),
     }
 
 

@@ -1039,28 +1039,36 @@ def _sales_classifier(client, org_id):
         Matches on DEPARTMENT **or** CATEGORY **or** product keyword — CATEGORY is the discriminator
         where a department is ambiguous (luxelink: dept 'BrandedHandset' holds the 'KittedBranded' phone
         AND the 'HandsetBranded' accessory; dept 'Handset' holds 'SimMarketplace' + 'Accessories').
-      • device    ← commcalc `gp_report._dept_classifier` over commcalc.gp_category_map (mig 069):
-        `classify(dept) == 'device'`. For a tenant whose device rows sit in an otherwise-accessory-shared
-        department, map that DEPARTMENT → 'device' in gp_category_map — the accessory-FIRST precedence at
-        the call site lets CATEGORY peel the accessory lines off before the department is treated as device.
+      • device    ← THE ONE HOME for "is this a device department": commcalc
+        `gp_report.device_department_test` over the org's `gp_category_map` (mig 069) AND its own
+        `accessory_config.box_departments` DECLARATION (mig 218). Owner decision 2026-10-19
+        ("branded handset is he device device dpet move it"), index §4a.4. Before it, this read the
+        category map ALONE and never the declaration, so a department the owner had declared a box
+        department but not also mapped was device revenue on the GP report and `_unbooked_sales` here
+        — $111,464.09 across Mar-Oct 2026 on the org that surfaced it. A `gp_category_map` row still
+        WINS (it may say a declared box department is 'accessory'), and the accessory-FIRST
+        precedence at the call site still lets CATEGORY peel the accessory lines off a shared
+        department before the department is treated as device.
 
     BOOST BYTE-IDENTICAL: an empty accessory_config falls back to department 'Ondigo' and an empty
     gp_category_map falls back to the built-in DEVICE_DEPTS — so with NO tenant config the two resolvers
     reproduce the old `dept == 'Ondigo'` / `dept in DEVICE_DEPTS` buckets exactly (the accessory match is
-    case-insensitive, a superset that never *loses* a Boost 'Ondigo' row). NEVER raises: any failure
-    degrades to the hard-coded Boost taxonomy so classification can never regress."""
+    case-insensitive, a superset that never *loses* a Boost 'Ondigo' row). `box_departments` resolves to
+    the house labels for an org that has declared none (`router._accessory_config`), which are the same
+    labels `DEVICE_DEPTS` holds — so the declaration cannot move an undeclared org either. NEVER raises:
+    any failure degrades to the hard-coded Boost taxonomy so classification can never regress."""
     try:
         from app.modules.commcalc.router import _accessory_config, _is_accessory
-        from app.modules.commcalc.gp_report import _dept_classifier
+        from app.modules.commcalc.gp_report import device_department_test
         acfg = _accessory_config(client, org_id)
         try:
             gp_map = (client.schema("commcalc").table("gp_category_map")
                       .select("department,category").eq("org_id", org_id).limit(1000).execute().data) or []
         except Exception:
             gp_map = []
-        classify_dept = _dept_classifier(gp_map)
+        is_device_dept = device_department_test(gp_map, acfg.get("box_departments"))
         return (lambda dept, category, product: _is_accessory(dept, category, product, acfg),
-                lambda dept: classify_dept(dept) == "device")
+                is_device_dept)
     except Exception:
         # Hard fallback — the historical Boost taxonomy, so a resolver/import failure never regresses P&L.
         return (lambda dept, category, product: (dept or "").strip() == ACCESSORY_DEPT,
@@ -1658,17 +1666,26 @@ def build_inputs(client, org_id, period):
     # Per-org config (commcalc.pl_sales_line_map) may route it to a revenue line; whatever still books nothing
     # is TALLIED and carried on the `_unbooked_sales` side entry (statement meta `unbooked_sales`). No map rows
     # ⇒ nothing is booked that was not booked before ⇒ byte-identical for every tenant.
+    # THE BASIS a rule books on (owner ruling 2026-10-20, mig 1088, index §37.11) rides on the rule
+    # row. The select is COLUMN-TOLERANT for the same reason every other P&L config read is (§4b.1):
+    # a pre-1088 schema must keep working, and it does — a missing column resolves to the house
+    # 'ext' default through `sales_line_map.resolve_basis`, which is byte-identical to before.
     from app.modules.account import sales_line_map as _slm
     _slm_tally = _slm.Tally()
     _slm_idx = {}
-    try:
-        _slm_rows = _fetch_all(client, "pl_sales_line_map", "match_field,match_value,pl_line_key,is_active",
-                               {"org_id": org_id})
-        if _slm_rows:
-            _slm_idx, _ = _slm.normalise_rules(
-                _slm_rows, {k for k, _l, sec, *_ in PL_SPEC if sec == "revenue"})
-    except Exception:
-        _slm_idx = {}
+    for _slm_cols in ("match_field,match_value,pl_line_key,is_active,amount_basis",
+                      "match_field,match_value,pl_line_key,is_active"):
+        try:
+            _slm_rows = _fetch_all(client, "pl_sales_line_map", _slm_cols, {"org_id": org_id})
+        except Exception:
+            continue
+        try:
+            if _slm_rows:
+                _slm_idx, _ = _slm.normalise_rules(
+                    _slm_rows, {k for k, _l, sec, *_ in PL_SPEC if sec == "revenue"})
+        except Exception:
+            _slm_idx = {}
+        break
 
     is_accessory, is_device = _sales_classifier(client, org_id)
     pos_device_cost = {}          # staged POS device cost — settled after the scan (ruling K3)
@@ -1710,18 +1727,27 @@ def build_inputs(client, org_id, period):
                 # is a last resort, not a source. With device_cogs_mode='off' (the default) this stages
                 # and then books the identical figure ⇒ byte-identical to pre-621 for every tenant.
                 pos_device_cost[st] = round(pos_device_cost.get(st, 0.0) + (ext - gp), 2)
-            elif ext:
+            elif _slm.line_money(ext, gp):
                 # No classifier claimed this line (index §37.4). The org's map may route it; what it does not
                 # is reported, never silently dropped. A target the royalty report already books this period
                 # is suppressed (the report is the revenue of record — never both).
+                #
+                # MONEY IS THE GROSS **OR** THE MARGIN (owner ruling 2026-10-20, index §37.11). This gate
+                # gated on ext_price ALONE, so a line whose only money is its `gp` — a plan activation the customer
+                # pays the carrier for — was neither booked nor even tallied. And what a rule books is now
+                # the rule's own declared BASIS, dereferenced from `sales_line_map.rule_amount`: a wallet
+                # refill's gross is the customer's pass-through money and only its `gp` is the store's.
+                # Both amounts go to the tally either way, so the report says what it passed over in full.
                 _hit = _slm.match(_slm_idx, dept, cat, prod) if _slm_idx else None
                 if _hit and _hit[0] in _roy_covered:
-                    _slm_tally.suppressed_by_royalty(_hit[0], dept, cat, ext, st)
+                    _slm_tally.suppressed_by_royalty(
+                        _hit[0], dept, cat, _slm.rule_amount(_hit[3], ext, gp), st, gp)
                 elif _hit:
-                    add(_hit[0], st, ext, detail_label=_hit[2])
-                    _slm_tally.booked_by_map(_hit[0], _hit[1], _hit[2], ext, st)
+                    _slm_amt = _slm.rule_amount(_hit[3], ext, gp)
+                    add(_hit[0], st, _slm_amt, detail_label=_hit[2])
+                    _slm_tally.booked_by_map(_hit[0], _hit[1], _hit[2], _slm_amt, st, gp)
                 else:
-                    _slm_tally.unclaimed(dept, cat, ext, st)
+                    _slm_tally.unclaimed(dept, cat, ext, st, gp)
     except Exception:
         pass
     L[_slm.SIDE_KEY] = _slm_tally.side_line()
@@ -1801,6 +1827,15 @@ def build_inputs(client, org_id, period):
             "measurement. The point-of-sale figure is deliberately not used as a fallback because it "
             "records cost AFTER the carrier subsidy and is negative on a subsidised handset. Upload the "
             "distributor's commission/fulfillment sheets for this period to measure it.")
+    # A handset whose cost could not be priced books its REBATE anyway, so the contra-COGS stands
+    # against a cost that is short by exactly those handsets — the LuxeLink September 2026 report
+    # ("how come the device cost is less than the device rebate"). `meta` alone never reaches a
+    # reader, so it is said on the line, in the one passthrough, through the one home
+    # (`device_cogs.unpriced_handsets_note`). APPENDED, never replacing: the honest zero and the
+    # §70 restatement are separate facts and all of them are true at once.
+    _unpriced_note = _device_cogs.unpriced_handsets_note(_dev.get("meta") or {})
+    if _unpriced_note:
+        L["device_cost"]["note"] = ((L["device_cost"].get("note") or "") + " " + _unpriced_note).strip()
 
     # asset_ledger — the distributor's reimbursement CLAIM, VIP fees (COGS), inventory value (BS),
     # owed-to-VIP (BS). One scan, multiple lines.
@@ -2021,9 +2056,19 @@ def build_inputs(client, org_id, period):
         # salary rows that suppress the wages estimate vanished with it. A month WITH its own rows
         # is byte-identical to the old read.
         from app.modules.commcalc.expenses_effective import effective_expense_rows
+        # THE CARRY SELECTION TAKES THE LABOUR VOCABULARY (owner directive 2026-10-20: *"salary and
+        # commisson shoudl be derived from the actuals"*). A carried month no longer inherits the
+        # rows the platform derives, so the stale figure cannot reach these books at all. NOTHING is
+        # put back here and nothing needs to be: this statement derives `wages` from the SAME StoreOps
+        # hours and `rep_comm` from the SAME `rep_commissions` for the month it is reporting, a few
+        # hundred lines below. Where the suppression plan was already dropping those carried rows the
+        # money does not move; where it was not, the month's own derivation replaces last month's
+        # figure, which is the whole point of the directive. See commcalc/labour_actuals.
+        from app.modules.commcalc import labour_vocabulary as _lvoc
         exp_rows, _exp_carried_from = effective_expense_rows(
             client, org_id, period, list(period_keys),
-            "store_code,expense_name,expense_type,amount,period,source_key")
+            "store_code,expense_name,expense_type,amount,period,source_key",
+            _lvoc.derived_row_names(acct_cfg.get("labour_vocabulary")))
         # ── COMMISSION DOUBLE-BOOK SUPPRESSION (owner decision 2026-09-08: "Rep commision should
         # go in p&l") ─────────────────────────────────────────────────────────────────────────────
         # Rep commission reaches these books by TWO routes: `rep_comm` (fed from

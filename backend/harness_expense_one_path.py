@@ -184,14 +184,16 @@ _both = EX.effective_series([exp("B-1", "Rent", 7.0, "2026-07")], ["July 2026"])
 eq("B8 both spellings of a month occupy ONE slot", [r["amount"] for r in _both["July 2026"]["rows"]],
    [7.0])
 eq("B9 nothing prior -> empty, and no carry claimed",
-   EX.effective_series(ROWS, ["June 2026"])["June 2026"], {"rows": [], "carried_from": None})
+   EX.effective_series(ROWS, ["June 2026"])["June 2026"],
+   {"rows": [], "carried_from": None, "carried_excluded": {}})
 eq("B10 an unparseable month claims no carry rather than guessing",
-   EX.effective_series(ROWS, ["nonsense"])["nonsense"], {"rows": [], "carried_from": None})
+   EX.effective_series(ROWS, ["nonsense"])["nonsense"],
+   {"rows": [], "carried_from": None, "carried_excluded": {}})
 eq("B11 an unparseable ROW never wins a carry",
    EX.effective_series([exp("B-1", "Rent", 5.0, "junk")], ["August 2026"])["August 2026"],
-   {"rows": [], "carried_from": None})
+   {"rows": [], "carried_from": None, "carried_excluded": {}})
 eq("B12 no rows at all -> every month empty", EX.effective_series([], ["July 2026"]),
-   {"July 2026": {"rows": [], "carried_from": None}})
+   {"July 2026": {"rows": [], "carried_from": None, "carried_excluded": {}}})
 eq("B13 no months asked for -> nothing invented", EX.effective_series(ROWS, []), {})
 eq("B14 None inputs are tolerated, never raised", EX.effective_series(None, None), {})
 _before = [dict(r) for r in ROWS]
@@ -351,9 +353,10 @@ ok("E10 the verdict strings are not spelled a second time inside the detector",
 ok("E11 the series rule has ONE home — the router does not re-implement the carry",
    "pick_carry_period" not in _code_only(_src(ROUTER)))
 _ex = _code_only(_src(EXPFX))
-ok("E12 effective_series dereferences the two shared pure facts rather than re-deciding",
+ok("E12 effective_series dereferences the shared pure facts rather than re-deciding",
    "pick_carry_period(" in _fn_src(EXPFX, "effective_series")
-   and "manual_rows(" in _fn_src(EXPFX, "effective_series"))
+   and "carryable_rows(" in _fn_src(EXPFX, "effective_series")
+   and "manual_rows(" in _fn_src(EXPFX, "carryable_rows"))
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 print("\n§F RULE TWO AND PURITY")
@@ -365,6 +368,11 @@ ok("F3 effective_series is pure — no client, no clock, no I/O",
    not any(t in _fn_src(EXPFX, "effective_series") for t in ("client", "datetime", "execute(")))
 ok("F4 the expenses_effective module still imports nothing at module scope",
    [ln for ln in _ex.splitlines() if ln.startswith(("import ", "from "))] == [])
+# …and the labour-row membership test it needs is DEREFERENCED, from inside the function, so the
+# purity above and the one-home rule below are both kept rather than traded off against each other.
+ok("F4b the derived-labour test is the vocabulary's, imported inside the function that uses it",
+   "labour_vocabulary" in _fn_src(EXPFX, "carryable_rows")
+   and "is_derived_row(" in _fn_src(EXPFX, "carryable_rows"))
 ok("F5 analysis still imports only _period, so the statement proofs keep running app-free",
    [ln for ln in _code_only(_src(ANALYSIS)).splitlines()
     if ln.startswith(("import ", "from "))] == ["from app.modules.account import _period"])
@@ -414,6 +422,86 @@ ok("G8 G7's scanner is armed (it finds the retired loop in a control string)",
        "            code = str(r.get('store_code') or '').strip()\n"
        "            amt = safe_float(r.get('amount'))\n"
        "            by[code][p]['total'] += amt\n")))
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+print("\n§H A CARRIED MONTH NEVER INHERITS THE PLATFORM'S OWN LABOUR "
+      "(owner directive 2026-10-20, index §COMMCALC-23)")
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Owner, verbatim: *"sepatember and october expeses wll be carried forward but salary and commisson
+# shoudl be derived from the actuals"*. The carry rule now takes the org's labour vocabulary and
+# refuses to carry the rows the platform fills in itself. The DANGER this section locks is the
+# un-wiring one the house has already paid for three times (§19.18): a registry written and a caller
+# left reading past it. Every live caller of the carry rule must PASS the vocabulary — a caller that
+# stops passing it silently carries September's salary into October again, and the figures still
+# look plausible, which is exactly why a human will not catch it.
+
+
+def _calls_with_args(src, fname):
+    """Every `fname(...)` in `src`, with its full argument text (balanced parens)."""
+    out, i = [], 0
+    needle = fname + "("
+    while True:
+        j = src.find(needle, i)
+        if j < 0:
+            return out
+        k, depth = j + len(needle), 1
+        while k < len(src) and depth:
+            depth += 1 if src[k] == "(" else (-1 if src[k] == ")" else 0)
+            k += 1
+        out.append(src[j:k])
+        i = k
+
+
+_CARRY_CALLERS = (ROUTER, "app/modules/account/coa.py")
+_unwired = []
+for _rel in _CARRY_CALLERS:
+    _code = _code_only(_src(_rel))
+    for _fn in ("effective_series", "effective_expense_rows"):
+        for _call in _calls_with_args(_code, _fn):
+            if "derived_row_names" not in _call:
+                _unwired.append((_rel, _fn, " ".join(_call.split())[:90]))
+ok("H1 EVERY live caller of the carry rule passes the org's labour vocabulary",
+   not _unwired, str(_unwired))
+# NEGATIVE CONTROL: the scanner must be able to SEE an un-wired call, or H1 passes blind.
+ok("H2 H1's scanner is armed (it catches a call that drops the vocabulary)",
+   [c for c in _calls_with_args("x = effective_series(rows, months)\n", "effective_series")
+    if "derived_row_names" not in c]
+   and not [c for c in _calls_with_args(
+       "effective_series(rows, months, _lvoc.derived_row_names(v))\n", "effective_series")
+       if "derived_row_names" not in c])
+ok("H3 all five readers are accounted for — the P&L, the GP report, the expenses trend, "
+   "the Sales Comparison and the takeover evaluation",
+   sum(len(_calls_with_args(_code_only(_src(r)), f))
+       for r in _CARRY_CALLERS for f in ("effective_series", "effective_expense_rows")) == 5)
+
+# ONE HOME for the membership test, and for the dollars that replace the refused rows.
+_la = _code_only(_src("app/modules/commcalc/labour_actuals.py"))
+ok("H4 the refused rows are replaced from ONE home, which derives no dollars of its own",
+   "wages_by_store(" in _la and "rep_commissions" in _la
+   and not any(t in _la for t in ("pay_rate", "* hours", "hours *")))
+ok("H5 …and it is PURE where it claims to be — `fold` reads no client and no clock",
+   not any(t in _fn_src("app/modules/commcalc/labour_actuals.py", "fold")
+           for t in ("client", "datetime", "execute(")))
+ok("H6 an unmeasured half is reported, never shipped as a zero (§19.49)",
+   "measured" in _fn_src("app/modules/commcalc/labour_actuals.py", "by_store")
+   and "measured" in _fn_src("app/modules/commcalc/labour_actuals.py", "as_expense_rows"))
+# NO SECOND COPY of "is this row the platform's own labour". The vocabulary's `is_derived_row` is
+# the only test; a surface that spells the row names itself is the divergence, and it is findable.
+_LABOUR_LITERAL = _re.compile(r"['\"]Employee (?:Salaries|Commission)['\"]")
+_lit = []
+for _rel in (ROUTER, "app/modules/account/coa.py",
+             "app/modules/commcalc/expenses_effective.py",
+             "app/modules/commcalc/labour_actuals.py"):
+    if _LABOUR_LITERAL.search(_code_only(_src(_rel))):
+        _lit.append(_rel)
+ok("H7 no caller spells the platform's own labour row names — the vocabulary is dereferenced",
+   not _lit, str(_lit))
+ok("H8 H7's scanner is armed", bool(_LABOUR_LITERAL.search("x = 'Employee Salaries'")))
+# THE KEYING PLUMBING ALSO HAS ONE HOME: three readers need canonical→code, and three copies of it
+# is how one of them later gets a fallback the others never got.
+ok("H9 the readers key the actuals through ONE helper, not a copy per reader",
+   _code_only(_src(ROUTER)).count("_labour_actuals_code_keyed(") >= 4
+   and _code_only(_src(ROUTER)).count("store_identity_index(") <= 2)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

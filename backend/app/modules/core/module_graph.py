@@ -203,6 +203,86 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/pos_report_sweep.py': ('feed',),
         },
     },
+    # ── §4a.4 (owner decision 2026-10-19) — which POS departments are DEVICE departments ────────
+    'device_department': {
+        "question": 'Is this POS department a DEVICE department? Asked by the Gross Profit report '
+                    '(both classification branches), by the P&L\'s sales classifier, and by the GP '
+                    'Category Map screen that tells the owner what each department IS. The answer is '
+                    'the org\'s OWN declared box-department set, with an explicit GP category '
+                    'override allowed to beat it and the house labels as the default for an org that '
+                    'declared nothing. It had TWO homes: the GP report read the declaration and the '
+                    'P&L read the category overrides ALONE, so a department the owner declared but '
+                    'never overrode was device revenue on one report and unbooked sales on the '
+                    'other ($111,464.09 across Mar-Oct 2026). Where each side is configured: '
+                    'index 4a.4.',
+        "homes": ('app/modules/commcalc/gp_report.py',),
+        "index": ('4a.4',),
+        "locks": ('harness_gp_pnl_commission_parity.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04).
+        #
+        # READ THIS LIST CORRECTLY. The home is the GP ENGINE module, which also owns the VOID-TOKEN
+        # vocabulary (`VOID_TOKENS` / `is_voided` / `countable_sale_skip_reason`) that half the
+        # commcalc package dereferences. The derivation is per-MODULE, so every importer of that
+        # engine lands here whatever it reads. The bindings that read THIS fact are
+        # `device_department_test` and `_dept_classifier`; a caller binding only a void-token name
+        # is listed because it imports the home, not because it classifies a department. What the
+        # A-check buys even so: a NEW importer cannot land silently, and the next author is told
+        # that this file answers the device-department question before they touch it.
+        "callers": {
+            # ── THE READERS OF THIS FACT ────────────────────────────────────────────────────────
+            # The P&L's sales classifier (`_sales_classifier.is_device`) — the reader that had its
+            # own answer until 2026-10-19 and now dereferences this one.
+            'app/modules/account/coa.py': ('device_department_test',),
+            # The GP report's one caller (`_compute_gp`, which hands over the org's declaration in
+            # EVERY mode) and the GP Category Map screens, which must tell the owner the same thing
+            # the books do about each department.
+            'app/modules/commcalc/router.py': ('DEVICE_DEPTS', 'GP_CATEGORIES', 'ONDIGO_DEPT',
+                                               '_GP_CATEGORIES_SET', '_GP_CATS_DEFAULT',
+                                               '_GP_VOID_TOKENS', '_dept_classifier', '_gp',
+                                               '_gp_is_voided', '_gp_skip_reason', '_ik',
+                                               'bucket_map', 'calc_gp_report',
+                                               'device_department_test'),
+            # ── IMPORTERS OF THE VOID-TOKEN VOCABULARY IN THE SAME MODULE (not of this fact) ────
+            'app/modules/commcalc/calculator.py': ('_VOID_TOKENS', '_is_voided'),
+            'app/modules/commcalc/commission_drilldown.py': ('_is_voided',),
+            'app/modules/commcalc/commission_engine.py': ('_VOID_TOKENS', '_is_voided'),
+            'app/modules/commcalc/flags.py': ('_is_voided',),
+            'app/modules/commcalc/ma_recon.py': ('_is_voided',),
+            'app/modules/commcalc/plan_impact.py': ('_is_voided',),
+            'app/modules/commcalc/sale_installment_engine.py': ('_VOID_TOKENS', '_is_voided'),
+            'app/modules/commcalc/tax_collected.py': ('VOID_TOKENS', 'is_voided', 'safe_float'),
+            'app/modules/commcalc/void_watchdog.py': ('_skip',),
+            'app/modules/commcalc/watchdog_router.py': ('is_voided',),
+            'app/modules/marketing/event_sales.py': ('is_voided',),
+        },
+    },
+    # ── §37.11 (owner ruling 2026-10-20) — which FIGURE does a mapped sale line book ─────────────
+    'sale_line_booking_basis': {
+        "question": 'A POS sale line no P&L classifier claims is routed to a revenue line by the '
+                    'org own rule map. WHICH FIGURE does that rule book, and does the line carry '
+                    'money at all? Both answers used to be one word, ext_price, written straight '
+                    'into the P&L sales scan: so a wallet refill would have booked the customer '
+                    'pass-through money as income, a plan activation (which rings no gross at all, '
+                    'because the customer pays the carrier) could not be booked or even reported, '
+                    'and the blank department the unbooked report prints as (blank) was the one '
+                    'department a rule could not name. The owner ruling of 2026-10-20 is that '
+                    'commission and margin coming in ARE income, and only money reimbursed toward '
+                    'phone cost is a subsidy, so the figure is a per-rule BASIS: ext (the gross) '
+                    'or gp (the store margin). Where it is configured: index 37.11.',
+        "homes": ('app/modules/account/sales_line_map.py',),
+        "index": ('37.11',),
+        "locks": ('harness_royalty_lock.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04).
+        "callers": {
+            # The P&L sales scan — the one booking path, and the only reader of the money gate.
+            'app/modules/account/coa.py': ('_slm',),
+            # The rule editor endpoint: it offers the vocabulary and validates against it rather
+            # than spelling the fields, the bases or the blank label itself.
+            'app/modules/account/router.py': ('sales_line_map',),
+        },
+    },
     # ── §COMMCALC-03 (owner directive 2026-10-12) — evaluate a store we do not own yet ───────────
     'multi_handset_one_buyer': {
         "question": 'Which buyers took more handsets in one day at one store than a family plausibly '
@@ -984,6 +1064,11 @@ FACTS: dict[str, dict] = {
             # `carrier_comm_source_line()` — which line it divides from THIS home, rather than
             # typing a second line beside the first.
             'app/modules/account/coa.py': ('_MA_COMPONENTS', '_msp', '_msp_spec', '_rs', '_rs_mi', '_rs_mi_idx'),
+            # `_NO_RULE_REASON` added 2026-10-19 (§COMMCALC-20): the fulfillment-side coverage
+            # read-out reports an unruled order-type family with the SAME honest-absence literal the
+            # daily-tx coverage uses, and reads the org's stated reasons through THIS home's
+            # `load_unbooked_reasons` rather than keeping a second copy of either.
+            'app/modules/account/device_cogs.py': ('_NO_RULE_REASON', 'load_unbooked_reasons'),
             'app/modules/account/ledger_pnl.py': ('_msp',),
             'app/modules/account/router.py': ('_msp', 'residual_subs'),
             'app/modules/account/statement_engine.py': ('_msp',),
@@ -1098,6 +1183,47 @@ FACTS: dict[str, dict] = {
             # them. This serves the measures, the scopes and the defaults by dereferencing the home, so
             # the browser names no measure and no default of its own.
             'app/modules/commcalc/plan_options.py': ('_aq',),
+        },
+    },
+    'carrier_claim_value': {
+        "question": 'Is this unpaid activation a CLAIM against the carrier at all, and what is it '
+                    'worth?',
+        "homes": ('app/modules/commcalc/carrier_claim_value.py',),
+        "index": ('COMMCALC-22',),
+        "locks": ('harness_carrier_claim_value.py',),
+        # SNAPSHOT -- hand-written (--bless strips per-caller comments, SSCOMMCALC-01); the derived
+        # edges were verified by RUNNING the guard afterwards.
+        "callers": {
+            # The carrier-statement recon: hardcoded 0.0 on every discrepancy row before this, which
+            # is why the hub's open-$ card summed to nothing. Now classifies and prices through here.
+            'app/modules/commcalc/ma_recon.py': ('ccv',),
+            # THE SIBLING, fixed in the same change: the rate-card engine filed an unsizeable claim
+            # as $0.00 too. It now writes NULL and borrows this module's subtraction.
+            'app/modules/commcalc/discrepancy_engine.py': ('ccv',),
+        },
+    },
+    'installment_exclusion_basis': {
+        "question": 'WHY did this device category pay no multi-month installment -- did somebody '
+                    'decide that, or did nobody?',
+        "homes": ('app/modules/commcalc/installment_category.py',),
+        "index": ('COMMCALC-21',),
+        "locks": ('harness_installment_exclusion_basis.py',),
+        # SNAPSHOT — hand-written (--bless strips per-caller comments, §COMMCALC-01); the derived
+        # edges were verified by RUNNING the guard afterwards.
+        "callers": {
+            # The engine resolves the qualification and now gets the per-category basis with it, so a
+            # category excluded BY A DECISION is reported apart from one nobody ruled on.
+            'app/modules/commcalc/sale_installment_engine.py': ('icat',),
+            # The notice list the owner reads after Run Calculation. `_icat_mod()` is the one accessor;
+            # the bindings below are the AST import aliases, not the accessor's name.
+            'app/modules/commcalc/router.py': ('CATEGORY_KEYS', '_icat', '_icat_dev', 'icat'),
+            # The per-category FLAT payout (mig 256) shares this category vocabulary.
+            'app/modules/commcalc/installment_category_payout.py': ('icat',),
+            # Executive-MTD pay prices a TABLET / WATCH event through the same one classifier (§6n),
+            # so these three share the category vocabulary without touching the exclusion basis.
+            'app/modules/commcalc/line_class.py': ('_icat',),
+            'app/modules/commcalc/plan_pay_gate.py': ('_icat',),
+            'app/modules/commcalc/sales_comparison.py': ('_icat',),
         },
     },
     'payout_slice_evidence': {
@@ -1356,6 +1482,29 @@ FACTS: dict[str, dict] = {
             # strings, which is what let one slicer serve the month report and the month-over-month
             # P&L. The spelling home is unchanged and still has every other caller it had.
             'app/modules/commcalc/router.py': ('_pd',),
+            # §COMMCALC-23 (owner directive 2026-10-20) — the derived-labour actuals read
+            # `rep_commissions` for ONE month and must match both of its stored spellings, so the
+            # month is expanded by THIS home. Added BY HAND, not blessed (§50).
+            'app/modules/commcalc/labour_actuals.py': ('_pk',),
+        },
+    },
+    'derived_labour_actuals': {
+        "question": 'What did the platform\'s OWN labour rows (salary, rep commission) actually cost '
+                    'in this month, per store — as opposed to what some other month cost?',
+        "homes": ('app/modules/commcalc/labour_actuals.py',),
+        "index": ('COMMCALC-23',),
+        "locks": ('harness_labour_actuals.py', 'harness_expense_one_path.py'),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04 and still strips the per-caller comments). The lock verifies it against the
+        # real import graph.
+        "callers": {
+            # Four surfaces whose only labour figure is an expense sheet, and which therefore may not
+            # inherit another month's payroll: the GP report (SALARY only — `net_profit` already
+            # subtracts `rep_pay`), the expenses trend, the Sales Comparison expense line and the
+            # takeover evaluation's cost benchmark. The P&L is deliberately NOT here: it derives
+            # `wages` and `rep_comm` from these same sources itself, so it needs the carried rows
+            # gone and nothing put back.
+            'app/modules/commcalc/router.py': ('_lact',),
         },
     },
     'statement_crosscheck_verdict': {
@@ -1599,10 +1748,24 @@ FACTS: dict[str, dict] = {
                     'hosts, so that is routine here; nothing on the row distinguishes it from a live '
                     'login, so the discriminator is AGE (`in_flight_is_stale`), with the budget '
                     'DERIVED from the two homes that already answer "how long may this take" rather '
-                    'than copied. `present_auth_status` is what a surface reads.',
+                    'than copied. `present_auth_status` is what a surface reads. AND, the other '
+                    'axis of the same home (§COMMCALC-24): WHICH PROCESS may answer about a '
+                    'session at all. `_SESSIONS` is a dict in ONE process\'s memory, so on the '
+                    'split deploy (§41) an endpoint that reads it from the API host sees an EMPTY '
+                    'registry and reports "No live session running" about a session that is alive '
+                    'on the worker. The old gate was spelled `require_browser_service` and asked '
+                    '"does this launch a browser?"; /frame launches nothing, it reads a dict, so '
+                    'the whole READ half of the operator surface was left ungated and the owner\'s '
+                    'UPS login was invisible to him for five days while the browser sat on the '
+                    'portal\'s Sign In button and timed out for operator inactivity. The question '
+                    'that matters is "does this touch _SESSIONS?", so the gate is RENAMED here: '
+                    '`require_session_host` is THE gate, and `sessions_live_here` is the pure fact '
+                    'for a reader that must degrade rather than proxy. Both dereference '
+                    '`app.core.service_role` — one reader of the role, not two.',
         "homes": ('app/modules/commcalc/live_login.py',),
-        "index": ('COMMCALC-13',),
-        "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py'),
+        "index": ('COMMCALC-13', 'COMMCALC-24'),
+        "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py',
+                  'harness_live_session_host.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
         # import graph.
         "callers": {

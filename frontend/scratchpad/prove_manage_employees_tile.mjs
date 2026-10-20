@@ -14,7 +14,9 @@
 //   §3 the SHIPPED design opens all three doors for exactly the people who hold the two it was folded
 //      from, and offers them to nobody the route guard would bounce.
 //   §4 the tile collapses to nothing for a store/self-scoped rep — no half-dead tile.
-//   §5 the side-menu ruling of §19.40 survives: Employees & Pay is still its own, non-tileOnly row.
+//   §5 the side-menu rulings survive: Employees & Pay is still its own, non-tileOnly row (§19.40),
+//      and Employee Password Reset now has one of its own too — owner reversal 2026-10-19, §CORE-09.6 —
+//      while keeping its tile door, so the Payroll & HR menu shows exactly three rows.
 //
 // Predicates are a verbatim re-impl of the shipped rbac.ts / hub-gate.ts, run against the REAL NAV
 // parsed out of rbac.ts, the REAL tile literal parsed out of the hub, and the REAL production role
@@ -142,13 +144,41 @@ for (const { who, scopeKind, perms } of ROLES) {
 }
 
 // ── §5 the §19.40 side-menu ruling survives ──────────────────────────────────────────────────────
-console.log('\n§5  §19.40 untouched — Employees & Pay is still its own side-menu row')
+console.log('\n§5  side menu — Employees & Pay keeps its row (§19.40) and the password page gains one (§CORE-09.6)')
 const ep = NAV.find(i => i.href === '/hr?tab=employees')
 ok('§5 the NAV entry exists', !!ep)
 ok('§5 it is NOT tileOnly (it shows in the sidebar)', ep && ep.tileOnly === false)
+// The Payroll & HR group's VISIBLE side-menu rows, sliced out of the real rbac.ts group literal
+// (NAV above is flat, so group membership is read from the source, never retyped).
+const PAYROLL_HR_SRC = (() => {
+  const i = RBAC.indexOf("{ group: 'Payroll & HR'")
+  return i < 0 ? '' : RBAC.slice(i, RBAC.indexOf('\n  { group:', i + 1))
+})()
+const PAYROLL_HR_ROWS = [...PAYROLL_HR_SRC.matchAll(/\{\s*href: '([^']+)'([^}]*)\}/g)]
+  .filter(m => !/tileOnly:\s*true|platformOnly:\s*true/.test(m[2])).map(m => m[1])
+ok('§5 parsed the Payroll & HR group out of rbac.ts', PAYROLL_HR_SRC.length > 500)
+
+// §5 RE-EXPRESSED 2026-10-19 (owner reversal, index §CORE-09.6), not relaxed: this used to assert
+// the password page IS tileOnly. The owner then asked for a side-menu row too — *"dont drop it from
+// anywhere jsut add a seaprate link under eh manage employee tile under Payroll & HR"* — so the
+// assertion inverts and TIGHTENS: it must have its own row AND keep the tile door (§1 pins the door).
 const pw = NAV.find(i => i.href === '/hr/employee-password')
-ok('§5 the password page IS tileOnly (the tile is its door)', pw && pw.tileOnly === true)
+ok('§5 the password page is NOT tileOnly — its own Payroll & HR row (owner 2026-10-19)',
+  pw && pw.tileOnly === false)
+ok('§5 ...and still a door of the Manage Employees tile (nothing was dropped)',
+  DOORS.includes('/hr/employee-password'))
 ok('§5 ...and carries module hr, not admin', pw && pw.module === 'hr')
+ok('§5 ...and its visible row sits directly after Employees & Pay in the Payroll & HR menu',
+  JSON.stringify(PAYROLL_HR_ROWS) ===
+    JSON.stringify(['/payroll', '/hr?tab=employees', '/hr/employee-password']),
+  `the group's visible rows are: ${PAYROLL_HR_ROWS.join('  ')}`)
+console.log(`    Payroll & HR side-menu rows: ${PAYROLL_HR_ROWS.join('  ')}`)
+ok('§5 control: tileOnly restored on the password row → the row assertion goes RED',
+  [...PAYROLL_HR_SRC.replace("label: 'Employee Password Reset', icon: '\u{1F511}', module: 'hr', scopes: ['all', 'market'] }",
+    "label: 'Employee Password Reset', icon: '\u{1F511}', module: 'hr', scopes: ['all', 'market'], tileOnly: true }")
+    .matchAll(/\\{\\s*href: '([^']+)'([^}]*)\\}/g)]
+    .filter(m => !/tileOnly:\\s*true|platformOnly:\\s*true/.test(m[2])).map(m => m[1])
+    .includes('/hr/employee-password') === false)
 
 console.log(`\n${pass} passed / ${fail} failed`)
 process.exit(fail ? 1 : 0)

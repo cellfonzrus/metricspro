@@ -109,7 +109,8 @@ check("build_paid_index never raises on junk", mr.build_paid_index(None, None, N
       == {"spiff": {}, "link": {}, "tx": {}})
 
 print("── C. reconciliation statuses — evidence-first, never guessed ──")
-rows, summary = mr.reconcile_ma_activations(sold, paid, [], PERIOD, CFG)
+CLAIM_CTX = mr.build_claim_context(MA_ROWS, PERIOD, CFG)
+rows, summary = mr.reconcile_ma_activations(sold, paid, [], PERIOD, CFG, CLAIM_CTX)
 by = {r["imei"]: r for r in rows}
 check("A: paid via ma_commission spiff (netted base+adjustment) → 'ok'",
       by["355163568356973"]["status"] == "ok", by["355163568356973"])
@@ -182,7 +183,7 @@ RULES = [
      "match_op": "contains", "match_value": "a", "expected_outcome": "not_paid", "priority": 0,
      "is_active": False},
 ]
-rows2, summary2 = mr.reconcile_ma_activations(sold, paid, RULES, PERIOD, CFG)
+rows2, summary2 = mr.reconcile_ma_activations(sold, paid, RULES, PERIOD, CFG, CLAIM_CTX)
 by2 = {r["imei"]: r for r in rows2}
 d = by2["444445555566666"]
 check("D: rule matched → 'info' with rule_key + description attached",

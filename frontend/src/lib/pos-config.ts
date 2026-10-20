@@ -228,6 +228,54 @@ export const POS_SETTING_SECTIONS: PosSettingSection[] = [
         hint: 'Receipt lines print the already-discounted price instead of a separate discount line.',
         type: 'boolean', default: false,
       },
+      // WHAT THIS STORE PRINTS ON (owner 2026-10-19, §POS-03). Set these per STORE — the store
+      // picker above the settings — so one counter's thermal roll is not every store's default.
+      // Each is blank by default, meaning "this store accepts the company default", which is a
+      // different fact from a width it chose; the server's copy of these defaults is pinned
+      // key-by-key by harness_pos_receipt_render.py.
+      {
+        key: 'receipt_printer_label',
+        label: 'Receipt printer at this store',
+        hint: 'The printer this counter prints receipts on, in your own words — e.g. "Epson TM-T20III" or "Citizen CT-S310II". Shown on the print screen so staff can see what the slip is sized for. Windows still supplies the driver.',
+        type: 'text', default: '',
+      },
+      {
+        key: 'receipt_paper_width_mm',
+        label: 'Receipt paper width at this store',
+        hint: 'Blank follows the company template. Set it when this counter prints on a different roll.',
+        type: 'select', default: '',
+        options: [
+          { value: '', label: 'Follow the company template' },
+          { value: '58', label: '58 mm roll' },
+          { value: '80', label: '80 mm roll' },
+        ],
+      },
+      // DIRECT PRINTING (owner 2026-10-20, §POS-04). Off everywhere until a store turns it on,
+      // and even then it is only this store's DEFAULT destination: the print screen offers both
+      // every time, so nothing is hardcoded and the printer dialog keeps working as it does today.
+      {
+        key: 'receipt_direct_print',
+        label: 'Print straight to the receipt printer at this store',
+        hint: 'Sends the receipt to the printer with no print dialog and cuts the slip. Needs the till helper running on this counter\u2019s PC; staff can still choose the print dialog for any receipt.',
+        type: 'boolean', default: false,
+      },
+      {
+        key: 'receipt_helper_url',
+        label: 'Till helper address',
+        hint: 'Where the helper listens on the counter PC. Leave it as it is unless you were told otherwise when the helper was installed.',
+        type: 'text', default: 'http://127.0.0.1:9100/print',
+      },
+      {
+        key: 'receipt_layout',
+        label: 'Receipt layout at this store',
+        hint: 'Blank follows the company template. Staff can still pick a different format for one print on the receipt screen.',
+        type: 'select', default: '',
+        options: [
+          { value: '', label: 'Follow the company template' },
+          { value: 'thermal', label: 'Till slip (thermal roll)' },
+          { value: 'pos_format', label: "My POS's own receipt layout" },
+        ],
+      },
       {
         key: 'receipt_auto_print',
         label: 'Auto-print receipt on sale completion',

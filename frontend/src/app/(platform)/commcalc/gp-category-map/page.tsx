@@ -20,7 +20,7 @@ type CatRow = { value: string; label?: string; rolls_up_to?: string; source?: st
 type ItemRow = {
   item_key: string; product_desc: string; sku: string; lines: number; returns: number
   gp: number; ext_price: number; category: string; bucket: string
-  source: 'item' | 'department' | 'default'; mapped: boolean
+  source: 'item' | 'department' | 'declaration' | 'default'; mapped: boolean
 }
 
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -275,7 +275,9 @@ export default function GpCategoryMapPage() {
                                       {it.source === 'item'
                                         ? <button onClick={() => setItemCat(key, it, '')} title="Clear this item's category and follow the department rule again"
                                             style={{ ...sel, cursor: 'pointer', fontSize: 10.5, padding: '2px 6px' }}>↺ this item</button>
-                                        : it.source === 'department' ? 'department rule' : 'built-in default'}
+                                        : it.source === 'department' ? 'department rule'
+                                        : it.source === 'declaration' ? 'declared a box department'
+                                        : 'built-in default'}
                                     </td>
                                   </tr>
                                 ))}

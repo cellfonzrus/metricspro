@@ -1504,6 +1504,9 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     n_dedup = n_mrc_unresolved = n_mrc_ambiguous = 0
     total_amt = 0.0
     cat_counts, cat_excluded, cat_sources = {}, {}, set()
+    # `unknown` exclusions are kept apart from the device-category ones (§COMMCALC-21) so an
+    # unclassifiable activation is reported once, by its own warning, and not twice.
+    cat_excluded_unknown = {}
     n_cat_excluded = n_cat_unknown = 0
     cat_excluded_amt = 0.0
     # mig 256 flat-payout accounting. All zero/empty unless a tenant actually configured a flat
@@ -1799,8 +1802,15 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             # withheld flag — it is not held pending residual, it simply does not qualify. It is
             # NEVER silent: every excluded chain is counted with its dollars in `category_guard` and
             # summarised in `warnings`, which is what the operator reads after Run Calculation.
-            _qual, _qsrc = ((qual_override, "override") if qual_override is not None
-                            else icat.qualification_for(sched, org_qual))
+            # The per-category BASIS comes back with the verdict (§COMMCALC-21): the figures are
+            # identical to `qualification_for`'s, and the engine now knows WHICH layer excluded each
+            # category, so a decision the operator already made is never re-reported as a finding.
+            if qual_override is not None:
+                _qual, _qbasis, _qsrc = (qual_override,
+                                         {k: icat.BASIS_SCHEDULE_OVERRIDE for k in icat.CATEGORY_KEYS},
+                                         "override")
+            else:
+                _qual, _qbasis, _qsrc = icat.qualification_with_basis(sched, org_qual)
             cat_sources.add(_qsrc)
             _cat, _cev = icat.resolve_chain_category(_chain_lines or [line], cat_rules,
                                                      catalog_cat_of=cat_lookup,
@@ -1874,8 +1884,14 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             if not _qual.get(_cat, True):
                 n_cat_excluded += 1
                 cat_excluded_amt = round(cat_excluded_amt + safe_float(amount), 2)
-                _ex = cat_excluded.setdefault(_cat, {"chains": 0, "amount": 0.0, "reps": {},
-                                                     "examples": []})
+                # `unknown` is NOT a device category, so it is never reported as an excluded one: it
+                # has its own warning above (`category_unknown`), which is the actionable statement.
+                # It used to appear in BOTH lists, so one unclassifiable activation read as two
+                # separate problems.
+                _bucket = cat_excluded if _cat != "unknown" else cat_excluded_unknown
+                _ex = _bucket.setdefault(_cat, {"chains": 0, "amount": 0.0, "reps": {},
+                                                "examples": [],
+                                                "basis": _qbasis.get(_cat, icat.BASIS_UNSTATED)})
                 _ex["chains"] += 1
                 _ex["amount"] = round(_ex["amount"] + safe_float(amount), 2)
                 _ex["reps"][repU_cat(rep)] = round(_ex["reps"].get(repU_cat(rep), 0.0)
@@ -2246,16 +2262,24 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             "detail": f"Device {_ser} has {len(_rs)} month-{_mi} installments in {pay_period}: {_why}"})
 
     # SUMMARY warnings — appended AFTER the per-chain cap so a big month can never hide the headline.
+    # A DECISION IS NOT A FINDING (§COMMCALC-21). An exclusion somebody chose is reported as
+    # `category_excluded_decided` -- the chains and the dollars are still there, so nothing is hidden --
+    # while `category_excluded` now carries ONLY the exclusions that need a human. The reason sentence
+    # comes from the one home and names the real layer; no caller composes it.
     for _k, _v in sorted(cat_excluded.items()):
-        warnings.append({
-            "type": "category_excluded", "category": _k,
-            "category_label": icat.CATEGORY_LABELS.get(_k, _k),
-            "chains": _v["chains"], "amount": round(_v["amount"], 2),
+        _b = _v.get("basis") or icat.BASIS_UNSTATED
+        _decided = icat.is_decided(_b)
+        _w = {
+            "type": "category_excluded_decided" if _decided else "category_excluded",
+            "category": _k, "category_label": icat.CATEGORY_LABELS.get(_k, _k),
+            "basis": _b, "chains": _v["chains"], "amount": round(_v["amount"], 2),
             "by_rep": _v["reps"], "examples": _v["examples"],
-            "detail": (f"{_v['chains']} {icat.CATEGORY_LABELS.get(_k, _k).lower()} activation(s) did NOT "
-                       f"pay a multi-month installment (${_v['amount']:,.2f} not paid) because "
-                       f"'{icat.CATEGORY_LABELS.get(_k, _k)}' is unchecked under Plan Installments → "
-                       f"Qualifying categories. Tick it to include them again.")})
+            "detail": icat.exclusion_reason(_k, _b) + (
+                f" {_v['chains']} activation(s), ${_v['amount']:,.2f}."
+                if _decided else
+                f" {_v['chains']} activation(s) and ${_v['amount']:,.2f} were affected. Decide it "
+                f"under Plan Installments → Qualifying categories so this stops being an accident.")}
+        warnings.append(_w)
     for _k, _v in sorted(flat_unconfigured.items()):
         warnings.append({
             "type": "flat_amount_unconfigured", "category": _k,
@@ -2358,6 +2382,10 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             "category_guard": {"excluded_chains": n_cat_excluded,
                                "excluded_amount": round(cat_excluded_amt, 2),
                                "unknown_chains": n_cat_unknown,
+                               # §COMMCALC-21: `excluded` keeps every device category it always did,
+                               # each now carrying its `basis`; `excluded_unknown` is the
+                               # unclassifiable bucket, split out so it is not reported twice.
+                               "excluded_unknown": cat_excluded_unknown,
                                "by_category": cat_counts, "excluded": cat_excluded,
                                "config_source": sorted(cat_sources),
                                "qualification": {k: bool(v) for k, v in

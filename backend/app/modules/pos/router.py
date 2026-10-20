@@ -2101,6 +2101,7 @@ def update_receipt_template(template_id: str, body: dict,
 # tenant printing "in its POS's layout" prints the layout its own uploads are reprinted in.
 from app.modules.pos import sale_receipt as _sr
 from app.modules.pos import pos_config_effective as _poscfg
+from app.modules.pos import receipt_escpos as _escpos
 from app.modules.core import tenant_identity as _tenant
 
 
@@ -2142,10 +2143,21 @@ def _declared_receipt_format(client, org_id: str):
     return getattr(fmt, "module", None) or fmt
 
 
-def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None) -> dict:
+def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
+                    want_layout=None, want_paper=None, want_destination=None) -> dict:
     """Everything a receipt needs, read once: the template, the effective POS config, the store
     block, the customer, the tenant's name and the declared format. One reader, so the printed copy
-    and the emailed copy can never be built from different inputs."""
+    and the emailed copy can never be built from different inputs.
+
+    `want_layout` / `want_paper` are what the print screen asked for FOR THIS PRINT ONLY (owner
+    2026-10-19, §POS-03): nothing is stored, and they are resolved through the same
+    `sale_receipt.print_choice` the store's and the org's own settings go through, so a request
+    cannot reach a layout or a paper width a setting could not.
+
+    `want_destination` is where this copy GOES (owner 2026-10-20, §POS-04): the operating system's
+    print dialog, as every store has always had, or the till printer itself through the helper on the
+    counter PC. A store's own setting is only the DEFAULT; both are offered on every print.
+    """
     store_code = (sale.get("store_code") or "").strip()
     rows = _pos_settings_rows(client, org_id, store_code)
     template_row = _receipt_template_row(client, org_id)
@@ -2173,22 +2185,52 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None) -> dic
         pass
     fmt = _declared_receipt_format(client, org_id)
     snap = _sr.snapshot_view(sale.get("receipt"), sale)
+    printer = _poscfg.printer(rows, store_code)
+    choice = _sr.print_choice(template, want_layout=want_layout, want_paper=want_paper,
+                              store_layout=printer["layout"], store_paper=printer["paper_width_mm"],
+                              format_available=bool(fmt),
+                              want_destination=want_destination, store_direct=printer["direct"])
+    template = _sr.with_choice(template, choice)
     settings_text = {k: _poscfg.text(rows, k, store_code)
                      for k in ("email_receipt_subject", "email_receipt_body")}
+    # Named once: the browser's copy and the printer's byte stream are handed the SAME inputs, or
+    # the cut slip could say something the paper one does not.
+    blocks = _poscfg.disclaimers(rows, store_code)
+    fold_discount = _poscfg.flag(rows, "receipt_coupon_in_retail_price", store_code)
+    employee_name = (sale.get("employee_id") or "") if template["show_employee"] else ""
     html = _sr.html(
         snap, template,
         render_document=_rrender.render_html, fmt=fmt,
-        brand=brand, disclaimer_blocks=_poscfg.disclaimers(rows, store_code),
+        brand=brand, disclaimer_blocks=blocks,
         store_name=store_name, store_lines=store_lines,
-        fold_discount=_poscfg.flag(rows, "receipt_coupon_in_retail_price", store_code),
+        fold_discount=fold_discount,
         tenant_name=tenant_name,
-        employee_name=(sale.get("employee_id") or "") if template["show_employee"] else "",
+        employee_name=employee_name,
         short_customer_name=_poscfg.flag(rows, "receipt_customer_short_name", store_code),
     )
     return {
         "html": html,
-        "layout": _sr.clean_layout(template["layout"], format_available=bool(fmt)),
-        "layout_note": _sr.layout_note(template["layout"], format_available=bool(fmt)),
+        "layout": choice["layout"],
+        "layout_note": choice["layout_note"],
+        "layout_source": choice["layout_source"],
+        "paper_width_mm": choice["paper_width_mm"],
+        "paper_source": choice["paper_source"],
+        "layout_options": _sr.layout_options(fmt.get("label") if fmt else ""),
+        "paper_options": _sr.paper_options(),
+        "printer_label": printer["label"],
+        "destination": choice["destination"],
+        "destination_source": choice["destination_source"],
+        "destination_options": _sr.destination_options(printer["label"],
+                                                       helper_ready=bool(printer["helper_url"])),
+        "helper_url": printer["helper_url"],
+        # The printer's own byte stream, built ONLY when this copy is going to the printer — the
+        # register is its courier, not its reader, and a dialog print has no use for it. Both media
+        # render `sale_receipt.slip_model`, so the cut slip and the paper copy cannot differ.
+        "escpos_base64": (_escpos.payload_base64(
+            _sr.slip_model(snap, template, brand=brand, disclaimer_blocks=blocks,
+                           store_name=store_name, fold_discount=fold_discount,
+                           tenant_name=tenant_name, employee_name=employee_name))
+            if choice["destination"] == _sr.DEST_DIRECT else ""),
         "email": _sr.email_view(snap, brand, template, settings_text, customer=customer,
                                 typed=typed_email, tenant_name=tenant_name),
         "snapshot": snap,
@@ -2257,20 +2299,33 @@ def preview_receipt_template(body: dict = None, org_id: str = ORG_ID):
             "layout_note": _sr.layout_note(template["layout"], format_available=bool(fmt))}
 
 
+#: What the receipt response carries. Named once so GET and the re-render answer the same shape.
+_RECEIPT_KEYS = ("html", "layout", "layout_note", "layout_source", "paper_width_mm", "paper_source",
+                 "layout_options", "paper_options", "printer_label", "destination",
+                 "destination_source", "destination_options", "helper_url", "escpos_base64",
+                 "email", "company_name")
+
+
 @router.get("/sales/{sale_id}/receipt")
-def sale_receipt(sale_id: str, org_id: str = ORG_ID):
-    """THE receipt of this sale as print-ready HTML, plus what the email screen must show: the
-    address it would go to, whether that address is usable, the name it will come from and the
-    subject. The register prints this; it builds no receipt of its own."""
+def sale_receipt(sale_id: str, org_id: str = ORG_ID, layout: str = "", paper_width_mm: str = "",
+                 destination: str = ""):
+    """THE receipt of this sale as print-ready HTML, plus what the print and email screen must show:
+    the formats and paper widths this store can print, which one this copy used and why, the printer
+    the store declared, and the address the email would go to. The register prints this; it builds no
+    receipt of its own.
+
+    `layout` / `paper_width_mm` are FOR THIS PRINT ONLY (owner 2026-10-19, §POS-03) — a counter with
+    a thermal roll and an office printer asks for each in turn without changing any setting. Omitted,
+    the answer is the store's own declaration, else the company template.
+    """
     client = sb()
     sale = _load_sale(client, org_id, sale_id)
     try:
-        bundle = _receipt_bundle(client, org_id, sale)
+        bundle = _receipt_bundle(client, org_id, sale, want_layout=layout, want_paper=paper_width_mm,
+                                 want_destination=destination)
     except _sr.ReceiptError as e:
         raise HTTPException(400, str(e))
-    return {"receipt": {k: bundle[k] for k in ("html", "layout", "layout_note", "email",
-                                               "company_name")},
-            "sale_id": sale_id}
+    return {"receipt": {k: bundle[k] for k in _RECEIPT_KEYS}, "sale_id": sale_id}
 
 
 @router.post("/sales/{sale_id}/email-receipt")
@@ -2287,7 +2342,9 @@ async def email_sale_receipt(sale_id: str, body: dict = None,
     client = sb()
     sale = _load_sale(client, org_id, sale_id)
     try:
-        bundle = _receipt_bundle(client, org_id, sale, typed_email=body.get("to"))
+        bundle = _receipt_bundle(client, org_id, sale, typed_email=body.get("to"),
+                                 want_layout=body.get("layout"),
+                                 want_paper=body.get("paper_width_mm"))
     except _sr.ReceiptError as e:
         raise HTTPException(400, str(e))
     view = bundle["email"]
