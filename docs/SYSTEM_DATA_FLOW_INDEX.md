@@ -137,6 +137,7 @@ Primary code homes:
 | COMMCALC-19 | **The figures at the top of a report are something you can send** | "The dashboard should give an option to send the snapshot of the top part to the desired people." Sending already had one home; what was missing was a shape for the TILES, shared rather than written into one page. And when the snapshot says a figure is unchanged, is that a measurement or two copies of one carried expense sheet compared with itself? |
 | COMMCALC-20 | **A handset that books a rebate books a cost** | "How come the device cost is less than the device rebate?" The rebate books per commission row, unconditionally; the cost books only if the handset can be PRICED off the fulfillment sheet — and an order-type allowlist silently decided which fulfillment rows were allowed to carry a price at all. A family the distributor opened after the allowlist was written priced nothing, so its handsets netted a full rebate against a zero cost. |
 | COMMCALC-21 | **A non-payment somebody chose is not a finding** | "The multi-month notice lists 115 home internet and 290 tablet activations as 'did not pay'. I excluded those on purpose. Which of these lines is a problem, which is my own setting being restated at me, and how does a surface know the difference instead of asserting one reason for all of them?" |
+| COMMCALC-22 | **A claim with no amount cannot be filed** | "Trace the 4 devices paid twice and the 200 sales that matched no commission — they should be part of the discrepancies to be filed with the carrier if we did not get paid." The discrepancy report already held them, and wrote $0.00 on every single one, so the hub's open-$ card summed to nothing. Which non-payments are claims against the carrier at all, which are facts about our own feed, and what is a claim worth? |
 
 ---
 
@@ -25684,6 +25685,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-19 | commcalc |
 | COMMCALC-20 | commcalc |
 | COMMCALC-21 | commcalc |
+| COMMCALC-22 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -28788,6 +28790,146 @@ AST-derived (73 facts / 305 edges / 1563 checks).
 
 §6n (the one device classifier), §66 (`component_is_evidence`), §COMMCALC-09 (`payout_slice_evidence`),
 §19.28 (`kpi_failing`), §19.18 (a mechanism written, callers left unwired), §50 (the module graph).
+
+## §COMMCALC-22. A CLAIM WITH NO AMOUNT CANNOT BE FILED (owner report 2026-10-20)
+
+Owner, verbatim: *"trace teh 4 devices which were aid twice , 200 sales which matched no commision ,
+it could be a part of the discrepancies to be filed with the carrier and as a matter of fact they
+shoudl be a part of the discrepancies if we did not get paid"*.
+
+### COMMCALC-22.1 What was actually wrong
+
+What he asked for already existed and could not be used. The B2B-sold / carrier-paid recon (§15)
+resolves every sold activation against the statement and writes the unpaid ones to
+`commcalc.discrepancy_results`. Measured read-only 2026-10-20: **every row it has ever written
+carries `expected_amount` $0.00, `commissionable_mrc` $0.00 and `gap` $0.00** — the literal `0.0` at
+the write site (`ma_recon.py`) — so `discrepancy_appeals.summarize_appeals`' open-$ card sums to
+$0.00 for the whole tenant. A claim the platform says is worth nothing is a claim nobody can file.
+
+Luxelink, June–October 2026, every activation matched to `raw_ma_commission` on digit-normalized
+`serial_1` ∪ `sim` (the recon's own sold basis):
+
+| | activations | comparable value | verdict |
+| --- | --- | --- | --- |
+| carrier paid | 3,642 | — | — |
+| sold after the last day that period's statement reaches | 285 | ~$55,824 | not yet due — **not a claim** |
+| all on **28 July**, a day the statement holds ZERO rows for | 33 | ~$5,914 | our feed gap — **not a claim** |
+| explained by the tenant's own `ma_payment_rule` rows | 206 | ~$11,025 | a decision (§COMMCALC-21) |
+| **nothing explains them** | **298** | **~$55,946** | **the claims** (July 230 / ~$40,505) |
+
+Before this change all four shapes were written as `open` or `info` with a $0.00 value — so filing
+from the report would have invoiced the carrier for money not yet owed and for a statement day
+nobody uploaded, and every real claim would have been worth nothing.
+
+**The class, not the instance.** The instance is "the carrier-statement recon writes zero". The class
+is **two writers answering one question, one wired and the other left hardcoded** — the sibling
+defect the index rules already forbid. One table has two authors: the rate-card engine
+(`discrepancy_engine`) SIZES each claim; the recon wrote `0.0`. And a hardcoded `0.0` is the same
+shape §19.28 (`kpi_failing`), §66 (`component_is_evidence`), §COMMCALC-09 (`payout_slice_evidence`)
+and §COMMCALC-21 each already outlawed on a different subject: a figure nobody measured, printed as a
+measurement.
+
+### COMMCALC-22.2 Duplicate check (the build gate)
+
+Searched the index for an existing home for "what should this activation have paid". Four
+near-neighbours, each the same posture or the same table on a different question — posture reused, no
+sibling built:
+
+- **§15 `ma_recon`** owns *whether* the carrier paid, through the mig-308 gate. It keeps that job
+  entirely; this section adds only *is it a claim, and what is it worth*.
+- **`discrepancy_engine`** owns the Boost rate card. It is not a general estimator (it needs an MI
+  line or a parseable MRC), so it could not price this feed — but it is the SIBLING, and it is fixed
+  in the same change rather than excused: its unsizeable `SOLD_NOT_IN_MI` claim now writes NULL.
+- **§66 `component_is_evidence`** — the allowlist shape, copied exactly, twice.
+- **§COMMCALC-21 `installment_category`** — a decision is not a finding; here a decision and a feed
+  gap are both not *claims*.
+
+### COMMCALC-22.3 The one home
+
+`backend/app/modules/commcalc/carrier_claim_value.py`. Pure: no I/O, no `from app`, no table, and no
+carrier, tenant, market or product name (RULE TWO) — the contract family is whatever string the
+caller's own rows carry, and the money columns come from the gate's existing
+`ma_month_field_prefix` / `ma_month1_extra_fields` / `ma_payout_sign` config ladder, so a comparable
+can never be built from a different definition of money than the test that decided the activation was
+unpaid.
+
+**Four states, one claim.** `STATE_OPEN_CLAIM` · `STATE_NOT_YET_STATEMENTED` ·
+`STATE_STATEMENT_DAY_MISSING` · `STATE_EXPLAINED_BY_RULE`. `is_claimable` is an **allowlist** of the
+first alone, so a state a later migration invents — or one missing entirely — is never filed.
+`classify_non_payment` applies them in order of evidence strength: past the statement's reach wins
+over everything, a day the statement demonstrably skipped explains its own silence before any rule
+does, and a rule speaks only about an activation the statement really did cover and really did skip.
+
+**Absence of coverage is not a gap.** `statement_day_missing` may be asserted only when the day-level
+coverage is actually known (`statement_days` non-empty). A statement whose rows carry no usable dates
+says nothing about any particular day, and claiming a gap from that would be the very defect this
+section exists to remove. Caught by §D of the lock, which was written after the first draft got this
+wrong.
+
+**One figure, one basis.** `claim_value` returns `(amount, basis, sample_n)`. The amount is the
+median the carrier ITSELF paid for the same contract family in the same period;
+`MIN_COMPARABLE_SAMPLE` is 3, the smallest sample whose median is not simply an endpoint, and below
+it the figure is **withheld as None with the `not_measured` basis — never rounded down to 0.00**.
+`value_is_measured` is the second allowlist. `CLAIM_VALUE_CAVEAT` is the only place the limit is
+worded ("a comparable, not an invoice"), so no surface can overstate it. `claim_gap` returns None
+when the expected side was not measured, because a subtraction cannot exist where one side does not.
+
+### COMMCALC-22.4 What moved
+
+| surface | before | now |
+| --- | --- | --- |
+| `ma_recon` row | `expected_amount` 0.0, `gap` 0.0, `commissionable_mrc` 0.0 | the one home's figure, or **NULL** with the basis in `evidence.claim` |
+| `ma_recon` status | `open` for every unexplained non-payment | `open` only for a real claim; `pending` for not-yet-due, `info` for a missing statement day |
+| `ma_recon` notes | the rule's text, or the no-rule literal | the one home's sentence; the `'no business rule configured'` literal is kept EXACTLY where that is why the row is open, so `summarize_appeals.no_rule_count` reads as it always did |
+| `ma_recon` summary | counts only | plus `claims` from `ccv.summarize` — claimable count, claimable amount over MEASURED values only, and how many claims are unpriced |
+| `discrepancy_engine` `SOLD_NOT_IN_MI` | `expected_amount` 0.00, filed | NULL, still `open` — a real finding whose value is unmeasured |
+| `/discrepancy/run` response | — | `statement_last_day`, `statement_days_loaded`, `comparables_built` |
+
+No migration: `expected_amount`, `commissionable_mrc` and `gap` are nullable `NUMERIC` (mig 312 DDL),
+and the precise state rides in the existing `evidence` jsonb rather than taking a new column. **No
+priced figure moves** — the rate-card engine rounds a sized claim exactly as before (§F of the lock),
+and nothing here decides whether the carrier paid.
+
+### COMMCALC-22.5 Reported, never repaired
+
+Per the house rule, found in live data and handed to the owner rather than coded around:
+
+- **The recon last ran 2026-09-02.** Nothing for September or October. 806 Luxelink rows exist, 717
+  of them under the period spelling `2026-07` and 89 under `August 2026` — two spellings in one
+  table (the §COMMCALC-07 class).
+- **28 July has no statement rows at all.** Needs re-pulling from the portal.
+- **The tenant's two Upgrade rules contradict the statement.** Both say Total pays no activation
+  bounty on Upgrades, and they hold 206 activations off the claim list — yet **the carrier paid 121
+  Upgrades at a median $75.00**. Worth ~$15,000 if the rule is wrong. A config row, and the owner's
+  call; nothing was changed.
+- **Re-rings pay per ring** (traced the same day): all 19 duplicated device-months use ONE schedule,
+  so the engine's "two schedules" wording is wrong for every live case. $17.25 overpaid, but 100
+  Luxelink and 63 Cellfonz activations are OVER-COUNTED, and 83 of 117 re-rings carry no signal in
+  the feed at all. Its own job, awaiting the owner's answer on whether to retire the unambiguous ones.
+
+### COMMCALC-22.6 Locks
+
+- `backend/harness_carrier_claim_value.py` — **99 passed / 0 failed**. Verified against pre-fix
+  `main` in a clean worktree WITH the new module and graph fact staged, so only the wiring could
+  fail: **19 named failures, no traceback** — it catches "registry written, callers unwired" (§19.18)
+  rather than merely "module absent".
+- `reconcile_ma_activations(..., cfg, claim_ctx)` — `claim_ctx` is **required with no default**, so
+  forgetting it is a TypeError at the call site, not a zero in a letter to a carrier.
+- §J asserts the hardcoded zeros are gone from BOTH writers and that no second copy of the state or
+  basis vocabulary exists outside the one home.
+- CI: the lock job's paths filter (4 paths) and its own step — jobs 33, steps 296 → 297, verified
+  with `yaml.safe_load`.
+- `core/module_graph.py` fact `carrier_claim_value`, both callers AST-derived.
+
+### COMMCALC-22.7 Cross-references
+
+- §15 — the recon that decides whether the carrier paid; unchanged, and the only owner of that test.
+- §66 / §COMMCALC-09 / §COMMCALC-21 / §19.28 — the allowlist posture this reuses, now four subjects deep.
+- §COMMCALC-07 — the two-period-spelling class, found again here.
+- Reports: Pay Discrepancy, Commission Discrepancy hub (`/discrepancy-appeals`), `carrier_vs_pay`
+  (reads the recon rows' `status`; `pending` falls in its `explained` bucket).
+
+---
 
 ## §COMMCALC-10. A LIVE LOGIN THAT STOPS MAKING PROGRESS MUST SAY SO (owner report 2026-10-15)
 
