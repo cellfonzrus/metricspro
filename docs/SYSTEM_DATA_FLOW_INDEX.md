@@ -31480,6 +31480,16 @@ belongs on the worker is forwarded before it does work it would only throw away.
   as the owner's answer. It is the one named exemption in the lock, and it must earn it.
 - The VidaPay pull's inner session reuse is a legitimate best-effort read of a per-process registry —
   it falls back to the cold `storage_state` restore — so it degrades, it does not lie.
+- **`harness_browser_sweep_kinds.py` was a sibling LOCK, and CI found it, not me.** It already asks
+  the same question from the other direction — it walks the call graph for the browser *reach* and
+  asserts the endpoint is gated — but it matched the gate by the literal string
+  `require_browser_service()`, so the rename failed a correctly gated `open_order_session`. Two locks
+  on one requirement with two spellings is the divergence the index rules forbid, so it now accepts
+  either name through one `_GATE_CALLS` vocabulary — and **proves the alias rather than assuming it**
+  (3 new checks: the renamed gate exists at its home, it dereferences `require_browser_service`, and
+  it reads no environment of its own). Make `require_session_host` decide the role itself and that
+  file stops accepting the spelling. The two locks are complementary and both are kept: this one
+  scans `@router` endpoints touching the registry, that one follows helper calls to a browser launch.
 
 ### COMMCALC-22.4 Locked so it cannot un-wire
 
@@ -31493,7 +31503,8 @@ controls, including the exact pre-change `/state` body text, armed so a revert r
 Wired into `carrier-vocab-guard.yml` as *"live-session-host lock"*.
 
 **Proved red two ways on main's shape:** removing the gate from `/frame` fails **2** checks; before
-the fix the scan reported **6** ungated endpoints.
+the fix the scan reported **6** ungated endpoints. The sibling lock is proved red too: making
+`require_session_host` read the environment instead of dereferencing fails **2** of its checks.
 
 ### COMMCALC-22.5 Cross-references
 

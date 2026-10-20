@@ -236,6 +236,19 @@ _LAUNCH_RE = re.compile(r"from\s+playwright|import\s+playwright|sync_playwright|
 # SERVICE_ROLE=api deploy proxies them to BROWSER_SERVICE_URL or answers a plain 503 — never a fake success);
 # the ones that do not reach a browser must NOT (they would 503 for nothing).
 _BROWSER_CALLS = ("start_session(", "live_login_start(", "_live_pull(")
+# TWO SPELLINGS, ONE REQUIREMENT (§COMMCALC-22, 2026-10-20). The gate was renamed at its home to
+# `live_login.require_session_host()` because the old name asked "does this endpoint launch a
+# browser?" and the question that matters is "does it touch the per-process session registry?" —
+# /live-login/frame launches nothing, reads a dict, and was left ungated for five days on that
+# reasoning. `require_session_host` DEREFERENCES `require_browser_service`, so a handler calling it
+# is gated. This file must accept both or it fails a correctly gated endpoint; it must not accept a
+# name that does NOT dereference the role module, so the alias is PROVED below, never assumed.
+_GATE_CALLS = ("require_browser_service()", "require_session_host()")
+
+
+def _gated(text):
+    """True when this (effective) handler body calls the browser-service gate under either name."""
+    return any(g in text for g in _GATE_CALLS)
 SUPPLY_ROUTER = os.path.join(APP, "modules", "supply", "router.py")
 # DECLARED, not merely counted. Until 2026-10-14 this set was only asserted to have at least four
 # members, and PR #477 showed what that tolerates: read_vendor_catalog moved its browser call into a
@@ -305,11 +318,24 @@ def _browser_modules_elsewhere():
         (reach if any(c in eff for c in _BROWSER_CALLS) else plain).append(name)
     eq(set(reach), SUPPLY_BROWSER_ENDPOINTS,
        "the supply endpoints that reach a live browser are exactly the declared set")
+    # THE ALIAS IS PROVED, NOT ASSUMED (§COMMCALC-22). `_GATE_CALLS` accepts the renamed gate only
+    # because it dereferences the role module. If someone makes `require_session_host` decide the
+    # role itself — or deletes it — this file must stop accepting that spelling, so check it here
+    # rather than trusting the name.
+    _ll = _src(os.path.join(APP, "modules", "commcalc", "live_login.py"))
+    ok("def require_session_host" in _ll,
+       "the renamed gate exists at its one home in live_login")
+    _gate_src = _ll.split("def require_session_host", 1)[-1].split("\ndef ", 1)[0] if \
+        "def require_session_host" in _ll else ""
+    ok("require_browser_service()" in _gate_src,
+       "and it DEREFERENCES require_browser_service, which is why this file accepts it as the gate")
+    ok("SERVICE_ROLE" not in _gate_src and "environ" not in _gate_src,
+       "and it reads no environment of its own — one reader of the role, not two")
     for name in reach:
-        ok("require_browser_service()" in _effective_body(name, handlers),
-           "supply %s() reaches a live browser and calls require_browser_service()" % name)
+        ok(_gated(_effective_body(name, handlers)),
+           "supply %s() reaches a live browser and is gated to the session host" % name)
     for name in plain:
-        ok("require_browser_service()" not in _effective_body(name, handlers),
+        ok(not _gated(_effective_body(name, handlers)),
            "supply %s() reaches no browser and does NOT require the browser service" % name)
     # The helper walk must not be vacuous: a handler whose browser call and guard BOTH sit in a
     # same-module helper has to classify exactly as if they were inline. 2026-10-14: this is not
@@ -318,7 +344,7 @@ def _browser_modules_elsewhere():
     _probe = {"_h_endpoint": "    return await run_in_threadpool(_h_helper, x)\n",
               "_h_helper": "    require_browser_service()\n    return live_login_start(sid)\n"}
     _probe_eff = _effective_body("_h_endpoint", _probe)
-    ok(any(c in _probe_eff for c in _BROWSER_CALLS) and "require_browser_service()" in _probe_eff,
+    ok(any(c in _probe_eff for c in _BROWSER_CALLS) and _gated(_probe_eff),
        "control: a browser call and its guard are seen THROUGH a same-module helper")
     ok(not any(c in _probe["_h_endpoint"] for c in _BROWSER_CALLS),
        "control: …and the handler's own body really does name neither (so the walk did the work)")
