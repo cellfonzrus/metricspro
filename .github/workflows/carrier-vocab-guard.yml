@@ -1158,9 +1158,6 @@ jobs:
       - name: Run the suspended-sale proof (one held cart per register on the register_sessions triple; stored and restored verbatim with its age; not a sale; adaptive before mig 1088 — index §POS-01)
         working-directory: backend
         run: python3 harness_pos_held_sale.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the receipt-render proof (ONE renderer for the till copy, the reprint, the preview and the emailed copy; the browser/server POS-setting defaults pinned key by key; the layout declared with its fallback spoken aloud; the From name is the tenant's own and has one reader — index §POS-02)
-        working-directory: backend
-        run: python3 harness_pos_receipt_render.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the ledger statement-identity lock (one identity derivation, one period home, one lander; every ledger read on the family; N landings refused — index §30.15)
         working-directory: backend
         run: python3 harness_ledger_identity_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1800,6 +1797,20 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_payout_structure.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  pos-receipt-render-proof:
+    name: POS receipts — one renderer, one declared format (DB-free, the real router)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the receipt-render proof (ONE renderer for the till copy, the reprint, the preview and the emailed copy; the browser/server POS-setting defaults pinned key by key; the layout declared with its fallback spoken aloud; the From name is the tenant's own and has one reader; the declared format has ONE shape and the print crash is reproduced — index §POS-02, §POS-03, §POS-04, §POS-05)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_pos_receipt_render.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   store-identity-proof:
     name: Store identity — one store, one canonical key (DB-free, the real resolver)
