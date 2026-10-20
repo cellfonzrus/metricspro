@@ -23,6 +23,11 @@ stdlib only, DB-free.
   §H ONE HOME — the register builds no receipt HTML of its own and the admin screen draws no
      imitation of one; both dereference the server. The `From:` header is assembled in one place.
   §I ENDPOINT WIRING + REGISTRATION.
+  §M THE DECLARED FORMAT HAS ONE SHAPE (§POS-05, the 2026-10-20 print crash, ref 357a4772) — "which
+     receipt format has this tenant declared" had three derivations in two shapes (the registry ROW
+     and the format MODULE), so the day one's `.get("label")` was copied onto the other every receipt
+     of the one tenant WITH a declared POS died with an unhandled 500. One home, four dereferences,
+     and a regression that reproduces the crash.
   Negative controls prove each rule goes red.
 """
 import io
@@ -565,6 +570,149 @@ check("L18 §POS-04 is registered in the index with its one homes",
       "POS-04" in idx and "receipt_escpos" in idx and "slip_model" in idx
       and "pos-print-helper" in idx)
 
+print("\n§M  THE DECLARED FORMAT HAS ONE SHAPE (the 2026-10-20 print crash, ref 357a4772)")
+# WHAT WENT WRONG. `sales_from_reports.resolve_format` answers {"ok","pos","format","reason"} where
+# `format` is the REGISTRY ROW ({source,label,parse,module}). Three callers in pos/router.py each
+# unpacked that themselves: the admin screen kept the ROW and read `.get("label")` off it, the print
+# path narrowed it to the MODULE — and §POS-03 copied the row's `.get("label")` onto the module. A
+# module has no `.get`, so every receipt of the one tenant that HAS a declared POS died with an
+# unhandled 500, while the tenants with no POS declared (format None) printed fine. The fact had
+# three derivations; §M pins its ONE home and the four call sites that dereference it.
+from app.modules.pos import sales_from_reports as sfr          # noqa: E402
+from app.modules.pos.receipt_formats import registry as rfmt   # noqa: E402
+from app.modules.commcalc import report_kinds as rk            # noqa: E402
+from app.modules.pos import router as prouter                  # noqa: E402
+
+
+class _FakeQ:
+    """Enough of a PostgREST query to read rows back: every filter returns self."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def __getattr__(self, _name):
+        return lambda *a, **kw: self
+
+    def execute(self):
+        return type("Res", (), {"data": list(self._rows)})()
+
+
+class _FakeTable:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def select(self, *a, **kw):
+        return _FakeQ(self._rows)
+
+    def insert(self, *a, **kw):
+        return _FakeQ(self._rows)
+
+
+class FakeClient:
+    """A DB-free stand-in: rows keyed by (schema, table). No network, no credentials."""
+
+    def __init__(self, data):
+        self._data, self._schema = data, ""
+
+    def schema(self, name):
+        self._schema = name
+        return self
+
+    def table(self, name):
+        return _FakeTable(self._data.get((self._schema, name), []))
+
+
+def declared_as(pos_keys):
+    """`declared_format` read for a tenant whose declaration names `pos_keys`."""
+    real = rk.tenant_declaration
+    rk.tenant_declaration = lambda client, org_id: {"pos": list(pos_keys)}
+    try:
+        return sfr.declared_format(FakeClient({}), "O")
+    finally:
+        rk.tenant_declaration = real
+
+
+RQ_SOURCE = rfmt.sources()[0]                       # the registry's own first POS, never a literal
+RQ_ROW = rfmt.get(RQ_SOURCE)
+M_DATA = {
+    ("pos", "pos_settings"): [],
+    ("pos", "receipt_templates"): [{"id": "t1", "org_id": "O", "name": "Default", "is_default": True,
+                                    "layout": sr.LAYOUT_POS_FORMAT, "paper_width_mm": 80,
+                                    "font_size_px": 12, "show_store_name": True,
+                                    "show_customer": True}],
+    ("storeops", "stores"): [{"store_code": "S1", "name": "Shop", "address": "1 St", "phone": "555"}],
+}
+M_SALE = {"id": "s1", "store_code": "S1", "employee_id": "E1",
+          "receipt": {"transactionId": 9,
+                      "items": [{"description": "Phone", "qty": 1, "unit_price": 100.0,
+                                 "line_total": 100.0}],
+                      "subtotal": 100.0, "taxTotal": 0, "total": 100.0, "method": "cash",
+                      "tendered": 100.0, "change": 0}}
+
+
+def bundle_for(pos_keys):
+    real = rk.tenant_declaration
+    rk.tenant_declaration = lambda client, org_id: {"pos": list(pos_keys)}
+    try:
+        return prouter._receipt_bundle(FakeClient(M_DATA), "O", M_SALE)
+    finally:
+        rk.tenant_declaration = real
+
+
+def declared_format_survives_a_broken_read():
+    """A receipt must still print when the declaration read itself fails."""
+    real = rk.tenant_declaration
+
+    def boom(client, org_id):
+        raise RuntimeError("the declaration table is unreachable")
+
+    rk.tenant_declaration = boom
+    try:
+        v = sfr.declared_format(FakeClient({}), "O")
+    finally:
+        rk.tenant_declaration = real
+    return (v["available"] is False and v["module"] is None and v["label"] == ""
+            and bool(v["reason"]))
+
+
+_declared = declared_as([RQ_SOURCE])
+
+check("M1 the declared format answers ONE fixed shape, named in the module",
+      tuple(sorted(_declared)) == tuple(sorted(sfr.DECLARED_FORMAT_KEYS)))
+check("M2 a declared POS the registry knows gives its label AND its module, both dereferenced",
+      _declared["available"] is True and _declared["pos"] == RQ_SOURCE
+      and _declared["label"] == RQ_ROW["label"] and _declared["module"] is RQ_ROW["module"]
+      and _declared["reason"] is None)
+check("M3 no POS declared reads as no format, with the reason spoken aloud",
+      declared_as([])["available"] is False and declared_as([])["label"] == ""
+      and declared_as([])["module"] is None and bool(declared_as([])["reason"]))
+check("M4 a declared POS with no registered format keeps the declaration and refuses the format",
+      declared_as(["a-pos-nobody-registered"])["available"] is False
+      and declared_as(["a-pos-nobody-registered"])["pos"] == "a-pos-nobody-registered"
+      and declared_as(["a-pos-nobody-registered"])["module"] is None)
+check("M5 REGRESSION — the receipt of a tenant WITH a declared POS builds (it raised AttributeError)",
+      bundle_for([RQ_SOURCE])["layout_options"][1]["label"].startswith(RQ_ROW["label"])
+      and bundle_for([RQ_SOURCE])["layout"] == sr.LAYOUT_POS_FORMAT
+      and len(bundle_for([RQ_SOURCE])["html"]) > 500)
+check("M6 a tenant with NO declared POS still prints, on the till slip, and says why",
+      bundle_for([])["layout"] == sr.LAYOUT_THERMAL and bool(bundle_for([])["layout_note"])
+      and len(bundle_for([])["html"]) > 500)
+ROUTER_CODE = code_only(read(ROUTER))
+check("M7 LOCK — the POS router no longer resolves the format itself; one reader, four dereferences",
+      "resolve_format(" not in ROUTER_CODE and "_declared_receipt_format" not in ROUTER_CODE
+      and ROUTER_CODE.count("def _declared_format(") == 1
+      and ROUTER_CODE.count("_declared_format(") == 5)
+check("M8 LOCK — no caller reads a label or a module off the record by hand",
+      'fmt.get("label")' not in ROUTER_CODE and "fmt.LABEL" not in ROUTER_CODE
+      and 'fmt.get("module")' not in ROUTER_CODE
+      and ROUTER_CODE.count('_sr.layout_options(fmt["label"])') == 2)
+check("M9 LOCK — the renderer is handed the MODULE, never the record",
+      ROUTER_CODE.count('fmt=fmt["module"]') == 2 and "fmt=fmt," not in ROUTER_CODE)
+check("M10 the one home never raises when the declaration cannot be read",
+      declared_format_survives_a_broken_read())
+check("M11 §POS-05 is registered in the index with its one home",
+      "POS-05" in idx and "declared_format" in idx)
+
 print("\n§J  negative controls")
 check("neg-B a default that drifted on one side only is RED",
       ts_default("brand_company_name")[1] == pc.SERVER_DEFAULTS["brand_company_name"]
@@ -590,6 +738,13 @@ check("neg-L a byte stream that re-read the sale would be RED (it takes the mode
       esc.payload(MODEL) == esc.payload(dict(MODEL)) and "snapshot_view" not in ESC_SRC)
 check("neg-L2 a store that never opted in printing straight to the printer would be RED",
       sr.print_choice(T_ORG, store_direct=False)["destination"] == sr.DEST_DIALOG)
+
+check("neg-M the two shapes really are different — this is the mix-up, not a style point",
+      not hasattr(RQ_ROW, "COLUMNS") and hasattr(RQ_ROW["module"], "COLUMNS")
+      and getattr(RQ_ROW["module"], "get", None) is None and callable(RQ_ROW.get))
+check("neg-M2 a record that invented a label for an unregistered POS would be RED",
+      declared_as(["a-pos-nobody-registered"])["label"] == ""
+      and RQ_ROW["label"] not in str(declared_as(["a-pos-nobody-registered"])))
 
 print(f"\n{_pass} passed, {_fail} failed")
 if _fail:

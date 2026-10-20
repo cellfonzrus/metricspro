@@ -382,6 +382,38 @@ def resolve_format(client, org_id):
                       f"cannot print it in that POS's layout until a format is added to receipt_formats/registry (a house change)"}
 
 
+#: What EVERY caller of "which receipt format has this tenant declared" is handed. Named here so the
+#: answer has one shape: `available` (is there a format at all), `pos` (the declared key), `label`
+#: (what a person is shown), `module` (the format's own declarations, which the renderer reads) and
+#: `reason` (why there is none).
+DECLARED_FORMAT_KEYS = ("available", "pos", "label", "module", "reason")
+
+
+def declared_format(client, org_id) -> dict:
+    """THE declared receipt format of this tenant, as one fixed record — `DECLARED_FORMAT_KEYS`.
+
+    WHY THIS EXISTS (the 2026-10-20 crash, system-error ref 357a4772). `resolve_format` answers
+    {"ok","pos","format","reason"} where `format` is the REGISTRY ROW ({source,label,parse,module}).
+    Three callers each unpacked that themselves and disagreed about what `format` was: the admin
+    screen read `fmt.get("label")` off the row, while the print path narrowed it to the MODULE and
+    then had the same `.get("label")` copied onto it — and a module has no `.get`, so every receipt
+    printed by the one tenant that HAS a declared format died with an unhandled 500, while the
+    tenants with no POS declared (format None) printed fine. The fact was derived three times; this
+    is its one home, and callers dereference it.
+
+    Never raises: a tenant's declaration is read from the database, and a receipt must still print on
+    the thermal slip when that read fails."""
+    try:
+        res = resolve_format(client, org_id) or {}
+    except Exception as exc:                                   # pragma: no cover - I/O guard
+        return {"available": False, "pos": None, "label": "", "module": None,
+                "reason": f"the declared POS could not be read ({type(exc).__name__})"}
+    row = res.get("format") if isinstance(res.get("format"), dict) else None
+    return {"available": bool(row), "pos": res.get("pos"),
+            "label": (row or {}).get("label") or "", "module": (row or {}).get("module"),
+            "reason": res.get("reason")}
+
+
 def _store_header_fn(client, org_id):
     """store string → the receipt's store block from the store master: the POS's own store name (the
     string), the roster's address and phone for the resolved store code (§13a chain)."""

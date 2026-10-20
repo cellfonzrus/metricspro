@@ -2030,22 +2030,17 @@ def get_receipt_template(org_id: str = ORG_ID):
         r = client.schema("pos").table("receipt_templates").insert(
             {"org_id": org_id, "name": "Default", "is_default": True}).execute()
         template = (r.data or [{}])[0]
-    try:
-        from app.modules.pos import sales_from_reports as _sfr_local
-        decl = _sfr_local.resolve_format(client, org_id) or {}
-    except Exception:
-        decl = {}
-    fmt = (decl.get("format") or {}) if isinstance(decl.get("format"), dict) else {}
+    fmt = _declared_format(client, org_id)
     tenant_name = _tenant.display_name(client, org_id)
     brand = _poscfg.brand(_pos_settings_rows(client, org_id), "")
     stored_layout = template.get("layout")
     return {
         "template": template,
-        "layout_options": _sr.layout_options(fmt.get("label") or ""),
-        "layout": _sr.clean_layout(stored_layout, format_available=bool(fmt)),
-        "layout_note": _sr.layout_note(stored_layout, format_available=bool(fmt)),
-        "pos_format": {"declared": decl.get("pos"), "label": fmt.get("label"),
-                       "reason": decl.get("reason")},
+        "layout_options": _sr.layout_options(fmt["label"]),
+        "layout": _sr.clean_layout(stored_layout, format_available=fmt["available"]),
+        "layout_note": _sr.layout_note(stored_layout, format_available=fmt["available"]),
+        "pos_format": {"declared": fmt["pos"], "label": fmt["label"],
+                       "reason": fmt["reason"]},
         # What a customer sees a receipt come from — shown on the screen so the admin can tell
         # whether onboarding named the business, rather than discovering it from a sent email.
         "from_name": _sr.company_name(brand, tenant_name),
@@ -2128,19 +2123,17 @@ def _receipt_template_row(client, org_id: str) -> dict:
     return rows[0] if rows else {}
 
 
-def _declared_receipt_format(client, org_id: str):
-    """The format module of the POS this tenant declared, or None — through the SAME resolver the
-    rebuilt receipts use (`sales_from_reports.resolve_format`), so "my POS's layout" cannot come to
-    mean two different POSs on one tenant."""
-    try:
-        from app.modules.pos import sales_from_reports as _sfr_local
-        res = _sfr_local.resolve_format(client, org_id)
-    except Exception:
-        return None
-    fmt = (res or {}).get("format") if isinstance(res, dict) else res
-    if isinstance(fmt, dict):
-        return fmt.get("module")
-    return getattr(fmt, "module", None) or fmt
+def _declared_format(client, org_id: str) -> dict:
+    """What POS this tenant declared and what its receipt format is called — read from the ONE home,
+    `sales_from_reports.declared_format` (`DECLARED_FORMAT_KEYS`), never unpacked here.
+
+    This router used to derive it three times and in two different shapes; the print path kept the
+    MODULE and the admin screen kept the registry ROW, and the day a `.get("label")` was copied from
+    one onto the other every receipt of the one tenant with a declared POS crashed. Nothing in this
+    module reads `resolve_format` any more, so the two cannot drift apart again (pinned by
+    harness_pos_receipt_render.py §M)."""
+    from app.modules.pos import sales_from_reports as _sfr_local
+    return _sfr_local.declared_format(client, org_id)
 
 
 def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
@@ -2183,12 +2176,12 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
                                        (srows[0].get("phone") or "").strip()) if x]
     except Exception:
         pass
-    fmt = _declared_receipt_format(client, org_id)
+    fmt = _declared_format(client, org_id)
     snap = _sr.snapshot_view(sale.get("receipt"), sale)
     printer = _poscfg.printer(rows, store_code)
     choice = _sr.print_choice(template, want_layout=want_layout, want_paper=want_paper,
                               store_layout=printer["layout"], store_paper=printer["paper_width_mm"],
-                              format_available=bool(fmt),
+                              format_available=fmt["available"],
                               want_destination=want_destination, store_direct=printer["direct"])
     template = _sr.with_choice(template, choice)
     settings_text = {k: _poscfg.text(rows, k, store_code)
@@ -2200,7 +2193,7 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
     employee_name = (sale.get("employee_id") or "") if template["show_employee"] else ""
     html = _sr.html(
         snap, template,
-        render_document=_rrender.render_html, fmt=fmt,
+        render_document=_rrender.render_html, fmt=fmt["module"],
         brand=brand, disclaimer_blocks=blocks,
         store_name=store_name, store_lines=store_lines,
         fold_discount=fold_discount,
@@ -2215,7 +2208,7 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
         "layout_source": choice["layout_source"],
         "paper_width_mm": choice["paper_width_mm"],
         "paper_source": choice["paper_source"],
-        "layout_options": _sr.layout_options(fmt.get("label") if fmt else ""),
+        "layout_options": _sr.layout_options(fmt["label"]),
         "paper_options": _sr.paper_options(),
         "printer_label": printer["label"],
         "destination": choice["destination"],
@@ -2283,10 +2276,10 @@ def preview_receipt_template(body: dict = None, org_id: str = ORG_ID):
     rows = _pos_settings_rows(client, org_id)
     brand = _poscfg.brand(rows, "")
     tenant_name = _tenant.display_name(client, org_id)
-    fmt = _declared_receipt_format(client, org_id)
+    fmt = _declared_format(client, org_id)
     snap = _sr.snapshot_view(PREVIEW_SNAPSHOT)
     html = _sr.html(
-        snap, template, render_document=_rrender.render_html, fmt=fmt, brand=brand,
+        snap, template, render_document=_rrender.render_html, fmt=fmt["module"], brand=brand,
         disclaimer_blocks=_poscfg.disclaimers(rows, ""),
         store_name="Your store", store_lines=["Your store", "1 Example Street"],
         fold_discount=_poscfg.flag(rows, "receipt_coupon_in_retail_price", ""),
@@ -2295,8 +2288,8 @@ def preview_receipt_template(body: dict = None, org_id: str = ORG_ID):
         short_customer_name=_poscfg.flag(rows, "receipt_customer_short_name", ""),
     )
     return {"html": html, "sample": True,
-            "layout": _sr.clean_layout(template["layout"], format_available=bool(fmt)),
-            "layout_note": _sr.layout_note(template["layout"], format_available=bool(fmt))}
+            "layout": _sr.clean_layout(template["layout"], format_available=fmt["available"]),
+            "layout_note": _sr.layout_note(template["layout"], format_available=fmt["available"])}
 
 
 #: What the receipt response carries. Named once so GET and the re-render answer the same shape.
@@ -3648,8 +3641,8 @@ def sales_from_reports_list(from_: str = Query("", alias="from"), to: str = "", 
     """The POS sales rebuilt from the reports in a date range (newest first): invoice #, date, store,
     customer, total, the payment lines, lines found, the tie words; each prints through
     GET /pos/receipt-imports/{id}/print (the one renderer) and opens for editing like any import."""
-    fmt = _sfr.resolve_format(sb(), org_id)
-    return {"pos": fmt["pos"], "format_label": (fmt["format"] or {}).get("label") if fmt["ok"] else None,
+    fmt = _declared_format(sb(), org_id)
+    return {"pos": fmt["pos"], "format_label": fmt["label"],
             "format_reason": fmt["reason"], "sales": _sfr.list_rebuilt(sb(), org_id, from_ or None, to or None)}
 
 
