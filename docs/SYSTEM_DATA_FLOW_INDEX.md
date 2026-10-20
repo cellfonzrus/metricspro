@@ -31490,6 +31490,24 @@ belongs on the worker is forwarded before it does work it would only throw away.
   it reads no environment of its own). Make `require_session_host` decide the role itself and that
   file stops accepting the spelling. The two locks are complementary and both are kept: this one
   scans `@router` endpoints touching the registry, that one follows helper calls to a browser launch.
+- **`harness_one_domain_lock.py` was the THIRD lock on the same spelling, and it did not go red — it
+  went BLIND.** Its AST scan matched `require_browser_service` as a bare call name, so after the
+  rename it stopped recognising the gate at all: the set of endpoints whose `DIRECT_ROUTES` coverage
+  it asserts fell from **19 to 8**, and *eleven endpoints silently left that assertion*. Nothing
+  failed on the merits — only the non-vacuity bound (`len(endpoints) >= 10`) turned the job red. That
+  bound is the whole reason this was caught, and it is the §19.x lesson again in a new costume: **a
+  scan that cannot see its subject does not fail; its assertion ceases to exist.** The scan now reads
+  the vocabulary and accepts both the bare and the attribute call form
+  (`live_login.require_session_host()`). Coverage itself was never actually broken — `DIRECT_ROUTES`
+  already carries `live-login/[^/]+`, so every newly gated endpoint is direct — but nothing was
+  *checking* that for eleven of them.
+
+**THE REAL LESSON OF THIS CHANGE, and the fourth design fix in it.** Renaming one function broke
+three locks in three different ways because each had **its own literal copy of the gate's name**. So
+the gate's VOCABULARY now has one home beside the gate — `app.core.service_role.GATE_FUNCTION_NAMES`
+— and every lock dereferences it. A fourth spelling is one line in one place. `harness_live_session_host`
+§G fails the build if a lock that scans for the gate spells a name itself again, proved red by
+hard-coding it back.
 
 ### COMMCALC-22.4 Locked so it cannot un-wire
 

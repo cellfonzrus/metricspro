@@ -231,8 +231,44 @@ def _mount_prefixes(main_text):
     return out
 
 
+def gate_function_names():
+    """The gate's accepted function names, READ from app/core/service_role.py (§COMMCALC-22).
+
+    Until 2026-10-20 this file matched the single literal `require_browser_service`. §COMMCALC-22
+    renamed the gate at its home, and this scan went BLIND rather than red: eight endpoints dropped
+    out of the set below, taking their DIRECT_ROUTES coverage assertion with them. Only the
+    non-vacuity bound caught it. So the vocabulary is dereferenced, and an empty or missing
+    declaration is a hard error rather than a quiet fallback."""
+    src = open(os.path.join(HERE, "app", "core", "service_role.py"), encoding="utf-8").read()
+    for node in ast.walk(ast.parse(src)):
+        if (isinstance(node, ast.Assign)
+                and any(getattr(t, "id", "") == "GATE_FUNCTION_NAMES" for t in node.targets)):
+            names = tuple(e.value for e in node.value.elts if isinstance(e, ast.Constant))
+            if not names:
+                raise SystemExit("service_role.GATE_FUNCTION_NAMES is empty — the gate has no name")
+            return names
+    raise SystemExit("service_role.py no longer declares GATE_FUNCTION_NAMES (§COMMCALC-22)")
+
+
+def _calls_gate(fn, names):
+    """True when this handler calls the gate under ANY declared name, bare or through a module.
+
+    Both forms occur and both are the gate: `require_browser_service()` (imported name) and
+    `live_login.require_session_host()` (attribute on the module that owns it)."""
+    for n in ast.walk(fn):
+        if not isinstance(n, ast.Call):
+            continue
+        f = n.func
+        if getattr(f, "id", "") in names or getattr(f, "attr", "") in names:
+            return True
+    return False
+
+
+_GATE_NAMES = gate_function_names()
+
+
 def browser_endpoints(router_texts, main_text):
-    """[(full path, 'file:function')] for every route handler that calls require_browser_service()."""
+    """[(full path, 'file:function')] for every route handler that calls the browser-service gate."""
     mounts = _mount_prefixes(main_text)
     out = []
     for rel, text in sorted(router_texts.items()):
@@ -247,8 +283,7 @@ def browser_endpoints(router_texts, main_text):
         for fn in ast.walk(tree):
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            calls = any(isinstance(n, ast.Call) and getattr(n.func, "id", "") == "require_browser_service"
-                        for n in ast.walk(fn))
+            calls = _calls_gate(fn, _GATE_NAMES)
             if not calls:
                 continue
             for dec in fn.decorator_list:

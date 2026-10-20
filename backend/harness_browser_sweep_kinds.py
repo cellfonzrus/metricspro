@@ -236,6 +236,24 @@ _LAUNCH_RE = re.compile(r"from\s+playwright|import\s+playwright|sync_playwright|
 # SERVICE_ROLE=api deploy proxies them to BROWSER_SERVICE_URL or answers a plain 503 — never a fake success);
 # the ones that do not reach a browser must NOT (they would 503 for nothing).
 _BROWSER_CALLS = ("start_session(", "live_login_start(", "_live_pull(")
+def _gate_vocabulary():
+    """The gate's accepted call spellings, READ from the role module (§COMMCALC-22) — never a copy.
+
+    Parsed out of the source rather than imported so this harness stays DB-free and import-free of
+    the app package. A missing or empty declaration is a hard error: silently falling back to one
+    literal is how a scan goes blind."""
+    import ast as _ast
+    src = _src(os.path.join(HERE, "app", "core", "service_role.py"))
+    for node in _ast.walk(_ast.parse(src)):
+        if (isinstance(node, _ast.Assign) and any(getattr(t, "id", "") == "GATE_FUNCTION_NAMES"
+                                                  for t in node.targets)):
+            names = [e.value for e in node.value.elts if isinstance(e, _ast.Constant)]
+            if not names:
+                raise SystemExit("service_role.GATE_FUNCTION_NAMES is empty — the gate has no name")
+            return tuple("%s()" % n for n in names)
+    raise SystemExit("service_role.py no longer declares GATE_FUNCTION_NAMES (§COMMCALC-22)")
+
+
 # TWO SPELLINGS, ONE REQUIREMENT (§COMMCALC-22, 2026-10-20). The gate was renamed at its home to
 # `live_login.require_session_host()` because the old name asked "does this endpoint launch a
 # browser?" and the question that matters is "does it touch the per-process session registry?" —
@@ -243,7 +261,8 @@ _BROWSER_CALLS = ("start_session(", "live_login_start(", "_live_pull(")
 # reasoning. `require_session_host` DEREFERENCES `require_browser_service`, so a handler calling it
 # is gated. This file must accept both or it fails a correctly gated endpoint; it must not accept a
 # name that does NOT dereference the role module, so the alias is PROVED below, never assumed.
-_GATE_CALLS = ("require_browser_service()", "require_session_host()")
+# DEREFERENCED, never copied: the vocabulary lives beside the gate in app/core/service_role.py.
+_GATE_CALLS = _gate_vocabulary()
 
 
 def _gated(text):

@@ -97,3 +97,19 @@ def role_banner() -> str:
     role = service_role() or "<unset>"
     state = "allowed" if browser_allowed() else "blocked"
     return "SERVICE_ROLE=%s (browser sweeps %s)" % (role, state)
+
+
+# ── WHAT THE GATE IS CALLED (§COMMCALC-22) ──────────────────────────────────────────────────────
+# Three separate CI locks scan source for "is this endpoint gated to the browser/session host", and
+# until 2026-10-20 each matched the literal name `require_browser_service`. When §COMMCALC-22 renamed
+# the gate at its own home — to `require_session_host`, because the old name asked "does this launch a
+# browser?" and the question that matters is "does this touch the per-process session registry?" —
+# two of those locks failed a CORRECTLY gated endpoint and the third went BLIND, silently dropping
+# eight endpoints out of the set whose DIRECT_ROUTES coverage it checks. A scan that cannot see a
+# subject does not fail; its assertion ceases to exist (the §19.x lesson, re-learned).
+#
+# So the gate's VOCABULARY lives here, next to the gate, and every lock READS it. A fourth spelling
+# is one line in one place; a lock that hard-codes a name again is the defect.
+# Each name here must be a function that ultimately enforces `browser_allowed()`.
+GATE_FUNCTION_NAMES = ("require_browser_service", "require_session_host")
+GATE_CALLS = tuple("%s()" % n for n in GATE_FUNCTION_NAMES)

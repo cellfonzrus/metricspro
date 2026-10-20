@@ -196,6 +196,34 @@ ok('"""The live session\'s phase + human message + the LATEST screenshot (data-u
 ok("_browser_client()" in io.open(MAIN_PATH, encoding="utf-8").read(),
    "and the forwarder pools its connection, so a ~3/s frame poll is not a handshake per frame")
 
+print("\n§G  THE GATE HAS ONE NAME-LIST, AND EVERY LOCK READS IT")
+# WHY THIS SECTION EXISTS. The rename in this change broke three CI locks, one after another, because
+# each carried its own literal "require_browser_service". Two failed a correctly gated endpoint — loud
+# and harmless. The third went BLIND: harness_one_domain_lock's AST scan stopped recognising the gate,
+# eleven endpoints silently left the set whose DIRECT_ROUTES coverage it asserts, and only a
+# non-vacuity bound (len >= 10) turned it red. A scan that cannot see its subject does not fail; its
+# assertion ceases to exist. So the vocabulary lives beside the gate and the locks dereference it.
+ROLE_SRC = io.open(os.path.join("app", "core", "service_role.py"), encoding="utf-8").read()
+ok("GATE_FUNCTION_NAMES" in ROLE_SRC,
+   "the role module declares the gate's names — one home for what the gate is CALLED")
+_names = [l for l in ROLE_SRC.splitlines() if l.startswith("GATE_FUNCTION_NAMES")]
+ok(len(_names) == 1 and "require_browser_service" in _names[0] and "require_session_host" in _names[0],
+   "and it names both spellings exactly once")
+# Every lock that SCANS source for the gate must read that list rather than spell a name itself.
+SCANNERS = {"harness_browser_sweep_kinds.py": "walks helper calls to a browser launch",
+            "harness_one_domain_lock.py": "checks each gated endpoint is DIRECT, not proxied"}
+for fname in sorted(SCANNERS):
+    src = io.open(fname, encoding="utf-8").read()
+    ok("GATE_FUNCTION_NAMES" in src,
+       "%s dereferences the name-list (%s)" % (fname, SCANNERS[fname]),
+       "this lock scans for the gate. Spelling a gate name as a literal here is what made the rename "
+       "break three locks at once and sent one of them blind. Read "
+       "app/core/service_role.GATE_FUNCTION_NAMES instead.")
+    # and it must not keep a second copy of the vocabulary beside the dereference
+    body = src.replace("GATE_FUNCTION_NAMES", "")
+    ok(body.count('"require_browser_service"') + body.count("'require_browser_service'") == 0,
+       "%s keeps no second copy of a gate NAME beside it" % fname)
+
 print("\n%d passed, %d failed" % (PASS, FAIL))
 if FAIL:
     print("\nFAIL — an endpoint can answer about a live session from a process that holds none. The one "
