@@ -98,6 +98,11 @@ the MECHANISM, for every caller of it, or say plainly that you have not.
   per-org config rows with house defaults (org `00000000-0000-0000-0000-000000000001`).
 - Migrations are numbered, idempotent, additive, with `-- REVERT:` notes; money-touching changes are
   surfaced for approval before applying.
+- **A migration grants what it creates.** Every `create table` / `create view` ships, in the SAME file,
+  `grant select, insert, update, delete on <schema>.<relation> to service_role;` — the backend reaches
+  every relation through PostgREST, and from 2026-10-30 Supabase no longer grants new `public` tables
+  automatically. `service_role` only: the browser never reads a table here, so an `anon` grant widens
+  exposure rather than fixing anything. Enforced by `harness_data_api_grant_guard.py` (index §CORE-13).
 - Every sensitive query is org-scoped; CI enforces it.
 - Pure logic ships with a DB-free proof harness (`backend/harness_*.py`).
 
