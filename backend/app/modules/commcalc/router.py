@@ -28987,8 +28987,12 @@ def carrier_vs_pay_report(period: str, org_id: str = ORG_ID, authorization: str 
     sold_idx, sold_without_serial = ma_recon.build_sold_index(sold_rows)
     ma_rows, tx_rows = ma_recon.load_ma_paid_rows(client, org_id, period)
     paid_idx = ma_recon.build_paid_index(ma_rows, tx_rows, cfg)
+    # The claim context is built from the SAME statement rows loaded just above — the one home for
+    # "is this a claim, and what is it worth" (§COMMCALC-22), handed in rather than defaulted so this
+    # caller cannot drift back to a $0.00 claim.
     recon_rows, recon_summary = ma_recon.reconcile_ma_activations(
-        sold_idx, paid_idx, rules, period, cfg)
+        sold_idx, paid_idx, rules, period, cfg,
+        ma_recon.build_claim_context(ma_rows, period, cfg))
 
     # ── the statement MONEY — the mig-308 netted index over the SAME rows ma_recon loaded ────────
     money_idx = _ma_gate_index(ma_rows)

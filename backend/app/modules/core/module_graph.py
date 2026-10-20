@@ -1159,6 +1159,23 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/plan_options.py': ('_aq',),
         },
     },
+    'carrier_claim_value': {
+        "question": 'Is this unpaid activation a CLAIM against the carrier at all, and what is it '
+                    'worth?',
+        "homes": ('app/modules/commcalc/carrier_claim_value.py',),
+        "index": ('COMMCALC-22',),
+        "locks": ('harness_carrier_claim_value.py',),
+        # SNAPSHOT -- hand-written (--bless strips per-caller comments, SSCOMMCALC-01); the derived
+        # edges were verified by RUNNING the guard afterwards.
+        "callers": {
+            # The carrier-statement recon: hardcoded 0.0 on every discrepancy row before this, which
+            # is why the hub's open-$ card summed to nothing. Now classifies and prices through here.
+            'app/modules/commcalc/ma_recon.py': ('ccv',),
+            # THE SIBLING, fixed in the same change: the rate-card engine filed an unsizeable claim
+            # as $0.00 too. It now writes NULL and borrows this module's subtraction.
+            'app/modules/commcalc/discrepancy_engine.py': ('ccv',),
+        },
+    },
     'installment_exclusion_basis': {
         "question": 'WHY did this device category pay no multi-month installment -- did somebody '
                     'decide that, or did nobody?',

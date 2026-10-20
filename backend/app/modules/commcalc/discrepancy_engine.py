@@ -2,6 +2,10 @@ import re
 from datetime import date
 from dateutil.relativedelta import relativedelta
 from app.core.database import get_supabase
+# THE one home for "is this non-payment a claim, and what is it worth" (§COMMCALC-22). The
+# carrier-statement recon dereferences the same module, so the two writers that fill
+# `discrepancy_results` can never disagree about an unpriced claim again.
+from app.modules.commcalc import carrier_claim_value as ccv
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -211,7 +215,11 @@ def run_discrepancy(period, org_id=ORG_ID):
 
         def add(comp_type, expected, match_month, status_override=None):
             rec = received_for(mdn, imei, comp_type, match_month)
-            gap = round(expected - rec, 2)
+            # `expected` is None when this engine cannot SIZE the claim (no MI line and no parseable
+            # MRC). A gap is a subtraction, so it does not exist where one side does not — writing
+            # 0.00 there is the §COMMCALC-22 defect, and the one home does the arithmetic.
+            gap = ccv.claim_gap(expected, rec)
+            sized = expected is not None
             if status_override:
                 status = status_override
             elif comp_type in INFORMATIONAL:
@@ -219,8 +227,8 @@ def run_discrepancy(period, org_id=ORG_ID):
             elif comp_type in LAGGED:
                 status = "lagged"
             elif (match_month or bmonth) == 1 and (today - act_date).days <= 10 and comp_type != "SOLD_NOT_IN_MI":
-                status = "pending" if gap > 0.50 else "ok"
-            elif gap > 0.50:
+                status = "pending" if (sized and gap > 0.50) else "ok"
+            elif sized and gap > 0.50:
                 status = "open"
             else:
                 status = "ok"
@@ -230,14 +238,19 @@ def run_discrepancy(period, org_id=ORG_ID):
                 "activation_date": act_date.isoformat(), "activation_type": act_raw,
                 "device_model": (s.get("product_desc") or "")[:200], "customer_plan": plan[:200],
                 "commissionable_mrc": mrc, "bounty_month": match_month or bmonth,
-                "comp_type": comp_type, "expected_amount": round(expected, 2),
+                "comp_type": comp_type,
+                # NULL, never 0.00, when the claim could not be sized — the whole point of the one
+                # home. A sized claim is rounded exactly as before, so no existing figure moves.
+                "expected_amount": round(expected, 2) if sized else None,
                 "received_amount": round(rec, 2), "gap": gap, "status": status,
             })
-            return gap if status == "open" else 0.0
+            return gap if (status == "open" and gap is not None) else 0.0
 
         # Flag sold-but-not-in-MI (and skip MRC bounties we can't size)
         if not in_mi and mrc == 0:
-            add("SOLD_NOT_IN_MI", 0.0, bmonth, status_override="open")
+            # Sold, absent from the MI feed, and no MRC to size a bounty from. It is a real finding
+            # and stays `open`, but its value is UNMEASURED — it is not a $0.00 claim.
+            add("SOLD_NOT_IN_MI", None, bmonth, status_override="open")
             continue
 
         # ── Same-month bounties ──
@@ -281,12 +294,19 @@ def run_discrepancy(period, org_id=ORG_ID):
                 add("SIMCR", r, 1)
 
     # Dedupe by (imei, mdn, comp_type, bounty_month) - keep largest gap
+    def _gap_rank(row):
+        g = row.get("gap")
+        return float("-inf") if g is None else float(g)
+
     seen = {}
     for r in results:
         if r["status"] == "ok":
             continue
         key = (r["imei"], r["mdn"], r["comp_type"], r["bounty_month"])
-        if key not in seen or r["gap"] > seen[key]["gap"]:
+        # `gap` is NULL on a claim this engine could not size (§COMMCALC-22), and None has no
+        # ordering against a float. An unpriced row sorts BELOW every priced one and ties with other
+        # unpriced rows, so the "keep the largest gap" rule is unchanged for every row that has one.
+        if key not in seen or _gap_rank(r) > _gap_rank(seen[key]):
             seen[key] = r
     rows_to_save = list(seen.values())
     flagged = len([r for r in rows_to_save if r["status"] == "open"])
