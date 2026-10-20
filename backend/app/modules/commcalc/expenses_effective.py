@@ -20,10 +20,15 @@ and the money reports can never disagree again.
 
 THE RULE (mirrors GET /expenses/{period} exactly, money-hardened):
   1. If the period has ANY store_expenses rows (either period spelling), use them as-is — no carry.
-  2. Otherwise carry forward the latest STRICTLY-PRIOR period's MANUAL rows (source_key IS NULL).
-     SYSTEM rows (non-null source_key — e.g. a payroll run's PTO accrual, `payroll_gross`) are
-     period-specific products of their own month and are NEVER carried into another month (carrying
-     July's payroll into August would double-book it the moment August's own run lands).
+  2. Otherwise carry forward the latest STRICTLY-PRIOR period's CARRYABLE rows — the MANUAL rows
+     (source_key IS NULL) minus the rows the PLATFORM DERIVES for each month (owner directive
+     2026-10-20; see `carryable_rows`). SYSTEM rows (non-null source_key — e.g. a payroll run's PTO
+     accrual, `payroll_gross`) are period-specific products of their own month and are NEVER carried
+     into another month (carrying July's payroll into August would double-book it the moment
+     August's own run lands); `Employee Salaries` / `Employee Commission` and whatever a tenant named
+     instead are the same thing wearing a manual row's clothes — the platform fills them in and
+     re-derives them for every month, so they come from the MONTH'S OWN actuals, never from the sheet
+     it inherited.
   3. Nothing prior → empty (a brand-new tenant books nothing, exactly as before).
 
 Carried rows are returned with `carried_from` set (and unchanged `period`) so a consumer can label
@@ -32,6 +37,7 @@ them; amounts are returned verbatim — this module never invents or scales a do
 Pure selection logic is DB-free (proof: backend/harness_expenses_carry_forward.py).
 Registered in docs/SYSTEM_DATA_FLOW_INDEX.md (§4 GP report + P&L expense flow).
 """
+
 
 _MONTHS = {m.lower(): i for i, m in enumerate(
     ["january", "february", "march", "april", "may", "june", "july",
@@ -77,7 +83,64 @@ def manual_rows(rows):
     return [r for r in (rows or []) if not (r.get("source_key") or None)]
 
 
-def effective_series(rows, periods):
+def carryable_rows(rows, derived_names=None):
+    """PURE: of a prior month's rows, the ones a LATER month may inherit — THE carry selection.
+
+    OWNER DIRECTIVE 2026-10-20, verbatim: *"sepatember and october expeses wll be carried forward but
+    salary and commisson shoudl be derived from the actuals"*.
+
+    Two kinds of row are a measurement of THEIR OWN month and may never speak for another:
+
+      1. a SYSTEM row (`source_key` set) — a payroll run's accrual, already excluded since mig 206;
+      2. a row the PLATFORM DERIVES — `Employee Salaries`, `Employee Commission`, and whatever a
+         tenant named instead (`labour_vocabulary.derived_row_names`). The platform auto-fills these
+         from StoreOps hours and from `rep_commissions`, and it derives the SAME figures again for
+         every month on the `wages` and `rep_comm` P&L lines. Carrying one states August's payroll as
+         September's: measured live 2026-10-20, 58% of the $276,162.69 that September and October were
+         each showing for one tenant was August's salary and commission, against an actual September
+         of $110,302.73 of wages and $12,703.71 of commission.
+
+    `labour_coverage`'s docstring has named this defect since 2026-09-08 (point 3, MONTH GRAIN) and
+    only ever REPORTED it on the coverage report. This is the fix, in the one place the decision lives.
+
+    `derived_names` is INJECTED (resolved per org by `labour_vocabulary.resolve`, house default where
+    the tenant named nothing) — RULE TWO: no row name is written into this module. None means the
+    caller resolved no vocabulary and only rule 1 applies, which is the pre-2026-10-20 behaviour;
+    `harness_expense_one_path.py` §H fails the build when a caller stops passing it, because a
+    registry nothing dereferences is this house's most repeated defect (§19.18).
+
+    A dropped row is never silently dropped: `carried_excluded` beside each result says which names
+    and how many dollars did not come across, so the surface can SAY that this month's labour comes
+    from payroll rather than from the sheet it inherited.
+    """
+    # The membership test is DEREFERENCED from the labour-row vocabulary (index §4e), never
+    # re-spelled here. Imported INSIDE the function on purpose: this module imports nothing at
+    # module scope so the carry rule stays loadable with no app weight, and
+    # `harness_expense_one_path.py` §F4 fails the build if that changes.
+    from app.modules.commcalc import labour_vocabulary as _lv
+    names = derived_names or ()
+    return [r for r in manual_rows(rows)
+            if not _lv.is_derived_row(r.get("expense_name"), names)]
+
+
+def excluded_summary(rows, derived_names=None, *, amount_col="amount"):
+    """PURE: {row name: dollars} for the rows `carryable_rows` refused to carry — the absence, with
+    its reason, so no consumer has to re-derive what it is missing (§19.49)."""
+    from app.modules.commcalc import labour_vocabulary as _lv      # see `carryable_rows` on why here
+    out = {}
+    for r in manual_rows(rows):
+        nm = " ".join(str(r.get("expense_name") or "").strip().split())
+        if not _lv.is_derived_row(nm, derived_names or ()):
+            continue
+        try:
+            amt = float(str(r.get(amount_col) or 0).replace(",", "").replace("$", "").strip() or 0)
+        except (TypeError, ValueError):
+            amt = 0.0
+        out[nm] = round(out.get(nm, 0.0) + amt, 2)
+    return out
+
+
+def effective_series(rows, periods, derived_names=None):
     """PURE: THE carry-forward rule applied to a SERIES of months at once (index §19.50).
 
     `rows` = every `store_expenses` row the org has (each needs `period`, plus `source_key` for the
@@ -110,11 +173,14 @@ def effective_series(rows, periods):
         k = period_sort_key(p)
         own = list(by_month.get(k) or [])
         if own:
-            out[p] = {"rows": own, "carried_from": None}
+            out[p] = {"rows": own, "carried_from": None, "carried_excluded": {}}
             continue
         carried_from = pick_carry_period(all_periods, p) if k != (0, 0) else None
         prior = by_month.get(period_sort_key(carried_from)) or [] if carried_from else []
-        out[p] = {"rows": manual_rows(prior), "carried_from": carried_from}
+        # THE carry selection (above): system rows and platform-DERIVED rows stay in their own month,
+        # and what did not come across is named rather than left for the reader to notice.
+        out[p] = {"rows": carryable_rows(prior, derived_names), "carried_from": carried_from,
+                  "carried_excluded": excluded_summary(prior, derived_names)}
     return out
 
 
@@ -149,7 +215,7 @@ def totals_by_store(rows, store_key_of=None, *, store_col="store_code", amount_c
     return out
 
 
-def effective_expense_rows(client, org_id, period, pvariants, select_cols):
+def effective_expense_rows(client, org_id, period, pvariants, select_cols, derived_names=None):
     """I/O: the period's effective store_expenses rows under the carry-forward rule above.
 
     Returns (rows, carried_from). `pvariants` = the caller's period-spelling list (both spellings);
@@ -187,4 +253,7 @@ def effective_expense_rows(client, org_id, period, pvariants, select_cols):
     if not carried_from:
         return [], None
     prior = _read([carried_from])
-    return manual_rows(prior), carried_from
+    # THE carry selection, the same one `effective_series` applies (owner directive 2026-10-20): a
+    # month inherits what the tenant typed, never a figure the platform derives for its own month.
+    # `derived_names` None keeps rule 1 only — what every caller did before the vocabulary was wired.
+    return carryable_rows(prior, derived_names), carried_from

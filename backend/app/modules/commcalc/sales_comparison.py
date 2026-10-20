@@ -297,7 +297,8 @@ def _combine(cur_m, prev_m):
     }
 
 
-def expense_change_measured(base_carried_from, compare_carried_from):
+def expense_change_measured(base_carried_from, compare_carried_from,
+                            base_month_labour=False, compare_month_labour=False):
     """PURE: can a month-over-month EXPENSE change be measured at all?
 
     THE DEFECT THIS NAMES (owner report 2026-10-19, looking at the live screen). An expense month a
@@ -313,11 +314,22 @@ def expense_change_measured(base_carried_from, compare_carried_from):
     as a result* (§19.49). A zero change is a claim about two months; it may only be made when two
     months were actually measured.
 
-    False when both windows carried from the same sheet; True otherwise — including when only ONE
-    side carried, because then the two figures really are different months and the change is real."""
+    False when both windows carried from the same sheet AND neither of them contributed a figure of
+    its OWN; True otherwise — including when only ONE side carried, because then the two figures
+    really are different months and the change is real.
+
+    `base_month_labour` / `compare_month_labour` say whether that month's SALARY OR COMMISSION was
+    measured from its own payroll rather than inherited (owner directive 2026-10-20, §COMMCALC-23).
+    Once they are, two carried months are no longer one sheet compared with itself: the labour half
+    of each figure is that month's own measurement, and a change between them is a real claim. The
+    non-labour half may still be one sheet, which the surface says — a partly-measured change is
+    reported WITH what is measured in it, not withheld as if nothing were (§19.49 cuts both ways:
+    a measurement must not be suppressed any more than an absence may be asserted)."""
     b = str(base_carried_from or "").strip()
     c = str(compare_carried_from or "").strip()
     if not b or not c:
+        return True
+    if base_month_labour or compare_month_labour:
         return True
     kb, kc = _period_key(b), _period_key(c)
     if kb == (0, 0) or kc == (0, 0):
@@ -426,8 +438,16 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
         groups = {}
         for store in stores:
             groups.setdefault(fold(store), []).append(store)
+        # A month "contributed its own labour" when at least one half of it was measured from that
+        # month's own payroll — read from the SAME `labour` map the meta reports, so the predicate
+        # and the note on screen can never disagree about which months were measured.
+        _own_labour = {p: any((((expenses.get("labour") or {}).get(p) or {}).get("measured")
+                               or {}).values())
+                       for p in (base_period, compare_period)}
         exp_measured = expense_change_measured(expenses.get("base_carried_from"),
-                                               expenses.get("compare_carried_from"))
+                                               expenses.get("compare_carried_from"),
+                                               _own_labour.get(base_period, False),
+                                               _own_labour.get(compare_period, False))
         label_of, market_of = {}, {}
         for ckey, spellings in groups.items():
             uniq = sorted(set(spellings))
@@ -532,6 +552,16 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
         "compare_carried_from": expenses.get("compare_carried_from"),
         "stores": len(exp_rows),
         "store_merges": exp_merges,
+        # WHAT THE EXPENSE FIGURE IS MADE OF (owner directive 2026-10-20). `labour` is each month's
+        # OWN salary and commission, from the homes that derive them, with `measured` per half; the
+        # `*_excluded` maps name what the carried sheet was not allowed to hand over. A half that was
+        # not measured must be SAID on the surface — a month missing its payroll is an incomplete
+        # month, never a cheaper one (§19.49).
+        "labour": expenses.get("labour") or {},
+        "base_excluded": expenses.get("base_excluded") or {},
+        "compare_excluded": expenses.get("compare_excluded") or {},
+        "labour_measured": all(bool(v) for m in (expenses.get("labour") or {}).values()
+                               for v in ((m or {}).get("measured") or {"_": True}).values()),
     })
     out["overall"]["current_exp"] = round(exp_cur_tot, 2) if expenses is not None else None
     out["overall"]["previous_exp"] = round(exp_prev_tot, 2) if expenses is not None else None

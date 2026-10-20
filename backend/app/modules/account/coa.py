@@ -2056,9 +2056,19 @@ def build_inputs(client, org_id, period):
         # salary rows that suppress the wages estimate vanished with it. A month WITH its own rows
         # is byte-identical to the old read.
         from app.modules.commcalc.expenses_effective import effective_expense_rows
+        # THE CARRY SELECTION TAKES THE LABOUR VOCABULARY (owner directive 2026-10-20: *"salary and
+        # commisson shoudl be derived from the actuals"*). A carried month no longer inherits the
+        # rows the platform derives, so the stale figure cannot reach these books at all. NOTHING is
+        # put back here and nothing needs to be: this statement derives `wages` from the SAME StoreOps
+        # hours and `rep_comm` from the SAME `rep_commissions` for the month it is reporting, a few
+        # hundred lines below. Where the suppression plan was already dropping those carried rows the
+        # money does not move; where it was not, the month's own derivation replaces last month's
+        # figure, which is the whole point of the directive. See commcalc/labour_actuals.
+        from app.modules.commcalc import labour_vocabulary as _lvoc
         exp_rows, _exp_carried_from = effective_expense_rows(
             client, org_id, period, list(period_keys),
-            "store_code,expense_name,expense_type,amount,period,source_key")
+            "store_code,expense_name,expense_type,amount,period,source_key",
+            _lvoc.derived_row_names(acct_cfg.get("labour_vocabulary")))
         # ── COMMISSION DOUBLE-BOOK SUPPRESSION (owner decision 2026-09-08: "Rep commision should
         # go in p&l") ─────────────────────────────────────────────────────────────────────────────
         # Rep commission reaches these books by TWO routes: `rep_comm` (fed from
