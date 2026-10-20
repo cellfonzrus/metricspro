@@ -185,6 +185,24 @@ app.add_middleware(BodySizeLimitMiddleware)
 # exactly the old 503. Long timeout: the 2FA verify launches Chromium inline and can take a minute.
 from app.core.service_role import BrowserWorkProxy, browser_service_url  # noqa: E402
 
+# ONE POOLED CLIENT, not one per request (§COMMCALC-22). This handler was built for endpoints a human
+# presses a few times a minute, where a fresh connection per call costs nothing visible. The live-login
+# VIEW now travels through it too — `/live-login/frame` is polled ~3x/s and `/state` ~1x/s for as long
+# as the operator watches the browser — and a new TCP+TLS handshake per frame would spend more time
+# connecting than the 80ms screencast pump spends producing, turning a low-latency view into a
+# slideshow. A module-level AsyncClient keeps the connection to the worker open across polls.
+_browser_cx = None
+
+
+def _browser_client():
+    """The pooled client for worker forwarding, created on first use (inside the running loop)."""
+    global _browser_cx
+    import httpx
+    if _browser_cx is None:
+        _browser_cx = httpx.AsyncClient(timeout=180.0,
+                                        limits=httpx.Limits(max_keepalive_connections=8, max_connections=32))
+    return _browser_cx
+
 
 @app.exception_handler(BrowserWorkProxy)
 async def _proxy_browser_work(request, exc):
@@ -197,8 +215,7 @@ async def _proxy_browser_work(request, exc):
            if k.lower() not in ("host", "content-length", "connection", "accept-encoding")}
     body = await request.body()
     try:
-        async with httpx.AsyncClient(timeout=180.0) as cx:
-            r = await cx.request(request.method, url, headers=fwd, content=body)
+        r = await _browser_client().request(request.method, url, headers=fwd, content=body)
     except httpx.HTTPError as e:
         # Name the worker address tried (a URL, never a secret) so a mistyped BROWSER_SERVICE_URL reads as one.
         return _Resp(content=('{"detail":"browser service unreachable at %s: %s"}'

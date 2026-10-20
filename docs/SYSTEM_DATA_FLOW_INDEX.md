@@ -137,6 +137,7 @@ Primary code homes:
 | COMMCALC-19 | **The figures at the top of a report are something you can send** | "The dashboard should give an option to send the snapshot of the top part to the desired people." Sending already had one home; what was missing was a shape for the TILES, shared rather than written into one page. And when the snapshot says a figure is unchanged, is that a measurement or two copies of one carried expense sheet compared with itself? |
 | COMMCALC-20 | **A handset that books a rebate books a cost** | "How come the device cost is less than the device rebate?" The rebate books per commission row, unconditionally; the cost books only if the handset can be PRICED off the fulfillment sheet — and an order-type allowlist silently decided which fulfillment rows were allowed to carry a price at all. A family the distributor opened after the allowlist was written priced nothing, so its handsets netted a full rebate against a zero cost. |
 | COMMCALC-21 | **A non-payment somebody chose is not a finding** | "The multi-month notice lists 115 home internet and 290 tablet activations as 'did not pay'. I excluded those on purpose. Which of these lines is a problem, which is my own setting being restated at me, and how does a surface know the difference instead of asserting one reason for all of them?" |
+| COMMCALC-22 | **A live session is read where it lives** | "I press Live login on the UPS portal and the panel says no live session is running, every time, for days. Which process holds a live browser session, which endpoints may answer a question about one, and what should a process that holds none say instead of 'nothing is running'?" |
 
 ---
 
@@ -25684,6 +25685,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-19 | commcalc |
 | COMMCALC-20 | commcalc |
 | COMMCALC-21 | commcalc |
+| COMMCALC-22 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -31399,3 +31401,104 @@ home rather than a sibling derivation, and no second copy of any of their facts 
 Same class: §19.18 (a registry written and its callers left unwired is not a fix), §CORE-10 (a
 lesson in a note is enforced by whoever remembers it; a lesson in CI is enforced), §30.16 (a copied
 schema-wide GRANT silently undoing a narrower REVOKE).
+
+---
+---
+
+## §COMMCALC-22. A LIVE SESSION IS READ WHERE IT LIVES (owner report 2026-10-20)
+
+**Owner, verbatim:** *"ups portla live login does not work i hvae tried again today"*. He was right,
+and the row proved he had been right for five days.
+
+**What the row and the server-side screenshot show.** His 17:47Z attempt reached the real UPS
+Franchise Reporting System sign-in page, filled his username and password, and parked on **Sign In**
+with the portal's own reCAPTCHA badge beside it (`login_shot_at` 2026-10-20T17:55:17Z; the stored
+`login_shot` decodes to exactly that page). It then closed with *"Live session closed after
+inactivity."* — the `_preauth_loop`'s `_HUMAN_ACTION_IDLE_SECONDS` budget, eight minutes, elapsed
+having received **not one click**. The login was never broken. **He simply could not see it.**
+
+**THE CAUSE.** `live_login._SESSIONS` is a plain dict in ONE process's memory. On this deploy
+(§41 — `SERVICE_ROLE=api` on the API host plus `BROWSER_SERVICE_URL` at the sweeps worker)
+`/live-login/start` carried `require_browser_service()`, so it proxied and the session was created on
+the **worker**. `/live-login/state` and `/live-login/frame` carried no such gate, so they answered
+from the **API host**, where that registry is empty: `{"phase": "idle", "message": "No live session
+running…", "shot": None}`. His hands were pointed at the worker and his eyes at the API host.
+
+**THE CLASS, which is why this is not a one-line patch.** The gate's old spelling asked *"does this
+endpoint launch a browser?"*. `/frame` launches nothing — it reads a dict — so a reviewer adding it
+left the gate off, **correctly by that question**. The question that matters is *"does this endpoint
+touch `_SESSIONS`?"*, and if it does it must run in the process that has them. So the requirement is
+**renamed at its home**: `require_session_host()`, because the old spelling is what misled the eye.
+Three endpoints that obviously drove a browser were gated; **six that read or steered the session
+were not — and the read half is the entire operator-facing surface.**
+
+### COMMCALC-22.1 Duplicate check (the build gate)
+
+- **`app.core.service_role.require_browser_service` / `browser_allowed`** (§41) — "may this process do
+  browser work". **DEREFERENCED, never copied**: both halves of the new home call into it and read no
+  environment of their own; the lock fails if the gate body ever grows a `SERVICE_ROLE` or `environ`
+  read. This is an EXTENSION of §41's mechanism under a name that fits the real question, not a
+  second role reader.
+- **`main._proxy_browser_work`** (§41) — the forwarder that already carries method, path, query,
+  headers and body to the worker verbatim, where the JWT is re-authenticated and the org checks
+  re-run. **REUSED unchanged**; the only change on that path is that it now pools its HTTP client,
+  because `/frame` polls it ~3/s and a TLS handshake per frame is not a video feed.
+- **§COMMCALC-13's `present_auth_status`** — what a *finished* session leaves on the ROW. A different
+  axis of the same home (that one is about the row, this one about the process), so it EXTENDS that
+  module-graph fact rather than forking a sibling: one home, one question.
+- **`supply/router`'s session endpoints** (§51) — the vendor-ordering door onto the SAME sessions.
+  Checked here, not left to drift (see §COMMCALC-22.3).
+- No new table, no new column, **no migration**, no new endpoint, no new report.
+
+### COMMCALC-22.2 One fact, one home, dereferenced
+
+| question | home | reader |
+|---|---|---|
+| can THIS process hold live sessions? | `app.core.service_role.browser_allowed` | `live_login.sessions_live_here()` |
+| must this request run where they are? | the same | `live_login.require_session_host()` |
+
+`sessions_live_here()` is **pure and never raises**: an unintrospectable or exploding role reads as
+`True`, which keeps the single-service answer (sessions are local) rather than declaring a working
+deploy blind. Reading a live session as absent is the one regression this must not cause.
+
+`require_session_host()` is called as the **first statement** of every live-login handler, before
+`require_org` and before a DB client is opened — exactly as `/start` always did — so a request that
+belongs on the worker is forwarded before it does work it would only throw away.
+
+### COMMCALC-22.3 The siblings, fixed here rather than excused
+
+- `commcalc/router` — all **nine** live-login endpoints (`start`, `state`, `frame`, `click`, `input`,
+  `submit`, `submit-totp`, `resend`, `cancel`) now call the gate; six of them did not.
+- `commcalc/router` `/data-sources/{sid}/run` and `supply/router` `/orders/{po_id}/open-session` were
+  already gated by the role module, but **by the old spelling** — the exact divergence the lock
+  exists to stop. Re-pointed at the named home. *The lock found both; they were not in the hand-made
+  list.*
+- `supply/router` `/orders/{po_id}` is **deliberately NOT gated**: it is the whole PO page, and
+  proxying it would make an order unreadable whenever the sweeps worker is down. Instead it
+  dereferences `sessions_live_here()` and reports **`observable`**, with `for_this_order` as `None`
+  rather than `False` when this process cannot see — so a blind process never presents its blindness
+  as the owner's answer. It is the one named exemption in the lock, and it must earn it.
+- The VidaPay pull's inner session reuse is a legitimate best-effort read of a per-process registry —
+  it falls back to the cold `storage_state` restore — so it degrades, it does not lie.
+
+### COMMCALC-22.4 Locked so it cannot un-wire
+
+`backend/harness_live_session_host.py` — **44 checks**, DB-free, no network, no browser. §A the one
+home, and the gate dereferences the role module · §B the fact is pure and a raising role still reads
+`True` · §C **THE LOCK**: a regex scan of every `@router` endpoint in both routers — any handler
+touching `get_session`/`start_session` must call the gate, with the single named exemption above ·
+§D the gate precedes `require_org` and `sb()` · §E the supply sibling reports `observable` · §F
+controls, including the exact pre-change `/state` body text, armed so a revert reads RED.
+
+Wired into `carrier-vocab-guard.yml` as *"live-session-host lock"*.
+
+**Proved red two ways on main's shape:** removing the gate from `/frame` fails **2** checks; before
+the fix the scan reported **6** ungated endpoints.
+
+### COMMCALC-22.5 Cross-references
+
+Same class: §19.18 (a mechanism written and its callers left unwired is not a fix), §COMMCALC-13 (a
+status that outlived the process that owned it). Neighbours: §41 (the split deploy and the
+forwarder), §COMMCALC-10 (the progress watchdog on the same session), §COMMCALC-11 (the human check
+this session was parked on), §CORE-03 (where the credential it signs in with is sealed), §51 (the
+vendor-ordering door onto the same sessions), §COMMCALC-07 (the UPS pull this login exists to feed).

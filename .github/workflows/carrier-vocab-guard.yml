@@ -263,6 +263,11 @@ on:
       # (named further down from §COMMCALC-10) and the one reader is the data_source row decorator in
       # commcalc/router.py (already named above for §12a.2a), so both re-run this job.
       - "backend/harness_terminal_status.py"
+      # §COMMCALC-22 — a live session is read where it LIVES. Same home (live_login, named
+      # further down from §COMMCALC-10) and the callers are the two routers already named above,
+      # so both re-run this job; app/main.py carries the forwarder the gate depends on.
+      - "backend/harness_live_session_host.py"
+      - "backend/app/main.py"
       - "backend/app/modules/commcalc/import_audit.py"
       - "backend/app/modules/commcalc/merchant_portals.py"
       - "backend/app/modules/core/import_health.py"
@@ -1017,6 +1022,9 @@ jobs:
       - name: Run the terminal-status lock (a session that ends restores the row's real status; an in-flight claim cannot outlive its worker - index COMMCALC-13)
         working-directory: backend
         run: python3 harness_terminal_status.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the live-session-host lock (an endpoint that touches the session registry runs in the process that HAS it - index COMMCALC-22)
+        working-directory: backend
+        run: python3 harness_live_session_host.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the mapping-key lock (one derivation per statement type; no literal mapping key)
         working-directory: backend
         run: python3 harness_mapping_key_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

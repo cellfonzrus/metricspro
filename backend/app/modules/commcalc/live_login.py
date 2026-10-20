@@ -58,14 +58,65 @@ import time
 from datetime import datetime, timezone, timedelta
 
 try:
-    from app.core.service_role import assert_browser_allowed   # SERVICE_ROLE=api guard
+    from app.core.service_role import (assert_browser_allowed,      # SERVICE_ROLE=api guard
+                                       browser_allowed, require_browser_service)
 except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
     def assert_browser_allowed():                        # no-op fallback for path-loaded proof scripts
+        return None
+
+    def browser_allowed():
+        return True
+
+    def require_browser_service():
         return None
 
 # Registry of live sessions, keyed by data_source id. Guarded by _SESSIONS_LOCK.
 _SESSIONS = {}
 _SESSIONS_LOCK = threading.Lock()
+
+
+# ── WHERE THE SESSIONS LIVE (§COMMCALC-22) ───────────────────────────────────────────────────────
+# `_SESSIONS` is a dict in THIS process's memory. Asking it a question therefore answers for this
+# process ONLY, and on a split deploy (`SERVICE_ROLE=api` + `BROWSER_SERVICE_URL`, §41) the API host
+# holds no sessions at all: `get_session` there returns None for a session that is alive and running
+# on the sweeps worker.
+#
+# That is how the Team Portal live login was dead for the owner from 2026-10-15 to 2026-10-20.
+# `/live-login/start` carried `require_browser_service()`, so it proxied to the worker and a real
+# Chromium really did open, fill his username and password and park on the portal's Sign In button.
+# `/live-login/state` and `/live-login/frame` did NOT carry it, so they answered from the API host —
+# `{"phase": "idle", "message": "No live session running…", "shot": None}` — and the panel that IS
+# his only view of that browser showed him nothing to press. Eight minutes later the worker closed
+# the session for operator inactivity. He had been looking at the wrong process the whole time.
+#
+# THE CLASS: gating "does this endpoint LAUNCH a browser?" is the wrong question. `/frame` launches
+# nothing; it reads a dict. The right question is **"does this endpoint touch `_SESSIONS`?"** — and
+# if it does, it must run in the process that HAS them. The three endpoints that obviously drive a
+# browser got the gate; the six that merely read or steer the session did not, and the read half is
+# exactly what the operator's screen is made of.
+#
+# So the requirement gets its own NAME here, in the module that owns the registry, rather than being
+# spelled as `require_browser_service()` at each call site. The old spelling reads as "this launches
+# Chromium", which is precisely why a reviewer adding a read endpoint left it off.
+def sessions_live_here():
+    """True when THIS process can hold live sessions, i.e. it is the one that runs browsers.
+
+    PURE and never raises — an unintrospectable role reads as True, which keeps the single-service
+    behaviour (sessions are local) rather than declaring a working deploy blind."""
+    try:
+        return bool(browser_allowed())
+    except Exception:
+        return True
+
+
+def require_session_host():
+    """THE gate for an endpoint that reads, drives or creates a live session.
+
+    Dereferences `require_browser_service()` — on a split deploy that raises `BrowserWorkProxy` and
+    `main._proxy_browser_work` forwards the whole request to the worker, so the endpoint runs where
+    `_SESSIONS` actually is; with no worker configured it is the same honest 503 as before. Call it
+    EARLY, before `require_org`, exactly as `/live-login/start` always has."""
+    require_browser_service()
 
 _SHOT_INTERVAL = 0.7           # legacy idle capture cadence (kept for the post-auth slow path)
 _IDLE_CLOSE_SECONDS = 20 * 60  # auto-close a session left idle this long (long enough to fetch a code)

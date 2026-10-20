@@ -40952,7 +40952,10 @@ async def run_data_source(sid: str, org_id: str = ORG_ID, confirm: bool = False)
     COOLDOWN (mig 244): if the portal has temporarily blocked us, this returns blocked/requires_confirm
     instead of pulling. A human MAY override with ?confirm=true — the UI asks first, because another
     attempt during an active block typically extends it."""
-    require_browser_service()   # SERVICE_ROLE=api → portal pull launches Chromium; run it on the sweeps worker
+    # §COMMCALC-22 — launches Chromium AND reuses a live session out of _SESSIONS (see the PREFER THE
+    # LIVE AUTHENTICATED BROWSER note below), so it must run in the process that holds them.
+    from app.modules.commcalc import live_login
+    live_login.require_session_host()
     require_org(org_id)
     client = sb()
     rows = _ds_rows(client.schema("commcalc").table("data_source").select("*")
@@ -42153,9 +42156,9 @@ def live_login_start(sid: str, org_id: str = ORG_ID, confirm: bool = False):
     ~HH:MM — another attempt may extend the block") and take a second, deliberate click. The AUTOMATIC
     post-login pull stays suppressed for the whole cooldown regardless of the confirm (auto_pull_gate),
     so a human look at the login screen never turns into 5 reports x N months of traffic."""
-    require_browser_service()   # SERVICE_ROLE=api → live login launches Chromium; run it on the sweeps worker
-    require_org(org_id)
     from app.modules.commcalc import live_login
+    live_login.require_session_host()   # §COMMCALC-22 — launches Chromium AND owns the session
+    require_org(org_id)
     client = sb()
     s = _live_source_row(client, sid, org_id)
     # ROUTE GATE (mig 998) — FIRST, and NOT overridable by ?confirm. The cooldown below deliberately
@@ -42207,8 +42210,9 @@ def live_login_submit_totp(sid: str, org_id: str = ORG_ID):
 
     Reuses the existing live-session submit queue verbatim — the worker fills the code into the SAME
     open page that requested it, exactly as it does for a human-typed code."""
-    require_org(org_id)
     from app.modules.commcalc import live_login, portal_totp
+    live_login.require_session_host()   # §COMMCALC-22 — run where _SESSIONS is
+    require_org(org_id)
     client = sb()
     row = _live_source_row(client, sid, org_id)
     secret = row.get("totp_secret")
@@ -42327,8 +42331,9 @@ def clear_source_block(sid: str, org_id: str = ORG_ID, authorization: str = Head
 def live_login_state(sid: str, org_id: str = ORG_ID):
     """The live session's phase + human message + the LATEST screenshot (data-uri JPEG). Polled ~1s by
     the UI. Screenshot is served ONLY here (never in the polled data-sources list)."""
-    require_org(org_id)
     from app.modules.commcalc import live_login
+    live_login.require_session_host()   # §COMMCALC-22 — answer from the process that HAS the session
+    require_org(org_id)
     sess = live_login.get_session(sid, org_id)
     if not sess:
         return {"phase": "idle", "message": "No live session running — click 🔴 Live login to start one.",
@@ -42340,8 +42345,9 @@ def live_login_state(sid: str, org_id: str = ORG_ID):
 def live_login_submit(sid: str, body: LoginCodeIn, org_id: str = ORG_ID):
     """Enqueue the operator's 2FA code into the LIVE session. The worker thread fills it into the same
     open page, selects the trust radio and clicks Verify — the UI polls /state for the outcome."""
-    require_org(org_id)
     from app.modules.commcalc import live_login
+    live_login.require_session_host()   # §COMMCALC-22 — run where _SESSIONS is
+    require_org(org_id)
     code = str(body.code or "").strip()
     if not code:
         raise HTTPException(400, "Enter the verification code.")
@@ -42355,8 +42361,9 @@ def live_login_submit(sid: str, body: LoginCodeIn, org_id: str = ORG_ID):
 @router.post("/data-sources/{sid}/live-login/resend")
 def live_login_resend(sid: str, org_id: str = ORG_ID):
     """Click the LIVE page's resend / send-code control — no re-login, no re-navigation."""
-    require_org(org_id)
     from app.modules.commcalc import live_login
+    live_login.require_session_host()   # §COMMCALC-22 — run where _SESSIONS is
+    require_org(org_id)
     sess = live_login.get_session(sid, org_id)
     if not sess:
         raise HTTPException(400, "No live session running — click 🔴 Live login to start one.")
@@ -42373,9 +42380,9 @@ class LiveLoginClickIn(LaxModel):
 def live_login_click(sid: str, body: LiveLoginClickIn, org_id: str = ORG_ID):
     """'Take control': forward an operator click (NORMALIZED x/y in 0..1 of the streamed image) to the
     live page, so they can press a control the auto-clicker missed (e.g. the portal's Next button)."""
-    require_browser_service()   # SERVICE_ROLE=api → live-login sessions only run on the sweeps worker
-    require_org(org_id)
     from app.modules.commcalc import live_login
+    live_login.require_session_host()   # §COMMCALC-22 — run where _SESSIONS is
+    require_org(org_id)
     sess = live_login.get_session(sid, org_id)
     if not sess:
         raise HTTPException(400, "No live session running — click 🔴 Live login to start one.")
@@ -42402,9 +42409,9 @@ def live_login_input(sid: str, body: LiveLoginInputIn, org_id: str = ORG_ID):
     RESEND / PULL). type ∈ click|dblclick|type|key|scroll. Click coords are NORMALIZED (0..1 of the
     streamed image) and multiplied by the live viewport size server-side (DPR-proof — the img is rendered
     smaller than the real viewport). The first human input pauses auto-driving for the rest of pre-auth."""
-    require_browser_service()   # SERVICE_ROLE=api → live-login sessions only run on the sweeps worker
-    require_org(org_id)
     from app.modules.commcalc import live_login
+    live_login.require_session_host()   # §COMMCALC-22 — run where _SESSIONS is
+    require_org(org_id)
     sess = live_login.get_session(sid, org_id)
     if not sess:
         raise HTTPException(400, "No live session running — click 🔴 Live login to start one.")
@@ -42436,8 +42443,9 @@ def live_login_frame(sid: str, since: int = 0, org_id: str = ORG_ID):
     when `_seq` advanced past `since`, else a tiny unchanged payload — so the panel can poll this ~250-400ms
     while the modal is open without shipping a frame every time. phase + message are always included so the
     status line stays fresh. No live session → an idle payload (the panel stops polling)."""
-    require_org(org_id)
     from app.modules.commcalc import live_login
+    live_login.require_session_host()   # §COMMCALC-22 — answer from the process that HAS the session
+    require_org(org_id)
     sess = live_login.get_session(sid, org_id)
     if not sess:
         return {"seq": 0, "phase": "idle", "message": None, "changed": False, "shot": None}
@@ -42447,8 +42455,9 @@ def live_login_frame(sid: str, since: int = 0, org_id: str = ORG_ID):
 @router.post("/data-sources/{sid}/live-login/cancel")
 def live_login_cancel(sid: str, org_id: str = ORG_ID):
     """Cancel + close the live session (frees the headless browser)."""
-    require_org(org_id)
     from app.modules.commcalc import live_login
+    live_login.require_session_host()   # §COMMCALC-22 — run where _SESSIONS is
+    require_org(org_id)
     sess = live_login.get_session(sid, org_id)
     if sess:
         sess.cancel()

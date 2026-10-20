@@ -1682,10 +1682,24 @@ FACTS: dict[str, dict] = {
                     'hosts, so that is routine here; nothing on the row distinguishes it from a live '
                     'login, so the discriminator is AGE (`in_flight_is_stale`), with the budget '
                     'DERIVED from the two homes that already answer "how long may this take" rather '
-                    'than copied. `present_auth_status` is what a surface reads.',
+                    'than copied. `present_auth_status` is what a surface reads. AND, the other '
+                    'axis of the same home (§COMMCALC-22): WHICH PROCESS may answer about a '
+                    'session at all. `_SESSIONS` is a dict in ONE process\'s memory, so on the '
+                    'split deploy (§41) an endpoint that reads it from the API host sees an EMPTY '
+                    'registry and reports "No live session running" about a session that is alive '
+                    'on the worker. The old gate was spelled `require_browser_service` and asked '
+                    '"does this launch a browser?"; /frame launches nothing, it reads a dict, so '
+                    'the whole READ half of the operator surface was left ungated and the owner\'s '
+                    'UPS login was invisible to him for five days while the browser sat on the '
+                    'portal\'s Sign In button and timed out for operator inactivity. The question '
+                    'that matters is "does this touch _SESSIONS?", so the gate is RENAMED here: '
+                    '`require_session_host` is THE gate, and `sessions_live_here` is the pure fact '
+                    'for a reader that must degrade rather than proxy. Both dereference '
+                    '`app.core.service_role` — one reader of the role, not two.',
         "homes": ('app/modules/commcalc/live_login.py',),
-        "index": ('COMMCALC-13',),
-        "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py'),
+        "index": ('COMMCALC-13', 'COMMCALC-22'),
+        "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py',
+                  'harness_live_session_host.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
         # import graph.
         "callers": {
