@@ -17,6 +17,10 @@ import {
   toLocalInput, fromLocalInput, readPositionOnce,
   type EventWorkspace, type ActualsResponse, type EventStaff, type MarketingOption,
 } from '@/lib/marketing'
+// Picker lives at MODULE SCOPE in its own file — see that file's note. Declared inside this
+// component it was a new element type every render, which remounts the subtree (owner bug
+// 2026-10-21). Same class of defect as the create form's Field; one home, dereferenced.
+import { Picker } from '@/lib/marketingForm'
 
 type Tab = 'overview' | 'people' | 'logistics' | 'checklist' | 'parties' | 'creative' | 'giveaways' | 'results' | 'debrief'
 const TABS: { key: Tab; label: string }[] = [
@@ -92,15 +96,6 @@ export default function EventWorkspace() {
     setBusy(false)
   }
 
-  const Picker = ({ listKey, value, onChange, width = 160 }: {
-    listKey: string; value: string; onChange: (v: string) => void; width?: number
-  }) => (
-    <select style={{ ...input, width }} value={value || ''} onChange={ev => onChange(ev.target.value)}>
-      <option value="">—</option>
-      {opts(listKey).map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-    </select>
-  )
-
   return (
     <div style={{ padding: 20, maxWidth: 1400 }}>
       {/* ── header ─────────────────────────────────────────────────────────────────────────── */}
@@ -170,12 +165,12 @@ export default function EventWorkspace() {
       {tab === 'overview' && <Overview w={w} />}
 
       {tab === 'people' && (
-        <People w={w} editable={editable} opts={opts} Picker={Picker} busy={busy}
+        <People w={w} editable={editable} opts={opts} busy={busy}
                 addChild={addChild} patchChild={patchChild} delChild={delChild} staffById={staffById} />
       )}
 
       {tab === 'logistics' && (
-        <Logistics w={w} editable={editable} opts={opts} Picker={Picker} busy={busy}
+        <Logistics w={w} editable={editable} opts={opts} busy={busy}
                    patchChild={patchChild} staffById={staffById} />
       )}
 
@@ -185,17 +180,17 @@ export default function EventWorkspace() {
       )}
 
       {tab === 'parties' && (
-        <Parties w={w} editable={editable} Picker={Picker} busy={busy}
+        <Parties w={w} editable={editable} busy={busy}
                  addChild={addChild} patchChild={patchChild} delChild={delChild} opts={opts} />
       )}
 
       {tab === 'creative' && (
-        <Creative w={w} editable={editable} Picker={Picker} busy={busy}
+        <Creative w={w} editable={editable} busy={busy}
                   addChild={addChild} delChild={delChild} opts={opts} />
       )}
 
       {tab === 'giveaways' && (
-        <Giveaways w={w} editable={editable} Picker={Picker} busy={busy}
+        <Giveaways w={w} editable={editable} busy={busy}
                    addChild={addChild} patchChild={patchChild} delChild={delChild} opts={opts} />
       )}
 
@@ -260,7 +255,7 @@ function Overview({ w }: { w: EventWorkspace }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════
-function People({ w, editable, opts, Picker, busy, addChild, patchChild, delChild, staffById }: any) {
+function People({ w, editable, opts, busy, addChild, patchChild, delChild, staffById }: any) {
   const [n, setN] = useState({ employee_name: '', employee_id: '', role_key: '', is_backup: false, backup_for_staff_id: '' })
   const primaries: EventStaff[] = w.staff.filter((s: EventStaff) => !s.is_backup)
   return (
@@ -347,7 +342,7 @@ function People({ w, editable, opts, Picker, busy, addChild, patchChild, delChil
               <input style={{ ...input, width: 130 }} value={n.employee_id}
                      onChange={ev => setN({ ...n, employee_id: ev.target.value })} /></div>
             <div><span style={label}>Role</span>
-              <Picker listKey="event_role" value={n.role_key} onChange={(v: string) => setN({ ...n, role_key: v })} /></div>
+              <Picker options={opts('event_role')} width={160} value={n.role_key} onChange={(v: string) => setN({ ...n, role_key: v })} /></div>
             <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center', paddingBottom: 8 }}>
               <input type="checkbox" checked={n.is_backup}
                      onChange={ev => setN({ ...n, is_backup: ev.target.checked })} /> is a backup
@@ -397,7 +392,7 @@ function People({ w, editable, opts, Picker, busy, addChild, patchChild, delChil
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════
-function Logistics({ w, editable, opts, Picker, busy, patchChild, staffById }: any) {
+function Logistics({ w, editable, opts, busy, patchChild, staffById }: any) {
   return (
     <>
       {!!w.transport.problems.length && (
@@ -540,7 +535,7 @@ function Checklist({ w, id, editable, busy, addChild, patchChild, delChild, call
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════
-function Parties({ w, editable, Picker, busy, addChild, patchChild, delChild, opts }: any) {
+function Parties({ w, editable, busy, addChild, patchChild, delChild, opts }: any) {
   const [n, setN] = useState({ vendor_name: '', party_type_key: '', contact_name: '', contact_phone: '', cost: '' })
   return (
     <>
@@ -579,7 +574,7 @@ function Parties({ w, editable, Picker, busy, addChild, patchChild, delChild, op
             <div><span style={label}>Who</span>
               <input style={{ ...input, width: 200 }} value={n.vendor_name} onChange={ev => setN({ ...n, vendor_name: ev.target.value })} /></div>
             <div><span style={label}>Type</span>
-              <Picker listKey="party_type" value={n.party_type_key} onChange={(v: string) => setN({ ...n, party_type_key: v })} /></div>
+              <Picker options={opts('party_type')} width={160} value={n.party_type_key} onChange={(v: string) => setN({ ...n, party_type_key: v })} /></div>
             <div><span style={label}>Contact</span>
               <input style={{ ...input, width: 150 }} value={n.contact_name} onChange={ev => setN({ ...n, contact_name: ev.target.value })} /></div>
             <div><span style={label}>Phone</span>
@@ -598,7 +593,7 @@ function Parties({ w, editable, Picker, busy, addChild, patchChild, delChild, op
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════
-function Creative({ w, editable, Picker, busy, addChild, delChild, opts }: any) {
+function Creative({ w, editable, busy, addChild, delChild, opts }: any) {
   const [n, setN] = useState({ channel_key: '', label: '', url: '', planned_post_at: '' })
   return (
     <>
@@ -631,7 +626,7 @@ function Creative({ w, editable, Picker, busy, addChild, delChild, opts }: any) 
         <Section title="Add a planned link">
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'end' }}>
             <div><span style={label}>Channel</span>
-              <Picker listKey="link_channel" value={n.channel_key} onChange={(v: string) => setN({ ...n, channel_key: v })} /></div>
+              <Picker options={opts('link_channel')} width={160} value={n.channel_key} onChange={(v: string) => setN({ ...n, channel_key: v })} /></div>
             <div><span style={label}>What is it</span>
               <input style={{ ...input, width: 200 }} value={n.label} onChange={ev => setN({ ...n, label: ev.target.value })} /></div>
             <div><span style={label}>Link</span>
@@ -651,7 +646,7 @@ function Creative({ w, editable, Picker, busy, addChild, delChild, opts }: any) 
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════
-function Giveaways({ w, editable, Picker, busy, addChild, patchChild, delChild, opts }: any) {
+function Giveaways({ w, editable, busy, addChild, patchChild, delChild, opts }: any) {
   const [n, setN] = useState({ item_label: '', giveaway_type_key: '', qty_out: '' })
   const rec = w.giveaway_reconciliation
   return (
@@ -692,7 +687,7 @@ function Giveaways({ w, editable, Picker, busy, addChild, patchChild, delChild, 
             <div><span style={label}>Item</span>
               <input style={{ ...input, width: 200 }} value={n.item_label} onChange={ev => setN({ ...n, item_label: ev.target.value })} /></div>
             <div><span style={label}>Type</span>
-              <Picker listKey="giveaway_type" value={n.giveaway_type_key} onChange={(v: string) => setN({ ...n, giveaway_type_key: v })} /></div>
+              <Picker options={opts('giveaway_type')} width={160} value={n.giveaway_type_key} onChange={(v: string) => setN({ ...n, giveaway_type_key: v })} /></div>
             <div><span style={label}>Qty out</span>
               <input style={{ ...input, width: 90 }} type="number" value={n.qty_out} onChange={ev => setN({ ...n, qty_out: ev.target.value })} /></div>
             <button style={btnPrimary} disabled={busy || !n.item_label.trim()} onClick={async () => {

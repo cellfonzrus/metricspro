@@ -9,69 +9,37 @@ import {
   type Task, type Disposition,
 } from '@/lib/crm'
 
-export default function MyFollowupsPage() {
-  const [rows, setRows] = useState<Task[]>([])
-  const [dispositions, setDispositions] = useState<Disposition[]>([])
-  const [reasons, setReasons] = useState<any[]>([])
-  const [scope, setScope] = useState<'mine' | 'team'>('mine')
-  const [status, setStatus] = useState<'open' | 'missed' | 'done'>('open')
-  const [days, setDays] = useState(14)
-  const [msg, setMsg] = useState('')
-  const [note, setNote] = useState('')
-  const [busy, setBusy] = useState('')
-  const [openId, setOpenId] = useState('')
-  const [dispId, setDispId] = useState('')
-  const [reasonId, setReasonId] = useState('')
+// The section list lives at MODULE SCOPE, and that is the whole point. Declared inside the page
+// component it was a NEW function identity on every render, and React compares element types by
+// REFERENCE — a different type UNMOUNTS the old subtree and MOUNTS a fresh one rather than updating
+// it. So every keystroke in the outcome Note destroyed the very <input> being typed into and the
+// browser dropped focus with it: the owner's 2026-10-21 report ("only letter at a time is entered")
+// on the marketing create form, the same defect in this screen. What the rows need is handed over in
+// `ctx` instead of being closed over; the JSX is unchanged. A fresh `ctx` object each render only
+// changes a PROP, which React updates in place — it is the element TYPE that must stay stable.
+// Locked by backend/harness_inner_component_inputs.py.
+type SectionCtx = {
+  scope: 'mine' | 'team'
+  busy: string
+  openId: string; setOpenId: (v: string) => void
+  dispId: string; setDispId: (v: string) => void
+  reasonId: string; setReasonId: (v: string) => void
+  note: string; setNote: (v: string) => void
+  dispositions: Disposition[]
+  reasons: any[]
+  chosen: Disposition | undefined
+  complete: (t: Task, withOutcome: boolean) => void
+  snooze: (t: Task, hours: number) => void
+}
 
-  const load = useCallback(async () => {
-    setMsg('')
-    try {
-      const p = new URLSearchParams({ scope, status, days: String(days) })
-      const r = await api(`/api/v1/crm/tasks?${p}`)
-      setRows(r.rows || [])
-      if (r.note) setMsg(r.note)
-    } catch (e: any) { setMsg(e?.message || String(e)); setRows([]) }
-  }, [scope, status, days])
-
-  useEffect(() => { load() }, [load])
-  useEffect(() => {
-    Promise.all([api('/api/v1/crm/lists/dispositions'), api('/api/v1/crm/lists/reason-codes')])
-      .then(([d, r]) => { setDispositions(d || []); setReasons(r || []) })
-      .catch(() => { /* config unreachable — completing without an outcome still works */ })
-  }, [])
-
-  const chosen = dispositions.find(d => d.id === dispId)
-
-  async function complete(t: Task, withOutcome: boolean) {
-    setBusy(t.id); setMsg('')
-    try {
-      const body: any = {}
-      if (withOutcome && dispId) {
-        body.disposition_id = dispId
-        body.reason_code_id = reasonId || null
-        body.note = note
-      }
-      await api(`/api/v1/crm/tasks/${t.id}/complete`, { method: 'POST', body: JSON.stringify(body) })
-      setOpenId(''); setDispId(''); setReasonId(''); setNote('')
-      await load()
-    } catch (e: any) { setMsg(e?.message || String(e)) }
-    setBusy('')
-  }
-
-  async function snooze(t: Task, hours: number) {
-    setBusy(t.id); setMsg('')
-    try {
-      await api(`/api/v1/crm/tasks/${t.id}/snooze`, { method: 'POST', body: JSON.stringify({ hours }) })
-      await load()
-    } catch (e: any) { setMsg(e?.message || String(e)) }
-    setBusy('')
-  }
-
-  const overdue = rows.filter(t => t.is_overdue)
-  const today = rows.filter(t => !t.is_overdue && t.is_today)
-  const upcoming = rows.filter(t => !t.is_overdue && !t.is_today)
-
-  const Section = ({ title, list, tint }: { title: string; list: Task[]; tint?: string }) => (
+function Section({ title, list, tint, ctx }: {
+  title: string; list: Task[]; tint?: string; ctx: SectionCtx
+}) {
+  const {
+    scope, busy, openId, setOpenId, dispId, setDispId, reasonId, setReasonId,
+    note, setNote, dispositions, reasons, chosen, complete, snooze,
+  } = ctx
+  return (
     <div style={{ ...panel, marginBottom: 14, borderColor: tint }}>
       <div style={{ fontWeight: 700, marginBottom: 8, color: tint }}>{title} ({list.length})</div>
       {list.length === 0 && <div style={{ fontSize: 13, color: 'var(--text2)' }}>Nothing here.</div>}
@@ -133,6 +101,75 @@ export default function MyFollowupsPage() {
       ))}
     </div>
   )
+}
+
+export default function MyFollowupsPage() {
+  const [rows, setRows] = useState<Task[]>([])
+  const [dispositions, setDispositions] = useState<Disposition[]>([])
+  const [reasons, setReasons] = useState<any[]>([])
+  const [scope, setScope] = useState<'mine' | 'team'>('mine')
+  const [status, setStatus] = useState<'open' | 'missed' | 'done'>('open')
+  const [days, setDays] = useState(14)
+  const [msg, setMsg] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState('')
+  const [openId, setOpenId] = useState('')
+  const [dispId, setDispId] = useState('')
+  const [reasonId, setReasonId] = useState('')
+
+  const load = useCallback(async () => {
+    setMsg('')
+    try {
+      const p = new URLSearchParams({ scope, status, days: String(days) })
+      const r = await api(`/api/v1/crm/tasks?${p}`)
+      setRows(r.rows || [])
+      if (r.note) setMsg(r.note)
+    } catch (e: any) { setMsg(e?.message || String(e)); setRows([]) }
+  }, [scope, status, days])
+
+  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    Promise.all([api('/api/v1/crm/lists/dispositions'), api('/api/v1/crm/lists/reason-codes')])
+      .then(([d, r]) => { setDispositions(d || []); setReasons(r || []) })
+      .catch(() => { /* config unreachable — completing without an outcome still works */ })
+  }, [])
+
+  const chosen = dispositions.find(d => d.id === dispId)
+
+  async function complete(t: Task, withOutcome: boolean) {
+    setBusy(t.id); setMsg('')
+    try {
+      const body: any = {}
+      if (withOutcome && dispId) {
+        body.disposition_id = dispId
+        body.reason_code_id = reasonId || null
+        body.note = note
+      }
+      await api(`/api/v1/crm/tasks/${t.id}/complete`, { method: 'POST', body: JSON.stringify(body) })
+      setOpenId(''); setDispId(''); setReasonId(''); setNote('')
+      await load()
+    } catch (e: any) { setMsg(e?.message || String(e)) }
+    setBusy('')
+  }
+
+  async function snooze(t: Task, hours: number) {
+    setBusy(t.id); setMsg('')
+    try {
+      await api(`/api/v1/crm/tasks/${t.id}/snooze`, { method: 'POST', body: JSON.stringify({ hours }) })
+      await load()
+    } catch (e: any) { setMsg(e?.message || String(e)) }
+    setBusy('')
+  }
+
+  const ctx: SectionCtx = {
+    scope, busy, openId, setOpenId, dispId, setDispId, reasonId, setReasonId,
+    note, setNote, dispositions, reasons, chosen, complete, snooze,
+  }
+
+  const overdue = rows.filter(t => t.is_overdue)
+  const today = rows.filter(t => !t.is_overdue && t.is_today)
+  const upcoming = rows.filter(t => !t.is_overdue && !t.is_today)
+
 
   return (
     <div style={{ padding: 20, maxWidth: 1100 }}>
@@ -163,9 +200,9 @@ export default function MyFollowupsPage() {
 
       {msg && <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 14 }}>{msg}</div>}
 
-      <Section title="Overdue" list={overdue} tint="#dc2626" />
-      <Section title="Today" list={today} tint="#f39c12" />
-      <Section title="Coming up" list={upcoming} />
+      <Section title="Overdue" list={overdue} tint="#dc2626" ctx={ctx} />
+      <Section title="Today" list={today} tint="#f39c12" ctx={ctx} />
+      <Section title="Coming up" list={upcoming} ctx={ctx} />
     </div>
   )
 }

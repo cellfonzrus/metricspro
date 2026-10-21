@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, type Dispatch, type SetStateAction } from 'react'
 import { api, apiDownload, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { usePosTerm } from '@/lib/report-labels'
@@ -60,6 +60,38 @@ function termLabel(k: string): string { return TERM_LABELS[k] || k }
 function parsePromoPrice(sampleDesc: string): string {
   const m = sampleDesc.match(/\$(\d+(?:\.\d+)?)$/)
   return m ? `$${m[1]}` : '—'
+}
+
+// A rate field lives at MODULE SCOPE, and that is the whole point. Declared inside the page
+// component it was a NEW function identity on every render, and React compares element types by
+// REFERENCE — a different type UNMOUNTS the old subtree and MOUNTS a fresh one rather than updating
+// it. So every keystroke destroyed the very <input> being typed into and the browser dropped focus
+// with it: the owner's 2026-10-21 report ("only letter at a time is entered") on the marketing
+// create form, the same defect in this screen. `cfg`/`setCfg` therefore arrive as props instead of
+// being closed over. Locked by backend/harness_inner_component_inputs.py.
+function Field({ label, field, cfg, setCfg, prefix = '', suffix = '' }: {
+  label: string; field: string; cfg: any; setCfg: Dispatch<SetStateAction<any>>
+  prefix?: string; suffix?: string
+}) {
+  return (
+    <div>
+      <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: 'var(--text2)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        {label}
+      </label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {prefix && <span style={{ color: 'var(--text3)', fontSize: 14 }}>{prefix}</span>}
+        <input
+          className="input"
+          type="number"
+          step="0.01"
+          value={cfg[field] ?? ''}
+          onChange={e => setCfg((c: any) => ({ ...c, [field]: parseFloat(e.target.value) || 0 }))}
+          style={{ width: 100 }}
+        />
+        {suffix && <span style={{ color: 'var(--text2)', fontSize: 13 }}>{suffix}</span>}
+      </div>
+    </div>
+  )
 }
 
 export default function SettingsPage() {
@@ -281,27 +313,6 @@ export default function SettingsPage() {
       a.label.toLowerCase().localeCompare(b.label.toLowerCase()) || a.label.localeCompare(b.label))
   }, [markets, storeList])
 
-  function Field({ label, field, prefix = '', suffix = '' }: { label: string; field: string; prefix?: string; suffix?: string }) {
-    return (
-      <div>
-        <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: 'var(--text2)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          {label}
-        </label>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {prefix && <span style={{ color: 'var(--text3)', fontSize: 14 }}>{prefix}</span>}
-          <input
-            className="input"
-            type="number"
-            step="0.01"
-            value={cfg[field] ?? ''}
-            onChange={e => setCfg((c: any) => ({ ...c, [field]: parseFloat(e.target.value) || 0 }))}
-            style={{ width: 100 }}
-          />
-          {suffix && <span style={{ color: 'var(--text2)', fontSize: 13 }}>{suffix}</span>}
-        </div>
-      </div>
-    )
-  }
 
   // Group comp rates by comp_type for display
   const groupedRates = compRates.reduce((acc, r) => {
@@ -582,17 +593,17 @@ export default function SettingsPage() {
           <div className="card">
             <div style={{ fontWeight: 600, marginBottom: 16 }}>Per-Transaction Flat Rates</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
-              <Field label="Premium Activation" field="premium_flat" prefix="$" suffix="per act" />
-              <Field label="BYOD Activation" field="byod_flat" prefix="$" suffix="per act" />
-              <Field label="Device Upgrade" field="upgrade_flat" prefix="$" suffix="per act" />
-              <Field label="Trade-In SPIFF" field="trade_in_spiff" prefix="$" suffix="per trade" />
-              <Field label="ACIMA Financing SPIFF" field="acima_spiff" prefix="$" suffix="per txn" />
-              <Field label="Additional BYOD SPIFF" field="byod_extra_spiff" prefix="$" suffix="per act" />
+              <Field label="Premium Activation" field="premium_flat" cfg={cfg} setCfg={setCfg} prefix="$" suffix="per act" />
+              <Field label="BYOD Activation" field="byod_flat" cfg={cfg} setCfg={setCfg} prefix="$" suffix="per act" />
+              <Field label="Device Upgrade" field="upgrade_flat" cfg={cfg} setCfg={setCfg} prefix="$" suffix="per act" />
+              <Field label="Trade-In SPIFF" field="trade_in_spiff" cfg={cfg} setCfg={setCfg} prefix="$" suffix="per trade" />
+              <Field label="ACIMA Financing SPIFF" field="acima_spiff" cfg={cfg} setCfg={setCfg} prefix="$" suffix="per txn" />
+              <Field label="Additional BYOD SPIFF" field="byod_extra_spiff" cfg={cfg} setCfg={setCfg} prefix="$" suffix="per act" />
             </div>
             <div style={{ fontWeight: 600, margin: '24px 0 16px' }}>GP-Based Rates</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
-              <Field label="Accessories (Ondigo dept)" field="acc_rate" suffix="= 10% of GP" />
-              <Field label="Device Setup Fees" field="setup_fee_rate" suffix="= 10% of GP" />
+              <Field label="Accessories (Ondigo dept)" field="acc_rate" cfg={cfg} setCfg={setCfg} suffix="= 10% of GP" />
+              <Field label="Device Setup Fees" field="setup_fee_rate" cfg={cfg} setCfg={setCfg} suffix="= 10% of GP" />
             </div>
           </div>
         </div>
@@ -602,13 +613,13 @@ export default function SettingsPage() {
         <div className="card">
           <div style={{ fontWeight: 600, marginBottom: 16 }}>KPI Targets (minimum % to pass)</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
-            <Field label="ATU %" field="kpi_atu_target" suffix="% target" />
-            <Field label="Carrier Protect %" field="kpi_protect_target" suffix="% target" />
-            <Field label="Carrier App %" field="kpi_boostapp_target" suffix="% target" />
-            <Field label="Family Plan %" field="kpi_familyplan_target" suffix="% target" />
-            <Field label="BYOD %" field="kpi_byod_target" suffix="% target" />
-            <Field label="3MR %" field="kpi_tmr3_target" suffix="% target" />
-            <Field label="AAL Conversion %" field="kpi_aal_target" suffix="% target" />
+            <Field label="ATU %" field="kpi_atu_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
+            <Field label="Carrier Protect %" field="kpi_protect_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
+            <Field label="Carrier App %" field="kpi_boostapp_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
+            <Field label="Family Plan %" field="kpi_familyplan_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
+            <Field label="BYOD %" field="kpi_byod_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
+            <Field label="3MR %" field="kpi_tmr3_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
+            <Field label="AAL Conversion %" field="kpi_aal_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
           </div>
         </div>
       )}
@@ -617,10 +628,10 @@ export default function SettingsPage() {
         <div className="card">
           <div style={{ fontWeight: 600, marginBottom: 16 }}>Tier Structure</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 20 }}>
-            <Field label="KPIs needed for 100% tier" field="tier_100_min_kpis" suffix="of 7 KPIs" />
-            <Field label="KPIs needed for 75% tier" field="tier_75_min_kpis" suffix="of 7 KPIs" />
-            <Field label="75% tier multiplier" field="tier_75_pct" suffix="(0.75 = 75%)" />
-            <Field label="50% tier multiplier" field="tier_50_pct" suffix="(0.50 = 50%)" />
+            <Field label="KPIs needed for 100% tier" field="tier_100_min_kpis" cfg={cfg} setCfg={setCfg} suffix="of 7 KPIs" />
+            <Field label="KPIs needed for 75% tier" field="tier_75_min_kpis" cfg={cfg} setCfg={setCfg} suffix="of 7 KPIs" />
+            <Field label="75% tier multiplier" field="tier_75_pct" cfg={cfg} setCfg={setCfg} suffix="(0.75 = 75%)" />
+            <Field label="50% tier multiplier" field="tier_50_pct" cfg={cfg} setCfg={setCfg} suffix="(0.50 = 50%)" />
           </div>
           <div style={{ marginTop: 20 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>

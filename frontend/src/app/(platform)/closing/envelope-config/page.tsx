@@ -32,6 +32,91 @@ const blankCfg = (store_code: string | null = null): Cfg => ({
   require_photo_if_cash: false,
 })
 
+// Both cards live at MODULE SCOPE, and that is not a style choice. Declared inside the page
+// component they were a NEW function identity on every render, and React compares element types by
+// REFERENCE — a different type UNMOUNTS the old subtree and MOUNTS a fresh one. The day-of-month and
+// biweekly-anchor inputs were therefore destroyed on each keystroke and focus went with them: the
+// owner's 2026-10-21 report ("only letter at a time is entered") on the marketing create form, the
+// same defect in this screen. Locked by backend/harness_inner_component_inputs.py.
+function CadenceFields({ label, cadence, anchor, anchorDate, onChange }: {
+  label: string; cadence: string; anchor: string; anchorDate: string
+  onChange: (patch: { cadence?: string; anchor?: string; anchorDate?: string }) => void
+}) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, marginBottom: 4 }}>{label} cadence</div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select style={sel} value={cadence} onChange={e => onChange({ cadence: e.target.value })}>
+          {CADENCES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+        {cadence === 'weekly' && (
+          <select style={sel} value={anchor} onChange={e => onChange({ anchor: e.target.value })}>
+            <option value="">(today&apos;s weekday)</option>
+            {WEEKDAYS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        )}
+        {cadence === 'monthly' && (
+          <input style={{ ...sel, width: 90 }} type="number" min={1} max={31} placeholder="Day of month"
+            value={anchor} onChange={e => onChange({ anchor: e.target.value })} />
+        )}
+        {cadence === 'biweekly' && (
+          <input style={sel} type="date" value={anchorDate} onChange={e => onChange({ anchorDate: e.target.value })} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function CfgCard({ cfg, onChange, onSave, title, busy }: {
+  cfg: Cfg; onChange: (c: Cfg) => void; onSave: () => void; title: string; busy: boolean
+}) {
+  return (
+    <div className="card" style={{ padding: 16, marginBottom: 14 }}>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>{title}</div>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 14 }}>
+        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={cfg.take_commission} onChange={e => onChange({ ...cfg, take_commission: e.target.checked })} /> Take commission
+        </label>
+        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={cfg.take_salary} onChange={e => onChange({ ...cfg, take_salary: e.target.checked })} /> Take salary
+        </label>
+        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={cfg.take_expenses} onChange={e => onChange({ ...cfg, take_expenses: e.target.checked })} /> Take approved expenses
+        </label>
+      </div>
+      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 12 }}>
+        <CadenceFields label="Commission" cadence={cfg.commission_cadence} anchor={cfg.commission_anchor} anchorDate={cfg.commission_anchor_date}
+          onChange={p => onChange({ ...cfg, commission_cadence: p.cadence ?? cfg.commission_cadence, commission_anchor: p.anchor ?? cfg.commission_anchor, commission_anchor_date: p.anchorDate ?? cfg.commission_anchor_date })} />
+        <CadenceFields label="Salary" cadence={cfg.salary_cadence} anchor={cfg.salary_anchor} anchorDate={cfg.salary_anchor_date}
+          onChange={p => onChange({ ...cfg, salary_cadence: p.cadence ?? cfg.salary_cadence, salary_anchor: p.anchor ?? cfg.salary_anchor, salary_anchor_date: p.anchorDate ?? cfg.salary_anchor_date })} />
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, marginBottom: 4 }}>Envelope selection order (Q15)</div>
+        <select style={sel} value={cfg.order_preference} onChange={e => onChange({ ...cfg, order_preference: e.target.value })}>
+          <option value="oldest_first">Oldest envelope first (default)</option>
+          <option value="newest_first">Newest envelope first</option>
+        </select>
+        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, maxWidth: 480 }}>
+          Fewest envelopes is always the objective — this only decides which envelope wins when two or
+          more are otherwise an equally-good pick.
+        </div>
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={cfg.require_photo_if_cash}
+            onChange={e => onChange({ ...cfg, require_photo_if_cash: e.target.checked })} />
+          Require an envelope photo whenever cash &gt; 0 is declared
+        </label>
+        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, maxWidth: 480 }}>
+          OFF by default. When ON, a closing that declares any cash is blocked from submitting until a
+          photo of the envelope is attached (a $0-cash closing is never affected).
+        </div>
+      </div>
+      <button className="btn btn-primary" disabled={busy} style={{ fontSize: 13 }} onClick={onSave}>💾 Save</button>
+    </div>
+  )
+}
+
 export default function EnvelopeConfigPage() {
   const [orgCfg, setOrgCfg] = useState<Cfg>(blankCfg())
   const [overrides, setOverrides] = useState<Cfg[]>([])
@@ -65,83 +150,6 @@ export default function EnvelopeConfigPage() {
     setBusy(false)
   }
 
-  function CadenceFields({ label, cadence, anchor, anchorDate, onChange }: {
-    label: string; cadence: string; anchor: string; anchorDate: string
-    onChange: (patch: { cadence?: string; anchor?: string; anchorDate?: string }) => void
-  }) {
-    return (
-      <div>
-        <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, marginBottom: 4 }}>{label} cadence</div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <select style={sel} value={cadence} onChange={e => onChange({ cadence: e.target.value })}>
-            {CADENCES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
-          {cadence === 'weekly' && (
-            <select style={sel} value={anchor} onChange={e => onChange({ anchor: e.target.value })}>
-              <option value="">(today&apos;s weekday)</option>
-              {WEEKDAYS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-          )}
-          {cadence === 'monthly' && (
-            <input style={{ ...sel, width: 90 }} type="number" min={1} max={31} placeholder="Day of month"
-              value={anchor} onChange={e => onChange({ anchor: e.target.value })} />
-          )}
-          {cadence === 'biweekly' && (
-            <input style={sel} type="date" value={anchorDate} onChange={e => onChange({ anchorDate: e.target.value })} />
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  function CfgCard({ cfg, onChange, onSave, title }: { cfg: Cfg; onChange: (c: Cfg) => void; onSave: () => void; title: string }) {
-    return (
-      <div className="card" style={{ padding: 16, marginBottom: 14 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>{title}</div>
-        <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 14 }}>
-          <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input type="checkbox" checked={cfg.take_commission} onChange={e => onChange({ ...cfg, take_commission: e.target.checked })} /> Take commission
-          </label>
-          <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input type="checkbox" checked={cfg.take_salary} onChange={e => onChange({ ...cfg, take_salary: e.target.checked })} /> Take salary
-          </label>
-          <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input type="checkbox" checked={cfg.take_expenses} onChange={e => onChange({ ...cfg, take_expenses: e.target.checked })} /> Take approved expenses
-          </label>
-        </div>
-        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 12 }}>
-          <CadenceFields label="Commission" cadence={cfg.commission_cadence} anchor={cfg.commission_anchor} anchorDate={cfg.commission_anchor_date}
-            onChange={p => onChange({ ...cfg, commission_cadence: p.cadence ?? cfg.commission_cadence, commission_anchor: p.anchor ?? cfg.commission_anchor, commission_anchor_date: p.anchorDate ?? cfg.commission_anchor_date })} />
-          <CadenceFields label="Salary" cadence={cfg.salary_cadence} anchor={cfg.salary_anchor} anchorDate={cfg.salary_anchor_date}
-            onChange={p => onChange({ ...cfg, salary_cadence: p.cadence ?? cfg.salary_cadence, salary_anchor: p.anchor ?? cfg.salary_anchor, salary_anchor_date: p.anchorDate ?? cfg.salary_anchor_date })} />
-        </div>
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, marginBottom: 4 }}>Envelope selection order (Q15)</div>
-          <select style={sel} value={cfg.order_preference} onChange={e => onChange({ ...cfg, order_preference: e.target.value })}>
-            <option value="oldest_first">Oldest envelope first (default)</option>
-            <option value="newest_first">Newest envelope first</option>
-          </select>
-          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, maxWidth: 480 }}>
-            Fewest envelopes is always the objective — this only decides which envelope wins when two or
-            more are otherwise an equally-good pick.
-          </div>
-        </div>
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input type="checkbox" checked={cfg.require_photo_if_cash}
-              onChange={e => onChange({ ...cfg, require_photo_if_cash: e.target.checked })} />
-            Require an envelope photo whenever cash &gt; 0 is declared
-          </label>
-          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, maxWidth: 480 }}>
-            OFF by default. When ON, a closing that declares any cash is blocked from submitting until a
-            photo of the envelope is attached (a $0-cash closing is never affected).
-          </div>
-        </div>
-        <button className="btn btn-primary" disabled={busy} style={{ fontSize: 13 }} onClick={onSave}>💾 Save</button>
-      </div>
-    )
-  }
-
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
@@ -157,12 +165,12 @@ export default function EnvelopeConfigPage() {
       </div>
       {msg && <div style={{ fontSize: 13, marginBottom: 10 }}>{msg}</div>}
 
-      <CfgCard cfg={orgCfg} onChange={setOrgCfg} onSave={() => save(orgCfg)} title="Org default" />
+      <CfgCard cfg={orgCfg} onChange={setOrgCfg} onSave={() => save(orgCfg)} title="Org default" busy={busy} />
 
       <div style={{ fontWeight: 700, fontSize: 14, margin: '18px 0 8px' }}>Store overrides</div>
       {overrides.map((o, i) => (
         <CfgCard key={o.store_code || i} cfg={o} onChange={c => setOverrides(os => os.map((x, j) => j === i ? c : x))}
-          onSave={() => save(overrides[i])} title={storeLabel(o.store_code || '')} />
+          onSave={() => save(overrides[i])} title={storeLabel(o.store_code || '')} busy={busy} />
       ))}
       <div className="card" style={{ padding: 14, display: 'flex', gap: 10, alignItems: 'center' }}>
         <EntityPicker options={storeOptions.filter(s => !overrides.some(o => o.store_code === s.id))}
