@@ -545,10 +545,39 @@ main_src = src(APP, "main.py")
 check("L13 main.py registers the supply router", "from app.modules.supply.router import router as supply_router" in main_src
       and 'app.include_router(supply_router, prefix="/api/v1")' in main_src)
 rbac = src(REPO, "frontend", "src", "lib", "rbac.ts")
-grp = re.search(r"\{ group: 'Supply Ordering', module: 'supply_ordering', items: \[(.*?)\]\}", rbac, re.S)
+# Read the group by its HEAD and then its body, the way every other NAV reader here does
+# (harness_super_admin_toolbox A0, harness_nav_deep_link_lock NAV_GROUP_RE). Pinning the literal
+# field ORDER — `{ group: 'X', module: 'Y', items: [` — made this lock fail the day a new declared
+# field (`icon`, index §CORE-14.5) was added between them, which is a fact about the source's
+# punctuation, not about the nav group.
+def _nav_group_body(source: str, name: str) -> str:
+    """The text of ONE NAV group: from its `{ group: '<name>'` head to the next group head (or the
+    end of the literal). Same shape as harness_super_admin_toolbox's reader, and it depends on no
+    field order inside the head."""
+    head = re.search(r"\{ group: '%s'" % re.escape(name), source)
+    if not head:
+        return ""
+    rest = source[head.end():]
+    nxt = re.search(r"^  \{ group: '", rest, re.M)
+    return rest[: nxt.start()] if nxt else rest
+grp = re.search(r"\{ group: 'Supply Ordering'", rbac)
+body_ = _nav_group_body(rbac, 'Supply Ordering')
 check("L14 ONE nav group 'Supply Ordering' (module supply_ordering) with the four pages",
       grp is not None and rbac.count("group: 'Supply Ordering'") == 1
-      and all(h in (grp.group(1) if grp else "") for h in ("'/supply/vendors'", "'/supply/compare'", "'/supply/cart'", "'/supply/orders'")))
+      and "module: 'supply_ordering'" in body_
+      and all(h in body_ for h in ("'/supply/vendors'", "'/supply/compare'", "'/supply/cart'", "'/supply/orders'")))
+# The lock above must not go blind if the declaration is reordered again: a field order it does NOT
+# depend on cannot break it, and a group that loses its module or a page still fails.
+_reordered = re.sub(r"\{ group: 'Supply Ordering', icon: ('[^']*'), module:",
+                    r"{ group: 'Supply Ordering', module:", rbac, count=1)
+check("L14b the group reader does not depend on the field ORDER inside the head",
+      "module: 'supply_ordering'" in _nav_group_body(_reordered, 'Supply Ordering')
+      and all(h in _nav_group_body(_reordered, 'Supply Ordering')
+              for h in ("'/supply/vendors'", "'/supply/compare'", "'/supply/cart'", "'/supply/orders'")))
+check("L14c …and still fails a group that lost a page",
+      "'/supply/cart'" not in _nav_group_body(rbac.replace("{ href: '/supply/cart'", "{ href: '/supply/gone'", 1), 'Supply Ordering'))
+check("L14d …and reads only ITS OWN group, not the next one",
+      "'/supply/" in body_ and "group: '" not in body_)
 check("L15 rbac.ts spells no vertical key", not any(f"'{k}'" in rbac or f'"{k}"' in rbac for k in vkeys))
 fe = os.path.join(REPO, "frontend", "src", "app", "(platform)", "supply")
 pages = sorted(os.path.relpath(os.path.join(dp, f), fe) for dp, _d, fs in os.walk(fe) for f in fs if f == "page.tsx") if os.path.isdir(fe) else []
