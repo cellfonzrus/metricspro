@@ -144,14 +144,29 @@ tr:hover td { background: var(--surface2); }
 /* Group header — quiet until pointed at, so the eye goes to the items. */
 .mp-nav-group {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  width: 100%; padding: 11px 10px 5px;
+  width: 100%; padding: 12px 10px 5px;
   background: none; border: none; cursor: pointer;
   color: rgba(255, 255, 255, 0.4);
-  font-family: inherit; font-size: 9.5px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.1em;
+  font-family: inherit; font-size: 11px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 0.085em;
   transition: color 0.12s ease;
+  /* A <button> centres its text by default. That never showed while the label was a shrink-to-fit
+     span pushed left by `space-between`; now that the label is the flexible child between the icon
+     and the chevron, the default would centre every heading. */
+  text-align: left;
+  --mp-accent: var(--nav-accent-1);
 }
 .mp-nav-group:hover { color: rgba(255, 255, 255, 0.72); }
+/* The heading's icon, in the SAME fixed slot width as a row's icon chip, so a heading and the rows
+   under it share one left edge instead of stepping in and out. */
+.mp-nav-group-icon { width: 21px; flex-shrink: 0; text-align: center; font-size: 12.5px; line-height: 1; }
+/* A heading is plain TEXT, not an emoji, so `color` is the thing that works on it (see the chip note
+   below). It takes the same mix as a row's label — deliberately: the rotation is one palette, and a
+   heading differs from its rows by weight and size, not by a colour of its own. */
+@supports (color: color-mix(in srgb, red 50%, white)) {
+  .mp-nav-group { color: color-mix(in srgb, var(--mp-accent) 85%, #ffffff); }
+  .mp-nav-group:hover { color: #ffffff; }
+}
 
 /* Nav row. Rounded full-width pill instead of the old flush-left bar + border-left. */
 .mp-nav-item {

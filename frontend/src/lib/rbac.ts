@@ -354,7 +354,7 @@ export type NavSub = { name: string; items: NavItem[] }
 // `platformOnly` (index §38): the WHOLE group is for the platform super admin (AppUser.super_admin —
 // NOT modules.admin, which every tenant admin role holds). It never reaches a tenant's sidebar, search,
 // hub, role editor or menu editor: every consumer reads it through `platformOK` / `TENANT_NAV` below.
-export type NavGroup = { group: string; module: string; items: NavItem[]; subs?: NavSub[]; platformOnly?: boolean }
+export type NavGroup = { group: string; icon?: string; module: string; items: NavItem[]; subs?: NavSub[]; platformOnly?: boolean }
 
 // scopes (when present) further restricts an item to those scope tiers, e.g. settings = admin only.
 // ── NAV taxonomy (reorganized 2026-06-28) ──────────────────────────────────────────────
@@ -373,10 +373,10 @@ export const NAV: NavGroup[] = [
   // Store Operations (mig 1020, index §35) — a franchise store's day on one screen. Module `franchise_ops`
   // is scoped to its vertical as DATA (core.module_catalog.applies_to_vertical), so verticalOK hides this
   // group for every other kind of business; nothing here names one.
-  { group: 'Store Operations', module: 'franchise_ops', items: [
+  { group: 'Store Operations', icon: '🏪', module: 'franchise_ops', items: [
     { href: '/franchise', label: 'Operations Dashboard', icon: '🏪', module: 'franchise_ops' },
   ] },
-  { group: 'Point of Sale', module: 'pos', items: [
+  { group: 'Point of Sale', icon: '🛒', module: 'pos', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -411,7 +411,7 @@ export const NAV: NavGroup[] = [
   // BEFORE a sale exists, and the register is where it ends up.
   // 'Customer Lookup' carries no extra nav scope on purpose — the real gate is the server-side
   // `customer_360` data grant (default-closed), so widening the nav here cannot widen access.
-  { group: 'CRM', module: 'crm', items: [
+  { group: 'CRM', icon: '🤝', module: 'crm', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -442,7 +442,7 @@ export const NAV: NavGroup[] = [
   //
   // Settings is 'all' only, like every other module's config surface; planning and approving are
   // ['all','market'] with the backend (_require_manager / _require_approver) as the real gate.
-  { group: 'Marketing', module: 'marketing', items: [
+  { group: 'Marketing', icon: '📣', module: 'marketing', items: [
     { href: '/marketing', label: 'Events Dashboard', icon: '🎪', module: 'marketing', scopes: ['all', 'market', 'store'] },
     { href: '/marketing/events/new', label: 'Plan an Event', icon: '➕', module: 'marketing', scopes: ['all', 'market'], tileOnly: true },
     // Sales from Events (owner directive 2026-09-09, §23s) — the three event-register reports. Same
@@ -457,7 +457,7 @@ export const NAV: NavGroup[] = [
   // back. module 'supply_ordering' is the entitlement key; which tenants have it is DATA (core.module_catalog
   // applies_to_vertical, mig 1020) — nothing here names a kind of tenant. Vendors (setup) is 'all'/'market',
   // like every other roster/config surface; the backend's vendor-roster admin gate is the real guard.
-  { group: 'Supply Ordering', module: 'supply_ordering', items: [
+  { group: 'Supply Ordering', icon: '📦', module: 'supply_ordering', items: [
     { href: '/supply/compare', label: 'Price Compare', icon: '⚖️', module: 'supply_ordering', scopes: ['all', 'market', 'store'] },
     { href: '/supply/cart', label: 'Supply Cart', icon: '🛒', module: 'supply_ordering', scopes: ['all', 'market', 'store'] },
     { href: '/supply/orders', label: 'Supply Orders', icon: '📦', module: 'supply_ordering', scopes: ['all', 'market', 'store'] },
@@ -470,7 +470,7 @@ export const NAV: NavGroup[] = [
   // Approvals is scoped ['all','market']: approving a payout is a manager act, and the backend
   // (_can_approve) is the real gate — the nav scope only decides who sees the tab. Settings is 'all'
   // only, like every other module's config surface.
-  { group: 'Referral', module: 'referral', items: [
+  { group: 'Referral', icon: '🎁', module: 'referral', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -490,7 +490,7 @@ export const NAV: NavGroup[] = [
   // 'Coaching' carries a manager scope on purpose — it names individual employees. An employee
   // reaches their OWN numbers through the server-side /vision/behavior/mine route, which needs no
   // manager role, so narrowing the nav here does not hide anyone's own data from them.
-  { group: 'Vision', module: 'vision', items: [
+  { group: 'Vision', icon: '👁️', module: 'vision', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -525,7 +525,7 @@ export const NAV: NavGroup[] = [
   // tileOnly DUPLICATE of its original entry keeping module + scopes byte-identical (the Reports-
   // directory duplicate precedent — zero RBAC change); the "Rep Incentive" relabel of Owner
   // Overview lives in the mig-948 tile-layout DATA (layout item label > NAV label), never here.
-  { group: 'Management Overview', module: 'commissions', items: [
+  { group: 'Management Overview', icon: '🧭', module: 'commissions', items: [
     { href: '/hub/management-overview', label: 'Management Overview Dashboard', icon: '🧭', module: 'commissions' },
     { href: '/commcalc/sales-report', label: 'Sales Report', icon: '🧾', module: 'commissions', tileOnly: true },
     { href: '/commcalc/exec/mtd', label: 'Executive MTD', icon: '📅', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -592,7 +592,7 @@ export const NAV: NavGroup[] = [
   // "every flag and compliance issue should be under that": a separate dashboard category whose
   // curated page (/compliance) shows per-queue counts (GET /commcalc/compliance-summary) over the
   // D1 tile layout (house layout seeded by mig 948). Same zero-RBAC-change duplicate rule as above.
-  { group: 'Flags & Compliance', module: 'commissions', items: [
+  { group: 'Flags & Compliance', icon: '🚩', module: 'commissions', items: [
     { href: '/compliance', label: 'Flags & Compliance Dashboard', icon: '🛡️', module: 'commissions', scopes: ['all', 'market'] },
     // MANAGEMENT WATCHDOG (owner ask 2026-10-05, index §53). Its home is this group because it is
     // the SAME findings table, cut the other way: the dashboard above counts one row per QUEUE
@@ -653,7 +653,7 @@ export const NAV: NavGroup[] = [
     { href: '/closing/tender-recon-3way', label: '3-Way Tender Recon', icon: '🧮', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/recon', label: 'Reconciliation', icon: '🔎', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
   ]},
-  { group: 'Incentives', module: 'commissions', items: [
+  { group: 'Incentives', icon: '🏆', module: 'commissions', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -756,7 +756,7 @@ export const NAV: NavGroup[] = [
   // that actually pays it (Boost KPI-tier rates vs configurable Commission Plans / Payout Schedules).
   // Boost Rates is carrier-gated to Boost tenants (NAV_CARRIERS) so a Total-only tenant never sees the
   // hardcoded Boost tiers. Regroup is a ZERO-RBAC-CHANGE move — every item keeps its module + scopes.
-  { group: 'Incentive Payout Plans', module: 'commissions', items: [
+  { group: 'Incentive Payout Plans', icon: '💵', module: 'commissions', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -783,7 +783,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/accessory-definition', label: 'Accessory Definition', icon: '🎧', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/commission-import', label: 'Import Wizard', icon: '🪄', module: 'commissions', scopes: ['all'], tileOnly: true },
   ]},
-  { group: 'Targets & Coaching', module: 'targets', items: [
+  { group: 'Targets & Coaching', icon: '🎯', module: 'targets', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -813,7 +813,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/targets/my', label: 'My Targets', icon: '🙋', module: 'targets', tileOnly: true },
     { href: '/employee', label: 'Employee Dashboard', icon: '🧑‍💼', module: 'targets', tileOnly: true },
   ]},
-  { group: 'Finance', module: 'accounts', items: [
+  { group: 'Finance', icon: '💰', module: 'accounts', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -863,7 +863,7 @@ export const NAV: NavGroup[] = [
     { href: '/accounts/profit-centers', label: 'Profit Centers', icon: '🏬', module: 'royalty', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/cost-centers', label: 'Cost Centers', icon: '🗂️', module: 'royalty', scopes: ['all', 'market'], tileOnly: true },
   ]},
-  { group: 'Assets', module: 'asset', items: [
+  { group: 'Assets', icon: '🏦', module: 'asset', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -911,7 +911,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/asset/purchase-orders', label: 'Purchase Orders', icon: '📦', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/asset/hotsheet-recon', label: 'Pricing Hotsheet', icon: '🏷️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
   ]},
-  { group: 'Distributors', module: 'vip', items: [
+  { group: 'Distributors', icon: '🚚', module: 'vip', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -926,13 +926,13 @@ export const NAV: NavGroup[] = [
   // Unified Approvals inbox (owner directive 2026-08-19) — cross-cutting, so its own group. Every
   // module's approval/intimation request surfaces here; approvers are managers (scope all/market/store).
   // Module 'storeops' gates it to workforce-entitled tenants (the pilot type is time-clock permissions).
-  { group: 'Approvals', module: 'storeops', items: [
+  { group: 'Approvals', icon: '✅', module: 'storeops', items: [
     { href: '/approvals', label: 'Approvals', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'] },
   ]},
   // Internal Chat (owner directive 2026-08-19) — everyone in the org can message; no extra nav scope
   // (the real gate is chat membership, enforced server-side). Module 'storeops' gates it to the
   // workforce entitlement so it shows wherever the people directory does.
-  { group: 'Chat', module: 'storeops', items: [
+  { group: 'Chat', icon: '💬', module: 'storeops', items: [
     { href: '/chat', label: 'Chat', icon: '💬', module: 'storeops', scopes: ['all', 'market', 'store', 'self'] },
   ]},
   // ── Phase W2 (owner directive 2026-09-01): the Workforce + Payroll TILED DASHBOARDS are now the
@@ -946,7 +946,7 @@ export const NAV: NavGroup[] = [
   // Workforce Dashboard entry. NOTHING is deleted (longest-prefix gating, see above), search still
   // finds every page, and the 'Reports · …' directory copies still render. The Visits/Reviews rows
   // gained a hub tile ("Store Ops") in the same phase so they could be tileOnly too.
-  { group: 'Workforce', module: 'storeops', items: [
+  { group: 'Workforce', icon: '👥', module: 'storeops', items: [
     { href: '/storeops', label: 'Workforce Dashboard', icon: '🏠', module: 'storeops' },
     { href: '/storeops/schedule', label: 'Schedule', icon: '📅', module: 'storeops', tileOnly: true },
     { href: '/storeops/timeoff', label: 'Time Off', icon: '🌴', module: 'storeops', tileOnly: true },
@@ -982,7 +982,7 @@ export const NAV: NavGroup[] = [
     // Bookmarks, ⌘K search and direct links still reach it; a sidebar row would undo the cleanup.
     { href: '/storeops/admin', label: 'Admin (combined)', icon: '🛠️', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
   ]},
-  { group: 'Payroll & HR', module: 'storeops', items: [
+  { group: 'Payroll & HR', icon: '🧾', module: 'storeops', items: [
     // The Payroll tiled dashboard (Phase W2) — group's front door, FIRST on purpose. module
     // 'storeops' + ['all','market'] mirrors /storeops/payroll: the hub lists payroll surfaces, and
     // each destination keeps its own (sometimes stricter) gate — e.g. payers stays scopes:['all'].
@@ -1031,7 +1031,7 @@ export const NAV: NavGroup[] = [
     { href: '/storeops/payroll/payers', label: 'Who Pays Payroll', icon: '🏦', module: 'storeops', scopes: ['all'], tileOnly: true },
     { href: '/storeops/payroll-tax', label: 'Payroll (Tax)', icon: '🧾', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
   ]},
-  { group: 'Daily Closing', module: 'closing', items: [
+  { group: 'Daily Closing', icon: '🔒', module: 'closing', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -1108,7 +1108,7 @@ export const NAV: NavGroup[] = [
     { href: '/closing/envelope-config', label: 'Envelope Payout Setup', icon: '⚙️', module: 'closing', scopes: ['all'], tileOnly: true },
     { href: '/closing/imports', label: 'Auto-Import', icon: '🔄', module: 'closing', scopes: ['all'], tileOnly: true },
   ]},
-  { group: 'Integrations & Imports', module: 'commissions', items: [
+  { group: 'Integrations & Imports', icon: '🔌', module: 'commissions', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -1133,7 +1133,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/epay/sweep', label: 'Payment Processor Sync', icon: '🧹', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/dlar/sweep', label: 'Metrics Rep/Store Sync', icon: '🧹', module: 'commissions', scopes: ['all'], tileOnly: true },
   ]},
-  { group: 'Mapping', module: 'commissions', items: [
+  { group: 'Mapping', icon: '🗺️', module: 'commissions', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -1155,7 +1155,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/catalog', label: 'Catalog Categories', icon: '🏷️', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/rep-aliases', label: 'Rep Aliases', icon: '🔗', module: 'commissions', scopes: ['all'], tileOnly: true },
   ]},
-  { group: 'Notify', module: 'notify', items: [
+  { group: 'Notify', icon: '🔔', module: 'notify', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -1165,7 +1165,7 @@ export const NAV: NavGroup[] = [
     { href: '/notify', label: 'Notify', icon: '📤', module: 'notify', tileOnly: true },
     { href: '/notify/report-recipients', label: 'Report Recipients', icon: '📬', module: 'notify', tileOnly: true },
   ]},
-  { group: 'Helpdesk', module: 'helpdesk', items: [
+  { group: 'Helpdesk', icon: '🛟', module: 'helpdesk', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -1182,7 +1182,7 @@ export const NAV: NavGroup[] = [
   // module 'support' (NOT 'admin'): support agents need not be admins. The console's backend endpoints are
   // additionally house-gated + super-admin-only cross-tenant, so a tenant user granted the module still
   // can't read another tenant's cases.
-  { group: 'Support', module: 'support', items: [
+  { group: 'Support', icon: '🧰', module: 'support', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
     // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
     // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
@@ -1202,7 +1202,7 @@ export const NAV: NavGroup[] = [
   // Designer (module key 'super-admin-toolbox'). Every page still gates itself server-side.
   // harness_super_admin_toolbox.py locks: each copy has a home elsewhere, each route exists, and every
   // NAV consumer dereferences platformOK / TENANT_NAV.
-  { group: 'Super Admin Toolbox', module: 'admin', platformOnly: true, items: [
+  { group: 'Super Admin Toolbox', icon: '🧪', module: 'admin', platformOnly: true, items: [
     { href: '/hub/super-admin-toolbox', label: 'Super Admin Toolbox', icon: '🧰', module: 'admin' },
     { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
     { href: '/operator/tenants', label: 'Tenant List & Sign-in', icon: '🛰️', module: 'admin', tileOnly: true, tile: 'Companies & Onboarding' },
@@ -1238,7 +1238,7 @@ export const NAV: NavGroup[] = [
     { href: '/admin/training', label: 'Walk-throughs', icon: '🎓', module: 'admin', tileOnly: true, tile: 'Platform Defaults' },
     { href: '/admin/whats-new', label: "What's New", icon: '✨', module: 'admin', tileOnly: true, tile: 'Platform Defaults' },
   ]},
-  { group: 'Configuration', module: 'admin', items: [
+  { group: 'Configuration', icon: '⚙️', module: 'admin', items: [
     { href: '/configurations', label: 'All Settings', icon: '⚙️', module: 'admin' },
     { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin', platformOnly: true },
     // Business Types (index §35) — the platform super-admin edits what each kind of business sees (pages, modules,
@@ -1326,7 +1326,7 @@ export const NAV: NavGroup[] = [
   ]},
   // Reports LAST (owner directive 2026-08-10) — the Report Center directory sits at the foot of the
   // sidebar, immediately above the per-category report groups applyNavLayout() appends after it.
-  { group: 'Reports', module: 'targets', items: [
+  { group: 'Reports', icon: '📑', module: 'targets', items: [
     { href: '/reports', label: 'Report Center', icon: '📊', module: 'targets' },
   ]},
 ]
@@ -1363,15 +1363,15 @@ export type NavLayout = {
 // ONLY analytical reports + operational lists/dashboards are listed here — pure config/mapping/import/
 // settings/entry pages are intentionally EXCLUDED (they are inputs, not reports; same exemption as
 // RULES FOUR/FIVE). Category ORDER below is the sidebar order (categories render after the module groups).
-export const REPORT_CATEGORIES: { key: string; label: string }[] = [
-  { key: 'sales',    label: 'Reports · Sales' },
-  { key: 'comm',     label: 'Reports · Commissions & Pay' },
-  { key: 'targets',  label: 'Reports · Targets & Coaching' },
-  { key: 'assets',   label: 'Reports · Assets & Inventory' },
-  { key: 'finance',  label: 'Reports · Finance & Accounting' },
-  { key: 'payroll',  label: 'Reports · Payroll & HR' },
-  { key: 'ops',      label: 'Reports · Store Operations' },
-  { key: 'admin',    label: 'Reports · Admin & System' },
+export const REPORT_CATEGORIES: { key: string; label: string; icon: string }[] = [
+  { key: 'sales',    label: 'Reports · Sales',                 icon: '📈' },
+  { key: 'comm',     label: 'Reports · Commissions & Pay',     icon: '💱' },
+  { key: 'targets',  label: 'Reports · Targets & Coaching',    icon: '🎯' },
+  { key: 'assets',   label: 'Reports · Assets & Inventory',    icon: '🏦' },
+  { key: 'finance',  label: 'Reports · Finance & Accounting',  icon: '💰' },
+  { key: 'payroll',  label: 'Reports · Payroll & HR',          icon: '🧾' },
+  { key: 'ops',      label: 'Reports · Store Operations',      icon: '🏪' },
+  { key: 'admin',    label: 'Reports · Admin & System',        icon: '⚙️' },
 ]
 // href → category KEY. Ordered by category (drives intra-area order). A duplicate is only rendered when
 // the SAME href survives access filtering in a module group, so this map never widens visibility.
@@ -1459,6 +1459,19 @@ export const REPORT_DIRECTORY: [string, string][] = [
 ]
 const REPORT_CATEGORY_LABEL: Record<string, string> = Object.fromEntries(REPORT_CATEGORIES.map(c => [c.key, c.label]))
 
+// WHICH ICON DOES A GROUP HAVE — the one home (index §CORE-14.5, owner ask 2026-10-21: the group
+// headings "needs to be in bolder and with different colors and favicon"). Derived from the
+// declarations above, never a second list: a NAV group declares `icon`, a report category declares
+// `icon`, and a group a TENANT created at /admin/menu has no declaration at all, so it takes the
+// fallback rather than rendering a ragged header with no icon where its neighbours have one. The
+// sidebar reads this through applyNavLayout's returned `icon` and spells no icon of its own.
+export const GROUP_ICON_FALLBACK = '📁'
+const GROUP_ICON: Record<string, string> = {
+  ...Object.fromEntries(NAV.filter(g => g.icon).map(g => [g.group, g.icon as string])),
+  ...Object.fromEntries(REPORT_CATEGORIES.map(c => [c.label, c.icon])),
+}
+export function groupIcon(group: string): string { return GROUP_ICON[group] || GROUP_ICON_FALLBACK }
+
 // Apply a per-org sidebar layout (admin config) ON TOP of the already-filtered groups: move an item to
 // a different group, DUPLICATE it into additional groups (`also`), or hide it. Items with no override
 // keep their built-in group. Default group order is preserved; a brand-new group name lands at the end.
@@ -1538,6 +1551,10 @@ export function applyNavLayout(groups: NavGroup[], layout?: NavLayout): NavGroup
     return {
       group,
       module: moduleByGroup[group] || (targets.find(t => t.group === group)?.it.module || ''),
+      // The group's icon is REBUILT from its one home rather than carried off the input object: this
+      // function keys everything by group NAME, so an item moved into another group, a tenant-created
+      // group and a Reports category all resolve the same way.
+      icon: groupIcon(group),
       items,
       // Spread so the key is ABSENT (not `undefined`) when the group has no sub-categories — the
       // returned object stays shape-identical to the old one for every untouched tenant.
