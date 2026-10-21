@@ -221,9 +221,6 @@ export default function PosSalesPage() {
   const autoPrintedTxn = useRef<number | null>(null)
   // receipt_prompt_email: customer id to offer an email capture for in the completion modal
   const [emailPromptCustomer, setEmailPromptCustomer] = useState<string | null>(null)
-  // The emailed receipt (§POS-02): what the server says it would send, where, and from whom — all of
-  // it SHOWN before the cashier presses Send, and the address editable right there.
-  const [emailSentTo, setEmailSentTo] = useState('')
   // THE PRINT FORMAT (§POS-03, owner 2026-10-19). What the server says this sale can print as and
   // what it resolved to, plus what the cashier asked for FOR THIS PRINT. Nothing is saved: the
   // store's own declared setting is where the next receipt starts from again.
@@ -433,7 +430,6 @@ export default function PosSalesPage() {
   // rather than from an effect watching it: opening the modal is the event, and an effect would
   // re-ask on every unrelated re-render while the modal is up.
   async function loadReceiptView(saleId: string, choice?: PrintChoice) {
-    setEmailSentTo('')
     setReceiptView(null)
     try {
       setReceiptView(await fetchSaleReceipt(saleId, choice))
@@ -449,7 +445,6 @@ export default function PosSalesPage() {
   // panel's (§POS-09) — this is the half that is the till's own business, and a reprint in the Sale
   // Log deliberately does not do it.
   async function saveReceiptEmailToProfile(address: string) {
-    setEmailSentTo(address)
     if (!emailPromptCustomer || !address) return
     try {
       await api(`/api/v1/pos/customers/${emailPromptCustomer}`, { method: 'PATCH', body: JSON.stringify({ email: address }) })
