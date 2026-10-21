@@ -13,10 +13,14 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { api } from '@/lib/client'
 import {
-  panel, input, label, btn, btnPrimary,
+  panel, btnPrimary, btn,
   fromLocalInput, fmtMoney,
   type MarketingOption, type MarketingConfig, type OptionList,
 } from '@/lib/marketing'
+// Field / Picker / Area live at MODULE SCOPE in their own file, and that is the whole point — see
+// that file's note. Declaring them inside this component made each keystroke remount the input and
+// drop focus (owner bug 2026-10-21, "only letter at a time is entered").
+import { Field, Area, Picker } from '@/lib/marketingForm'
 
 export default function NewMarketingEvent() {
   const router = useRouter()
@@ -85,30 +89,6 @@ export default function NewMarketingEvent() {
     } catch (e: any) { setMsg(e?.message || String(e)); setSaving(false) }
   }
 
-  const Picker = ({ listKey, value, onChange, name }: {
-    listKey: string; value: string; onChange: (v: string) => void; name: string
-  }) => (
-    <div>
-      <span style={label}>{name}</span>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <select style={input} value={value} onChange={e => onChange(e.target.value)}>
-          <option value="">—</option>
-          {(lists[listKey] || []).map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-        </select>
-        {/* THE "+" the owner asked for. */}
-        <Link href={`/marketing/settings?list=${listKey}`} title={`Add a ${name.toLowerCase()}`}
-              style={{ ...btn, padding: '7px 11px', textDecoration: 'none', lineHeight: 1.2 }}>＋</Link>
-      </div>
-    </div>
-  )
-
-  const Field = ({ k, name, type = 'text', ph }: { k: keyof typeof f; name: string; type?: string; ph?: string }) => (
-    <div>
-      <span style={label}>{name}</span>
-      <input style={input} type={type} value={f[k]} placeholder={ph} onChange={e => set(k, e.target.value)} />
-    </div>
-  )
-
   const grid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 12 }
 
   return (
@@ -125,32 +105,30 @@ export default function NewMarketingEvent() {
       <section style={{ ...panel, marginBottom: 14 }}>
         <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 10px' }}>What and who for</h2>
         <div style={grid}>
-          <Field k="title" name="Event title" ph="Back-to-school table at Lincoln High" />
-          <Picker listKey="theme" name="Theme" value={f.theme_key} onChange={v => set('theme_key', v)} />
-          <Field k="market" name="Market" />
-          <Field k="primary_store_code" name="Primary store code" />
-          <Field k="store_codes" name="All stores working it" ph="comma separated" />
+          <Field name="Event title" ph="Back-to-school table at Lincoln High"  value={f.title} onChange={v => set('title', v)} />
+          <Picker options={lists['theme'] || []} name="Theme" value={f.theme_key} onChange={v => set('theme_key', v)} addHref="/marketing/settings?list=theme" />
+          <Field name="Market"  value={f.market} onChange={v => set('market', v)} />
+          <Field name="Primary store code"  value={f.primary_store_code} onChange={v => set('primary_store_code', v)} />
+          <Field name="All stores working it" ph="comma separated"  value={f.store_codes} onChange={v => set('store_codes', v)} />
         </div>
         <div style={{ marginTop: 12 }}>
-          <span style={label}>Description</span>
-          <textarea style={{ ...input, minHeight: 60 }} value={f.description}
-                    onChange={e => set('description', e.target.value)} />
+          <Area name="Description" value={f.description} onChange={v => set('description', v)} />
         </div>
       </section>
 
       <section style={{ ...panel, marginBottom: 14 }}>
         <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 10px' }}>Where</h2>
         <div style={grid}>
-          <Field k="venue_name" name="Venue" />
-          <Picker listKey="venue_type" name="Venue type" value={f.venue_type_key} onChange={v => set('venue_type_key', v)} />
-          <Field k="address" name="Address" />
-          <Field k="city" name="City" />
-          <Field k="state" name="State" />
-          <Field k="postal_code" name="ZIP" />
-          <Field k="geo_lat" name="Map pin — latitude" type="number" ph="40.9300" />
-          <Field k="geo_lng" name="Map pin — longitude" type="number" ph="-73.9000" />
-          <Field k="checkin_radius_m" name="Check-in radius (m)"
-                 type="number" ph={String(config?.default_checkin_radius_m ?? 150)} />
+          <Field name="Venue"  value={f.venue_name} onChange={v => set('venue_name', v)} />
+          <Picker options={lists['venue_type'] || []} name="Venue type" value={f.venue_type_key} onChange={v => set('venue_type_key', v)} addHref="/marketing/settings?list=venue_type" />
+          <Field name="Address"  value={f.address} onChange={v => set('address', v)} />
+          <Field name="City"  value={f.city} onChange={v => set('city', v)} />
+          <Field name="State"  value={f.state} onChange={v => set('state', v)} />
+          <Field name="ZIP"  value={f.postal_code} onChange={v => set('postal_code', v)} />
+          <Field name="Map pin — latitude" type="number" ph="40.9300"  value={f.geo_lat} onChange={v => set('geo_lat', v)} />
+          <Field name="Map pin — longitude" type="number" ph="-73.9000"  value={f.geo_lng} onChange={v => set('geo_lng', v)} />
+          <Field name="Check-in radius (m)"
+                 type="number" ph={String(config?.default_checkin_radius_m ?? 150)}  value={f.checkin_radius_m} onChange={v => set('checkin_radius_m', v)} />
         </div>
         <p style={{ fontSize: 12, color: 'var(--text2)', margin: '10px 0 0' }}>
           The map pin is what a staff check-in is verified against. Without one, check-ins are still
@@ -158,28 +136,20 @@ export default function NewMarketingEvent() {
           counted as absent for it.
         </p>
         <div style={{ ...grid, marginTop: 12 }}>
-          <div>
-            <span style={label}>Setup notes</span>
-            <textarea style={{ ...input, minHeight: 50 }} value={f.setup_notes}
-                      onChange={e => set('setup_notes', e.target.value)} />
-          </div>
-          <div>
-            <span style={label}>Parking notes</span>
-            <textarea style={{ ...input, minHeight: 50 }} value={f.parking_notes}
-                      onChange={e => set('parking_notes', e.target.value)} />
-          </div>
+          <Area name="Setup notes" value={f.setup_notes} onChange={v => set('setup_notes', v)} minHeight={50} />
+          <Area name="Parking notes" value={f.parking_notes} onChange={v => set('parking_notes', v)} minHeight={50} />
         </div>
       </section>
 
       <section style={{ ...panel, marginBottom: 14 }}>
         <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 10px' }}>When</h2>
         <div style={grid}>
-          <Field k="event_start" name="Event starts" type="datetime-local" />
-          <Field k="event_end" name="Event ends" type="datetime-local" />
+          <Field name="Event starts" type="datetime-local"  value={f.event_start} onChange={v => set('event_start', v)} />
+          <Field name="Event ends" type="datetime-local"  value={f.event_end} onChange={v => set('event_end', v)} />
           {/* Its own field, by owner directive — not derived from the event start. */}
-          <Field k="staff_call_at" name="Staff have to be there by" type="datetime-local" />
-          <Field k="setup_start_at" name="Setup starts" type="datetime-local" />
-          <Field k="teardown_end_at" name="Teardown done by" type="datetime-local" />
+          <Field name="Staff have to be there by" type="datetime-local"  value={f.staff_call_at} onChange={v => set('staff_call_at', v)} />
+          <Field name="Setup starts" type="datetime-local"  value={f.setup_start_at} onChange={v => set('setup_start_at', v)} />
+          <Field name="Teardown done by" type="datetime-local"  value={f.teardown_end_at} onChange={v => set('teardown_end_at', v)} />
         </div>
         <p style={{ fontSize: 12, color: 'var(--text2)', margin: '10px 0 0' }}>
           &ldquo;Staff have to be there by&rdquo; is separate from the event start on purpose — it is what the
@@ -191,7 +161,7 @@ export default function NewMarketingEvent() {
       <section style={{ ...panel, marginBottom: 14 }}>
         <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 10px' }}>Budget</h2>
         <div style={grid}>
-          <Field k="planned_spend" name="Planned spend" type="number" ph="0.00" />
+          <Field name="Planned spend" type="number" ph="0.00"  value={f.planned_spend} onChange={v => set('planned_spend', v)} />
         </div>
         <div style={{
           marginTop: 10, padding: 10, borderRadius: 7, fontSize: 12,

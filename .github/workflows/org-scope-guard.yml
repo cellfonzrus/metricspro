@@ -40,6 +40,8 @@ on:
       - "frontend/src/**"
       # the row-save lock (index §19.35) — its proof and ratchet live beside frontend/src
       - "frontend/prove_row_save.mjs"
+      # the inner-component-inputs lock (index §19.56) — every .tsx under frontend/src
+      - "backend/harness_inner_component_inputs.py"
       - "frontend/row_save_pending.txt"
       # the hub viewer gate (index §CORE-06) — the one home, its consumers, its lock and its proof
       - "frontend/src/lib/hub-gate.ts"
@@ -361,3 +363,21 @@ jobs:
       - name: Run the people-visibility proof (real endpoints, both leaks reproduced)
         working-directory: backend
         run: python3 harness_people_visibility.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  inner-component-inputs-lock:
+    # TYPE STABILITY (owner report 2026-10-21, index §19.56): the marketing create form declared `Field`
+    # INSIDE the page component, so every keystroke gave React a new element TYPE, which remounts the
+    # subtree and destroys the focused <input> — "the user cannot type freely only letter at a time is
+    # entered". The lock (stdlib, DB-free) fails the build if any .tsx under frontend/src declares a
+    # component inside another component that reaches a control a user types into, directly or through
+    # one it renders; it also holds the marketing controls to their one home (src/lib/marketingForm.tsx)
+    # and checks it is itself run by a workflow. Planted controls inside, including the pre-fix shapes
+    # and the near-misses (a checkbox, a display-only Tile) that must NOT fail.
+    name: Nothing a user types into is declared inside another component
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the inner-component-inputs lock
+        run: python3 backend/harness_inner_component_inputs.py | tee -a "$GITHUB_STEP_SUMMARY"
