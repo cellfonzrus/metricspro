@@ -1051,7 +1051,11 @@ check("P12 one home for the printed name, so the file cannot say John S. where t
       and not re.search(r'customer_name.*=.*customer_display', code_only(RPDF_SRC)))
 check("P13 the attachment is named for the sale, so two receipts can be told apart",
       rpdf.filename(77) == "receipt-77.pdf" and rpdf.filename("") == "receipt.pdf"
-      and rpdf.filename("77/../etc") == "receipt-77etc.pdf")
+      # A SLUGIFIER: a path separator is substituted, never dropped, so two different references
+      # cannot collapse onto one name and the value cannot be mistaken for a match key (the §E
+      # accent-fold class in harness_payroll_hours_basis_lock.py).
+      and rpdf.filename("77/../etc") == "receipt-77____etc.pdf"
+      and rpdf.filename("A-77") != rpdf.filename("A77"))
 check("P14 the mail carries it, and ONLY a path that attaches one pays to build it",
       'want_pdf=True' in router and router.count("want_pdf=True") == 2
       and '"application/pdf"' in router
