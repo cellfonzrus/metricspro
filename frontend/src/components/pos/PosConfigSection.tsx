@@ -275,7 +275,10 @@ export default function PosConfigSection({ stores, rows, loading, loadError, rel
               <div style={{ fontSize: 13, fontWeight: 700 }}>{section.icon} {section.title}</div>
               <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>{section.subtitle}</div>
             </div>
-            {section.settings.map(def => {
+            {/* A sensitive setting is answered MASKED by GET /pos/settings, so a plain box here
+                would save the mask over the real number (§POS-06). It has its own editor, which
+                validates it and stores it sealed; this screen shows it nowhere. */}
+            {section.settings.filter(def => !def.sensitive).map(def => {
               const modified = def.key in draft
               const b = badgeFor(def)
               const canRevert = !!scope && !saving

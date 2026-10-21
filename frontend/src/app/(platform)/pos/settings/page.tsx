@@ -16,6 +16,7 @@ import type { PosSettingRow } from '@/lib/pos-config'
 import PosConfigSection, { type PosStore } from '@/components/pos/PosConfigSection'
 import TaxCodesSection from '@/components/pos/TaxCodesSection'
 import ReceiptTemplateSection from '@/components/pos/ReceiptTemplateSection'
+import ReceiptRemitFields from '@/components/pos/ReceiptRemitFields'
 import DealerCodesSection from '@/components/pos/DealerCodesSection'
 import CarrierPortalsSection from '@/components/pos/CarrierPortalsSection'
 import ServicePlansSection from '@/components/pos/ServicePlansSection'
@@ -59,6 +60,7 @@ export default function PosSettingsPage() {
       <PosConfigSection stores={stores} rows={rows} loading={loading} loadError={loadError} reload={reloadSettings} />
       <TaxCodesSection stores={stores} rows={rows} onSettingsChanged={reloadSettings} />
       <ReceiptTemplateSection />
+      <ReceiptRemitFields stores={stores} rows={rows} onSettingsChanged={reloadSettings} />
       <DealerCodesSection stores={stores} />
       <CarrierPortalsSection />
       <ServicePlansSection />

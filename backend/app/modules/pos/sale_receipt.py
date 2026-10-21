@@ -293,7 +293,7 @@ def _esc(v) -> str:
 
 
 def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name="",
-               fold_discount=False, tenant_name="", employee_name="") -> dict:
+               fold_discount=False, tenant_name="", employee_name="", remit_block="") -> dict:
     """THE CONTENT of a till slip: which lines print, in what order, with what figures.
 
     WHY THIS EXISTS (owner 2026-10-20: *"the receipts will print to the thermal printer only if
@@ -365,20 +365,27 @@ def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name=
         "totals": totals,
         "paid": paid,
         "footer": template_v["footer_text"],
-        "blocks": [{"text": d.get("text"), "signature": bool(d.get("signature"))}
-                   for d in (disclaimer_blocks or [])],
+        # The pay-by-bank paragraph (§POS-06) is an ordinary footer block, LAST, after whatever the
+        # tenant's legal blocks say. Deliberately not a section of its own: both renderers already
+        # print `blocks`, so the paper copy, the emailed copy and the printer's byte stream carry it
+        # with no renderer change — and no renderer can therefore carry it differently. It never
+        # takes a signature line: the customer signs for what they bought, not for being told where
+        # to pay.
+        "blocks": ([{"text": d.get("text"), "signature": bool(d.get("signature"))}
+                    for d in (disclaimer_blocks or [])]
+                   + ([{"text": remit_block, "signature": False}] if remit_block else [])),
     }
 
 
 def thermal_html(snap, template_v, brand=None, disclaimer_blocks=None, store_name="",
-                 fold_discount=False, tenant_name="", employee_name="") -> str:
+                 fold_discount=False, tenant_name="", employee_name="", remit_block="") -> str:
     """The 58/80 mm till slip as HTML — ONE of the two renderers of `slip_model`, the one a browser
     prints and an email carries. Field for field what the register's own `buildReceiptHtml` used to
     print, every figure now read from the model rather than recomputed here."""
     t = template_v
     m = slip_model(snap, template_v, brand=brand, disclaimer_blocks=disclaimer_blocks,
                    store_name=store_name, fold_discount=fold_discount, tenant_name=tenant_name,
-                   employee_name=employee_name)
+                   employee_name=employee_name, remit_block=remit_block)
     width = PAPER_PX.get(t["paper_width_mm"], PAPER_PX[DEFAULT_PAPER_MM])
     font = t["font_size_px"]
     small = max(9, font - 2)
@@ -447,7 +454,7 @@ def thermal_html(snap, template_v, brand=None, disclaimer_blocks=None, store_nam
 
 # ── the tenant's own POS layout ───────────────────────────────────────────────────────────────────
 def document(snap, fmt, template_v, brand=None, store_lines=None, tenant_name="",
-             employee_name="") -> dict:
+             employee_name="", remit_block="") -> dict:
     """The sale as the SAME structured Document an imported receipt of this POS is parsed into — so
     `receipt_formats.render.render_html` prints it in that POS's layout with no renderer change, and
     the tenant's own uploaded receipts and its register's receipts finally look alike.
@@ -514,13 +521,20 @@ def document(snap, fmt, template_v, brand=None, store_lines=None, tenant_name=""
         doc["payments"] = [{"label": snap["method"].title(),
                             "amount": snap["tendered"] if snap["tendered"] is not None else snap["total"]}]
     doc["footer_text"] = (template_v or {}).get("footer_text") or ""
+    # §POS-06 — a receipt printed in the tenant's own POS layout carries the pay-by-bank paragraph
+    # too. `comments` is the Document's own free-text block and both of that format's renderers
+    # already print it, so this is the same one paragraph in the third medium rather than a fourth
+    # place that decides what the block says. A document BUILT from a sale has no comments of its
+    # own (an UPLOADED one does, and this function never touches those), so nothing is overwritten.
+    if remit_block:
+        doc["comments"] = remit_block
     doc["derived"] = {"transaction_id": snap["transaction_id"], "voided": snap["status"] == "voided"}
     return doc
 
 
 def html(snap, template_v, *, render_document=None, fmt=None, brand=None, disclaimer_blocks=None,
          store_name="", store_lines=None, fold_discount=False, tenant_name="",
-         employee_name="", short_customer_name=False) -> str:
+         employee_name="", short_customer_name=False, remit_block="") -> str:
     """THE receipt of this sale, as print-ready HTML — the only answer, for print, reprint and email.
 
     `render_document` is injected (`receipt_formats.render.render_html`) so this module stays pure and
@@ -533,10 +547,11 @@ def html(snap, template_v, *, render_document=None, fmt=None, brand=None, discla
     if layout == LAYOUT_POS_FORMAT:
         return render_document(document(snap, fmt, template_v, brand=brand,
                                         store_lines=store_lines, tenant_name=tenant_name,
-                                        employee_name=employee_name))
+                                        employee_name=employee_name, remit_block=remit_block))
     return thermal_html(snap, template_v, brand=brand, disclaimer_blocks=disclaimer_blocks,
                         store_name=store_name, fold_discount=fold_discount,
-                        tenant_name=tenant_name, employee_name=employee_name)
+                        tenant_name=tenant_name, employee_name=employee_name,
+                        remit_block=remit_block)
 
 
 # ── WHAT THIS PRINT USES ──────────────────────────────────────────────────────────────────────────
@@ -599,9 +614,19 @@ def destination_options(printer_label="", helper_ready: bool = True) -> list:
     ]
 
 
+def _asked(value) -> bool:
+    """Did the print screen tick the box? The query string carries "1" / "true" / "on"; anything
+    else, including a missing parameter, is a no. One reader, so the register and a later caller
+    cannot disagree about what a tick looks like on the wire."""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def print_choice(template_v, *, want_layout=None, want_paper=None, store_layout=None,
                  store_paper=None, format_available: bool = True,
-                 want_destination=None, store_direct=False) -> dict:
+                 want_destination=None, store_direct=False,
+                 want_remit=None, remit_available: bool = False) -> dict:
     """Which layout and paper THIS print uses, and where that came from.
 
     Precedence: the screen's request (one print, nothing stored) → this store's own declaration →
@@ -635,6 +660,13 @@ def print_choice(template_v, *, want_layout=None, want_paper=None, store_layout=
                         if str(want_destination or "").strip()
                         else (DEST_DIRECT if store_direct else DEST_DIALOG)),
         "destination_source": "request" if str(want_destination or "").strip() else "store",
+        # THE PAY-BY-BANK TICK (owner 2026-10-21, §POS-06). Off on every receipt until the cashier
+        # ticks it — there is no stored default, because which customer is paying by bank transfer is
+        # known at the counter and nowhere else. A tick cannot turn it on when the store has not
+        # declared both numbers: `remit_available` gates it the same way `format_available` gates the
+        # POS layout, so the block can never print with a number missing from it.
+        "remit": bool(remit_available) and _asked(want_remit),
+        "remit_source": "request" if _asked(want_remit) else "off",
     }
 
 

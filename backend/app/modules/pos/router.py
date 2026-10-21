@@ -1966,12 +1966,27 @@ def delete_held_sale(store_code: str, register_number: int = 1,
 # code default and renders the inheritance badges.
 @router.get("/settings")
 def list_settings(store_code: str = "", org_id: str = ORG_ID):
+    """Every POS setting row for this org (and this store), with the bank numbers MASKED.
+
+    This endpoint is the register's own config read, so any signed-in POS user reaches it and every
+    POS screen receives what it answers. The two pay-by-bank settings (§POS-06) are the only values
+    here that must not travel in full: `receipt_remit.KEYS` names them, `receipt_remit.mask` shows
+    their last four, and the full numbers are read only by the receipt builder, server-side. The
+    editor for them is `PUT /pos/receipt-remit`, which takes the whole number — a masked value is
+    never accepted as an update, so the mask cannot be saved back over the real one.
+    """
     q = (sb().schema("pos").table("pos_settings").select("store_code,key,value")
          .eq("org_id", org_id))
     if store_code:
         q = q.or_(f"store_code.is.null,store_code.eq.{store_code}")
     rows = q.limit(1000).execute().data or []
-    return {"settings": rows}
+    out = []
+    for row in rows:
+        if (row or {}).get("key") in _remit.KEYS:
+            row = dict(row)
+            row["value"] = _remit.mask(_remit.open_setting_value(row.get("value")))
+        out.append(row)
+    return {"settings": out}
 
 
 def upsert_pos_setting(client, org_id: str, key: str, value, store: str = None) -> dict:
@@ -1998,6 +2013,47 @@ def upsert_setting(body: dict, authorization: str = Header(default=""), org_id: 
         raise HTTPException(400, "key and value required")
     store = (body.get("store_code") or "").strip() or None
     return {"setting": upsert_pos_setting(sb(), org_id, key, body["value"], store)}
+
+
+@router.put("/receipt-remit")
+def upsert_receipt_remit(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Declare (or clear) the account a customer is told to pay into — the two boxes in the register
+    setup (owner 2026-10-21, §POS-06).
+
+    Why these two settings have an endpoint of their own rather than riding `PUT /pos/settings`:
+    they are the only POS settings stored ENCRYPTED, they are the only ones validated before they are
+    stored, and `GET /pos/settings` hands them back masked — so a generic save would write the mask
+    over the real number the first time anybody pressed Save on that screen. The value still lands
+    through `upsert_pos_setting`, the one writer of this table; this adds no second insert.
+
+    Gated on `pos_settings`, like every other setting write. That gate is the point as much as the
+    storage is: a cashier who could type a routing number onto a customer's receipt could redirect
+    that customer's payment, and a receipt is a document people trust.
+
+    Body `{routing_number?, account_number?, store_code?}`. A blank value CLEARS that number (and a
+    store with only one of the two prints neither). Answers the masked view, never the numbers.
+    """
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    store = (body.get("store_code") or "").strip() or None
+    try:
+        pairs = []
+        if "routing_number" in body:
+            pairs.append((_remit.ROUTING_KEY, _remit.clean_routing(body.get("routing_number"))))
+        if "account_number" in body:
+            pairs.append((_remit.ACCOUNT_KEY, _remit.clean_account(body.get("account_number"))))
+    except _remit.RemitError as e:
+        raise HTTPException(400, str(e))
+    if not pairs:
+        raise HTTPException(400, "routing_number or account_number required")
+    client = sb()
+    for key, cleaned in pairs:
+        upsert_pos_setting(client, org_id, key, _remit.seal_setting_value(cleaned), store)
+    rows = _pos_settings_rows(client, org_id, store or "")
+    from app.core import crypto
+    return {"remit": _remit.masked_view(rows, store or ""),
+            # So the screen can say plainly that the numbers are NOT sealed on a server with no key
+            # configured, rather than implying a protection that is not there.
+            "encryption_enabled": crypto.is_enabled()}
 
 
 @router.delete("/settings")
@@ -2097,6 +2153,7 @@ def update_receipt_template(template_id: str, body: dict,
 from app.modules.pos import sale_receipt as _sr
 from app.modules.pos import pos_config_effective as _poscfg
 from app.modules.pos import receipt_escpos as _escpos
+from app.modules.pos import receipt_remit as _remit
 from app.modules.core import tenant_identity as _tenant
 
 
@@ -2137,7 +2194,8 @@ def _declared_format(client, org_id: str) -> dict:
 
 
 def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
-                    want_layout=None, want_paper=None, want_destination=None) -> dict:
+                    want_layout=None, want_paper=None, want_destination=None,
+                    want_remit=None) -> dict:
     """Everything a receipt needs, read once: the template, the effective POS config, the store
     block, the customer, the tenant's name and the declared format. One reader, so the printed copy
     and the emailed copy can never be built from different inputs.
@@ -2150,6 +2208,10 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
     `want_destination` is where this copy GOES (owner 2026-10-20, §POS-04): the operating system's
     print dialog, as every store has always had, or the till printer itself through the helper on the
     counter PC. A store's own setting is only the DEFAULT; both are offered on every print.
+
+    `want_remit` is the pay-by-bank tick (owner 2026-10-21, §POS-06) — print the account this store
+    told the customer to pay into. Off unless this print asks for it, and it cannot be turned on at
+    all unless the register setup declares BOTH numbers.
     """
     store_code = (sale.get("store_code") or "").strip()
     rows = _pos_settings_rows(client, org_id, store_code)
@@ -2179,10 +2241,12 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
     fmt = _declared_format(client, org_id)
     snap = _sr.snapshot_view(sale.get("receipt"), sale)
     printer = _poscfg.printer(rows, store_code)
+    remit = _remit.declared(rows, store_code)
     choice = _sr.print_choice(template, want_layout=want_layout, want_paper=want_paper,
                               store_layout=printer["layout"], store_paper=printer["paper_width_mm"],
                               format_available=fmt["available"],
-                              want_destination=want_destination, store_direct=printer["direct"])
+                              want_destination=want_destination, store_direct=printer["direct"],
+                              want_remit=want_remit, remit_available=remit["available"])
     template = _sr.with_choice(template, choice)
     settings_text = {k: _poscfg.text(rows, k, store_code)
                      for k in ("email_receipt_subject", "email_receipt_body")}
@@ -2191,6 +2255,10 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
     blocks = _poscfg.disclaimers(rows, store_code)
     fold_discount = _poscfg.flag(rows, "receipt_coupon_in_retail_price", store_code)
     employee_name = (sale.get("employee_id") or "") if template["show_employee"] else ""
+    # The one paragraph, built once. Every medium below is handed THIS string, so the paper copy, the
+    # emailed copy, the printer's byte stream and the tenant's own POS layout cannot word it or
+    # number it differently.
+    remit_block = _remit.block(remit, include=choice["remit"])
     html = _sr.html(
         snap, template,
         render_document=_rrender.render_html, fmt=fmt["module"],
@@ -2200,6 +2268,7 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
         tenant_name=tenant_name,
         employee_name=employee_name,
         short_customer_name=_poscfg.flag(rows, "receipt_customer_short_name", store_code),
+        remit_block=remit_block,
     )
     return {
         "html": html,
@@ -2216,13 +2285,23 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
         "destination_options": _sr.destination_options(printer["label"],
                                                        helper_ready=bool(printer["helper_url"])),
         "helper_url": printer["helper_url"],
+        # THE TICK AND WHAT IT WOULD PRINT (§POS-06). The masked numbers, never the full ones: these
+        # fields exist so the print screen can say WHICH account the customer will be told to pay
+        # into before anybody prints it. The full numbers reach the browser only inside `html` /
+        # `escpos_base64`, and only when this print actually asked for the block.
+        "remit": choice["remit"],
+        "remit_source": choice["remit_source"],
+        "remit_available": remit["available"],
+        "remit_routing_masked": _remit.mask(remit["routing"]),
+        "remit_account_masked": _remit.mask(remit["account"]),
         # The printer's own byte stream, built ONLY when this copy is going to the printer — the
         # register is its courier, not its reader, and a dialog print has no use for it. Both media
         # render `sale_receipt.slip_model`, so the cut slip and the paper copy cannot differ.
         "escpos_base64": (_escpos.payload_base64(
             _sr.slip_model(snap, template, brand=brand, disclaimer_blocks=blocks,
                            store_name=store_name, fold_discount=fold_discount,
-                           tenant_name=tenant_name, employee_name=employee_name))
+                           tenant_name=tenant_name, employee_name=employee_name,
+                           remit_block=remit_block))
             if choice["destination"] == _sr.DEST_DIRECT else ""),
         "email": _sr.email_view(snap, brand, template, settings_text, customer=customer,
                                 typed=typed_email, tenant_name=tenant_name),
@@ -2296,12 +2375,13 @@ def preview_receipt_template(body: dict = None, org_id: str = ORG_ID):
 _RECEIPT_KEYS = ("html", "layout", "layout_note", "layout_source", "paper_width_mm", "paper_source",
                  "layout_options", "paper_options", "printer_label", "destination",
                  "destination_source", "destination_options", "helper_url", "escpos_base64",
-                 "email", "company_name")
+                 "remit", "remit_source", "remit_available", "remit_routing_masked",
+                 "remit_account_masked", "email", "company_name")
 
 
 @router.get("/sales/{sale_id}/receipt")
 def sale_receipt(sale_id: str, org_id: str = ORG_ID, layout: str = "", paper_width_mm: str = "",
-                 destination: str = ""):
+                 destination: str = "", remit: str = ""):
     """THE receipt of this sale as print-ready HTML, plus what the print and email screen must show:
     the formats and paper widths this store can print, which one this copy used and why, the printer
     the store declared, and the address the email would go to. The register prints this; it builds no
@@ -2315,7 +2395,7 @@ def sale_receipt(sale_id: str, org_id: str = ORG_ID, layout: str = "", paper_wid
     sale = _load_sale(client, org_id, sale_id)
     try:
         bundle = _receipt_bundle(client, org_id, sale, want_layout=layout, want_paper=paper_width_mm,
-                                 want_destination=destination)
+                                 want_destination=destination, want_remit=remit)
     except _sr.ReceiptError as e:
         raise HTTPException(400, str(e))
     return {"receipt": {k: bundle[k] for k in _RECEIPT_KEYS}, "sale_id": sale_id}
@@ -2337,7 +2417,8 @@ async def email_sale_receipt(sale_id: str, body: dict = None,
     try:
         bundle = _receipt_bundle(client, org_id, sale, typed_email=body.get("to"),
                                  want_layout=body.get("layout"),
-                                 want_paper=body.get("paper_width_mm"))
+                                 want_paper=body.get("paper_width_mm"),
+                                 want_remit=body.get("remit"))
     except _sr.ReceiptError as e:
         raise HTTPException(400, str(e))
     view = bundle["email"]
