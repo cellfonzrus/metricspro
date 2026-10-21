@@ -9,9 +9,9 @@ import { api } from '@/lib/client'
 // place why recon/gates look empty instead of discovering it one broken report at a time. Universal —
 // the SAME checks run for every tenant; a fully-wired tenant (house/Boost today) just shows all green.
 const SEV_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
-  critical: { bg: '#fdeaea', fg: '#b42318', label: '🔴 Critical' },
-  warning: { bg: '#fef3e2', fg: '#b45309', label: '🟡 Warning' },
-  info: { bg: '#eef2ff', fg: '#3730a3', label: '🔵 Info' },
+  critical: { bg: 'var(--c-bg-fdeaea)', fg: 'var(--c-fg-b42318)', label: '🔴 Critical' },
+  warning: { bg: 'var(--c-bg-fef3e2)', fg: 'var(--c-fg-b45309)', label: '🟡 Warning' },
+  info: { bg: 'var(--c-bg-eef2ff)', fg: 'var(--c-fg-3730a3)', label: '🔵 Info' },
 }
 
 export default function ClosingReadinessPage() {
@@ -33,12 +33,12 @@ export default function ClosingReadinessPage() {
         <Link href="/closing" className="btn btn-secondary" style={{ fontSize: 13 }}>← Dashboard</Link>
       </div>
 
-      {err && <div className="card" style={{ padding: 16, color: '#b42318' }}>❌ {err}</div>}
+      {err && <div className="card" style={{ padding: 16, color: 'var(--c-fg-b42318)' }}>❌ {err}</div>}
       {!data && !err && <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>}
 
       {data && (
         <>
-          <div className="card" style={{ padding: 16, marginBottom: 16, background: data.ok ? '#e6f7ec' : '#fdeaea' }}>
+          <div className="card" style={{ padding: 16, marginBottom: 16, background: data.ok ? 'var(--c-bg-e6f7ec)' : 'var(--c-bg-fdeaea)' }}>
             <div style={{ fontWeight: 700, fontSize: 15 }}>
               {data.ok ? '✅ No critical gaps found.' : `🚫 ${data.issues.filter((i: any) => i.severity === 'critical').length} critical gap(s) found.`}
             </div>

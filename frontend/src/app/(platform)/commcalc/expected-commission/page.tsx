@@ -249,8 +249,8 @@ export default function ExpectedCommissionPage() {
             subtitle={`Months ${data?.config?.from_month ?? 2}–${data?.config?.to_month ?? 6} carry an expected amount. Sorted by what is still owed.`}
             filename={`expected-vs-earned-${period}`}
             columns={ROW_COLS} rows={shownRows} compact stickyHeader
-            rowStyle={(r: any) => (r.promote_stale ? { background: '#fef2f2' }
-              : r.promoted ? { background: '#f0fdf4' } : undefined)}
+            rowStyle={(r: any) => (r.promote_stale ? { background: 'var(--c-bg-fef2f2)' }
+              : r.promoted ? { background: 'var(--c-bg-f0fdf4)' } : undefined)}
           >
             {data?.can_promote && (
               <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>

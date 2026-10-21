@@ -39,19 +39,19 @@ type Data = {
 
 const CLASS_META: Record<Classification, { label: string; color: string; help: string }> = {
   missing_phone_candidate: {
-    label: 'Missing-Phone Candidate', color: '#dc2626',
+    label: 'Missing-Phone Candidate', color: 'var(--c-fg-dc2626)',
     help: 'On-Inventory, but a rebate/commission was paid on this IMEI — the device is demonstrably activated or left the store. The inventory record is likely wrong, or the phone walked.',
   },
   conflict: {
-    label: 'Conflict', color: '#d97706',
+    label: 'Conflict', color: 'var(--c-fg-d97706)',
     help: 'The Distributor ledger and the commission (ePay) side DISAGREE on whether a rebate was paid for this IMEI — needs a human look, not silently resolved either way.',
   },
   non_activated: {
-    label: 'Non-Activated (true stock)', color: '#059669',
+    label: 'Non-Activated (true stock)', color: 'var(--c-fg-059669)',
     help: 'On-Inventory with no rebate evidence anywhere checked — genuinely unsold stock.',
   },
   unmatchable: {
-    label: 'Unmatchable', color: '#6b7280',
+    label: 'Unmatchable', color: 'var(--c-fg-6b7280)',
     help: 'The on-inventory row has no usable IMEI/ESN — can’t be checked against either leg. Never silently dropped.',
   },
 }
@@ -220,7 +220,7 @@ export default function OninvThreeWayReconPage() {
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>Loading…</div>
       ) : !data?.migrated ? (
-        <div className="card" style={{ padding: 24, textAlign: 'center', color: '#b91c1c' }}>
+        <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--c-fg-b91c1c)' }}>
           {data?.message || <SetupNotice lead="This report is not available yet." detail="310_asset_oninv_3way_recon_rpc.sql" />}
         </div>
       ) : !data.rows.length ? (
@@ -322,7 +322,7 @@ export default function OninvThreeWayReconPage() {
                     <tr key={(r.esn_imei || '') + i} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.store || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.device_model || '—'}</td>
-                      <td style={{ padding: '8px 12px', fontSize: 11, fontFamily: 'monospace' }}>{r.esn_imei || <span style={{ color: '#dc2626' }}>(blank)</span>}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 11, fontFamily: 'monospace' }}>{r.esn_imei || <span style={{ color: 'var(--c-fg-dc2626)' }}>(blank)</span>}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{fmtDate(r.acquired_date)}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.aging_days ?? '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, fontWeight: 600 }}>{fmt(r.device_value)}</td>

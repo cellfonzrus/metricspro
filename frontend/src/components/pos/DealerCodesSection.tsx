@@ -54,7 +54,7 @@ const input: React.CSSProperties = { padding: '7px 10px', borderRadius: 7, borde
 const label: React.CSSProperties = { fontSize: 12, color: 'var(--text2)', marginBottom: 3, display: 'block' }
 const th: React.CSSProperties = { textAlign: 'left', padding: '8px 14px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '8px 14px', fontSize: 13, borderBottom: '1px solid var(--border)' }
-const errorBox: React.CSSProperties = { margin: '12px 16px', border: '1px solid #dc2626', color: '#dc2626', borderRadius: 8, padding: '10px 14px', fontSize: 12 }
+const errorBox: React.CSSProperties = { margin: '12px 16px', border: '1px solid var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }
 
 interface Props {
   stores: PosStore[]
@@ -201,15 +201,15 @@ export default function DealerCodesSection({ stores }: Props) {
             <div key={i} style={{ fontSize: 12.5, padding: '6px 0', borderTop: i ? '1px solid var(--border)' : undefined }}>
               <b>{c.carrier || 'Unnamed carrier'}</b>
               {!c.configured && (
-                <span style={{ color: '#b45309' }}> — not mapped yet. {c.hint || 'Set this carrier’s dealer-code source on the Carriers page.'} Nothing was guessed at.</span>
+                <span style={{ color: 'var(--c-fg-b45309)' }}> — not mapped yet. {c.hint || 'Set this carrier’s dealer-code source on the Carriers page.'} Nothing was guessed at.</span>
               )}
-              {c.configured && c.error && <span style={{ color: '#dc2626' }}> — could not read {c.source}: {c.error}</span>}
+              {c.configured && c.error && <span style={{ color: 'var(--c-fg-dc2626)' }}> — could not read {c.source}: {c.error}</span>}
               {c.configured && !c.error && (
                 <>
                   <span style={{ color: 'var(--text2)' }}>
                     {' '}— {c.found ?? 0} {c.label || 'code'}{(c.found ?? 0) === 1 ? '' : 's'} in {c.source}
                     {c.name_source ? `, named from ${c.name_source}` : ''}
-                    {' · '}<b style={{ color: (c.new ?? 0) > 0 ? '#16a34a' : 'var(--text3)' }}>{c.new ?? 0} new</b>
+                    {' · '}<b style={{ color: (c.new ?? 0) > 0 ? 'var(--c-fg-16a34a)' : 'var(--text3)' }}>{c.new ?? 0} new</b>
                   </span>
                   {(c.sample || []).length > 0 && (
                     <div style={{ marginTop: 4, color: 'var(--text3)', fontSize: 12 }}>
@@ -225,7 +225,7 @@ export default function DealerCodesSection({ stores }: Props) {
               {importing ? 'Importing…' : newTotal > 0 ? `Import ${newTotal} new code${newTotal === 1 ? '' : 's'}` : 'Nothing new to import'}
             </button>
             <button className="btn btn-secondary" onClick={() => { setPreview(null); setSyncMsg('') }}>Close</button>
-            {syncMsg && <span style={{ fontSize: 12, color: '#16a34a' }}>{syncMsg}</span>}
+            {syncMsg && <span style={{ fontSize: 12, color: 'var(--c-fg-16a34a)' }}>{syncMsg}</span>}
           </div>
           <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 6 }}>
             Importing only ADDS codes that are missing. A code you have already edited — its store, its
@@ -236,7 +236,7 @@ export default function DealerCodesSection({ stores }: Props) {
       )}
 
       {unattached > 0 && !preview && (
-        <div style={{ margin: '12px 16px', border: '1px solid #fbbf24', background: '#fffbeb', borderRadius: 8, padding: '9px 14px', fontSize: 12.5, color: '#92400e' }}>
+        <div style={{ margin: '12px 16px', border: '1px solid var(--c-bg-fbbf24)', background: 'var(--c-bg-fffbeb)', borderRadius: 8, padding: '9px 14px', fontSize: 12.5, color: 'var(--c-fg-92400e)' }}>
           {unattached} dealer code{unattached === 1 ? ' is' : 's are'} not attached to a store yet — they
           show as “All stores”, so a rep at any door can pick them. Edit each one and set its store.
         </div>
@@ -306,16 +306,16 @@ export default function DealerCodesSection({ stores }: Props) {
             <tbody>
               {dealerCodes.map(dc => (
                 <tr key={dc.id} style={{ opacity: dc.is_active ? 1 : 0.5 }}>
-                  <td style={{ ...td, fontWeight: 600, color: '#2980b9' }}>{dc.code}</td>
+                  <td style={{ ...td, fontWeight: 600, color: 'var(--c-fg-2980b9)' }}>{dc.code}</td>
                   <td style={{ ...td, color: 'var(--text2)' }}>{dc.description || '—'}</td>
                   <td style={td}>{dc.carrier || '—'}</td>
-                  <td style={{ ...td, color: dc.store_code ? 'var(--text)' : '#f39c12' }}>{storeName(dc.store_code)}</td>
-                  <td style={td}><span style={{ color: dc.is_active ? '#16a34a' : '#dc2626', fontWeight: 600 }}>{dc.is_active ? 'Active' : 'Inactive'}</span></td>
+                  <td style={{ ...td, color: dc.store_code ? 'var(--text)' : 'var(--c-fg-f39c12)' }}>{storeName(dc.store_code)}</td>
+                  <td style={td}><span style={{ color: dc.is_active ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)', fontWeight: 600 }}>{dc.is_active ? 'Active' : 'Inactive'}</span></td>
                   <td style={td}>
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }}
                         onClick={() => { setError(''); setForm({ id: dc.id, code: dc.code, carrier: dc.carrier || '', store_code: dc.store_code || '', description: dc.description || '', is_active: dc.is_active }) }}>Edit</button>
-                      <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', color: dc.is_active ? '#dc2626' : '#16a34a' }}
+                      <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', color: dc.is_active ? 'var(--c-fg-dc2626)' : 'var(--c-fg-16a34a)' }}
                         onClick={() => toggleDealerCode(dc)}>{dc.is_active ? 'Deactivate' : 'Reactivate'}</button>
                     </div>
                   </td>

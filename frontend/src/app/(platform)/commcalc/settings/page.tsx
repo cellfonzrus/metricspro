@@ -394,7 +394,7 @@ export default function SettingsPage() {
           </div>
 
           {showAddRate && (
-            <div className="card" style={{ marginBottom: 16, background: '#f0fdf4', border: '1px solid #86efac' }}>
+            <div className="card" style={{ marginBottom: 16, background: 'var(--c-bg-f0fdf4)', border: '1px solid var(--c-bg-86efac)' }}>
               <div style={{ fontWeight: 600, marginBottom: 12, fontSize: 14 }}>New Comp Rate</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 }}>
                 <div>
@@ -505,7 +505,7 @@ export default function SettingsPage() {
                             ) : null}
                             <button
                               className="btn"
-                              style={{ fontSize: 11, padding: '4px 10px', color: '#dc2626' }}
+                              style={{ fontSize: 11, padding: '4px 10px', color: 'var(--c-fg-dc2626)' }}
                               onClick={() => deleteRate(r.id)}
                             >
                               🗑
@@ -581,7 +581,7 @@ export default function SettingsPage() {
             </div>
           )}
 
-          <div style={{ marginTop: 16, background: '#fefce8', border: '1px solid #fde047', borderRadius: 10, padding: '12px 16px', fontSize: 13, color: '#92400e' }}>
+          <div style={{ marginTop: 16, background: 'var(--c-bg-fefce8)', border: '1px solid var(--c-bg-fde047)', borderRadius: 10, padding: '12px 16px', fontSize: 13, color: 'var(--c-fg-92400e)' }}>
             <strong>📋 Hotsheet upload coming soon.</strong> Once enabled, you&apos;ll set the official SRP and promo price per device here, and the discrepancy engine will flag any rebate paid at the wrong price.
           </div>
         </div>
@@ -590,7 +590,7 @@ export default function SettingsPage() {
       {/* ── ORIGINAL TABS ── */}
       {activeTab === 'rates' && (
         <div>
-          <div style={{ background: '#fefce8', border: '1px solid #fde047', borderRadius: 10, padding: '10px 16px', marginBottom: 20, fontSize: 13, color: '#92400e' }}>
+          <div style={{ background: 'var(--c-bg-fefce8)', border: '1px solid var(--c-bg-fde047)', borderRadius: 10, padding: '10px 16px', marginBottom: 20, fontSize: 13, color: 'var(--c-fg-92400e)' }}>
             💡 After saving, go to Dashboard and click <strong>Run Calculation</strong> to apply new rates.
           </div>
           <div className="card">

@@ -500,8 +500,8 @@ function errText(e: unknown): string {
 
 const VERDICT: Record<string, { bg: string; fg: string; icon: string }> = {
   measured: { bg: 'var(--surface2)', fg: 'var(--text2)', icon: '✓' },
-  not_measured: { bg: '#fef3c7', fg: '#92400e', icon: '◻︎' },
-  uploaded_feed_missing: { bg: '#fee2e2', fg: '#991b1b', icon: '⚑' },
+  not_measured: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '◻︎' },
+  uploaded_feed_missing: { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)', icon: '⚑' },
 }
 
 // Hoisted out of the page component deliberately: a component created during render is a new type on
@@ -510,7 +510,7 @@ function Tile({ label, value, sub, warn }: { label: string; value: string; sub?:
   return (
     <div className="card" style={{ padding: '12px 16px', minWidth: 190 }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? '#92400e' : 'var(--text1)' }}>{value}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? 'var(--c-fg-92400e)' : 'var(--text1)' }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
     </div>
   )
@@ -1633,12 +1633,12 @@ export default function StoreTakeoverPage() {
       </div>
 
       {list?.error &&
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-991b1b)', fontSize: 13 }}>
           <b>❌ The prospect list could not be read.</b> {list.error}
         </div>}
 
       {list && Object.keys(list.config_columns_missing || {}).length > 0 &&
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, background: '#fef3c7', color: '#92400e', fontSize: 13 }}>
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)', fontSize: 13 }}>
           <b>⚠︎ The per-company settings for this page are not available yet.</b>{' '}
           <SetupNotice
             lead={'The evaluation still runs on its built-in defaults \u2014 more than 2 lines on one ' +
@@ -1725,7 +1725,7 @@ export default function StoreTakeoverPage() {
               </>
             } />
           {filtering &&
-            <div style={{ fontSize: 11.5, color: '#92400e', marginBottom: 10 }}>
+            <div style={{ fontSize: 11.5, color: 'var(--c-fg-92400e)', marginBottom: 10 }}>
               ◻︎ The store filter narrows the P&amp;L columns, the store table, the handset orders and
               the flagged accounts. The <b>whole-prospect</b> P&amp;L above them, its tiles and the
               keep-versus-exclude figures are the WHOLE month either way &mdash; they are what the
@@ -1735,7 +1735,7 @@ export default function StoreTakeoverPage() {
         </div>}
 
       {msg &&
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: 13, background: msg.ok ? 'var(--surface2)' : '#fee2e2', color: msg.ok ? 'var(--text2)' : '#991b1b' }}>
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: 13, background: msg.ok ? 'var(--surface2)' : 'var(--c-bg-fee2e2)', color: msg.ok ? 'var(--text2)' : 'var(--c-fg-991b1b)' }}>
           {msg.ok ? '✓ ' : '❌ '}{msg.text}
         </div>}
 
@@ -1792,7 +1792,7 @@ export default function StoreTakeoverPage() {
         </>}
 
       {pid && data?.error &&
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-991b1b)', fontSize: 13 }}>
           <b>❌ The evaluation could not be built.</b> {data.error}
         </div>}
 
@@ -1815,7 +1815,7 @@ export default function StoreTakeoverPage() {
                 <div key={k} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', minWidth: 250, flex: '1 1 260px' }}>
                   <div style={{ fontSize: 12, fontWeight: 700 }}>{f.label}</div>
                   <div style={{ fontSize: 11, color: 'var(--text3)', margin: '3px 0 7px' }}>{f.answers}</div>
-                  <div style={{ fontSize: 12, color: total ? 'var(--text2)' : '#92400e', marginBottom: 7 }}>
+                  <div style={{ fontSize: 12, color: total ? 'var(--text2)' : 'var(--c-fg-92400e)', marginBottom: 7 }}>
                     {total
                       ? <>{here.toLocaleString()} row{here === 1 ? '' : 's'}{period ? ` in ${period}` : ' uploaded'}{total !== here ? ` (${total.toLocaleString()} in all)` : ''}</>
                       : <b>not uploaded yet</b>}
@@ -1849,7 +1849,7 @@ export default function StoreTakeoverPage() {
                 </button>
               </div>
               {rentMeta.applied === false && rentMeta.reason &&
-                <div style={{ fontSize: 11, color: '#92400e', marginTop: 6 }}>⚠︎ {rentMeta.reason}</div>}
+                <div style={{ fontSize: 11, color: 'var(--c-fg-92400e)', marginTop: 6 }}>⚠︎ {rentMeta.reason}</div>}
               {rentMeta.applied && rentMeta.replaced_average !== null && rentMeta.replaced_average !== undefined &&
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
                   Our own stores average {money(rentMeta.replaced_average)} —
@@ -1869,9 +1869,9 @@ export default function StoreTakeoverPage() {
               const has = (n || 0) > 0
               return (
                 <div key={k} style={{ fontSize: 12, display: 'flex', gap: 8, padding: '2px 0' }}>
-                  <span style={{ color: has ? 'var(--ok, #15803d)' : '#b45309' }}>{has ? '✓' : '○'}</span>
+                  <span style={{ color: has ? 'var(--ok, var(--c-fg-15803d))' : 'var(--c-fg-b45309)' }}>{has ? '✓' : '○'}</span>
                   <span style={{ flex: 1 }}>{registry[k]?.label || k}</span>
-                  <b style={{ color: has ? 'var(--text1)' : '#b45309' }}>
+                  <b style={{ color: has ? 'var(--text1)' : 'var(--c-fg-b45309)' }}>
                     {has ? `${(n || 0).toLocaleString()} rows this month` : 'nothing uploaded'}
                   </b>
                 </div>
@@ -1885,7 +1885,7 @@ export default function StoreTakeoverPage() {
               </div>}
           </div>
           {(data?.feeds_missing || []).length > 0 &&
-            <div style={{ fontSize: 12, color: '#92400e', marginTop: 10 }}>
+            <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)', marginTop: 10 }}>
               ⚠︎ {(data?.feeds_missing || []).map(k => registry[k]?.label || k).join(' and ')}
               {(data?.feeds_missing || []).length === 1 ? ' has' : ' have'} not been uploaded, so the
               P&amp;L lines {(data?.feeds_missing || []).length === 1 ? 'it answers' : 'they answer'} are
@@ -1920,7 +1920,7 @@ export default function StoreTakeoverPage() {
           </div>
 
           {/* The honesty statement, above the numbers rather than under them. */}
-          <div className="card" style={{ padding: '12px 16px', marginBottom: 16, background: '#fef3c7', color: '#92400e', fontSize: 13 }}>
+          <div className="card" style={{ padding: '12px 16px', marginBottom: 16, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)', fontSize: 13 }}>
             <b>◻︎ Read this before the bottom line.</b> {covSummary.bottom_line_note}
             {' '}<b>{covSummary.measured}</b> of {covSummary.lines} chart lines were measured;
             {' '}<b>{covSummary.not_measured}</b> cannot be answered from these three reports
@@ -2078,14 +2078,14 @@ export default function StoreTakeoverPage() {
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Our own average expenses, line by line</div>
             <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10 }}>{expWindow.note}</div>
             {partialLines.length > 0 &&
-              <div style={{ fontSize: 12, color: '#92400e', marginBottom: 8 }}>
+              <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)', marginBottom: 8 }}>
                 ⚠︎ {partialLines.length} line{partialLines.length === 1 ? ' is' : 's are'} missing from
                 some of these months, so {partialLines.length === 1 ? 'it is' : 'they are'} averaged over
                 fewer months than the rest:{' '}
                 {partialLines.map(x => `${x.expense_name} (no ${(x.months_missing || []).join(', ')})`).join('; ')}.
               </div>}
             {expWindow.error &&
-              <div style={{ fontSize: 12, color: '#991b1b', marginBottom: 8 }}>❌ {expWindow.error}</div>}
+              <div style={{ fontSize: 12, color: 'var(--c-fg-991b1b)', marginBottom: 8 }}>❌ {expWindow.error}</div>}
             <ReportShell title="" filename={`takeover-expenses-${data?.period || ''}`}
                          columns={EXP_COLS} rows={expRows} compact stickyHeader totals
                          noticeTone={partialLines.length ? 'warn' : 'info'}
@@ -2285,7 +2285,7 @@ export default function StoreTakeoverPage() {
                   </div>
                   <div style={{ borderLeft: '1px solid var(--line)', paddingLeft: 24 }}>
                     <div style={{ fontSize: 11, color: 'var(--text3)' }}>Shortfall to break even</div>
-                    <div style={{ fontSize: 20, fontWeight: 700, color: '#b91c1c' }}>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-b91c1c)' }}>
                       {money(breakEven.needed)}
                     </div>
                   </div>
@@ -2354,7 +2354,7 @@ export default function StoreTakeoverPage() {
             always every month, because comparing them is the whole question this grid answers.
           </div>
           {trend?.error &&
-            <div style={{ fontSize: 12.5, color: '#991b1b', marginBottom: 10 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--c-fg-991b1b)', marginBottom: 10 }}>
               The month-over-month P&amp;L could not be read: {trend.error}
             </div>}
           {trendLoading && !trend &&
@@ -2470,7 +2470,7 @@ export default function StoreTakeoverPage() {
           {/* WHICH OF OUR OWN MONTHS THE EXPENSE BENCHMARK CAME FROM, on every month shown — and
               a month we could not measure at all SAYS SO rather than printing a zero. */}
           {trend && !trend.error && (trend.by_month || []).some(m => m.expenses?.measured === false) &&
-            <div style={{ fontSize: 11.5, color: '#991b1b', marginTop: 10 }}>
+            <div style={{ fontSize: 11.5, color: 'var(--c-fg-991b1b)', marginTop: 10 }}>
               ❌ <b>Not measured, not zero.</b> For{' '}
               {(trend.by_month || []).filter(m => m.expenses?.measured === false)
                 .map(m => m.period).join(', ')}{' '}
@@ -2481,7 +2481,7 @@ export default function StoreTakeoverPage() {
             </div>}
           {trend && !trend.error &&
            (trend.by_month || []).some(m => m.expenses?.direction === 'after' || m.expenses?.direction === 'both') &&
-            <div style={{ fontSize: 11.5, color: '#92400e', marginTop: 10 }}>
+            <div style={{ fontSize: 11.5, color: 'var(--c-fg-92400e)', marginTop: 10 }}>
               ◻︎ <b>Our cost base was measured on months that come after some of these.</b> Our own
               average store cost is a benchmark, not a figure belonging to the month on screen, so
               where we had entered no expenses before a month the nearest months we DID record are
@@ -2557,7 +2557,7 @@ export default function StoreTakeoverPage() {
       {/* ── THE ACCOUNTS AT THE BOTTOM, AND THE NUMBER UNDERNEATH THEM ───────────────────────── */}
       {pid && !loading && statement && fraud && fraud.accounts > 0 &&
         <div className="card" style={{ padding: '14px 16px', marginTop: 14,
-                                       borderLeft: '3px solid #b45309' }}>
+                                       borderLeft: '3px solid var(--c-bg-b45309)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>
             Accounts carrying more than {fraud.threshold} lines in this month
           </div>
@@ -2690,7 +2690,7 @@ export default function StoreTakeoverPage() {
                  yet &mdash; anything that is plainly not a phone will be sitting there.</>}
           </div>
           {products.unplaced.length > 0 &&
-            <div style={{ fontSize: 12, color: '#92400e', marginTop: 8 }}>
+            <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)', marginTop: 8 }}>
               ⚠︎ {products.unplaced.map(u => `${num(u.lines)} × ${u.description}`).join(', ')}
               {' '}&mdash; {products.unplaced.length === 1 ? 'this row names' : 'these rows name'} no
               product and {products.unplaced.length === 1 ? 'is' : 'are'} reported on their own line

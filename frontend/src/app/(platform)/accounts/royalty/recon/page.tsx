@@ -65,21 +65,21 @@ export default function RoyaltyReconPage() {
       <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>Each sales line of the month&apos;s royalty report against the daily report(s) for the same store, summed over the month.</div>
       <label style={{ fontSize: 13 }}>Month <input type="month" value={period} onChange={e => changePeriod(e.target.value)} /></label>
       {loading && <div style={{ marginTop: 10, color: 'var(--text2)' }}>Loading…</div>}
-      {err && <div style={{ color: '#b91c1c', marginTop: 10 }}>{err}</div>}
+      {err && <div style={{ color: 'var(--c-fg-b91c1c)', marginTop: 10 }}>{err}</div>}
       {data && (
         <div style={{ marginTop: 12 }}>
           <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 8 }}>
             Daily source <code>{data.daily_source}</code> · {data.daily_rows} rows · matched on <code>{data.match_field}</code> · {data.tender_rows} register tender rows
           </div>
-          {data.needs && <div className="card" style={{ padding: 12, marginBottom: 12, color: '#b45309' }}>{data.needs}</div>}
+          {data.needs && <div className="card" style={{ padding: 12, marginBottom: 12, color: 'var(--c-fg-b45309)' }}>{data.needs}</div>}
           {!data.centers?.length && <div className="card" style={{ padding: 12 }}>No royalty report is stored for {data.period}.</div>}
           {data.centers?.map(c => (
             <div key={c.report_id} className="card" style={{ padding: 14, marginBottom: 14 }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Center {c.center_code} — {c.period}{c.store ? ` · ${c.store}` : ''}</div>
-              {c.note && <div style={{ color: '#b45309', fontSize: 13, margin: '4px 0' }}>{c.note}</div>}
+              {c.note && <div style={{ color: 'var(--c-fg-b45309)', fontSize: 13, margin: '4px 0' }}>{c.note}</div>}
               <div style={{ display: 'flex', gap: 18, fontSize: 13, margin: '8px 0', flexWrap: 'wrap' }}>
                 <span>Royalty sales <b>{fmt(c.totals.royalty_sales)}</b></span><span>Daily total <b>{fmt(c.totals.daily_total)}</b></span>
-                <span>Variance <b style={{ color: c.totals.variance ? '#b91c1c' : undefined }}>{fmt(c.totals.variance)}</b></span>
+                <span>Variance <b style={{ color: c.totals.variance ? 'var(--c-fg-b91c1c)' : undefined }}>{fmt(c.totals.variance)}</b></span>
                 {c.tenders ? <span>Register tenders <b>{fmt(c.tenders.tenders)}</b> over {c.tenders.days} day(s) · vs gross sales {fmt(c.tenders.variance)}</span> : <span style={{ color: 'var(--text3)' }}>No register tenders for the month (not measured)</span>}
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -106,11 +106,11 @@ export default function RoyaltyReconPage() {
               </table>
               {(c.unmapped_daily?.length ?? 0) > 0 && c.unmapped_daily && (
                 <div style={{ marginTop: 10, fontSize: 13 }}>
-                  <b style={{ color: '#b45309' }}>Daily categories no royalty line claims</b> (add them to a line under Royalty Report → Line setup):
+                  <b style={{ color: 'var(--c-fg-b45309)' }}>Daily categories no royalty line claims</b> (add them to a line under Royalty Report → Line setup):
                   {c.unmapped_daily.map(u => <div key={u.category}>{u.category} — {fmt(u.amount)} over {Object.keys(u.days).length} day(s), {u.rows} row(s)</div>)}
                 </div>
               )}
-              {(c.conflicts?.length ?? 0) > 0 && c.conflicts && <div style={{ marginTop: 8, color: '#b91c1c', fontSize: 13 }}>{c.conflicts.map(x => `'${x.category}' is claimed by ${x.lines.join(' and ')}`).join(' · ')}</div>}
+              {(c.conflicts?.length ?? 0) > 0 && c.conflicts && <div style={{ marginTop: 8, color: 'var(--c-fg-b91c1c)', fontSize: 13 }}>{c.conflicts.map(x => `'${x.category}' is claimed by ${x.lines.join(' and ')}`).join(' · ')}</div>}
             </div>
           ))}
         </div>

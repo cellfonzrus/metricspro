@@ -51,9 +51,9 @@ const td: React.CSSProperties = { padding: '6px 8px', fontSize: 13, borderBottom
 
 function Badge({ kind }: { kind: 'unmapped' | 'proposed' | 'confirmed' }) {
   const s: Record<string, React.CSSProperties> = {
-    unmapped: { background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca' },
-    proposed: { background: '#fff7ed', color: '#9a3412', border: '1px solid #fdba74' },
-    confirmed: { background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0' },
+    unmapped: { background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-b91c1c)', border: '1px solid var(--c-bg-fecaca)' },
+    proposed: { background: 'var(--c-bg-fff7ed)', color: 'var(--c-fg-9a3412)', border: '1px solid var(--c-bg-fdba74)' },
+    confirmed: { background: 'var(--c-bg-f0fdf4)', color: 'var(--c-fg-15803d)', border: '1px solid var(--c-bg-bbf7d0)' },
   }
   const label = kind === 'unmapped' ? 'UNMAPPED' : kind === 'proposed' ? 'PROPOSED — not confirmed' : 'CONFIRMED'
   return <span style={{ ...s[kind], borderRadius: 999, padding: '1px 8px', fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>{label}</span>
@@ -277,7 +277,7 @@ export default function MaProductClassPage() {
              “Total ALL ACCESS Plan $65 New Activation Commission” only by suffix.</>}
       </p>
 
-      <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e40af', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 12, maxWidth: 900 }}>
+      <div style={{ background: 'var(--c-bg-eff6ff)', border: '1px solid var(--c-bg-bfdbfe)', color: 'var(--c-fg-1e40af)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 12, maxWidth: 900 }}>
         <b>Nothing on this page changes anyone’s pay.</b> The classification is configuration and the
         “Impact preview” tab is read-only — it shows what this WOULD reclassify. Feeding a class into a
         commission, the Commission Ledger, carrier income or the P&amp;L is a separate change that needs
@@ -285,19 +285,19 @@ export default function MaProductClassPage() {
       </div>
 
       {!ready && (
-        <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
+        <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
           Saving, confirming and editing classifications is not available yet — the page shows the built-in
           proposals read-only, and nothing else breaks. <SetupNotice detail="254_commission_ma_product_class.sql" />
         </div>
       )}
       {ready && builtin && (
-        <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span>No saved classifications for this tenant yet — the built-in proposals are shown.</span>
           <button onClick={seed} style={{ ...sel, cursor: 'pointer', fontWeight: 600 }}>Save them as proposals for this tenant</button>
         </div>
       )}
       {truncated && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
+        <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', color: 'var(--c-fg-b91c1c)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
           The source read hit its row cap — the counts below cover only part of the file. Narrow by period.
         </div>
       )}
@@ -369,14 +369,14 @@ export default function MaProductClassPage() {
                       <code style={{ fontSize: 12.5 }}>{it.product_name}</code>
                       {it.not_in_data && <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--text3)' }}>(mapped, not in the filtered data)</span>}
                       {!!it.raw_variants.length && (
-                        <div style={{ fontSize: 11, color: '#9a3412', marginTop: 2 }}>
+                        <div style={{ fontSize: 11, color: 'var(--c-fg-9a3412)', marginTop: 2 }}>
                           stored with surrounding whitespace in the file: {it.raw_variants.map(v => <code key={v}>&quot;{v}&quot;</code>)} — matched after trim
                         </div>
                       )}
                       {it.note && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, maxWidth: 440 }}>{it.note}</div>}
                     </td>
                     <td style={{ ...td, textAlign: 'right' }}>{it.lines.toLocaleString()}</td>
-                    <td style={{ ...td, textAlign: 'right', color: it.total < 0 ? '#15803d' : 'inherit' }}>{money(it.total)}</td>
+                    <td style={{ ...td, textAlign: 'right', color: it.total < 0 ? 'var(--c-fg-15803d)' : 'inherit' }}>{money(it.total)}</td>
                     <td style={td}><span style={{ fontSize: 11.5, color: 'var(--text3)' }}>{it.sign}</span></td>
                     <td style={td}>
                       <select style={sel} value={it.product_class === UNMAPPED ? '' : it.product_class}
@@ -410,24 +410,24 @@ export default function MaProductClassPage() {
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
               <div className="card" style={{ padding: '8px 14px', border: '1px solid var(--border)', borderRadius: 10, minWidth: 190 }}>
                 <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: .4, color: 'var(--text3)' }}>Unmapped today (confirmed only)</div>
-                <div style={{ fontSize: 19, fontWeight: 700, color: '#b91c1c' }}>{pv.preview.confirmed.unmapped_lines.toLocaleString()} lines</div>
+                <div style={{ fontSize: 19, fontWeight: 700, color: 'var(--c-fg-b91c1c)' }}>{pv.preview.confirmed.unmapped_lines.toLocaleString()} lines</div>
                 <div style={{ fontSize: 12, color: 'var(--text2)' }}>{money(pv.preview.confirmed.unmapped_total)}</div>
               </div>
               <div className="card" style={{ padding: '8px 14px', border: '1px solid var(--border)', borderRadius: 10, minWidth: 190 }}>
                 <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: .4, color: 'var(--text3)' }}>Still unmapped if you confirm all</div>
-                <div style={{ fontSize: 19, fontWeight: 700, color: '#9a3412' }}>{pv.preview.proposed.unmapped_lines.toLocaleString()} lines</div>
+                <div style={{ fontSize: 19, fontWeight: 700, color: 'var(--c-fg-9a3412)' }}>{pv.preview.proposed.unmapped_lines.toLocaleString()} lines</div>
                 <div style={{ fontSize: 12, color: 'var(--text2)' }}>{money(pv.preview.proposed.unmapped_total)}</div>
               </div>
               <div className="card" style={{ padding: '8px 14px', border: '1px solid var(--border)', borderRadius: 10, minWidth: 190 }}>
                 <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: .4, color: 'var(--text3)' }}>Confirming would classify</div>
-                <div style={{ fontSize: 19, fontWeight: 700, color: '#15803d' }}>{pv.preview.delta.lines_newly_classified.toLocaleString()} lines</div>
+                <div style={{ fontSize: 19, fontWeight: 700, color: 'var(--c-fg-15803d)' }}>{pv.preview.delta.lines_newly_classified.toLocaleString()} lines</div>
                 <div style={{ fontSize: 12, color: 'var(--text2)' }}>{money(pv.preview.delta.dollars_newly_classified)}</div>
               </div>
             </div>
           )}
           {pv?.note && <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10, maxWidth: 900, lineHeight: 1.5 }}>{pv.note}</div>}
           {!!pv?.unmapped?.names && (
-            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 12, maxWidth: 1000 }}>
+            <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', color: 'var(--c-fg-b91c1c)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 12, maxWidth: 1000 }}>
               <b>{pv.unmapped.names} product name(s) have no class at all</b> — {pv.unmapped.lines.toLocaleString()} lines,
               {' '}{money(pv.unmapped.total)}. They are counted as “unmapped”, never folded into a money class:{' '}
               {pv.unmapped.detail.slice(0, 8).map(d => <code key={d.product_name} style={{ marginRight: 6 }}>{d.product_name}</code>)}

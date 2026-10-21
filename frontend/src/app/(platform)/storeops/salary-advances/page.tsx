@@ -298,7 +298,7 @@ export default function SalaryAdvancesPage() {
                     <td style={cell}>{r.pay_basis}</td>
                     <td style={cell}>{$(r.owed_total)}</td>
                     <td style={cell}>{$(r.cash_paid_total)}</td>
-                    <td style={{ ...cell, color: r.balance < 0 ? 'var(--danger, #c0392b)' : undefined }}>{$(r.balance)}</td>
+                    <td style={{ ...cell, color: r.balance < 0 ? 'var(--danger, var(--c-fg-c0392b))' : undefined }}>{$(r.balance)}</td>
                   </tr>
                   {expanded === r.employee_id && (
                     <tr>

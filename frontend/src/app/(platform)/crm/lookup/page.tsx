@@ -124,8 +124,8 @@ export default function CustomerLookupPage() {
         <button type="submit" disabled={loading} style={btnPrimary}>{loading ? 'Looking…' : 'Look up'}</button>
       </form>
 
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginBottom: 14, maxWidth: 720 }}>{msg}</div>}
-      {data?.error && <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 14, maxWidth: 720 }}>{data.error}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginBottom: 14, maxWidth: 720 }}>{msg}</div>}
+      {data?.error && <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', marginBottom: 14, maxWidth: 720 }}>{data.error}</div>}
 
       {s && (
         <>
@@ -134,13 +134,13 @@ export default function CustomerLookupPage() {
               <div style={{ fontSize: 20, fontWeight: 700 }}>{s.name || 'Unknown name'}</div>
               <div style={{ fontSize: 13, color: 'var(--text2)' }}>{data.phone ? fmtPhone(data.phone) : (data.phone_masked || '••••')}</div>
               {data.pii_revealed
-                ? <span style={{ fontSize: 11, color: '#b45309' }}>👁 contact info revealed (recorded)</span>
+                ? <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>👁 contact info revealed (recorded)</span>
                 : <button type="button" onClick={() => search(undefined, true)} disabled={loading}
                     style={{ fontSize: 11, border: '1px solid var(--border)', background: 'var(--surface2)', borderRadius: 6, padding: '2px 8px', cursor: 'pointer' }}
                     title="Show full phone & email — this reveal is recorded in the lookup audit">🔒 Reveal contact info</button>}
               <div style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
                             background: s.is_customer ? '#16a34a22' : '#6b728022',
-                            color: s.is_customer ? '#16a34a' : '#6b7280' }}>
+                            color: s.is_customer ? 'var(--c-fg-16a34a)' : 'var(--c-fg-6b7280)' }}>
                 {s.is_customer ? 'EXISTING CUSTOMER' : 'NOT A CUSTOMER YET'}
               </div>
               {data.can_export_dsar && (
@@ -190,7 +190,7 @@ export default function CustomerLookupPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                   <span style={{ fontWeight: 700 }}>{title}</span>
                   <span style={{ fontSize: 12, color: 'var(--text2)' }}>{sec.available ? `${sec.count}` : 'unavailable'}</span>
-                  {sec.withheld.length > 0 && <span style={{ fontSize: 11, color: '#f39c12' }}>🔒 hidden: {sec.withheld.join(', ')}</span>}
+                  {sec.withheld.length > 0 && <span style={{ fontSize: 11, color: 'var(--c-fg-f39c12)' }}>🔒 hidden: {sec.withheld.join(', ')}</span>}
                 </div>
                 {!sec.available && <div style={{ fontSize: 12, color: 'var(--text2)' }}>{sec.reason}</div>}
                 {sec.available && sec.rows.length === 0 && <div style={{ fontSize: 12, color: 'var(--text2)' }}>Nothing on record.</div>}

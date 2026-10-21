@@ -24,9 +24,9 @@ interface ChargebackItem {
 }
 
 const STATUS_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
-  posted: { bg: '#fdeaea', fg: '#b91c1c', label: 'POSTED' },
-  pending: { bg: '#fff7e6', fg: '#92400e', label: 'PENDING' },
-  waived: { bg: '#e7f6ec', fg: '#166534', label: 'WAIVED' },
+  posted: { bg: 'var(--c-bg-fdeaea)', fg: 'var(--c-fg-b91c1c)', label: 'POSTED' },
+  pending: { bg: 'var(--c-bg-fff7e6)', fg: 'var(--c-fg-92400e)', label: 'PENDING' },
+  waived: { bg: 'var(--c-bg-e7f6ec)', fg: 'var(--c-fg-166534)', label: 'WAIVED' },
 }
 
 export default function MyChargebacks({ token }: { token?: string | null }) {
@@ -52,7 +52,7 @@ export default function MyChargebacks({ token }: { token?: string | null }) {
         </thead>
         <tbody>
           {items.map(it => {
-            const s = STATUS_STYLE[String(it.status || '').toLowerCase()] || { bg: '#f1f5f9', fg: '#475569', label: (it.status || '—').toUpperCase() }
+            const s = STATUS_STYLE[String(it.status || '').toLowerCase()] || { bg: 'var(--c-bg-f1f5f9)', fg: 'var(--c-fg-475569)', label: (it.status || '—').toUpperCase() }
             const isOverflowChild = !!it.parent_id
             const hasCoveredContext = it.covered_amount != null
             return (
@@ -60,7 +60,7 @@ export default function MyChargebacks({ token }: { token?: string | null }) {
                 <td>
                   {it.reason_label || it.reason}
                   {isOverflowChild && (
-                    <div style={{ fontSize: 10, color: '#b45309', marginTop: 2 }}>
+                    <div style={{ fontSize: 10, color: 'var(--c-fg-b45309)', marginTop: 2 }}>
                       carried from {it.incident_date || 'commission'} — overflow
                     </div>
                   )}

@@ -38,7 +38,7 @@ export function RestrictedReport({ title, grantKey, subtitle }: { title: string;
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>{title}</h1>
       {subtitle && <p style={{ color: 'var(--text2)', fontSize: 13, margin: '4px 0 0' }}>{subtitle}</p>}
-      <div className="card" style={{ padding: 24, marginTop: 16, borderLeft: '3px solid #dc2626', maxWidth: 640 }}>
+      <div className="card" style={{ padding: 24, marginTop: 16, borderLeft: '3px solid var(--c-bg-dc2626)', maxWidth: 640 }}>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>🔒 Restricted</div>
         <p style={{ color: 'var(--text2)', fontSize: 13, margin: 0 }}>
           This report is restricted — ask an admin to grant it on your role.

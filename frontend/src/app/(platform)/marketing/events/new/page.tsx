@@ -100,7 +100,7 @@ export default function NewMarketingEvent() {
         <button style={btnPrimary} onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Create as draft'}</button>
       </div>
 
-      {msg && <div style={{ ...panel, marginBottom: 14, borderColor: '#dc2626', color: '#dc2626' }}>{msg}</div>}
+      {msg && <div style={{ ...panel, marginBottom: 14, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)' }}>{msg}</div>}
 
       <section style={{ ...panel, marginBottom: 14 }}>
         <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 10px' }}>What and who for</h2>
@@ -166,7 +166,7 @@ export default function NewMarketingEvent() {
         <div style={{
           marginTop: 10, padding: 10, borderRadius: 7, fontSize: 12,
           background: 'var(--surface)', border: '1px solid var(--border)',
-          color: willNeedApproval.need ? '#f39c12' : 'var(--text2)',
+          color: willNeedApproval.need ? 'var(--c-fg-f39c12)' : 'var(--text2)',
         }}>
           {willNeedApproval.need ? '▲ This event will need approval before it can go live. ' : '✓ No approval needed. '}
           {willNeedApproval.why}

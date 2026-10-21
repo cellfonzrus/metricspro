@@ -227,10 +227,10 @@ export default function ProcessorLedgerPage() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
-        <Stat label="Debits (charged)" value={fmt(totals.debits)} color="#dc2626" />
-        <Stat label="Credits (paid to you)" value={fmt(totals.credits)} color="#16a34a" />
+        <Stat label="Debits (charged)" value={fmt(totals.debits)} color="var(--c-fg-dc2626)" />
+        <Stat label="Credits (paid to you)" value={fmt(totals.credits)} color="var(--c-fg-16a34a)" />
         <Stat label="Net (credits − debits)" value={`${totals.net >= 0 ? '+' : ''}${fmt(totals.net)}`}
-          color={totals.net >= 0 ? '#059669' : '#dc2626'} />
+          color={totals.net >= 0 ? 'var(--c-fg-059669)' : 'var(--c-fg-dc2626)'} />
         <Stat label="Days · feed rows" value={`${dayCount} · ${totals.rows.toLocaleString()}`} />
       </div>
 
@@ -252,7 +252,7 @@ export default function ProcessorLedgerPage() {
       </div>
 
       {unclassified.types.length > 0 && (
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#92400e', background: '#fffbeb', lineHeight: 1.55 }}>
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: 13, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fffbeb)', lineHeight: 1.55 }}>
           <strong>{fmt(unclassified.moved)}</strong> across <strong>{unclassified.types.length}</strong> payment
           type{unclassified.types.length === 1 ? '' : 's'} has no category, so it cannot be told apart as
           commission or rebate. {data?.categories?.note}
@@ -266,7 +266,7 @@ export default function ProcessorLedgerPage() {
       )}
 
       {truncated && (
-        <div className="card" style={{ padding: '8px 14px', marginBottom: 12, fontSize: 13, color: '#b45309', background: '#fffbeb' }}>
+        <div className="card" style={{ padding: '8px 14px', marginBottom: 12, fontSize: 13, color: 'var(--c-fg-b45309)', background: 'var(--c-bg-fffbeb)' }}>
           The date range holds more feed rows than one report can load — totals below are incomplete. Narrow the dates.
         </div>
       )}
@@ -274,7 +274,7 @@ export default function ProcessorLedgerPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : err ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {err}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {err}</div>
       ) : rows.length === 0 ? (
         <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>
           No processor money movements for {rangeLabel}{fStores.length || fMarkets.length || fTypes.length || fCats.length ? ' with these filters' : ''}.
@@ -291,9 +291,9 @@ export default function ProcessorLedgerPage() {
                 <tr key={`day_${r.date}`} style={{ borderTop: '1px solid var(--border)', background: 'var(--surface2)', fontWeight: 700 }}>
                   <td style={{ padding: '8px 12px', fontSize: 12.5 }}>{r.date}</td>
                   <td colSpan={2} style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text2)' }}>DAY TOTAL</td>
-                  <td style={{ ...num, color: '#dc2626' }}>{r.debits ? fmt(r.debits) : '—'}</td>
-                  <td style={{ ...num, color: '#16a34a' }}>{r.credits ? fmt(r.credits) : '—'}</td>
-                  <td style={{ ...num, color: r.net >= 0 ? '#059669' : '#dc2626' }}>{r.net >= 0 ? '+' : ''}{fmt(r.net)}</td>
+                  <td style={{ ...num, color: 'var(--c-fg-dc2626)' }}>{r.debits ? fmt(r.debits) : '—'}</td>
+                  <td style={{ ...num, color: 'var(--c-fg-16a34a)' }}>{r.credits ? fmt(r.credits) : '—'}</td>
+                  <td style={{ ...num, color: r.net >= 0 ? 'var(--c-fg-059669)' : 'var(--c-fg-dc2626)' }}>{r.net >= 0 ? '+' : ''}{fmt(r.net)}</td>
                   <td style={{ ...num, fontSize: 12, color: 'var(--text3)' }}>{r.rows.toLocaleString()}</td>
                 </tr>
               ) : (
@@ -303,11 +303,11 @@ export default function ProcessorLedgerPage() {
                   <td style={{ padding: '9px 12px', fontSize: 12.5, whiteSpace: 'nowrap' }}>
                     {r.category
                       ? <span>{r.category}</span>
-                      : <span style={{ color: '#b45309' }} title="This org has never mapped this payment type to a pay category, so it belongs to no bucket.">not classified</span>}
+                      : <span style={{ color: 'var(--c-fg-b45309)' }} title="This org has never mapped this payment type to a pay category, so it belongs to no bucket.">not classified</span>}
                   </td>
-                  <td style={{ ...num, color: r.debits ? '#dc2626' : 'var(--text3)' }}>{r.debits ? fmt(r.debits) : '—'}</td>
-                  <td style={{ ...num, color: r.credits ? '#16a34a' : 'var(--text3)' }}>{r.credits ? fmt(r.credits) : '—'}</td>
-                  <td style={{ ...num, fontWeight: 700, color: r.net >= 0 ? '#059669' : '#dc2626' }}>{r.net >= 0 ? '+' : ''}{fmt(r.net)}</td>
+                  <td style={{ ...num, color: r.debits ? 'var(--c-fg-dc2626)' : 'var(--text3)' }}>{r.debits ? fmt(r.debits) : '—'}</td>
+                  <td style={{ ...num, color: r.credits ? 'var(--c-fg-16a34a)' : 'var(--text3)' }}>{r.credits ? fmt(r.credits) : '—'}</td>
+                  <td style={{ ...num, fontWeight: 700, color: r.net >= 0 ? 'var(--c-fg-059669)' : 'var(--c-fg-dc2626)' }}>{r.net >= 0 ? '+' : ''}{fmt(r.net)}</td>
                   <td style={{ ...num, fontSize: 12, color: 'var(--text3)' }}>{r.rows.toLocaleString()}</td>
                 </tr>
               ))}
@@ -315,9 +315,9 @@ export default function ProcessorLedgerPage() {
             <tfoot>
               <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)', fontWeight: 700 }}>
                 <td colSpan={3} style={{ padding: '10px 12px', fontSize: 13 }}>TOTAL ({dayCount} day(s))</td>
-                <td style={{ ...num, color: '#dc2626' }}>{fmt(totals.debits)}</td>
-                <td style={{ ...num, color: '#16a34a' }}>{fmt(totals.credits)}</td>
-                <td style={{ ...num, color: totals.net >= 0 ? '#059669' : '#dc2626' }}>{totals.net >= 0 ? '+' : ''}{fmt(totals.net)}</td>
+                <td style={{ ...num, color: 'var(--c-fg-dc2626)' }}>{fmt(totals.debits)}</td>
+                <td style={{ ...num, color: 'var(--c-fg-16a34a)' }}>{fmt(totals.credits)}</td>
+                <td style={{ ...num, color: totals.net >= 0 ? 'var(--c-fg-059669)' : 'var(--c-fg-dc2626)' }}>{totals.net >= 0 ? '+' : ''}{fmt(totals.net)}</td>
                 <td style={{ ...num, fontSize: 12, color: 'var(--text3)' }}>{totals.rows.toLocaleString()}</td>
               </tr>
             </tfoot>

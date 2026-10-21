@@ -254,11 +254,11 @@ function HRPageBody() {
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Salary, payroll and total compensation in one place — scoped to your area. Set each person&apos;s pay on
           the <ScreenLink to="employees_pay">Employees &amp; Pay</ScreenLink> tab.
-          Configure employer payroll tax + burden items on the <a href="/hr/payroll-expenses" style={{ color: 'var(--accent,#2563eb)' }}>Payroll Expenses</a> page.
-          Manage disciplinary/shortage/performance letters in <a href="/hr/letters" style={{ color: 'var(--accent,#2563eb)' }}>HR Letters</a> —
-          send one from <a href="/hr/letters/send" style={{ color: 'var(--accent,#2563eb)' }}>Send a Letter</a>, review the{' '}
-          <a href="/hr/letters/queue" style={{ color: 'var(--accent,#2563eb)' }}>Approval Queue</a>, or see the{' '}
-          <a href="/hr/letters/sent" style={{ color: 'var(--accent,#2563eb)' }}>Sent Log</a>.
+          Configure employer payroll tax + burden items on the <a href="/hr/payroll-expenses" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Payroll Expenses</a> page.
+          Manage disciplinary/shortage/performance letters in <a href="/hr/letters" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>HR Letters</a> —
+          send one from <a href="/hr/letters/send" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Send a Letter</a>, review the{' '}
+          <a href="/hr/letters/queue" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Approval Queue</a>, or see the{' '}
+          <a href="/hr/letters/sent" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Sent Log</a>.
         </p>
       </div>
 
@@ -271,7 +271,7 @@ function HRPageBody() {
         {tab === 'comp' && comp?.rows?.length > 0 && <><ExportButtons payload={compPayload} compact /><SendReportButton exportPayload={compPayload} compact /></>}
       </div>
 
-      {err && <div className="card" style={{ padding: 12, color: '#c0392b', borderColor: '#c0392b', marginBottom: 12 }}>{err}</div>}
+      {err && <div className="card" style={{ padding: 12, color: 'var(--c-fg-c0392b)', borderColor: 'var(--c-bg-c0392b)', marginBottom: 12 }}>{err}</div>}
       {loading ? <div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div> : (
         <>
           {tab === 'comp' && (
@@ -303,7 +303,7 @@ function HRPageBody() {
                         <td style={td}>{r.store || '—'}</td>
                         <td style={tdR}>{fmt(r.base_salary)}
                           {r.pay_basis && r.pay_basis !== 'hourly' && <span title={`${PAY_BASIS_LABEL[r.pay_basis as PayBasis] || r.pay_basis}${r.salary_prorated ? ' · prorated for this period' : ''}`} style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 4 }}>({r.pay_basis}{r.salary_prorated ? ' ◔' : ''})</span>}
-                          {r.chargebacks > 0 ? <span title="chargebacks deducted" style={{ fontSize: 10, color: '#b42318' }}> −{fmt(r.chargebacks)}</span> : null}</td>
+                          {r.chargebacks > 0 ? <span title="chargebacks deducted" style={{ fontSize: 10, color: 'var(--c-fg-b42318)' }}> −{fmt(r.chargebacks)}</span> : null}</td>
                         <td style={tdR}>{fmt(r.commission)}</td>
                         <td style={{ ...tdR, fontWeight: 700 }}>{fmt(r.total_comp)}</td>
                         <td style={tdR}>{fmt(r.annualized)}</td>
@@ -333,8 +333,8 @@ function HRPageBody() {
                 </label>
               </div>
               {pendingRows > 0 && (
-                <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 10, padding: '8px 12px', borderRadius: 8, border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.08)' }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: '#b45309' }}>● {pendingRows} row{pendingRows === 1 ? '' : 's'} with unsaved changes</span>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 10, padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-bg-f59e0b)', background: 'rgba(245,158,11,0.08)' }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-fg-b45309)' }}>● {pendingRows} row{pendingRows === 1 ? '' : 's'} with unsaved changes</span>
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>Nothing is saved until you press Save — leaving this page asks first.</span>
                   <div style={{ flex: 1 }} />
                   <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 12px' }} disabled={rowBusy !== ''} onClick={saveAllRows}>💾 Save all</button>
@@ -368,11 +368,11 @@ function HRPageBody() {
                               <button className="btn btn-primary" style={{ fontSize: 12, padding: '3px 10px' }} disabled={rowBusy === e.id}
                                 title={`Saves every edited field on this row: ${pending.map(p => p.label).join(', ')}`}
                                 onClick={() => saveRow(e)}>{rowBusy === e.id ? '…' : '💾 Save'}</button>
-                              <span style={{ fontSize: 11, color: '#b45309' }}>● unsaved: {pending.map(p => p.label).join(', ')}</span>
+                              <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>● unsaved: {pending.map(p => p.label).join(', ')}</span>
                             </div>
                           )}
-                          {rm && pending.length === 0 && <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, color: rm.ok ? '#15803d' : '#b42318' }}>{rm.ok ? '✅ ' : '❌ '}{rm.text}</div>}
-                          {rm && !rm.ok && pending.length > 0 && <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, color: '#b42318' }}>❌ {rm.text}</div>}
+                          {rm && pending.length === 0 && <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, color: rm.ok ? 'var(--c-fg-15803d)' : 'var(--c-fg-b42318)' }}>{rm.ok ? '✅ ' : '❌ '}{rm.text}</div>}
+                          {rm && !rm.ok && pending.length > 0 && <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2, color: 'var(--c-fg-b42318)' }}>❌ {rm.text}</div>}
                         </td>
                         {pfsAvailable && (
                           <td style={td}>
@@ -389,7 +389,7 @@ function HRPageBody() {
                                   <option value="no">No — clocked hours only</option>
                                 </select>
                                 {pfsMsg[String(e.id)] && (
-                                  <div style={{ fontSize: 11, marginTop: 2, maxWidth: 260, color: pfsMsg[String(e.id)].ok ? '#15803d' : '#b42318' }}>
+                                  <div style={{ fontSize: 11, marginTop: 2, maxWidth: 260, color: pfsMsg[String(e.id)].ok ? 'var(--c-fg-15803d)' : 'var(--c-fg-b42318)' }}>
                                     {pfsMsg[String(e.id)].ok ? '✅ ' : '❌ '}{pfsMsg[String(e.id)].text}
                                   </div>
                                 )}

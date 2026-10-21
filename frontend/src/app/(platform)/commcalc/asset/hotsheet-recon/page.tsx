@@ -143,10 +143,10 @@ export default function HotsheetReconPage() {
         </div>
       </div>
 
-      {syncMsg && <div style={{ marginBottom: 14, fontSize: 13, color: syncMsg.startsWith('✓') ? '#059669' : '#dc2626' }}>{syncMsg}</div>}
+      {syncMsg && <div style={{ marginBottom: 14, fontSize: 13, color: syncMsg.startsWith('✓') ? 'var(--c-fg-059669)' : 'var(--c-fg-dc2626)' }}>{syncMsg}</div>}
 
       {data && !data.hotsheet_loaded && !ledgerEmpty && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: '#92400e' }}>
+        <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: 'var(--c-fg-92400e)' }}>
           ⚠️ <strong>No hotsheet loaded.</strong> Upload a pricing hotsheet on the Commissions page first — every device will read “Not on hotsheet” until then.
         </div>
       )}
@@ -213,8 +213,8 @@ export default function HotsheetReconPage() {
                         <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right' }}>{t.count.toLocaleString()}</td>
                         <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right' }}>{fmt(t.expected)}</td>
                         <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right' }}>{fmt(t.actual)}</td>
-                        <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, color: t.variance < 0 ? '#dc2626' : 'var(--text)' }}>{fmt(t.variance)}</td>
-                        <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: t.underpaid_count ? '#dc2626' : 'var(--text3)' }}>{t.underpaid_count}</td>
+                        <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, color: t.variance < 0 ? 'var(--c-fg-dc2626)' : 'var(--text)' }}>{fmt(t.variance)}</td>
+                        <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: t.underpaid_count ? 'var(--c-fg-dc2626)' : 'var(--text3)' }}>{t.underpaid_count}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -253,7 +253,7 @@ export default function HotsheetReconPage() {
                       <td style={{ padding: '7px 12px', fontSize: 12, color: 'var(--text3)' }}>{r.effective_date || '—'}</td>
                       <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right' }}>{r.expected == null ? '—' : fmt(r.expected)}</td>
                       <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right' }}>{fmt(r.actual)}</td>
-                      <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, color: r.variance != null && r.variance < 0 ? '#dc2626' : r.variance != null && r.variance > 0 ? '#2563eb' : 'var(--text3)' }}>{r.variance == null ? '—' : fmt(r.variance)}</td>
+                      <td style={{ padding: '7px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700, color: r.variance != null && r.variance < 0 ? 'var(--c-fg-dc2626)' : r.variance != null && r.variance > 0 ? 'var(--c-fg-2563eb)' : 'var(--text3)' }}>{r.variance == null ? '—' : fmt(r.variance)}</td>
                     </tr>
                   ))}
                   {!items.length && <tr><td colSpan={10} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>No devices in “{BUCKET_LABEL[bucket]}”.</td></tr>}

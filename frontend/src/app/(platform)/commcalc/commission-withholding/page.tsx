@@ -300,10 +300,10 @@ export default function CommissionWithholdingPage() {
         </div>
       </div>
 
-      {err && <div style={{ background: '#fef2f2', color: '#991b1b', padding: 12, borderRadius: 8, margin: '12px 0', fontSize: 13.5 }}>{err}</div>}
-      {msg && <div style={{ background: '#f0fdf4', color: '#166534', padding: 10, borderRadius: 8, margin: '12px 0', fontSize: 13 }}>{msg}</div>}
+      {err && <div style={{ background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-991b1b)', padding: 12, borderRadius: 8, margin: '12px 0', fontSize: 13.5 }}>{err}</div>}
+      {msg && <div style={{ background: 'var(--c-bg-f0fdf4)', color: 'var(--c-fg-166534)', padding: 10, borderRadius: 8, margin: '12px 0', fontSize: 13 }}>{msg}</div>}
       {data && !data.appeals_ready && (
-        <div style={{ background: '#fffbeb', color: '#92400e', padding: 12, borderRadius: 8, margin: '12px 0', fontSize: 13 }}>
+        <div style={{ background: 'var(--c-bg-fffbeb)', color: 'var(--c-fg-92400e)', padding: 12, borderRadius: 8, margin: '12px 0', fontSize: 13 }}>
           <SetupNotice lead="Appeal tracking is not available yet. Every figure below still works." detail="1060_flag_appeal_state.sql" />
         </div>
       )}
@@ -311,7 +311,7 @@ export default function CommissionWithholdingPage() {
       {/* THE MONEY FINDING. A clawback the org declares as EARNINGS nets into commission with
           nothing saying it was taken back. Re-declaring it moves money, so it is surfaced, not done. */}
       {decl?.as_earnings_note && decl.as_earnings.length > 0 && (
-        <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', padding: '12px 16px', borderRadius: 8, margin: '12px 0', fontSize: 13, lineHeight: 1.55 }}>
+        <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', padding: '12px 16px', borderRadius: 8, margin: '12px 0', fontSize: 13, lineHeight: 1.55 }}>
           <b>⚠️ Worth a decision.</b> {decl.as_earnings_note}
           <table style={{ borderCollapse: 'collapse', marginTop: 8, fontSize: 12.5 }}>
             <tbody>
@@ -357,7 +357,7 @@ export default function CommissionWithholdingPage() {
 
       {/* The feed has clawbacks this queue does not: a REASON, never a quietly shorter report. */}
       {data?.pending_calculation?.note && (
-        <div style={{ background: '#eff6ff', color: '#1e40af', padding: '10px 16px', borderRadius: 8, margin: '12px 0', fontSize: 13 }}>
+        <div style={{ background: 'var(--c-bg-eff6ff)', color: 'var(--c-fg-1e40af)', padding: '10px 16px', borderRadius: 8, margin: '12px 0', fontSize: 13 }}>
           <b>{data.pending_calculation.count}</b> clawback{data.pending_calculation.count === 1 ? '' : 's'} worth{' '}
           <b>{fmt(data.pending_calculation.withheld)}</b> are in the feed but not yet in this queue. {data.pending_calculation.note}
         </div>
@@ -448,7 +448,7 @@ export default function CommissionWithholdingPage() {
                       <div>{r.last_withheld_on || '—'}</div>
                       <div style={{ fontSize: 12, color: 'var(--text3)' }}>{r.period}</div>
                     </td>
-                    <td style={{ ...num, fontWeight: 600, color: '#dc2626' }}>{fmt(r.withheld)}</td>
+                    <td style={{ ...num, fontWeight: 600, color: 'var(--c-fg-dc2626)' }}>{fmt(r.withheld)}</td>
                     <td style={td}>
                       <span style={{ fontWeight: 600, color: RECOVERY_COLOR[r.recovery_state] || 'var(--text)' }}
                         title={data?.recovery_notes?.[r.recovery_state] || ''}>
@@ -463,7 +463,7 @@ export default function CommissionWithholdingPage() {
                         </div>
                       )}
                       {r.undated_paid > 0 && (
-                        <div style={{ fontSize: 12, color: '#92400e' }}>
+                        <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)' }}>
                           {fmt(r.undated_paid)} paid with no date — not counted either way
                         </div>
                       )}

@@ -83,11 +83,11 @@ function accessoryRules(p?: Plan | null): Rule[] {
 
 const chip: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, padding: '2px 8px', borderRadius: 12,
-  background: 'var(--panel2, #f1f5f9)', border: '1px solid var(--border, #e2e8f0)', fontSize: 12,
+  background: 'var(--panel2, var(--c-bg-f1f5f9))', border: '1px solid var(--border, var(--c-bg-e2e8f0))', fontSize: 12,
 }
 const sectionNum: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26,
-  borderRadius: '50%', background: 'var(--accent, #2563eb)', color: '#fff', fontWeight: 700, fontSize: 13,
+  borderRadius: '50%', background: 'var(--accent, var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', fontWeight: 700, fontSize: 13,
   flexShrink: 0,
 }
 
@@ -334,7 +334,7 @@ export default function CommissionStructurePage() {
           drive the pay. Moved above the step-by-step builder (owner directive 2026-09-20); behaviour unchanged. */}
       <div className="card" id={EXEC_MTD_FLAT.anchor} data-testid="option-exec-mtd-flat" style={{ padding: 16, marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-          <span style={{ ...sectionNum, background: '#0891b2' }}>{EXEC_MTD_FLAT.n}</span>
+          <span style={{ ...sectionNum, background: 'var(--c-bg-0891b2)' }}>{EXEC_MTD_FLAT.n}</span>
           <div style={{ fontWeight: 700 }}>{optionHeading(EXEC_MTD_FLAT)}</div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 10px' }}>
@@ -397,7 +397,7 @@ export default function CommissionStructurePage() {
                   </span>
                 )
               })}
-              <span style={{ ...chip, background: 'var(--panel2, #f1f5f9)' }}>
+              <span style={{ ...chip, background: 'var(--panel2, var(--c-bg-f1f5f9))' }}>
                 Accessories: {fmt(Number(mtd?.totals?.acc_sales) || 0)} × {((Number(mtd.accessory_pct) || 0) * 100).toFixed(1)}% = {fmt(Number(mtd?.totals?.accessory_pay) || 0)}
               </span>
             </div>
@@ -411,7 +411,7 @@ export default function CommissionStructurePage() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 520 }}>
                   <thead><tr>{['Rep', 'Activations', 'Acc. Sales', 'Activation $', 'Accessory $', 'Commission'].map(h =>
-                    <th key={h} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--border, #e2e8f0)' }}>{h}</th>)}</tr></thead>
+                    <th key={h} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--border, var(--c-bg-e2e8f0))' }}>{h}</th>)}</tr></thead>
                   <tbody>
                     {(mtd.by_rep || []).map((r: any, i: number) => (
                       <tr key={i}>
@@ -427,7 +427,7 @@ export default function CommissionStructurePage() {
                 </table>
               </div>
             ) : (
-              <div style={{ fontSize: 13, color: '#b45309' }}>
+              <div style={{ fontSize: 13, color: 'var(--c-fg-b45309)' }}>
                 No Exec MTD rows for <b>{selected?.name}</b>’s stores in {period}. Check the plan&apos;s store
                 assignments (Step 5) and that {period} has sales.
               </div>
@@ -439,7 +439,7 @@ export default function CommissionStructurePage() {
       {/* OPTION 2 (below) — the customised payout, built with the steps that follow. */}
       <div className="card" id={CUSTOM_STEPS.anchor} data-testid="option-custom-steps" style={{ padding: 16, marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-          <span style={{ ...sectionNum, background: '#0891b2' }}>{CUSTOM_STEPS.n}</span>
+          <span style={{ ...sectionNum, background: 'var(--c-bg-0891b2)' }}>{CUSTOM_STEPS.n}</span>
           <div style={{ fontWeight: 700 }}>{optionHeading(CUSTOM_STEPS)}</div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--text2)', margin: 0 }}>
@@ -480,22 +480,22 @@ export default function CommissionStructurePage() {
         </p>
         {selected ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10 }}>
-            <div style={{ border: '1px solid var(--border, #e2e8f0)', borderRadius: 8, padding: 10 }}>
+            <div style={{ border: '1px solid var(--border, var(--c-bg-e2e8f0))', borderRadius: 8, padding: 10 }}>
               <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>📶 Activation payout</div>
               {actRules.length ? actRules.map((r, i) => (
                 <div key={i} style={{ fontSize: 12, color: 'var(--text2)' }}>
                   {r.label || 'Activation'} — <b>{fmt(Number(r.amount) || 0)}</b> per unit{' '}
                   ({r.match_op || 'in'} {r.match_value || 'premium, byod'})
                 </div>
-              )) : <div style={{ fontSize: 12, color: '#b45309' }}>No activation rule yet.</div>}
+              )) : <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)' }}>No activation rule yet.</div>}
             </div>
-            <div style={{ border: '1px solid var(--border, #e2e8f0)', borderRadius: 8, padding: 10 }}>
+            <div style={{ border: '1px solid var(--border, var(--c-bg-e2e8f0))', borderRadius: 8, padding: 10 }}>
               <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>🎧 Accessory payout</div>
               {accRules.length ? accRules.map((r, i) => (
                 <div key={i} style={{ fontSize: 12, color: 'var(--text2)' }}>
                   {r.label || 'Accessory'} — <b>{Number(r.pct) || 0}%</b> of price ({r.payout_kind})
                 </div>
-              )) : <div style={{ fontSize: 12, color: '#b45309' }}>No accessory rule yet.</div>}
+              )) : <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)' }}>No accessory rule yet.</div>}
             </div>
           </div>
         ) : <div style={{ fontSize: 13, color: 'var(--text2)' }}>Pick a plan above first.</div>}
@@ -544,7 +544,7 @@ export default function CommissionStructurePage() {
         </p>
         {acc == null ? <div style={{ fontSize: 13, color: 'var(--text2)' }}>Loading…</div> : (
           <>
-            {!accCanEdit && <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8 }}>Read-only — you don&apos;t have the Classification permission.</div>}
+            {!accCanEdit && <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginBottom: 8 }}>Read-only — you don&apos;t have the Classification permission.</div>}
             <ChipEditor label="Accessory departments" values={accSel.d} disabled={!accCanEdit}
               onChange={v => setAccSel(s => ({ ...s, d: v }))} placeholder="e.g. Accessories" />
             <ChipEditor label="Accessory categories" values={accSel.c} disabled={!accCanEdit}
@@ -629,8 +629,8 @@ export default function CommissionStructurePage() {
                     const isSel = String(name) === String(selected?.name)
                     return (
                       <span key={name} style={{ ...chip,
-                        background: isSel ? 'var(--accent, #2563eb)' : chip.background,
-                        color: isSel ? '#fff' : undefined }}>
+                        background: isSel ? 'var(--accent, var(--c-bg-2563eb))' : chip.background,
+                        color: isSel ? 'var(--c-fg-ffffff)' : undefined }}>
                         {name}: <b>{d.reps}</b> rep(s) · {fmt(d.payout)}
                       </span>
                     )
@@ -647,7 +647,7 @@ export default function CommissionStructurePage() {
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 480 }}>
                   <thead><tr>{['Rep', 'Store', 'Plan', 'Units', 'Payout'].map(h =>
-                    <th key={h} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--border, #e2e8f0)' }}>{h}</th>)}</tr></thead>
+                    <th key={h} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--border, var(--c-bg-e2e8f0))' }}>{h}</th>)}</tr></thead>
                   <tbody>
                     {estRows.map((r, i) => (
                       <tr key={i}>
@@ -662,7 +662,7 @@ export default function CommissionStructurePage() {
                 </table>
               </div>
             ) : (
-              <div style={{ fontSize: 13, color: '#b45309' }}>
+              <div style={{ fontSize: 13, color: 'var(--c-fg-b45309)' }}>
                 No reps are assigned to <b>{selected?.name}</b> for {period}. Assign your NY / Luxelink reps to
                 this plan in <b>Step 5</b> (or open the Assignment audit) — until then this plan pays no one, and
                 those reps are paid by whichever plan the distribution above shows.

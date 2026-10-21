@@ -9,13 +9,13 @@ import { NoLedgerData } from '../../_shared/NoLedgerData'
 
 // URL slug -> backend group key + display config
 const GROUP_MAP: Record<string, { key: string; title: string; color: string; critical?: boolean; blurb: string }> = {
-  'appeals':       { key:'appeals',       title:'Appeals & Denied Payments', color:'#dc2626', critical:true,
+  'appeals':       { key:'appeals',       title:'Appeals & Denied Payments', color:'var(--c-fg-dc2626)', critical:true,
                      blurb:'The carrier denied or is withholding payment for these activations/reimbursements. Each is a potential direct loss — review and appeal.' },
-  'vip-fees':      { key:'vip_fees',       title:'Distributor Fees', color:'#2563eb',
+  'vip-fees':      { key:'vip_fees',       title:'Distributor Fees', color:'var(--c-fg-2563eb)',
                      blurb:'Processing, shipping, and SIM kit fees billed by the Distributor.' },
-  'stock-balance': { key:'stock_balance',  title:'Stock Balancing / Returns', color:'#d97706',
+  'stock-balance': { key:'stock_balance',  title:'Stock Balancing / Returns', color:'var(--c-fg-d97706)',
                      blurb:'Phones returned to the Distributor because they could not sell before 60 days (FIFO, unopened). Confirm the Distributor credited these.' },
-  'recon':         { key:'recon_oddity',   title:'Reconciliation Oddities', color:'#7c3aed',
+  'recon':         { key:'recon_oddity',   title:'Reconciliation Oddities', color:'var(--c-fg-7c3aed)',
                      blurb:'Payment/data mismatches — wrong ESN paid, missing Elevate data, coupon issues, exchanges.' },
 }
 
@@ -101,7 +101,7 @@ export default function ChargeGroupPage() {
     : market ? stores.filter(s => s.market === market) : stores
   const selStyle = { padding:'6px 10px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, background:'var(--surface)' }
   const tabBtn = (active:boolean) => ({ padding:'6px 14px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, cursor:'pointer', fontWeight:600,
-    background: active ? 'var(--accent)' : 'var(--surface)', color: active ? '#fff' : 'var(--text2)' })
+    background: active ? 'var(--accent)' : 'var(--surface)', color: active ? 'var(--c-fg-ffffff)' : 'var(--text2)' })
   const periodLabel = mode==='all' ? 'All time' : mode==='month' ? `${MONTHS[month-1]} ${year}` : `Week of ${weekFriday}`
   // No asset_ledger rows for this org at all (see NoLedgerData.tsx — luxelink-parity, 2026-07-16):
   // don't show the unconditional "Critical — money at stake" banner when there is nothing to review.
@@ -168,7 +168,7 @@ export default function ChargeGroupPage() {
       </div>
 
       {cfg.critical && !ledgerEmpty && (
-        <div style={{ background:'#fef2f2', border:'2px solid #dc2626', borderRadius:10, padding:'14px 18px', marginBottom:20, color:'#991b1b' }}>
+        <div style={{ background:'var(--c-bg-fef2f2)', border:'2px solid var(--c-bg-dc2626)', borderRadius:10, padding:'14px 18px', marginBottom:20, color:'var(--c-fg-991b1b)' }}>
           <strong>🚨 Critical — money at stake.</strong> These are denied/withheld carrier payments. Use “Push Appeals to Flags” on the dashboard to track them on the Flags page.
         </div>
       )}

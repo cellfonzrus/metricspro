@@ -24,7 +24,7 @@ export default function HelpToggle({ collapsed }: { collapsed?: boolean }) {
         <span aria-hidden>ⓘ</span>
         <span style={{ flex: 1, textAlign: 'left' }}>Help text</span>
         <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.04em',
-          color: on ? '#86efac' : 'rgba(255,255,255,0.4)' }}>{on ? 'ON' : 'OFF'}</span>
+          color: on ? 'var(--c-fg-86efac)' : 'rgba(255,255,255,0.4)' }}>{on ? 'ON' : 'OFF'}</span>
       </button>
     </div>
   )

@@ -100,8 +100,8 @@ export default function HelpDocsEditor() {
       <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
         Per-page help. <b>User help</b> shows in the &quot;?&quot; panel; the <b>support playbook</b> shows only in the console.
       </p>
-      {msg && <div className="card" style={{ padding: 8, marginBottom: 10, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', fontSize: 13 }}>{msg}</div>}
-      {err && <div className="card" style={{ padding: 8, marginBottom: 10, borderColor: '#c0392b', color: '#c0392b', fontSize: 13 }}>{err}</div>}
+      {msg && <div className="card" style={{ padding: 8, marginBottom: 10, background: 'var(--c-bg-f0fdf4)', border: '1px solid var(--c-bg-bbf7d0)', color: 'var(--c-fg-166534)', fontSize: 13 }}>{msg}</div>}
+      {err && <div className="card" style={{ padding: 8, marginBottom: 10, borderColor: 'var(--c-bg-c0392b)', color: 'var(--c-fg-c0392b)', fontSize: 13 }}>{err}</div>}
 
       {/* Edit form */}
       <div className="card" style={{ padding: 16, marginBottom: 16, display: 'grid', gap: 12 }}>
@@ -167,7 +167,7 @@ export default function HelpDocsEditor() {
             const d = docs.find(x => x.page_key === n.href)
             return (
               <div key={n.href} onClick={() => d ? edit(d) : setForm(f => ({ ...emptyDoc(), page_key: n.href, module: n.module, title: n.label.split(' · ').pop() || '' }))}
-                style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '5px 8px', borderRadius: 6, cursor: 'pointer', fontSize: 12, background: d ? '#f0fdf4' : 'var(--bg2)', border: `1px solid ${d ? '#bbf7d0' : 'var(--border)'}` }}>
+                style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '5px 8px', borderRadius: 6, cursor: 'pointer', fontSize: 12, background: d ? 'var(--c-bg-f0fdf4)' : 'var(--bg2)', border: `1px solid ${d ? 'var(--c-bg-bbf7d0)' : 'var(--border)'}` }}>
                 <span>{d ? '✓' : '○'}</span>
                 <span style={{ fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.href}</span>
               </div>

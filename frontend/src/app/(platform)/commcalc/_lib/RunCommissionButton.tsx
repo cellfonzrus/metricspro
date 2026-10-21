@@ -46,7 +46,7 @@ export function RunCommissionPanel({ state, onConfirm, onCancel, onDismiss, repo
   if (s.phase === 'confirm') {
     return (
       <div role="alertdialog" aria-label="Confirm recalculation" data-testid="run-commission-confirm"
-        style={{ ...box, borderLeft: '4px solid #b45309', background: 'var(--surface2)' }}>
+        style={{ ...box, borderLeft: '4px solid var(--c-bg-b45309)', background: 'var(--surface2)' }}>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>{confirmText(s.period, s.tenant)}</div>
         <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6 }}>
           Every rep&apos;s stored commission for <b>{s.period}</b> is deleted and rewritten from the current
@@ -89,7 +89,7 @@ export function RunCommissionPanel({ state, onConfirm, onCancel, onDismiss, repo
         </div>
         <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6 }}>{s.message}</div>
         {(s.gatewayTimeout || s.uncertain) && (
-          <div data-testid="run-commission-no-retry" style={{ fontSize: 12, color: '#b45309', marginTop: 6 }}>
+          <div data-testid="run-commission-no-retry" style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginTop: 6 }}>
             Do not press it again — re-running it now would restart the delete-and-rewrite and can leave the
             month at $0. This page keeps checking on its own.
           </div>

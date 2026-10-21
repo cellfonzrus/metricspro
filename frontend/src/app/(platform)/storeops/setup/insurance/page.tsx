@@ -30,8 +30,8 @@ function Field({ label, width = 160, children }: { label: string; width?: number
 }
 
 function daysBadge(days: number, inWindow: boolean) {
-  const bg = days < 0 ? '#fee2e2' : inWindow ? '#fef3c7' : 'var(--surface2)'
-  const fg = days < 0 ? '#991b1b' : inWindow ? '#92400e' : 'var(--text3)'
+  const bg = days < 0 ? 'var(--c-bg-fee2e2)' : inWindow ? 'var(--c-bg-fef3c7)' : 'var(--surface2)'
+  const fg = days < 0 ? 'var(--c-fg-991b1b)' : inWindow ? 'var(--c-fg-92400e)' : 'var(--text3)'
   const txt = days < 0 ? `expired ${-days}d ago` : `${days}d`
   return <span style={{ fontSize: 11, fontWeight: 700, background: bg, color: fg, padding: '1px 6px', borderRadius: 4 }}>{txt}</span>
 }
@@ -209,7 +209,7 @@ export default function InsurancePoliciesPage() {
           One policy can cover many stores. Each store&apos;s own certificate lives on{' '}
           <Link href="/storeops/setup/stores" style={{ textDecoration: 'underline' }}>Store Setup</Link>.
         </span>
-        {msg && <span style={{ fontSize: 12, color: msg.startsWith('✓') ? '#166534' : '#b91c1c' }}>{msg}</span>}
+        {msg && <span style={{ fontSize: 12, color: msg.startsWith('✓') ? 'var(--c-fg-166534)' : 'var(--c-fg-b91c1c)' }}>{msg}</span>}
       </div>
 
       {/* Expiring — the whole point of the notice contacts */}
@@ -255,7 +255,7 @@ export default function InsurancePoliciesPage() {
                     <td>{u.expires_on}</td>
                     <td>{daysBadge(u.days_out, u.in_window)}</td>
                     <td style={{ color: 'var(--text3)' }}>{u.notice_days}d</td>
-                    <td style={{ color: u.contacts ? 'var(--text2)' : '#b91c1c' }}>
+                    <td style={{ color: u.contacts ? 'var(--text2)' : 'var(--c-fg-b91c1c)' }}>
                       {u.contacts ? `${u.contacts} to notify` : 'nobody to notify'}
                     </td>
                   </tr>
@@ -361,7 +361,7 @@ export default function InsurancePoliciesPage() {
                   {busy[`ai-${p.id}`] ? '⏳ Reading…' : '✨ Read the policy with AI'}
                 </button>
               )}
-              <button className="btn" onClick={() => removePolicy(p)} style={{ marginLeft: 'auto', color: '#b91c1c' }}>🗑️</button>
+              <button className="btn" onClick={() => removePolicy(p)} style={{ marginLeft: 'auto', color: 'var(--c-fg-b91c1c)' }}>🗑️</button>
             </div>
 
             {docs.length > 0 && (

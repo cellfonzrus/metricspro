@@ -103,7 +103,7 @@ export default function PLPerStorePrint({ period, scope, companyLabel, stores, m
       )}
       <button className="btn btn-secondary" style={{ fontSize: 12, padding: '5px 8px' }} onClick={() => setOpen(false)}
         aria-label="Close print each store">✕</button>
-      {err && <div style={{ flexBasis: '100%', fontSize: 12, color: '#dc2626' }}>{err}</div>}
+      {err && <div style={{ flexBasis: '100%', fontSize: 12, color: 'var(--c-fg-dc2626)' }}>{err}</div>}
     </div>
   )
 }

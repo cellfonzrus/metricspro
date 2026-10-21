@@ -156,7 +156,7 @@ export default function VisionActivityPage() {
         <input type="date" value={to} onChange={e => setTo(e.target.value)} style={input} aria-label="To" />
       </div>
 
-      {err && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', fontSize: 13, marginBottom: 16 }}>{err}</div>}
+      {err && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', fontSize: 13, marginBottom: 16 }}>{err}</div>}
       {loading && <div style={{ color: 'var(--text2)' }}>Loading…</div>}
 
       {/* ── COVERAGE FIRST. The one signal on this page with no caveats attached. ─────────────── */}
@@ -174,7 +174,7 @@ export default function VisionActivityPage() {
                 Unattended with people waiting
               </div>
               <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.2, fontVariantNumeric: 'tabular-nums',
-                color: (cover.waiting_seconds || 0) > 0 ? '#b45309' : 'var(--text)' }}>
+                color: (cover.waiting_seconds || 0) > 0 ? 'var(--c-fg-b45309)' : 'var(--text)' }}>
                 {fmtDuration(cover.waiting_seconds)}
               </div>
             </div>
@@ -212,18 +212,18 @@ export default function VisionActivityPage() {
                 <div style={{ display: 'flex', gap: 2, marginTop: 6, borderTop: '1px solid var(--border)', paddingTop: 6 }}>
                   {cover.by_hour.map(h => (
                     <div key={h.hour} style={{ flex: 1, textAlign: 'center', fontSize: 10,
-                      color: h.waiting > 0 ? '#b45309' : 'var(--text3)',
+                      color: h.waiting > 0 ? 'var(--c-fg-b45309)' : 'var(--text3)',
                       fontWeight: h.waiting > 0 ? 600 : 400 }}>
                       {hourLabel(h.hour)}
                       <div style={{ height: 3, marginTop: 3, borderRadius: 2,
-                        background: h.waiting > 0 ? '#b45309' : 'transparent' }} />
+                        background: h.waiting > 0 ? 'var(--c-bg-b45309)' : 'transparent' }} />
                     </div>
                   ))}
                 </div>
                 {cover.by_hour.some(h => h.waiting > 0) && (
                   <div style={{ fontSize: 11.5, color: 'var(--text2)', marginTop: 8,
                     display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ width: 14, height: 3, borderRadius: 2, background: '#b45309', display: 'inline-block' }} />
+                    <span style={{ width: 14, height: 3, borderRadius: 2, background: 'var(--c-bg-b45309)', display: 'inline-block' }} />
                     Hours where the floor was unattended while people were waiting
                   </div>
                 )}
@@ -236,7 +236,7 @@ export default function VisionActivityPage() {
 
       {/* ── HOW MUCH OF THIS IS ACTUALLY ABOUT A PERSON. Never collapsed, never below the table. */}
       {data && total > 0 && (
-        <div style={{ ...panel, borderLeft: '3px solid #b45309', marginBottom: 16, fontSize: 13 }}>
+        <div style={{ ...panel, borderLeft: '3px solid var(--c-bg-b45309)', marginBottom: 16, fontSize: 13 }}>
           <b>{named} of {total} readings ({namedPct}%) could be tied to a person.</b>{' '}
           We do no face recognition, so a reading is matched to somebody only when exactly one
           consenting employee was clocked in at the time. Everything else is counted but anonymous —
@@ -296,7 +296,7 @@ export default function VisionActivityPage() {
                         style={{ width: `${seg(v)}%`, background: colour, display: 'flex',
                           alignItems: 'center', justifyContent: 'center', minWidth: 2 }}>
                         {seg(v) >= 12 && (
-                          <span style={{ fontSize: 10.5, color: '#fff', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                          <span style={{ fontSize: 10.5, color: 'var(--c-fg-ffffff)', fontWeight: 600, whiteSpace: 'nowrap' }}>
                             {seg(v).toFixed(0)}%
                           </span>
                         )}

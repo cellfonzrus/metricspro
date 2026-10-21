@@ -221,7 +221,7 @@ export default function ManagementIncentivePage() {
 
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
                 <button className="btn btn-primary" disabled={busy} onClick={savePlan}>{busy ? 'Saving…' : '💾 Save plan'}</button>
-                {plan.id && <button className="btn" disabled={busy} style={{ color: '#dc2626' }} onClick={deletePlan}>Delete</button>}
+                {plan.id && <button className="btn" disabled={busy} style={{ color: 'var(--c-fg-dc2626)' }} onClick={deletePlan}>Delete</button>}
                 <span style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--text2)' }}>Full-attainment opportunity: <b>{money(fullOpportunity)}</b></span>
               </div>
             </div>
@@ -356,8 +356,8 @@ function ComputeTab({ plans }: { plans: Plan[] }) {
         </div>
         {pullInfo && (
           <div style={{ marginTop: 12, fontSize: 12, background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
-            {pullInfo.resolved.length > 0 && <div style={{ marginBottom: 4 }}><b style={{ color: '#166534' }}>Auto-filled:</b> {pullInfo.resolved.join(', ')}</div>}
-            {pullInfo.unresolved.length > 0 && <div style={{ marginBottom: 4 }}><b style={{ color: '#b45309' }}>Enter manually (no data source):</b> {pullInfo.unresolved.join(', ')}</div>}
+            {pullInfo.resolved.length > 0 && <div style={{ marginBottom: 4 }}><b style={{ color: 'var(--c-fg-166534)' }}>Auto-filled:</b> {pullInfo.resolved.join(', ')}</div>}
+            {pullInfo.unresolved.length > 0 && <div style={{ marginBottom: 4 }}><b style={{ color: 'var(--c-fg-b45309)' }}>Enter manually (no data source):</b> {pullInfo.unresolved.join(', ')}</div>}
             {Object.keys(pullInfo.notes || {}).length > 0 && (
               <ul style={{ margin: '6px 0 0', paddingLeft: 16, color: 'var(--text3)' }}>
                 {Object.entries(pullInfo.notes).map(([k, v]: any) => <li key={k}><b>{k}:</b> {v}</li>)}
@@ -384,7 +384,7 @@ function ComputeTab({ plans }: { plans: Plan[] }) {
               ))}
               {result.bonuses?.map((b: any, i: number) => (
                 <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={{ padding: '5px 6px' }}>{b.label} {!b.earned && <span style={{ fontSize: 11, color: '#b45309' }}>· not earned</span>}</td>
+                  <td style={{ padding: '5px 6px' }}>{b.label} {!b.earned && <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>· not earned</span>}</td>
                   <td style={{ padding: '5px 6px', color: 'var(--text3)', fontSize: 12 }}>{b.gated_by}</td>
                   <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 600 }}>{money(b.payout)}</td>
                 </tr>
@@ -395,7 +395,7 @@ function ComputeTab({ plans }: { plans: Plan[] }) {
             <div style={{ marginTop: 10, fontSize: 12 }}>
               <span style={{ fontWeight: 600 }}>Qualification: </span>
               {result.qualifiers.map((q: any, i: number) => (
-                <span key={i} style={{ marginRight: 10, color: q.passed ? '#166534' : '#991b1b' }}>
+                <span key={i} style={{ marginRight: 10, color: q.passed ? 'var(--c-fg-166534)' : 'var(--c-fg-991b1b)' }}>
                   {q.passed ? '✓' : '✕'} {q.label} ({q.value ?? '—'} {OP_LABEL[q.op] || q.op} {q.threshold})
                 </span>
               ))}

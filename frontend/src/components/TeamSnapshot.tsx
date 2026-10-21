@@ -96,7 +96,7 @@ export default function TeamSnapshot({ period, token, unitId, today }:
   }
 
   if (loading) return <div style={{ padding: 24, color: 'var(--text3)' }}>Loading team…</div>
-  if (err) return <div className="card" style={{ padding: 14, color: '#c0392b', borderColor: '#c0392b' }}>{err}</div>
+  if (err) return <div className="card" style={{ padding: 14, color: 'var(--c-fg-c0392b)', borderColor: 'var(--c-bg-c0392b)' }}>{err}</div>
   if (!data) return null
   if (!data.is_manager && !unitId) {
     return <div className="card" style={{ padding: 18, color: 'var(--text2)', fontSize: 14 }}>
@@ -215,15 +215,15 @@ export default function TeamSnapshot({ period, token, unitId, today }:
               <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{cap(k)}</div>
               <div style={{ fontSize: 20, fontWeight: 700 }}>{t.achieved_mtd}<span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 500 }}> / {t.monthly}</span></div>
               <div style={{ height: 6, borderRadius: 4, background: 'var(--bg2)', marginTop: 6, overflow: 'hidden' }}>
-                <div style={{ width: `${Math.min(100, t.pct)}%`, height: '100%', background: t.pct >= 100 ? '#16794a' : t.pct >= 60 ? '#f5a623' : '#dc2626' }} />
+                <div style={{ width: `${Math.min(100, t.pct)}%`, height: '100%', background: t.pct >= 100 ? 'var(--c-bg-16794a)' : t.pct >= 60 ? 'var(--c-bg-f5a623)' : 'var(--c-bg-dc2626)' }} />
               </div>
               <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>{t.pct}% · need {t.need}</div>
             </div>
           )
         })}
-        <div style={{ ...tile, background: filteredMoneyOnTable > 0 ? '#fdeaea' : 'var(--surface)' }}>
+        <div style={{ ...tile, background: filteredMoneyOnTable > 0 ? 'var(--c-bg-fdeaea)' : 'var(--surface)' }}>
           <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>Money on table</div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: filteredMoneyOnTable > 0 ? '#b42318' : 'inherit' }}>${Number(filteredMoneyOnTable || 0).toLocaleString()}</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: filteredMoneyOnTable > 0 ? 'var(--c-fg-b42318)' : 'inherit' }}>${Number(filteredMoneyOnTable || 0).toLocaleString()}</div>
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>{filteredStores.length} store{filteredStores.length !== 1 ? 's' : ''} · {filteredReps.length} rep{filteredReps.length !== 1 ? 's' : ''}</div>
         </div>
       </div>
@@ -277,7 +277,7 @@ export default function TeamSnapshot({ period, token, unitId, today }:
                 <td style={td}>{r.store}</td>
                 <td style={td}>{r.tier != null ? `${r.tier}×` : '—'}</td>
                 <td style={td}>{r.kpis_met}/{r.total_kpis}</td>
-                <td style={{ ...td, color: r.money_on_table > 0 ? '#b42318' : 'inherit' }}>${Number(r.money_on_table || 0).toLocaleString()}</td>
+                <td style={{ ...td, color: r.money_on_table > 0 ? 'var(--c-fg-b42318)' : 'inherit' }}>${Number(r.money_on_table || 0).toLocaleString()}</td>
                 <td style={td}><button className="btn btn-sm" onClick={() => openRep(r.rep)}>View ▾</button></td>
               </tr>
             ))}
@@ -308,7 +308,7 @@ export default function TeamSnapshot({ period, token, unitId, today }:
                   <td style={{ ...td, fontWeight: 600 }}>{cap(k)}</td>
                   <td style={td}>{fmt(t.achieved_mtd)}</td>
                   <td style={td}>{fmt(t.monthly)}</td>
-                  <td style={{ ...td, fontWeight: 600, color: t.pct >= 100 ? '#16794a' : t.pct >= 60 ? '#f5a623' : '#dc2626' }}>{t.pct}%</td>
+                  <td style={{ ...td, fontWeight: 600, color: t.pct >= 100 ? 'var(--c-fg-16794a)' : t.pct >= 60 ? 'var(--c-fg-f5a623)' : 'var(--c-fg-dc2626)' }}>{t.pct}%</td>
                   <td style={td}>{fmt(t.need)}</td>
                 </tr>
               )
@@ -334,7 +334,7 @@ export default function TeamSnapshot({ period, token, unitId, today }:
           </div>
           {drillBusy && <div style={{ color: 'var(--text3)' }}>Loading…</div>}
           {drill?._noEmp && <div style={{ color: 'var(--text3)', fontSize: 13 }}>No employee record matched “{drillRep}” — ask an admin to link this rep’s Employee ID.</div>}
-          {drill?._err && <div style={{ color: '#c0392b', fontSize: 13 }}>{drill._err}</div>}
+          {drill?._err && <div style={{ color: 'var(--c-fg-c0392b)', fontSize: 13 }}>{drill._err}</div>}
           {drill?.dash && <EmployeeWidgets data={drill.dash} coach={drill.coach} repTargets={drill.repTargets} />}
         </div>
       )}
@@ -371,7 +371,7 @@ function UnitNode({ node, perfByName, onEmp, depth }:
                 <span style={{ fontWeight: 500 }}>{e.name}</span>
                 {e.role && <span style={{ fontSize: 11, color: 'var(--text3)' }}>{e.role}</span>}
                 {e.home_store && <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {e.home_store}</span>}
-                {p && p.money_on_table > 0 && <span style={{ fontSize: 11, color: '#b42318' }}>${Number(p.money_on_table).toLocaleString()} on table</span>}
+                {p && p.money_on_table > 0 && <span style={{ fontSize: 11, color: 'var(--c-fg-b42318)' }}>${Number(p.money_on_table).toLocaleString()} on table</span>}
                 <span style={{ flex: 1 }} />
                 <button className="btn btn-sm" onClick={() => onEmp(e.employee_id, e.name)}>View ▾</button>
               </div>

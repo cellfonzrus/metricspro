@@ -500,11 +500,11 @@ export default function OnboardingIntakePage() {
           </div>
         ))}
         {state && !state.state_ready && (
-          <div style={{ ...note, fontSize: 11, marginTop: 10, color: '#b45309' }}>
+          <div style={{ ...note, fontSize: 11, marginTop: 10, color: 'var(--c-fg-b45309)' }}>
             <SetupNotice lead="Your place is not being saved. The flow still works." detail={state.migration} />
           </div>
         )}
-        {stateErr && <div style={{ ...note, fontSize: 11, marginTop: 10, color: '#ef4444' }}>{stateErr}</div>}
+        {stateErr && <div style={{ ...note, fontSize: 11, marginTop: 10, color: 'var(--c-fg-ef4444)' }}>{stateErr}</div>}
         {rail?.sign_off.signed && <div style={{ ...note, fontSize: 11, marginTop: 10 }}>Signed off by <b>{rail.sign_off.by}</b>{rail.sign_off.on_behalf ? ' (on behalf)' : ''}.</div>}
       </aside>
 
@@ -515,7 +515,7 @@ export default function OnboardingIntakePage() {
           Drop each report exactly as your system produces it. We read it, propose what each column is and show where every proposal came from;
           you confirm only what a file cannot say. Nothing is imported until a confirm step, and the confirm step reports what was actually saved.
         </p>
-        {msg && <div style={{ ...card, padding: '8px 12px', fontSize: 13, marginBottom: 14, borderColor: '#f59e0b' }}>{msg}</div>}
+        {msg && <div style={{ ...card, padding: '8px 12px', fontSize: 13, marginBottom: 14, borderColor: 'var(--c-bg-f59e0b)' }}>{msg}</div>}
 
         {/* ═══ STAGE 2 ═══ */}
         {stage === '2' && (
@@ -534,9 +534,9 @@ export default function OnboardingIntakePage() {
                 {rail.verify_table.map(r => (
                   <tr key={r.instance_key} onClick={() => r.red && openRow(r.instance_key, r.stage, r.fix_step)}
                     style={{ borderTop: '1px solid var(--border)', background: r.red ? 'rgba(239,68,68,.06)' : 'transparent', cursor: r.red ? 'pointer' : 'default' }}>
-                    <td style={{ padding: '6px 4px', fontWeight: 600 }}>{r.label}{r.red && <div style={{ ...note, fontSize: 11, color: '#ef4444' }}>{r.blocking_reason || r.status} → step {r.fix_step}</div>}{!r.red && r.basis && <div style={{ ...note, fontSize: 11 }}>{r.basis}</div>}
+                    <td style={{ padding: '6px 4px', fontWeight: 600 }}>{r.label}{r.red && <div style={{ ...note, fontSize: 11, color: 'var(--c-fg-ef4444)' }}>{r.blocking_reason || r.status} → step {r.fix_step}</div>}{!r.red && r.basis && <div style={{ ...note, fontSize: 11 }}>{r.basis}</div>}
                       {/* Stage C — the cross-check this commit ran (bill payments extracted / units activated but still on hand) */}
-                      {r.note && <div style={{ ...note, fontSize: 11, color: '#b45309', fontWeight: 600 }}>{r.note}</div>}
+                      {r.note && <div style={{ ...note, fontSize: 11, color: 'var(--c-fg-b45309)', fontWeight: 600 }}>{r.note}</div>}
                       {/* 2.5a — the activation split of a landed sales export (or "not yet checked — open step 2.5a") */}
                       {r.activation_note && <div style={{ ...note, fontSize: 11, color: r.activation_note.startsWith('activations:') ? 'var(--text2)' : '#b45309', fontWeight: 600, cursor: 'pointer' }} onClick={e => { e.stopPropagation(); openRow(r.instance_key, r.stage, '2.5a') }}>{r.activation_note}</div>}
                       {/* 2.5b — an invoice export's tender split beside the X-report per store-day, and Σ tax (owner 2026-09-21) */}
@@ -563,13 +563,13 @@ export default function OnboardingIntakePage() {
             <ReportLinksSection links={shownLinks} busy={linksBusy} pairKey={pairKey} setPairKey={setPairKey} loadLinks={loadLinks} />
             <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>4.2 — Sign-off</h2>
             {rail.sign_off.signed
-              ? <div style={note}>Signed off by <b>{rail.sign_off.by}</b>{rail.sign_off.on_behalf ? ' on behalf of the tenant' : ''} at {rail.sign_off.at?.slice(0, 16).replace('T', ' ')}.{!rail.sign_off.all_verified && <span style={{ color: '#ef4444' }}> A source was added or changed since — its row above is red until re-verified.</span>}</div>
+              ? <div style={note}>Signed off by <b>{rail.sign_off.by}</b>{rail.sign_off.on_behalf ? ' on behalf of the tenant' : ''} at {rail.sign_off.at?.slice(0, 16).replace('T', ' ')}.{!rail.sign_off.all_verified && <span style={{ color: 'var(--c-fg-ef4444)' }}> A source was added or changed since — its row above is red until re-verified.</span>}</div>
               : <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <input value={signName} onChange={e => setSignName(e.target.value)} placeholder={who || 'your name'} style={{ ...inp, width: 200 }} />
                   <input value={signRole} onChange={e => setSignRole(e.target.value)} placeholder="role (e.g. owner, implementer)" style={{ ...inp, width: 220 }} />
                   <label style={{ fontSize: 13 }}><input type="checkbox" checked={signBehalf} onChange={e => setSignBehalf(e.target.checked)} /> on behalf of the tenant</label>
                   <button style={primary} disabled={busy || !rail.sign_off.all_verified} title={rail.sign_off.all_verified ? '' : 'every row above must be green first'} onClick={signOff}>Sign off</button>
-                  {!rail.sign_off.all_verified && <span style={{ ...note, color: '#b45309' }}>every row above must be green first</span>}
+                  {!rail.sign_off.all_verified && <span style={{ ...note, color: 'var(--c-fg-b45309)' }}>every row above must be green first</span>}
                 </div>}
           </div>
         )}
@@ -581,7 +581,7 @@ export default function OnboardingIntakePage() {
             <p style={{ ...note, marginBottom: 12 }}>{rail.runbook.note}</p>
             <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
               {/* the links are screen keys → ScreenLink (the ONE screen → href map, RBAC-gated); never an href spelled here */}
-              {rail.runbook.links.map(l => l.screen in SCREENS ? <span key={l.screen} style={{ ...primary, display: 'inline-block' }}><ScreenLink to={l.screen as ScreenKey} style={{ color: '#fff', textDecoration: 'none' }}>{l.label}</ScreenLink></span> : <span key={l.screen}>{l.label}</span>)}
+              {rail.runbook.links.map(l => l.screen in SCREENS ? <span key={l.screen} style={{ ...primary, display: 'inline-block' }}><ScreenLink to={l.screen as ScreenKey} style={{ color: 'var(--c-fg-ffffff)', textDecoration: 'none' }}>{l.label}</ScreenLink></span> : <span key={l.screen}>{l.label}</span>)}
               {(rail.runbook.reports || []).map(l => l.screen in SCREENS ? <span key={l.screen} title={l.why} style={{ ...ghost, display: 'inline-block' }}><ScreenLink to={l.screen as ScreenKey} style={{ textDecoration: 'none' }}>{l.label}</ScreenLink></span> : <span key={l.screen}>{l.label}</span>)}
             </div>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
@@ -595,14 +595,14 @@ export default function OnboardingIntakePage() {
                   <td style={{ padding: '6px 4px' }}><Lamp status={m.status} />{(LAMP[m.status] || LAMP.not_started).label}</td>
                 </tr>))}</tbody>
             </table>
-            {!rail.sign_off.signed && <div style={{ ...note, marginTop: 10, color: '#b45309' }}>Not signed off yet — Stage 4.</div>}
+            {!rail.sign_off.signed && <div style={{ ...note, marginTop: 10, color: 'var(--c-fg-b45309)' }}>Not signed off yet — Stage 4.</div>}
           </div>
         )}
 
         {/* ═══ STAGE 3 ═══ */}
         {stage === '3' && a && step !== '3.1' && (
           <div style={{ ...note, marginBottom: 12 }}>
-            <b>{a.carrier.name}</b> · {a.statement_type} · {filename}{canUseKept ? <span style={{ color: '#15803d' }}> · file kept — no need to drop it again</span> : !file && <span style={{ color: '#b45309' }}> · file not attached (re-drop it in 3.1 to re-check or commit)</span>}
+            <b>{a.carrier.name}</b> · {a.statement_type} · {filename}{canUseKept ? <span style={{ color: 'var(--c-fg-15803d)' }}> · file kept — no need to drop it again</span> : !file && <span style={{ color: 'var(--c-fg-b45309)' }}> · file not attached (re-drop it in 3.1 to re-check or commit)</span>}
           </div>
         )}
 
@@ -699,7 +699,7 @@ export default function OnboardingIntakePage() {
                   {(a.sign[side] || []).map((r, i) => (
                     <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '4px 0', borderTop: i ? '1px solid var(--border)' : 'none' }}>
                       <span>{r.label}{r.sub_label ? ` › ${r.sub_label}` : ''}{r.store ? ` · ${r.store}` : ''}</span>
-                      <span style={{ ...mono, fontWeight: 600, color: r.amount < 0 ? '#ef4444' : 'inherit' }}>{money(r.amount)}</span>
+                      <span style={{ ...mono, fontWeight: 600, color: r.amount < 0 ? 'var(--c-fg-ef4444)' : 'inherit' }}>{money(r.amount)}</span>
                     </div>
                   ))}
                 </div>
@@ -723,12 +723,12 @@ export default function OnboardingIntakePage() {
                 : `Every label must be in one of your buckets — there is no "other". A reversal (chargeback / deactivation) can go into the bucket it reverses (it books negative there, so the bucket reads net) or into a deduction bucket of its own — your choice, nothing is decided for you. Deduction buckets book signed: money taken off the statement reads negative. Add, rename or reorder buckets on the Category → Bucket Map page.`}
             </p>
             {step === '3.6' && bucketMeta && bucketMeta.ready === false && (
-              <div style={{ ...card, padding: '8px 12px', fontSize: 13, marginBottom: 10, borderColor: '#f59e0b', background: 'rgba(245,158,11,.08)' }}>
+              <div style={{ ...card, padding: '8px 12px', fontSize: 13, marginBottom: 10, borderColor: 'var(--c-bg-f59e0b)', background: 'rgba(245,158,11,.08)' }}>
                 The buckets shown are the built-in defaults. A label can be placed in a deduction bucket here, but the confirm step will refuse until custom buckets are switched on. <SetupNotice detail={bucketMeta.migration} />
               </div>
             )}
             {step === '3.6' && a.blank_label && (
-              <div style={{ ...card, padding: '8px 12px', fontSize: 13, marginBottom: 10, borderColor: '#ef4444', background: 'rgba(239,68,68,.06)', color: '#b91c1c' }}>
+              <div style={{ ...card, padding: '8px 12px', fontSize: 13, marginBottom: 10, borderColor: 'var(--c-bg-ef4444)', background: 'rgba(239,68,68,.06)', color: 'var(--c-fg-b91c1c)' }}>
                 {a.blank_label.message} <button style={{ ...ghost, padding: '2px 8px', fontSize: 12 }} onClick={() => setStep('3.3')}>Fix the columns</button>
               </div>
             )}
@@ -752,8 +752,8 @@ export default function OnboardingIntakePage() {
                   const sum = cards.reduce((s, l) => s + (l.sum_canonical ?? l.sum_raw), 0)
                   const ded = b !== UNASSIGNED && bucketKind(b) === 'deduction'
                   return (
-                    <div key={b} style={{ ...card, padding: 10, borderColor: b === UNASSIGNED && cards.length ? '#ef4444' : ded ? 'rgba(239,68,68,.35)' : 'var(--border)', minHeight: 120 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 2 }}>{b === UNASSIGNED ? 'Unassigned' : bucketLabels[b] || b}{ded && <span style={{ ...note, fontSize: 10, marginLeft: 6, color: '#b91c1c' }}>deduction</span>}</div>
+                    <div key={b} style={{ ...card, padding: 10, borderColor: b === UNASSIGNED && cards.length ? 'var(--c-bg-ef4444)' : ded ? 'rgba(239,68,68,.35)' : 'var(--border)', minHeight: 120 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 2 }}>{b === UNASSIGNED ? 'Unassigned' : bucketLabels[b] || b}{ded && <span style={{ ...note, fontSize: 10, marginLeft: 6, color: 'var(--c-fg-b91c1c)' }}>deduction</span>}</div>
                       <div style={{ ...note, fontSize: 11, marginBottom: 8 }}>{cards.length} label(s) · {money(sum)}</div>
                       {cards.map(l => (
                         <div key={l.label} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 8, marginBottom: 6, background: 'var(--bg,transparent)' }}>
@@ -783,7 +783,7 @@ export default function OnboardingIntakePage() {
               {step === '3.6' && <>
                 <button style={primary} disabled={!!unassigned.length || busy} title={unassigned.length ? `${unassigned.length} label(s) still unassigned` : ''}
                   onClick={() => { persist('3.7', { assignments, reversal_flags: reversal }); analyze({ keepStep: true }).finally(() => setStep('3.7')) }}>Store / account attribution →</button>
-                {!!unassigned.length && <span style={{ ...note, color: '#ef4444' }}>{unassigned.length} label(s) unassigned: {unassigned.slice(0, 5).join(', ')}{unassigned.length > 5 ? ' …' : ''}</span>}
+                {!!unassigned.length && <span style={{ ...note, color: 'var(--c-fg-ef4444)' }}>{unassigned.length} label(s) unassigned: {unassigned.slice(0, 5).join(', ')}{unassigned.length > 5 ? ' …' : ''}</span>}
               </>}
               {saveUi}
             </div>
@@ -806,7 +806,7 @@ export default function OnboardingIntakePage() {
               <button style={ghost} onClick={() => setStep('3.6')}>← Back</button>
               <button style={btn} disabled={busy || (!file && !canUseKept)} onClick={() => analyze({ keepStep: true, dec: decisions })}>Re-check with these decisions</button>
               <button style={primary} disabled={unresolvedStores.length > 0} title={unresolvedStores.length ? `${unresolvedStores.length} store string(s) unresolved` : ''} onClick={() => { persist('3.8', { identity: decisions }); analyze({ keepStep: true, dec: decisions }).finally(() => setStep('3.8')) }}>Totals →</button>
-              {unresolvedStores.length > 0 && <span style={{ ...note, color: '#ef4444' }}>{unresolvedStores.length} unresolved: {unresolvedStores.slice(0, 4).join(', ')}{unresolvedStores.length > 4 ? ' …' : ''} — re-check after deciding</span>}
+              {unresolvedStores.length > 0 && <span style={{ ...note, color: 'var(--c-fg-ef4444)' }}>{unresolvedStores.length} unresolved: {unresolvedStores.slice(0, 4).join(', ')}{unresolvedStores.length > 4 ? ' …' : ''} — re-check after deciding</span>}
               {saveUi}
             </div>
           </div>
@@ -817,23 +817,23 @@ export default function OnboardingIntakePage() {
           <div style={card}>
             <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>3.8 — Our totals beside the file&apos;s</h2>
             <p style={{ ...note, marginBottom: 12 }}>{a.verify.basis}. Match means zero difference to the cent.</p>
-            {a.verify.banners.map((b, i) => <div key={i} style={{ ...card, padding: '8px 12px', fontSize: 13, marginBottom: 8, borderColor: '#f59e0b', background: 'rgba(245,158,11,.08)' }}>{b}</div>)}
-            {!a.verify.totals && <div style={{ ...note, marginBottom: 12, color: '#b45309' }}>Answer 3.4 (and re-attach the file) to compute the totals.</div>}
+            {a.verify.banners.map((b, i) => <div key={i} style={{ ...card, padding: '8px 12px', fontSize: 13, marginBottom: 8, borderColor: 'var(--c-bg-f59e0b)', background: 'rgba(245,158,11,.08)' }}>{b}</div>)}
+            {!a.verify.totals && <div style={{ ...note, marginBottom: 12, color: 'var(--c-fg-b45309)' }}>Answer 3.4 (and re-attach the file) to compute the totals.</div>}
             {a.verify.totals && tie && (
               <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse', marginBottom: 12 }}>
                 <thead><tr style={{ color: 'var(--text2)' }}><th align="left">Bucket</th><th align="right">Earned (+)</th><th align="right">Reversed (−)</th><th align="right">Net</th><th align="right">Rows</th></tr></thead>
                 <tbody>
                   {(a.verify.totals.bucket_order || buckets).filter(b => bucketKind(b) !== 'deduction').map(b => { const x = a.verify.totals!.buckets[b]; return (
-                    <tr key={b} style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>{x?.label || bucketLabels[b] || b}</td><td style={mono}>{money(x?.gross)}</td><td style={{ ...mono, color: (x?.chargebacks || 0) < 0 ? '#ef4444' : 'inherit' }}>{money(x?.chargebacks)}</td><td style={{ ...mono, fontWeight: 600 }}>{money(x?.net)}</td><td style={mono}>{num(x?.count)}</td></tr>) })}
+                    <tr key={b} style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>{x?.label || bucketLabels[b] || b}</td><td style={mono}>{money(x?.gross)}</td><td style={{ ...mono, color: (x?.chargebacks || 0) < 0 ? 'var(--c-fg-ef4444)' : 'inherit' }}>{money(x?.chargebacks)}</td><td style={{ ...mono, fontWeight: 600 }}>{money(x?.net)}</td><td style={mono}>{num(x?.count)}</td></tr>) })}
                   <tr style={{ borderTop: '1px solid var(--border)', fontWeight: 600, color: 'var(--text2)' }}><td style={{ padding: '5px 4px' }}>Earned buckets</td><td /><td /><td style={mono}>{money(a.verify.totals.earned_total ?? a.verify.totals.net_total)}</td><td /></tr>
                   {(a.verify.totals.bucket_order || buckets).filter(b => bucketKind(b) === 'deduction').map(b => { const x = a.verify.totals!.buckets[b]; return (
-                    <tr key={b} style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>{x?.label || bucketLabels[b] || b} <span style={{ ...note, fontSize: 10, color: '#b91c1c' }}>deduction</span></td><td style={mono}>{money(x?.gross)}</td><td style={{ ...mono, color: (x?.chargebacks || 0) < 0 ? '#ef4444' : 'inherit' }}>{money(x?.chargebacks)}</td><td style={{ ...mono, fontWeight: 600 }}>{money(x?.net)}</td><td style={mono}>{num(x?.count)}</td></tr>) })}
-                  {dedKeys.length > 0 && <tr style={{ borderTop: '1px solid var(--border)', fontWeight: 600, color: 'var(--text2)' }}><td style={{ padding: '5px 4px' }}>Deduction buckets</td><td /><td /><td style={{ ...mono, color: (a.verify.totals.deductions_total || 0) < 0 ? '#ef4444' : 'inherit' }}>{money(a.verify.totals.deductions_total ?? 0)}</td><td /></tr>}
-                  {a.verify.totals.other.count > 0 && <tr style={{ borderTop: '1px solid var(--border)', color: '#ef4444' }}><td style={{ padding: '5px 4px' }}>Unassigned (booked to no bucket)</td><td style={mono}>{money(a.verify.totals.other.gross)}</td><td style={mono}>{money(a.verify.totals.other.chargebacks)}</td><td style={mono}>{money(a.verify.totals.other.net)}</td><td style={mono}>{num(a.verify.totals.other.count)}</td></tr>}
-                  {!!a.verify.totals.unlisted?.count && <tr style={{ borderTop: '1px solid var(--border)', color: '#b45309' }}><td style={{ padding: '5px 4px' }}>Filed under a bucket no longer listed ({Object.keys(a.verify.totals.unlisted.keys || {}).join(', ')})</td><td style={mono}>{money(a.verify.totals.unlisted.gross)}</td><td style={mono}>{money(a.verify.totals.unlisted.chargebacks)}</td><td style={mono}>{money(a.verify.totals.unlisted.net)}</td><td style={mono}>{num(a.verify.totals.unlisted.count)}</td></tr>}
+                    <tr key={b} style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>{x?.label || bucketLabels[b] || b} <span style={{ ...note, fontSize: 10, color: 'var(--c-fg-b91c1c)' }}>deduction</span></td><td style={mono}>{money(x?.gross)}</td><td style={{ ...mono, color: (x?.chargebacks || 0) < 0 ? 'var(--c-fg-ef4444)' : 'inherit' }}>{money(x?.chargebacks)}</td><td style={{ ...mono, fontWeight: 600 }}>{money(x?.net)}</td><td style={mono}>{num(x?.count)}</td></tr>) })}
+                  {dedKeys.length > 0 && <tr style={{ borderTop: '1px solid var(--border)', fontWeight: 600, color: 'var(--text2)' }}><td style={{ padding: '5px 4px' }}>Deduction buckets</td><td /><td /><td style={{ ...mono, color: (a.verify.totals.deductions_total || 0) < 0 ? 'var(--c-fg-ef4444)' : 'inherit' }}>{money(a.verify.totals.deductions_total ?? 0)}</td><td /></tr>}
+                  {a.verify.totals.other.count > 0 && <tr style={{ borderTop: '1px solid var(--border)', color: 'var(--c-fg-ef4444)' }}><td style={{ padding: '5px 4px' }}>Unassigned (booked to no bucket)</td><td style={mono}>{money(a.verify.totals.other.gross)}</td><td style={mono}>{money(a.verify.totals.other.chargebacks)}</td><td style={mono}>{money(a.verify.totals.other.net)}</td><td style={mono}>{num(a.verify.totals.other.count)}</td></tr>}
+                  {!!a.verify.totals.unlisted?.count && <tr style={{ borderTop: '1px solid var(--border)', color: 'var(--c-fg-b45309)' }}><td style={{ padding: '5px 4px' }}>Filed under a bucket no longer listed ({Object.keys(a.verify.totals.unlisted.keys || {}).join(', ')})</td><td style={mono}>{money(a.verify.totals.unlisted.gross)}</td><td style={mono}>{money(a.verify.totals.unlisted.chargebacks)}</td><td style={mono}>{money(a.verify.totals.unlisted.net)}</td><td style={mono}>{num(a.verify.totals.unlisted.count)}</td></tr>}
                   <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}><td style={{ padding: '6px 4px' }}>Σ all buckets (net: earned + deductions)</td><td /><td /><td style={mono}>{money(tie.our_total)}</td><td /></tr>
                   <tr><td style={{ padding: '4px 4px' }}>File&apos;s own total ({tie.file_total_source === 'footer' ? `footer row${a.detect.footer.rows.length ? ` ${a.detect.footer.rows.map(r => r.row).join(', ')}` : ''}` : tie.file_total_source === 'typed' ? 'typed by you' : 'none'})</td><td /><td /><td style={mono}>{money(tie.file_total)}</td><td /></tr>
-                  <tr style={{ fontWeight: 700, color: tie.match ? '#16a34a' : '#ef4444' }}><td style={{ padding: '4px 4px' }}>Difference</td><td /><td /><td style={mono}>{tie.difference === null ? 'nothing to compare' : money(tie.difference)}</td><td /></tr>
+                  <tr style={{ fontWeight: 700, color: tie.match ? 'var(--c-fg-16a34a)' : 'var(--c-fg-ef4444)' }}><td style={{ padding: '4px 4px' }}>Difference</td><td /><td /><td style={mono}>{tie.difference === null ? 'nothing to compare' : money(tie.difference)}</td><td /></tr>
                 </tbody>
               </table>
             )}
@@ -872,21 +872,21 @@ export default function OnboardingIntakePage() {
               <p style={{ ...note, marginBottom: 12 }}>Confirming saves the column map (with your sign answer) for this carrier and statement type, saves the bucket rules and your store decisions, imports the rows, and then re-reads what landed. The numbers below come back from the table, not from this screen.</p>
               <label style={{ fontSize: 13, display: 'block', marginBottom: 12 }}>Period this statement is for
                 <input value={period} onChange={e => setPeriod(e.target.value)} placeholder="e.g. August 2026" style={{ ...inp, marginLeft: 8, width: 200 }} />
-                {a.period.spans_two_months && <span style={{ ...note, marginLeft: 8, color: '#b45309' }}>the dates span {a.period.months.map(m => `${m.period} (${m.rows})`).join(', ')} — pick the month this statement is for</span>}
+                {a.period.spans_two_months && <span style={{ ...note, marginLeft: 8, color: 'var(--c-fg-b45309)' }}>the dates span {a.period.months.map(m => `${m.period} (${m.rows})`).join(', ')} — pick the month this statement is for</span>}
                 {!a.period.spans_two_months && a.period.proposed && <span style={{ ...note, marginLeft: 8 }}>from the statement&apos;s own dates</span>}
               </label>
               <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Confirm {a.carrier.name} — {period || '(period)'} — net {money(tie?.our_total)}</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button style={ghost} onClick={() => setStep('3.8')}>← Back</button>
                 <button style={primary} disabled={busy || (!file && !canUseKept) || !period.trim()} onClick={commit}>{busy ? 'Saving…' : 'Confirm and import'}</button>
-                {!file && !canUseKept && <span style={{ ...note, color: '#b45309', alignSelf: 'center' }}>re-attach the file in 3.1 to commit</span>}
+                {!file && !canUseKept && <span style={{ ...note, color: 'var(--c-fg-b45309)', alignSelf: 'center' }}>re-attach the file in 3.1 to commit</span>}
               </div>
             </>}
             {commitRes && (
               <div>
-                <div style={{ ...card, borderColor: commitRes.ok ? '#16a34a' : '#ef4444', background: commitRes.ok ? 'rgba(22,163,74,.06)' : 'rgba(239,68,68,.06)', marginBottom: 12 }}>
+                <div style={{ ...card, borderColor: commitRes.ok ? 'var(--c-bg-16a34a)' : 'var(--c-bg-ef4444)', background: commitRes.ok ? 'rgba(22,163,74,.06)' : 'rgba(239,68,68,.06)', marginBottom: 12 }}>
                   <div style={{ fontWeight: 700, fontSize: 15 }}>{commitRes.ok ? 'Saved and verified' : 'Saved, but NOT verified'} — {commitRes.carrier.name} · {commitRes.period}</div>
-                  {!commitRes.ok && <ul style={{ margin: '6px 0 0 18px', color: '#ef4444', fontSize: 13 }}>{commitRes.problems.map((p, i) => <li key={i}>{p}</li>)}</ul>}
+                  {!commitRes.ok && <ul style={{ margin: '6px 0 0 18px', color: 'var(--c-fg-ef4444)', fontSize: 13 }}>{commitRes.problems.map((p, i) => <li key={i}>{p}</li>)}</ul>}
                   <div style={{ ...note, marginTop: 6 }}>
                     Column map saved for {commitRes.mapping_saved.length} fields (sign: {commitRes.sign_convention}) · {commitRes.rules_saved} bucket rules · store aliases {commitRes.identity_written?.aliases.length ?? 0} · rows inserted {num(commitRes.verified_numbers.rows_inserted)} · <b>rows re-read from the table: {num(commitRes.verified_numbers.rows_landed)}</b> of {num(commitRes.verified_numbers.rows_built)} built · footer rows dropped {commitRes.verified_numbers.footer_rows_dropped}
                     {!commitRes.state.saved && <> · your place was not saved ({commitRes.state.reason})</>}
@@ -895,15 +895,15 @@ export default function OnboardingIntakePage() {
                 <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse', marginBottom: 12 }}>
                   <thead><tr style={{ color: 'var(--text2)' }}><th align="left">Bucket (re-read)</th><th align="right">Earned (+)</th><th align="right">Reversed (−)</th><th align="right">Net</th></tr></thead>
                   <tbody>
-                    {(commitRes.verified_numbers.totals.bucket_order || buckets).map(b => { const x = commitRes.verified_numbers.totals.buckets[b]; return <tr key={b} style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>{x?.label || bucketLabels[b] || b}{x?.kind === 'deduction' && <span style={{ ...note, fontSize: 10, color: '#b91c1c' }}> deduction</span>}</td><td style={mono}>{money(x?.gross)}</td><td style={mono}>{money(x?.chargebacks)}</td><td style={{ ...mono, fontWeight: 600 }}>{money(x?.net)}</td></tr> })}
+                    {(commitRes.verified_numbers.totals.bucket_order || buckets).map(b => { const x = commitRes.verified_numbers.totals.buckets[b]; return <tr key={b} style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>{x?.label || bucketLabels[b] || b}{x?.kind === 'deduction' && <span style={{ ...note, fontSize: 10, color: 'var(--c-fg-b91c1c)' }}> deduction</span>}</td><td style={mono}>{money(x?.gross)}</td><td style={mono}>{money(x?.chargebacks)}</td><td style={{ ...mono, fontWeight: 600 }}>{money(x?.net)}</td></tr> })}
                     {commitRes.verified_numbers.totals.deductions_total !== undefined && <tr style={{ borderTop: '1px solid var(--border)', color: 'var(--text2)', fontWeight: 600 }}><td style={{ padding: '5px 4px' }}>Earned {money(commitRes.verified_numbers.totals.earned_total)} · deductions {money(commitRes.verified_numbers.totals.deductions_total)}</td><td /><td /><td /></tr>}
                     <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}><td style={{ padding: '5px 4px' }}>Σ all buckets (net)</td><td /><td /><td style={mono}>{money(commitRes.verified_numbers.tie.our_total)}</td></tr>
                     <tr><td style={{ padding: '5px 4px' }}>File&apos;s own total</td><td /><td /><td style={mono}>{money(commitRes.verified_numbers.tie.file_total)}</td></tr>
-                    <tr style={{ fontWeight: 700, color: commitRes.verified_numbers.tie.match ? '#16a34a' : '#ef4444' }}><td style={{ padding: '5px 4px' }}>Difference</td><td /><td /><td style={mono}>{money(commitRes.verified_numbers.tie.difference)}</td></tr>
+                    <tr style={{ fontWeight: 700, color: commitRes.verified_numbers.tie.match ? 'var(--c-fg-16a34a)' : 'var(--c-fg-ef4444)' }}><td style={{ padding: '5px 4px' }}>Difference</td><td /><td /><td style={mono}>{money(commitRes.verified_numbers.tie.difference)}</td></tr>
                   </tbody>
                 </table>
                 {commitRes.verified_numbers.attestation && <div style={{ ...note, marginBottom: 8 }}>Attested: &quot;{commitRes.verified_numbers.attestation.reason}&quot; — {commitRes.verified_numbers.confirmed_by}</div>}
-                {commitRes.verified_numbers.replaced_note && <div style={{ ...note, marginBottom: 8, color: '#b45309' }}>This landing {commitRes.verified_numbers.replaced_note}.</div>}
+                {commitRes.verified_numbers.replaced_note && <div style={{ ...note, marginBottom: 8, color: 'var(--c-fg-b45309)' }}>This landing {commitRes.verified_numbers.replaced_note}.</div>}
                 {/* WHERE THIS STATEMENT SHOWS UP (mig 1013): the ledger's consumers from the one map, the P&L
                     entry naming the lines its buckets book to; and the source switch, so the person who just
                     took the statement in can make it reach the P&L — suggested, confirmed here, never silent */}
@@ -912,7 +912,7 @@ export default function OnboardingIntakePage() {
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button style={primary} onClick={resetForAnother}>Another carrier?</button>
                   <a href="/commcalc/commission-ledger" style={{ ...ghost, textDecoration: 'none', display: 'inline-block' }}>Open the Commission Ledger</a>
-                  <button style={{ ...ghost, color: '#b91c1c' }} disabled={busy} onClick={retireStatement} title="Remove every row this statement landed for this period (its own slice: every copy under its key and its legacy key), counted first and confirmed — then the line is retired on the record">Retire this statement</button>
+                  <button style={{ ...ghost, color: 'var(--c-fg-b91c1c)' }} disabled={busy} onClick={retireStatement} title="Remove every row this statement landed for this period (its own slice: every copy under its key and its legacy key), counted first and confirmed — then the line is retired on the record">Retire this statement</button>
                   <button style={ghost} onClick={() => openStage('4')}>Verify everything →</button>
                   {!commitRes.ok && <button style={ghost} onClick={() => { setCommitRes(null); setStep('3.8') }}>Back to the totals</button>}
                 </div>
@@ -954,10 +954,10 @@ function DirectionDetail({ d, from, to, label }: { d: LinkDirection; from: strin
   return (
     <div style={{ marginBottom: 8 }}>
       <div style={{ fontSize: 13 }}><b>{num(d.matched)}</b> of {num(d.lines)} {from} lines match a {to} line by {label}
-        {d.unmatched > 0 && <span> · <span style={{ color: '#b45309' }}>{num(d.unmatched)} unmatched</span></span>}
+        {d.unmatched > 0 && <span> · <span style={{ color: 'var(--c-fg-b45309)' }}>{num(d.unmatched)} unmatched</span></span>}
         {d.no_key > 0 && <span> · {num(d.no_key)} carry no {label}</span>}
         {!!d.via_lines && <span> · {num(d.via_lines)} paired through {d.via_label}</span>}
-        {d.ambiguous > 0 && <span> · <span style={{ color: '#b45309' }}>{num(d.ambiguous)} match several {to} lines (ambiguous — listed, not resolved)</span></span>}
+        {d.ambiguous > 0 && <span> · <span style={{ color: 'var(--c-fg-b45309)' }}>{num(d.ambiguous)} match several {to} lines (ambiguous — listed, not resolved)</span></span>}
       </div>
       {!!d.via_reasons && Object.keys(d.via_reasons).length > 0 && (
         <div style={{ ...note, fontSize: 11 }}>could not be paired through the third report: {Object.entries(d.via_reasons).map(([k, v]) => `${num(v)} — ${k}`).join(' · ')}</div>
@@ -997,8 +997,8 @@ function ReportLinksSection({ links, busy, pairKey, setPairKey, loadLinks }: {
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
         <button style={ghost} disabled={busy} onClick={() => { setPairKey(null); loadLinks('all') }}>{busy ? 'Computing…' : links?.computed ? 'Recompute' : 'Compute the links'}</button>
         {links?.computed_at && <span style={{ ...note, fontSize: 11 }}>computed {links.computed_at.slice(0, 16).replace('T', ' ')}{links.cached ? ' (cached)' : ''}</span>}
-        {links?.stale && <span style={{ ...note, fontSize: 11, color: '#b45309' }}>a report was added or re-verified since — recompute</span>}
-        {links && !links.available && <span style={{ ...note, fontSize: 11, color: '#b45309' }}>{links.note}</span>}
+        {links?.stale && <span style={{ ...note, fontSize: 11, color: 'var(--c-fg-b45309)' }}>a report was added or re-verified since — recompute</span>}
+        {links && !links.available && <span style={{ ...note, fontSize: 11, color: 'var(--c-fg-b45309)' }}>{links.note}</span>}
       </div>
       {links?.available && links.computed && mx && (
         <>

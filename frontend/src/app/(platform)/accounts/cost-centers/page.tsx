@@ -53,8 +53,8 @@ export default function CostCentersPage() {
     <div style={{ padding: 16, maxWidth: 1200 }}>
       <h1 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 4px' }}>Cost Centers</h1>
       <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>Tag P&L lines (or one detail of a line) to a cost center; the view below regroups the P&L Statement by center and ties to it to the cent.</div>
-      {err && <div style={{ color: '#b91c1c', marginBottom: 8 }}>{err}</div>}
-      {(data?.problems?.cost?.length ?? 0) > 0 && data?.problems?.cost && <div style={{ color: '#b45309', marginBottom: 8 }}>{data.problems.cost.join(' · ')}</div>}
+      {err && <div style={{ color: 'var(--c-fg-b91c1c)', marginBottom: 8 }}>{err}</div>}
+      {(data?.problems?.cost?.length ?? 0) > 0 && data?.problems?.cost && <div style={{ color: 'var(--c-fg-b45309)', marginBottom: 8 }}>{data.problems.cost.join(' · ')}</div>}
 
       <div className="card" style={{ padding: 14, marginBottom: 14 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>Centers</div>
@@ -101,10 +101,10 @@ export default function CostCentersPage() {
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>P&L by cost center</div>
           <input type="month" value={period} onChange={e => setPeriod(e.target.value)} />
-          {view?.computed && <span style={{ fontSize: 12.5, color: view.tie ? '#15803d' : '#b91c1c' }}>{view.tie ? 'ties to the P&L Statement' : 'does NOT tie to the P&L Statement'}</span>}
+          {view?.computed && <span style={{ fontSize: 12.5, color: view.tie ? 'var(--c-fg-15803d)' : 'var(--c-fg-b91c1c)' }}>{view.tie ? 'ties to the P&L Statement' : 'does NOT tie to the P&L Statement'}</span>}
         </div>
-        {view && !view.computed && <div style={{ color: '#b45309' }}>{view.note}</div>}
-        {(view?.unknown_codes?.length ?? 0) > 0 && view?.unknown_codes && <div style={{ color: '#b45309', fontSize: 13 }}>Tags name centers that do not exist: {view.unknown_codes.join(', ')}</div>}
+        {view && !view.computed && <div style={{ color: 'var(--c-fg-b45309)' }}>{view.note}</div>}
+        {(view?.unknown_codes?.length ?? 0) > 0 && view?.unknown_codes && <div style={{ color: 'var(--c-fg-b45309)', fontSize: 13 }}>Tags name centers that do not exist: {view.unknown_codes.join(', ')}</div>}
         {view?.computed && (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr><th style={th}>Center</th><th style={thr}>Revenue</th><th style={thr}>COGS</th><th style={thr}>Expenses</th><th style={thr}>Other</th><th style={thr}>Net (incl. children)</th><th style={th}></th></tr></thead>

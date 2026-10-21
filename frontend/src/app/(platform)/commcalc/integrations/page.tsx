@@ -17,8 +17,8 @@ type Item = {
 type Cat = { category: string; blurb?: string; items: Item[] }
 
 const STATUS: Record<string, { label: string; bg: string; fg: string }> = {
-  connected:     { label: 'Connected',        bg: '#dcfce7', fg: '#166534' },
-  action_needed: { label: 'Set up · paused',  bg: '#fef9c3', fg: '#854d0e' },
+  connected:     { label: 'Connected',        bg: 'var(--c-bg-dcfce7)', fg: 'var(--c-fg-166534)' },
+  action_needed: { label: 'Set up · paused',  bg: 'var(--c-bg-fef9c3)', fg: 'var(--c-fg-854d0e)' },
   not_started:   { label: 'Not set up',       bg: 'var(--surface2)', fg: 'var(--text2)' },
   unknown:       { label: 'Status unknown',   bg: 'var(--surface2)', fg: 'var(--text3)' },
   info:          { label: 'Ready',            bg: 'var(--surface2)', fg: 'var(--text2)' },
@@ -100,8 +100,8 @@ export default function IntegrationsPage() {
           a feed still behind is alerted to admins. This panel shows the live status and a manual check button. */}
       {fresh?.feeds?.length > 0 && (
         <div className="card" style={{ padding: 14, marginBottom: 16,
-          border: fresh.any_stale ? '1px solid #fde68a' : '1px solid var(--border)',
-          background: fresh.any_stale ? '#fffbeb' : 'var(--surface)' }}>
+          border: fresh.any_stale ? '1px solid var(--c-bg-fde68a)' : '1px solid var(--border)',
+          background: fresh.any_stale ? 'var(--c-bg-fffbeb)' : 'var(--surface)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
             <div style={{ fontWeight: 700, fontSize: 13.5 }}>
               {fresh.any_stale ? '⚠️ Data health — a feed is behind' : '✅ Data health — all feeds current'}
@@ -132,7 +132,7 @@ export default function IntegrationsPage() {
         </div>
       )}
 
-      {err && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>❌ {err}</div>}
+      {err && <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>❌ {err}</div>}
       {loading && <div style={{ color: 'var(--text3)', fontSize: 13, padding: 20 }}>Loading…</div>}
 
       {(data?.categories || []).map(cat => {

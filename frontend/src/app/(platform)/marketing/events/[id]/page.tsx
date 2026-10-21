@@ -73,7 +73,7 @@ export default function EventWorkspace() {
     call(`/api/v1/marketing/events/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
 
   if (!w) {
-    return <div style={{ padding: 20 }}>{msg ? <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626' }}>{msg}</div> : 'Loading…'}</div>
+    return <div style={{ padding: 20 }}>{msg ? <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)' }}>{msg}</div> : 'Loading…'}</div>
   }
 
   const e = w.event
@@ -102,8 +102,8 @@ export default function EventWorkspace() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
         <Link href="/marketing" style={{ fontSize: 13, color: 'var(--text2)' }}>← Marketing</Link>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>{e.title}</h1>
-        <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20, color: '#fff',
-                       background: STATUS_COLOR[e.status] || '#6b7280', textTransform: 'capitalize' }}>{e.status}</span>
+        <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20, color: 'var(--c-fg-ffffff)',
+                       background: STATUS_COLOR[e.status] || 'var(--c-bg-6b7280)', textTransform: 'capitalize' }}>{e.status}</span>
         <div style={{ flex: 1 }} />
         {w.allowed_transitions.map(t => (
           <button key={t} style={t === 'cancelled' ? btnDanger : btn} disabled={busy}
@@ -120,8 +120,8 @@ export default function EventWorkspace() {
         {' · '}<strong>Staff by {fmtTime(e.staff_call_at)}</strong> ({relTime(e.staff_call_at)})
       </div>
 
-      {msg && <div style={{ ...panel, marginBottom: 12, borderColor: '#dc2626', color: '#dc2626' }}>{msg}</div>}
-      {note && <div style={{ ...panel, marginBottom: 12, borderColor: '#16a34a' }}>{note}</div>}
+      {msg && <div style={{ ...panel, marginBottom: 12, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)' }}>{msg}</div>}
+      {note && <div style={{ ...panel, marginBottom: 12, borderColor: 'var(--c-bg-16a34a)' }}>{note}</div>}
 
       {/* Approval only appears when it applies — an off-by-default workflow should be invisible. */}
       {e.approval_state !== 'not_required' && (
@@ -141,7 +141,7 @@ export default function EventWorkspace() {
       )}
 
       {!!w.readiness.issues.length && (
-        <div style={{ ...panel, marginBottom: 12, borderColor: '#f39c12' }}>
+        <div style={{ ...panel, marginBottom: 12, borderColor: 'var(--c-bg-f39c12)' }}>
           <strong>This event needs attention</strong>
           {w.readiness.issues.map((i, n) => (
             <div key={n} style={{ fontSize: 13, marginTop: 4, color: SEVERITY_COLOR[i.severity] }}>
@@ -244,7 +244,7 @@ function Overview({ w }: { w: EventWorkspace }) {
       <Section title="Readiness">
         <Row k="Staff planned" v={`${c.planned} (${c.confirmed} confirmed, ${c.unconfirmed} unconfirmed, ${c.declined} not coming)`} />
         <Row k="With a named backup" v={`${c.with_backup} of ${c.planned}`} />
-        <Row k="Slots with nobody" v={c.uncovered ? <span style={{ color: '#dc2626' }}>{c.uncovered}</span> : '0'} />
+        <Row k="Slots with nobody" v={c.uncovered ? <span style={{ color: 'var(--c-fg-dc2626)' }}>{c.uncovered}</span> : '0'} />
         <Row k="Arrived (checked in)" v={c.arrived} />
         <Row k="Checklist packed" v={r.total ? `${r.packed} of ${r.total} (${r.pct_packed}%)` : 'No checklist yet'} />
         <Row k="Outside parties" v={`${w.vendors.length} (${w.vendors.filter(v => v.confirm_state === 'confirmed').length} confirmed)`} />
@@ -274,7 +274,7 @@ function People({ w, editable, opts, busy, addChild, patchChild, delChild, staff
                   <td style={cell}>
                     <strong>{s.employee_name || s.employee_id || '—'}</strong>
                     {!s.is_covered && ['declined', 'no_show'].includes(s.confirm_state) &&
-                      <div style={{ fontSize: 11, color: '#dc2626' }}>Not coming and no backup</div>}
+                      <div style={{ fontSize: 11, color: 'var(--c-fg-dc2626)' }}>Not coming and no backup</div>}
                   </td>
                   <td style={cell}>{optionLabel(opts('event_role'), s.role_key)}</td>
                   <td style={cell}>
@@ -300,7 +300,7 @@ function People({ w, editable, opts, busy, addChild, patchChild, delChild, staff
                       ? <span style={{ color: CONFIRM_COLOR[s.backup.confirm_state] }}>
                           {s.backup.employee_name} ({s.backup.confirm_state})
                         </span>
-                      : <span style={{ color: '#f39c12' }}>none</span>}
+                      : <span style={{ color: 'var(--c-fg-f39c12)' }}>none</span>}
                   </td>
                   <td style={cell}>{s.arrived ? '✓' : '—'}</td>
                   <td style={cell}>
@@ -396,10 +396,10 @@ function Logistics({ w, editable, opts, busy, patchChild, staffById }: any) {
   return (
     <>
       {!!w.transport.problems.length && (
-        <div style={{ ...panel, marginBottom: 14, borderColor: '#f39c12' }}>
+        <div style={{ ...panel, marginBottom: 14, borderColor: 'var(--c-bg-f39c12)' }}>
           <strong>Rides that will not work</strong>
           {w.transport.problems.map((p: any, i: number) => (
-            <div key={i} style={{ fontSize: 13, marginTop: 4, color: '#f39c12' }}>▲ {p.detail}</div>
+            <div key={i} style={{ fontSize: 13, marginTop: 4, color: 'var(--c-fg-f39c12)' }}>▲ {p.detail}</div>
           ))}
         </div>
       )}
@@ -671,7 +671,7 @@ function Giveaways({ w, editable, busy, addChild, patchChild, delChild, opts }: 
                   <input style={{ ...input, width: 80 }} type="number" defaultValue={g.qty_returned ?? ''} disabled={busy}
                          onBlur={ev => patchChild('giveaways', g.id, { qty_returned: ev.target.value === '' ? null : Number(ev.target.value) })} />
                 </td>
-                <td style={{ ...cell, color: (g.unaccounted || 0) > 0 ? '#dc2626' : 'var(--text2)' }}>
+                <td style={{ ...cell, color: (g.unaccounted || 0) > 0 ? 'var(--c-fg-dc2626)' : 'var(--text2)' }}>
                   {g.counted ? g.unaccounted : 'not counted back'}
                 </td>
                 <td style={cell}>{editable && <button style={btnDanger} disabled={busy} onClick={() => delChild('giveaways', g.id)}>×</button>}</td>
@@ -727,7 +727,7 @@ function Results({ w, act, opts, busy, addChild, delChild }: any) {
       {/* THE attribution caption. Rendered as a visible block, never a tooltip: the whole point is
           that nobody reads these numbers as "sales the event caused". */}
       {act?.attribution && (
-        <div style={{ ...panel, marginBottom: 14, borderColor: '#f39c12', background: 'var(--surface)' }}>
+        <div style={{ ...panel, marginBottom: 14, borderColor: 'var(--c-bg-f39c12)', background: 'var(--surface)' }}>
           <strong style={{ fontSize: 13 }}>{act.attribution.headline}</strong>
           <p style={{ fontSize: 12, color: 'var(--text2)', margin: '6px 0 0', lineHeight: 1.5 }}>{act.attribution.detail}</p>
           <p style={{ fontSize: 12, color: 'var(--text2)', margin: '6px 0 0', lineHeight: 1.5 }}>{act.attribution.grain_note}</p>
@@ -736,12 +736,12 @@ function Results({ w, act, opts, busy, addChild, delChild }: any) {
             Stores: {act.attribution.stores.join(', ') || 'none attached'}
           </p>
           <p style={{ fontSize: 11, color: 'var(--text2)', margin: '4px 0 0' }}>Source: {act.attribution.source}</p>
-          {act.attribution.source_note && <p style={{ fontSize: 11, color: '#f39c12', margin: '4px 0 0' }}>{act.attribution.source_note}</p>}
+          {act.attribution.source_note && <p style={{ fontSize: 11, color: 'var(--c-fg-f39c12)', margin: '4px 0 0' }}>{act.attribution.source_note}</p>}
         </div>
       )}
 
       <Section title="Goal vs what the stores did">
-        {act && !act.available && <div style={{ fontSize: 13, color: '#f39c12', marginBottom: 10 }}>{act.reason}</div>}
+        {act && !act.available && <div style={{ fontSize: 13, color: 'var(--c-fg-f39c12)', marginBottom: 10 }}>{act.reason}</div>}
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead><tr>
             <th style={th}>Metric</th><th style={th}>Goal</th><th style={th}>Event window</th>
@@ -759,7 +759,7 @@ function Results({ w, act, opts, busy, addChild, delChild }: any) {
                     {g.derivable ? <strong>{fmtMetric(g.actual_value, g.unit)}</strong>
                       : <span style={{ color: 'var(--text2)', fontSize: 12 }}>no automatic actual</span>}
                   </td>
-                  <td style={{ ...cell, color: (g.variance ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>
+                  <td style={{ ...cell, color: (g.variance ?? 0) >= 0 ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)' }}>
                     {g.derivable && g.variance !== null ? `${g.variance >= 0 ? '+' : ''}${fmtMetric(g.variance, g.unit)}` : '—'}
                     {g.pct_of_goal !== null && g.pct_of_goal !== undefined && <div style={{ fontSize: 11 }}>{g.pct_of_goal}% of goal</div>}
                   </td>

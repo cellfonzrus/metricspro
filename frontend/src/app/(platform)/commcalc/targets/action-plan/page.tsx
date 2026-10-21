@@ -41,16 +41,16 @@ const mval = (unit: string, n: number) =>
   unit === 'dollars' ? '$' + Math.round(n || 0).toLocaleString() : String(Math.round((n || 0) * 10) / 10)
 
 const SEV = {
-  critical: { bg: '#fef2f2', border: '#fecaca', fg: '#b91c1c', icon: '🔴', label: 'Critical' },
-  warning: { bg: '#fffbeb', border: '#fde68a', fg: '#92400e', icon: '🟠', label: 'Warning' },
-  good: { bg: '#f0fdf4', border: '#bbf7d0', fg: '#15803d', icon: '🟢', label: 'On track' },
+  critical: { bg: 'var(--c-bg-fef2f2)', border: 'var(--c-bg-fecaca)', fg: 'var(--c-fg-b91c1c)', icon: '🔴', label: 'Critical' },
+  warning: { bg: 'var(--c-bg-fffbeb)', border: 'var(--c-bg-fde68a)', fg: 'var(--c-fg-92400e)', icon: '🟠', label: 'Warning' },
+  good: { bg: 'var(--c-bg-f0fdf4)', border: 'var(--c-bg-bbf7d0)', fg: 'var(--c-fg-15803d)', icon: '🟢', label: 'On track' },
 } as const
 
 function tabLink(active: boolean): React.CSSProperties {
   return {
     padding: '7px 16px', borderRadius: 9, fontSize: 13, fontWeight: 600, textDecoration: 'none',
     background: active ? 'var(--accent)' : 'var(--surface2)',
-    color: active ? '#fff' : 'var(--text2)', border: '1px solid var(--border)',
+    color: active ? 'var(--c-fg-ffffff)' : 'var(--text2)', border: '1px solid var(--border)',
   }
 }
 
@@ -186,8 +186,8 @@ export default function ActionPlanPage() {
             <div style={{ fontSize: 26, fontWeight: 800 }}>{data.summary.stores}</div>
             <div style={{ fontSize: 12, color: 'var(--text2)' }}>stores with targets</div>
           </div>
-          <div className="card" style={{ padding: '12px 18px', borderLeft: `4px solid ${data.summary.commission_at_risk > 0 ? '#b45309' : 'var(--green)'}` }}>
-            <div style={{ fontSize: 26, fontWeight: 800, color: data.summary.commission_at_risk > 0 ? '#b45309' : 'var(--green)' }}>${Math.round(data.summary.commission_at_risk || 0).toLocaleString()}</div>
+          <div className="card" style={{ padding: '12px 18px', borderLeft: `4px solid ${data.summary.commission_at_risk > 0 ? 'var(--c-bg-b45309)' : 'var(--green)'}` }}>
+            <div style={{ fontSize: 26, fontWeight: 800, color: data.summary.commission_at_risk > 0 ? 'var(--c-fg-b45309)' : 'var(--green)' }}>${Math.round(data.summary.commission_at_risk || 0).toLocaleString()}</div>
             <div style={{ fontSize: 12, color: 'var(--text2)' }}>commission at risk</div>
           </div>
         </div>
@@ -198,8 +198,8 @@ export default function ActionPlanPage() {
           a lagging store has no target so carries no item here, or a column the comparison could not
           answer. Each is stated; none is rendered as a number. */}
       {data?.peer && (data.peer.error || data.peer.note || (data.peer.caveats?.length ?? 0) > 0) && (
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 18, borderLeft: '4px solid #92400e' }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 18, borderLeft: '4px solid var(--c-bg-92400e)' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-fg-92400e)', marginBottom: 6 }}>
             About the peer comparison
           </div>
           {data.peer.error && (
@@ -311,8 +311,8 @@ export default function ActionPlanPage() {
                           <span key={k.kpi} title={`${k.label}: ${k.actual}% vs ${k.target}% target`}
                             style={{
                               fontSize: 10, padding: '2px 7px', borderRadius: 12, fontWeight: 600,
-                              background: k.met ? '#f0fdf4' : '#fef2f2', color: k.met ? '#15803d' : '#b91c1c',
-                              border: `1px solid ${k.met ? '#bbf7d0' : '#fecaca'}`,
+                              background: k.met ? 'var(--c-bg-f0fdf4)' : 'var(--c-bg-fef2f2)', color: k.met ? 'var(--c-fg-15803d)' : 'var(--c-fg-b91c1c)',
+                              border: `1px solid ${k.met ? 'var(--c-bg-bbf7d0)' : 'var(--c-bg-fecaca)'}`,
                             }}>
                             {k.met ? '✓' : '✗'} {k.label} {k.actual}%
                           </span>

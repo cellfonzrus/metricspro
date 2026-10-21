@@ -61,7 +61,7 @@ export default function MaManualUpload() {
           <button key={s} onClick={() => setStep(i)} className="card" style={{
             padding: '6px 10px', fontSize: 12, cursor: 'pointer', border: '1px solid var(--border)',
             fontWeight: i === step ? 700 : 400, background: i === step ? 'var(--surface2)' : 'var(--surface)',
-            color: i < step ? '#16794a' : 'inherit' }}>
+            color: i < step ? 'var(--c-fg-16794a)' : 'inherit' }}>
             {i < step ? '✓ ' : `${i + 1}. `}{s}
           </button>
         ))}
@@ -95,7 +95,7 @@ export default function MaManualUpload() {
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <b style={{ fontSize: 14 }}>{r.display_name}</b>
                     <MapBadge r={r} />
-                    {r.calibration && <span style={{ fontSize: 11, color: '#b45309' }}>· calibration</span>}
+                    {r.calibration && <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>· calibration</span>}
                     <div style={{ flex: 1 }} />
                     <span style={{ fontSize: 11, color: 'var(--text3)' }}>→ {sourceLabel(r.target_table)}</span>
                   </div>
@@ -137,9 +137,9 @@ export default function MaManualUpload() {
 }
 
 function MapBadge({ r }: { r: ReportInfo }) {
-  if (r.source === 'saved') return <span style={{ fontSize: 11, color: '#16794a' }}>✓ mapped ({r.columns} cols · saved {r.saved_at ? new Date(r.saved_at).toLocaleDateString() : ''}{r.saved_by ? ` by ${r.saved_by}` : ''})</span>
-  if (r.source === 'default') return <span style={{ fontSize: 11, color: '#0369a1' }}>✓ mapped ({r.columns} cols · default)</span>
-  return <span style={{ fontSize: 11, color: '#b91c1c' }}>needs mapping</span>
+  if (r.source === 'saved') return <span style={{ fontSize: 11, color: 'var(--c-fg-16794a)' }}>✓ mapped ({r.columns} cols · saved {r.saved_at ? new Date(r.saved_at).toLocaleDateString() : ''}{r.saved_by ? ` by ${r.saved_by}` : ''})</span>
+  if (r.source === 'default') return <span style={{ fontSize: 11, color: 'var(--c-fg-0369a1)' }}>✓ mapped ({r.columns} cols · default)</span>
+  return <span style={{ fontSize: 11, color: 'var(--c-fg-b91c1c)' }}>needs mapping</span>
 }
 
 // ── Step 3: sample → detect → map columns → save (per org,carrier,report_key) ────────────────────
@@ -302,7 +302,7 @@ function UploadStep({ carrierId, report, setMsg, onRemap }: { carrierId: string;
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) ingest(f); e.target.value = '' }} />
-        <button className="btn" style={{ fontSize: 13, background: '#16a34a', color: '#fff' }} disabled={busy} onClick={() => fileRef.current?.click()}>{busy ? '⏳ Uploading…' : '⬆️ Choose file & upload'}</button>
+        <button className="btn" style={{ fontSize: 13, background: 'var(--c-bg-16a34a)', color: 'var(--c-fg-ffffff)' }} disabled={busy} onClick={() => fileRef.current?.click()}>{busy ? '⏳ Uploading…' : '⬆️ Choose file & upload'}</button>
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={onRemap}>Re-map columns</button>
         <Link href="/commcalc/upload#trace" style={{ fontSize: 12 }}>🩺 Ingest health →</Link>
       </div>

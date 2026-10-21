@@ -153,7 +153,7 @@ export default function CashReconManagementPage() {
       </div>
 
       {denied ? (
-        <div className="card" style={{ padding: 30, textAlign: 'center', borderLeft: '3px solid #dc2626' }}>
+        <div className="card" style={{ padding: 30, textAlign: 'center', borderLeft: '3px solid var(--c-bg-dc2626)' }}>
           <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>🔒 Restricted</div>
           <div style={{ fontSize: 13, color: 'var(--text2)', maxWidth: 560, margin: '0 auto' }}>
             This screen is restricted to market managers and above (owner directive 2026-09-02). Employees and

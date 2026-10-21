@@ -133,7 +133,7 @@ export default function AccessoryTargetsPage() {
           because the selling store isn't in the roster / has no store mapping. Previously this simply
           vanished from this page, which is one of the ways the two surfaces showed different totals. */}
       {Number(trendMeta.unmapped_acc_plus_setup || 0) > 0 && (
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, borderLeft: '3px solid #d97706', fontSize: 12.5, color: 'var(--text2)' }}>
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, borderLeft: '3px solid var(--c-bg-d97706)', fontSize: 12.5, color: 'var(--text2)' }}>
           ⚠️ <b>{fmt(Number(trendMeta.unmapped_acc_plus_setup || 0))}</b> of accessory + set‑up‑fee $ is on{' '}
           <a href="/commcalc/exec/mtd">Executive MTD</a> but cannot appear here — the selling store isn&apos;t
           mapped to a store code, so there is no target row to attach it to
@@ -155,9 +155,9 @@ export default function AccessoryTargetsPage() {
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 14, marginBottom: 16 }}>
             <Stat label="Accessory target (all stores)" value={fmt(tot.monthly)} />
-            <Stat label="Achieved MTD" value={fmt(tot.achieved)} color="#16a34a" sub={tot.monthly ? `${Math.round(100 * tot.achieved / tot.monthly)}% to goal` : undefined} />
+            <Stat label="Achieved MTD" value={fmt(tot.achieved)} color="var(--c-fg-16a34a)" sub={tot.monthly ? `${Math.round(100 * tot.achieved / tot.monthly)}% to goal` : undefined} />
             <Stat label="Trending (proj. month-end)" value={fmt(tot.trend)} color="var(--accent)" sub={tot.monthly ? `${Math.round(100 * tot.trend / tot.monthly)}% of goal` : undefined} />
-            <Stat label="Still needed" value={fmt(tot.need)} color="#d97706" />
+            <Stat label="Still needed" value={fmt(tot.need)} color="var(--c-fg-d97706)" />
             <Stat label="Needed today" value={fmt(tot.today)} color="var(--accent)" />
           </div>
 
@@ -177,13 +177,13 @@ export default function AccessoryTargetsPage() {
                         style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: ok ? undefined : '#fffaf5' }}>
                         <td style={{ padding: '9px 12px', fontSize: 13, fontWeight: 600 }}>{(s.reps?.length) ? (open[s.store_code] ? '▾ ' : '▸ ') : ''}{s.address || s.store_code}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(a.monthly)}</td>
-                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: '#16a34a' }}>{fmt(a.achieved_mtd)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--c-fg-16a34a)' }}>{fmt(a.achieved_mtd)}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--text3)' }} title="Device set-up fee counted toward the accessory target (reported separately)">{fmt(setupFee(s))}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--accent)', fontWeight: 600 }}
                           title={`Projected month-end on the Achieved basis (accessory $ + set-up fee). Executive MTD's accessory-only projection for this store is ${fmt(trendPure(s))}.`}>{fmt(trend(s))}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 12 }}>
                           <div style={{ display: 'inline-block', width: 70, height: 7, background: 'var(--surface2)', borderRadius: 4, overflow: 'hidden', verticalAlign: 'middle', marginRight: 6 }}>
-                            <div style={{ width: `${p}%`, height: '100%', background: ok ? '#16a34a' : '#d97706' }} />
+                            <div style={{ width: `${p}%`, height: '100%', background: ok ? 'var(--c-bg-16a34a)' : 'var(--c-bg-d97706)' }} />
                           </div>{p}%
                         </td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, fontWeight: 600 }}>{fmt(Math.max(0, a.need))}</td>
@@ -193,14 +193,14 @@ export default function AccessoryTargetsPage() {
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 12 }}>
                           {noTarget
                             ? <span style={{ background: 'var(--surface2)', color: 'var(--text2)', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>No target</span>
-                            : <span style={{ background: ok ? '#dcfce7' : '#ffedd5', color: ok ? '#065f46' : '#9a3412', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>{ok ? 'On track' : 'Behind'}</span>}
+                            : <span style={{ background: ok ? 'var(--c-bg-dcfce7)' : 'var(--c-bg-ffedd5)', color: ok ? 'var(--c-fg-065f46)' : 'var(--c-fg-9a3412)', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>{ok ? 'On track' : 'Behind'}</span>}
                         </td>
                       </tr>
                       {open[s.store_code] && (s.reps || []).map((rp: any, i: number) => (
                         <tr key={s.store_code + '_' + i} style={{ background: 'var(--surface2)', fontSize: 12 }}>
                           <td style={{ padding: '5px 12px 5px 30px', color: 'var(--text2)' }}>{rp.rep || '(unnamed)'}</td>
                           <td colSpan={1} />
-                          <td style={{ padding: '5px 12px', textAlign: 'right', color: '#16a34a' }}>{fmt(rp.accessories || 0)}</td>
+                          <td style={{ padding: '5px 12px', textAlign: 'right', color: 'var(--c-fg-16a34a)' }}>{fmt(rp.accessories || 0)}</td>
                           <td style={{ padding: '5px 12px', textAlign: 'right', color: 'var(--text3)' }}>{fmt(rp.accessory_setup_fee || 0)}</td>
                           <td colSpan={7} style={{ padding: '5px 12px', color: 'var(--text3)' }}>accessory $ contributed (set-up fee shown separately)</td>
                         </tr>

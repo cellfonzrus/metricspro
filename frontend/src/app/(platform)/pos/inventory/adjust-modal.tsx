@@ -87,7 +87,7 @@ export default function AdjustModal({ unit, flagId, onClose, onDone }: {
               ))}
             </div>
           )}
-          {err && <div style={{ color: '#dc2626', fontSize: 12 }}>{err}</div>}
+          {err && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 12 }}>{err}</div>}
         </div>
         <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button className="btn btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>

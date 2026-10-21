@@ -97,8 +97,8 @@ export default function InventorySoldReconPage() {
       {loading && <div style={{ fontSize: 13, color: 'var(--text3)' }}>Loading…</div>}
 
       {!!err && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 10,
-          padding: 14, fontSize: 13, color: '#991b1b' }}>
+        <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', borderRadius: 10,
+          padding: 14, fontSize: 13, color: 'var(--c-fg-991b1b)' }}>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>❌ {err}</div>
           <div style={{ marginBottom: 10 }}>
             This is the page failing to reach the server — it does <b>not</b> mean your inventory is clean.
@@ -119,13 +119,13 @@ export default function InventorySoldReconPage() {
         {/* THE BASIS, PER SOURCE — what each side is and what it can pair on. A report that does not say
             what it read is a number acted on without its basis. */}
         {basis?.sources && (
-          <div style={{ background: 'var(--card,#fff)', border: '1px solid var(--border)', borderRadius: 10, padding: 12, fontSize: 12.5, marginBottom: 16, lineHeight: 1.6 }}>
+          <div style={{ background: 'var(--card,var(--c-bg-ffffff))', border: '1px solid var(--border)', borderRadius: 10, padding: 12, fontSize: 12.5, marginBottom: 16, lineHeight: 1.6 }}>
             {(['sales', 'inventory', 'activations'] as const).map(k => {
               const sb = basis.sources?.[k]
               if (!sb) return null
               return (
                 <div key={k}>
-                  <b style={{ textTransform: 'capitalize' }}>{k}:</b> <b>{sourceLabel(sb.table)}</b> — {sb.read_ok ? `${sb.rows.toLocaleString()} rows read${sb.truncated ? ' (capped — a floor)' : ''}` : <span style={{ color: '#991b1b' }}>read did not complete{k === 'activations' ? ' — no activation report is loaded; checked against sales only' : ''}</span>}{sb.period ? ` · ${sb.period}` : ''}
+                  <b style={{ textTransform: 'capitalize' }}>{k}:</b> <b>{sourceLabel(sb.table)}</b> — {sb.read_ok ? `${sb.rows.toLocaleString()} rows read${sb.truncated ? ' (capped — a floor)' : ''}` : <span style={{ color: 'var(--c-fg-991b1b)' }}>read did not complete{k === 'activations' ? ' — no activation report is loaded; checked against sales only' : ''}</span>}{sb.period ? ` · ${sb.period}` : ''}
                   {k === 'activations' && sb.read_ok && <> · carries a device key: <b>{sb.carries_device_key ? 'yes' : 'no'}</b> · carries a mobile number: <b>{sb.carries_mobile ? 'yes' : 'no'}</b></>}
                   <div style={{ color: 'var(--text3)' }}>pairs on: {sb.pairs_on}</div>
                 </div>
@@ -137,8 +137,8 @@ export default function InventorySoldReconPage() {
         {/* WHAT THIS ANSWER IS BASED ON. A capped or failed read makes every number above a FLOOR,
             and a report that does not say so is a number somebody acts on without knowing its basis. */}
         {basis && !basis.complete && (
-          <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10,
-            padding: 12, fontSize: 12.5, color: '#92400e', marginBottom: 16 }}>
+          <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 10,
+            padding: 12, fontSize: 12.5, color: 'var(--c-fg-92400e)', marginBottom: 16 }}>
             <b>These are minimums, not totals.</b>{' '}
             {!basis.sales_read_ok && 'The sales read did not complete. '}
             {!basis.inventory_read_ok && 'The inventory read did not complete. '}
@@ -162,7 +162,7 @@ export default function InventorySoldReconPage() {
           empty={acts?.present ? 'No on-hand unit appears in the activation report without a sale. ' : 'No activation report is loaded, so this check could not run. '}
           rows={activatedRows} showDetails showPairing />
         {acts && acts.unpairable.length > 0 && (
-          <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: 12, fontSize: 12.5, color: '#92400e', marginBottom: 24 }}>
+          <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 10, padding: 12, fontSize: 12.5, color: 'var(--c-fg-92400e)', marginBottom: 24 }}>
             <b>{acts.unpairable.length} activation line{acts.unpairable.length === 1 ? '' : 's'} could not be paired to a unit</b> — listed, never guessed
             {' '}({totals.activations_paired_by_key ?? 0} paired by IMEI/serial, {totals.activations_paired_by_mobile ?? 0} by mobile number through a sale line):
             <ul style={{ margin: '6px 0 0 18px' }}>
@@ -193,9 +193,9 @@ export default function InventorySoldReconPage() {
 }
 
 function Tile({ label, value, tone }: { label: string; value: string; tone: 'ok' | 'warn' | 'info' }) {
-  const c = tone === 'warn' ? { bg: '#fffbeb', bd: '#fde68a', fg: '#92400e' }
-          : tone === 'info' ? { bg: '#eff6ff', bd: '#bfdbfe', fg: '#1e40af' }
-          : { bg: 'var(--card, #fff)', bd: 'var(--border)', fg: 'var(--text2)' }
+  const c = tone === 'warn' ? { bg: 'var(--c-bg-fffbeb)', bd: 'var(--c-bg-fde68a)', fg: 'var(--c-fg-92400e)' }
+          : tone === 'info' ? { bg: 'var(--c-bg-eff6ff)', bd: 'var(--c-bg-bfdbfe)', fg: 'var(--c-fg-1e40af)' }
+          : { bg: 'var(--card, var(--c-bg-ffffff))', bd: 'var(--border)', fg: 'var(--text2)' }
   return (
     <div style={{ background: c.bg, border: `1px solid ${c.bd}`, borderRadius: 10, padding: '12px 14px' }}>
       <div style={{ fontSize: 11.5, color: c.fg, opacity: 0.85 }}>{label}</div>

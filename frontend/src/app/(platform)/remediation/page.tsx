@@ -87,9 +87,9 @@ export default function RemediationConsole() {
           <button className="btn btn-primary" disabled={busy || !issue.trim()} onClick={propose}>
             {busy ? 'Diagnosing…' : 'Propose a fix'}</button>
         </div>
-        {err && <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>{err}</div>}
+        {err && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 13, marginTop: 10 }}>{err}</div>}
         {result && (
-          <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: 'var(--surface2, #f6f7f9)' }}>
+          <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: 'var(--surface2, var(--c-bg-f6f7f9))' }}>
             {result.escalated ? (
               <div><b>Escalated.</b> {result.message}</div>
             ) : (
@@ -98,10 +98,10 @@ export default function RemediationConsole() {
                 <div style={{ fontSize: 13, marginTop: 4 }}><b>Preview:</b> {result.preview?.summary}</div>
                 <div style={{ fontSize: 13, marginTop: 6 }}>
                   Sent to: {result.notified?.length ? result.notified.join(', ') : 'no channel (use the link)'} ·{' '}
-                  <a href={safeHref(result.approval_url)} style={{ color: '#2563eb' }}>Open approval</a>
+                  <a href={safeHref(result.approval_url)} style={{ color: 'var(--c-fg-2563eb)' }}>Open approval</a>
                 </div>
                 {result.delivery && (
-                  <div style={{ fontSize: 12, marginTop: 6, color: 'var(--text3, #888)' }}>
+                  <div style={{ fontSize: 12, marginTop: 6, color: 'var(--text3, var(--c-fg-888888))' }}>
                     <div>WhatsApp: {result.delivery.whatsapp || '—'}</div>
                     <div>Email: {result.delivery.email || '—'}</div>
                   </div>

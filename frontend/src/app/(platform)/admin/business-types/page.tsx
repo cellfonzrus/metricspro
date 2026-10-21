@@ -134,8 +134,8 @@ export default function BusinessTypesPage() {
         inputs its reps are asked for. A company picks its type in the Setup Wizard; one company&rsquo;s exceptions are set on
         its own Display Labels page.
       </p>
-      {err && <div style={{ ...card, borderColor: '#fecaca', color: '#991b1b' }}>{err}</div>}
-      {msg && <div style={{ ...card, borderColor: '#bbf7d0', color: '#166534' }}>{msg}</div>}
+      {err && <div style={{ ...card, borderColor: 'var(--c-bg-fecaca)', color: 'var(--c-fg-991b1b)' }}>{err}</div>}
+      {msg && <div style={{ ...card, borderColor: 'var(--c-bg-bbf7d0)', color: 'var(--c-fg-166534)' }}>{msg}</div>}
       {data && !data.registry_ready && (
         <div style={card}>Business types are not set up on this database yet (migration 1020). Showing the built-in defaults; saving is disabled.</div>
       )}

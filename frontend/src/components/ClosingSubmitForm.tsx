@@ -613,9 +613,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   return (
     <>
       {coach?.needs_walkthrough && (
-        <div className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid var(--amber)', background: '#fffbeb', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid var(--amber)', background: 'var(--c-bg-fffbeb)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 20 }}>🎓</span>
-          <div style={{ flex: 1, minWidth: 220, fontSize: 13, color: '#92400e' }}>
+          <div style={{ flex: 1, minWidth: 220, fontSize: 13, color: 'var(--c-fg-92400e)' }}>
             {coach.message || 'Your recent closing entries needed correction — take the quick walkthrough so tonight’s entry goes in right.'}
           </div>
           <button className="btn btn-primary" style={{ fontSize: 13 }}
@@ -623,9 +623,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         </div>
       )}
       {!resumeDraft && serverResume && (
-        <div className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid var(--amber)', background: '#fffbeb', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid var(--amber)', background: 'var(--c-bg-fffbeb)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 20 }}>✎</span>
-          <div style={{ flex: 1, minWidth: 200, fontSize: 13, color: '#92400e' }}>
+          <div style={{ flex: 1, minWidth: 200, fontSize: 13, color: 'var(--c-fg-92400e)' }}>
             <b>This closing was sent back to be corrected.</b> Nothing is recorded for the day yet.
             What you entered {serverResume.tries === 1 ? 'last time' : `on your last of ${serverResume.tries} tries`} is still saved — bring it back, change what needs changing, and submit again.
           </div>
@@ -634,9 +634,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         </div>
       )}
       {resumeDraft && (
-        <div className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid var(--amber)', background: '#fffbeb', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid var(--amber)', background: 'var(--c-bg-fffbeb)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 20 }}>💾</span>
-          <div style={{ flex: 1, minWidth: 200, fontSize: 13, color: '#92400e' }}>
+          <div style={{ flex: 1, minWidth: 200, fontSize: 13, color: 'var(--c-fg-92400e)' }}>
             <b>You have an unfinished closing from a few minutes ago.</b> The app may have restarted while opening the camera. Resume where you left off, or start fresh.
           </div>
           <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={applyResume}>Resume it</button>
@@ -658,7 +658,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
                 onChange={v => { setNameTouched(true); set({ employee_name: v || '' }) }} placeholder="Your name" width="100%" />
             ) : (
               <>
-                <input style={{ ...inp, background: 'var(--bg2, #f5f5f5)' }} value={lockedName} readOnly
+                <input style={{ ...inp, background: 'var(--bg2, var(--c-bg-f5f5f5))' }} value={lockedName} readOnly
                   placeholder="Your name" title="Closings are submitted under your own name" />
                 <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 4 }}>
                   {lockedName ? 'Submitted under your name. A district manager or above can submit for someone else.'
@@ -667,7 +667,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
               </>
             )}
             {pickAny && empsLoaded && !empOptions.length && (
-              <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>
+              <div style={{ fontSize: 12, color: 'var(--c-fg-b91c1c)', marginTop: 4 }}>
                 No employees available to pick. Ask an admin to check your store assignment
                 (Admin → Roles) — the close cannot be submitted without a name.
               </div>
@@ -886,27 +886,27 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={envPreview} alt="envelope" style={{
                     height: 70, borderRadius: 8,
-                    border: photoError ? '2px solid #b42318' : '1px solid var(--border)',
+                    border: photoError ? '2px solid var(--c-bg-b42318)' : '1px solid var(--border)',
                     opacity: photoUploading ? 0.5 : 1,
                   }} />
                   {photoUploading && <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>📤</span>}
-                  {!photoUploading && photoError && <span title="Not uploaded — tap the photo button to retry" style={{ position: 'absolute', top: -6, right: -6, fontSize: 14, background: '#fff', borderRadius: '50%' }}>⚠️</span>}
+                  {!photoUploading && photoError && <span title="Not uploaded — tap the photo button to retry" style={{ position: 'absolute', top: -6, right: -6, fontSize: 14, background: 'var(--c-bg-ffffff)', borderRadius: '50%' }}>⚠️</span>}
                 </div>
               )}
               {photoUploading && <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600 }}>📤 Uploading photo…</span>}
               {ocrBusy && <span style={{ fontSize: 13, color: 'var(--text3)' }}>🔍 Reading envelope…</span>}
             </div>
             {photoError && (
-              <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: '#fdeaea', border: '1px solid #f3b4b4', fontSize: 13, color: '#b42318', fontWeight: 600 }}>
+              <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: 'var(--c-bg-fdeaea)', border: '1px solid var(--c-bg-f3b4b4)', fontSize: 13, color: 'var(--c-fg-b42318)', fontWeight: 600 }}>
                 {photoError}
               </div>
             )}
             {(ocrCash !== '' || ocrAmounts.length > 0) && (
-              <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: ocrMismatch ? '#fdeaea' : '#e7f6ec', fontSize: 13 }}>
+              <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: ocrMismatch ? 'var(--c-bg-fdeaea)' : 'var(--c-bg-e7f6ec)', fontSize: 13 }}>
                 <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                   <span>📸 OCR cash read: <b>$</b><input style={{ ...inp, width: 110, display: 'inline-block', padding: '4px 8px' }} inputMode="decimal" value={ocrCash} onChange={e => setOcrCash(e.target.value)} /></span>
                   <span>vs cash entered <b>${enteredCash.toFixed(2)}</b></span>
-                  {ocrMismatch ? <span style={{ color: '#b42318', fontWeight: 600 }}>⚠️ mismatch — off by ${Math.abs(ocrNum - enteredCash).toFixed(2)}</span> : <span style={{ color: '#16794a' }}>✓ matches</span>}
+                  {ocrMismatch ? <span style={{ color: 'var(--c-fg-b42318)', fontWeight: 600 }}>⚠️ mismatch — off by ${Math.abs(ocrNum - enteredCash).toFixed(2)}</span> : <span style={{ color: 'var(--c-fg-16794a)' }}>✓ matches</span>}
                 </div>
                 {ocrAmounts.length > 0 && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>amounts detected: {ocrAmounts.map(n => `$${n}`).join(', ')} — adjust the read above if wrong (handwriting reads roughly).</div>}
               </div>
@@ -918,8 +918,8 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         </Row>
 
         {retry && (
-          <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: '#fdeaea', border: '1px solid #f3b4b4' }}>
-            <div style={{ fontWeight: 700, color: '#b42318', fontSize: 14 }}>⚠️ Report doesn’t match — recount needed</div>
+          <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: 'var(--c-bg-fdeaea)', border: '1px solid var(--c-bg-f3b4b4)' }}>
+            <div style={{ fontWeight: 700, color: 'var(--c-fg-b42318)', fontSize: 14 }}>⚠️ Report doesn’t match — recount needed</div>
             <div style={{ fontSize: 13, marginTop: 4 }}>{retry.message}</div>
           </div>
         )}
@@ -971,7 +971,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
                     <td style={cell}>{fmt(r.t_zelle ?? r.other_account ?? 0)}</td>
                     <td style={cell}>{fmt(r.acc_sale ?? 0)}</td>
                     {countCols.map(c => <td key={c.key} style={cell}>{countVal(r, c.key)}</td>)}
-                    <td style={cell}>{r.auto_accepted ? <span title="accepted after 3 tries — under management review" style={{ fontSize: 11, color: '#b42318' }}>⚑ review</span> : <span style={{ fontSize: 11, color: 'var(--text3)' }}>{r.source === 'manual' ? 'form' : 'sheet'}</span>}</td>
+                    <td style={cell}>{r.auto_accepted ? <span title="accepted after 3 tries — under management review" style={{ fontSize: 11, color: 'var(--c-fg-b42318)' }}>⚑ review</span> : <span style={{ fontSize: 11, color: 'var(--text3)' }}>{r.source === 'manual' ? 'form' : 'sheet'}</span>}</td>
                   </tr>
                 ))}
               </tbody>

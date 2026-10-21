@@ -63,8 +63,8 @@ export default function TenantSettingsPage() {
       <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 16px' }}>
         {name ? <b>{name}</b> : 'This company'}&apos;s work-week and pay cycle. The schedule week, the manager
         hours budget, and payroll all derive from this — define it once. {complete
-          ? <span style={{ color: '#166534', fontWeight: 600 }}>✓ Setup complete.</span>
-          : <span style={{ color: '#92400e', fontWeight: 600 }}>Not yet set — using the default Monday week.</span>}
+          ? <span style={{ color: 'var(--c-fg-166534)', fontWeight: 600 }}>✓ Setup complete.</span>
+          : <span style={{ color: 'var(--c-fg-92400e)', fontWeight: 600 }}>Not yet set — using the default Monday week.</span>}
       </p>
 
       {!canEdit && <div style={{ padding: 10, marginBottom: 12, background: 'var(--surface2)', borderRadius: 8, fontSize: 13, color: 'var(--text2)' }}>Only a company admin can change these settings — you can view the current cycle below.</div>}

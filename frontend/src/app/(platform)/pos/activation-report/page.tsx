@@ -83,7 +83,7 @@ export default function ActivationReportPage() {
         commission into the P&amp;L (device rebate nets against device cost as a contra-COGS).
       </p>
 
-      {error && <div style={{ background: '#fde8e8', color: '#9b1c1c', padding: '8px 12px', borderRadius: 6, marginBottom: 12, fontSize: 13 }}>{error}</div>}
+      {error && <div style={{ background: 'var(--c-bg-fde8e8)', color: 'var(--c-fg-9b1c1c)', padding: '8px 12px', borderRadius: 6, marginBottom: 12, fontSize: 13 }}>{error}</div>}
 
       <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, marginBottom: 18, display: 'flex', gap: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <div>
@@ -110,7 +110,7 @@ export default function ActivationReportPage() {
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
             <Stat label="Device gross profit (rebate − cost)" value={money(t.device_gp)} warn={t.device_gp < 0} />
           </div>
-          <div style={{ background: '#eef4ff', color: '#22447a', padding: '10px 12px', borderRadius: 6, marginBottom: 14, fontSize: 12, lineHeight: 1.5 }}>
+          <div style={{ background: 'var(--c-bg-eef4ff)', color: 'var(--c-fg-22447a)', padding: '10px 12px', borderRadius: 6, marginBottom: 14, fontSize: 12, lineHeight: 1.5 }}>
             <b>Device gross profit = total rebate − COGS (rebate − device cost).</b> Because this tenant&apos;s sales feed
             doesn&apos;t carry these financed devices, the import books <b>both</b> the device cost (→ device_cost COGS) and
             the rebate (→ device_rebate contra-COGS) from this report, plus the commission (→ carrier_comm). A negative
@@ -159,7 +159,7 @@ export default function ActivationReportPage() {
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             {!result && <button className="btn btn-primary" disabled={busy === 'import'} onClick={doImport}>{busy === 'import' ? 'Importing…' : 'Import (create customers + activations, feed P&L)'}</button>}
             {result && (
-              <div style={{ color: '#0a7d33', fontSize: 13 }}>
+              <div style={{ color: 'var(--c-fg-0a7d33)', fontSize: 13 }}>
                 ✓ Imported — {result.customers_created} new customers, {result.activations_created} activations,
                 {' '}{result.ledger_periods} store/period P&amp;L rows. Re-running the same file is a no-op.
               </div>
@@ -175,7 +175,7 @@ function Stat({ label, value, good, warn }: { label: string; value: string; good
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', minWidth: 140 }}>
       <div style={{ fontSize: 11, color: 'var(--text2)' }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 800, color: warn ? '#b45309' : good ? '#0a7d33' : 'var(--text)' }}>{value}</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: warn ? 'var(--c-fg-b45309)' : good ? 'var(--c-fg-0a7d33)' : 'var(--text)' }}>{value}</div>
     </div>
   )
 }

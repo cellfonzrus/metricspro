@@ -140,7 +140,7 @@ export default function OrgStructurePage() {
           {u.store_count > 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>· {u.store_count} store{u.store_count > 1 ? 's' : ''}</span>}
           {u.managers.map(m => (
             <span key={m.employee_id} style={{ fontSize: 12, padding: '1px 6px', borderRadius: 10,
-              background: 'var(--accent-soft, #eef)', color: 'var(--text2)' }}>
+              background: 'var(--accent-soft, var(--c-bg-eeeeff))', color: 'var(--text2)' }}>
               👤 {m.name} <button title="Remove manager" onClick={() => removeMgr(u, m.employee_id)}
                 style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text3)' }}>×</button>
             </span>
@@ -154,7 +154,7 @@ export default function OrgStructurePage() {
             marginLeft: depth * 22 + 26, background: 'var(--bg2)', borderBottom: '1px solid var(--border)' }}>
             <button className="btn btn-sm" disabled={busy} onClick={() => addChild(u)}>+ Add child</button>
             <button className="btn btn-sm" disabled={busy} onClick={() => rename(u)}>Rename</button>
-            <button className="btn btn-sm" disabled={busy} onClick={() => del(u)} style={{ color: '#c0392b' }}>Delete</button>
+            <button className="btn btn-sm" disabled={busy} onClick={() => del(u)} style={{ color: 'var(--c-fg-c0392b)' }}>Delete</button>
             <label style={{ fontSize: 12, color: 'var(--text3)' }}>Move under:
               <select disabled={busy} defaultValue="" onChange={e => move(u, e.target.value)} style={{ marginLeft: 4 }}>
                 <option value="">(top level)</option>
@@ -197,7 +197,7 @@ export default function OrgStructurePage() {
         node’s subtree. Stores attach to a node; reps follow their home store. Levels are user-defined — add a
         “Region” or “District” anytime.
       </p>
-      {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 12, marginBottom: 12 }}>{err}</div>}
+      {err && <div className="card" style={{ borderColor: 'var(--c-bg-c0392b)', color: 'var(--c-fg-c0392b)', padding: 12, marginBottom: 12 }}>{err}</div>}
 
       {showLevels && <LevelsPanel levels={levels} busy={busy} run={run} />}
 
@@ -262,7 +262,7 @@ function LevelsPanel({ levels, busy, run }:
           <span style={{ fontWeight: 600 }}>{l.name}</span>
           <span style={{ flex: 1 }} />
           <button className="btn btn-sm" disabled={busy} onClick={() => rename(l)}>Rename</button>
-          <button className="btn btn-sm" disabled={busy} onClick={() => del(l)} style={{ color: '#c0392b' }}>Delete</button>
+          <button className="btn btn-sm" disabled={busy} onClick={() => del(l)} style={{ color: 'var(--c-fg-c0392b)' }}>Delete</button>
         </div>
       ))}
       {levels.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 13 }}>No levels yet — “Seed from stores” creates Company + Market.</div>}

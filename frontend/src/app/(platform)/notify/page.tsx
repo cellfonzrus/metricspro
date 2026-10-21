@@ -44,10 +44,10 @@ const FILTER_HINT: Record<string, string> = {
   period: ' (e.g. June 2026 / current / last)',
   thursday: ' — billing Friday (blank = current week / last)',
 }
-const card: React.CSSProperties = { background: 'var(--surface,#fff)', border: '1px solid var(--border,#e5e7eb)', borderRadius: 12, padding: 16, marginBottom: 16 }
-const inp: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border,#ddd)', fontSize: 13 }
-const th: React.CSSProperties = { textAlign: 'left', padding: '8px 12px', fontSize: 12, color: '#666', borderBottom: '1px solid var(--border,#eee)' }
-const td: React.CSSProperties = { padding: '8px 12px', fontSize: 13, borderBottom: '1px solid var(--border,#f3f4f6)' }
+const card: React.CSSProperties = { background: 'var(--surface,var(--c-bg-ffffff))', border: '1px solid var(--border,var(--c-bg-e5e7eb))', borderRadius: 12, padding: 16, marginBottom: 16 }
+const inp: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border,var(--c-bg-dddddd))', fontSize: 13 }
+const th: React.CSSProperties = { textAlign: 'left', padding: '8px 12px', fontSize: 12, color: 'var(--c-fg-666666)', borderBottom: '1px solid var(--border,var(--c-bg-eeeeee))' }
+const td: React.CSSProperties = { padding: '8px 12px', fontSize: 13, borderBottom: '1px solid var(--border,var(--c-bg-f3f4f6))' }
 const d10 = (s: string | null) => (s ? String(s).slice(0, 16).replace('T', ' ') : '—')
 
 // Deep-linkable tab (?tab=subs|log|recipients|settings): the admin-attention items for notify link
@@ -90,7 +90,7 @@ function NotifyPageBody() {
     <div style={{ padding: 24, maxWidth: 1100 }}>
       <h1 style={{ marginTop: 0 }}>📤 Notify</h1>
       {health && (!health.email_configured || !health.whatsapp_configured) && (
-        <div style={{ ...card, background: '#fff8e1', borderColor: '#f0d68a', fontSize: 13 }}>
+        <div style={{ ...card, background: 'var(--c-bg-fff8e1)', borderColor: 'var(--c-bg-f0d68a)', fontSize: 13 }}>
           {!health.email_configured && <div>⚠️ Email sending isn&apos;t set up yet — contact support to switch it on.</div>}
           {!health.whatsapp_configured && <div>⚠️ WhatsApp sending isn&apos;t set up yet — contact support to switch it on.</div>}
         </div>
@@ -140,7 +140,7 @@ function NotifySettings({ setMsg, health }: { setMsg: (s: string) => void; healt
     <>
     <div style={card}>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>WhatsApp / download links</div>
-      <div style={{ fontSize: 12, color: 'var(--muted,#888)', marginBottom: 12 }}>
+      <div style={{ fontSize: 12, color: 'var(--muted,var(--c-fg-888888))', marginBottom: 12 }}>
         When WhatsApp can only deliver a link (a report sent outside the recipient&apos;s 24h window with no
         document-header template), the link is a no-login direct download of the file. Set how long that
         link stays valid.
@@ -170,9 +170,9 @@ function NotifySettings({ setMsg, health }: { setMsg: (s: string) => void; healt
 function Row({ good, label, detail }: { good: boolean; label: string; detail?: string }) {
   return (
     <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 13, padding: '3px 0' }}>
-      <span style={{ color: good ? 'green' : '#b45309' }}>{good ? '✓' : '⚠'}</span>
+      <span style={{ color: good ? 'green' : 'var(--c-fg-b45309)' }}>{good ? '✓' : '⚠'}</span>
       <span style={{ minWidth: 250 }}>{label}</span>
-      <span style={{ color: 'var(--muted,#888)', fontSize: 12 }}>{detail || ''}</span>
+      <span style={{ color: 'var(--muted,var(--c-fg-888888))', fontSize: 12 }}>{detail || ''}</span>
     </div>
   )
 }
@@ -194,7 +194,7 @@ function WhatsAppDelivery({ health }: { health: Health | null }) {
   return (
     <div style={card}>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>WhatsApp delivery health</div>
-      <div style={{ fontSize: 12, color: 'var(--muted,#888)', marginBottom: 10 }}>
+      <div style={{ fontSize: 12, color: 'var(--muted,var(--c-fg-888888))', marginBottom: 10 }}>
         WhatsApp only lets a business send a FREE-FORM message (the one that attaches the actual file)
         within 24 hours of the recipient messaging you. Outside that, only an approved template arrives.
         Meta sometimes accepts an out-of-window message and drops it silently — these checks tell you
@@ -219,7 +219,7 @@ function WhatsAppDelivery({ health }: { health: Health | null }) {
           detail="this re-enables the silent-drop failure mode — turn it off unless you are deliberately testing" />
       )}
       {h.whatsapp_webhook_url && (
-        <div style={{ fontSize: 11, color: 'var(--muted,#888)', marginTop: 8 }}>
+        <div style={{ fontSize: 11, color: 'var(--muted,var(--c-fg-888888))', marginTop: 8 }}>
           Callback URL to set in Meta → WhatsApp → Configuration:{' '}
           <code style={{ fontSize: 11 }}>{h.whatsapp_webhook_url}</code>
         </div>
@@ -229,16 +229,16 @@ function WhatsAppDelivery({ health }: { health: Health | null }) {
           {busy ? '⏳ Checking…' : 'Which account am I sending as?'}
         </button>
       </div>
-      {err && <div style={{ fontSize: 12, color: '#c00', marginTop: 8 }}>{err}</div>}
+      {err && <div style={{ fontSize: 12, color: 'var(--c-fg-cc0000)', marginTop: 8 }}>{err}</div>}
       {acct && !acct.ok && (
-        <div style={{ fontSize: 12, color: '#c00', marginTop: 8 }}>Could not read the account: {acct.error}</div>
+        <div style={{ fontSize: 12, color: 'var(--c-fg-cc0000)', marginTop: 8 }}>Could not read the account: {acct.error}</div>
       )}
       {acct && acct.ok && (
         <div style={{ fontSize: 13, marginTop: 8, lineHeight: 1.7 }}>
           <div><b>Number:</b> {acct.display_phone_number || '—'} &nbsp;<b>Name:</b> {acct.verified_name || '—'}</div>
           <div><b>Quality:</b> {acct.quality_rating || '—'} &nbsp;<b>Number status:</b> {acct.code_verification_status || '—'} / {acct.name_status || '—'}</div>
           <div><b>Phone number ID:</b> <code style={{ fontSize: 11 }}>{acct.phone_number_id}</code> — this must match the one shown in the Meta dashboard.</div>
-          <div style={{ color: 'var(--muted,#888)', fontSize: 12 }}>{acct.app_mode_note}</div>
+          <div style={{ color: 'var(--muted,var(--c-fg-888888))', fontSize: 12 }}>{acct.app_mode_note}</div>
         </div>
       )}
     </div>
@@ -365,7 +365,7 @@ function Subscriptions({ reports, saved, subs, onChange, setMsg }: {
                 value={filters[f] || ''} onChange={e => setFilters({ ...filters, [f]: e.target.value })} />
             ))}
             {rep.filters.some(f => FILTER_HINT[f]) && (
-              <span style={{ fontSize: 12, color: '#888' }}>
+              <span style={{ fontSize: 12, color: 'var(--c-fg-888888)' }}>
                 Leave a date filter blank on a recurring schedule — it resolves to the current period every run.
               </span>
             )}
@@ -398,7 +398,7 @@ function Subscriptions({ reports, saved, subs, onChange, setMsg }: {
 
         <div style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Recipients (saved)</div>
-          {saved.length === 0 && <div style={{ fontSize: 12, color: '#999' }}>Add recipients in the Recipients tab first.</div>}
+          {saved.length === 0 && <div style={{ fontSize: 12, color: 'var(--c-fg-999999)' }}>Add recipients in the Recipients tab first.</div>}
           {saved.map(s => (
             <label key={s.id} style={{ fontSize: 13, marginRight: 12 }}>
               <input type="checkbox" checked={recipientIds.includes(s.id)} onChange={() => toggle(recipientIds, s.id, setRecipientIds)} /> {s.name || s.email || s.phone}
@@ -455,7 +455,7 @@ function SendLog({ log }: { log: LogRow[] }) {
   return (
     <div style={card}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>Recent sends</div>
-      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>
+      <div style={{ fontSize: 11, color: 'var(--c-fg-64748b)', marginBottom: 8 }}>
         “Status” is only what Meta ACCEPTED. “Delivery” is what actually happened on the handset
         (delivered/read = confirmed; <b>failed</b> shows Meta&apos;s own reason; a WhatsApp row stuck on
         <b> sent</b> with no delivery was accepted and never confirmed — that is the silent-drop case).
@@ -474,7 +474,7 @@ function SendLog({ log }: { log: LogRow[] }) {
               <td style={{ ...td, color: deliveryColor(l.delivery_status) }}>{l.delivery_status || '—'}</td>
               <td style={{ ...td, fontSize: 12 }}>{routeLabel(l.delivery_route)}</td>
               <td style={td}>{l.triggered_by}</td>
-              <td style={{ ...td, color: '#c00', fontSize: 11 }}>{l.delivery_error || l.error}</td>
+              <td style={{ ...td, color: 'var(--c-fg-cc0000)', fontSize: 11 }}>{l.delivery_error || l.error}</td>
             </tr>
           ))}
           {log.length === 0 && <tr><td style={td} colSpan={9}>No sends yet.</td></tr>}

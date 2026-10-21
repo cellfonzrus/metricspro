@@ -88,7 +88,7 @@ export default function TargetFieldsPage() {
         header aliases. These flow into the <b>Column Mapping</b> & <b>Import Wizard</b> auto-suggest.
       </p>
       {!ready && (
-        <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
+        <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
           Saving custom fields is not available yet — the mapper uses the built-in defaults only.{' '}
           <SetupNotice detail="070_target_field_registry.sql" />
         </div>
@@ -113,7 +113,7 @@ export default function TargetFieldsPage() {
           <div><div style={lbl}>Aliases (comma-sep)</div><input style={{ ...inp, width: 180 }} value={nf.aliases} placeholder="synonym1, synonym2" onChange={e => setNf({ ...nf, aliases: e.target.value })} /></div>
           <div><div style={lbl}>Sort</div><input style={{ ...inp, width: 64 }} value={nf.sort_order} onChange={e => setNf({ ...nf, sort_order: e.target.value })} /></div>
           <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 5 }}><input type="checkbox" checked={nf.required} onChange={e => setNf({ ...nf, required: e.target.checked })} /> required</label>
-          <button onClick={addField} style={{ ...inp, cursor: 'pointer', fontWeight: 700, background: 'var(--accent, #2563eb)', color: '#fff', border: 'none' }}>Add field</button>
+          <button onClick={addField} style={{ ...inp, cursor: 'pointer', fontWeight: 700, background: 'var(--accent, var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', border: 'none' }}>Add field</button>
         </div>
       </div>
 

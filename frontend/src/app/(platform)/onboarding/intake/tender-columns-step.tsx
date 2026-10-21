@@ -79,7 +79,7 @@ export function TenderColumnsStep({ block, numbers, tie, decisions, setDecisions
         A column the register keyed by hand (a &quot;non-integrated&quot; twin) is the same kind of payment, flagged.
         {block.earlier_choices > 0 && <> Your earlier choices for this file&apos;s columns were applied ({block.earlier_choices}).</>}
       </p>
-      {!!block.errors.length && <div style={{ ...card, borderColor: '#ef4444', background: 'rgba(239,68,68,.06)', fontSize: 13, marginBottom: 10 }}><b>Fix before confirming:</b><ul style={{ margin: '4px 0 0 18px' }}>{block.errors.map((e, i) => <li key={i}>{e}</li>)}</ul></div>}
+      {!!block.errors.length && <div style={{ ...card, borderColor: 'var(--c-bg-ef4444)', background: 'rgba(239,68,68,.06)', fontSize: 13, marginBottom: 10 }}><b>Fix before confirming:</b><ul style={{ margin: '4px 0 0 18px' }}>{block.errors.map((e, i) => <li key={i}>{e}</li>)}</ul></div>}
       <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse', marginBottom: 10 }}>
         <thead><tr style={{ color: 'var(--text2)' }}><th align="left">Column</th><th align="right" style={{ width: 120 }}>Σ in file</th><th align="right" style={{ width: 90 }}>Invoices</th><th align="left" style={{ width: 210 }}>Role</th><th align="left" style={{ width: 220 }}>Kind of payment</th><th align="left" style={{ width: 110 }}>Keyed by hand</th><th align="left">Where this came from</th></tr></thead>
         <tbody>
@@ -124,10 +124,10 @@ export function TenderColumnsStep({ block, numbers, tie, decisions, setDecisions
             Σ customer payments {money(numbers.tenders.customer_sum ?? numbers.tenders.sum)} on {num(numbers.tenders.invoices_with_tenders)} invoice(s)
             {!!numbers.tenders.not_customer?.sum && <>{' · '}paid by the vendor / a promotion (lands beside, not part of the invoice total) {money(numbers.tenders.not_customer.sum)} on {num(numbers.tenders.not_customer.invoices)} invoice(s)</>}
             {' · '}Σ invoice total {money(numbers.sum_invoice_total)}
-            {numbers.tenders.difference !== null && <> · difference <span style={{ color: ok ? '#16a34a' : '#ef4444', fontWeight: 700 }}>{money(numbers.tenders.difference)}</span></>}
+            {numbers.tenders.difference !== null && <> · difference <span style={{ color: ok ? 'var(--c-fg-16a34a)' : 'var(--c-fg-ef4444)', fontWeight: 700 }}>{money(numbers.tenders.difference)}</span></>}
             {' · '}by kind: {Object.entries(numbers.tenders.by_class).map(([k, v]) => `${vocabLabel(k)} ${money(v)}`).join(' · ') || 'none'}
           </div>
-          {numbers.tenders.invoices_off > 0 && <div style={{ ...note, fontSize: 12, marginTop: 4, color: '#b45309' }}>
+          {numbers.tenders.invoices_off > 0 && <div style={{ ...note, fontSize: 12, marginTop: 4, color: 'var(--c-fg-b45309)' }}>
             {num(numbers.tenders.invoices_off)} invoice(s) whose customer payments do not add up (first {numbers.tenders.invoices_off_sample.length}): {numbers.tenders.invoices_off_sample.map(o => `${o.trans_id} total ${money(o.invoice_total)} vs tenders ${money(o.tenders)} (${money(o.difference)})`).join(' · ')}
             — fix the columns above, or attest the difference with a reason at 2.5.
           </div>}

@@ -10,11 +10,11 @@ type Group = { key: string; label: string; count: number; owed: number }
 type Summary = { groups: Record<string, Group>; total_loss: { total: number; appeals: number; rma: number } }
 
 const TILES = [
-  { key:'appeals',       icon:'🚨', href:'/commcalc/asset/charges/appeals',      color:'#dc2626', blurb:'Carrier denied or withheld payment — direct loss.' },
-  { key:'rma',           icon:'🔁', href:'/commcalc/asset/charges/rma',          color:'#db2777', blurb:'Returned devices not reimbursed or short-paid.' },
-  { key:'vip_fees',      icon:'🧾', href:'/commcalc/asset/charges/vip-fees',      color:'#2563eb', blurb:'Processing, shipping, and SIM kit fees.' },
-  { key:'stock_balance', icon:'📦', href:'/commcalc/asset/charges/stock-balance', color:'#d97706', blurb:'Phones returned to the Distributor (unsold before 60 days).' },
-  { key:'recon_oddity',  icon:'🔍', href:'/commcalc/asset/charges/recon',         color:'#7c3aed', blurb:'Payment/data mismatches to investigate.' },
+  { key:'appeals',       icon:'🚨', href:'/commcalc/asset/charges/appeals',      color:'var(--c-fg-dc2626)', blurb:'Carrier denied or withheld payment — direct loss.' },
+  { key:'rma',           icon:'🔁', href:'/commcalc/asset/charges/rma',          color:'var(--c-fg-db2777)', blurb:'Returned devices not reimbursed or short-paid.' },
+  { key:'vip_fees',      icon:'🧾', href:'/commcalc/asset/charges/vip-fees',      color:'var(--c-fg-2563eb)', blurb:'Processing, shipping, and SIM kit fees.' },
+  { key:'stock_balance', icon:'📦', href:'/commcalc/asset/charges/stock-balance', color:'var(--c-fg-d97706)', blurb:'Phones returned to the Distributor (unsold before 60 days).' },
+  { key:'recon_oddity',  icon:'🔍', href:'/commcalc/asset/charges/recon',         color:'var(--c-fg-7c3aed)', blurb:'Payment/data mismatches to investigate.' },
 ]
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -93,7 +93,7 @@ export default function AssetDashboard() {
     : market ? stores.filter(s => s.market === market) : stores
   const sel = { padding:'6px 10px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, background:'var(--surface)' }
   const tabBtn = (active:boolean) => ({ padding:'6px 14px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, cursor:'pointer', fontWeight:600,
-    background: active ? 'var(--accent)' : 'var(--surface)', color: active ? '#fff' : 'var(--text2)' })
+    background: active ? 'var(--accent)' : 'var(--surface)', color: active ? 'var(--c-fg-ffffff)' : 'var(--text2)' })
 
   function tileVal(key:string): {count:number;owed:number} {
     if (key === 'rma') return rmaData
@@ -186,10 +186,10 @@ export default function AssetDashboard() {
       ) : (
         <>
           {/* Total Loss headline */}
-          <div className="card" style={{ padding:'22px 26px', marginBottom:20, borderLeft:'5px solid #dc2626', background:'#fef2f2' }}>
-            <div style={{ fontSize:13, fontWeight:600, color:'#991b1b', textTransform:'uppercase', letterSpacing:'0.05em' }}>Total Loss (Denied Appeals + RMA Net Loss)</div>
-            <div style={{ fontSize:34, fontWeight:800, color:'#dc2626', margin:'8px 0 4px' }}>{fmt(data.total_loss.total)}</div>
-            <div style={{ fontSize:13, color:'#7f1d1d' }}>
+          <div className="card" style={{ padding:'22px 26px', marginBottom:20, borderLeft:'5px solid var(--c-bg-dc2626)', background:'var(--c-bg-fef2f2)' }}>
+            <div style={{ fontSize:13, fontWeight:600, color:'var(--c-fg-991b1b)', textTransform:'uppercase', letterSpacing:'0.05em' }}>Total Loss (Denied Appeals + RMA Net Loss)</div>
+            <div style={{ fontSize:34, fontWeight:800, color:'var(--c-fg-dc2626)', margin:'8px 0 4px' }}>{fmt(data.total_loss.total)}</div>
+            <div style={{ fontSize:13, color:'var(--c-fg-7f1d1d)' }}>
               Appeals {fmt(data.total_loss.appeals)} · RMA net loss {fmt(data.total_loss.rma)}
             </div>
           </div>

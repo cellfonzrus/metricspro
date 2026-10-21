@@ -125,7 +125,7 @@ export default function OnboardingPage() {
         your carrier, POS and processor. Each step links to where you complete it; green means done.
       </p>
 
-      {err && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>❌ {err}</div>}
+      {err && <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>❌ {err}</div>}
       {loading && <div style={{ color: 'var(--text3)', fontSize: 13, padding: 20 }}>Loading…</div>}
 
       {/* WHAT KIND OF BUSINESS (mig 1020, index §35) — asked FIRST because it decides which modules, pages
@@ -145,7 +145,7 @@ export default function OnboardingPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 4 }}>
             <span style={{ fontWeight: 700 }}>{ready} of {total} steps done</span><span style={{ color: 'var(--text3)' }}>{pct}%</span>
           </div>
-          <div style={{ height: 10, background: 'var(--surface2, #eef2f7)', borderRadius: 999, overflow: 'hidden' }}>
+          <div style={{ height: 10, background: 'var(--surface2, var(--c-bg-eef2f7))', borderRadius: 999, overflow: 'hidden' }}>
             <div style={{ width: `${pct}%`, height: '100%', background: pct === 100 ? '#16a34a' : '#2563eb', transition: 'width .3s' }} />
           </div>
         </div>
@@ -153,7 +153,7 @@ export default function OnboardingPage() {
 
       {/* Step 1 — the adaptive PROFILE questionnaire */}
       {!loading && profileStep && (
-        <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', marginBottom: 18, background: '#f8fbff' }}>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', marginBottom: 18, background: 'var(--c-bg-f8fbff)' }}>
           <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 2 }}>{profileStep.phase}</div>
           <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 12 }}>{profileStep.question}</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
@@ -179,7 +179,7 @@ export default function OnboardingPage() {
                       return (
                         <button key={o} onClick={() => toggleCarrier(o)} disabled={saving === 'profile'}
                           style={{ fontSize: 12.5, fontWeight: 700, padding: '6px 12px', borderRadius: 999, cursor: 'pointer',
-                            border: '1px solid ' + (on ? '#2563eb' : 'var(--border)'), background: on ? '#2563eb' : 'transparent', color: on ? '#fff' : 'var(--text2)' }}>
+                            border: '1px solid ' + (on ? 'var(--c-bg-2563eb)' : 'var(--border)'), background: on ? 'var(--c-bg-2563eb)' : 'transparent', color: on ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>
                           {on ? '✓ ' : ''}{o}
                         </button>
                       )
@@ -189,7 +189,7 @@ export default function OnboardingPage() {
               </div>
             ))}
           </div>
-          {!profileStep.done && <div style={{ fontSize: 12, color: '#92400e', marginTop: 10 }}>Answer all four to unlock the tailored steps below.</div>}
+          {!profileStep.done && <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)', marginTop: 10 }}>Answer all four to unlock the tailored steps below.</div>}
         </div>
       )}
 
@@ -211,17 +211,17 @@ export default function OnboardingPage() {
             return (
               <div key={s.key} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', border: '1px solid var(--border)',
                 borderRadius: 10, padding: '11px 14px', marginBottom: 9, opacity: locked ? 0.55 : 1,
-                background: done ? 'var(--surface)' : (locked ? 'var(--surface)' : '#fffdf5') }}>
+                background: done ? 'var(--surface)' : (locked ? 'var(--surface)' : 'var(--c-bg-fffdf5)') }}>
                 <div style={{ flexShrink: 0, width: 24, height: 24, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 13, fontWeight: 800, background: done ? '#dcfce7' : '#fef3c7', color: done ? '#166534' : '#92400e' }}>{done ? '✓' : (locked ? '🔒' : '•')}</div>
+                  fontSize: 13, fontWeight: 800, background: done ? 'var(--c-bg-dcfce7)' : 'var(--c-bg-fef3c7)', color: done ? 'var(--c-fg-166534)' : 'var(--c-fg-92400e)' }}>{done ? '✓' : (locked ? '🔒' : '•')}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 13.5, fontWeight: 700 }}>{s.title}</span>
                     <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 6, padding: '1px 7px',
-                      background: done ? '#dcfce7' : '#fef3c7', color: done ? '#166534' : '#92400e' }}>
+                      background: done ? 'var(--c-bg-dcfce7)' : 'var(--c-bg-fef3c7)', color: done ? 'var(--c-fg-166534)' : 'var(--c-fg-92400e)' }}>
                       {done ? `Done${s.count ? ` · ${s.count}` : ''}` : (s.status === 'skipped' ? 'Skipped' : 'To do')}
                     </span>
-                    {s.kind === 'gate' && !done && <span style={{ fontSize: 11, color: '#b45309' }}>required</span>}
+                    {s.kind === 'gate' && !done && <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>required</span>}
                   </div>
                   <div style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 3 }}>{s.question}</div>
                   {locked && <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 3 }}>Complete the earlier step(s) first.</div>}
@@ -242,7 +242,7 @@ export default function OnboardingPage() {
                   )}
                   {s.cta && !locked && (
                     <Link href={s.cta.href} style={{ fontSize: 12.5, fontWeight: 700, textDecoration: 'none', padding: '7px 12px', borderRadius: 8,
-                      background: done ? 'transparent' : 'var(--accent, #2563eb)', color: done ? 'var(--text2)' : '#fff', border: done ? '1px solid var(--border)' : 'none' }}>
+                      background: done ? 'transparent' : 'var(--accent, var(--c-bg-2563eb))', color: done ? 'var(--text2)' : 'var(--c-fg-ffffff)', border: done ? '1px solid var(--border)' : 'none' }}>
                       {done ? 'Review' : s.cta.label} →
                     </Link>
                   )}
@@ -261,7 +261,7 @@ export default function OnboardingPage() {
           </h2>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
-              <div style={{ background: 'var(--surface2, #f8fafc)', padding: '7px 11px', fontSize: 12, fontWeight: 700 }}>Ingested feeds</div>
+              <div style={{ background: 'var(--surface2, var(--c-bg-f8fafc))', padding: '7px 11px', fontSize: 12, fontWeight: 700 }}>Ingested feeds</div>
               {(dr.ingested || []).map(s => (
                 <div key={s.source_key} style={{ padding: '7px 11px', borderTop: '1px solid var(--border)', fontSize: 12.5 }}>
                   <span style={{ marginRight: 6 }}>{s.present ? '✅' : '⬜'}</span><b>{s.source_label}</b>
@@ -270,11 +270,11 @@ export default function OnboardingPage() {
               ))}
             </div>
             <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
-              <div style={{ background: 'var(--surface2, #f8fafc)', padding: '7px 11px', fontSize: 12, fontWeight: 700 }}>Reports &amp; menus</div>
+              <div style={{ background: 'var(--surface2, var(--c-bg-f8fafc))', padding: '7px 11px', fontSize: 12, fontWeight: 700 }}>Reports &amp; menus</div>
               {(dr.reports || []).map((r, i) => (
                 <div key={i} style={{ padding: '7px 11px', borderTop: '1px solid var(--border)', fontSize: 12.5 }}>
                   <span style={{ marginRight: 6 }}>{r.powered ? '🟢' : '🔴'}</span><b>{r.report}</b>
-                  {!r.powered && (r.needs || []).length > 0 && <div style={{ fontSize: 11.5, color: '#92400e', marginTop: 2, marginLeft: 20 }}>needs: {(r.needs || []).join(' · ')}</div>}
+                  {!r.powered && (r.needs || []).length > 0 && <div style={{ fontSize: 11.5, color: 'var(--c-fg-92400e)', marginTop: 2, marginLeft: 20 }}>needs: {(r.needs || []).join(' · ')}</div>}
                 </div>
               ))}
             </div>
@@ -327,7 +327,7 @@ function FlowStrip({ spine, here }: { spine: SpineStep[]; here: string }) {
             <li key={s.href} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <span title={s.does} style={{ padding: '4px 9px', borderRadius: 999,
                 border: `1px solid ${cur ? 'var(--accent)' : 'var(--border)'}`,
-                background: cur ? 'var(--surface2, #eef2ff)' : 'transparent' }}>
+                background: cur ? 'var(--surface2, var(--c-bg-eef2ff))' : 'transparent' }}>
                 {open ? <Link href={s.href} style={{ textDecoration: 'none' }}>{body}</Link> : body}
               </span>
               {i < spine.length - 1 && <span style={{ color: 'var(--text3)', fontSize: 11 }}>→</span>}
@@ -370,7 +370,7 @@ function CarrierFlow({ impl, onChanged, setErr }:
   const link = (href: string, label: string, tone: 'primary' | 'plain') => {
     const style: React.CSSProperties = tone === 'primary'
       ? { fontSize: 12, fontWeight: 700, padding: '5px 10px', borderRadius: 7, textDecoration: 'none',
-          background: 'var(--accent, #2563eb)', color: '#fff' }
+          background: 'var(--accent, var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)' }
       : { fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 7, textDecoration: 'none',
           border: '1px solid var(--border)', color: 'var(--text2)' }
     // An href with no nav entry for this viewer degrades to plain text — never a link to a 403.
@@ -407,7 +407,7 @@ function CarrierFlow({ impl, onChanged, setErr }:
             style={{ padding: '7px 10px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 8, width: 160 }} />
           <button onClick={addCarrier} disabled={busy || !name.trim()}
             style={{ fontSize: 12.5, fontWeight: 700, padding: '7px 12px', borderRadius: 8, cursor: 'pointer',
-              border: 'none', background: 'var(--accent, #2563eb)', color: '#fff' }}>
+              border: 'none', background: 'var(--accent, var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)' }}>
             {busy ? '…' : 'Add carrier'}
           </button>
           <button onClick={() => setAdding(false)}
@@ -431,7 +431,7 @@ function CarrierFlow({ impl, onChanged, setErr }:
       {blocks.map(b => (
         <div key={b.carrier_id || '__shared__'} style={{ border: '1px solid var(--border)', borderRadius: 10,
           marginBottom: 10, overflow: 'hidden' }}>
-          <div style={{ background: 'var(--surface2, #f8fafc)', padding: '8px 12px', display: 'flex',
+          <div style={{ background: 'var(--surface2, var(--c-bg-f8fafc))', padding: '8px 12px', display: 'flex',
             gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
             <b style={{ fontSize: 13.5 }}>{b.carrier_name}</b>
             {b.is_default && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)' }}>DEFAULT</span>}

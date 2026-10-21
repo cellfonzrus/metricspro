@@ -269,7 +269,7 @@ export default function ExecMtdPage() {
           stale, when it last ingested and the latest transaction date it carries, and link to fix it. Only
           renders when something is actually stale. */}
       {(fresh?.any_stale || fresh?.unrouted?.length > 0) && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8,
+        <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', color: 'var(--c-fg-92400e)', borderRadius: 8,
           padding: '10px 12px', fontSize: 12.5, marginBottom: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠️ Some data hasn’t updated — numbers below may be stale</div>
           {(fresh.feeds || []).filter((f: any) => f.stale && f.rows).map((f: any) => (
@@ -283,19 +283,19 @@ export default function ExecMtdPage() {
           {/* UNROUTED REPORTS — attachments that arrived but matched no import rule (a report renamed at the
               source). The precise cause: the email HAS the data, but no rule imported it. */}
           {fresh?.unrouted?.length > 0 && (
-            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #fde68a' }}>
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--c-bg-fde68a)' }}>
               <div style={{ fontWeight: 700 }}>📎 {fresh.unrouted.length} report{fresh.unrouted.length === 1 ? '' : 's'} arrived that no import rule matched:</div>
               <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>
                 {fresh.unrouted.slice(0, 6).map((n: string, i: number) => <li key={i}>{n}</li>)}
               </ul>
               <div style={{ marginTop: 4 }}>
-                The email has the data, but no filename rule matched it. Open <Link href="/commcalc/email-imports" style={{ color: '#92400e', textDecoration: 'underline' }}>Data Imports → Email Imports</Link> and
+                The email has the data, but no filename rule matched it. Open <Link href="/commcalc/email-imports" style={{ color: 'var(--c-fg-92400e)', textDecoration: 'underline' }}>Data Imports → Email Imports</Link> and
                 add or widen a rule so the name matches (e.g. <code>*Sales*Transaction*Details*</code> → daily sales), then <b>Run now</b>.
               </div>
             </div>
           )}
           <div style={{ marginTop: 6 }}>
-            New files aren’t being ingested. Open <Link href="/commcalc/email-imports" style={{ color: '#92400e', textDecoration: 'underline' }}>Data Imports → Email Imports</Link>,
+            New files aren’t being ingested. Open <Link href="/commcalc/email-imports" style={{ color: 'var(--c-fg-92400e)', textDecoration: 'underline' }}>Data Imports → Email Imports</Link>,
             check the processed history, and click <b>Run now</b>. If the latest file isn’t in the inbox, the report email stopped arriving for those days.
           </div>
         </div>
@@ -322,8 +322,8 @@ export default function ExecMtdPage() {
           showing a narrowed number that looks like the whole story. */}
       {dr.active && (
         <div style={{ fontSize: 12, marginBottom: 10 }}>
-          <span style={{ background: dr.no_overlap ? '#fef3f2' : 'var(--surface2)',
-            color: dr.no_overlap ? '#b42318' : 'var(--text2)', borderRadius: 8, padding: '4px 10px' }}>
+          <span style={{ background: dr.no_overlap ? 'var(--c-bg-fef3f2)' : 'var(--surface2)',
+            color: dr.no_overlap ? 'var(--c-fg-b42318)' : 'var(--text2)', borderRadius: 8, padding: '4px 10px' }}>
             {dr.no_overlap ? (
               <>The selected dates fall outside <b>{period}</b> ({dr.month_from} → {dr.month_to}) — nothing to
                 show. Pick dates inside the month, or change the month in the header.</>
@@ -363,8 +363,8 @@ export default function ExecMtdPage() {
           preset / no preset: on — today's behavior, byte-identical). bannerOn is CONFIG resolution (tenant
           override > carrier preset > default on) — never a carrier branch in code. */}
       {gaps.note && bannerOn('unrecognized_ct_recon') && (
-        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fffbeb', border: '1px solid #fde68a',
-          color: '#92400e', borderRadius: 8, padding: '9px 12px' }}>
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)',
+          color: 'var(--c-fg-92400e)', borderRadius: 8, padding: '9px 12px' }}>
           <div style={{ fontWeight: 700, marginBottom: 3 }}>⚠️ Some activations aren’t being counted in Total Activation</div>
           <div style={{ marginBottom: unrecCts.length ? 6 : 0 }}>
             Home Internet, FiOS, FWA and Tablet activations are now counted automatically. These remaining
@@ -374,7 +374,7 @@ export default function ExecMtdPage() {
           {unrecCts.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
               {unrecCts.slice(0, 12).map((u) => (
-                <span key={u.contract_type} style={{ background: '#fef3c7', border: '1px solid #fcd34d',
+                <span key={u.contract_type} style={{ background: 'var(--c-bg-fef3c7)', border: '1px solid var(--c-bg-fcd34d)',
                   borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>
                   {u.contract_type} <b>×{u.transactions}</b>
                 </span>
@@ -385,7 +385,7 @@ export default function ExecMtdPage() {
           <div>
             Map each label to <b>Activation</b>, <b>BYOD</b> or <b>Upgrade</b> (or <b>None</b> to exclude on
             purpose) in{' '}
-            <Link href="/commcalc/sales-report" style={{ color: '#92400e', fontWeight: 700, textDecoration: 'underline' }}>
+            <Link href="/commcalc/sales-report" style={{ color: 'var(--c-fg-92400e)', fontWeight: 700, textDecoration: 'underline' }}>
               Sales Report → ⚙ Classification settings
             </Link>{' '}
             and this total will reconcile to {pos}. This changes reporting only — no commission pay is affected.
@@ -397,8 +397,8 @@ export default function ExecMtdPage() {
           (the Vzone July 2026 case: 238 rows, department / category / product name blank on every one,
           because the file that landed was the by-product aggregate, not the line-level export). */}
       {landingEmpty && landing && (
-        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fffbeb', border: '1px solid #fcd34d',
-          color: '#92400e', borderRadius: 8, padding: '9px 12px' }}>
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fcd34d)',
+          color: 'var(--c-fg-92400e)', borderRadius: 8, padding: '9px 12px' }}>
           <div style={{ fontWeight: 700, marginBottom: 3 }}>
             {landing.rows === 0 ? 'No sales lines for this period yet' : `${landing.rows.toLocaleString()} sales lines for this period carry none of the columns this page counts`}
           </div>
@@ -410,7 +410,7 @@ export default function ExecMtdPage() {
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {(landing.feeds || []).map(f => (
-              <span key={f.key} style={{ background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 6, padding: '2px 8px' }}>
+              <span key={f.key} style={{ background: 'var(--c-bg-fef3c7)', border: '1px solid var(--c-bg-fcd34d)', borderRadius: 6, padding: '2px 8px' }}>
                 <b>{f.label}</b>{' — under '}
                 {f.where?.screen && f.where.screen in SCREENS ? <ScreenLink to={f.where.screen as ScreenKey}>{f.where.label}</ScreenLink> : f.where?.label}
                 {f.where?.upload_types?.length ? <> (the &apos;{f.where.upload_types[0]}&apos; tile)</> : null}
@@ -428,8 +428,8 @@ export default function ExecMtdPage() {
       {/* THE TWIN (2026-09-21): a saved word inside nearly every line makes every invoice an activation — the
           predicate's count carries `refused`; the split shown below is NOT a split until the word is fixed. */}
       {!landingEmpty && landing?.classified?.rules_refused && (
-        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fef2f2', border: '1px solid #fca5a5',
-          color: '#991b1b', borderRadius: 8, padding: '9px 12px' }}>
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)',
+          color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '9px 12px' }}>
           <div style={{ fontWeight: 700, marginBottom: 3 }}>
             The activation rule in force cannot be trusted — the activation columns below count nearly every invoice
           </div>
@@ -440,8 +440,8 @@ export default function ExecMtdPage() {
         </div>
       )}
       {!landingEmpty && landing?.classified?.gate_open && (
-        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fffbeb', border: '1px solid #fcd34d',
-          color: '#92400e', borderRadius: 8, padding: '9px 12px' }}>
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fcd34d)',
+          color: 'var(--c-fg-92400e)', borderRadius: 8, padding: '9px 12px' }}>
           <div style={{ fontWeight: 700, marginBottom: 3 }}>
             {landing.classified.scanned.toLocaleString()} sales lines this period, and no line could be told apart as an activation or upgrade
           </div>
@@ -458,8 +458,8 @@ export default function ExecMtdPage() {
           This says which bucket matched nothing and what the data actually contains. No carrier or
           tenant name appears here: the values shown are read from the tenant's own rows (RULE TWO). */}
       {covGaps.length > 0 && !landingEmpty && (
-        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fef2f2', border: '1px solid #fecaca',
-          color: '#991b1b', borderRadius: 8, padding: '9px 12px' }}>
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)',
+          color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '9px 12px' }}>
           <div style={{ fontWeight: 700, marginBottom: 3 }}>
             ⚠️ {covGaps.length === 1 ? 'A metric definition matches' : `${covGaps.length} metric definitions match`} none of this period’s sales lines
           </div>
@@ -471,18 +471,18 @@ export default function ExecMtdPage() {
           {covGaps.slice(0, 4).map((g) => (
             <div key={g.bucket} style={{ marginBottom: 5 }}>
               <b>{g.bucket}</b>{' '}
-              <span style={{ color: '#b91c1c' }}>({g.source === 'tenant' ? 'your saved definition'
+              <span style={{ color: 'var(--c-fg-b91c1c)' }}>({g.source === 'tenant' ? 'your saved definition'
                 : g.source === 'carrier_preset' ? 'inherited carrier preset' : 'built-in default'})</span>
               {(g.unmatched_departments || []).length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 3 }}>
                   {(g.unmatched_departments || []).slice(0, 5).map(([v, n]) => (
-                    <span key={`d-${v}`} style={{ background: '#fee2e2', border: '1px solid #fca5a5',
+                    <span key={`d-${v}`} style={{ background: 'var(--c-bg-fee2e2)', border: '1px solid var(--c-bg-fca5a5)',
                       borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>
                       dept: {v} <b>×{n}</b>
                     </span>
                   ))}
                   {(g.unmatched_categories || []).slice(0, 5).map(([v, n]) => (
-                    <span key={`c-${v}`} style={{ background: '#fee2e2', border: '1px solid #fca5a5',
+                    <span key={`c-${v}`} style={{ background: 'var(--c-bg-fee2e2)', border: '1px solid var(--c-bg-fca5a5)',
                       borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>
                       cat: {v} <b>×{n}</b>
                     </span>
@@ -503,12 +503,12 @@ export default function ExecMtdPage() {
           POS-consistent definition that matches /activation-counts. Says so plainly so the number is never
           silently redefined. Hidden on the default sales basis (active:false). */}
       {data?.activation_source?.active && (
-        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#ecfdf5', border: '1px solid #6ee7b7',
-          color: '#065f46', borderRadius: 8, padding: '9px 12px' }}>
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: 'var(--c-bg-ecfdf5)', border: '1px solid var(--c-bg-6ee7b7)',
+          color: 'var(--c-fg-065f46)', borderRadius: 8, padding: '9px 12px' }}>
           <span style={{ fontWeight: 700 }}>✓ Activations from the Activation Details report (basis of truth).</span>{' '}
           Total Activation counts distinct devices and <b>excludes Upgrade</b> ({pos}-consistent); Upgrade is shown
           in its own column. {int(data.activation_source.ad_rows || 0)} activation rows for this window.{' '}
-          <Link href="/commcalc/activations" style={{ color: '#065f46', fontWeight: 700, textDecoration: 'underline' }}>
+          <Link href="/commcalc/activations" style={{ color: 'var(--c-fg-065f46)', fontWeight: 700, textDecoration: 'underline' }}>
             Open the Activations report &amp; reconciliation →
           </Link>
         </div>
@@ -543,7 +543,7 @@ export default function ExecMtdPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : err ? (
-        <div className="card" style={{ padding: 16, borderLeft: '3px solid #b42318', color: '#b42318', fontSize: 13 }}>Could not load MTD summary: {err}</div>
+        <div className="card" style={{ padding: 16, borderLeft: '3px solid var(--c-bg-b42318)', color: 'var(--c-fg-b42318)', fontSize: 13 }}>Could not load MTD summary: {err}</div>
       ) : rows.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>
           {hasFilter

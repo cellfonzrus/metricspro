@@ -73,7 +73,7 @@ export default function AgenciesPage() {
         You can see agencies and their workload; adding or editing one needs the CRM settings permission.
       </div>}
 
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginBottom: 12 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginBottom: 12 }}>{msg}</div>}
 
       {showForm && canEdit && (
         <div style={{ ...panel, display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 12, marginBottom: 14 }}>
@@ -113,7 +113,7 @@ export default function AgenciesPage() {
                   <td style={cell}>{String(a.type || '').replace(/_/g, ' ')}</td>
                   <td style={cell}>{a.contact_name || '—'}{a.email ? ` · ${a.email}` : ''}</td>
                   <td style={cell}>{s.total}</td>
-                  <td style={{ ...cell, color: s.pending ? '#f39c12' : undefined, fontWeight: s.pending ? 600 : 400 }}>{s.pending}</td>
+                  <td style={{ ...cell, color: s.pending ? 'var(--c-fg-f39c12)' : undefined, fontWeight: s.pending ? 600 : 400 }}>{s.pending}</td>
                   <td style={cell}>{fmtMoney(s.value)}</td>
                   <td style={cell}>{a.is_active === false ? 'no' : 'yes'}</td>
                   {canEdit && (
@@ -145,7 +145,7 @@ export default function AgenciesPage() {
                 <td style={cell}><Link href={`/crm/leads/${l.id}`}>{l.display_name}</Link></td>
                 <td style={cell}>{l.agency_name || '—'}</td>
                 <td style={cell}>{fmtDate(l.agency_assigned_at)}</td>
-                <td style={{ ...cell, color: l.agency_accepted_at ? '#16a34a' : '#f39c12' }}>
+                <td style={{ ...cell, color: l.agency_accepted_at ? 'var(--c-fg-16a34a)' : 'var(--c-fg-f39c12)' }}>
                   {l.agency_accepted_at ? 'accepted' : 'waiting'}
                 </td>
                 <td style={cell}>{fmtMoney(l.value_estimate)}</td>

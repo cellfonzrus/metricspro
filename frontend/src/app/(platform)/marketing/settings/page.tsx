@@ -31,9 +31,9 @@ function OptionListEditor({ list, onChanged, highlight }: {
   }
 
   return (
-    <section style={{ ...panel, marginBottom: 14, borderColor: highlight ? '#2563eb' : undefined }}>
+    <section style={{ ...panel, marginBottom: 14, borderColor: highlight ? 'var(--c-bg-2563eb)' : undefined }}>
       <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 8px' }}>{list.label}</h2>
-      {msg && <div style={{ fontSize: 12, color: '#dc2626', marginBottom: 8 }}>{msg}</div>}
+      {msg && <div style={{ fontSize: 12, color: 'var(--c-fg-dc2626)', marginBottom: 8 }}>{msg}</div>}
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead><tr>
           <th style={th}>Label</th><th style={th}>Key</th><th style={th}>Order</th>
@@ -125,7 +125,7 @@ export default function MarketingSettings() {
         <Link href="/marketing" style={{ fontSize: 13, color: 'var(--text2)' }}>← Marketing</Link>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Marketing settings</h1>
       </div>
-      {msg && <div style={{ ...panel, marginBottom: 14, borderColor: '#dc2626', color: '#dc2626' }}>{msg}</div>}
+      {msg && <div style={{ ...panel, marginBottom: 14, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)' }}>{msg}</div>}
 
       <section style={{ ...panel, marginBottom: 14 }}>
         <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 8px' }}>Event approval</h2>
@@ -195,7 +195,7 @@ export default function MarketingSettings() {
           common than someone pretending to be somewhere they are not.
         </p>
         {retention && (
-          <p style={{ fontSize: 12, color: retention.due_for_purge ? '#f39c12' : 'var(--text2)', marginTop: 10 }}>
+          <p style={{ fontSize: 12, color: retention.due_for_purge ? 'var(--c-fg-f39c12)' : 'var(--text2)', marginTop: 10 }}>
             {retention.total} check-in record(s) stored · {retention.due_for_purge} past their retention date.
             {' '}{retention.note}
           </p>

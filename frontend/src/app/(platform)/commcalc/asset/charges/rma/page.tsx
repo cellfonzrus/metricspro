@@ -17,9 +17,9 @@ type RmaData = { buckets:{ full:Bucket; short:Bucket; none:Bucket }; net_loss:nu
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
 const BUCKET_META: Record<string,{label:string;color:string;note:string}> = {
-  none:  { label:'Not Reimbursed', color:'#dc2626', note:'No credit received — full amount lost' },
-  short: { label:'Reimbursed Short', color:'#d97706', note:'Credited less than owed' },
-  full:  { label:'Reimbursed in Full', color:'#059669', note:'Fully credited' },
+  none:  { label:'Not Reimbursed', color:'var(--c-fg-dc2626)', note:'No credit received — full amount lost' },
+  short: { label:'Reimbursed Short', color:'var(--c-fg-d97706)', note:'Credited less than owed' },
+  full:  { label:'Reimbursed in Full', color:'var(--c-fg-059669)', note:'Fully credited' },
 }
 
 function RmaTable({ rows, showShort }: { rows: Row[]; showShort?: boolean }) {
@@ -41,12 +41,12 @@ function RmaTable({ rows, showShort }: { rows: Row[]; showShort?: boolean }) {
               <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'monospace' }}>{r.esn_imei||'—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.date_sold ? String(r.date_sold).slice(0,10) : '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, fontWeight:600 }}>{fmt(r.owed_to_vip||0)}</td>
-              <td style={{ padding:'8px 12px', fontSize:12, color:'#059669' }}>{fmt(r.reimbursement||0)}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, color:'var(--c-fg-059669)' }}>{fmt(r.reimbursement||0)}</td>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.selling_price==null ? '—' : fmt(r.selling_price)}</td>
               <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.reimbursement_date ? String(r.reimbursement_date).slice(0,10) : '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'monospace' }}>{r.vip_invoice_number||'—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.vip_invoice_date ? String(r.vip_invoice_date).slice(0,10) : '—'}</td>
-              <td style={{ padding:'8px 12px', fontSize:12, fontWeight:700, color:'#dc2626' }}>{fmt(r._shortfall||0)}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, fontWeight:700, color:'var(--c-fg-dc2626)' }}>{fmt(r._shortfall||0)}</td>
             </tr>
           ))}
         </tbody>
@@ -165,10 +165,10 @@ export default function RmaPage() {
       ) : (
         <>
           {/* Net loss headline */}
-          <div className="card" style={{ padding:'20px 24px', marginBottom:20, borderLeft:'5px solid #dc2626', background:'#fef2f2' }}>
-            <div style={{ fontSize:13, fontWeight:600, color:'#991b1b', textTransform:'uppercase', letterSpacing:'0.05em' }}>RMA Net Loss (uncredited + shortfall)</div>
-            <div style={{ fontSize:30, fontWeight:800, color:'#dc2626', margin:'6px 0 2px' }}>{fmt(data.net_loss)}</div>
-            <div style={{ fontSize:13, color:'#7f1d1d' }}>{data.total_rma} RMA devices total</div>
+          <div className="card" style={{ padding:'20px 24px', marginBottom:20, borderLeft:'5px solid var(--c-bg-dc2626)', background:'var(--c-bg-fef2f2)' }}>
+            <div style={{ fontSize:13, fontWeight:600, color:'var(--c-fg-991b1b)', textTransform:'uppercase', letterSpacing:'0.05em' }}>RMA Net Loss (uncredited + shortfall)</div>
+            <div style={{ fontSize:30, fontWeight:800, color:'var(--c-fg-dc2626)', margin:'6px 0 2px' }}>{fmt(data.net_loss)}</div>
+            <div style={{ fontSize:13, color:'var(--c-fg-7f1d1d)' }}>{data.total_rma} RMA devices total</div>
           </div>
 
           {/* Bucket cards */}
@@ -187,7 +187,7 @@ export default function RmaPage() {
 
           {/* Not reimbursed */}
           <div className="card" style={{ padding:0, marginBottom:20 }}>
-            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, color:'#991b1b' }}>
+            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, color:'var(--c-fg-991b1b)' }}>
               🔴 Not Reimbursed ({data.buckets.none.count}) — {fmt(data.buckets.none.owed)} uncredited
             </div>
             <RmaTable rows={data.buckets.none.rows} />
@@ -195,7 +195,7 @@ export default function RmaPage() {
 
           {/* Short */}
           <div className="card" style={{ padding:0, marginBottom:20 }}>
-            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, color:'#92400e' }}>
+            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, color:'var(--c-fg-92400e)' }}>
               🟠 Reimbursed Short ({data.buckets.short.count}) — {fmt(data.buckets.short.owed - data.buckets.short.reimb)} shortfall
             </div>
             <RmaTable rows={data.buckets.short.rows} showShort />
@@ -203,7 +203,7 @@ export default function RmaPage() {
 
           {/* Full */}
           <div className="card" style={{ padding:0 }}>
-            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, color:'#065f46' }}>
+            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, color:'var(--c-fg-065f46)' }}>
               🟢 Reimbursed in Full ({data.buckets.full.count})
             </div>
             <RmaTable rows={data.buckets.full.rows} />

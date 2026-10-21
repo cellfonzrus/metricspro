@@ -434,12 +434,12 @@ export function MatchWarnings({ opts, rules, stats, index, windowLabel }: {
   return (
     <div style={{ fontSize: 10.5, lineHeight: 1.5 }}>
       {me.lines === 0 ? (
-        <div style={{ color: '#b45309' }}>⚠ matches nothing in {win}{truncNote}</div>
+        <div style={{ color: 'var(--c-fg-b45309)' }}>⚠ matches nothing in {win}{truncNote}</div>
       ) : (
         <div style={{ color: 'var(--text3)' }}>{num(me.lines)} line{me.lines === 1 ? '' : 's'} in {win}{truncNote}</div>
       )}
       {overlaps.map(x => (
-        <div key={x.j} style={{ color: '#b45309' }}>
+        <div key={x.j} style={{ color: 'var(--c-fg-b45309)' }}>
           ⚠ {num(x.n)} of them also match {ruleName(x.s)} — both rules pay on those lines
         </div>
       ))}
@@ -513,7 +513,7 @@ export function MatchEvidence({ opts, rule, max = 4 }: { opts: PlanOptions | nul
         </div>
       )}
       {collisions.map(c => (
-        <div key={c.field} style={{ color: '#b45309' }}>
+        <div key={c.field} style={{ color: 'var(--c-fg-b45309)' }}>
           ⚠ “{rule.match_value}” is also a value of <b>{c.field}</b>{' '}
           ({c.values.map(v => `“${v.value}”${v.lines ? ` · ${num(v.lines)} lines` : ''}`).join(', ')}) —
           if this rule means that, match on {c.field} instead of the item description.
@@ -534,12 +534,12 @@ export function ruleName(r: MatchRule): string {
 export function OptionsSourceNote({ opts }: { opts: PlanOptions | null }) {
   if (!opts) return null
   if (opts.ready === false) {
-    return <span style={{ fontSize: 11, color: '#b45309' }}>
+    return <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>
       ⚠ value suggestions unavailable — you can still type values
     </span>
   }
   if (opts.note) {
-    return <span style={{ fontSize: 11, color: '#b45309' }}>⚠ {opts.note}</span>
+    return <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>⚠ {opts.note}</span>
   }
   const w = opts.window?.labels?.length ? opts.window.labels.join(', ') : 'recent months'
   const src = opts.source_table === 'feed' ? 'the daily sales feed' : 'monthly sales'

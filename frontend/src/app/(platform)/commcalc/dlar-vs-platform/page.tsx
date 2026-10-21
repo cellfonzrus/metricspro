@@ -33,14 +33,14 @@ const td: React.CSSProperties = { padding: '8px 10px', fontSize: 13, borderBotto
 const num: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }
 
 const CAUSE_STYLE: Record<string, { bg: string; bd: string; label: string }> = {
-  counting_definition: { bg: 'seagreen', bd: 'seagreen', label: 'definition' },
+  counting_definition: { bg: 'var(--c-bg-2e8b57)', bd: 'var(--c-bg-2e8b57)', label: 'definition' },
   feed_vintage: { bg: 'goldenrod', bd: 'goldenrod', label: 'stale feed' },
   grain: { bg: 'slateblue', bd: 'slateblue', label: 'grain' },
-  unattributed: { bg: 'crimson', bd: 'crimson', label: 'look at this' },
+  unattributed: { bg: 'var(--c-bg-dc143c)', bd: 'var(--c-bg-dc143c)', label: 'look at this' },
 }
 
 function chip(c: any, i: number) {
-  const s = CAUSE_STYLE[c.cause] || { bg: 'gray', bd: 'gray', label: c.cause }
+  const s = CAUSE_STYLE[c.cause] || { bg: 'var(--c-bg-808080)', bd: 'var(--c-bg-808080)', label: c.cause }
   return (
     <span key={i} title={c.detail}
       style={{ display: 'inline-block', margin: '1px 4px 1px 0', padding: '2px 7px', borderRadius: 20, fontSize: 11,

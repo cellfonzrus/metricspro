@@ -35,7 +35,7 @@ import { SetupNotice } from '@/lib/setupNotice'
 
 const inp: React.CSSProperties = { padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const btn: React.CSSProperties = { padding: '6px 11px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, cursor: 'pointer', background: 'var(--surface)' }
-const btnP: React.CSSProperties = { ...btn, background: 'var(--accent,#2563eb)', color: '#fff', border: 'none', fontWeight: 600 }
+const btnP: React.CSSProperties = { ...btn, background: 'var(--accent,var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', border: 'none', fontWeight: 600 }
 const lbl: React.CSSProperties = { fontSize: 12, color: 'var(--text2)', display: 'inline-flex', alignItems: 'center', gap: 5 }
 
 type Doc = {
@@ -203,10 +203,10 @@ export default function CompliancePage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🗂️ Compliance Document Repository</h1>
       <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
         Every uploaded or signed onboarding document across the roster, grouped by employee — with each document&apos;s
-        signature page linked alongside it. Reuses the same storage the <a href="/hr/onboarding" style={{ color: 'var(--accent,#2563eb)' }}>Documents board</a> tracks; nothing is duplicated here.
+        signature page linked alongside it. Reuses the same storage the <a href="/hr/onboarding" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Documents board</a> tracks; nothing is duplicated here.
       </p>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>{msg}</div>}
-      {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>
+      {!ready && <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>
         {fetchError || <SetupNotice lead="Onboarding is not switched on yet, so this repository has nothing to show." detail="073_hr_onboarding.sql" />}
       </div>}
 
@@ -252,7 +252,7 @@ export default function CompliancePage() {
           touched yet (it was never in `documents` to begin with); say so instead of letting those
           employees/rows just silently vanish. */}
       {(submittedFrom || submittedTo) && notSubmittedCount > 0 && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 10 }}>
+        <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', color: 'var(--c-fg-92400e)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 10 }}>
           ⚠️ {notSubmittedCount} outstanding item(s) across {notSubmittedEmpCount} active employee(s) haven&apos;t been submitted yet —
           they can&apos;t appear under a submitted-date filter (there&apos;s nothing to date yet), so they&apos;re not counted above.
         </div>
@@ -272,7 +272,7 @@ export default function CompliancePage() {
       {grouped.map(([eid, g]) => (
         <div key={eid} style={{ border: '1px solid var(--border)', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'var(--surface)' }}>
-            <a href={`/hr/onboarding/${eid}`} style={{ fontWeight: 700, fontSize: 14, color: 'var(--accent,#2563eb)', textDecoration: 'none' }}>{g.name}</a>
+            <a href={`/hr/onboarding/${eid}`} style={{ fontWeight: 700, fontSize: 14, color: 'var(--accent,var(--c-fg-2563eb))', textDecoration: 'none' }}>{g.name}</a>
             <span style={{ fontSize: 11, color: 'var(--text3)' }}>{eid}{g.email ? ` · ${g.email}` : ''}</span>
             <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {g.docs.length} document(s)</span>
             <span style={{ fontSize: 11, color: 'var(--text3)' }}>

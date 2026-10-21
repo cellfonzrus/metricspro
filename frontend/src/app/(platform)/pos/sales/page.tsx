@@ -1051,15 +1051,15 @@ export default function PosSalesPage() {
           <div style={{ ...panel, marginBottom: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10, paddingBottom: 4, borderBottom: '1px solid var(--border)' }}>Sales</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button onClick={() => setActiveView('sale')} style={{ background: 'var(--green)', border: 'none', color: 'white', borderRadius: 7, padding: '12px 20px', fontSize: 13, fontWeight: 700, cursor: 'pointer', minWidth: 140 }}>
+              <button onClick={() => setActiveView('sale')} style={{ background: 'var(--green)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 7, padding: '12px 20px', fontSize: 13, fontWeight: 700, cursor: 'pointer', minWidth: 140 }}>
                 💵 Customer Sale
               </button>
-              <a href="/pos/activations" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--green)', color: 'white', borderRadius: 7, padding: '12px 20px', fontSize: 13, fontWeight: 700, textDecoration: 'none', minWidth: 160 }}>
+              <a href="/pos/activations" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--green)', color: 'var(--c-fg-ffffff)', borderRadius: 7, padding: '12px 20px', fontSize: 13, fontWeight: 700, textDecoration: 'none', minWidth: 160 }}>
                 📋 Manual Activation
               </a>
               {/* Customer Special Order — sell an item the store doesn't stock (ships to the store).
                   Neutral by design: the vendor behind the catalog is never named store/customer-side. */}
-              <a href="/pos/special-orders" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--green)', color: 'white', borderRadius: 7, padding: '12px 20px', fontSize: 13, fontWeight: 700, textDecoration: 'none', minWidth: 180 }}>
+              <a href="/pos/special-orders" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--green)', color: 'var(--c-fg-ffffff)', borderRadius: 7, padding: '12px 20px', fontSize: 13, fontWeight: 700, textDecoration: 'none', minWidth: 180 }}>
                 🧾 Customer Special Order
               </a>
               <button onClick={() => setActiveView('salelog')} className="btn btn-secondary" style={{ minWidth: 120, justifyContent: 'center' }}>
@@ -1118,7 +1118,7 @@ export default function PosSalesPage() {
                 cart, and the prices on it are as old as the hold — so the banner names both rather
                 than presenting someone else's part-rung sale as this one's work. */}
             {heldBanner && (
-              <div style={{ background: 'rgba(217,119,6,0.08)', borderBottom: '1px solid var(--amber, #d97706)', padding: '8px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ background: 'rgba(217,119,6,0.08)', borderBottom: '1px solid var(--amber, var(--c-bg-d97706))', padding: '8px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 12, color: 'var(--text)', flex: 1, minWidth: 220 }}>⏸ {heldBanner}</span>
                 <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => setHeldBanner('')}>Keep it</button>
                 <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px', color: 'var(--red)' }} onClick={discardHeldSale}>Discard it</button>
@@ -1196,7 +1196,7 @@ export default function PosSalesPage() {
                             : 'Price — edit to override for this sale'}
                           style={{ ...inputStyle, width: 74, padding: '4px 6px', fontSize: 11,
                             color: 'var(--green)', fontWeight: 600,
-                            borderColor: item.list_price !== item.unit_price ? 'var(--amber, #d97706)' : undefined }} />
+                            borderColor: item.list_price !== item.unit_price ? 'var(--amber, var(--c-bg-d97706))' : undefined }} />
                         {item.list_price !== item.unit_price && (
                           <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>
                             was ${item.list_price.toFixed(2)}
@@ -1351,7 +1351,7 @@ export default function PosSalesPage() {
           {/* Action bar */}
           <div style={{ ...panel, marginBottom: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={printSelectedSale}>🖨️ Print Receipt</button>
-            <button onClick={voidSale} disabled={voiding} style={{ background: 'var(--red)', border: 'none', color: 'white', borderRadius: 6, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: voiding ? 'wait' : 'pointer', opacity: voiding ? 0.7 : 1 }}>✗ Void Sale Receipt</button>
+            <button onClick={voidSale} disabled={voiding} style={{ background: 'var(--red)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 6, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: voiding ? 'wait' : 'pointer', opacity: voiding ? 0.7 : 1 }}>✗ Void Sale Receipt</button>
             <button className="btn btn-secondary" style={{ fontSize: 12, marginLeft: 'auto' }} onClick={() => setActiveView('home')}>← Back to POS</button>
           </div>
 
@@ -1491,7 +1491,7 @@ export default function PosSalesPage() {
                   <input value={newCust.phone_primary} onChange={e => setNewCust(f => ({ ...f, phone_primary: e.target.value }))} placeholder="Phone" style={inputStyle} />
                   <input value={newCust.email} onChange={e => setNewCust(f => ({ ...f, email: e.target.value }))} placeholder="Email" style={inputStyle} />
                 </div>
-                <button onClick={createQuickCustomer} disabled={creatingCustomer} style={{ background: 'var(--green)', border: 'none', color: 'white', borderRadius: 7, padding: '8px 16px', fontSize: 12, fontWeight: 600, cursor: creatingCustomer ? 'wait' : 'pointer', width: '100%' }}>
+                <button onClick={createQuickCustomer} disabled={creatingCustomer} style={{ background: 'var(--green)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 7, padding: '8px 16px', fontSize: 12, fontWeight: 600, cursor: creatingCustomer ? 'wait' : 'pointer', width: '100%' }}>
                   {creatingCustomer ? 'Creating…' : 'Create & Select'}
                 </button>
                 <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6 }}>Full details (address, ID, etc.) can be added later from the Customers page.</div>
@@ -1534,7 +1534,7 @@ export default function PosSalesPage() {
               {pickerPending && hasProductFilters(pickerFilters) && (
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>Filtering…</div>
               )}
-              {pickerError && <div style={{ fontSize: 11, color: 'var(--red, #dc2626)', marginTop: 8 }}>{pickerError}</div>}
+              {pickerError && <div style={{ fontSize: 11, color: 'var(--red, var(--c-fg-dc2626))', marginTop: 8 }}>{pickerError}</div>}
               {!pickerPending && !pickerError && pickerResults && (
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
                   {pickerResults.length === 0 ? 'No products match.' : `${pickerResults.length}${pickerResults.length >= 500 ? '+' : ''} match${pickerResults.length === 1 ? '' : 'es'}${pickerResults.length > 100 ? ' · showing the first 100 — narrow the search or filters' : ''}`}
@@ -1644,7 +1644,7 @@ export default function PosSalesPage() {
                         <input type="number" min="0" step="1" value={openingQty} onChange={e => setOpeningQty(e.target.value)} placeholder="0" style={{ ...inputStyle, width: 120 }} />
                       </div>
                       {!activeStore && (
-                        <div style={{ fontSize: 11, color: 'var(--amber, #d97706)' }}>
+                        <div style={{ fontSize: 11, color: 'var(--amber, var(--c-fg-d97706))' }}>
                           Pick this register&apos;s store first — stock is held at a store, so none can be recorded without one.
                         </div>
                       )}
@@ -1654,7 +1654,7 @@ export default function PosSalesPage() {
               )}
 
               {productFormError && (
-                <div style={{ marginTop: 12, fontSize: 12, color: 'var(--red, #dc2626)' }}>{productFormError}</div>
+                <div style={{ marginTop: 12, fontSize: 12, color: 'var(--red, var(--c-fg-dc2626))' }}>{productFormError}</div>
               )}
               {productFormNote && (
                 <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text2)' }}>{productFormNote}</div>
@@ -1714,7 +1714,7 @@ export default function PosSalesPage() {
             </div>
             <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="btn btn-secondary" onClick={() => setShowPayment(false)}>Cancel</button>
-              <button onClick={completeSale} disabled={saving} style={{ background: 'var(--green)', border: 'none', color: 'white', borderRadius: 7, padding: '10px 24px', fontSize: 14, fontWeight: 700, cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.7 : 1 }}>
+              <button onClick={completeSale} disabled={saving} style={{ background: 'var(--green)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 7, padding: '10px 24px', fontSize: 14, fontWeight: 700, cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.7 : 1 }}>
                 {saving ? 'Processing...' : '✅ Complete Sale'}
               </button>
             </div>
@@ -1769,7 +1769,7 @@ export default function PosSalesPage() {
               {lastWasActivation && lastSaleId && (
                 <a href={`/pos/activations?sale=${lastSaleId}&customer=${lastSaleCustomerId || ''}`}
                   title={mustPrint ? mustPrintTitle : undefined}
-                  style={{ display: 'block', width: '100%', boxSizing: 'border-box', background: 'linear-gradient(135deg, var(--accent2), var(--accent))', border: 'none', color: 'white', borderRadius: 8, padding: 14, fontSize: 15, fontWeight: 700, cursor: mustPrint ? 'not-allowed' : 'pointer', marginBottom: 8, textDecoration: 'none', pointerEvents: mustPrint ? 'none' : 'auto', opacity: mustPrint ? 0.5 : 1 }}>
+                  style={{ display: 'block', width: '100%', boxSizing: 'border-box', background: 'linear-gradient(135deg, var(--accent2), var(--accent))', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 8, padding: 14, fontSize: 15, fontWeight: 700, cursor: mustPrint ? 'not-allowed' : 'pointer', marginBottom: 8, textDecoration: 'none', pointerEvents: mustPrint ? 'none' : 'auto', opacity: mustPrint ? 0.5 : 1 }}>
                   📱 Continue to Activation →
                 </a>
               )}
@@ -1786,7 +1786,7 @@ export default function PosSalesPage() {
                 🖨️ Print Receipt
               </button>
               <button onClick={() => { setShowReceipt(false); setActiveView('home') }} disabled={mustPrint} title={mustPrint ? mustPrintTitle : undefined}
-                style={{ width: '100%', background: 'var(--green)', border: 'none', color: 'white', borderRadius: 8, padding: 12, fontSize: 14, fontWeight: 700, cursor: mustPrint ? 'not-allowed' : 'pointer', opacity: mustPrint ? 0.5 : 1 }}>
+                style={{ width: '100%', background: 'var(--green)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 8, padding: 12, fontSize: 14, fontWeight: 700, cursor: mustPrint ? 'not-allowed' : 'pointer', opacity: mustPrint ? 0.5 : 1 }}>
                 New Sale
               </button>
               <button className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center', marginTop: 8, cursor: mustPrint ? 'not-allowed' : 'pointer', opacity: mustPrint ? 0.5 : 1 }}

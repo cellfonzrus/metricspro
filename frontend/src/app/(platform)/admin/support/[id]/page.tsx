@@ -14,7 +14,7 @@ const PRIORITIES = ['low', 'normal', 'high', 'urgent']
 function Pill({ label, color }: { label?: string | null; color?: string }) {
   if (!label) return null
   return <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap',
-    background: (color || '#888') + '22', color: color || '#555', border: `1px solid ${(color || '#888')}55` }}>{label}</span>
+    background: (color || 'var(--c-bg-888888)') + '22', color: color || 'var(--c-fg-555555)', border: `1px solid ${(color || 'var(--c-bg-888888)')}55` }}>{label}</span>
 }
 const SEV_COLOR: Record<string, string> = { error: '#dc2626', warning: '#d97706', info: '#2563eb' }
 const PRIORITY_COLOR: Record<string, string> = { urgent: '#ef4444', high: '#f97316', normal: '#3b82f6', low: '#6b7280' }
@@ -49,21 +49,21 @@ export default function SupportCase() {
     catch (e: any) { setErr(e?.message || 'Action failed') } finally { setBusy(false) }
   }
 
-  if (err && !data) return <div style={{ padding: 24, color: '#c0392b' }}>{err} · <Link href="/admin/support" style={{ color: '#2563eb' }}>Back</Link></div>
+  if (err && !data) return <div style={{ padding: 24, color: 'var(--c-fg-c0392b)' }}>{err} · <Link href="/admin/support" style={{ color: 'var(--c-fg-2563eb)' }}>Back</Link></div>
   if (!data) return <div style={{ padding: 24, color: 'var(--text3)' }}>Loading…</div>
   const c = data.case; const t = data.ticket
   const sel = { padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13 }
 
   return (
     <div style={{ padding: 24 }}>
-      <Link href="/admin/support" style={{ color: '#2563eb', fontSize: 13 }}>← Support Console</Link>
+      <Link href="/admin/support" style={{ color: 'var(--c-fg-2563eb)', fontSize: 13 }}>← Support Console</Link>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '8px 0 2px' }}>
         <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{t?.subject || '(ticket unavailable)'}</h1>
-        <Pill label={c.priority} color={PRIORITY_COLOR[c.priority] || '#6b7280'} />
-        <Pill label={c.status} color="#475569" />
+        <Pill label={c.priority} color={PRIORITY_COLOR[c.priority] || 'var(--c-fg-6b7280)'} />
+        <Pill label={c.status} color="var(--c-fg-475569)" />
         <span style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 600 }}>🏢 {c.tenant_name}</span>
       </div>
-      {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 10, margin: '8px 0' }}>{err}</div>}
+      {err && <div className="card" style={{ borderColor: 'var(--c-bg-c0392b)', color: 'var(--c-fg-c0392b)', padding: 10, margin: '8px 0' }}>{err}</div>}
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         {/* MAIN */}
@@ -81,7 +81,7 @@ export default function SupportCase() {
             <label style={{ fontSize: 12, color: 'var(--text3)' }}>Assignee
               <input style={{ ...sel, marginLeft: 6 }} disabled={busy} defaultValue={c.assignee_email || ''} placeholder="email"
                 onBlur={e => { if (e.target.value !== (c.assignee_email || '')) post('assign', { assignee_email: e.target.value }) }} /></label>
-            {c.sla_due_at && <span style={{ fontSize: 12, color: new Date(c.sla_due_at).getTime() < Date.now() ? '#dc2626' : 'var(--text3)' }}>
+            {c.sla_due_at && <span style={{ fontSize: 12, color: new Date(c.sla_due_at).getTime() < Date.now() ? 'var(--c-fg-dc2626)' : 'var(--text3)' }}>
               SLA due {String(c.sla_due_at).slice(0, 16).replace('T', ' ')}</span>}
           </div>
 
@@ -94,7 +94,7 @@ export default function SupportCase() {
                 onClick={() => post('status', { status: 'resolved', resolution }, () => setResolution(''))}>✅ Mark resolved</button>
             </div>
           )}
-          {c.resolution && <div className="card" style={{ padding: 10, marginBottom: 12, background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+          {c.resolution && <div className="card" style={{ padding: 10, marginBottom: 12, background: 'var(--c-bg-f0fdf4)', border: '1px solid var(--c-bg-bbf7d0)' }}>
             <b style={{ fontSize: 12 }}>Resolution:</b> <span style={{ fontSize: 13 }}>{c.resolution}</span></div>}
 
           {/* Timeline */}
@@ -104,14 +104,14 @@ export default function SupportCase() {
             {(data.events || []).map((e: any) => {
               const isNote = e.kind === 'internal_note'
               const isReply = e.kind === 'reply'
-              const bg = isNote ? '#fffbeb' : isReply ? '#eff6ff' : 'var(--bg2)'
-              const bd = isNote ? '#fde68a' : isReply ? '#bfdbfe' : 'var(--border)'
+              const bg = isNote ? 'var(--c-bg-fffbeb)' : isReply ? 'var(--c-bg-eff6ff)' : 'var(--bg2)'
+              const bd = isNote ? 'var(--c-bg-fde68a)' : isReply ? 'var(--c-bg-bfdbfe)' : 'var(--border)'
               return (
                 <div key={e.id} style={{ padding: '8px 10px', borderRadius: 8, marginBottom: 6, background: bg, border: `1px solid ${bd}` }}>
                   <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 2 }}>
                     {e.author_email || 'system'} · {String(e.created_at).slice(0, 16).replace('T', ' ')}
-                    {isNote && <span style={{ color: '#b45309', marginLeft: 6 }}>internal note (hidden from user)</span>}
-                    {isReply && <span style={{ color: '#1d4ed8', marginLeft: 6 }}>reply → sent to user</span>}
+                    {isNote && <span style={{ color: 'var(--c-fg-b45309)', marginLeft: 6 }}>internal note (hidden from user)</span>}
+                    {isReply && <span style={{ color: 'var(--c-fg-1d4ed8)', marginLeft: 6 }}>reply → sent to user</span>}
                     {(e.kind === 'status' || e.kind === 'assign') && <span style={{ color: 'var(--text3)', marginLeft: 6 }}>{e.kind}</span>}
                   </div>
                   {e.body && <div style={{ fontSize: 14, whiteSpace: 'pre-wrap' }}>{e.body}</div>}
@@ -160,7 +160,7 @@ export default function SupportCase() {
           <div className="card" style={{ padding: 12, marginBottom: 12 }}>
             <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>📖 Support playbook{doc?.title ? ` · ${doc.title}` : ''}</div>
             {doc?.support_md ? <div style={{ fontSize: 12, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{doc.support_md}</div>
-              : <div style={{ fontSize: 12, color: 'var(--text3)' }}>No playbook for this page yet. <Link href="/admin/support/docs" style={{ color: '#2563eb' }}>Add one</Link>.</div>}
+              : <div style={{ fontSize: 12, color: 'var(--text3)' }}>No playbook for this page yet. <Link href="/admin/support/docs" style={{ color: 'var(--c-fg-2563eb)' }}>Add one</Link>.</div>}
             {Array.isArray(doc?.common_issues) && doc.common_issues.length > 0 && (
               <div style={{ marginTop: 8 }}>
                 <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Common issues</div>
@@ -169,7 +169,7 @@ export default function SupportCase() {
                     <div><b>{ci.symptom}</b></div>
                     {ci.diagnosis && <div style={{ color: 'var(--text3)' }}>Dx: {ci.diagnosis}</div>}
                     {ci.fix && <div>Fix: {ci.fix}</div>}
-                    {ci.escalate_when && <div style={{ color: '#b45309' }}>Escalate when: {ci.escalate_when}</div>}
+                    {ci.escalate_when && <div style={{ color: 'var(--c-fg-b45309)' }}>Escalate when: {ci.escalate_when}</div>}
                   </div>
                 ))}
               </div>
@@ -183,7 +183,7 @@ export default function SupportCase() {
                 <div key={f.id} style={{ fontSize: 12, marginBottom: 6 }}>
                   <Pill label={f.severity} color={SEV_COLOR[f.severity]} /> <b>{f.category}</b>
                   <div style={{ color: 'var(--text3)' }}>{f.message}</div>
-                  {f.remediation && <div style={{ color: '#0369a1' }}>{f.remediation}</div>}
+                  {f.remediation && <div style={{ color: 'var(--c-fg-0369a1)' }}>{f.remediation}</div>}
                 </div>
               ))}
           </div>

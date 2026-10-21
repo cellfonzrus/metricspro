@@ -68,8 +68,8 @@ function Breakdown({ title, rows, note }: { title: string; rows: Bucket[]; note?
                 <td style={{ padding: '6px 8px' }}>{b.key}</td>
                 <td style={{ padding: '6px 8px', textAlign: 'right' }}>{b.rows.toLocaleString()}</td>
                 <td style={{ padding: '6px 8px', textAlign: 'right' }}>{fmt(b.earned)}</td>
-                <td style={{ padding: '6px 8px', textAlign: 'right', color: b.collected ? '#15803d' : 'var(--text3)' }}>{fmt(b.collected)}</td>
-                <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: '#b45309' }}>{fmt(b.outstanding)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', color: b.collected ? 'var(--c-fg-15803d)' : 'var(--text3)' }}>{fmt(b.collected)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, color: 'var(--c-fg-b45309)' }}>{fmt(b.outstanding)}</td>
               </tr>
             ))}
           </tbody>
@@ -109,8 +109,8 @@ export default function VendorRebatesPage() {
 
       {/* The posture banner. It is not decoration: the whole risk of this feed is a reader assuming
           "earned" means "received", and this is the sentence that stops them. */}
-      <div style={{ ...card, marginTop: 14, background: booked ? '#fffbeb' : '#f0f9ff',
-                    borderColor: booked ? '#fcd34d' : '#bae6fd' }}>
+      <div style={{ ...card, marginTop: 14, background: booked ? 'var(--c-bg-fffbeb)' : 'var(--c-bg-f0f9ff)',
+                    borderColor: booked ? 'var(--c-bg-fcd34d)' : 'var(--c-bg-bae6fd)' }}>
         <strong style={{ fontSize: 13 }}>Earned, not collected — nothing here is booked.</strong>
         <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 4 }}>
           These rows record what the carrier <strong>owes</strong>. They do not prove payment, and they are
@@ -132,11 +132,11 @@ export default function VendorRebatesPage() {
       </div>
 
       {loading && <div style={{ marginTop: 16, color: 'var(--text2)' }}>Loading…</div>}
-      {err && <div style={{ marginTop: 16, color: '#dc2626', fontSize: 13 }}>❌ {err}</div>}
+      {err && <div style={{ marginTop: 16, color: 'var(--c-fg-dc2626)', fontSize: 13 }}>❌ {err}</div>}
 
       {/* A table that does not exist yet is a migration away, not a bug — say which one. */}
       {data && data.available === false && (
-        <div style={{ ...card, marginTop: 16, background: '#fffbeb', borderColor: '#fcd34d' }}>
+        <div style={{ ...card, marginTop: 16, background: 'var(--c-bg-fffbeb)', borderColor: 'var(--c-bg-fcd34d)' }}>
           <strong style={{ fontSize: 13 }}>Nothing landed yet.</strong>
           <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 4 }}>{data.note}</div>
         </div>
@@ -162,7 +162,7 @@ export default function VendorRebatesPage() {
           {/* A feed whose own Balance column disagrees with its own arithmetic is a fact about the
               file, so it is surfaced rather than quietly reconciled away. */}
           {Math.abs(t.balance_disagrees_by) >= 0.01 && (
-            <div style={{ ...card, marginTop: 12, background: '#fef2f2', borderColor: '#fca5a5' }}>
+            <div style={{ ...card, marginTop: 12, background: 'var(--c-bg-fef2f2)', borderColor: 'var(--c-bg-fca5a5)' }}>
               <strong style={{ fontSize: 13 }}>This file disagrees with itself by {fmt(t.balance_disagrees_by)}.</strong>
               <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 4 }}>
                 Its own Balance column totals {fmt(t.balance_reported)}, while earned − collected is {fmt(t.outstanding)}.

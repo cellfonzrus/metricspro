@@ -131,7 +131,7 @@ export default function CashPositionPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : err ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {err}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {err}</div>
       ) : (
         <ReportShell
           title="Cash Position" subtitle={rangeMode ? `${rangeStart} → ${rangeEnd}` : date}

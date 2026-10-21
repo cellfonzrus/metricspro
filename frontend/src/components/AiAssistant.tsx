@@ -159,14 +159,14 @@ export default function AiAssistant({ initialOpen = false, initialQuestion = '',
       </div>
 
       {mode === 'data' && !dataOK && data && (
-        <div style={{ fontSize: 13, color: '#b45309', marginBottom: 10 }}>
+        <div style={{ fontSize: 13, color: 'var(--c-fg-b45309)', marginBottom: 10 }}>
           {data.reason || 'The data assistant is not available for this login.'}
         </div>
       )}
       {notConfigured && (
-        <div style={{ fontSize: 13, color: '#b45309', marginBottom: 10 }}>
+        <div style={{ fontSize: 13, color: 'var(--c-fg-b45309)', marginBottom: 10 }}>
           The assistant isn’t configured yet — ask an admin to set the API key. You can still{' '}
-          <Link href="/helpdesk/new" style={{ color: '#2563eb' }}>raise a ticket</Link>.
+          <Link href="/helpdesk/new" style={{ color: 'var(--c-fg-2563eb)' }}>raise a ticket</Link>.
         </div>
       )}
 
@@ -205,7 +205,7 @@ export default function AiAssistant({ initialOpen = false, initialQuestion = '',
         )}
         <div ref={endRef} />
       </div>
-      {err && <div style={{ fontSize: 12, color: '#c0392b', marginBottom: 6 }}>{err}</div>}
+      {err && <div style={{ fontSize: 12, color: 'var(--c-fg-c0392b)', marginBottom: 6 }}>{err}</div>}
       <div style={{ display: 'flex', gap: 8 }}>
         <input className="input" style={{ flex: 1 }} value={input} disabled={busy}
           placeholder={mode === 'data' ? 'Ask about your numbers…' : 'Ask a question…'}
@@ -220,7 +220,7 @@ export default function AiAssistant({ initialOpen = false, initialQuestion = '',
           // Said plainly, because it is the property that makes the answers trustworthy.
           ? 'Read-only. Figures come from your own reports, scoped to what you can see — the same numbers as the report pages.'
           : <>Read-only — it can’t change data or money. For that, use the relevant screen or{' '}
-            <Link href="/helpdesk/new" style={{ color: '#2563eb' }}>raise a ticket</Link>.</>}
+            <Link href="/helpdesk/new" style={{ color: 'var(--c-fg-2563eb)' }}>raise a ticket</Link>.</>}
       </div>
     </div>
   )
@@ -228,7 +228,7 @@ export default function AiAssistant({ initialOpen = false, initialQuestion = '',
   if (compact) return body
 
   return (
-    <div className="card" style={{ padding: 0, marginBottom: 12, overflow: 'hidden', borderColor: '#c7d2fe' }}>
+    <div className="card" style={{ padding: 0, marginBottom: 12, overflow: 'hidden', borderColor: 'var(--c-bg-c7d2fe)' }}>
       <button onClick={() => setOpen(o => !o)} style={{ width: '100%', textAlign: 'left', background: 'none',
         border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px' }}>
         <span style={{ fontSize: 18 }}>🤖</span>

@@ -190,7 +190,7 @@ export default function PayoutSchedulesPage() {
           single-month payout (unchanged). <strong>Preview</strong> is read-only — it does not change live payouts.
         </p>
       </div>
-      {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || <SetupNotice detail="057_multi_month_payout.sql" />}</div>}
+      {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', fontSize: 13 }}>⚠️ {msg || <SetupNotice detail="057_multi_month_payout.sql" />}</div>}
 
       {/* import carrier template — clone another org's shareable payout config into this tenant */}
       {sources.length > 0 && (
@@ -329,9 +329,9 @@ export default function PayoutSchedulesPage() {
               <span style={{ fontWeight: 600 }}>{carrierName(s.carrier_id)}</span>
               <span style={{ color: 'var(--text3)' }}>· {s.activation_type === '*' ? 'all activations' : s.activation_type} · {s.num_months} mo · {(s.lines || []).map(l => l.payout_kind === 'pct_mrc' ? `${Math.round((l.mrc_pct || 0) * 100)}%MRC` : `$${l.flat_amount}`).join(' → ')}</span>
               <span style={{ flex: 1 }} />
-              {!s.is_active && <span style={{ fontSize: 11, color: '#b45309' }}>inactive</span>}
+              {!s.is_active && <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>inactive</span>}
               <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => edit(s)}>Edit</button>
-              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => del(s.id)}>Delete</button>
+              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: 'var(--c-fg-dc2626)' }} onClick={() => del(s.id)}>Delete</button>
             </div>
           ))}
         </div>
@@ -346,7 +346,7 @@ export default function PayoutSchedulesPage() {
           a fallback whenever the carrier statement reports $0 MRC — so residual installments
           compute real amounts instead of $0.{!multi && ' Some carrier statements report $0 MRC; those that report a real MRC are unaffected.'}
         </p>
-        {!mrcReady && <div style={{ padding: 12, marginBottom: 12, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>⚠️ <SetupNotice lead="This catalog is not available yet." detail="074_product_mrc.sql" /></div>}
+        {!mrcReady && <div style={{ padding: 12, marginBottom: 12, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 8, fontSize: 13 }}>⚠️ <SetupNotice lead="This catalog is not available yet." detail="074_product_mrc.sql" /></div>}
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12 }}>
           <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Plan name<br />
@@ -418,7 +418,7 @@ export default function PayoutSchedulesPage() {
                 <button className="btn btn-primary" disabled={impBusy || !imp.total} onClick={impCommit}>{impBusy ? '…' : `⬇ Import ${imp.total || 0} plans`}</button>
                 <button className="btn btn-secondary" onClick={() => setImp(null)}>Cancel</button>
               </div>
-              {imp.note && <div style={{ fontSize: 12, color: '#b45309', marginBottom: 6 }}>{imp.note}</div>}
+              {imp.note && <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginBottom: 6 }}>{imp.note}</div>}
               {(imp.rows || []).length > 0 && (
                 <table style={{ borderCollapse: 'collapse', fontSize: 12 }}>
                   <thead><tr style={{ background: 'var(--surface2)' }}><th style={{ textAlign: 'left', padding: '4px 10px' }}>Plan</th><th style={{ textAlign: 'left', padding: '4px 10px' }}>MRC</th></tr></thead>
@@ -440,14 +440,14 @@ export default function PayoutSchedulesPage() {
             <tbody>
               {shownMrc.map(m => (
                 <tr key={m.id} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
-                  <td style={{ padding: '6px 8px', fontWeight: 600 }}>{m.plan_pattern}{!m.is_active && <span style={{ fontSize: 11, color: '#b45309' }}> (inactive)</span>}</td>
+                  <td style={{ padding: '6px 8px', fontWeight: 600 }}>{m.plan_pattern}{!m.is_active && <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}> (inactive)</span>}</td>
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{m.match_op}</td>
                   <td style={{ padding: '6px 8px', fontWeight: 600 }}>{fmt(m.mrc)}</td>
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{carrierName(m.carrier_id)}</td>
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{m.priority}</td>
                   <td style={{ padding: '6px 8px', textAlign: 'right' }}>
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setMrcDraft({ ...m, carrier_id: m.carrier_id || '' })}>Edit</button>{' '}
-                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => delMrc(m.id)}>Delete</button>
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: 'var(--c-fg-dc2626)' }} onClick={() => delMrc(m.id)}>Delete</button>
                   </td>
                 </tr>
               ))}
@@ -468,10 +468,10 @@ export default function PayoutSchedulesPage() {
               <thead><tr style={{ background: 'var(--surface2)' }}>{['Customer Plan', 'Subs', 'MRC', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
               <tbody>
                 {coverage.plans.slice(0, 100).map((p: any, i: number) => (
-                  <tr key={i} style={{ borderTop: '1px solid var(--border)', fontSize: 12, background: p.matched ? 'transparent' : '#fef2f2' }}>
+                  <tr key={i} style={{ borderTop: '1px solid var(--border)', fontSize: 12, background: p.matched ? 'transparent' : 'var(--c-bg-fef2f2)' }}>
                     <td style={{ padding: '5px 8px' }}>{p.customer_plan}</td>
                     <td style={{ padding: '5px 8px' }}>{p.subscribers}</td>
-                    <td style={{ padding: '5px 8px', fontWeight: 600 }}>{p.matched ? fmt(p.mrc) : <span style={{ color: '#b91c1c' }}>none</span>}</td>
+                    <td style={{ padding: '5px 8px', fontWeight: 600 }}>{p.matched ? fmt(p.mrc) : <span style={{ color: 'var(--c-fg-b91c1c)' }}>none</span>}</td>
                     <td style={{ padding: '5px 8px', textAlign: 'right' }}>
                       {!p.matched && <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => setMrcDraft({ ...blankMrc(), plan_pattern: p.customer_plan, carrier_id: p.carrier_id || '' })}>＋ Add MRC</button>}
                     </td>
@@ -513,7 +513,7 @@ export default function PayoutSchedulesPage() {
                     <td style={{ padding: '5px 8px', fontSize: 12 }}>{d.rep || '—'}</td>
                     <td style={{ padding: '5px 8px', fontSize: 12 }}>{d.store || '—'}</td>
                     <td style={{ padding: '5px 8px', fontSize: 12 }}>{d.month_index}</td>
-                    <td style={{ padding: '5px 8px', fontSize: 12 }}>{fmt(d.mrc_at_pay)}{d.mrc_source === 'product_catalog' && <span title="from per-product MRC catalog" style={{ marginLeft: 4, fontSize: 10, color: '#2563eb' }}>catalog</span>}{d.mrc_source === 'none' && d.payout_kind === 'pct_mrc' && <span title="no MRC found — add one to the catalog" style={{ marginLeft: 4, fontSize: 10, color: '#b91c1c' }}>no MRC</span>}</td>
+                    <td style={{ padding: '5px 8px', fontSize: 12 }}>{fmt(d.mrc_at_pay)}{d.mrc_source === 'product_catalog' && <span title="from per-product MRC catalog" style={{ marginLeft: 4, fontSize: 10, color: 'var(--c-fg-2563eb)' }}>catalog</span>}{d.mrc_source === 'none' && d.payout_kind === 'pct_mrc' && <span title="no MRC found — add one to the catalog" style={{ marginLeft: 4, fontSize: 10, color: 'var(--c-fg-b91c1c)' }}>no MRC</span>}</td>
                     <td style={{ padding: '5px 8px', fontSize: 12, fontWeight: 600 }}>{fmt(d.amount)}</td>
                     <td style={{ padding: '5px 8px', fontSize: 12, color: d.status === 'paid' ? '#15803d' : d.status === 'withheld_unpaid' ? '#b91c1c' : '#b45309' }}>{d.status}</td>
                   </tr>

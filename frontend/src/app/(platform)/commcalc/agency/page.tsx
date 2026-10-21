@@ -17,7 +17,7 @@ const card: React.CSSProperties = { border: '1px solid var(--border)', borderRad
 const th: React.CSSProperties = { textAlign: 'left', padding: '6px 10px', fontSize: 12, color: 'var(--text2)', borderBottom: '1px solid var(--border)' }
 const td: React.CSSProperties = { padding: '6px 10px', fontSize: 13, borderBottom: '1px solid var(--border)' }
 const btn: React.CSSProperties = { padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', fontSize: 13 }
-const btnP: React.CSSProperties = { ...btn, background: 'var(--accent, #2563eb)', color: '#fff', borderColor: 'transparent' }
+const btnP: React.CSSProperties = { ...btn, background: 'var(--accent, var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', borderColor: 'transparent' }
 const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
 const money = (n: any) => fmt(Number(n) || 0)
@@ -39,8 +39,8 @@ export default function AgencyPage() {
       <div style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
         Configure sub-agent relationships, holdback / equipment-margin / charge rules, equipment transfers, and generate agency invoices.
       </div>
-      {err && <div style={{ ...card, borderColor: '#dc2626', color: '#dc2626' }}>{err} <button style={btn} onClick={() => setErr('')}>dismiss</button></div>}
-      {notice && <div style={{ ...card, borderColor: '#d97706', color: '#b45309' }}>{notice} <button style={btn} onClick={() => setNotice('')}>ok</button></div>}
+      {err && <div style={{ ...card, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)' }}>{err} <button style={btn} onClick={() => setErr('')}>dismiss</button></div>}
+      {notice && <div style={{ ...card, borderColor: 'var(--c-bg-d97706)', color: 'var(--c-fg-b45309)' }}>{notice} <button style={btn} onClick={() => setNotice('')}>ok</button></div>}
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
         {TABS.map(t => (
@@ -115,7 +115,7 @@ function LinksTab({ links, selId, setSelId, reload, onErr }: any) {
                        onKeyDown={e => { if (e.key === 'Enter') doLookup() }} />
                 <button style={btn} onClick={doLookup} disabled={!subQuery.trim()}>Look up</button>
                 {subMatch && <span style={{ fontSize: 13, color: 'var(--text2)' }}>✓ <b>{subMatch.name}</b></span>}
-                {lookMsg && <span style={{ fontSize: 12, color: '#b45309' }}>{lookMsg}</span>}
+                {lookMsg && <span style={{ fontSize: 12, color: 'var(--c-fg-b45309)' }}>{lookMsg}</span>}
               </span>
             : <input style={{ ...inp, width: 240 }} placeholder="External party name" value={name} onChange={e => setName(e.target.value)} />}
           <label style={{ fontSize: 13, display: 'inline-flex', gap: 6, alignItems: 'center' }}>
@@ -191,7 +191,7 @@ function LinkDetail({ linkId, link, carriers, reload, onErr }: any) {
         </div>
       </div>
       <div style={{ marginTop: 14, fontWeight: 600 }}>Store roster</div>
-      {cand && !cand.consented && <div style={{ fontSize: 12, color: '#b45309', margin: '4px 0' }}>{cand.reason || 'manual entry only'} — add stores manually below.</div>}
+      {cand && !cand.consented && <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', margin: '4px 0' }}>{cand.reason || 'manual entry only'} — add stores manually below.</div>}
       {cand && cand.consented && <ConsentedStorePicker stores={cand.stores} onAdd={(s: any) => addStore({ store_kind: 'storeops', store_id: s.store_id, store_code: s.store_code, store_address: s.store_address })} />}
       <ManualStoreAdd onAdd={addStore} />
       <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>

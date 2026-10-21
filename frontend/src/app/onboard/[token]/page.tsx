@@ -10,10 +10,10 @@ import { apiUrl } from '@/lib/apiBase'
 // pre-start employee can read + fill + upload their own forms before they have an account. Talks ONLY to
 // the token-guarded /hr/public/onboarding endpoints. Lives outside the (platform) RBAC group on purpose.
 
-const card: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 20, maxWidth: 560, margin: '0 auto' }
-const inp: React.CSSProperties = { padding: '10px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 15, width: '100%', boxSizing: 'border-box' }
-const btnP: React.CSSProperties = { padding: '10px 16px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' }
-const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: '#334155', display: 'block', margin: '0 0 4px' }
+const card: React.CSSProperties = { background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, padding: 20, maxWidth: 560, margin: '0 auto' }
+const inp: React.CSSProperties = { padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-bg-cbd5e1)', fontSize: 15, width: '100%', boxSizing: 'border-box' }
+const btnP: React.CSSProperties = { padding: '10px 16px', borderRadius: 8, border: 'none', background: 'var(--c-bg-2563eb)', color: 'var(--c-fg-ffffff)', fontSize: 15, fontWeight: 600, cursor: 'pointer' }
+const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: 'var(--c-fg-334155)', display: 'block', margin: '0 0 4px' }
 
 type DocFile = { id: string; name: string; uploaded_at?: string; employee_can_delete?: boolean }
 type Task = { id: string; label: string; description?: string; doc_url?: string; doc_label?: string; requires_upload?: boolean; status: string; has_document?: boolean; document_name?: string; documents?: DocFile[]; template_url?: string | null; template_name?: string | null; requires_signature?: boolean; form_fields?: { key?: string; label?: string; required?: boolean }[] | null; missing_fields?: string[] | null; returned_reason?: string | null; signed_at?: string | null; work_auth?: boolean; sample_name?: string | null; sample_url?: string | null }
@@ -194,18 +194,18 @@ export default function PublicOnboardPage() {
   const ddPending = intakeDone && !ddSigned && ddConfigured
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f1f5f9', padding: '32px 16px', fontFamily: 'system-ui, sans-serif' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--c-bg-f1f5f9)', padding: '32px 16px', fontFamily: 'system-ui, sans-serif' }}>
       <div style={{ maxWidth: 560, margin: '0 auto 16px', textAlign: 'center' }}>
-        <h1 style={{ fontSize: 22, fontWeight: 800, color: '#0f172a', margin: 0 }}>Welcome aboard{first ? `, ${first}` : ''} 👋</h1>
-        <p style={{ color: '#475569', fontSize: 14 }}>Tell us about yourself, then fill and upload your new-hire forms.</p>
+        <h1 style={{ fontSize: 22, fontWeight: 800, color: 'var(--c-fg-0f172a)', margin: 0 }}>Welcome aboard{first ? `, ${first}` : ''} 👋</h1>
+        <p style={{ color: 'var(--c-fg-475569)', fontSize: 14 }}>Tell us about yourself, then fill and upload your new-hire forms.</p>
       </div>
 
-      {err && <div style={{ ...card, borderColor: '#fca5a5', background: '#fef2f2', color: '#991b1b', fontSize: 14, marginBottom: 12 }}>{err}</div>}
+      {err && <div style={{ ...card, borderColor: 'var(--c-bg-fca5a5)', background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-991b1b)', fontSize: 14, marginBottom: 12 }}>{err}</div>}
 
       {!verified ? (
         <div style={card}>
           <h2 style={{ fontSize: 16, fontWeight: 700, marginTop: 0 }}>Confirm it&apos;s you</h2>
-          <p style={{ color: '#475569', fontSize: 14 }}>For your security, enter your date of birth to continue.</p>
+          <p style={{ color: 'var(--c-fg-475569)', fontSize: 14 }}>For your security, enter your date of birth to continue.</p>
           <input style={inp} type="date" value={value} onChange={e => setValue(e.target.value)} />
           <button style={{ ...btnP, marginTop: 14, width: '100%', opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={loadChecklist}>{busy ? 'Checking…' : 'Continue'}</button>
         </div>
@@ -213,20 +213,20 @@ export default function PublicOnboardPage() {
         <div style={{ maxWidth: 560, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
           {/* item 4: persistent notice, shown on every visit while any work-auth doc is outstanding */}
           {workAuthPending.length > 0 && (
-            <div style={{ ...card, background: '#fef2f2', borderColor: '#fca5a5', color: '#991b1b', fontSize: 14 }}>
+            <div style={{ ...card, background: 'var(--c-bg-fef2f2)', borderColor: 'var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)', fontSize: 14 }}>
               ⛔ {workAuthNotice || 'Your work-authorization documents are still outstanding. Your payroll will be delayed until these documents are submitted.'}
             </div>
           )}
           {/* Gate-1 fold N1: persistent (survives reload, unlike `note`) — bank details were withheld
               until the disclaimer is acknowledged. */}
           {ddPending && (
-            <div style={{ ...card, background: '#fffbeb', borderColor: '#fde68a', color: '#92400e', fontSize: 14 }}>
+            <div style={{ ...card, background: 'var(--c-bg-fffbeb)', borderColor: 'var(--c-bg-fde68a)', color: 'var(--c-fg-92400e)', fontSize: 14 }}>
               🏦 Bank details pending — add your initials to finish direct deposit (see &quot;Your information&quot; below).
             </div>
           )}
           {progress && <div style={{ ...card, padding: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ flex: 1, height: 8, background: '#e2e8f0', borderRadius: 8, overflow: 'hidden' }}><div style={{ width: `${progress.total ? Math.round(progress.done / progress.total * 100) : 0}%`, height: '100%', background: '#059669' }} /></div>
-            <span style={{ fontSize: 13, color: '#475569' }}>{progress.done}/{progress.total} done</span>
+            <div style={{ flex: 1, height: 8, background: 'var(--c-bg-e2e8f0)', borderRadius: 8, overflow: 'hidden' }}><div style={{ width: `${progress.total ? Math.round(progress.done / progress.total * 100) : 0}%`, height: '100%', background: 'var(--c-bg-059669)' }} /></div>
+            <span style={{ fontSize: 13, color: 'var(--c-fg-475569)' }}>{progress.done}/{progress.total} done</span>
           </div>}
           {note && <div style={{ ...card, padding: 12,
             background: noteKind === 'err' ? '#fef2f2' : noteKind === 'warn' ? '#fffbeb' : '#ecfdf5',
@@ -234,34 +234,34 @@ export default function PublicOnboardPage() {
             color: noteKind === 'err' ? '#991b1b' : noteKind === 'warn' ? '#92400e' : '#065f46', fontSize: 14 }}>{note}</div>}
 
           {/* Step 1 — which state do you work in? (drives which tax forms you get) */}
-          <div style={{ ...card, borderColor: needsState ? '#fca5a5' : '#e5e7eb' }}>
+          <div style={{ ...card, borderColor: needsState ? 'var(--c-bg-fca5a5)' : 'var(--c-bg-e5e7eb)' }}>
             <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 6px' }}>Which state will you work in?</h2>
-            <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 8px' }}>We&apos;ll show you only the tax forms for that state.</p>
+            <p style={{ fontSize: 13, color: 'var(--c-fg-64748b)', margin: '0 0 8px' }}>We&apos;ll show you only the tax forms for that state.</p>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
               <EntityPicker options={US_STATES} value={workState || null} width={200} disabled={busy}
                 onChange={v => { if (v) saveState(v) }} placeholder="Select state…" clearable={false} />
-              {workState && <span style={{ alignSelf: 'center', fontSize: 13, color: '#059669' }}>✓ {workState}</span>}
+              {workState && <span style={{ alignSelf: 'center', fontSize: 13, color: 'var(--c-fg-059669)' }}>✓ {workState}</span>}
             </div>
           </div>
 
           {/* Step 2 — structured intake form (configurable) */}
           {fields.length > 0 && (
             <div style={card}>
-              <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 4px' }}>Your information {intakeDone && (ddPending ? <span style={{ fontSize: 12, color: '#92400e', fontWeight: 600 }}>· bank details pending</span> : <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>· saved ✓</span>)}</h2>
-              <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 12px' }}>This fills your employee record automatically — no PDF needed for these.</p>
+              <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 4px' }}>Your information {intakeDone && (ddPending ? <span style={{ fontSize: 12, color: 'var(--c-fg-92400e)', fontWeight: 600 }}>· bank details pending</span> : <span style={{ fontSize: 12, color: 'var(--c-fg-059669)', fontWeight: 600 }}>· saved ✓</span>)}</h2>
+              <p style={{ fontSize: 13, color: 'var(--c-fg-64748b)', margin: '0 0 12px' }}>This fills your employee record automatically — no PDF needed for these.</p>
               {sections.map(sec => (
                 <div key={sec} style={{ marginBottom: 14 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4, margin: '0 0 8px' }}>{SECTION_LABEL[sec] || sec}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-fg-94a3b8)', textTransform: 'uppercase', letterSpacing: 0.4, margin: '0 0 8px' }}>{SECTION_LABEL[sec] || sec}</div>
                   {/* item 3a: bold disclaimer above the bank-details fields */}
                   {sec === 'direct_deposit' && (
-                    <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 12px', marginBottom: 10, fontSize: 13, fontWeight: 700, color: '#92400e' }}>
+                    <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 8, padding: '10px 12px', marginBottom: 10, fontSize: 13, fontWeight: 700, color: 'var(--c-fg-92400e)' }}>
                       {tenantConfig.dd_disclaimer_text || 'By providing bank account information for direct deposit, I certify the routing and account numbers above are correct. If I submit incorrect information, my employer and the payroll processing company are NOT liable for any loss, delay, or misdirection of my wages that results.'}
                     </div>
                   )}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                     {fields.filter(f => (f.section || 'personal') === sec).map(f => (
                       <div key={f.key} style={{ gridColumn: f.field_type === 'select' || f.key === 'address_line1' ? 'span 2' : 'auto' }}>
-                        <label style={lbl}>{f.label}{f.required && <span style={{ color: '#ef4444' }}> *</span>}{f.sensitive && <span style={{ color: '#94a3b8', fontWeight: 400 }}> · private</span>}</label>
+                        <label style={lbl}>{f.label}{f.required && <span style={{ color: 'var(--c-fg-ef4444)' }}> *</span>}{f.sensitive && <span style={{ color: 'var(--c-fg-94a3b8)', fontWeight: 400 }}> · private</span>}</label>
                         {f.field_type === 'select'
                           ? <select style={inp} value={vals[f.key] || ''} onChange={e => setVals(v => ({ ...v, [f.key]: e.target.value }))}>
                               <option value="">Select…</option>
@@ -273,13 +273,13 @@ export default function PublicOnboardPage() {
                               onBlur={f.key === 'dd_routing' ? (e => checkRouting(e.target.value)) : undefined}
                               placeholder={f.help_text || ''} />}
                         {/* item 3b: ABA checksum + bank-name confirmation */}
-                        {f.key === 'dd_routing' && routingBusy && <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>Checking…</div>}
+                        {f.key === 'dd_routing' && routingBusy && <div style={{ fontSize: 12, color: 'var(--c-fg-64748b)', marginTop: 4 }}>Checking…</div>}
                         {f.key === 'dd_routing' && !routingBusy && routingInfo && (
                           routingInfo.valid_checksum ? (
-                            <div style={{ fontSize: 12, color: '#059669', marginTop: 4 }}>
+                            <div style={{ fontSize: 12, color: 'var(--c-fg-059669)', marginTop: 4 }}>
                               ✓ Valid routing number{routingInfo.bank_name ? <> — you&apos;re entering an account at <b>{routingInfo.bank_name}</b>. Correct?</> : ''}
                             </div>
-                          ) : <div style={{ fontSize: 12, color: '#dc2626', marginTop: 4 }}>⚠️ That doesn&apos;t look like a valid routing number — please double-check it.</div>
+                          ) : <div style={{ fontSize: 12, color: 'var(--c-fg-dc2626)', marginTop: 4 }}>⚠️ That doesn&apos;t look like a valid routing number — please double-check it.</div>
                         )}
                       </div>
                     ))}
@@ -287,11 +287,11 @@ export default function PublicOnboardPage() {
                   {/* item 3a: typed-initials acknowledgment (server also gates this) */}
                   {sec === 'direct_deposit' && !ddSigned && (
                     <div style={{ marginTop: 10 }}>
-                      <label style={lbl}>Type your initials to confirm the disclaimer above<span style={{ color: '#ef4444' }}> *</span></label>
+                      <label style={lbl}>Type your initials to confirm the disclaimer above<span style={{ color: 'var(--c-fg-ef4444)' }}> *</span></label>
                       <input style={{ ...inp, maxWidth: 120 }} maxLength={6} value={ddInitials} onChange={e => setDdInitials(e.target.value)} placeholder="e.g. JB" />
                     </div>
                   )}
-                  {sec === 'direct_deposit' && ddSigned && <div style={{ marginTop: 8, fontSize: 12, color: '#059669' }}>✓ Disclaimer acknowledged</div>}
+                  {sec === 'direct_deposit' && ddSigned && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--c-fg-059669)' }}>✓ Disclaimer acknowledged</div>}
                 </div>
               ))}
               <button style={{ ...btnP, marginTop: 4, opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={saveIntake}>{busy ? 'Saving…' : (intakeDone ? 'Update my information' : 'Save my information')}</button>
@@ -303,30 +303,30 @@ export default function PublicOnboardPage() {
             <div key={c.key} style={card}>
               <h2 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 10px' }}>{c.label}</h2>
               {c.tasks.map(t => (
-                <div key={t.id} style={{ padding: '10px 0', borderTop: '1px solid #f1f5f9' }}>
+                <div key={t.id} style={{ padding: '10px 0', borderTop: '1px solid var(--c-bg-f1f5f9)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 15 }}>{t.status === 'returned' ? '⚠️' : (t.has_document || t.status === 'verified' ? '✅' : '⬜')}</span>
-                    <span style={{ fontSize: 15, fontWeight: 600, color: '#0f172a' }}>{t.label}</span>
-                    {t.work_auth && <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b' }}>required for payroll</span>}
+                    <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--c-fg-0f172a)' }}>{t.label}</span>
+                    {t.work_auth && <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)' }}>required for payroll</span>}
                   </div>
-                  {t.description && <div style={{ fontSize: 13, color: '#64748b', margin: '2px 0 0 23px' }}>{t.description}</div>}
+                  {t.description && <div style={{ fontSize: 13, color: 'var(--c-fg-64748b)', margin: '2px 0 0 23px' }}>{t.description}</div>}
                   {t.status === 'returned' && (
-                    <div style={{ margin: '6px 0 0 23px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: '#991b1b' }}>
+                    <div style={{ margin: '6px 0 0 23px', background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: 'var(--c-fg-991b1b)' }}>
                       ↩ <b>Returned — please fix and resubmit.</b>
                       {(t.missing_fields || []).length > 0 && <div style={{ marginTop: 2 }}>Missing: <b>{(t.missing_fields || []).join(', ')}</b></div>}
                       {t.returned_reason && <div style={{ fontSize: 12, marginTop: 2 }}>{t.returned_reason}</div>}
                     </div>
                   )}
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '8px 0 0 23px' }}>
-                    {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📄 Open {t.doc_label || 'form'}</a>}
-                    {t.template_url && <a href={t.template_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📎 {t.template_name || 'Download template'}</a>}
-                    {t.sample_url && <a href={t.sample_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>👁 View completed sample</a>}
-                    <button onClick={() => setSigning(t)} disabled={busy} style={{ padding: '7px 12px', borderRadius: 8, border: 'none', background: '#059669', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>✍️ Fill &amp; sign online</button>
-                    {t.requires_upload && <label style={{ padding: '7px 12px', borderRadius: 8, background: t.has_document ? '#f8fafc' : '#2563eb', color: t.has_document ? '#334155' : '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: t.has_document ? '1px solid #cbd5e1' : 'none' }}>
+                    {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid var(--c-bg-cbd5e1)', fontSize: 13, color: 'var(--c-fg-2563eb)', textDecoration: 'none', fontWeight: 600 }}>📄 Open {t.doc_label || 'form'}</a>}
+                    {t.template_url && <a href={t.template_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid var(--c-bg-cbd5e1)', fontSize: 13, color: 'var(--c-fg-2563eb)', textDecoration: 'none', fontWeight: 600 }}>📎 {t.template_name || 'Download template'}</a>}
+                    {t.sample_url && <a href={t.sample_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid var(--c-bg-cbd5e1)', fontSize: 13, color: 'var(--c-fg-2563eb)', textDecoration: 'none', fontWeight: 600 }}>👁 View completed sample</a>}
+                    <button onClick={() => setSigning(t)} disabled={busy} style={{ padding: '7px 12px', borderRadius: 8, border: 'none', background: 'var(--c-bg-059669)', color: 'var(--c-fg-ffffff)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>✍️ Fill &amp; sign online</button>
+                    {t.requires_upload && <label style={{ padding: '7px 12px', borderRadius: 8, background: t.has_document ? 'var(--c-bg-f8fafc)' : 'var(--c-bg-2563eb)', color: t.has_document ? 'var(--c-fg-334155)' : 'var(--c-fg-ffffff)', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: t.has_document ? '1px solid var(--c-bg-cbd5e1)' : 'none' }}>
                       {t.has_document ? '+ Add another file' : '⬆ Upload signed copy'}
                       <input type="file" accept={acceptAttr(tenantConfig.upload_allowed_formats)} style={{ display: 'none' }} disabled={busy} onChange={e => { const f = e.target.files?.[0]; if (f) upload(t, f); e.currentTarget.value = '' }} />
                     </label>}
-                    {t.signed_at && <span style={{ fontSize: 12, color: '#059669' }}>✍️ signed online</span>}
+                    {t.signed_at && <span style={{ fontSize: 12, color: 'var(--c-fg-059669)' }}>✍️ signed online</span>}
                   </div>
                   {/* migration 402: every file on this document, each independently viewable — and,
                       only while employee_can_delete says the task is still editable, removable. */}
@@ -334,8 +334,8 @@ export default function PublicOnboardPage() {
                     <div style={{ margin: '6px 0 0 23px', display: 'flex', flexDirection: 'column', gap: 4 }}>
                       {(t.documents || []).map(f => (
                         <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                          <button onClick={() => viewFile(t, f)} style={{ background: 'none', border: 'none', padding: 0, color: '#2563eb', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}>📄 {f.name}</button>
-                          {f.employee_can_delete && <button onClick={() => deleteFile(t, f)} disabled={busy} title="Remove this file" style={{ background: 'none', border: 'none', padding: 0, color: '#dc2626', cursor: 'pointer', fontSize: 12 }}>✕ remove</button>}
+                          <button onClick={() => viewFile(t, f)} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--c-fg-2563eb)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}>📄 {f.name}</button>
+                          {f.employee_can_delete && <button onClick={() => deleteFile(t, f)} disabled={busy} title="Remove this file" style={{ background: 'none', border: 'none', padding: 0, color: 'var(--c-fg-dc2626)', cursor: 'pointer', fontSize: 12 }}>✕ remove</button>}
                         </div>
                       ))}
                     </div>
@@ -345,7 +345,7 @@ export default function PublicOnboardPage() {
             </div>
           ))}
           {cats.length === 0 && fields.length === 0 && <div style={card}>Nothing is assigned to you yet. Check back later or ask HR.</div>}
-          <p style={{ textAlign: 'center', fontSize: 12, color: '#94a3b8' }}>Your information goes straight to HR. You can close this page and return with the same link anytime.</p>
+          <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--c-fg-94a3b8)' }}>Your information goes straight to HR. You can close this page and return with the same link anytime.</p>
           {signing && <OnboardSignModal task={signing} onCancel={() => setSigning(null)} onSubmit={signOnline} />}
         </div>
       )}

@@ -36,7 +36,7 @@ function ProofBadge({ p }: { p: Proof }) {
   return (
     <span title={`Successful automated runs (any company) in the last ${p.window_days} days: ${p.runs}. Needed before the setup wizard offers a login: ${p.needed}.`}
       style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap',
-        color: ok ? '#15803d' : 'var(--text3)', background: ok ? '#f0fdf4' : 'var(--surface2)' }}>
+        color: ok ? 'var(--c-fg-15803d)' : 'var(--text3)', background: ok ? 'var(--c-bg-f0fdf4)' : 'var(--surface2)' }}>
       {ok ? `✓ automation proven (${p.runs}/${p.needed}${p.how ? ' · ' + p.how : ''})` : `manual only (${p.runs}/${p.needed} runs)`}
     </span>
   )
@@ -105,7 +105,7 @@ function KindEditor({ k, cadences, onSaved }: { k: Kind; cadences: string[]; onS
         </div>
         <button style={{ ...btn, fontWeight: 600 }} disabled={busy || !dirty} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
       </div>
-      {msg && <div style={{ fontSize: 12, marginTop: 6, color: msg.startsWith('❌') ? '#b91c1c' : '#15803d' }}>{msg}</div>}
+      {msg && <div style={{ fontSize: 12, marginTop: 6, color: msg.startsWith('❌') ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-15803d)' }}>{msg}</div>}
     </div>
   )
 }
@@ -186,9 +186,9 @@ export default function CarrierDocumentsPage() {
         are in, and then reminded on the schedule they pick. A login for automatic updates is only offered once that
         document has been pulled automatically, successfully, often enough (per row below).
       </p>
-      {err && <div style={{ color: '#b91c1c', marginBottom: 10 }}>❌ {err}</div>}
+      {err && <div style={{ color: 'var(--c-fg-b91c1c)', marginBottom: 10 }}>❌ {err}</div>}
       {data && !data.setup_ready && (
-        <div style={{ ...card, background: '#fffbeb', borderColor: '#fcd34d', fontSize: 13 }}>
+        <div style={{ ...card, background: 'var(--c-bg-fffbeb)', borderColor: 'var(--c-bg-fcd34d)', fontSize: 13 }}>
           The setup columns are not in the database yet — apply migration <b>{data.migration}</b>. Until then nothing is
           required and no company is redirected.
         </div>
@@ -211,7 +211,7 @@ export default function CarrierDocumentsPage() {
           <label><span style={lbl}>Upload route keys (from the Upload page)</span><input style={inp} value={newKind.upload_types} onChange={e => setNewKind({ ...newKind, upload_types: e.target.value })} /></label>
         </div>
         <button style={{ ...btn, marginTop: 10 }} disabled={!newKind.label.trim()} onClick={addKind}>＋ Add as a required document</button>
-        {addMsg && <span style={{ fontSize: 12, marginLeft: 10, color: addMsg.startsWith('❌') ? '#b91c1c' : '#15803d' }}>{addMsg}</span>}
+        {addMsg && <span style={{ fontSize: 12, marginLeft: 10, color: addMsg.startsWith('❌') ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-15803d)' }}>{addMsg}</span>}
       </div>
       <div style={card}>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>Walk a company through setup again</div>
@@ -222,7 +222,7 @@ export default function CarrierDocumentsPage() {
           </select>
           <button style={btn} disabled={!reopenOrg} onClick={reopen}>Re-open its setup wizard</button>
         </div>
-        {reopenMsg && <div style={{ fontSize: 12, marginTop: 6, color: reopenMsg.startsWith('❌') ? '#b91c1c' : '#15803d' }}>{reopenMsg}</div>}
+        {reopenMsg && <div style={{ fontSize: 12, marginTop: 6, color: reopenMsg.startsWith('❌') ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-15803d)' }}>{reopenMsg}</div>}
       </div>
     </div>
   )

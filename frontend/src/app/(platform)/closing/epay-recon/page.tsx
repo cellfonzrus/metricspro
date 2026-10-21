@@ -143,8 +143,8 @@ export default function EpayReconPage() {
             I&apos;ve verified this slip manually
           </label>
         )}
-        <button className="btn" disabled={depBusy} onClick={saveDeposit} style={{ background: 'var(--accent)', color: '#fff' }}>{depBusy ? 'Saving…' : 'Save'}</button>
-        {depMsg && <span style={{ fontSize: 12, color: depMsg.startsWith('❌') ? '#b91c1c' : 'var(--text2)' }}>{depMsg}</span>}
+        <button className="btn" disabled={depBusy} onClick={saveDeposit} style={{ background: 'var(--accent)', color: 'var(--c-fg-ffffff)' }}>{depBusy ? 'Saving…' : 'Save'}</button>
+        {depMsg && <span style={{ fontSize: 12, color: depMsg.startsWith('❌') ? 'var(--c-fg-b91c1c)' : 'var(--text2)' }}>{depMsg}</span>}
         {depCfg && (
           <span style={{ fontSize: 11, color: 'var(--text3)' }}>
             Slip checked against: <b>{String(depCfg.match_target || 'total_cash').replace('_', ' ')}</b>
@@ -175,14 +175,14 @@ export default function EpayReconPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : data?.error ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {data.error}</div>
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
             <Stat label="Declared ePay cash" value={fmt(t.declared_cash)} />
             <Stat label="Sales bill‑pay cash" value={fmt(t.sales_cash)} color="var(--text2)" />
-            <Stat label="Bank deposited" value={fmt(t.bank_deposited)} color="#16a34a" />
-            <Stat label="Stores flagged" value={`${t.flagged || 0} / ${t.stores || 0}`} color={t.flagged ? '#dc2626' : '#059669'} />
+            <Stat label="Bank deposited" value={fmt(t.bank_deposited)} color="var(--c-fg-16a34a)" />
+            <Stat label="Stores flagged" value={`${t.flagged || 0} / ${t.stores || 0}`} color={t.flagged ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'} />
           </div>
           <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
             <MarketStorePicker
@@ -209,16 +209,16 @@ export default function EpayReconPage() {
                   {rows.map(r => (
                     <Fragment key={r.store_code}>
                       <tr onClick={() => setOpen(o => ({ ...o, [r.store_code]: !o[r.store_code] }))}
-                        style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: r.flag ? '#fffafa' : undefined }}>
+                        style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: r.flag ? 'var(--c-bg-fffafa)' : undefined }}>
                         <td style={{ padding: '9px 12px', fontSize: 13, fontWeight: 600 }}>{(r.reps?.length || r.deposits?.length) ? (open[r.store_code] ? '▾ ' : '▸ ') : ''}{r.store_address}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(r.declared.cash)}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--text2)' }}>{fmt(r.declared.credit)}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--text2)' }}>{fmt(r.declared.acima)}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--text3)' }}>{fmt(r.sales.cash)}</td>
-                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: '#16a34a' }}>{fmt(r.bank_deposited)}</td>
-                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, fontWeight: 700, color: r.flag ? '#dc2626' : 'var(--text1)' }}>{r.cash_variance >= 0 ? '+' : ''}{fmt(r.cash_variance)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--c-fg-16a34a)' }}>{fmt(r.bank_deposited)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, fontWeight: 700, color: r.flag ? 'var(--c-fg-dc2626)' : 'var(--text1)' }}>{r.cash_variance >= 0 ? '+' : ''}{fmt(r.cash_variance)}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 12 }}>
-                          {r.flag ? <span style={{ background: '#fee2e2', color: '#b91c1c', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>{r.direction === 'short' ? 'NOT DEPOSITED' : 'OVER‑DEPOSITED'}</span> : <span style={{ color: '#059669' }}>✓ OK</span>}
+                          {r.flag ? <span style={{ background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-b91c1c)', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>{r.direction === 'short' ? 'NOT DEPOSITED' : 'OVER‑DEPOSITED'}</span> : <span style={{ color: 'var(--c-fg-059669)' }}>✓ OK</span>}
                         </td>
                       </tr>
                       {open[r.store_code] && [...(r.reps || []).map((x: any, i: number) => (
@@ -231,14 +231,14 @@ export default function EpayReconPage() {
                         </tr>
                       )), ...(r.deposits || []).map((x: any, i: number) => (
                         <tr key={r.store_code + '_d' + i} style={{ background: 'var(--surface2)', fontSize: 12 }}>
-                          <td style={{ padding: '4px 12px 4px 30px', color: '#16a34a' }}>bank deposit · {x.employee_name || ''}{x.receipt_path ? ' 📎' : ''}</td>
+                          <td style={{ padding: '4px 12px 4px 30px', color: 'var(--c-fg-16a34a)' }}>bank deposit · {x.employee_name || ''}{x.receipt_path ? ' 📎' : ''}</td>
                           <td colSpan={4} style={{ padding: '4px 12px', color: 'var(--text3)' }}>
                             {x.note || ''}
-                            {x.ocr_match === 'mismatch' && <span style={{ color: '#b91c1c', fontWeight: 700, marginLeft: 6 }}>⚠ OCR MISMATCH{x.ocr_amount != null ? ` (slip read ${fmt(x.ocr_amount)})` : ''}</span>}
-                            {x.ocr_match === 'matched' && <span style={{ color: '#16a34a', marginLeft: 6 }}>✓ OCR matched</span>}
-                            {x.ocr_match === 'unreadable' && <span style={{ color: '#b45309', marginLeft: 6 }}>OCR unreadable</span>}
+                            {x.ocr_match === 'mismatch' && <span style={{ color: 'var(--c-fg-b91c1c)', fontWeight: 700, marginLeft: 6 }}>⚠ OCR MISMATCH{x.ocr_amount != null ? ` (slip read ${fmt(x.ocr_amount)})` : ''}</span>}
+                            {x.ocr_match === 'matched' && <span style={{ color: 'var(--c-fg-16a34a)', marginLeft: 6 }}>✓ OCR matched</span>}
+                            {x.ocr_match === 'unreadable' && <span style={{ color: 'var(--c-fg-b45309)', marginLeft: 6 }}>OCR unreadable</span>}
                           </td>
-                          <td style={{ padding: '4px 12px', textAlign: 'right', color: '#16a34a' }}>{fmt(x.amount)}</td>
+                          <td style={{ padding: '4px 12px', textAlign: 'right', color: 'var(--c-fg-16a34a)' }}>{fmt(x.amount)}</td>
                           <td colSpan={2} />
                         </tr>
                       ))]}

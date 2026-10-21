@@ -35,7 +35,7 @@ function fmt(v: any) {
 function Confidence({ c }: { c: number | null }) {
   if (c == null) return <span style={{ fontSize: 11, color: 'var(--text3)' }}>—</span>
   const pct = Math.round(c * 100)
-  const color = c >= 0.85 ? '#166534' : c >= 0.6 ? '#a16207' : '#b91c1c'
+  const color = c >= 0.85 ? 'var(--c-fg-166534)' : c >= 0.6 ? 'var(--c-fg-a16207)' : 'var(--c-fg-b91c1c)'
   return <span style={{ fontSize: 11, fontWeight: 700, color }}>{pct}%</span>
 }
 
@@ -104,7 +104,7 @@ export default function ExtractionReview({ extraction, onAccepted, reviewedBy }:
           <span style={{ fontSize: 12, fontWeight: 700 }}>{f.label}</span>
           <span style={{ fontSize: 13 }}>{fmt(f.value)}</span>
           <Confidence c={f.confidence} />
-          {f.money_guarded && <span style={{ fontSize: 10, fontWeight: 700, color: '#b45309', background: '#fef3c7', padding: '1px 5px', borderRadius: 4 }}>MONEY</span>}
+          {f.money_guarded && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--c-fg-b45309)', background: 'var(--c-bg-fef3c7)', padding: '1px 5px', borderRadius: 4 }}>MONEY</span>}
         </div>
         {f.source_text && <div style={snip}>&ldquo;{f.source_text}&rdquo;{f.source_page ? ` — page ${f.source_page}` : ''}</div>}
       </div>
@@ -126,19 +126,19 @@ export default function ExtractionReview({ extraction, onAccepted, reviewedBy }:
       )}
 
       {money.length > 0 && (
-        <div style={{ border: '1px solid #fcd34d', background: '#fffbeb', borderRadius: 8, padding: 10 }}>
-          <div style={{ ...lbl, color: '#92400e', marginBottom: 4 }}>Amounts — these feed the books</div>
-          <div style={{ fontSize: 12, color: '#92400e', marginBottom: 6 }}>
+        <div style={{ border: '1px solid var(--c-bg-fcd34d)', background: 'var(--c-bg-fffbeb)', borderRadius: 8, padding: 10 }}>
+          <div style={{ ...lbl, color: 'var(--c-fg-92400e)', marginBottom: 4 }}>Amounts — these feed the books</div>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)', marginBottom: 6 }}>
             Rent and premiums entered here are what the finance reports bill and book. Check each one
             against the quoted text before you keep it.
           </div>
           {money.map(f => <Row key={f.key} f={f} />)}
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 12, fontWeight: 700, color: '#92400e' }}>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, fontSize: 12, fontWeight: 700, color: 'var(--c-fg-92400e)' }}>
             <input type="checkbox" checked={confirmMoney} onChange={e => setConfirmMoney(e.target.checked)} />
             I checked these amounts against the document and want them saved to the books.
           </label>
           {chosenMoney > 0 && !confirmMoney &&
-            <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: 'var(--c-fg-b91c1c)', marginTop: 4 }}>
               {chosenMoney} amount{chosenMoney === 1 ? '' : 's'} ticked — tick the confirmation above or they will not be saved.
             </div>}
         </div>
@@ -191,7 +191,7 @@ export default function ExtractionReview({ extraction, onAccepted, reviewedBy }:
       )}
 
       {refused.length > 0 && (
-        <div style={{ fontSize: 12, color: '#b91c1c' }}>
+        <div style={{ fontSize: 12, color: 'var(--c-fg-b91c1c)' }}>
           Not saved: {refused.map((r: any) => `${r.key} (${String(r.reason).replace(/_/g, ' ')})`).join(', ')}
         </div>
       )}
@@ -200,7 +200,7 @@ export default function ExtractionReview({ extraction, onAccepted, reviewedBy }:
         <button className="btn btn-primary" disabled={busy} onClick={save}>
           {busy ? '⏳ Saving…' : '✓ Save the ticked values'}
         </button>
-        {msg && <span style={{ fontSize: 12, color: msg.startsWith('✓') ? '#166534' : '#b91c1c' }}>{msg}</span>}
+        {msg && <span style={{ fontSize: 12, color: msg.startsWith('✓') ? 'var(--c-fg-166534)' : 'var(--c-fg-b91c1c)' }}>{msg}</span>}
       </div>
     </div>
   )

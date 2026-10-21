@@ -190,7 +190,7 @@ export default function BankDepositPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : err ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {err}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {err}</div>
       ) : liveSections.length === 0 ? (
         <div className="card" style={{ padding: 16, fontSize: 13, color: 'var(--text2)' }}>
           No deposit categories are configured yet, so there is nothing to record a deposit against.{' '}
@@ -292,16 +292,16 @@ function DepositSection({ section, categories, rows, stores, dateFrom, dateTo, o
           value={dep.amount} onChange={e => setDep(d => ({ ...d, amount: e.target.value }))} />
         <input style={{ ...inp, width: 140 }} placeholder="Deposited by"
           value={dep.employee_name} onChange={e => setDep(d => ({ ...d, employee_name: e.target.value }))} />
-        <button className="btn" disabled={busy} onClick={save} style={{ background: 'var(--accent)', color: '#fff' }}>
+        <button className="btn" disabled={busy} onClick={save} style={{ background: 'var(--accent)', color: 'var(--c-fg-ffffff)' }}>
           {busy ? 'Saving…' : 'Save'}
         </button>
-        {msg && <span style={{ fontSize: 12, color: msg.startsWith('❌') ? '#b91c1c' : msg.startsWith('⚠') ? '#b45309' : 'var(--text2)' }}>{msg}</span>}
+        {msg && <span style={{ fontSize: 12, color: msg.startsWith('❌') ? 'var(--c-fg-b91c1c)' : msg.startsWith('⚠') ? 'var(--c-fg-b45309)' : 'var(--text2)' }}>{msg}</span>}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginBottom: 10 }}>
         <Stat label="Expected" value={fmt(expected)} />
         <Stat label="Deposited" value={fmt(deposited)} />
-        <Stat label="Short store-days" value={String(shortRows)} color={shortRows ? '#dc2626' : '#059669'} />
+        <Stat label="Short store-days" value={String(shortRows)} color={shortRows ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'} />
       </div>
 
       <ReportShell title={`Bank Deposit — ${section.label}`} subtitle={`${dateFrom} → ${dateTo}`}
@@ -341,7 +341,7 @@ function DepositSection({ section, categories, rows, stores, dateFrom, dateTo, o
                     </td>
                     <td style={cell}>{fmt(r.expected_deposit)}</td>
                     <td style={{ ...cell, fontWeight: 600 }}>{fmt(r.total_deposited)}</td>
-                    <td style={{ ...cell, color: r.variance < 0 ? '#dc2626' : r.variance > 0 ? '#b45309' : 'var(--text2)' }}>{fmt(r.variance)}</td>
+                    <td style={{ ...cell, color: r.variance < 0 ? 'var(--c-fg-dc2626)' : r.variance > 0 ? 'var(--c-fg-b45309)' : 'var(--text2)' }}>{fmt(r.variance)}</td>
                     <td style={cell}>{(r.status || '').toUpperCase()}</td>
                   </tr>
                 )

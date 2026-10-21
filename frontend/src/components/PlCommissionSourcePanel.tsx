@@ -26,7 +26,7 @@ type Payload = {
   shows_in: ShowsInPayload
 }
 
-const card: CSSProperties = { border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', background: 'var(--surface, #fff)', marginBottom: 12 }
+const card: CSSProperties = { border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', background: 'var(--surface, var(--c-bg-ffffff))', marginBottom: 12 }
 const note: CSSProperties = { fontSize: 12, color: 'var(--text2)', lineHeight: 1.45 }
 const pill: CSSProperties = { display: 'inline-block', fontSize: 11, padding: '1px 8px', borderRadius: 999, border: '1px solid var(--border)', marginRight: 6 }
 
@@ -54,7 +54,7 @@ export default function PlCommissionSourcePanel({ compact = false, lead }: { com
     finally { setSaving(false) }
   }
 
-  if (!p) return <div style={{ ...card, ...note }} data-pl-commission-source="loading">{err ? <span style={{ color: '#b91c1c' }}>{err}</span> : 'Working out which source books the P&L…'}</div>
+  if (!p) return <div style={{ ...card, ...note }} data-pl-commission-source="loading">{err ? <span style={{ color: 'var(--c-fg-b91c1c)' }}>{err}</span> : 'Working out which source books the P&L…'}</div>
   const current = p.options.find(o => o.value === p.value)
   return (
     <div style={card} data-pl-commission-source={p.value}>
@@ -62,7 +62,7 @@ export default function PlCommissionSourcePanel({ compact = false, lead }: { com
       <div style={{ ...note, marginBottom: 8 }}>
         Today: <b>{current?.label || p.value}</b>. {current?.blurb}
       </div>
-      {!p.ready && <div style={{ ...note, color: '#9a3412', background: '#fff7ed', border: '1px solid #fdba74', borderRadius: 8, padding: '6px 10px', marginBottom: 8 }}>{p.not_ready_note}</div>}
+      {!p.ready && <div style={{ ...note, color: 'var(--c-fg-9a3412)', background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', borderRadius: 8, padding: '6px 10px', marginBottom: 8 }}>{p.not_ready_note}</div>}
       <div style={{ display: 'grid', gap: 6, marginBottom: 8 }}>
         {p.options.map(o => (
           <label key={o.value} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, cursor: p.ready ? 'pointer' : 'not-allowed', opacity: p.ready ? 1 : 0.6 }}>
@@ -74,7 +74,7 @@ export default function PlCommissionSourcePanel({ compact = false, lead }: { com
       {p.suggestion?.value && p.suggestion.value !== p.value && (
         <div style={{ ...note, background: 'rgba(37,99,235,.06)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 10px', marginBottom: 8 }} data-suggestion={p.suggestion.value}>
           <b>Suggested:</b> {p.options.find(o => o.value === p.suggestion.value)?.label}. {p.suggestion.why}{' '}
-          <button disabled={!p.ready || saving} onClick={() => save(p.suggestion.value!)} style={{ marginLeft: 6, fontSize: 12, padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: '#fff', cursor: 'pointer' }}>Use this</button>
+          <button disabled={!p.ready || saving} onClick={() => save(p.suggestion.value!)} style={{ marginLeft: 6, fontSize: 12, padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--c-bg-ffffff)', cursor: 'pointer' }}>Use this</button>
         </div>
       )}
       {!p.suggestion?.value && p.suggestion?.why && <div style={{ ...note, marginBottom: 8 }}>{p.suggestion.why}</div>}
@@ -86,7 +86,7 @@ export default function PlCommissionSourcePanel({ compact = false, lead }: { com
       <div style={note}>
         Saving takes effect the next time a period is computed; each commission line on the <ScreenLink to="pl_statement">P&L Statement</ScreenLink> shows what the feed tables booked and what the ledger holds, with the difference.
         {saving && <span> · Saving…</span>}{savedAt && !saving && <span> · Saved ✓ {savedAt}</span>}
-        {err && <span style={{ color: '#b91c1c' }}> · Not saved — {err}</span>}
+        {err && <span style={{ color: 'var(--c-fg-b91c1c)' }}> · Not saved — {err}</span>}
       </div>
     </div>
   )

@@ -196,7 +196,7 @@ export default function CommissionLegsPage() {
             received over M1-M12"). The sidebar/hub label is DATA (mig 947 'nav_default' preset,
             tenant scope='nav' nickname overrides); this h1 carries the same default wording. */}
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧩 Commission received over M1-M12</h1>
-        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: 'rgba(34,197,94,.12)', color: '#16a34a' }}>
+        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: 'rgba(34,197,94,.12)', color: 'var(--c-fg-16a34a)' }}>
           READ-ONLY · changes no pay
         </span>
       </div>
@@ -269,15 +269,15 @@ export default function CommissionLegsPage() {
           ) : (
             <>
               {bo.identity_ok === false && (
-                <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12, fontWeight: 600 }}>
+                <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12, fontWeight: 600 }}>
                   ⚠ A row&apos;s parts do not add back to its own total — treat this split as unreliable and report it.
                 </div>
               )}
               {(bo.notes || []).map((n: string) => (
-                <div key={n} style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 10, lineHeight: 1.6 }}>⚠ {n}</div>
+                <div key={n} style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 10, lineHeight: 1.6 }}>⚠ {n}</div>
               ))}
               {(bo.gaps || []).map((g: any) => (
-                <div key={g.stream} style={{ background: '#fffbeb', border: '1px solid #fde047', color: '#92400e', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 10, lineHeight: 1.6 }}>
+                <div key={g.stream} style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde047)', color: 'var(--c-fg-92400e)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 10, lineHeight: 1.6 }}>
                   <b>Not ingested:</b> {g.what}. {g.why} Import it via {g.how}.
                 </div>
               ))}
@@ -333,15 +333,15 @@ export default function CommissionLegsPage() {
                       </Fragment>
                     ))}
                     {refStreams.map(s => (
-                      <tr key={s.key} style={{ borderTop: '2px solid var(--border)', background: '#fffbeb' }}>
-                        <td style={{ ...tdL, fontWeight: 600, color: '#92400e' }}>
+                      <tr key={s.key} style={{ borderTop: '2px solid var(--border)', background: 'var(--c-bg-fffbeb)' }}>
+                        <td style={{ ...tdL, fontWeight: 600, color: 'var(--c-fg-92400e)' }}>
                           {s.label} <span style={{ fontSize: 10, fontWeight: 500 }}>(cross-check — in no total)</span>
                         </td>
                         <td style={{ ...tdL, color: 'var(--text3)', fontSize: 11, maxWidth: 320, whiteSpace: 'normal' }}>{s.splits_on}</td>
                         {pivot === 'legs'
-                          ? legCols.map(k => <td key={k} style={{ ...td, color: '#92400e' }}>{s.legs?.[k] ? fmt(s.legs[k]) : '·'}</td>)
-                          : periods.map(p => <td key={p} style={{ ...td, color: '#92400e' }}>{s.periods[p]?.total ? fmt(s.periods[p].total) : '·'}</td>)}
-                        <td style={{ ...td, fontWeight: 700, color: '#92400e' }}>{fmt(s.total)}</td>
+                          ? legCols.map(k => <td key={k} style={{ ...td, color: 'var(--c-fg-92400e)' }}>{s.legs?.[k] ? fmt(s.legs[k]) : '·'}</td>)
+                          : periods.map(p => <td key={p} style={{ ...td, color: 'var(--c-fg-92400e)' }}>{s.periods[p]?.total ? fmt(s.periods[p].total) : '·'}</td>)}
+                        <td style={{ ...td, fontWeight: 700, color: 'var(--c-fg-92400e)' }}>{fmt(s.total)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -360,7 +360,7 @@ export default function CommissionLegsPage() {
               </div>
 
               {refStreams.length > 0 && (
-                <div style={{ background: '#fffbeb', border: '1px solid #fde047', color: '#92400e', borderRadius: 8, padding: '10px 12px', fontSize: 12.5, marginBottom: 16, lineHeight: 1.7 }}>
+                <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde047)', color: 'var(--c-fg-92400e)', borderRadius: 8, padding: '10px 12px', fontSize: 12.5, marginBottom: 16, lineHeight: 1.7 }}>
                   <b>Two different “residual” readings, and they are not the same money.</b> {bo.divergence_note}
                   {typeof airtime?.meta?.airtime_on_residual_orders === 'number' && (
                     <> Of the airtime margin above, <b>{fmt(airtime.meta.airtime_on_residual_orders)}</b> sits on
@@ -378,10 +378,10 @@ export default function CommissionLegsPage() {
                   </div>
                   <TrendChart data={trendData} height={230}
                     series={[
-                      { key: 'm1', name: '1st month', color: '#16a34a', money: true },
-                      { key: 'm2_12', name: 'M2–M12', color: '#2e75b6', money: true },
+                      { key: 'm1', name: '1st month', color: 'var(--c-fg-16a34a)', money: true },
+                      { key: 'm2_12', name: 'M2–M12', color: 'var(--c-fg-2e75b6)', money: true },
                       ...groups.filter(g => g.group === 'residual').map(g => ({
-                        key: g.group, name: g.label, color: '#f59e0b', money: true, dashed: true,
+                        key: g.group, name: g.label, color: 'var(--c-fg-f59e0b)', money: true, dashed: true,
                       })),
                     ]} />
                 </div>
@@ -392,9 +392,9 @@ export default function CommissionLegsPage() {
                 {bo.carrier_mode ? ` · carrier mode: ${bo.carrier_mode}` : ''}
                 {bo.config?.label_overrides ? ` · ${bo.config.label_overrides} label override(s)` : ''}
                 {bo.config?.mi_split_by_activation === false ? ' · residual split off' : ''}
-                {' · '}<a href="/commcalc/gp" style={{ color: 'var(--accent,#2563eb)' }}>Gross Profit</a>
-                {' · '}<a href="/commcalc/ma-overview-recon" style={{ color: 'var(--accent,#2563eb)' }}>MA Overview cross-check</a>
-                {' · '}<a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,#2563eb)' }}>Commission Ledger</a>
+                {' · '}<a href="/commcalc/gp" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Gross Profit</a>
+                {' · '}<a href="/commcalc/ma-overview-recon" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>MA Overview cross-check</a>
+                {' · '}<a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Commission Ledger</a>
               </div>
             </>
           )}
@@ -411,7 +411,7 @@ export default function CommissionLegsPage() {
           </p>
 
           {(!ready || !mapReady) && (
-            <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
+            <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
               The full history and saved overrides are not available yet: the page shows the most recent month only
               and the split falls back to the built-in rules (which already handle every label that names its own
               month). <SetupNotice detail="274_commission_leg_split.sql" />
@@ -429,7 +429,7 @@ export default function CommissionLegsPage() {
           </div>
 
           {unsplitTotal !== 0 && (
-            <div style={{ background: '#fffbeb', border: '1px solid #fde047', color: '#92400e', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
+            <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde047)', color: 'var(--c-fg-92400e)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
               <b>{fmt(unsplitTotal)}</b> is sitting in Unsplit. Those labels never state a month-of-life, so the
               reports show them separately instead of quietly folding them into one of the two columns. Pick a leg
               below and they move.
@@ -525,7 +525,7 @@ export default function CommissionLegsPage() {
                     <tr key={s.source} style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={{ padding: '5px 8px', fontWeight: 600, width: '38%' }}>{s.source}</td>
                       <td style={{ padding: '5px 8px', color: 'var(--text2)' }}>{s.splits_on}</td>
-                      <td style={{ padding: '5px 8px', color: s.splittable ? '#065f46' : '#9a3412', fontWeight: 600 }}>
+                      <td style={{ padding: '5px 8px', color: s.splittable ? 'var(--c-fg-065f46)' : 'var(--c-fg-9a3412)', fontWeight: 600 }}>
                         {s.splittable ? 'splittable' : 'not splittable from this source'}
                       </td>
                     </tr>

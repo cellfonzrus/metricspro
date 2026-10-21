@@ -35,7 +35,7 @@ const KEY_FIELDS = [
 const money = (n: number) => (n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 const inp: React.CSSProperties = { padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const btn: React.CSSProperties = { ...inp, cursor: 'pointer', fontWeight: 600 }
-const primary: React.CSSProperties = { ...btn, background: 'var(--accent,#2563eb)', color: '#fff', border: 'none', padding: '9px 18px' }
+const primary: React.CSSProperties = { ...btn, background: 'var(--accent,var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', border: 'none', padding: '9px 18px' }
 const card: React.CSSProperties = { border: '1px solid var(--border)', borderRadius: 12, padding: 16, background: 'var(--surface)' }
 const STEPS = ['Carrier', 'Upload file', 'Review', 'Import']
 
@@ -201,7 +201,7 @@ export default function CommissionLedgerSetupPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               {KEY_FIELDS.map(k => (
                 <div key={k.tf}>
-                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 3 }}>{k.label} {k.star && <span style={{ color: '#dc2626' }}>★</span>}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 3 }}>{k.label} {k.star && <span style={{ color: 'var(--c-fg-dc2626)' }}>★</span>}</div>
                   <select style={{ ...inp, width: '100%' }} value={fieldMap[k.tf] || ''} onChange={e => setFieldMap({ ...fieldMap, [k.tf]: e.target.value })}>
                     <option value="">— none —</option>
                     {a.headers.map(h => <option key={h} value={h}>{h}</option>)}
@@ -236,13 +236,13 @@ export default function CommissionLedgerSetupPage() {
               )}
             </div>
             {a.summary.other_count > 0 ? (
-              <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 12px', fontSize: 13 }}>
+              <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '10px 12px', fontSize: 13 }}>
                 ⚠️ <b>{a.summary.other_count} payout line(s)</b> ({money(a.summary.other_total)}) didn&apos;t match any rule. Open the{' '}
-                <a href={`/commcalc/commission-category-map?source_report=${src}`} target="_blank" rel="noreferrer" style={{ color: '#9a3412', fontWeight: 700 }}>Category Map</a>{' '}
+                <a href={`/commcalc/commission-category-map?source_report=${src}`} target="_blank" rel="noreferrer" style={{ color: 'var(--c-fg-9a3412)', fontWeight: 700 }}>Category Map</a>{' '}
                 in a new tab, add a rule for the highlighted labels, then come back and press <b>Re-check</b>.
               </div>
             ) : (
-              <div style={{ background: '#ecfdf5', border: '1px solid #6ee7b7', color: '#047857', borderRadius: 8, padding: '10px 12px', fontSize: 13 }}>
+              <div style={{ background: 'var(--c-bg-ecfdf5)', border: '1px solid var(--c-bg-6ee7b7)', color: 'var(--c-fg-047857)', borderRadius: 8, padding: '10px 12px', fontSize: 13 }}>
                 ✓ Every payout line matched a bucket. You&apos;re good to import.
               </div>
             )}
@@ -273,7 +273,7 @@ export default function CommissionLedgerSetupPage() {
             </>
           ) : (
             <>
-              <div style={{ background: '#ecfdf5', border: '1px solid #6ee7b7', color: '#047857', borderRadius: 8, padding: '12px 14px', fontSize: 14, marginBottom: 14 }}>
+              <div style={{ background: 'var(--c-bg-ecfdf5)', border: '1px solid var(--c-bg-6ee7b7)', color: 'var(--c-fg-047857)', borderRadius: 8, padding: '12px 14px', fontSize: 14, marginBottom: 14 }}>
                 ✅ Imported <b>{result.saved}</b> lines for <b>{period}</b> — {money(result.summary?.payout_total || 0)} in payouts
                 {result.summary?.other_count ? `, ${result.summary.other_count} still unmapped` : ', all classified'}.
               </div>

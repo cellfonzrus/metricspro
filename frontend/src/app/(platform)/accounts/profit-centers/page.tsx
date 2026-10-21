@@ -57,8 +57,8 @@ export default function ProfitCentersPage() {
     <div style={{ padding: 16, maxWidth: 1200 }}>
       <h1 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 4px' }}>Profit Centers</h1>
       <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>Each profit center is a set of stores; its P&L is the P&L Statement narrowed to those stores.</div>
-      {err && <div style={{ color: '#b91c1c', marginBottom: 8 }}>{err}</div>}
-      {(data?.problems?.profit?.length ?? 0) > 0 && data?.problems?.profit && <div style={{ color: '#b45309', marginBottom: 8 }}>{data.problems.profit.join(' · ')}</div>}
+      {err && <div style={{ color: 'var(--c-fg-b91c1c)', marginBottom: 8 }}>{err}</div>}
+      {(data?.problems?.profit?.length ?? 0) > 0 && data?.problems?.profit && <div style={{ color: 'var(--c-fg-b45309)', marginBottom: 8 }}>{data.problems.profit.join(' · ')}</div>}
 
       <div className="card" style={{ padding: 14, marginBottom: 14 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>Centers</div>
@@ -93,7 +93,7 @@ export default function ProfitCentersPage() {
             </td></tr>
           ))}</tbody>
         </table>
-        {Object.keys(data?.store_map_conflicts || {}).length > 0 && <div style={{ color: '#b91c1c', fontSize: 13, marginTop: 6 }}>A store is mapped to two centers: {JSON.stringify(data?.store_map_conflicts)}</div>}
+        {Object.keys(data?.store_map_conflicts || {}).length > 0 && <div style={{ color: 'var(--c-fg-b91c1c)', fontSize: 13, marginTop: 6 }}>A store is mapped to two centers: {JSON.stringify(data?.store_map_conflicts)}</div>}
       </div>
 
       {pc && (
@@ -102,7 +102,7 @@ export default function ProfitCentersPage() {
             <div style={{ fontWeight: 700, fontSize: 14 }}>P&L — {stmt ? scopeDisplay(stmt) : pc}</div>
             <input type="month" value={period} onChange={e => setPeriod(e.target.value)} />
           </div>
-          {stmt && !stmt.computed && <div style={{ color: '#b45309' }}>{stmt.note}</div>}
+          {stmt && !stmt.computed && <div style={{ color: 'var(--c-fg-b45309)' }}>{stmt.note}</div>}
           {stmt?.pl && (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <tbody>

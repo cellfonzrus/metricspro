@@ -180,7 +180,7 @@ export default function InventoryValuesPage() {
                   </td>
                   <td style={{ padding: '6px 12px', textAlign: 'right', fontSize: 13, fontWeight: 600 }}>
                     {r.effective == null ? '—' : fmt(r.effective)}
-                    {r.effective_source === 'manual' && <span style={{ marginLeft: 6, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999 }}>manual</span>}
+                    {r.effective_source === 'manual' && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '1px 5px', borderRadius: 999 }}>manual</span>}
                   </td>
                   <td style={{ padding: '6px 12px', fontSize: 12, color: 'var(--text3)' }}>{r.as_of_date || '—'}</td>
                   <td style={{ padding: '6px 12px' }}><input style={{ ...inp, width: 160 }} value={r.note ?? ''} placeholder="" onChange={e => setNote(i, e.target.value)} /></td>
@@ -205,11 +205,11 @@ export default function InventoryValuesPage() {
             <div>
               <strong style={{ fontSize: 14 }}>🔎 Reconciliation — report ↔ unsold-phone ledger</strong>
               <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>
-                Effective basis: <b>{recon.basis}</b> · report {fmt(recon.totals?.report_value)} vs devices {fmt(recon.totals?.device_value)} ({recon.totals?.device_count} phones) · delta <b style={{ color: Math.abs(recon.totals?.delta || 0) > 1 ? '#b45309' : '#15803d' }}>{fmt(recon.totals?.delta)}</b>
+                Effective basis: <b>{recon.basis}</b> · report {fmt(recon.totals?.report_value)} vs devices {fmt(recon.totals?.device_value)} ({recon.totals?.device_count} phones) · delta <b style={{ color: Math.abs(recon.totals?.delta || 0) > 1 ? 'var(--c-fg-b45309)' : 'var(--c-fg-15803d)' }}>{fmt(recon.totals?.delta)}</b>
               </div>
             </div>
             {(recon.device_meta?.unplaced_devices > 0 || recon.device_meta?.superseded_devices > 0) && (
-              <div style={{ fontSize: 12, color: '#92400e', background: '#fef3c7', padding: '4px 8px', borderRadius: 8, alignSelf: 'flex-start' }}>
+              <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '4px 8px', borderRadius: 8, alignSelf: 'flex-start' }}>
                 Excluded ghosts: {recon.device_meta.unplaced_devices} unplaced ({fmt(recon.device_meta.unplaced_value)}) · {recon.device_meta.superseded_devices} superseded ({fmt(recon.device_meta.superseded_value)})
               </div>
             )}
@@ -237,7 +237,7 @@ export default function InventoryValuesPage() {
                   <td style={{ padding: '6px 12px', textAlign: 'right', color: 'var(--text2)' }}>{r.manual_value == null ? '—' : fmt(r.manual_value)}</td>
                   <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600 }}>
                     {r.effective == null ? '—' : fmt(r.effective)}
-                    {r.effective_source && <span style={{ marginLeft: 6, fontSize: 10, color: '#3730a3', background: '#e0e7ff', padding: '1px 5px', borderRadius: 999 }}>{r.effective_source}</span>}
+                    {r.effective_source && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-fg-3730a3)', background: 'var(--c-bg-e0e7ff)', padding: '1px 5px', borderRadius: 999 }}>{r.effective_source}</span>}
                   </td>
                 </tr>
               ))}

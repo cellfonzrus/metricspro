@@ -91,9 +91,9 @@ export default function ReportMappingsPage() {
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           How the automated VidaPay / T-CETRA report pull maps each portal report to a database table and each
           source column to a destination column — <b>configuration, not code</b>. Editing a report that shows
-          <span style={{ background: '#eef2ff', color: '#3730a3', padding: '0 6px', borderRadius: 6, fontSize: 12, margin: '0 4px' }}>default</span>
+          <span style={{ background: 'var(--c-bg-eef2ff)', color: 'var(--c-fg-3730a3)', padding: '0 6px', borderRadius: 6, fontSize: 12, margin: '0 4px' }}>default</span>
           creates a tenant override; the house default stays intact. The pull itself runs on a schedule and from
-          <b> ▶ Pull now</b> on each portal login in <a href="/commcalc/email-imports#portal-logins" style={{ color: 'var(--accent,#2563eb)' }}>Data Imports</a> —
+          <b> ▶ Pull now</b> on each portal login in <a href="/commcalc/email-imports#portal-logins" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Data Imports</a> —
           the tenant never pulls from the UI.
         </p>
       </div>
@@ -101,7 +101,7 @@ export default function ReportMappingsPage() {
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <button className="btn btn-secondary" onClick={reseed} title="Insert any missing house-default report rows (safe to repeat)">↻ Reseed defaults</button>
         <button className="btn btn-secondary" onClick={load}>Refresh</button>
-        {!ready && <span style={{ fontSize: 12, color: '#b45309' }}>⚠️ <SetupNotice lead="Showing built-in defaults (read-only)." detail="207" /></span>}
+        {!ready && <span style={{ fontSize: 12, color: 'var(--c-fg-b45309)' }}>⚠️ <SetupNotice lead="Showing built-in defaults (read-only)." detail="207" /></span>}
         {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
       </div>
 
@@ -113,14 +113,14 @@ export default function ReportMappingsPage() {
               <div style={{ fontWeight: 700, fontSize: 14 }}>{rep.display_name || rep.report_key}</div>
               <code style={{ fontSize: 11, color: 'var(--text3)' }}>{rep.report_key}</code>
               {rep.inherited
-                ? <span style={{ background: '#eef2ff', color: '#3730a3', padding: '1px 7px', borderRadius: 6, fontSize: 11 }}>default</span>
-                : <span style={{ background: '#ecfdf5', color: '#047857', padding: '1px 7px', borderRadius: 6, fontSize: 11 }}>override</span>}
-              {rep.enabled === false && <span style={{ background: '#fef2f2', color: '#b91c1c', padding: '1px 7px', borderRadius: 6, fontSize: 11 }}>disabled</span>}
-              {rep.param_spec?.calibration && <span style={{ background: '#fffbeb', color: '#92400e', padding: '1px 7px', borderRadius: 6, fontSize: 11 }}>calibration (params pinned on first live run)</span>}
+                ? <span style={{ background: 'var(--c-bg-eef2ff)', color: 'var(--c-fg-3730a3)', padding: '1px 7px', borderRadius: 6, fontSize: 11 }}>default</span>
+                : <span style={{ background: 'var(--c-bg-ecfdf5)', color: 'var(--c-fg-047857)', padding: '1px 7px', borderRadius: 6, fontSize: 11 }}>override</span>}
+              {rep.enabled === false && <span style={{ background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-b91c1c)', padding: '1px 7px', borderRadius: 6, fontSize: 11 }}>disabled</span>}
+              {rep.param_spec?.calibration && <span style={{ background: 'var(--c-bg-fffbeb)', color: 'var(--c-fg-92400e)', padding: '1px 7px', borderRadius: 6, fontSize: 11 }}>calibration (params pinned on first live run)</span>}
               <div style={{ flex: 1 }} />
               <div style={{ fontSize: 12, color: 'var(--text3)' }}>→ <b>{sourceLabel(rep.target_table)}</b>{rep.export_pref ? ` · ${rep.export_pref}` : ''}{rep.param_spec?.iterate_months ? ' · month-by-month' : ''}</div>
               {!d && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => startEdit(rep)}>Edit</button>}
-              {!d && !rep.inherited && <button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={() => resetOverride(rep.report_key)}>Reset to default</button>}
+              {!d && !rep.inherited && <button className="btn btn-secondary" style={{ fontSize: 12, color: 'var(--c-fg-dc2626)' }} onClick={() => resetOverride(rep.report_key)}>Reset to default</button>}
             </div>
 
             {!d && (
@@ -162,7 +162,7 @@ export default function ReportMappingsPage() {
                         <td style={cell}><input style={{ ...inp, fontFamily: 'monospace' }} value={r.col} onChange={e => { const rows = [...d.rows]; rows[i] = { ...r, col: e.target.value }; setEdit(p => ({ ...p, [rep.report_key]: { ...d, rows } })) }} /></td>
                         <td style={cell}><select style={inp} value={r.type} onChange={e => { const rows = [...d.rows]; rows[i] = { ...r, type: e.target.value }; setEdit(p => ({ ...p, [rep.report_key]: { ...d, rows } })) }}>
                           <option value="text">text</option><option value="num">num</option><option value="date">date</option></select></td>
-                        <td style={cell}><button className="btn btn-secondary" style={{ fontSize: 11, color: '#dc2626', padding: '2px 7px' }} onClick={() => { const rows = d.rows.filter((_: any, j: number) => j !== i); setEdit(p => ({ ...p, [rep.report_key]: { ...d, rows } })) }}>✕</button></td>
+                        <td style={cell}><button className="btn btn-secondary" style={{ fontSize: 11, color: 'var(--c-fg-dc2626)', padding: '2px 7px' }} onClick={() => { const rows = d.rows.filter((_: any, j: number) => j !== i); setEdit(p => ({ ...p, [rep.report_key]: { ...d, rows } })) }}>✕</button></td>
                       </tr>
                     ))}
                   </tbody>

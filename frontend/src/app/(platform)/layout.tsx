@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo, useRef, useCallback, type CSSProperties } from 'react'
+import ThemeToggle from '@/components/ThemeToggle'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
@@ -85,12 +86,12 @@ function SetupBanner() {
   if ((user?.role || '').toLowerCase() !== 'admin') return null
   if (pathname?.startsWith('/admin/tenant-settings')) return null
   return (
-    <div style={{ background: '#fffbeb', borderBottom: '1px solid #fde68a', padding: '10px 24px',
-      display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, color: '#92400e' }}>
+    <div style={{ background: 'var(--c-bg-fffbeb)', borderBottom: '1px solid var(--c-bg-fde68a)', padding: '10px 24px',
+      display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, color: 'var(--c-fg-92400e)' }}>
       <span style={{ fontWeight: 700 }}>⚙️ Finish setup:</span>
       <span>Define {tenant.name ? <b>{tenant.name}</b> : 'your company'}&apos;s pay period &amp; work-week so schedules and payroll line up.</span>
-      <Link href="/admin/tenant-settings" style={{ marginLeft: 'auto', fontWeight: 700, color: '#92400e',
-        border: '1px solid #fbbf24', borderRadius: 8, padding: '5px 12px', textDecoration: 'none', whiteSpace: 'nowrap' }}>
+      <Link href="/admin/tenant-settings" style={{ marginLeft: 'auto', fontWeight: 700, color: 'var(--c-fg-92400e)',
+        border: '1px solid var(--c-bg-fbbf24)', borderRadius: 8, padding: '5px 12px', textDecoration: 'none', whiteSpace: 'nowrap' }}>
         Set pay period →
       </Link>
     </div>
@@ -116,8 +117,8 @@ function TrialBanner() {
   // Quiet for most of the trial — it only earns a bar in the last week, or once it has lapsed.
   if (!expired && days > 7) return null
   const tone = expired
-    ? { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' }
-    : { bg: '#eff6ff', border: '#bfdbfe', text: '#1d4ed8' }
+    ? { bg: 'var(--c-bg-fef2f2)', border: 'var(--c-bg-fecaca)', text: 'var(--c-fg-b91c1c)' }
+    : { bg: 'var(--c-bg-eff6ff)', border: 'var(--c-bg-bfdbfe)', text: 'var(--c-fg-1d4ed8)' }
   return (
     <div style={{ background: tone.bg, borderBottom: `1px solid ${tone.border}`, padding: '10px 24px',
       display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, color: tone.text, flexWrap: 'wrap' }}>
@@ -168,7 +169,7 @@ function ImpersonationBanner() {
 
   return (
     <div data-tour-id="impersonation-banner" style={{ position: 'sticky', top: 0, zIndex: 40,
-      background: '#7f1d1d', color: '#fff', borderBottom: '3px solid #fca5a5' }}>
+      background: 'var(--c-bg-7f1d1d)', color: 'var(--c-fg-ffffff)', borderBottom: '3px solid var(--c-bg-fca5a5)' }}>
       <div style={{ padding: '9px 20px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', fontSize: 13 }}>
         <span style={{ fontWeight: 800, letterSpacing: '0.03em' }}>👁️ VIEWING AS</span>
         <span style={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', padding: '3px 10px', borderRadius: 999 }}>
@@ -182,17 +183,17 @@ function ImpersonationBanner() {
           <span style={{ opacity: 0.85 }}>Ends automatically in <b>{minsLeft} min</b>.</span>
         )}
         <button data-tour-id="impersonation-unlock" onClick={() => { setUnlockOpen(o => !o); setErr(''); setOk('') }}
-          style={{ marginLeft: 'auto', background: 'rgba(255,255,255,0.12)', color: '#fff', fontWeight: 700,
+          style={{ marginLeft: 'auto', background: 'rgba(255,255,255,0.12)', color: 'var(--c-fg-ffffff)', fontWeight: 700,
             border: '1px solid rgba(255,255,255,0.5)', borderRadius: 8, padding: '5px 12px', cursor: 'pointer', fontSize: 13 }}>
           🔓 Unlock clock in/out
         </button>
         <button data-tour-id="impersonation-exit" onClick={() => stopImpersonation()}
-          style={{ background: '#fff', color: '#7f1d1d', fontWeight: 800, border: 'none', borderRadius: 8,
+          style={{ background: 'var(--c-bg-ffffff)', color: 'var(--c-fg-7f1d1d)', fontWeight: 800, border: 'none', borderRadius: 8,
             padding: '6px 14px', cursor: 'pointer', fontSize: 13 }}>
           ✕ Exit — back to my account
         </button>
       </div>
-      {ok && <div style={{ padding: '0 20px 9px', fontSize: 12.5, color: '#dcfce7' }}>{ok}</div>}
+      {ok && <div style={{ padding: '0 20px 9px', fontSize: 12.5, color: 'var(--c-fg-dcfce7)' }}>{ok}</div>}
       {unlockOpen && (
         <div style={{ padding: '0 20px 12px' }}>
           <div style={{ background: 'rgba(0,0,0,0.25)', borderRadius: 10, padding: 12, maxWidth: 640 }}>
@@ -204,20 +205,20 @@ function ImpersonationBanner() {
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <input value={impersonationInfo.target_email || ''} readOnly aria-label="Employee email"
                 style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.4)',
-                  background: 'rgba(255,255,255,0.1)', color: '#fff', fontSize: 13, width: 240 }} />
+                  background: 'rgba(255,255,255,0.1)', color: 'var(--c-fg-ffffff)', fontSize: 13, width: 240 }} />
               <input type="password" value={pw} autoFocus placeholder="Their password"
                 aria-label="Employee password"
                 onChange={e => setPw(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && pw && !busy) submitUnlock() }}
                 style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.4)',
-                  background: 'rgba(255,255,255,0.1)', color: '#fff', fontSize: 13, width: 200 }} />
+                  background: 'rgba(255,255,255,0.1)', color: 'var(--c-fg-ffffff)', fontSize: 13, width: 200 }} />
               <button disabled={!pw || busy} onClick={submitUnlock}
-                style={{ background: '#fff', color: '#7f1d1d', fontWeight: 800, border: 'none', borderRadius: 8,
+                style={{ background: 'var(--c-bg-ffffff)', color: 'var(--c-fg-7f1d1d)', fontWeight: 800, border: 'none', borderRadius: 8,
                   padding: '6px 14px', cursor: pw && !busy ? 'pointer' : 'not-allowed', fontSize: 13, opacity: pw && !busy ? 1 : 0.6 }}>
                 {busy ? 'Checking…' : 'Unlock one punch'}
               </button>
             </div>
-            {err && <div style={{ marginTop: 8, fontSize: 12.5, color: '#fecaca' }}>{err}</div>}
+            {err && <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--c-fg-fecaca)' }}>{err}</div>}
           </div>
         </div>
       )}
@@ -410,8 +411,8 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
         <div style={{ display: 'flex', alignItems: 'center', gap: 10,
           padding: collapsed ? '16px 0' : '16px 14px', justifyContent: collapsed ? 'center' : 'flex-start' }}>
           <div style={{ width: 28, height: 28, flexShrink: 0, borderRadius: 8, display: 'flex',
-            alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, fontWeight: 800,
-            letterSpacing: '-0.02em', background: 'linear-gradient(135deg,#3b82f6,#2e75b6)',
+            alignItems: 'center', justifyContent: 'center', color: 'var(--c-fg-ffffff)', fontSize: 13, fontWeight: 800,
+            letterSpacing: '-0.02em', background: 'linear-gradient(135deg,var(--c-bg-3b82f6),var(--c-bg-2e75b6))',
             boxShadow: '0 1px 3px rgba(0,0,0,0.35)' }}>M</div>
           {!collapsed && (
             <div style={{ minWidth: 0, flex: 1 }}>
@@ -428,8 +429,13 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
             </div>
           )}
           {!collapsed && (
-            <button className="mp-icon-btn" onClick={() => setCollapsed(true)} title="Collapse menu"
-              aria-label="Collapse menu">‹</button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              {/* The way back to the light app, beside the collapse control because both are about how
+                  the app LOOKS rather than what it shows. index §CORE-15. */}
+              <ThemeToggle />
+              <button className="mp-icon-btn" onClick={() => setCollapsed(true)} title="Collapse menu"
+                aria-label="Collapse menu">‹</button>
+            </div>
           )}
         </div>
 
@@ -472,7 +478,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
               textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: 4 }}>Period</label>
             <select value={period} onChange={e => setPeriod(e.target.value)} className="mp-search"
               style={{ width: '100%', padding: '6px 8px', cursor: 'pointer' }}>
-              {periods.map(p => <option key={p} value={p} style={{ color: '#0f172a' }}>{p}</option>)}
+              {periods.map(p => <option key={p} value={p} style={{ color: 'var(--c-fg-0f172a)' }}>{p}</option>)}
             </select>
           </div>
         )}
@@ -586,7 +592,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
       </aside>
 
       <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <header style={{ background: 'white', borderBottom: '1px solid var(--border)', padding: '0 24px',
+        <header style={{ background: 'var(--c-bg-ffffff)', borderBottom: '1px solid var(--border)', padding: '0 24px',
           height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           position: 'sticky', top: 0, zIndex: 10 }}>
           <div style={{ fontSize: 14, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -622,7 +628,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                 <span style={{ color: 'var(--text3)' }}>Viewing:</span>
                 <select value={activeCarrier} title="Which carrier you're viewing"
                   onChange={e => setActiveCarrier(e.target.value)}
-                  style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', background: 'white',
+                  style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', background: 'var(--c-bg-ffffff)',
                     border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px', cursor: 'pointer' }}>
                   {carrierList.map((c, i) => {
                     const code = carrierCode(c)
@@ -648,10 +654,10 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
               return (
                 <label title="The company every page on screen belongs to"
                   style={{ fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6,
-                    border: `1px solid ${acting.resolved ? 'var(--border)' : '#f59e0b'}`,
-                    background: acting.resolved ? 'white' : '#fffbeb',
+                    border: `1px solid ${acting.resolved ? 'var(--border)' : 'var(--c-bg-f59e0b)'}`,
+                    background: acting.resolved ? 'var(--c-bg-ffffff)' : 'var(--c-bg-fffbeb)',
                     borderRadius: 8, padding: '2px 4px 2px 9px' }}>
-                  <span style={{ color: acting.resolved ? 'var(--text3)' : '#92400e', fontWeight: 600 }}>Company:</span>
+                  <span style={{ color: acting.resolved ? 'var(--text3)' : 'var(--c-fg-92400e)', fontWeight: 600 }}>Company:</span>
                   <select value={acting.resolved ? (activeOrg || '') : ''} aria-label="Company you are working in"
                     onChange={e => {
                       const to = e.target.value
@@ -660,7 +666,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                       if (warn && !window.confirm(warn)) { e.target.value = acting.resolved ? (activeOrg || '') : ''; return }
                       setActiveOrg(to); window.location.reload()
                     }}
-                    style={{ fontSize: 13, fontWeight: 700, color: acting.resolved ? 'var(--text2)' : '#92400e',
+                    style={{ fontSize: 13, fontWeight: 700, color: acting.resolved ? 'var(--text2)' : 'var(--c-fg-92400e)',
                       background: 'transparent', border: 'none', borderRadius: 6, padding: '3px 4px', cursor: 'pointer' }}>
                     {switcherOptions(tenants, activeOrg).map(o => (
                       <option key={o.value || 'choose'} value={o.value} disabled={o.placeholder}>
@@ -679,7 +685,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
             title="Ask a question or jump to a report (⌘/)" aria-label="Ask a question"
             style={{ flex: '0 1 400px', maxWidth: 400, minWidth: 150, display: 'flex', alignItems: 'center',
               gap: 8, margin: '0 16px', padding: '7px 12px', borderRadius: 9, cursor: 'text', fontSize: 13,
-              color: 'var(--text3)', background: '#f1f5f9', border: '1px solid var(--border)' }}>
+              color: 'var(--text3)', background: 'var(--c-bg-f1f5f9)', border: '1px solid var(--border)' }}>
             <span aria-hidden>🔎</span>
             <span style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Ask a question…</span>
             <kbd style={{ fontSize: 10, opacity: 0.7, border: '1px solid var(--border)', borderRadius: 4, padding: '0 4px' }}>⌘/</kbd>
@@ -695,12 +701,12 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>{user?.role_display || user?.role || ''}</div>
               </div>
               <div style={{ width: 32, height: 32, background: 'var(--accent)', borderRadius: '50%',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 12, fontWeight: 700 }}>
+                display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--c-fg-ffffff)', fontSize: 12, fontWeight: 700 }}>
                 {initials}
               </div>
             </button>
             {menuOpen && (
-              <div style={{ position: 'absolute', right: 0, top: 44, background: 'white', border: '1px solid var(--border)',
+              <div style={{ position: 'absolute', right: 0, top: 44, background: 'var(--c-bg-ffffff)', border: '1px solid var(--border)',
                 borderRadius: 10, boxShadow: '0 10px 30px rgba(0,0,0,0.12)', minWidth: 180, zIndex: 20, overflow: 'hidden' }}>
                 <Link href="/account/password" onClick={() => setMenuOpen(false)}
                   style={{ display: 'block', padding: '10px 14px', fontSize: 13, color: 'var(--text1)', textDecoration: 'none' }}>
@@ -708,7 +714,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                 </Link>
                 <button onClick={() => signOut().then(() => router.replace('/login'))}
                   style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 14px', fontSize: 13,
-                    color: '#dc2626', background: 'none', border: 'none', borderTop: '1px solid var(--border)', cursor: 'pointer' }}>
+                    color: 'var(--c-fg-dc2626)', background: 'none', border: 'none', borderTop: '1px solid var(--border)', cursor: 'pointer' }}>
                   ↩︎ Sign out
                 </button>
               </div>
@@ -880,16 +886,16 @@ function Guard({ children }: { children: React.ReactNode }) {
           the server's own, because it is what knows which weekday the gate falls on. */}
       {clockGate?.alert && (
         <div style={{ margin: '0 0 12px', padding: '10px 14px', borderRadius: 8,
-                      border: `1px solid ${clockGate.gated ? '#f87171' : '#f59e0b'}`,
+                      border: `1px solid ${clockGate.gated ? 'var(--c-bg-f87171)' : 'var(--c-bg-f59e0b)'}`,
                       background: clockGate.gated ? 'rgba(248,113,113,0.10)' : 'rgba(245,158,11,0.08)',
                       fontSize: 13, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <strong style={{ color: clockGate.gated ? '#b42318' : '#b45309' }}>
+          <strong style={{ color: clockGate.gated ? 'var(--c-fg-b42318)' : 'var(--c-fg-b45309)' }}>
             ⏱ {clockGate.gated ? 'Clock corrections are due now' : 'Clock corrections are waiting'}
           </strong>
           <span style={{ color: 'var(--text2)' }}>{clockGate.reason}</span>
           <div style={{ flex: 1 }} />
           <a href={clockGate.correction_path || '/storeops/payroll/clock-variances'}
-             style={{ padding: '5px 11px', borderRadius: 7, background: 'var(--accent)', color: '#fff',
+             style={{ padding: '5px 11px', borderRadius: 7, background: 'var(--accent)', color: 'var(--c-fg-ffffff)',
                       fontWeight: 600, textDecoration: 'none' }}>Fix them →</a>
         </div>
       )}

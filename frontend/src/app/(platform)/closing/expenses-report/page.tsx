@@ -126,7 +126,7 @@ export default function ExpensesReportPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : err ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {err}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {err}</div>
       ) : (
         <ReportShell title="Expenses" subtitle={`${dateFrom} → ${dateTo}`}
           filename={`closing-expenses_${dateFrom}_${dateTo}`} columns={columns} rows={filtered} />

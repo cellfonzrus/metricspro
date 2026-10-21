@@ -66,8 +66,8 @@ const td: React.CSSProperties = { padding: '5px 8px', fontSize: 12.5, borderTop:
 const stepDot = (active: boolean, done: boolean): React.CSSProperties => ({
   width: 22, height: 22, borderRadius: 11, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   fontSize: 11, fontWeight: 800, flex: '0 0 auto',
-  background: done ? '#16a34a' : active ? 'var(--accent)' : 'var(--surface2)',
-  color: done || active ? '#fff' : 'var(--text2)', border: '1px solid var(--border)',
+  background: done ? 'var(--c-bg-16a34a)' : active ? 'var(--accent)' : 'var(--surface2)',
+  color: done || active ? 'var(--c-fg-ffffff)' : 'var(--text2)', border: '1px solid var(--border)',
 })
 
 export default function CoverageWizard(
@@ -276,19 +276,19 @@ export default function CoverageWizard(
         </div>
 
         <div style={{ padding: 18, minHeight: 240 }}>
-          {loadErr && <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 8, padding: '8px 10px', fontSize: 13, marginBottom: 12 }}>Load failed: {loadErr}</div>}
+          {loadErr && <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '8px 10px', fontSize: 13, marginBottom: 12 }}>Load failed: {loadErr}</div>}
           {loading && <div style={{ fontSize: 13, color: 'var(--text3)' }}>Loading coverage for {wizPeriod}…</div>}
 
           {!loading && result && (
             <div>
               {result.error
-                ? <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 8, padding: '10px 12px', fontSize: 13 }}>❌ {result.error}</div>
+                ? <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '10px 12px', fontSize: 13 }}>❌ {result.error}</div>
                 : (
-                  <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 10, padding: '14px 16px' }}>
+                  <div style={{ background: 'var(--c-bg-f0fdf4)', border: '1px solid var(--c-bg-86efac)', borderRadius: 10, padding: '14px 16px' }}>
                     <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 6 }}>✅ Applied.</div>
                     <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 8 }}>
-                      <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Now covered</div><div style={{ fontSize: 20, fontWeight: 800, color: '#166534' }}>{fmt(result.covered)}</div></div>
-                      <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Still unpaid</div><div style={{ fontSize: 20, fontWeight: 800, color: '#b45309' }}>{fmt(result.stillUnpaid)}</div></div>
+                      <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Now covered</div><div style={{ fontSize: 20, fontWeight: 800, color: 'var(--c-fg-166534)' }}>{fmt(result.covered)}</div></div>
+                      <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Still unpaid</div><div style={{ fontSize: 20, fontWeight: 800, color: 'var(--c-fg-b45309)' }}>{fmt(result.stillUnpaid)}</div></div>
                     </div>
                     <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 12.5 }}>
                       {(result.steps || []).map((s: string, i: number) => <li key={i}>{s}</li>)}
@@ -420,7 +420,7 @@ export default function CoverageWizard(
                           </label>
                           <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
                             <div style={{ fontSize: 11, color: 'var(--text2)' }}>Estimated new pay</div>
-                            <div style={{ fontSize: 18, fontWeight: 800, color: '#166534' }}>{fmt(est)}</div>
+                            <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--c-fg-166534)' }}>{fmt(est)}</div>
                           </div>
                         </div>
                       )}
@@ -448,7 +448,7 @@ export default function CoverageWizard(
                     return (
                       <div key={i} style={{ fontSize: 12.5, padding: '4px 0', borderTop: i ? '1px solid var(--border)' : undefined }}>
                         <b>{d!.matchOn}</b> = “{value || '(blank)'}” → {p.label} {p.uses === 'amount' ? `$${d!.amount}` : `${d!.pct}%`}
-                        <span style={{ color: '#166534', fontWeight: 700 }}> · {fmt(estimateFor(g, d!))}</span>
+                        <span style={{ color: 'var(--c-fg-166534)', fontWeight: 700 }}> · {fmt(estimateFor(g, d!))}</span>
                       </div>
                     )
                   })}
@@ -462,10 +462,10 @@ export default function CoverageWizard(
                 </div>
               </div>
               <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '12px 14px', display: 'flex', gap: 28, flexWrap: 'wrap' }}>
-                <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Estimated new $ paid (rules)</div><div style={{ fontSize: 20, fontWeight: 800, color: '#166534' }}>{fmt(rulesEstimate)}</div></div>
+                <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Estimated new $ paid (rules)</div><div style={{ fontSize: 20, fontWeight: 800, color: 'var(--c-fg-166534)' }}>{fmt(rulesEstimate)}</div></div>
                 <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Sales becoming eligible (attaches)</div><div style={{ fontSize: 20, fontWeight: 800 }}>{fmt(attachEligible)}</div></div>
               </div>
-              {!canApply && <div style={{ fontSize: 12.5, color: '#b45309', marginTop: 10 }}>Queue at least one rule or one plan-attach before applying.</div>}
+              {!canApply && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b45309)', marginTop: 10 }}>Queue at least one rule or one plan-attach before applying.</div>}
             </div>
           )}
         </div>

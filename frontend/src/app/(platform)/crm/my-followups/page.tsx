@@ -51,7 +51,7 @@ function Section({ title, list, tint, ctx }: {
             </Link>
             {t.lead_phone && <a href={`tel:${t.lead_phone}`} style={{ fontSize: 13 }}>📞 {fmtPhone(t.lead_phone)}</a>}
             <span style={{ fontSize: 13 }}>{t.title}</span>
-            <span style={{ fontSize: 12, color: t.is_overdue ? '#dc2626' : 'var(--text2)' }}>
+            <span style={{ fontSize: 12, color: t.is_overdue ? 'var(--c-fg-dc2626)' : 'var(--text2)' }}>
               {fmtDateTime(t.due_at)} · {relTime(t.due_at)}
             </span>
             {t.lead_store && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{t.lead_store}</span>}
@@ -198,7 +198,7 @@ export default function MyFollowupsPage() {
         <button onClick={load} style={btn}>Refresh</button>
       </div>
 
-      {msg && <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 14 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', marginBottom: 14 }}>{msg}</div>}
 
       <Section title="Overdue" list={overdue} tint="#dc2626" ctx={ctx} />
       <Section title="Today" list={today} tint="#f39c12" ctx={ctx} />

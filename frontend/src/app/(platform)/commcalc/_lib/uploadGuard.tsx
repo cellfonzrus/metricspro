@@ -184,7 +184,7 @@ export function UploadGuardBanner({ outcome, style }: { outcome: UploadOutcome |
       role="alert"
       style={{
         marginTop: 10, padding: '10px 12px', borderRadius: 8, fontSize: 13,
-        border: '1px solid #fcd34d', background: '#fffbeb', color: '#92400e', ...style,
+        border: '1px solid var(--c-bg-fcd34d)', background: 'var(--c-bg-fffbeb)', color: 'var(--c-fg-92400e)', ...style,
       }}
     >
       <div style={{ fontWeight: 700, marginBottom: 2 }}>

@@ -190,7 +190,7 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
   if (!s) return null
   return (
     <>
-      <tr style={{ background: 'var(--surface2, #f8fafc)' }}>
+      <tr style={{ background: 'var(--surface2, var(--c-bg-f8fafc))' }}>
         <td colSpan={2} style={{ padding: '8px 16px', fontWeight: 700, fontSize: 12, textTransform: 'uppercase', color: 'var(--text2)' }}>{SECTION_TITLE[s.type] || s.type}</td>
       </tr>
       {s.lines.map((l: any) => {
@@ -207,14 +207,14 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
                   </button>
                 )}
                 {l.label}
-                {l.kind === 'manual' && <span style={{ marginLeft: 6, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999 }}>manual</span>}
-                {l.kind === 'auto*' && <span style={{ marginLeft: 6, fontSize: 10, color: '#3730a3', background: '#e0e7ff', padding: '1px 5px', borderRadius: 999 }}>auto*</span>}
+                {l.kind === 'manual' && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '1px 5px', borderRadius: 999 }}>manual</span>}
+                {l.kind === 'auto*' && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-fg-3730a3)', background: 'var(--c-bg-e0e7ff)', padding: '1px 5px', borderRadius: 999 }}>auto*</span>}
                 {/* Owner ruling K3(b): a DECLARED zero must say so. A $0 with a reason is a different
                     statement from a $0 that was measured, and the reader cannot tell them apart from
                     the number. Only rendered when the backend actually attached a note. */}
                 {l.note && (
                   <div style={{ marginTop: 3, fontSize: 11.5, lineHeight: 1.45, color: 'var(--text3)', maxWidth: 620 }}>
-                    <span style={{ marginRight: 5, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>not measured</span>
+                    <span style={{ marginRight: 5, fontSize: 10, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>not measured</span>
                     {l.note}
                   </div>
                 )}
@@ -229,7 +229,7 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
                     {l.commission_source.words}{' '}
                     <ScreenLink to="commission_ledger">Open the Commission Ledger</ScreenLink>
                     {(l.commission_source.unbooked || []).length > 0 && (
-                      <div style={{ marginTop: 2, color: '#b45309' }}>
+                      <div style={{ marginTop: 2, color: 'var(--c-fg-b45309)' }}>
                         Not on the P&L: {l.commission_source.unbooked.map((u: any) => `${u.what} ${fmt(u.amount)} — ${u.reason}`).join('; ')}
                       </div>
                     )}
@@ -239,7 +239,7 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
               <td style={{ padding: '7px 16px', textAlign: 'right', fontSize: 13, color: l.amount ? 'var(--text)' : 'var(--text3)' }}>{l.amount ? fmt(l.amount) : '—'}</td>
             </tr>
             {hasDetail && open[k] && Object.entries(l.detail).map(([dl, dv]: any) => (
-              <tr key={k + ':' + dl} style={{ background: '#fafbfc' }}>
+              <tr key={k + ':' + dl} style={{ background: 'var(--c-bg-fafbfc)' }}>
                 <td style={{ padding: '4px 16px 4px 40px', fontSize: 12, color: 'var(--text2)' }}>↳ {dl}</td>
                 <td style={{ padding: '4px 16px', textAlign: 'right', fontSize: 12, color: 'var(--text2)' }}>{fmt(dv)}</td>
               </tr>
@@ -257,9 +257,9 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
 
 function TotalRow({ label, v, strong, accent }: { label: string; v: number; strong?: boolean; accent?: boolean }) {
   return (
-    <tr style={{ borderTop: '2px solid var(--border)', background: accent ? 'var(--surface2, #f1f5f9)' : 'transparent' }}>
+    <tr style={{ borderTop: '2px solid var(--border)', background: accent ? 'var(--surface2, var(--c-bg-f1f5f9))' : 'transparent' }}>
       <td style={{ padding: '10px 16px', fontWeight: strong ? 700 : 500, fontSize: 14 }}>{label}</td>
-      <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 700, fontSize: 14, color: accent ? (v >= 0 ? '#16a34a' : '#dc2626') : 'var(--text)' }}>{fmt(v || 0)}</td>
+      <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 700, fontSize: 14, color: accent ? (v >= 0 ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)') : 'var(--text)' }}>{fmt(v || 0)}</td>
     </tr>
   )
 }

@@ -37,11 +37,11 @@ function pct(v: number | null | undefined, digits = 1): string {
 }
 
 const SEV_STYLE: Record<string, { bg: string; fg: string; icon: string }> = {
-  different_line: { bg: '#fee2e2', fg: '#991b1b', icon: '⚑' },
-  not_declared: { bg: '#e0e7ff', fg: '#3730a3', icon: '◻︎' },
-  different_cohort: { bg: '#fef3c7', fg: '#92400e', icon: '⚠︎' },
-  unresolved_identity: { bg: '#fef3c7', fg: '#92400e', icon: '⚠︎' },
-  no_snapshot: { bg: '#fef3c7', fg: '#92400e', icon: '⚠︎' },
+  different_line: { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)', icon: '⚑' },
+  not_declared: { bg: 'var(--c-bg-e0e7ff)', fg: 'var(--c-fg-3730a3)', icon: '◻︎' },
+  different_cohort: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚠︎' },
+  unresolved_identity: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚠︎' },
+  no_snapshot: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚠︎' },
   as_computed: { bg: 'var(--surface2)', fg: 'var(--text2)', icon: '🕑' },
   loss_base: { bg: 'var(--surface2)', fg: 'var(--text2)', icon: 'ℹ︎' },
 }
@@ -109,7 +109,7 @@ export default function SpiffImpactPage() {
   const Tile = ({ label, value, sub, warn }: { label: string; value: string; sub?: string; warn?: boolean }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 190 }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? '#92400e' : 'var(--text1)' }}>{value}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? 'var(--c-fg-92400e)' : 'var(--text1)' }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
     </div>
   )
@@ -151,7 +151,7 @@ export default function SpiffImpactPage() {
       </div>
 
       {data?.error &&
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-991b1b)', fontSize: 13 }}>
           <b>❌ Spiff Impact could not be built.</b> {data.error}
         </div>}
 
@@ -259,7 +259,7 @@ export default function SpiffImpactPage() {
 
       {/* A comparison that did not run is not the same as no store being behind. */}
       {!loading && data?.peer_meta && data.peer_meta.ran === false &&
-        <div className="card" style={{ padding: '10px 14px', marginTop: 14, background: '#fef3c7', color: '#92400e', fontSize: 13 }}>
+        <div className="card" style={{ padding: '10px 14px', marginTop: 14, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)', fontSize: 13 }}>
           <b>⚠︎ The traffic-band comparison did not run</b>, so the boxes, the bands and the “behind its
           band” columns are blank for every store. That is not a finding of nobody lagging.
           {data.peer_meta.error && <> ({data.peer_meta.error})</>}

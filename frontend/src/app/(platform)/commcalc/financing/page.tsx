@@ -201,7 +201,7 @@ export default function FinancingReportPage() {
 
       {unconfigured.length > 0 && (
         <div className="card" style={{ padding: '11px 15px', marginBottom: 14, fontSize: 13,
-          background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
+          background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', color: 'var(--c-fg-92400e)' }}>
           <b>⚠️ {unconfigured.length} vendor{unconfigured.length > 1 ? 's are' : ' is'} not mapped yet.</b>{' '}
           {unconfigured.map(v => (multi ? vlabel(v.vendor_key, v.label) : `${v.label}: ${v.detection_note}`)).join(' · ')}{' '}
           <Link href="/commcalc/financing/vendors" style={{ textDecoration: 'underline' }}>Map it now</Link>
@@ -301,15 +301,15 @@ export default function FinancingReportPage() {
                       {multi
                         ? (v.detection_status === 'configured'
                             ? <span style={{ color: 'var(--text3)' }}>✓ configured</span>
-                            : <span style={{ color: '#b45309' }}>⚠️ not configured yet</span>)
+                            : <span style={{ color: 'var(--c-fg-b45309)' }}>⚠️ not configured yet</span>)
                         : (v.matchers || []).length === 0
-                        ? <span style={{ color: '#b45309' }}>⚠️ {v.detection_note}</span>
+                        ? <span style={{ color: 'var(--c-fg-b45309)' }}>⚠️ {v.detection_note}</span>
                         : <>
                           {(v.matchers || []).map((m, i) => (
                             <div key={i} style={{ fontSize: 12.5 }}>
                               <code>{m.match_field}</code> {m.match_op} <b>“{m.match_value}”</b>
                               {m.from_rule_label && <span style={{ color: 'var(--text3)' }}> · from pay rule {m.from_rule_label}</span>}
-                              {m.field_warning && <div style={{ color: '#b45309', fontSize: 11.5 }}>⚠️ {m.field_warning}</div>}
+                              {m.field_warning && <div style={{ color: 'var(--c-fg-b45309)', fontSize: 11.5 }}>⚠️ {m.field_warning}</div>}
                             </div>
                           ))}
                           <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 3 }}>{v.detection_note}</div>

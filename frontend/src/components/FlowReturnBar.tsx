@@ -60,18 +60,18 @@ export default function FlowReturnBar() {
   const stale = offerIsStale(offer)
 
   return (
-    <div style={{ background: stale ? '#fef2f2' : '#fffbeb',
-      borderBottom: `1px solid ${stale ? '#fecaca' : '#fde68a'}`, padding: '9px 24px',
+    <div style={{ background: stale ? 'var(--c-bg-fef2f2)' : 'var(--c-bg-fffbeb)',
+      borderBottom: `1px solid ${stale ? 'var(--c-bg-fecaca)' : 'var(--c-bg-fde68a)'}`, padding: '9px 24px',
       display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 13,
-      color: stale ? '#991b1b' : '#92400e' }}>
+      color: stale ? 'var(--c-fg-991b1b)' : 'var(--c-fg-92400e)' }}>
       <span aria-hidden>{stale ? '⚠️' : '🧭'}</span>
       <span>{offer.note}</span>
       <span style={{ flex: 1 }} />
       {stale ? (
         <span style={{ fontWeight: 700 }}>{offer.label}</span>
       ) : (
-        <Link href={offer.href} style={{ fontWeight: 700, color: '#92400e',
-          border: '1px solid #fbbf24', borderRadius: 8, padding: '5px 12px',
+        <Link href={offer.href} style={{ fontWeight: 700, color: 'var(--c-fg-92400e)',
+          border: '1px solid var(--c-bg-fbbf24)', borderRadius: 8, padding: '5px 12px',
           textDecoration: 'none', whiteSpace: 'nowrap' }}>
           {offer.label}
         </Link>

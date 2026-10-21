@@ -181,7 +181,7 @@ export default function VoidRegisterPage() {
     <div>
       <PageIntro
         title="Void &amp; Return Register"
-        right={<Link href="/watchdog" style={{ fontSize: 13, color: 'var(--blue, #2563eb)' }}>
+        right={<Link href="/watchdog" style={{ fontSize: 13, color: 'var(--blue, var(--c-fg-2563eb))' }}>
           ← Management Watchdog
         </Link>}
         help={
@@ -195,7 +195,7 @@ export default function VoidRegisterPage() {
       />
 
       {err && (
-        <div style={{ border: '1px solid var(--red, #dc2626)', borderRadius: 8, padding: '10px 12px',
+        <div style={{ border: '1px solid var(--red, var(--c-bg-dc2626))', borderRadius: 8, padding: '10px 12px',
                       marginBottom: 14, fontSize: 13, color: 'var(--text2)' }}>
           The register could not be loaded: {err}
         </div>
@@ -284,8 +284,8 @@ export default function VoidRegisterPage() {
                       <tr key={`${l.trans_id}-${i}`} style={{ borderTop: '1px solid var(--border)' }}>
                         <td style={{ padding: '8px' }}>
                           <span style={{ fontSize: 10, fontWeight: 700,
-                                         color: KIND_COLOR[l.kind] || '#64748b',
-                                         background: (KIND_COLOR[l.kind] || '#64748b') + '18',
+                                         color: KIND_COLOR[l.kind] || 'var(--c-fg-64748b)',
+                                         background: (KIND_COLOR[l.kind] || 'var(--c-bg-64748b)') + '18',
                                          padding: '2px 7px', borderRadius: 999,
                                          whiteSpace: 'nowrap' }}>
                             {KIND_LABEL[l.kind] || l.kind}

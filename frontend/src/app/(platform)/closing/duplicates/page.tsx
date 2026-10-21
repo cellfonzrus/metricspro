@@ -85,7 +85,7 @@ export default function ClosingDuplicatesPage() {
           <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>This report is limited to company-wide leadership (the same access as Management Review).</div>
         </div>
       ) : err ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {err}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {err}</div>
       ) : groups.length === 0 ? (
         <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>
           ✅ No duplicate submissions found for {mode === 'date' ? date : period}.
@@ -96,12 +96,12 @@ export default function ClosingDuplicatesPage() {
           {groups.map((g: any, gi: number) => {
             const gk = `${g.close_date}|${g.store_code}|${g.employee_name}`
             return (
-              <div key={gi} className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid #f3b4b4' }}>
-                <div style={{ padding: '10px 14px', background: '#fffafa', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div key={gi} className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid var(--c-bg-f3b4b4)' }}>
+                <div style={{ padding: '10px 14px', background: 'var(--c-bg-fffafa)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                   <span style={{ fontWeight: 700, fontSize: 13 }}>{g.store_address || g.store_code}</span>
                   <span style={{ fontSize: 13 }}>{g.employee_name || '—'}</span>
                   <span style={{ fontSize: 12, color: 'var(--text3)' }}>{g.close_date}</span>
-                  <span className="badge" style={{ fontSize: 11, background: '#fbe4e4', color: '#b42318' }}>{g.row_count} rows{g.any_released ? ' · one released' : ''}</span>
+                  <span className="badge" style={{ fontSize: 11, background: 'var(--c-bg-fbe4e4)', color: 'var(--c-fg-b42318)' }}>{g.row_count} rows{g.any_released ? ' · one released' : ''}</span>
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
@@ -116,14 +116,14 @@ export default function ClosingDuplicatesPage() {
                         <td style={{ padding: '6px 10px', fontSize: 12 }}>{fmt(r.cash)}</td>
                         <td style={{ padding: '6px 10px', fontSize: 12 }}>{fmt(r.credit)}</td>
                         <td style={{ padding: '6px 10px', fontSize: 12 }}>
-                          {r.released_at ? <span style={{ color: '#1d4ed8' }}>🔓 released by {r.released_by || 'management'}</span> : <span style={{ color: 'var(--text3)' }}>locked</span>}
+                          {r.released_at ? <span style={{ color: 'var(--c-fg-1d4ed8)' }}>🔓 released by {r.released_by || 'management'}</span> : <span style={{ color: 'var(--text3)' }}>locked</span>}
                         </td>
                         <td style={{ padding: '6px 10px', textAlign: 'right', display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                           <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px' }} disabled={!!busy[r.id]}
                             onClick={() => release(gk, r.id, !r.released_at)}>
                             {r.released_at ? '🔒 Re-lock' : '🔓 Release'}
                           </button>
-                          <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px', color: '#dc2626' }} disabled={!!busy[r.id]}
+                          <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px', color: 'var(--c-fg-dc2626)' }} disabled={!!busy[r.id]}
                             onClick={() => deleteRow(gk, r.id)}>
                             🗑 Delete
                           </button>
@@ -132,7 +132,7 @@ export default function ClosingDuplicatesPage() {
                     ))}
                   </tbody>
                 </table>
-                {msg[gk] && <div style={{ fontSize: 12, padding: '8px 14px', color: msg[gk].startsWith('❌') ? '#b91c1c' : 'var(--text2)' }}>{msg[gk]}</div>}
+                {msg[gk] && <div style={{ fontSize: 12, padding: '8px 14px', color: msg[gk].startsWith('❌') ? 'var(--c-fg-b91c1c)' : 'var(--text2)' }}>{msg[gk]}</div>}
               </div>
             )
           })}

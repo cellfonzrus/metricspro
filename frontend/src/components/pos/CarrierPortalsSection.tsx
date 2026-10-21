@@ -22,7 +22,7 @@ const input: React.CSSProperties = { padding: '7px 10px', borderRadius: 7, borde
 const label: React.CSSProperties = { fontSize: 12, color: 'var(--text2)', marginBottom: 3, display: 'block' }
 const th: React.CSSProperties = { textAlign: 'left', padding: '8px 14px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '8px 14px', fontSize: 13, borderBottom: '1px solid var(--border)' }
-const errorBox: React.CSSProperties = { margin: '12px 16px', border: '1px solid #dc2626', color: '#dc2626', borderRadius: 8, padding: '10px 14px', fontSize: 12 }
+const errorBox: React.CSSProperties = { margin: '12px 16px', border: '1px solid var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }
 
 export default function CarrierPortalsSection() {
   const [portals, setPortals] = useState<CarrierPortal[]>([])
@@ -165,17 +165,17 @@ export default function CarrierPortalsSection() {
                 <tr key={p.id} style={{ opacity: p.is_active ? 1 : 0.5 }}>
                   <td style={{ ...td, fontWeight: 600 }}>{p.carrier}</td>
                   <td style={td}>
-                    <a href={p.url} target="_blank" rel="noopener noreferrer" title={p.url} style={{ color: '#2980b9', textDecoration: 'none' }}>{shortUrl(p.url)}</a>
+                    <a href={p.url} target="_blank" rel="noopener noreferrer" title={p.url} style={{ color: 'var(--c-fg-2980b9)', textDecoration: 'none' }}>{shortUrl(p.url)}</a>
                   </td>
                   <td style={{ ...td, color: 'var(--text2)' }}>{p.sort_order}</td>
-                  <td style={td}><span style={{ color: p.is_active ? '#16a34a' : '#dc2626', fontWeight: 600 }}>{p.is_active ? 'Active' : 'Inactive'}</span></td>
+                  <td style={td}><span style={{ color: p.is_active ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)', fontWeight: 600 }}>{p.is_active ? 'Active' : 'Inactive'}</span></td>
                   <td style={td}>
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }}
                         onClick={() => { setError(''); setForm({ id: p.id, carrier: p.carrier, url: p.url, sort_order: String(p.sort_order), is_active: p.is_active }) }}>Edit</button>
-                      <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', color: p.is_active ? '#dc2626' : '#16a34a' }}
+                      <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', color: p.is_active ? 'var(--c-fg-dc2626)' : 'var(--c-fg-16a34a)' }}
                         onClick={() => togglePortal(p)}>{p.is_active ? 'Deactivate' : 'Reactivate'}</button>
-                      <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', color: '#dc2626' }}
+                      <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', color: 'var(--c-fg-dc2626)' }}
                         onClick={() => deletePortal(p)}>Delete</button>
                     </div>
                   </td>

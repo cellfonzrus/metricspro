@@ -499,7 +499,7 @@ export default function PosActivationsPage() {
                     <div style={{ padding: '8px 10px', fontSize: 12, color: 'var(--text3)' }}>No carrier portals configured — add them in Settings → Carrier Portals.</div>
                   ) : portals.map(p => (
                     <a key={p.carrier} href={p.url} target="_blank" rel="noopener noreferrer"
-                      style={{ display: 'block', padding: '7px 10px', fontSize: 12, color: '#3498db', textDecoration: 'none', borderRadius: 5 }}
+                      style={{ display: 'block', padding: '7px 10px', fontSize: 12, color: 'var(--c-fg-3498db)', textDecoration: 'none', borderRadius: 5 }}
                       onMouseEnter={e => (e.currentTarget as HTMLAnchorElement).style.background = 'var(--surface2)'}
                       onMouseLeave={e => (e.currentTarget as HTMLAnchorElement).style.background = 'transparent'}>
                       {p.carrier} ↗
@@ -528,16 +528,16 @@ export default function PosActivationsPage() {
       </div>
 
       {loadError && (
-        <div style={{ ...panel, borderColor: '#e74c3c', color: '#dc2626', marginBottom: 14, fontSize: 12 }}>{loadError}</div>
+        <div style={{ ...panel, borderColor: 'var(--c-bg-e74c3c)', color: 'var(--c-fg-dc2626)', marginBottom: 14, fontSize: 12 }}>{loadError}</div>
       )}
 
       {/* Stats bar */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 10, marginBottom: 14 }}>
         {[
-          { label: 'Total Activations', value: activations.length, color: '#3498db' },
-          { label: 'Verizon', value: activations.filter(a => a.carrier === 'Verizon').length, color: '#e74c3c' },
-          { label: 'Active', value: activations.filter(a => a.status === 'active').length, color: '#27ae60' },
-          { label: 'Monthly Revenue', value: `$${activations.filter(a => a.status === 'active').reduce((s, a) => s + (Number(a.monthly_fee) || 0), 0).toFixed(0)}`, color: '#e67e22' },
+          { label: 'Total Activations', value: activations.length, color: 'var(--c-fg-3498db)' },
+          { label: 'Verizon', value: activations.filter(a => a.carrier === 'Verizon').length, color: 'var(--c-fg-e74c3c)' },
+          { label: 'Active', value: activations.filter(a => a.status === 'active').length, color: 'var(--c-fg-27ae60)' },
+          { label: 'Monthly Revenue', value: `$${activations.filter(a => a.status === 'active').reduce((s, a) => s + (Number(a.monthly_fee) || 0), 0).toFixed(0)}`, color: 'var(--c-fg-e67e22)' },
         ].map((s, i) => (
           <div key={i} style={{ ...panel, padding: 12, borderTop: `3px solid ${s.color}` }}>
             <div style={{ fontSize: 20, fontWeight: 700 }}>{s.value}</div>
@@ -560,13 +560,13 @@ export default function PosActivationsPage() {
               {filtered.map(a => (
                 <tr key={a.id} onClick={() => openEdit(a)}
                   style={{ cursor: 'pointer', background: selected?.id === a.id ? 'var(--surface2)' : 'transparent' }}>
-                  <td style={{ ...cell, color: '#3498db', fontWeight: 600 }}>{a.activation_number}</td>
+                  <td style={{ ...cell, color: 'var(--c-fg-3498db)', fontWeight: 600 }}>{a.activation_number}</td>
                   <td style={{ ...cell, fontWeight: 500 }}>{a.customer_name || '—'}</td>
                   <td style={cell}>{a.carrier || '—'}</td>
                   <td style={{ ...cell, color: 'var(--text2)' }}>{a.activation_date ? new Date(a.activation_date).toLocaleDateString() : '—'}</td>
                   <td style={{ ...cell, color: 'var(--text2)' }}>{a.service_plan_date ? new Date(a.service_plan_date).toLocaleDateString() : '—'}</td>
                   <td style={cell}>{a.cell_number || a.mobile_phone || '—'}</td>
-                  <td style={{ ...cell, color: '#27ae60', fontWeight: 600 }}>{a.monthly_fee ? `$${a.monthly_fee}` : '—'}</td>
+                  <td style={{ ...cell, color: 'var(--c-fg-27ae60)', fontWeight: 600 }}>{a.monthly_fee ? `$${a.monthly_fee}` : '—'}</td>
                   <td style={{ ...cell, color: 'var(--text2)' }}>{a.included_minutes || '—'}</td>
                   <td style={{ ...cell, color: 'var(--text2)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.plan_description || '—'}</td>
                   <td style={{ ...cell, color: 'var(--text2)' }}>{a.plan_code || '—'}</td>
@@ -615,13 +615,13 @@ export default function PosActivationsPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 13, fontWeight: 600 }}>{custName(selectedCust)}{selectedCust.cust_number ? ` (#${selectedCust.cust_number})` : ''}</span>
                   {/* Explicit remove: clears the preserved original too, so save() really detaches */}
-                  <button onClick={() => { setSelectedCust(null); setEditingOriginalCustomerId(null) }} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer' }}>×</button>
+                  <button onClick={() => { setSelectedCust(null); setEditingOriginalCustomerId(null) }} style={{ background: 'none', border: 'none', color: 'var(--c-fg-dc2626)', cursor: 'pointer' }}>×</button>
                 </div>
               ) : (
-                <button className="btn btn-secondary" style={{ color: '#3498db' }} onClick={() => setShowCustPicker(true)}>+ Select Customer</button>
+                <button className="btn btn-secondary" style={{ color: 'var(--c-fg-3498db)' }} onClick={() => setShowCustPicker(true)}>+ Select Customer</button>
               )}
               {saleId && (
-                <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 600, background: 'var(--surface2)', color: '#3498db', border: '1px solid #2980b9', borderRadius: 10, padding: '3px 10px', whiteSpace: 'nowrap' }}>
+                <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 600, background: 'var(--surface2)', color: 'var(--c-fg-3498db)', border: '1px solid var(--c-bg-2980b9)', borderRadius: 10, padding: '3px 10px', whiteSpace: 'nowrap' }}>
                   Linked to sale #{saleTxn ?? `${saleId.slice(0, 8)}…`}
                 </span>
               )}
@@ -762,7 +762,7 @@ export default function PosActivationsPage() {
                         </select>
                         <button className="btn btn-primary" disabled={savingNote} onClick={addNote} style={{ whiteSpace: 'nowrap' }}>{savingNote ? 'Adding…' : 'Add Note'}</button>
                       </div>
-                      {notesError && <div style={{ color: '#dc2626', fontSize: 12, marginBottom: 8 }}>{notesError}</div>}
+                      {notesError && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 12, marginBottom: 8 }}>{notesError}</div>}
                       {!notesError && notes.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 12, padding: '6px 0' }}>No notes yet</div>}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 220, overflowY: 'auto' }}>
                         {notes.map(n => (
@@ -840,7 +840,7 @@ export default function PosActivationsPage() {
                   onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = 'var(--surface2)'}
                   onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = 'transparent'}>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{c.first_name} {c.last_name} {c.company_name ? `(${c.company_name})` : ''}</div>
-                  <span style={{ fontSize: 11, color: '#3498db' }}>#{c.cust_number}</span>
+                  <span style={{ fontSize: 11, color: 'var(--c-fg-3498db)' }}>#{c.cust_number}</span>
                 </div>
               ))}
               {customers.length === 0 && <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>Search for a customer above</div>}

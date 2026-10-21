@@ -62,64 +62,64 @@ const TRADE_IN_REPORTS = ['Trade-In Return Tracking', 'Trade-In Financial Impact
 
 const REPORT_CATEGORIES = [
   {
-    name: 'Sales', icon: '💰', color: '#27ae60', reports: [
+    name: 'Sales', icon: '💰', color: 'var(--c-fg-27ae60)', reports: [
       'Daily Sales Summary', 'Sales by Employee', 'Sales by Product', 'Sales by Category',
       'Sales Tax by Transaction', 'Sales Tax Summary', 'Void Report', 'Discount Report',
     ]
   },
   {
-    name: 'Activations', icon: '📡', color: '#3498db', reports: [
+    name: 'Activations', icon: '📡', color: 'var(--c-fg-3498db)', reports: [
       'Activations Summary', 'Activations by Carrier', 'Activations by Employee',
       'Activations by Store', 'Carrier Commissions',
     ]
   },
   {
-    name: 'Trade-Ins', icon: '♻️', color: '#16a085', reports: [
+    name: 'Trade-Ins', icon: '♻️', color: 'var(--c-fg-16a085)', reports: [
       'Trade-In Return Tracking', 'Trade-In Financial Impact',
     ]
   },
   {
-    name: 'Inventory', icon: '📦', color: '#e67e22', reports: [
+    name: 'Inventory', icon: '📦', color: 'var(--c-fg-e67e22)', reports: [
       'Inventory Quantity and Cost', 'Inventory Reorder by Store', 'Real-time Inventory Snapshot',
       'Product Price List by Store', 'Purchase Orders', 'RMA Requests', 'Stock Maintenance',
       'Inventory Aging', 'Inventory Adjustment Details',
     ]
   },
   {
-    name: 'Customers', icon: '👤', color: '#9b59b6', reports: [
+    name: 'Customers', icon: '👤', color: 'var(--c-fg-9b59b6)', reports: [
       'Customer Care', 'Customer Contact', 'Customer Activity',
     ]
   },
   {
-    name: 'Finance', icon: '🏦', color: '#e74c3c', reports: [
+    name: 'Finance', icon: '🏦', color: 'var(--c-fg-e74c3c)', reports: [
       'Cash Register Status', 'Cash Register Transactions', 'Cash Register Reconciliation',
       'Expenses', 'Sales Tax Summary', 'Sweep Report',
     ]
   },
   {
-    name: 'Scorecard', icon: '🏆', color: '#f39c12', reports: [
+    name: 'Scorecard', icon: '🏆', color: 'var(--c-fg-f39c12)', reports: [
       'Employee KPIs', 'Employee Performance', 'Employee Performance by Store',
       'Employee Scorecard', 'Location KPIs', 'Location Scorecard', 'Performance Report',
     ]
   },
   {
-    name: 'KPI', icon: '📊', color: '#1abc9c', reports: [
+    name: 'KPI', icon: '📊', color: 'var(--c-fg-1abc9c)', reports: [
       'Store KPIs', 'Daily KPI Dashboard', 'Weekly KPI Summary', 'Monthly KPI Report',
     ]
   },
   {
-    name: 'Time & Attendance', icon: '🕐', color: '#95a5a6', reports: [
+    name: 'Time & Attendance', icon: '🕐', color: 'var(--c-fg-95a5a6)', reports: [
       'Employee Time Sheet', 'Employee Attendance', 'Employee Schedule',
       'Average Transactions per Day', 'Time and Attendance',
     ]
   },
   {
-    name: 'MoM/YoY', icon: '📈', color: '#2980b9', reports: [
+    name: 'MoM/YoY', icon: '📈', color: 'var(--c-fg-2980b9)', reports: [
       'Month over Month Sales', 'Year over Year Sales', 'Growth Trends',
     ]
   },
   {
-    name: 'Summaries', icon: '📋', color: '#7f8c8d', reports: [
+    name: 'Summaries', icon: '📋', color: 'var(--c-fg-7f8c8d)', reports: [
       'Daily Summary', 'Weekly Summary', 'Monthly Summary', 'Annual Summary',
     ]
   },
@@ -476,19 +476,19 @@ export default function PosReportsPage() {
       </div>
 
       {statsError && (
-        <div style={{ marginBottom: 14, border: '1px solid #e74c3c', color: '#e74c3c', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>{statsError}</div>
+        <div style={{ marginBottom: 14, border: '1px solid var(--c-bg-e74c3c)', color: 'var(--c-fg-e74c3c)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>{statsError}</div>
       )}
 
       {/* KPI SUMMARY CARDS */}
       {stats && (
         <div style={{ marginBottom: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
           {[
-            { label: "Today's Revenue", value: fmt(stats.today.total), sub: `${stats.today.count} transactions`, icon: '💵', color: '#27ae60' },
-            { label: 'This Week', value: fmt(stats.week.total), sub: `${stats.week.count} transactions`, icon: '📅', color: '#3498db' },
-            { label: 'This Month', value: fmt(stats.month.total), sub: `${stats.month.count} transactions`, icon: '📆', color: '#9b59b6' },
-            { label: 'Total Customers', value: (stats.customers || 0).toLocaleString(), sub: 'Active accounts', icon: '👤', color: '#e67e22' },
-            { label: 'Total Products', value: (stats.products || 0).toLocaleString(), sub: 'In catalog', icon: '📦', color: '#1abc9c' },
-            { label: 'Phones In Stock', value: (stats.in_stock_units || 0).toLocaleString(), sub: 'Serial tracked', icon: '📱', color: '#e74c3c' },
+            { label: "Today's Revenue", value: fmt(stats.today.total), sub: `${stats.today.count} transactions`, icon: '💵', color: 'var(--c-fg-27ae60)' },
+            { label: 'This Week', value: fmt(stats.week.total), sub: `${stats.week.count} transactions`, icon: '📅', color: 'var(--c-fg-3498db)' },
+            { label: 'This Month', value: fmt(stats.month.total), sub: `${stats.month.count} transactions`, icon: '📆', color: 'var(--c-fg-9b59b6)' },
+            { label: 'Total Customers', value: (stats.customers || 0).toLocaleString(), sub: 'Active accounts', icon: '👤', color: 'var(--c-fg-e67e22)' },
+            { label: 'Total Products', value: (stats.products || 0).toLocaleString(), sub: 'In catalog', icon: '📦', color: 'var(--c-fg-1abc9c)' },
+            { label: 'Phones In Stock', value: (stats.in_stock_units || 0).toLocaleString(), sub: 'Serial tracked', icon: '📱', color: 'var(--c-fg-e74c3c)' },
           ].map((s, i) => (
             <div key={i} style={{ ...panel, padding: 14, position: 'relative', overflow: 'hidden' }}>
               <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: s.color }} />
@@ -599,7 +599,7 @@ export default function PosReportsPage() {
             </div>
 
             {filterLoadError && (
-              <div style={{ marginTop: 8, fontSize: 11, color: '#e67e22' }}>{filterLoadError}</div>
+              <div style={{ marginTop: 8, fontSize: 11, color: 'var(--c-fg-e67e22)' }}>{filterLoadError}</div>
             )}
             {isTradeReport && storeFilter && (
               <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text2)' }}>
@@ -618,14 +618,14 @@ export default function PosReportsPage() {
                 {sales.length > 0 && (
                   <>
                     <span style={{ fontSize: 13 }}>Records: <strong>{sales.length}</strong></span>
-                    <span style={{ fontSize: 13, color: '#27ae60', fontWeight: 700 }}>Total Revenue: {fmt(totalSales)}</span>
+                    <span style={{ fontSize: 13, color: 'var(--c-fg-27ae60)', fontWeight: 700 }}>Total Revenue: {fmt(totalSales)}</span>
                     <span style={{ fontSize: 13, color: 'var(--text2)' }}>Avg: {fmt(totalSales / sales.length)}</span>
                   </>
                 )}
                 {activations.length > 0 && (
                   <>
                     <span style={{ fontSize: 13 }}>Activations: <strong>{activations.length}</strong></span>
-                    <span style={{ fontSize: 13, color: '#27ae60', fontWeight: 700 }}>Monthly Fees: {fmt(totalActivationFees)}</span>
+                    <span style={{ fontSize: 13, color: 'var(--c-fg-27ae60)', fontWeight: 700 }}>Monthly Fees: {fmt(totalActivationFees)}</span>
                   </>
                 )}
                 {tradeIns.length > 0 && activeReport === 'Trade-In Return Tracking' && (
@@ -655,10 +655,10 @@ export default function PosReportsPage() {
 
             {/* Errors / not-implemented notices */}
             {!loading && reportError && (
-              <div style={{ margin: '14px 16px', border: '1px solid #e74c3c', color: '#e74c3c', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>{reportError}</div>
+              <div style={{ margin: '14px 16px', border: '1px solid var(--c-bg-e74c3c)', color: 'var(--c-fg-e74c3c)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>{reportError}</div>
             )}
             {!loading && reportInfo && (
-              <div style={{ margin: '14px 16px', border: '1px solid #e67e22', color: '#e67e22', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>{reportInfo}</div>
+              <div style={{ margin: '14px 16px', border: '1px solid var(--c-bg-e67e22)', color: 'var(--c-fg-e67e22)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>{reportInfo}</div>
             )}
 
             {/* Empty state */}
@@ -668,7 +668,7 @@ export default function PosReportsPage() {
                   {REPORT_CATEGORIES.find(c => c.name === activeCategory)?.icon || '📊'}
                 </div>
                 <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{activeReport}</div>
-                <div style={{ fontSize: 13, marginBottom: 16 }}>Select your date range and click <strong style={{ color: '#3498db' }}>Run Report</strong> to generate data</div>
+                <div style={{ fontSize: 13, marginBottom: 16 }}>Select your date range and click <strong style={{ color: 'var(--c-fg-3498db)' }}>Run Report</strong> to generate data</div>
                 {dateFrom && (
                   <div style={{ fontSize: 11, color: 'var(--text3)' }}>
                     {dateFrom === dateTo ? `Date: ${dateFrom}` : `${dateFrom} to ${dateTo}`}
@@ -691,7 +691,7 @@ export default function PosReportsPage() {
                   <tbody>
                     {sales.map(sale => (
                       <tr key={sale.transaction_id}>
-                        <td style={{ ...td, color: '#3498db', fontWeight: 600 }}>{sale.transaction_id}</td>
+                        <td style={{ ...td, color: 'var(--c-fg-3498db)', fontWeight: 600 }}>{sale.transaction_id}</td>
                         <td style={{ ...td, color: 'var(--text2)' }}>{new Date(sale.created_at).toLocaleString()}</td>
                         <td style={td}>
                           <span style={{ color: sale.status === 'completed' ? '#27ae60' : '#e74c3c', fontWeight: 600, textTransform: 'capitalize' }}>{sale.status}</span>
@@ -699,14 +699,14 @@ export default function PosReportsPage() {
                         <td style={{ ...td, color: 'var(--text2)', textTransform: 'capitalize' }}>{sale.receipt_type}</td>
                         <td style={td}>{sale.customer_name || '—'}</td>
                         <td style={{ ...td, color: 'var(--text2)' }}>{sale.employee_name || '—'}</td>
-                        <td style={{ ...td, color: '#27ae60', fontWeight: 700 }}>{fmt(sale.total || 0)}</td>
+                        <td style={{ ...td, color: 'var(--c-fg-27ae60)', fontWeight: 700 }}>{fmt(sale.total || 0)}</td>
                       </tr>
                     ))}
                   </tbody>
                   <tfoot>
                     <tr style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border)' }}>
                       <td colSpan={6} style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--text2)', fontSize: 12 }}>TOTAL ({sales.length} records)</td>
-                      <td style={{ padding: '10px 14px', fontWeight: 700, color: '#27ae60', fontSize: 14 }}>{fmt(totalSales)}</td>
+                      <td style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--c-fg-27ae60)', fontSize: 14 }}>{fmt(totalSales)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -727,20 +727,20 @@ export default function PosReportsPage() {
                   <tbody>
                     {activations.map(a => (
                       <tr key={a.activation_number}>
-                        <td style={{ ...td, color: '#3498db', fontWeight: 600 }}>{a.activation_number}</td>
+                        <td style={{ ...td, color: 'var(--c-fg-3498db)', fontWeight: 600 }}>{a.activation_number}</td>
                         <td style={td}>{a.customer_name || '—'}</td>
                         <td style={{ ...td, color: 'var(--text2)' }}>{a.employee_name || '—'}</td>
                         <td style={td}>{a.carrier || '—'}</td>
                         <td style={{ ...td, color: 'var(--text2)' }}>{a.activation_date ? new Date(a.activation_date).toLocaleDateString() : '—'}</td>
                         <td style={{ ...td, color: 'var(--text2)' }}>{a.cell_number || a.mobile_phone || '—'}</td>
-                        <td style={{ ...td, color: '#27ae60', fontWeight: 700 }}>{a.monthly_fee ? fmt(a.monthly_fee) : '—'}</td>
+                        <td style={{ ...td, color: 'var(--c-fg-27ae60)', fontWeight: 700 }}>{a.monthly_fee ? fmt(a.monthly_fee) : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
                   <tfoot>
                     <tr style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border)' }}>
                       <td colSpan={6} style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--text2)' }}>TOTAL ({activations.length} activations)</td>
-                      <td style={{ padding: '10px 14px', fontWeight: 700, color: '#27ae60', fontSize: 14 }}>{fmt(totalActivationFees)}/mo</td>
+                      <td style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--c-fg-27ae60)', fontSize: 14 }}>{fmt(totalActivationFees)}/mo</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -752,11 +752,11 @@ export default function PosReportsPage() {
               <div style={{ padding: 20 }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 20 }}>
                   {carrierStats.map((c, i) => (
-                    <div key={i} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 10, padding: 16, borderTop: `3px solid ${['#e74c3c', '#3498db', '#e67e22', '#9b59b6', '#27ae60'][i % 5]}` }}>
+                    <div key={i} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 10, padding: 16, borderTop: `3px solid ${['var(--c-bg-e74c3c)', 'var(--c-bg-3498db)', 'var(--c-bg-e67e22)', 'var(--c-bg-9b59b6)', 'var(--c-bg-27ae60)'][i % 5]}` }}>
                       <div style={{ fontSize: 18, fontWeight: 700 }}>{c.carrier}</div>
-                      <div style={{ fontSize: 24, fontWeight: 700, color: '#27ae60', margin: '8px 0' }}>{c.count}</div>
+                      <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--c-fg-27ae60)', margin: '8px 0' }}>{c.count}</div>
                       <div style={{ fontSize: 12, color: 'var(--text2)' }}>activations</div>
-                      <div style={{ fontSize: 13, color: '#e67e22', marginTop: 6, fontWeight: 600 }}>{fmt(c.revenue)}/mo total</div>
+                      <div style={{ fontSize: 13, color: 'var(--c-fg-e67e22)', marginTop: 6, fontWeight: 600 }}>{fmt(c.revenue)}/mo total</div>
                     </div>
                   ))}
                 </div>
@@ -773,7 +773,7 @@ export default function PosReportsPage() {
                       <tr key={i}>
                         <td style={{ ...td, fontWeight: 600 }}>{c.carrier}</td>
                         <td style={td}>{c.count}</td>
-                        <td style={{ ...td, color: '#27ae60' }}>{fmt(c.revenue)}/mo</td>
+                        <td style={{ ...td, color: 'var(--c-fg-27ae60)' }}>{fmt(c.revenue)}/mo</td>
                         <td style={{ ...td, color: 'var(--text2)' }}>{fmt(c.revenue / c.count)}/mo</td>
                       </tr>
                     ))}
@@ -805,8 +805,8 @@ export default function PosReportsPage() {
                           <td style={{ ...td, fontWeight: 600 }}>{t.device_description || '—'}</td>
                           <td style={{ ...td, color: 'var(--text2)', fontFamily: 'monospace' }}>{t.serial_number || t.imei || '—'}</td>
                           <td style={td}>{t.customer_name || '—'}</td>
-                          <td style={{ ...td, color: '#3498db', fontWeight: 600 }}>{t.activation_number ?? '—'}</td>
-                          <td style={{ ...td, color: '#27ae60', fontWeight: 700 }}>{fmt(t.credit_amount || 0)}</td>
+                          <td style={{ ...td, color: 'var(--c-fg-3498db)', fontWeight: 600 }}>{t.activation_number ?? '—'}</td>
+                          <td style={{ ...td, color: 'var(--c-fg-27ae60)', fontWeight: 700 }}>{fmt(t.credit_amount || 0)}</td>
                           <td style={td}>
                             <span style={{ color: statusColor(t.status), fontWeight: 600 }}>{statusLabel(t.status)}</span>
                           </td>
@@ -815,8 +815,8 @@ export default function PosReportsPage() {
                           <td style={{ ...td, whiteSpace: 'nowrap' }}>
                             {t.status === 'received' ? (
                               <div style={{ display: 'flex', gap: 6 }}>
-                                <button onClick={() => updateTradeIn(t, 'sent_back')} style={{ background: '#27ae60', border: 'none', color: 'white', borderRadius: 5, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Mark Sent Back</button>
-                                <button onClick={() => updateTradeIn(t, 'written_off')} style={{ background: 'transparent', border: '1px solid #e74c3c', color: '#e74c3c', borderRadius: 5, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Write Off</button>
+                                <button onClick={() => updateTradeIn(t, 'sent_back')} style={{ background: 'var(--c-bg-27ae60)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 5, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Mark Sent Back</button>
+                                <button onClick={() => updateTradeIn(t, 'written_off')} style={{ background: 'transparent', border: '1px solid var(--c-bg-e74c3c)', color: 'var(--c-fg-e74c3c)', borderRadius: 5, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Write Off</button>
                               </div>
                             ) : (
                               <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
@@ -828,7 +828,7 @@ export default function PosReportsPage() {
                     <tfoot>
                       <tr style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border)' }}>
                         <td colSpan={5} style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--text2)' }}>SHOWN ({displayedTradeIns.length} of {tradeIns.length} in range)</td>
-                        <td style={{ padding: '10px 14px', fontWeight: 700, color: '#27ae60', fontSize: 14 }}>{fmt(displayedTradeIns.reduce((s, t) => s + (t.credit_amount || 0), 0))}</td>
+                        <td style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--c-fg-27ae60)', fontSize: 14 }}>{fmt(displayedTradeIns.reduce((s, t) => s + (t.credit_amount || 0), 0))}</td>
                         <td colSpan={3} />
                       </tr>
                     </tfoot>
@@ -855,12 +855,12 @@ export default function PosReportsPage() {
                         <td style={{ ...td, fontWeight: 600 }}>{t.device_description || '—'}</td>
                         <td style={{ ...td, color: 'var(--text2)', fontFamily: 'monospace' }}>{t.serial_number || t.imei || '—'}</td>
                         <td style={td}>{t.customer_name || '—'}</td>
-                        <td style={{ ...td, color: '#3498db', fontWeight: 600 }}>{t.activation_number ?? '—'}</td>
-                        <td style={{ ...td, color: ageDays(t) > 30 ? '#e74c3c' : '#f39c12', fontWeight: 700 }}>{ageDays(t)}</td>
+                        <td style={{ ...td, color: 'var(--c-fg-3498db)', fontWeight: 600 }}>{t.activation_number ?? '—'}</td>
+                        <td style={{ ...td, color: ageDays(t) > 30 ? 'var(--c-fg-e74c3c)' : 'var(--c-fg-f39c12)', fontWeight: 700 }}>{ageDays(t)}</td>
                         <td style={td}>
                           <span style={{ color: statusColor(t.status), fontWeight: 600 }}>{statusLabel(t.status)}</span>
                         </td>
-                        <td style={{ ...td, color: '#e74c3c', fontWeight: 700 }}>{fmt(t.credit_amount || 0)}</td>
+                        <td style={{ ...td, color: 'var(--c-fg-e74c3c)', fontWeight: 700 }}>{fmt(t.credit_amount || 0)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -869,7 +869,7 @@ export default function PosReportsPage() {
                       <td colSpan={7} style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--text2)' }}>
                         TOTAL AT RISK ({tradeIns.length} units — money lost if devices never go back)
                       </td>
-                      <td style={{ padding: '10px 14px', fontWeight: 700, color: '#e74c3c', fontSize: 14 }}>{fmt(tradeOutstandingCredit + tradeWrittenOffCredit)}</td>
+                      <td style={{ padding: '10px 14px', fontWeight: 700, color: 'var(--c-fg-e74c3c)', fontSize: 14 }}>{fmt(tradeOutstandingCredit + tradeWrittenOffCredit)}</td>
                     </tr>
                   </tfoot>
                 </table>

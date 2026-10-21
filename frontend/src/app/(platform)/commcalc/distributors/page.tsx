@@ -88,7 +88,7 @@ export default function DistributorsPage() {
           Record each payment&apos;s <strong>funding source</strong> (own vs borrowed account).
         </p>
       </div>
-      {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || <SetupNotice detail="058_distributors.sql" />}</div>}
+      {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', fontSize: 13 }}>⚠️ {msg || <SetupNotice detail="058_distributors.sql" />}</div>}
 
       {/* editor */}
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
@@ -149,16 +149,16 @@ export default function DistributorsPage() {
                 {arrLabel(d.arrangement)}{d.arrangement === 'terms' && d.terms_days ? ` · ${d.terms_days}d` : ''}{d.arrangement === 'consignment' ? ` · ${d.billing_cycle}` : ''}
               </span>
               {d.carrier_id && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{carrierName(d.carrier_id)}</span>}
-              {d.has_asset_lending && <span style={{ fontSize: 11, color: '#6d28d9' }}>📲 asset lending</span>}
+              {d.has_asset_lending && <span style={{ fontSize: 11, color: 'var(--c-fg-6d28d9)' }}>📲 asset lending</span>}
               <span style={{ fontSize: 12, color: 'var(--text3)' }}>funds: {d.default_funding}</span>
-              {!d.is_active && <span style={{ fontSize: 11, color: '#b45309' }}>inactive</span>}
+              {!d.is_active && <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>inactive</span>}
               <span style={{ flex: 1 }} />
               <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => openPayments(d)}>💵 Payments</button>
               <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setDraft({ ...d, carrier_id: d.carrier_id || '' })}>Edit</button>
-              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => del(d.id)}>Delete</button>
+              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: 'var(--c-fg-dc2626)' }} onClick={() => del(d.id)}>Delete</button>
             </div>
             {payFor?.id === d.id && (
-              <div style={{ padding: '12px 16px', background: '#f8fafc', borderTop: '1px dashed var(--border)' }}>
+              <div style={{ padding: '12px 16px', background: 'var(--c-bg-f8fafc)', borderTop: '1px dashed var(--border)' }}>
                 <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Payments — {d.name}
                   {payments?.totals && <span style={{ fontWeight: 400, color: 'var(--text3)' }}> · own {fmt(payments.totals.own)} · borrowed {fmt(payments.totals.borrowed)} · total {fmt(payments.totals.total)}</span>}
                 </div>
@@ -186,7 +186,7 @@ export default function DistributorsPage() {
                           <td style={{ padding: '4px 8px', fontSize: 12, color: p.funding_source === 'borrowed' ? '#b45309' : '#15803d' }}>{p.funding_source}</td>
                           <td style={{ padding: '4px 8px', fontSize: 12 }}>{p.account_label || '—'}</td>
                           <td style={{ padding: '4px 8px', fontSize: 12 }}>{p.ref || '—'}</td>
-                          <td style={{ padding: '4px 8px' }}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', fontSize: 12 }} onClick={() => delPayment(p.id)}>✕</button></td>
+                          <td style={{ padding: '4px 8px' }}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-fg-dc2626)', fontSize: 12 }} onClick={() => delPayment(p.id)}>✕</button></td>
                         </tr>
                       ))}
                     </tbody>

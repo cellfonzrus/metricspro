@@ -11,10 +11,10 @@ type ResItem = { raw: string; sources: string[]; status: string; resolved_code: 
 type ResReport = { items: ResItem[]; counts: Record<string, number>; total: number; stores: Store[]; sources_scanned: string[] }
 
 const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
-  explicit: { label: '✓ Explicit mapping', bg: '#dcfce7', fg: '#15803d' },
-  store_mapping: { label: 'Store map', bg: '#dbeafe', fg: '#1d4ed8' },
-  'exact-fallback': { label: '⚠ Exact fallback', bg: '#fef3c7', fg: '#b45309' },
-  unresolved: { label: '✗ Unresolved', bg: '#fee2e2', fg: '#b91c1c' },
+  explicit: { label: '✓ Explicit mapping', bg: 'var(--c-bg-dcfce7)', fg: 'var(--c-fg-15803d)' },
+  store_mapping: { label: 'Store map', bg: 'var(--c-bg-dbeafe)', fg: 'var(--c-fg-1d4ed8)' },
+  'exact-fallback': { label: '⚠ Exact fallback', bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-b45309)' },
+  unresolved: { label: '✗ Unresolved', bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-b91c1c)' },
 }
 const CONF_FG: Record<string, string> = { exact: '#15803d', high: '#15803d', medium: '#b45309', low: '#6b7280' }
 
@@ -95,7 +95,7 @@ export default function StoreMatchPage() {
         </button>
       </div>
 
-      {msg && <div className="card" style={{ padding: '10px 14px', marginBottom: 14, color: msg.startsWith('Error') || msg.includes('failed') ? '#b91c1c' : '#15803d' }}>{msg}</div>}
+      {msg && <div className="card" style={{ padding: '10px 14px', marginBottom: 14, color: msg.startsWith('Error') || msg.includes('failed') ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-15803d)' }}>{msg}</div>}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
@@ -144,7 +144,7 @@ export default function StoreMatchPage() {
                           <span style={{ fontSize: 12, color: 'var(--text2)' }}>Resolved by your store map — no action.</span>
                         )}
                         {it.status === 'explicit' && (
-                          <span style={{ fontSize: 12, color: '#15803d' }}>Confirmed mapping. Remove it below to change.</span>
+                          <span style={{ fontSize: 12, color: 'var(--c-fg-15803d)' }}>Confirmed mapping. Remove it below to change.</span>
                         )}
                         {it.status === 'exact-fallback' && (
                           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -162,7 +162,7 @@ export default function StoreMatchPage() {
                                   {busy === key ? '…' : `✓ ${s.store_code}`}
                                 </button>
                                 <span style={{ fontSize: 12 }}>{s.store_address}</span>
-                                <span style={{ fontSize: 10, fontWeight: 700, color: CONF_FG[s.confidence] || '#6b7280', textTransform: 'uppercase' }}>{s.confidence}</span>
+                                <span style={{ fontSize: 10, fontWeight: 700, color: CONF_FG[s.confidence] || 'var(--c-fg-6b7280)', textTransform: 'uppercase' }}>{s.confidence}</span>
                                 <span style={{ fontSize: 11, color: 'var(--text3)' }}>({s.reason})</span>
                               </div>
                             )) : <span style={{ fontSize: 12, color: 'var(--text3)' }}>No close suggestion — pick manually.</span>}
@@ -181,7 +181,7 @@ export default function StoreMatchPage() {
                     </tr>
                   )
                 })}
-                {shown.length === 0 && <tr><td colSpan={3} style={{ padding: 24, textAlign: 'center', color: '#15803d' }}>✓ Every POS store string resolves to a canonical store. Nothing needs attention.</td></tr>}
+                {shown.length === 0 && <tr><td colSpan={3} style={{ padding: 24, textAlign: 'center', color: 'var(--c-fg-15803d)' }}>✓ Every POS store string resolves to a canonical store. Nothing needs attention.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -207,7 +207,7 @@ export default function StoreMatchPage() {
                       {a.source || 'manual'}{a.confidence ? ` · ${a.confidence}` : ''}{a.note ? ` · ${a.note}` : ''}
                     </td>
                     <td style={{ padding: '7px 12px', textAlign: 'right' }}>
-                      <button className="btn" disabled={busy === a.id} onClick={() => delAlias(a.id)} style={{ padding: '4px 10px', fontSize: 12, color: '#b91c1c' }}>
+                      <button className="btn" disabled={busy === a.id} onClick={() => delAlias(a.id)} style={{ padding: '4px 10px', fontSize: 12, color: 'var(--c-fg-b91c1c)' }}>
                         {busy === a.id ? '…' : 'Remove'}
                       </button>
                     </td>

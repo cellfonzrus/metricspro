@@ -57,8 +57,8 @@ type Payload = {
 }
 
 const SEV: Record<string, { bg: string; fg: string; icon: string }> = {
-  error: { bg: '#fee2e2', fg: '#991b1b', icon: '⚑' },
-  warning: { bg: '#fef3c7', fg: '#92400e', icon: '⚠︎' },
+  error: { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)', icon: '⚑' },
+  warning: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚠︎' },
   info: { bg: 'var(--surface2)', fg: 'var(--text2)', icon: 'ℹ︎' },
 }
 const STATUSES = ['proposed', 'approved', 'live', 'ended']
@@ -70,7 +70,7 @@ const card: React.CSSProperties = { border: '1px solid var(--border)', borderRad
   background: 'var(--surface)', marginBottom: 14 }
 const btn: React.CSSProperties = { padding: '7px 13px', borderRadius: 7, border: '1px solid var(--border)',
   background: 'var(--surface2)', color: 'var(--text)', fontSize: 13, cursor: 'pointer' }
-const primary: React.CSSProperties = { ...btn, background: '#1d4ed8', color: '#fff', borderColor: '#1d4ed8' }
+const primary: React.CSSProperties = { ...btn, background: 'var(--c-bg-1d4ed8)', color: 'var(--c-fg-ffffff)', borderColor: 'var(--c-bg-1d4ed8)' }
 
 // A figure the backend could not answer comes back null. Em dash, never 0 — a blank here means
 // "cannot be answered", and a 0 would read as a result.
@@ -177,7 +177,7 @@ export default function MonthFocusPage() {
                     <b style={{ fontSize: 13 }}>{it.label}</b>
                     <div style={{ fontSize: 12.5, opacity: 0.95 }}>{it.detail}</div>
                   </div>
-                  <Link style={{ fontSize: 12.5, color: "#1d4ed8" }} href={it.deep_link}>{it.deep_link_label}</Link>
+                  <Link style={{ fontSize: 12.5, color: "var(--c-fg-1d4ed8)" }} href={it.deep_link}>{it.deep_link_label}</Link>
                 </div>
               )
             })}
@@ -359,7 +359,7 @@ export default function MonthFocusPage() {
             </div>
             <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 4 }}>
               The pay config for {period} carries {data.live_spiff_names.length} custom spiff(s).{' '}
-              <Link style={{ fontSize: 12.5, color: "#1d4ed8" }} href="/commcalc/commission-settings">Open commission settings</Link>
+              <Link style={{ fontSize: 12.5, color: "var(--c-fg-1d4ed8)" }} href="/commcalc/commission-settings">Open commission settings</Link>
             </div>
           </div>
         )}
@@ -388,8 +388,8 @@ export default function MonthFocusPage() {
             <div style={{ fontSize: 13, margin: '4px 0' }}>{p.why}</div>
             <div style={{ fontSize: 13, color: 'var(--text2)' }}>{p.move}</div>
             <div style={{ fontSize: 12, marginTop: 6, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <Link style={{ fontSize: 12.5, color: "#1d4ed8" }} href={p.deep_link}>See the numbers</Link>
-              {(p.also || []).map(h => <Link key={h} style={{ fontSize: 12.5, color: "#1d4ed8" }} href={h}>{h}</Link>)}
+              <Link style={{ fontSize: 12.5, color: "var(--c-fg-1d4ed8)" }} href={p.deep_link}>See the numbers</Link>
+              {(p.also || []).map(h => <Link key={h} style={{ fontSize: 12.5, color: "var(--c-fg-1d4ed8)" }} href={h}>{h}</Link>)}
             </div>
             <details style={{ marginTop: 6 }}>
               <summary style={{ fontSize: 12, cursor: 'pointer', color: 'var(--text2)' }}>
@@ -430,9 +430,9 @@ export default function MonthFocusPage() {
               const isNow = data.checkins.current === d
               return (
                 <span key={d} style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6,
-                  border: `1px solid ${isNow ? '#1d4ed8' : 'var(--border)'}`,
-                  background: done ? '#dcfce7' : 'var(--surface2)',
-                  color: done ? '#166534' : 'var(--text2)' }}>
+                  border: `1px solid ${isNow ? 'var(--c-bg-1d4ed8)' : 'var(--border)'}`,
+                  background: done ? 'var(--c-bg-dcfce7)' : 'var(--surface2)',
+                  color: done ? 'var(--c-fg-166534)' : 'var(--text2)' }}>
                   {done ? '✓ ' : ''}{d}{isNow ? ' · this week' : ''}
                 </span>
               )
@@ -497,8 +497,8 @@ export default function MonthFocusPage() {
               </div>
             )}
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <Link style={{ fontSize: 12.5, color: "#1d4ed8" }} href="/commcalc/targets">Assign targets</Link>
-              <Link style={{ fontSize: 12.5, color: "#1d4ed8" }} href="/commcalc/accessory-target-plan">
+              <Link style={{ fontSize: 12.5, color: "var(--c-fg-1d4ed8)" }} href="/commcalc/targets">Assign targets</Link>
+              <Link style={{ fontSize: 12.5, color: "var(--c-fg-1d4ed8)" }} href="/commcalc/accessory-target-plan">
                 Split one accessory goal across the stores
               </Link>
             </div>

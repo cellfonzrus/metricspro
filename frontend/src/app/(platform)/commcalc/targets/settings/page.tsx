@@ -220,7 +220,7 @@ export default function TargetSettingsPage() {
         </p>
       </div>
 
-      <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '10px 16px', marginBottom: 20, fontSize: 13, color: '#1e40af' }}>
+      <div style={{ background: 'var(--c-bg-eff6ff)', border: '1px solid var(--c-bg-bfdbfe)', borderRadius: 10, padding: '10px 16px', marginBottom: 20, fontSize: 13, color: 'var(--c-fg-1e40af)' }}>
         💡 <strong>Activations</strong> = premium + BYOD acts (count). <strong>Upgrades</strong> = upgrade acts (count).
         <strong> Accessories</strong> = monthly GP ($, seeded from the store&apos;s StoreOps monthly target).
         <strong> BYOD %</strong> = share of activations expected to be BYOD (blank = KPI default {byodDefault}%).
@@ -307,12 +307,12 @@ export default function TargetSettingsPage() {
                     <div style={{ fontSize: 11, color: 'var(--text3)' }}>
                       {r.store_code}{r.market ? ` · ${r.market}` : ''}
                       {r.is_active === false && (
-                        <span style={{ color: '#b91c1c', marginLeft: 6, fontWeight: 600 }}
+                        <span style={{ color: 'var(--c-fg-b91c1c)', marginLeft: 6, fontWeight: 600 }}
                           title="This store is switched off in StoreOps. Its past targets are kept so old months still read correctly, but it is not given a new target and is not carried into next month.">
                           · closed store
                         </span>
                       )}
-                      {r._seeded && <span style={{ color: '#b45309', marginLeft: 6 }}>· not yet saved</span>}
+                      {r._seeded && <span style={{ color: 'var(--c-fg-b45309)', marginLeft: 6 }}>· not yet saved</span>}
                       {r._seeded && r._seed_basis && (
                         Object.values(r._seed_basis).includes('stretch')
                           ? <span style={{ color: 'var(--green)', marginLeft: 6 }}>· 🔼 +10% stretch (hit {r._prior_period})</span>

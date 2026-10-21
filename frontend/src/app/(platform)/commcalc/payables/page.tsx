@@ -39,7 +39,7 @@ function MapRow({ cand, carriers, onSave }: any) {
       </td>
       <td style={cell}>
         <button disabled={saving} onClick={async () => { setSaving(true); try { await onSave(cand.raw_model, canonical, cid, cand.side) } finally { setSaving(false) } }}
-          style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: 'var(--accent, #2563eb)', color: '#fff', fontSize: 12, cursor: 'pointer' }}>
+          style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: 'var(--accent, var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', fontSize: 12, cursor: 'pointer' }}>
           {saving ? '…' : 'Save'}
         </button>
       </td>
@@ -262,7 +262,7 @@ function PayablesPageBody() {
           <button onClick={() => setShowSettings(s => !s)}
             style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer' }}>⚙ Settings</button>
           <button onClick={rebuild} disabled={busy}
-            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: 'var(--accent, #2563eb)', color: '#fff', fontWeight: 600, cursor: busy ? 'wait' : 'pointer' }}>
+            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: 'var(--accent, var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', fontWeight: 600, cursor: busy ? 'wait' : 'pointer' }}>
             {busy ? 'Rebuilding…' : '↻ Rebuild ledger'}
           </button>
         </div>
@@ -341,7 +341,7 @@ function PayablesPageBody() {
         <>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
             Velocity from the last {fMeta.lookback ?? lookback} days → order for the next {fMeta.horizon ?? horizon} days, per carrier.
-            {(fMeta.unmapped ?? 0) > 0 && <> · <button onClick={() => setTab('map')} style={{ background: 'none', border: 'none', color: '#d97706', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' }}>{fMeta.unmapped} unmapped model(s)</button> — map them so sales &amp; stock line up.</>}
+            {(fMeta.unmapped ?? 0) > 0 && <> · <button onClick={() => setTab('map')} style={{ background: 'none', border: 'none', color: 'var(--c-fg-d97706)', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' }}>{fMeta.unmapped} unmapped model(s)</button> — map them so sales &amp; stock line up.</>}
             {(fMeta.unassigned_store ?? 0) > 0 && <> · <b>{fMeta.unassigned_store}</b> row(s) with no store — a Total/marketplace order is placed against the dealer account, so its store is resolved from the POS line that sold the device; these could not be resolved.</>}
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -356,8 +356,8 @@ function PayablesPageBody() {
               <SortableTh field="recommend_order" sort={fSort.sort} onSort={fSort.toggle} style={th}>Order</SortableTh>
             </tr></thead>
             <tbody>{fSort.sorted.map((r: any, i: number) => (
-              <tr key={i}><td style={td}>{r.carrier}{!r.mapped && <span title="unmapped model — map it on the Phone Mapping tab" style={{ color: '#d97706' }}> •</span>}</td><td style={td}>{r.store || <span style={{ color: 'var(--muted)' }}>(unassigned)</span>}</td><td style={td}>{r.device_model}</td><td style={td}>{r.units}</td><td style={td}>{r.avg_daily_velocity}</td><td style={td}>{r.projected_demand}</td><td style={td}>{r.on_hand}</td>
-                <td style={{ ...td, fontWeight: r.recommend_order > 0 ? 700 : 400, color: r.recommend_order > 0 ? '#d97706' : 'inherit' }}>{r.recommend_order}</td></tr>
+              <tr key={i}><td style={td}>{r.carrier}{!r.mapped && <span title="unmapped model — map it on the Phone Mapping tab" style={{ color: 'var(--c-fg-d97706)' }}> •</span>}</td><td style={td}>{r.store || <span style={{ color: 'var(--muted)' }}>(unassigned)</span>}</td><td style={td}>{r.device_model}</td><td style={td}>{r.units}</td><td style={td}>{r.avg_daily_velocity}</td><td style={td}>{r.projected_demand}</td><td style={td}>{r.on_hand}</td>
+                <td style={{ ...td, fontWeight: r.recommend_order > 0 ? 700 : 400, color: r.recommend_order > 0 ? 'var(--c-fg-d97706)' : 'inherit' }}>{r.recommend_order}</td></tr>
             ))}</tbody>
           </table>
         </>
@@ -394,10 +394,10 @@ function PayablesPageBody() {
             <tr key={i} onClick={() => openDrill(r.imei)} style={{ cursor: 'pointer' }}>
               <td style={td}>{r.imei}</td><td style={td}>{r.store}</td><td style={td}>{r.device_model}</td>
               <td style={td}>{r.owed == null ? '—' : fmt(r.owed)}</td>
-              <td style={td}>{r.rebate_amount ? fmt(r.rebate_amount) : '—'}{r.rebate_mismatch && <span title="Processor cross-check mismatch" style={{ color: '#dc2626' }}> ⚠︎</span>}</td>
+              <td style={td}>{r.rebate_amount ? fmt(r.rebate_amount) : '—'}{r.rebate_mismatch && <span title="Processor cross-check mismatch" style={{ color: 'var(--c-fg-dc2626)' }}> ⚠︎</span>}</td>
               <td style={{ ...td, fontWeight: 600 }}>{r.net_owed == null ? '—' : fmt(r.net_owed)}</td>
               <td style={td}>{r.due_date || '—'}</td>
-              <td style={td}><span style={{ padding: '2px 8px', borderRadius: 20, fontSize: 11, color: '#fff', background: STATUS_COLORS[r.status] || '#6b7280' }}>{r.status}</span>{r.priority && <span title="Priority sell (final 25% of window)"> 🔥</span>}</td>
+              <td style={td}><span style={{ padding: '2px 8px', borderRadius: 20, fontSize: 11, color: 'var(--c-fg-ffffff)', background: STATUS_COLORS[r.status] || 'var(--c-bg-6b7280)' }}>{r.status}</span>{r.priority && <span title="Priority sell (final 25% of window)"> 🔥</span>}</td>
             </tr>
           ))}</tbody>
         </table>
@@ -418,7 +418,7 @@ function PayablesPageBody() {
             so there is no price and no due date to group by. Loading the <b>vendor invoices</b> is what
             supplies owed + invoice date + terms; until then every sold device with no rebate lands in{' '}
             <button onClick={() => { setTab('payables'); setStatus('discrepancy') }}
-              style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 13, padding: 0, textDecoration: 'underline' }}>
+              style={{ background: 'none', border: 'none', color: 'var(--c-fg-dc2626)', cursor: 'pointer', fontSize: 13, padding: 0, textDecoration: 'underline' }}>
               Payables → Discrepancy
             </button>{' '}at $0.
           </div>
@@ -469,7 +469,7 @@ function PayablesPageBody() {
             <thead><tr><th style={th}>Raw model</th><th style={th}>Canonical</th><th style={th}>Carrier</th><th style={th}></th></tr></thead>
             <tbody>{mappings.map((m: any) => (
               <tr key={m.id}><td style={td}>{m.raw_model}</td><td style={td}>{m.canonical_model}</td><td style={td}>{m.carrier_name || '—'}</td>
-                <td style={td}><button onClick={() => deleteMapping(m.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 12 }}>Remove</button></td></tr>
+                <td style={td}><button onClick={() => deleteMapping(m.id)} style={{ background: 'none', border: 'none', color: 'var(--c-fg-dc2626)', cursor: 'pointer', fontSize: 12 }}>Remove</button></td></tr>
             ))}</tbody>
           </table>
         </div>
@@ -483,11 +483,11 @@ function PayablesPageBody() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <tbody>
                 <tr><td style={td}>Owed to vendor</td><td style={{ ...td, textAlign: 'right' }}>{drill.owed == null ? `— (${drill.owed_source})` : fmt(drill.owed)}</td></tr>
-                <tr><td style={td}>Primary rebate ({drill.primary_rebate?.source})</td><td style={{ ...td, textAlign: 'right', color: '#16a34a' }}>{drill.primary_rebate?.amount ? '− ' + fmt(drill.primary_rebate.amount) : '—'}</td></tr>
+                <tr><td style={td}>Primary rebate ({drill.primary_rebate?.source})</td><td style={{ ...td, textAlign: 'right', color: 'var(--c-fg-16a34a)' }}>{drill.primary_rebate?.amount ? '− ' + fmt(drill.primary_rebate.amount) : '—'}</td></tr>
                 {(drill.epay_crosscheck?.lines || []).map((l: any, i: number) => (
                   <tr key={i}><td style={td}>Processor: {l.type} ({l.date})</td><td style={{ ...td, textAlign: 'right', color: 'var(--muted)' }}>{fmt(l.amount)}</td></tr>
                 ))}
-                {drill.epay_crosscheck?.mismatch && <tr><td style={td} colSpan={2}><span style={{ color: '#dc2626' }}>⚠︎ Processor cross-check ({fmt(drill.epay_crosscheck.amount || 0)}) disagrees with the primary rebate</span></td></tr>}
+                {drill.epay_crosscheck?.mismatch && <tr><td style={td} colSpan={2}><span style={{ color: 'var(--c-fg-dc2626)' }}>⚠︎ Processor cross-check ({fmt(drill.epay_crosscheck.amount || 0)}) disagrees with the primary rebate</span></td></tr>}
                 <tr><td style={{ ...td, fontWeight: 700 }}>Net owed</td><td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{drill.net_owed == null ? '—' : fmt(drill.net_owed)}</td></tr>
               </tbody>
             </table>

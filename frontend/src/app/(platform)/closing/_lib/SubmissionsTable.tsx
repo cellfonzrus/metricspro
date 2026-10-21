@@ -248,7 +248,7 @@ export default function SubmissionsTable({
       )}
 
       {(meta?.status_capped || meta?.truncated) && (
-        <div className="card" style={{ padding: '8px 12px', marginBottom: 10, fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
+        <div className="card" style={{ padding: '8px 12px', marginBottom: 10, fontSize: 12, background: 'var(--c-bg-fff8e6)', border: '1px solid var(--c-bg-f3d98b)' }}>
           {meta?.truncated && <div>⚠️ This range has more submissions than can be loaded at once — narrow the date range to see everything.</div>}
           {meta?.status_capped && <div>ℹ️ Gate status was computed for the {meta.status_dates_computed} most recent day(s) in range (of {meta.status_dates_total}) — widen carefully, older days show “not computed” rather than a guess.</div>}
         </div>
@@ -262,7 +262,7 @@ export default function SubmissionsTable({
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : err ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {err}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {err}</div>
       ) : (
         <ReportShell
           title={drill && drill !== 'all' ? `Daily Closing — ${DRILL_LABEL[drill] || drill}` : 'Daily Closing — All Submissions'}

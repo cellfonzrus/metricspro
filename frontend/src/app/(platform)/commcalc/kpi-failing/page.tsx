@@ -138,7 +138,7 @@ export default function FailingKpiPage() {
         }
       />
 
-      {err && <div className="card" style={{ padding: 14, color: 'crimson', marginBottom: 12 }}>{err}</div>}
+      {err && <div className="card" style={{ padding: 14, color: 'var(--c-fg-dc143c)', marginBottom: 12 }}>{err}</div>}
       {loading && <div style={{ color: 'var(--text2)', padding: 20 }}>Loading…</div>}
 
       {!loading && data && (

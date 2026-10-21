@@ -127,7 +127,7 @@ export default function StoreOperationsDashboard() {
         <Tile title="Daily closing set-up" href="/closing" load={ready}>
           {ready.state === 'ok' && (
             <Big value={critical.length ? `${critical.length} to fix` : 'Ready'}
-                 color={critical.length ? 'var(--danger, #c0392b)' : 'var(--success, #1e8449)'}
+                 color={critical.length ? 'var(--danger, var(--c-fg-c0392b))' : 'var(--success, var(--c-fg-1e8449))'}
                  sub={critical[0]?.message || `${issues.length} note${issues.length === 1 ? '' : 's'}`} />
           )}
         </Tile>

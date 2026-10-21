@@ -636,10 +636,10 @@ export default function ReportsPage() {
                     <td>{r.byod_acts}</td>
                     <td>{r.upgrade_acts}</td>
                     <td style={{ textAlign: 'right' }}>{fmt(r.acc_comm)}</td>
-                    <td style={{ textAlign: 'right', color: r.acima_comm > 0 ? '#7c3aed' : 'var(--text3)' }}>
+                    <td style={{ textAlign: 'right', color: r.acima_comm > 0 ? 'var(--c-fg-7c3aed)' : 'var(--text3)' }}>
                       {r.acima_comm > 0 ? fmt(r.acima_comm) : '—'}
                     </td>
-                    {hasInstallment && <td style={{ textAlign: 'right', color: instOf(r) ? '#0369a1' : 'var(--text3)' }}>{instOf(r) ? fmt(instOf(r)) : '—'}</td>}
+                    {hasInstallment && <td style={{ textAlign: 'right', color: instOf(r) ? 'var(--c-fg-0369a1)' : 'var(--text3)' }}>{instOf(r) ? fmt(instOf(r)) : '—'}</td>}
                     <td style={{ textAlign: 'right' }}>{fmt(r.subtotal)}</td>
                     <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--accent)' }}>{fmt(r.total_payout)}</td>
                     {hasGoogle && <td><GoogleRatingChips list={googleFor(r.storeops_name || r.epay_salesperson)} compact /></td>}
@@ -650,7 +650,7 @@ export default function ReportsPage() {
                 <tfoot>
                   <tr style={{ background: 'var(--surface2)', fontWeight: 700 }}>
                     <td colSpan={9} style={{ textAlign: 'right', paddingRight: 8, color: 'var(--text2)' }}>Total:</td>
-                    {hasInstallment && <td style={{ textAlign: 'right', color: '#0369a1' }}>{fmt(filtered.reduce((s, r) => s + instOf(r), 0))}</td>}
+                    {hasInstallment && <td style={{ textAlign: 'right', color: 'var(--c-fg-0369a1)' }}>{fmt(filtered.reduce((s, r) => s + instOf(r), 0))}</td>}
                     <td style={{ textAlign: 'right', color: 'var(--text2)' }}>{fmt(filtered.reduce((s, r) => s + (r.subtotal || 0), 0))}</td>
                     <td style={{ textAlign: 'right', color: 'var(--accent)' }}>
                       {fmt(filtered.reduce((s, r) => s + r.total_payout, 0))}
@@ -711,7 +711,7 @@ export default function ReportsPage() {
                 {isBoost ? (
                   <div className="card" style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 28, fontWeight: 700 }}>
-                      <span style={{ color: currentRep.tier >= 1 ? '#16a34a' : currentRep.tier >= 0.75 ? '#d97706' : '#dc2626' }}>
+                      <span style={{ color: currentRep.tier >= 1 ? 'var(--c-fg-16a34a)' : currentRep.tier >= 0.75 ? 'var(--c-fg-d97706)' : 'var(--c-fg-dc2626)' }}>
                         {Math.round((currentRep.tier || 0) * 100)}%
                       </span>
                     </div>
@@ -764,7 +764,7 @@ export default function ReportsPage() {
                   </table>
                   {/* multi-month money on the rows while the org has no multi-month configured: shown, and SAID */}
                   {mmStatus.state === 'off_with_money' && mmStatus.note && (instSale !== 0 || instResid !== 0) && (
-                    <div style={{ fontSize: 12, color: '#b45309', marginTop: 8 }}>⚠ {mmStatus.note}</div>
+                    <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginTop: 8 }}>⚠ {mmStatus.note}</div>
                   )}
                   {showResidRow && (
                     <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8 }}>
@@ -850,7 +850,7 @@ export default function ReportsPage() {
                           {Math.round((currentRep.acima_comm || 0) / (cfg.acima_spiff || 25))} txns
                         </td>
                         <td style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 12 }}>{fmt(cfg.acima_spiff || 25)} each</td>
-                        <td style={{ textAlign: 'right', fontWeight: 600, color: '#7c3aed' }}>{fmt(currentRep.acima_comm)}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: 'var(--c-fg-7c3aed)' }}>{fmt(currentRep.acima_comm)}</td>
                       </tr>
                     )}
                     <tr style={{ background: 'var(--surface2)', fontWeight: 700 }}>
@@ -872,8 +872,8 @@ export default function ReportsPage() {
                 if (!repCbs.length) return null
                 const deducted = repCbs.filter(c => c.deduct).reduce((s, c) => s + (c.amount || 0), 0)
                 return (
-                  <div className="card" style={{ padding: 0, marginTop: 20, border: '1px solid #fca5a5' }}>
-                    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600, background: '#fef2f2', color: '#991b1b' }}>
+                  <div className="card" style={{ padding: 0, marginTop: 20, border: '1px solid var(--c-bg-fca5a5)' }}>
+                    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600, background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-991b1b)' }}>
                       ⚠️ Potential Chargebacks — {repCbs.length} items · Toggle to deduct from payout
                     </div>
                     <table>
@@ -888,7 +888,7 @@ export default function ReportsPage() {
                       </thead>
                       <tbody>
                         {repCbs.map(cb => (
-                          <tr key={cb.id} style={{ background: cb.deduct ? '#fef2f2' : undefined }}>
+                          <tr key={cb.id} style={{ background: cb.deduct ? 'var(--c-bg-fef2f2)' : undefined }}>
                             <td style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text3)' }}>{cb.source}</td>
                             <td style={{ fontSize: 12 }}>{cb.description}</td>
                             <td style={{ fontSize: 11, color: 'var(--text3)' }}>{cb.mdn || cb.imei || '—'}</td>
@@ -925,8 +925,8 @@ export default function ReportsPage() {
                 const opsTotal = currentRep.ops_chargeback_deduction ?? lines.reduce((s, l) => s + (l.amount || 0), 0)
                 const hasCbItems = chargebacks.some(cb => cb.epay_salesperson === currentRep.epay_salesperson)
                 return (
-                  <div className="card" style={{ padding: 0, marginTop: 20, border: '1px solid #fca5a5' }}>
-                    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600, background: '#fef2f2', color: '#991b1b' }}>
+                  <div className="card" style={{ padding: 0, marginTop: 20, border: '1px solid var(--c-bg-fca5a5)' }}>
+                    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600, background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-991b1b)' }}>
                       🔻 Ops Accountability Chargebacks — {lines.length} POSTED · deducted from incentive
                     </div>
                     <table>
@@ -1012,7 +1012,7 @@ export default function ReportsPage() {
                   <td style={{ textAlign: 'right' }} title={sliceReason(r) || undefined}>{slice(r, r.acc_comm, fmt)}</td>
                   <td style={{ textAlign: 'right' }} title={sliceReason(r) || undefined}>{slice(r, r.setup_fee_comm, fmt)}</td>
                   <td style={{ textAlign: 'right' }} title={sliceReason(r) || undefined}>{slice(r, r.trade_in_comm, fmt)}</td>
-                  <td style={{ textAlign: 'right', color: r.acima_comm > 0 ? '#7c3aed' : 'var(--text3)' }}
+                  <td style={{ textAlign: 'right', color: r.acima_comm > 0 ? 'var(--c-fg-7c3aed)' : 'var(--text3)' }}
                       title={sliceReason(r) || undefined}>
                     {r.acima_comm > 0 ? fmt(r.acima_comm) : '—'}
                   </td>
@@ -1045,7 +1045,7 @@ export default function ReportsPage() {
             </label>
             <button className="btn btn-primary" disabled={rangeBusy || !rangeSpan || rangeSpan > RANGE_MAX_MONTHS}
               onClick={loadRange}>{rangeBusy ? 'Loading…' : 'Show months'}</button>
-            <span style={{ fontSize: 12, color: rangeSpan > RANGE_MAX_MONTHS || !rangeSpan ? '#b91c1c' : 'var(--text3)' }}>
+            <span style={{ fontSize: 12, color: rangeSpan > RANGE_MAX_MONTHS || !rangeSpan ? 'var(--c-fg-b91c1c)' : 'var(--text3)' }}>
               {!rangeSpan ? 'Pick a from-month on or before the to-month.'
                 : rangeSpan > RANGE_MAX_MONTHS ? `${rangeSpan} months — the most one page shows is ${RANGE_MAX_MONTHS}.`
                 : `${rangeSpan} month${rangeSpan === 1 ? '' : 's'} · up to ${RANGE_MAX_MONTHS} on one page`}
@@ -1066,14 +1066,14 @@ export default function ReportsPage() {
               a section per month with its total, then the total for the range
             </span>
           </div>
-          {rangeErr && <div style={{ color: '#b91c1c', fontSize: 13, marginBottom: 10 }}>{rangeErr}</div>}
+          {rangeErr && <div style={{ color: 'var(--c-fg-b91c1c)', fontSize: 13, marginBottom: 10 }}>{rangeErr}</div>}
           {/* WHICH MONTHS ARE SHORT A BREAKDOWN, NAMED ONCE (§COMMCALC-09). A range is where this
               mattered most: summing a month whose breakdown was never computed beside one that was
               printed a Subtotal total that was quietly short. The server no longer adds those in, and
               this says which months to recalculate. The months come from the server's own verdict on
               each row — the test is not re-derived here. */}
           {notRecordedMonths.length > 0 && (
-            <div style={{ fontSize: 12, color: '#b45309', marginBottom: 10, maxWidth: 760 }}>
+            <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginBottom: 10, maxWidth: 760 }}>
               Subtotal is blank for {notRecordedMonths.join(', ')} — those months were last calculated
               before the pay breakdown existed, so only the total was stored. Each month&apos;s Payout
               is correct and is still included. Run Calculation for those months to fill the breakdown
@@ -1168,7 +1168,7 @@ export default function ReportsPage() {
               {drillBusy ? (
                 <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Loading transactions…</div>
               ) : drillFresh?.error ? (
-                <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>❌ {drillFresh.error}</div>
+                <div style={{ padding: 20, color: 'var(--c-fg-dc2626)', fontSize: 13 }}>❌ {drillFresh.error}</div>
               ) : !b || b.items.length === 0 ? (
                 <div style={{ padding: 20, color: 'var(--text3)', fontSize: 13 }}>No transactions found for this component in {period}.</div>
               ) : (
@@ -1232,7 +1232,7 @@ export default function ReportsPage() {
               ) : explainBusy ? (
                 <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Loading breakdown…</div>
               ) : explainFresh?.error ? (
-                <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>
+                <div style={{ padding: 20, color: 'var(--c-fg-dc2626)', fontSize: 13 }}>
                   ❌ {explainFresh.error}
                   <div style={{ marginTop: 10 }}>
                     <button className="btn btn-secondary" style={{ padding: '2px 10px' }}
@@ -1244,7 +1244,7 @@ export default function ReportsPage() {
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {explainOk.note && (
-                    <div style={{ fontSize: 12, color: '#b45309' }}>{explainOk.note}</div>
+                    <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)' }}>{explainOk.note}</div>
                   )}
 
                   {isPlanTab ? (
@@ -1406,7 +1406,7 @@ export default function ReportsPage() {
                           <span>Total: <b style={{ color: 'var(--accent)' }}>{fmt(explainRec.total_payout)}</b></span>
                         </div>
                         {drifted && (
-                          <div style={{ color: '#b45309', marginTop: 6 }}>
+                          <div style={{ color: 'var(--c-fg-b45309)', marginTop: 6 }}>
                             ⚠ The breakdown above is computed live from the CURRENT configuration ({fmt(liveTotal || 0)}),
                             which differs from the stored {fmt(storedPlan || 0)} written by the last Calculate.
                             Run Calculate for {period} to store the new numbers.
@@ -1414,7 +1414,7 @@ export default function ReportsPage() {
                         )}
                       </>
                     ) : (
-                      <div style={{ color: '#b45309' }}>
+                      <div style={{ color: 'var(--c-fg-b45309)' }}>
                         No plan-mode calculation stored for {period} — the breakdown above is computed live
                         from the current configuration. Run Calculate after the config is in place to store it.
                       </div>

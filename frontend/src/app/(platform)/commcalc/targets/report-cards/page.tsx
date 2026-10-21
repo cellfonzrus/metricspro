@@ -44,9 +44,9 @@ interface Resp {
 // platform's doctrine is that absence is never performance, and a card that painted every
 // unconfigured item red would accuse managers over configuration.
 const STATE: Record<string, { fg: string; bg: string; mark: string; word: string }> = {
-  met: { fg: '#166534', bg: '#dcfce7', mark: '✓', word: 'Met' },
-  missed: { fg: '#991b1b', bg: '#fee2e2', mark: '✗', word: 'Missed' },
-  no_target: { fg: 'var(--text3)', bg: 'var(--surface2, #f3f4f6)', mark: '–', word: 'No target set' },
+  met: { fg: 'var(--c-fg-166534)', bg: 'var(--c-bg-dcfce7)', mark: '✓', word: 'Met' },
+  missed: { fg: 'var(--c-fg-991b1b)', bg: 'var(--c-bg-fee2e2)', mark: '✗', word: 'Missed' },
+  no_target: { fg: 'var(--text3)', bg: 'var(--surface2, var(--c-bg-f3f4f6))', mark: '–', word: 'No target set' },
 }
 
 function fmtVal(v: number | null, unit: string): string {
@@ -60,7 +60,7 @@ function Score({ t }: { t: Tally }) {
   // No checked item → no score. Never 0%, never 100% (see `tally` in the backend module).
   return (
     <span style={{ fontSize: 13 }}>
-      <b style={{ color: t.missed ? '#991b1b' : '#166534' }}>
+      <b style={{ color: t.missed ? 'var(--c-fg-991b1b)' : 'var(--c-fg-166534)' }}>
         {t.score_pct === null ? '—' : t.score_pct + '%'}
       </b>
       <span style={{ color: 'var(--text3)', marginLeft: 6 }}>
@@ -110,7 +110,7 @@ function DmStoreTable({ rows, items }: { rows: StoreRow[]; items: { key: string;
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
       <thead>
-        <tr style={{ background: 'var(--surface2, #f9fafb)' }}>
+        <tr style={{ background: 'var(--surface2, var(--c-bg-f9fafb))' }}>
           <SortableTh field="store" sort={sort} onSort={toggle} style={{ textAlign: 'left', padding: '7px 10px' }}>Store</SortableTh>
           {items.map(i => (
             <SortableTh key={i.key} field={i.key} sort={sort} onSort={toggle} title={i.source}
@@ -147,7 +147,7 @@ function MgrDmTable({ rows }: { rows: { employee_id: string; name: string; store
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 10 }}>
       <thead>
-        <tr style={{ background: 'var(--surface2, #f9fafb)' }}>
+        <tr style={{ background: 'var(--surface2, var(--c-bg-f9fafb))' }}>
           <SortableTh field="name" sort={sort} onSort={toggle} style={{ textAlign: 'left', padding: '6px 10px' }}>District manager</SortableTh>
           <SortableTh field="stores" sort={sort} onSort={toggle} style={{ textAlign: 'right', padding: '6px 10px' }}>Stores</SortableTh>
           <SortableTh field="score" sort={sort} onSort={toggle} style={{ textAlign: 'right', padding: '6px 10px' }}>Score</SortableTh>
@@ -206,11 +206,11 @@ export default function ManagerReportCardsPage() {
           above the cards, not in a footnote. A card that looks complete while most of the org is
           unassigned is the misleading version. */}
       {!loading && data?.coverage_note &&
-        <div className="card" style={{ padding: '12px 14px', marginBottom: 14, background: '#fef3c7', color: '#92400e', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 14px', marginBottom: 14, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)', fontSize: 13 }}>
           ⚠︎ {data.coverage_note}
         </div>}
       {!loading && (data?.errors || []).length > 0 &&
-        <div className="card" style={{ padding: '12px 14px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 14px', marginBottom: 14, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-991b1b)', fontSize: 13 }}>
           {(data?.errors || []).map((e, i) => <div key={i}>⚠︎ {e}</div>)}
         </div>}
       {!loading && data?.setup_hint &&
@@ -218,7 +218,7 @@ export default function ManagerReportCardsPage() {
           {data.setup_hint}
         </div>}
       {data?.error &&
-        <div className="card" style={{ padding: 18, color: '#991b1b' }}>{data.error}</div>}
+        <div className="card" style={{ padding: 18, color: 'var(--c-fg-991b1b)' }}>{data.error}</div>}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
@@ -284,7 +284,7 @@ export default function ManagerReportCardsPage() {
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
-                  <tr style={{ background: 'var(--surface2, #f9fafb)' }}>
+                  <tr style={{ background: 'var(--surface2, var(--c-bg-f9fafb))' }}>
                     <SortableTh field="store" sort={uSort.sort} onSort={uSort.toggle} style={{ textAlign: 'left', padding: '6px 10px' }}>Store</SortableTh>
                     <SortableTh field="market" sort={uSort.sort} onSort={uSort.toggle} style={{ textAlign: 'left', padding: '6px 10px' }}>Market</SortableTh>
                     <SortableTh field="reason" sort={uSort.sort} onSort={uSort.toggle} style={{ textAlign: 'left', padding: '6px 10px' }}>Why</SortableTh>

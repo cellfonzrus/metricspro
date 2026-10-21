@@ -268,16 +268,16 @@ export default function AccessoryTargetPlanPage() {
           </div>
         )}
         {alloc?.reason && ALLOC_WHY[alloc.reason] && (
-          <div style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 10, padding: '8px 11px', background: '#fff7ed', border: '1px solid #fdba74', borderRadius: 6 }}>
+          <div style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 10, padding: '8px 11px', background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', borderRadius: 6 }}>
             ⚠️ {ALLOC_WHY[alloc.reason]}
             {alloc.reason === 'goal_already_committed' && alloc.shortfall ? ` They exceed it by ${fmt(alloc.shortfall)}.` : ''}
           </div>
         )}
       </div>
 
-      {err && <div className="card" style={{ padding: '10px 14px', marginBottom: 12, borderLeft: '3px solid #dc2626', fontSize: 13 }}>{err}</div>}
+      {err && <div className="card" style={{ padding: '10px 14px', marginBottom: 12, borderLeft: '3px solid var(--c-bg-dc2626)', fontSize: 13 }}>{err}</div>}
       {assigned && (
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, borderLeft: '3px solid #16a34a', fontSize: 13 }}>
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, borderLeft: '3px solid var(--c-bg-16a34a)', fontSize: 13 }}>
           {assigned.written > 0
             ? <>✅ Accessory target set on <b>{assigned.written}</b> store{assigned.written === 1 ? '' : 's'} for {plan?.period}. They now show on the <a href="/commcalc/targets/accessories">Accessory Sales Targets</a> tracker.</>
             : <>Nothing was written{assigned.reason ? ` — ${assigned.reason.replace(/_/g, ' ')}` : ''}.</>}
@@ -299,7 +299,7 @@ export default function AccessoryTargetPlanPage() {
             <Stat label="Being assigned" value={money(goal?.goal === null ? null : plan!.totals.assigned)} color="var(--accent)"
               sub={alloc?.reserved ? `+ ${fmt(alloc.reserved)} reserved on unselected stores` : undefined} />
             <Stat label="Total extension" value={goal?.goal === null ? '—' : fmt(plan!.totals.extension)}
-              color={plan!.totals.extension >= 0 ? '#16a34a' : '#d97706'}
+              color={plan!.totals.extension >= 0 ? 'var(--c-fg-16a34a)' : 'var(--c-fg-d97706)'}
               sub={`${plan!.totals.stores_selected} of ${plan!.totals.stores} stores selected`} />
           </div>
 
@@ -347,7 +347,7 @@ export default function AccessoryTargetPlanPage() {
                       <Td>{fmt(r.mtd_acc)}<Sub>{r.mtd_boxes} boxes</Sub></Td>
                       <Td>{fmt(r.projected_acc)}<Sub>{r.projected_boxes} boxes</Sub></Td>
                       <Td title={RATE_WHY[r.acc_per_box_basis]}>
-                        <span style={{ color: basisOdd ? '#d97706' : undefined, fontWeight: basisOdd ? 600 : 400 }}>{rate(r.acc_per_box)}</span>
+                        <span style={{ color: basisOdd ? 'var(--c-fg-d97706)' : undefined, fontWeight: basisOdd ? 600 : 400 }}>{rate(r.acc_per_box)}</span>
                         {basisOdd && <Sub>{r.acc_per_box_basis === 'company_rate_zero_attach' ? 'no attachment — company rate' : r.acc_per_box_basis === 'company_rate_no_history' ? 'no history — company rate' : 'no basis'}</Sub>}
                       </Td>
                       <Td title={BOX_WHY[r.expected_boxes_basis]}>{r.expected_boxes}
@@ -382,7 +382,7 @@ export default function AccessoryTargetPlanPage() {
           </div>
 
           {(alloc?.unweighted?.length || 0) > 0 && (
-            <div className="card" style={{ padding: '10px 14px', marginTop: 12, borderLeft: '3px solid #d97706', fontSize: 12.5, color: 'var(--text2)' }}>
+            <div className="card" style={{ padding: '10px 14px', marginTop: 12, borderLeft: '3px solid var(--c-bg-d97706)', fontSize: 12.5, color: 'var(--text2)' }}>
               ⚠️ <b>{alloc!.unweighted.length} store{alloc!.unweighted.length === 1 ? '' : 's'} could not be given a suggestion</b> — {alloc!.unweighted.join(', ')}.
               There is no accessories-per-box rate and no box projection to work from, so no number can be
               derived for them. Their current target is left exactly as it is; nothing is written as $0.

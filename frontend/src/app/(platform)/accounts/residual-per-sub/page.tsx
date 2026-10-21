@@ -105,7 +105,7 @@ export default function ResidualPerSubPage() {
   // Chart series for the shared <TrendChart>: the metric line(s) on the left axis + commission on the right.
   const chartSeries: TrendSeries[] = [
     ...chartLines.map(l => ({ key: l.key, name: l.name, color: l.color, axis: 'left' as const, money: metricDef.money })),
-    ...(showCommission ? [{ key: 'commission', name: 'Commission', color: '#94a3b8', axis: 'right' as const, money: true, dashed: true }] : []),
+    ...(showCommission ? [{ key: 'commission', name: 'Commission', color: 'var(--c-fg-94a3b8)', axis: 'right' as const, money: true, dashed: true }] : []),
   ]
 
   // Structured payload → Excel / PDF / Print / Send (shared lib), reflecting the current metric + filters.
@@ -192,7 +192,7 @@ export default function ResidualPerSubPage() {
           under "(Unassigned)" rather than being guessed onto a store — name those accounts so the
           bucket is actionable (pin them in the MA account→store map) instead of a mystery. */}
       {!loading && data?.store_note && (
-        <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 12, color: '#334155', background: '#f1f5f9', borderLeft: '3px solid #64748b' }}>
+        <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 12, color: 'var(--c-fg-334155)', background: 'var(--c-bg-f1f5f9)', borderLeft: '3px solid var(--c-bg-64748b)' }}>
           {data.store_note}
           {data?.store_attribution && (
             <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text3)' }}>
@@ -206,7 +206,7 @@ export default function ResidualPerSubPage() {
           and each month's daily-tx file is pulled per entity, so a month missing one entity's file
           reports a PARTIAL residual that reads exactly like a business decline. Name it. */}
       {!loading && data?.entity_note && (
-        <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 12, color: '#7c2d12', background: '#fff7ed', borderLeft: '3px solid #ea580c' }}>
+        <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 12, color: 'var(--c-fg-7c2d12)', background: 'var(--c-bg-fff7ed)', borderLeft: '3px solid var(--c-bg-ea580c)' }}>
           {data.entity_note}
           {Array.isArray(data.ma_coverage) && data.ma_coverage.length > 0 && (
             <div style={{ marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap', color: 'var(--text2)' }}>
@@ -223,7 +223,7 @@ export default function ResidualPerSubPage() {
       {/* Source-coverage warning — a month with airtime rows but no MA Commission Details rows
           computes to $0 residual/subscriber legitimately; say so instead of showing a silent $0. */}
       {!loading && data?.data_note && (
-        <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 12, color: '#92400e', background: '#fffbeb', borderLeft: '3px solid #f59e0b' }}>
+        <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 12, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fffbeb)', borderLeft: '3px solid var(--c-bg-f59e0b)' }}>
           {data.data_note}
           {Array.isArray(data.ma_coverage) && data.ma_coverage.length > 0 && (
             <div style={{ marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap', color: 'var(--text2)' }}>
@@ -282,7 +282,7 @@ export default function ResidualPerSubPage() {
           </div>
 
           {/* Matrix table */}
-          <div style={{ overflowX: 'auto', background: 'white', border: '1px solid var(--border)', borderRadius: 12 }}>
+          <div style={{ overflowX: 'auto', background: 'var(--c-bg-ffffff)', border: '1px solid var(--border)', borderRadius: 12 }}>
             {cw.dirty && <div style={{ padding: '4px 10px', fontSize: 11, color: 'var(--text3)' }}><button className="btn" style={{ padding: '2px 8px', fontSize: 11 }} onClick={cw.resetAll}>↺ Reset column widths</button> <span>drag a column edge to resize · double-click to auto-fit</span></div>}
             <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'auto' }}>
               <colgroup>
@@ -292,20 +292,20 @@ export default function ResidualPerSubPage() {
               </colgroup>
               <thead>
                 <tr style={{ background: 'var(--accent)' }}>
-                  <th style={{ padding: '10px 14px', color: 'white', fontSize: 12, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--accent)', whiteSpace: 'nowrap' }}>Store · {metricDef.label}<ResizeHandle onDown={e => cw.start('store', e)} onReset={() => cw.reset('store')} /></th>
-                  {periods.map(p => <th key={p} style={{ padding: '10px 10px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative', background: 'var(--accent)' }}>{shortPeriod(p)}<ResizeHandle onDown={e => cw.start(p, e)} onReset={() => cw.reset(p)} /></th>)}
-                  <th style={{ padding: '10px 12px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative', background: 'var(--accent)' }}>Total<ResizeHandle onDown={e => cw.start('total', e)} onReset={() => cw.reset('total')} /></th>
+                  <th style={{ padding: '10px 14px', color: 'var(--c-fg-ffffff)', fontSize: 12, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--accent)', whiteSpace: 'nowrap' }}>Store · {metricDef.label}<ResizeHandle onDown={e => cw.start('store', e)} onReset={() => cw.reset('store')} /></th>
+                  {periods.map(p => <th key={p} style={{ padding: '10px 10px', color: 'var(--c-fg-ffffff)', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative', background: 'var(--accent)' }}>{shortPeriod(p)}<ResizeHandle onDown={e => cw.start(p, e)} onReset={() => cw.reset(p)} /></th>)}
+                  <th style={{ padding: '10px 12px', color: 'var(--c-fg-ffffff)', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative', background: 'var(--accent)' }}>Total<ResizeHandle onDown={e => cw.start('total', e)} onReset={() => cw.reset('total')} /></th>
                 </tr>
               </thead>
               <tbody>
-                <tr style={{ background: '#eef6ff', fontWeight: 600 }}>
-                  <td style={{ padding: '7px 14px', fontSize: 12, position: 'sticky', left: 0, background: '#eef6ff' }}>{filtered ? 'Selected stores' : 'All stores'}</td>
+                <tr style={{ background: 'var(--c-bg-eef6ff)', fontWeight: 600 }}>
+                  <td style={{ padding: '7px 14px', fontSize: 12, position: 'sticky', left: 0, background: 'var(--c-bg-eef6ff)' }}>{filtered ? 'Selected stores' : 'All stores'}</td>
                   {periods.map(p => <td key={p} style={{ padding: '7px 10px', textAlign: 'right', fontSize: 12 }}>{metricDef.money ? fmt(metricVal(aggByPeriod[p])) : Math.round(metricVal(aggByPeriod[p])).toLocaleString()}</td>)}
                   <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 12 }}>—</td>
                 </tr>
                 {rowsToShow.map((s, i) => (
-                  <tr key={s.store} style={{ background: i % 2 ? '#fafbfc' : 'white' }}>
-                    <td style={{ padding: '6px 14px', fontSize: 12, position: 'sticky', left: 0, background: i % 2 ? '#fafbfc' : 'white', borderBottom: '1px solid var(--border)' }}>
+                  <tr key={s.store} style={{ background: i % 2 ? 'var(--c-bg-fafbfc)' : 'white' }}>
+                    <td style={{ padding: '6px 14px', fontSize: 12, position: 'sticky', left: 0, background: i % 2 ? 'var(--c-bg-fafbfc)' : 'white', borderBottom: '1px solid var(--border)' }}>
                       {s.store}
                       {s.store_code && <span style={{ color: 'var(--text3)', fontSize: 10 }}> · {s.store_code}</span>}
                       <span style={{ color: 'var(--text3)', fontSize: 10 }}> · {s.market}</span>
@@ -318,8 +318,8 @@ export default function ResidualPerSubPage() {
                     <td style={{ padding: '6px 12px', textAlign: 'right', fontSize: 12, fontWeight: 600, borderBottom: '1px solid var(--border)' }}>{metricDef.money ? fmt(metricVal(s.totals)) : Math.round(metricVal(s.totals)).toLocaleString()}</td>
                   </tr>
                 ))}
-                <tr style={{ background: '#f8fafc', color: 'var(--text2)' }}>
-                  <td style={{ padding: '7px 14px', fontSize: 11, fontStyle: 'italic', position: 'sticky', left: 0, background: '#f8fafc' }}>Commission paid (Σ)</td>
+                <tr style={{ background: 'var(--c-bg-f8fafc)', color: 'var(--text2)' }}>
+                  <td style={{ padding: '7px 14px', fontSize: 11, fontStyle: 'italic', position: 'sticky', left: 0, background: 'var(--c-bg-f8fafc)' }}>Commission paid (Σ)</td>
                   {periods.map(p => <td key={p} style={{ padding: '7px 10px', textAlign: 'right', fontSize: 11 }}>{fmt(aggByPeriod[p]?.commission || 0)}</td>)}
                   <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 11 }}>—</td>
                 </tr>

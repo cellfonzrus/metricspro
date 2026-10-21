@@ -53,7 +53,7 @@ export default function DmAccessoryAttributionPage() {
   useEffect(() => { load() }, [load])
 
   if (loading) return <div style={{ padding: 24, color: 'var(--text3)' }}>Loading DM attribution…</div>
-  if (err) return <div className="card" style={{ padding: 14, margin: 24, color: '#c0392b', borderColor: '#c0392b' }}>{err}</div>
+  if (err) return <div className="card" style={{ padding: 14, margin: 24, color: 'var(--c-fg-c0392b)', borderColor: 'var(--c-bg-c0392b)' }}>{err}</div>
   if (!data) return null
 
   const byDm: Record<string, DmBlock> = data.by_dm || {}
@@ -115,7 +115,7 @@ export default function DmAccessoryAttributionPage() {
       )}
 
       {Object.keys(ambiguous).length > 0 && (
-        <div className="card" style={{ padding: 12, marginBottom: 12, background: '#fdeaea', borderColor: '#c0392b', fontSize: 13 }}>
+        <div className="card" style={{ padding: 12, marginBottom: 12, background: 'var(--c-bg-fdeaea)', borderColor: 'var(--c-bg-c0392b)', fontSize: 13 }}>
           ⚠️ {Object.keys(ambiguous).length} market{Object.keys(ambiguous).length !== 1 ? 's are' : ' is'} granted to
           MORE THAN ONE DM ({Object.entries(ambiguous).map(([m, dms]) => `${m}: ${(dms as string[]).map(k => byDm[k]?.label || k).join(', ')}`).join(' · ')}) —
           those rows count toward every DM claiming the market until the grant is fixed in Roles.
@@ -143,7 +143,7 @@ export default function DmAccessoryAttributionPage() {
           )
         })}
         {unassigned.length > 0 && (
-          <div style={{ ...card, cursor: 'default', background: '#fff8e6' }}>
+          <div style={{ ...card, cursor: 'default', background: 'var(--c-bg-fff8e6)' }}>
             <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>Unassigned (no DM grant)</div>
             <div style={{ fontSize: 20, fontWeight: 700 }}>{$(data.unassigned?.total_target || 0)}</div>
             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>{unassigned.length} row{unassigned.length !== 1 ? 's' : ''} — grant the market to a DM in Roles</div>
@@ -190,7 +190,7 @@ export default function DmAccessoryAttributionPage() {
             {filteredRows.length === 0 && <tr><td style={td} colSpan={6}><span style={{ color: 'var(--text3)' }}>No rows match the current filters.</span></td></tr>}
             {filteredRows.map((r: Row, i: number) => (
               <tr key={i}>
-                <td style={td}>{r.routed_dm_label}{r.ambiguous && <span title="Market granted to more than one DM" style={{ color: '#c0392b' }}> ⚠</span>}</td>
+                <td style={td}>{r.routed_dm_label}{r.ambiguous && <span title="Market granted to more than one DM" style={{ color: 'var(--c-fg-c0392b)' }}> ⚠</span>}</td>
                 <td style={{ ...td, fontWeight: 600 }}>{r.employee_name}</td>
                 <td style={td}>{r.address || r.store_code}</td>
                 <td style={td}>{r.market}</td>

@@ -130,7 +130,7 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
                 <tr key={i}>
                   <td style={cell}>{p.device_model || '—'}</td>
                   <td style={{ ...cell, fontFamily: 'monospace', fontSize: 11 }}>{p.imei}</td>
-                  <td style={{ ...cell, textAlign: 'right', color: '#d97706', fontWeight: 600 }}>due {p.window_end || p.due_date || '—'}</td>
+                  <td style={{ ...cell, textAlign: 'right', color: 'var(--c-fg-d97706)', fontWeight: 600 }}>due {p.window_end || p.due_date || '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -143,16 +143,16 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
             {(coach.kpis || []).map((kpi: any) => (
               <span key={kpi.kpi} style={{ fontSize: 11, padding: '3px 8px', borderRadius: 99, fontWeight: 600,
-                background: kpi.met ? '#e6f7ec' : '#fde8e8', color: kpi.met ? '#16794a' : '#b42318' }}>
+                background: kpi.met ? 'var(--c-bg-e6f7ec)' : 'var(--c-bg-fde8e8)', color: kpi.met ? 'var(--c-fg-16794a)' : 'var(--c-fg-b42318)' }}>
                 {kpi.met ? '✓' : '✗'} {kpi.label} {kpi.actual}/{kpi.target}
               </span>
             ))}
           </div>
           {coach.tier < 1
             ? <div style={{ fontSize: 13 }}>💸 <b>{fmt(coach.at_risk)}</b> at risk — short on <b>{(coach.short_kpis || []).join(', ') || '—'}</b>{coach.need_for_full ? <> · hit <b>{coach.need_for_full}</b> more KPI(s) for full payout</> : null}.</div>
-            : <div style={{ fontSize: 13, color: 'var(--green, #16794a)' }}>✅ Full tier — all KPIs on target.</div>}
-          {coach.chargeback_deducted > 0 && <div style={{ fontSize: 13, color: '#b42318', marginTop: 4 }}>🔻 {fmt(coach.chargeback_deducted)} chargebacks deducted ({coach.chargeback_count}).</div>}
-          <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>On the table this period: <b style={{ color: coach.money_on_table > 0 ? '#b42318' : 'inherit' }}>{fmt(coach.money_on_table)}</b></div>
+            : <div style={{ fontSize: 13, color: 'var(--green, var(--c-fg-16794a))' }}>✅ Full tier — all KPIs on target.</div>}
+          {coach.chargeback_deducted > 0 && <div style={{ fontSize: 13, color: 'var(--c-fg-b42318)', marginTop: 4 }}>🔻 {fmt(coach.chargeback_deducted)} chargebacks deducted ({coach.chargeback_count}).</div>}
+          <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>On the table this period: <b style={{ color: coach.money_on_table > 0 ? 'var(--c-fg-b42318)' : 'inherit' }}>{fmt(coach.money_on_table)}</b></div>
           {(coach.coaching_notes || []).length > 0 && <ul style={{ margin: '6px 0 0', paddingLeft: 16, fontSize: 12, color: 'var(--text3)' }}>{coach.coaching_notes.map((n: string, i: number) => <li key={i}>{n}</li>)}</ul>}
         </Card>
       )}
@@ -206,7 +206,7 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
                     <td style={{ padding: '4px 4px', textAlign: 'right' }}>{Math.round((c.tier || 0) * 100)}%</td>
                   </tr>
                   {Number(c.chargeback_deduction || 0) > 0 && (
-                    <tr><td style={{ padding: '4px 4px', color: '#b42318' }}>− Chargebacks</td><td style={{ padding: '4px 4px', textAlign: 'right', color: '#b42318' }}>−{fmt(c.chargeback_deduction)}</td></tr>
+                    <tr><td style={{ padding: '4px 4px', color: 'var(--c-fg-b42318)' }}>− Chargebacks</td><td style={{ padding: '4px 4px', textAlign: 'right', color: 'var(--c-fg-b42318)' }}>−{fmt(c.chargeback_deduction)}</td></tr>
                   )}
                   <tr style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={{ padding: '6px 4px', fontWeight: 700 }}>Final payout</td>
@@ -224,13 +224,13 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
           <ResponsiveContainer width="100%" height={170}>
             <AreaChart data={trend} margin={{ top: 6, right: 6, left: -18, bottom: 0 }}>
               <defs><linearGradient id="payoutFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#2e75b6" stopOpacity={0.35} /><stop offset="100%" stopColor="#2e75b6" stopOpacity={0} />
+                <stop offset="0%" stopColor="var(--c-bg-2e75b6)" stopOpacity={0.35} /><stop offset="100%" stopColor="var(--c-bg-2e75b6)" stopOpacity={0} />
               </linearGradient></defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
               <XAxis dataKey="name" tick={{ fontSize: 11 }} stroke="var(--text3)" />
               <YAxis tick={{ fontSize: 11 }} stroke="var(--text3)" tickFormatter={(v: number) => `$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} />
               <Tooltip formatter={(v: any) => fmt(Number(v))} labelStyle={{ fontSize: 12 }} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
-              <Area type="monotone" dataKey="payout" stroke="#2e75b6" strokeWidth={2} fill="url(#payoutFill)" />
+              <Area type="monotone" dataKey="payout" stroke="var(--c-fg-2e75b6)" strokeWidth={2} fill="url(#payoutFill)" />
             </AreaChart>
           </ResponsiveContainer>
         </Card>
@@ -252,7 +252,7 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
               <YAxis tick={{ fontSize: 10 }} stroke="var(--text3)" />
               <Tooltip formatter={(v: any, _n: any, p: any) => [`${Number(v).toFixed(1)}% (target ${p?.payload?.target}%)`, p?.payload?.name]} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
               <Bar dataKey="value" radius={[3, 3, 0, 0]}>
-                {kpiData.map((d, i) => <Cell key={i} fill={!d.has ? '#cbd5e1' : d.met ? '#16a34a' : '#dc2626'} />)}
+                {kpiData.map((d, i) => <Cell key={i} fill={!d.has ? 'var(--c-fg-cbd5e1)' : d.met ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)'} />)}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -297,7 +297,7 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
               })}
               {repTargets.conversion?.rep && (
                 <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, fontSize: 12, color: 'var(--text2)' }}>
-                  Conversion: <b style={{ color: repTargets.conversion.rep.rate >= repTargets.conversion.store.target ? 'var(--green)' : '#dc2626' }}>{repTargets.conversion.rep.rate}%</b>
+                  Conversion: <b style={{ color: repTargets.conversion.rep.rate >= repTargets.conversion.store.target ? 'var(--green)' : 'var(--c-fg-dc2626)' }}>{repTargets.conversion.rep.rate}%</b>
                   {' '}vs store {repTargets.conversion.store.rate}% (target {repTargets.conversion.store.target}%)
                 </div>
               )}
@@ -328,7 +328,7 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
               <XAxis type="number" hide /><YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} stroke="var(--text3)" width={66} />
               <Tooltip formatter={(v: any) => `${v}h`} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
               <Bar dataKey="v" radius={[0, 4, 4, 0]} barSize={16}>
-                <Cell fill="#94a3b8" /><Cell fill="#2e75b6" />
+                <Cell fill="var(--c-fg-94a3b8)" /><Cell fill="var(--c-fg-2e75b6)" />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -384,10 +384,10 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
           {data.chargebacks.length ? (
             <div style={{ display: 'grid', gap: 8 }}>
               {data.chargebacks.slice(0, 12).map((cb: any, i: number) => (
-                <div key={i} style={{ borderLeft: '4px solid #dc2626', background: 'var(--surface2)', borderRadius: 8, padding: '8px 10px' }}>
+                <div key={i} style={{ borderLeft: '4px solid var(--c-bg-dc2626)', background: 'var(--surface2)', borderRadius: 8, padding: '8px 10px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                     <span style={{ fontWeight: 600, fontSize: 12 }}>{cb.reason || cb.flag_type || 'Chargeback'}</span>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: '#dc2626' }}>−{fmt(Math.abs(cb.amount || 0))}</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-fg-dc2626)' }}>−{fmt(Math.abs(cb.amount || 0))}</span>
                   </div>
                   {cb.description && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>{cb.description}</div>}
                   {(cb.mdn || cb.imei) && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{cb.mdn || cb.imei}</div>}

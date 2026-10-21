@@ -77,13 +77,13 @@ const card: React.CSSProperties = {
 // The five states, their word and their colour. "not reported" is deliberately the loudest thing on
 // the screen after an alert: it is the state a reader must never mistake for a zero.
 const STATE: Record<string, { word: string; bg: string; fg: string; chip: string }> = {
-  had_sales:     { word: 'had sales',     bg: '#dcfce7', fg: '#15803d', chip: '#16a34a' },
-  measured_zero: { word: 'measured zero', bg: '#fee2e2', fg: '#b91c1c', chip: '#dc2626' },
-  not_reported:  { word: 'not reported',  bg: '#fef3c7', fg: '#92400e', chip: '#d97706' },
+  had_sales:     { word: 'had sales',     bg: 'var(--c-bg-dcfce7)', fg: 'var(--c-fg-15803d)', chip: '#16a34a' },
+  measured_zero: { word: 'measured zero', bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-b91c1c)', chip: '#dc2626' },
+  not_reported:  { word: 'not reported',  bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', chip: '#d97706' },
   closed:        { word: 'closed',        bg: 'var(--bg2)', fg: 'var(--text3)', chip: 'var(--border)' },
   in_progress:   { word: 'in progress',   bg: 'var(--bg2)', fg: 'var(--text3)', chip: 'var(--border)' },
   off:           { word: 'not scheduled', bg: 'var(--bg2)', fg: 'var(--text3)', chip: 'var(--border)' },
-  rule_refused:  { word: 'rule refused',  bg: '#ede9fe', fg: '#6d28d9', chip: '#7c3aed' },
+  rule_refused:  { word: 'rule refused',  bg: 'var(--c-bg-ede9fe)', fg: 'var(--c-fg-6d28d9)', chip: '#7c3aed' },
 }
 
 function Tile({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: string }) {
@@ -122,7 +122,7 @@ function DigestPreview({ preview }: { preview: any }) {
   }
   if (preview.error) {
     return (
-      <div style={{ fontSize: 13, color: '#b91c1c', marginTop: 8 }}>
+      <div style={{ fontSize: 13, color: 'var(--c-fg-b91c1c)', marginTop: 8 }}>
         The preview could not be built: {String(preview.error)}
       </div>
     )
@@ -138,7 +138,7 @@ function DigestPreview({ preview }: { preview: any }) {
   return (
     <div style={{ marginTop: 10, fontSize: 13 }}>
       {refused.map((r, i) => (
-        <div key={`refused-${i}`} style={{ color: '#6d28d9', marginBottom: 6 }}>
+        <div key={`refused-${i}`} style={{ color: 'var(--c-fg-6d28d9)', marginBottom: 6 }}>
           Nothing was planned for this organisation &mdash; {String(r.skipped || r.error)}
           {r.detail ? `: ${r.detail}` : ''}
         </div>
@@ -189,7 +189,7 @@ function DigestPreview({ preview }: { preview: any }) {
       {/* A thin preview must never read as a healthy estate — the same reason the digest footer
           carries this count. */}
       {notAssessed > 0 && (
-        <div style={{ color: '#92400e', marginTop: 4 }}>
+        <div style={{ color: 'var(--c-fg-92400e)', marginTop: 4 }}>
           {notAssessed} store-{notAssessed === 1 ? 'day' : 'days'} in the window could not be
           assessed because no feed landed. Those are never emailed as a sales problem &mdash; they
           are a data gap, reported on this screen and in import health.
@@ -259,7 +259,7 @@ export default function ZeroSalesPage() {
 
       {/* The posture banner. The whole risk of this screen is a reader treating a missing feed as a
           zero, so this is the sentence that stops them. */}
-      <div style={{ ...card, marginTop: 14, background: '#f0f9ff', borderColor: '#bae6fd' }}>
+      <div style={{ ...card, marginTop: 14, background: 'var(--c-bg-f0f9ff)', borderColor: 'var(--c-bg-bae6fd)' }}>
         <strong style={{ fontSize: 13 }}>A missing feed is not a zero.</strong>
         <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 4 }}>
           A day counts as zero sales only when the feed <em>did</em> carry that store and none of its
@@ -272,14 +272,14 @@ export default function ZeroSalesPage() {
       </div>
 
       {data?.rules_refused && (
-        <div style={{ ...card, marginTop: 12, background: '#ede9fe', borderColor: '#c4b5fd' }}>
+        <div style={{ ...card, marginTop: 12, background: 'var(--c-bg-ede9fe)', borderColor: 'var(--c-bg-c4b5fd)' }}>
           <strong style={{ fontSize: 13 }}>This report is claiming nothing for this organisation.</strong>
           <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 4 }}>{data.note}</div>
         </div>
       )}
 
       {!data?.rules_refused && !!t?.store_days_not_reported && (
-        <div style={{ ...card, marginTop: 12, background: '#fffbeb', borderColor: '#fcd34d' }}>
+        <div style={{ ...card, marginTop: 12, background: 'var(--c-bg-fffbeb)', borderColor: 'var(--c-bg-fcd34d)' }}>
           <strong style={{ fontSize: 13 }}>
             {t.store_days_not_reported} store-day(s) in this window were not reported.
           </strong>
@@ -297,7 +297,7 @@ export default function ZeroSalesPage() {
       </div>
 
       {loading && <div style={{ marginTop: 16, color: 'var(--text2)' }}>Loading&hellip;</div>}
-      {err && <div style={{ marginTop: 16, color: '#dc2626', fontSize: 13 }}>&#10060; {err}</div>}
+      {err && <div style={{ marginTop: 16, color: 'var(--c-fg-dc2626)', fontSize: 13 }}>&#10060; {err}</div>}
 
       {t && (
         <>
@@ -374,7 +374,7 @@ export default function ZeroSalesPage() {
                         {r.label}
                         {r.alerting && (
                           <span style={{ marginLeft: 8, fontSize: 11, padding: '1px 6px', borderRadius: 9,
-                                         background: '#fee2e2', color: '#b91c1c' }}>alerting</span>
+                                         background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-b91c1c)' }}>alerting</span>
                         )}
                         {r.trading_calendar === 'unknown' && (
                           <span title="This store has no schedule in this window, so its trading days are unknown and every day was evaluated."
@@ -395,7 +395,7 @@ export default function ZeroSalesPage() {
                       </td>
                       <td style={{ padding: '6px 8px', textAlign: 'right' }}>{r.days_measured_zero}</td>
                       <td style={{ padding: '6px 8px', textAlign: 'right',
-                                   color: r.days_not_reported ? '#92400e' : 'var(--text3)' }}>
+                                   color: r.days_not_reported ? 'var(--c-fg-92400e)' : 'var(--text3)' }}>
                         {r.days_not_reported || '—'}
                       </td>
                       <td style={{ padding: '6px 8px' }} title={r.note}>
@@ -423,7 +423,7 @@ export default function ZeroSalesPage() {
                         <td style={{ padding: '4px 8px', textAlign: 'right' }}>{k.zero_days || '—'}</td>
                         <td style={{ padding: '4px 8px', textAlign: 'right' }}>{k.days_measured_zero}</td>
                         <td style={{ padding: '4px 8px', textAlign: 'right',
-                                     color: k.days_not_reported ? '#92400e' : 'var(--text3)' }}>
+                                     color: k.days_not_reported ? 'var(--c-fg-92400e)' : 'var(--text3)' }}>
                           {k.days_not_reported || '—'}
                         </td>
                         <td style={{ padding: '4px 8px' }} title={k.note}>

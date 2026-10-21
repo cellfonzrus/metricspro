@@ -116,11 +116,11 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
   if (tpl.empty) return (
     <div>
       <PeriodBar period={period} setPeriod={setPeriod} periods={data.periods} />
-      <div className="card" style={{ ...card, borderLeft: '3px solid #f59e0b', background: '#fffbeb' }}>
-        <div style={{ fontWeight: 700, color: '#92400e', marginBottom: 6 }}>No pay source configured for {data.carrier?.name || 'this carrier'}</div>
-        <p style={{ color: '#92400e', fontSize: 13, margin: '0 0 12px' }}>{tpl.reason}</p>
+      <div className="card" style={{ ...card, borderLeft: '3px solid var(--c-bg-f59e0b)', background: 'var(--c-bg-fffbeb)' }}>
+        <div style={{ fontWeight: 700, color: 'var(--c-fg-92400e)', marginBottom: 6 }}>No pay source configured for {data.carrier?.name || 'this carrier'}</div>
+        <p style={{ color: 'var(--c-fg-92400e)', fontSize: 13, margin: '0 0 12px' }}>{tpl.reason}</p>
         <a href={tpl.configure_url || '/commcalc/commission-plans'}
-          style={{ display: 'inline-block', padding: '8px 14px', borderRadius: 8, background: 'var(--accent)', color: '#fff', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
+          style={{ display: 'inline-block', padding: '8px 14px', borderRadius: 8, background: 'var(--accent)', color: 'var(--c-fg-ffffff)', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
           Configure incentive plans →</a>
       </div>
     </div>
@@ -170,14 +170,14 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
         {tierOpts.map((o: any) => (
           <button key={String(o.label)} onClick={() => setTier(num(o.value))}
             style={{ padding: '5px 10px', borderRadius: 7, fontSize: 12, cursor: 'pointer', border: '1px solid var(--border)',
-                     background: num(tier) === num(o.value) ? 'var(--accent)' : 'var(--surface)', color: num(tier) === num(o.value) ? '#fff' : 'var(--text2)' }}>{o.label}</button>
+                     background: num(tier) === num(o.value) ? 'var(--accent)' : 'var(--surface)', color: num(tier) === num(o.value) ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>{o.label}</button>
         ))}
       </div>
 
       {/* Shown only when the selected employee genuinely has no qualifying lines this period — a
           statement of fact (their quantities really are zero), not a refusal to compute. */}
       {data.rep_note && (
-        <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 12.5, color: '#92400e', background: '#fffbeb', borderLeft: '3px solid #f59e0b' }}>
+        <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 12.5, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fffbeb)', borderLeft: '3px solid var(--c-bg-f59e0b)' }}>
           {data.rep_note}
         </div>
       )}
@@ -257,7 +257,7 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14 }}>
         <Stat label="Projected subtotal (pre-tier)" value={fmt(subtotal)} sub={`vs current ${fmt(baseSub)}`} />
         <Stat label={`Projected payout (× ${(+num(tier)).toFixed(2)} tier)`} value={fmt(payout)} color="var(--accent)" sub={`vs current ${fmt(basePay)}`} />
-        <Stat label="Delta vs current" value={(payout - basePay >= 0 ? '+' : '') + fmt(payout - basePay)} color={payout - basePay >= 0 ? '#059669' : '#dc2626'} sub={rep ? `baseline: ${rep}` : `${data.actuals?.reps ?? 0} reps in baseline`} />
+        <Stat label="Delta vs current" value={(payout - basePay >= 0 ? '+' : '') + fmt(payout - basePay)} color={payout - basePay >= 0 ? 'var(--c-fg-059669)' : 'var(--c-fg-dc2626)'} sub={rep ? `baseline: ${rep}` : `${data.actuals?.reps ?? 0} reps in baseline`} />
       </div>
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 14 }}>
         {tpl.source_kind === 'boost_rates'
@@ -315,7 +315,7 @@ function ByodResidual({ carrierId }: { carrierId: string }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginBottom: 18 }}>
         <Stat label={`Total residual (${srcLabel})`} value={fmt(data.total_residual)} />
-        <Stat label="Avg residual / subscriber / mo" value={fmt(data.avg_residual_per_sub)} color="#059669" />
+        <Stat label="Avg residual / subscriber / mo" value={fmt(data.avg_residual_per_sub)} color="var(--c-fg-059669)" />
         <Stat label="Total paid subscribers" value={(data.total_subs || 0).toLocaleString()} />
       </div>
 
@@ -327,7 +327,7 @@ function ByodResidual({ carrierId }: { carrierId: string }) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14 }}>
             <Stat label="Residual / BYOD sub" value={fmt(data.byod_specific.avg_residual_per_byod_sub)} color="var(--accent)" sub={`vs ${fmt(data.byod_specific.avg_residual_per_other_sub)} for non‑BYOD`} />
             <Stat label="BYOD subs earning residual" value={(data.byod_specific.byod_subs_with_residual || 0).toLocaleString()} sub={`${Math.round((data.byod_specific.match_rate || 0) * 100)}% matched`} />
-            <Stat label="BYOD residual" value={fmt(data.byod_specific.byod_residual_month)} color="#059669" />
+            <Stat label="BYOD residual" value={fmt(data.byod_specific.byod_residual_month)} color="var(--c-fg-059669)" />
           </div>
           {data.byod_specific.note && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>{data.byod_specific.note}</div>}
         </div>
@@ -344,8 +344,8 @@ function ByodResidual({ carrierId }: { carrierId: string }) {
         <TrendChart height={300} leftMoney rightMoney={false}
           data={(data.series || []).map((s: any) => ({ name: s.period, residual: s.residual, byod_acts: s.byod_acts, per_sub: s.per_sub }))}
           series={[
-            { key: 'residual', name: 'Residual', type: 'bar', axis: 'left', money: true, color: '#2e75b6' },
-            { key: 'byod_acts', name: 'BYOD activations', type: 'line', axis: 'right', money: false, color: '#f59e0b' },
+            { key: 'residual', name: 'Residual', type: 'bar', axis: 'left', money: true, color: 'var(--c-fg-2e75b6)' },
+            { key: 'byod_acts', name: 'BYOD activations', type: 'line', axis: 'right', money: false, color: 'var(--c-fg-f59e0b)' },
           ]} />
       </div>
 
@@ -358,7 +358,7 @@ function ByodResidual({ carrierId }: { carrierId: string }) {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 14 }}>
           <Stat label="Residual these BYOD subs generate" value={fmt(projected)} color="var(--accent)" sub={`${byod} subs × ${fmt(perSub)}/mo × ${active} mo`} />
-          <Stat label="Each +1 BYOD/mo adds" value={fmt(perExtra)} color="#059669" sub={`over ${active} months of residual`} />
+          <Stat label="Each +1 BYOD/mo adds" value={fmt(perExtra)} color="var(--c-fg-059669)" sub={`over ${active} months of residual`} />
         </div>
       </div>
 
@@ -385,7 +385,7 @@ function ByodResidual({ carrierId }: { carrierId: string }) {
 function corrLabel(r: number | null) {
   if (r == null) return { txt: 'n/a (need ≥3 points)', color: 'var(--text3)' }
   const a = Math.abs(r), strength = a >= 0.7 ? 'strong' : a >= 0.4 ? 'moderate' : a >= 0.2 ? 'weak' : 'negligible'
-  return { txt: `${strength} ${r > 0 ? 'positive' : 'negative'} · r = ${r}`, color: a >= 0.4 ? (r > 0 ? '#059669' : '#dc2626') : 'var(--text2)' }
+  return { txt: `${strength} ${r > 0 ? 'positive' : 'negative'} · r = ${r}`, color: a >= 0.4 ? (r > 0 ? 'var(--c-fg-059669)' : 'var(--c-fg-dc2626)') : 'var(--text2)' }
 }
 
 function Scatter({ points, xKey, yKey, xLabel, yLabel }: { points: any[]; xKey: string; yKey: string; xLabel: string; yLabel: string }) {
@@ -405,7 +405,7 @@ function Scatter({ points, xKey, yKey, xLabel, yLabel }: { points: any[]; xKey: 
       <text x={(W + PAD) / 2} y={H - 14} textAnchor="middle" fontSize="11" fill="var(--text3)">{xLabel}</text>
       <text x={16} y={(H - PAD) / 2} textAnchor="middle" fontSize="11" fill="var(--text3)" transform={`rotate(-90 16 ${(H - PAD) / 2})`}>{yLabel}</text>
       {sxx > 0 && <line x1={sx(xmin)} y1={sy(intercept + slope * xmin)} x2={sx(xmax)} y2={sy(intercept + slope * xmax)} stroke="var(--accent)" strokeWidth="2" strokeDasharray="5 4" opacity="0.8" />}
-      {points.map((p, i) => <circle key={i} cx={sx(p[xKey])} cy={sy(p[yKey])} r="4" fill="#6366f1" opacity="0.6"><title>{p.store} · {p.period}: {xLabel} {p[xKey]}, {yLabel} {fmt(p[yKey])}</title></circle>)}
+      {points.map((p, i) => <circle key={i} cx={sx(p[xKey])} cy={sy(p[yKey])} r="4" fill="var(--c-fg-6366f1)" opacity="0.6"><title>{p.store} · {p.period}: {xLabel} {p[xKey]}, {yLabel} {fmt(p[yKey])}</title></circle>)}
     </svg>
   )
 }
@@ -439,7 +439,7 @@ function AccessoryByod() {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14 }}>
         <Stat label="Total BYOD (all store‑months)" value={(data.totals.byod || 0).toLocaleString()} />
-        <Stat label="Total accessory revenue" value={fmt(data.totals.accessory_rev)} color="#059669" />
+        <Stat label="Total accessory revenue" value={fmt(data.totals.accessory_rev)} color="var(--c-fg-059669)" />
         <Stat label="Total revenue" value={fmt(data.totals.revenue)} color="var(--accent)" />
       </div>
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 14 }}>
@@ -513,7 +513,7 @@ function CarrierIncome({ carrierId }: { carrierId: string }) {
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>What {trend.carrier?.name || 'the carrier'} pays the company — source: {isLedger ? 'Commission Ledger (canonical) + MA Daily Tx' : isMA ? 'MA Commission Details + MA Daily Tx' : 'Comprehensive Comp + MI+ATU'}</span>
       </div>
 
-      {noComp && <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 13, color: '#92400e', background: '#fffbeb', borderLeft: '3px solid #f59e0b' }}>
+      {noComp && <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 13, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fffbeb)', borderLeft: '3px solid var(--c-bg-f59e0b)' }}>
         {cur.comp_source_missing
           ? (isLedger
             ? <>Carrier compensation for {period} reads $0 because <b>the Commission Ledger has no lines for that month</b> ({cur.daily_tx_rows} MA Daily Tx row(s), 0 ledger line(s){num(cur.commission_rows) > 0 ? `, ${cur.commission_rows} raw MA Commission row(s) waiting to be synced` : ''}) — a data gap, not a calculation error. Showing residual only; {num(cur.commission_rows) > 0 ? 'refresh the ledger from MA data on the Commission Report page.' : 'pull MA Commission Details for the month on Data\u00a0Imports, then refresh the ledger.'}</>
@@ -530,9 +530,9 @@ function CarrierIncome({ carrierId }: { carrierId: string }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, margin: '14px 0 18px' }}>
-        <Stat label="We collect (carrier)" value={fmt(totalIncome)} color="#16a34a" />
-        <Stat label="We pay reps" value={fmt(repPay)} color="#dc2626" sub={`${period} employee payout`} />
-        <Stat label="Net to company" value={fmt(net)} color={net >= 0 ? '#059669' : '#dc2626'}
+        <Stat label="We collect (carrier)" value={fmt(totalIncome)} color="var(--c-fg-16a34a)" />
+        <Stat label="We pay reps" value={fmt(repPay)} color="var(--c-fg-dc2626)" sub={`${period} employee payout`} />
+        <Stat label="Net to company" value={fmt(net)} color={net >= 0 ? 'var(--c-fg-059669)' : 'var(--c-fg-dc2626)'}
           sub={totalIncome ? `${Math.round((net / totalIncome) * 100)}% margin` : undefined} />
       </div>
 
@@ -541,11 +541,11 @@ function CarrierIncome({ carrierId }: { carrierId: string }) {
         <TrendChart height={320} leftMoney
           data={chartData}
           series={[
-            { key: 'commission', name: 'Commission', type: 'bar', axis: 'left', money: true, color: '#2e75b6' },
-            { key: 'spiff', name: isLedger ? 'Spiff' : (isMA ? 'Rebate' : 'SPIFF'), type: 'bar', axis: 'left', money: true, color: '#7c3aed' },
-            ...(isLedger ? [{ key: 'equipment_rebate', name: 'Equip. rebate', type: 'bar' as const, axis: 'left' as const, money: true, color: '#db2777' }] : []),
-            { key: 'reimbursement', name: 'Reimbursement', type: 'bar', axis: 'left', money: true, color: '#0891b2' },
-            { key: 'residual', name: 'Residual', type: 'line', axis: 'left', money: true, color: '#16a34a' },
+            { key: 'commission', name: 'Commission', type: 'bar', axis: 'left', money: true, color: 'var(--c-fg-2e75b6)' },
+            { key: 'spiff', name: isLedger ? 'Spiff' : (isMA ? 'Rebate' : 'SPIFF'), type: 'bar', axis: 'left', money: true, color: 'var(--c-fg-7c3aed)' },
+            ...(isLedger ? [{ key: 'equipment_rebate', name: 'Equip. rebate', type: 'bar' as const, axis: 'left' as const, money: true, color: 'var(--c-fg-db2777)' }] : []),
+            { key: 'reimbursement', name: 'Reimbursement', type: 'bar', axis: 'left', money: true, color: 'var(--c-fg-0891b2)' },
+            { key: 'residual', name: 'Residual', type: 'line', axis: 'left', money: true, color: 'var(--c-fg-16a34a)' },
           ]} />
       </div>
       <SourceSwap swap={trend.source_swap} />
@@ -570,7 +570,7 @@ function ClassLegSwap({ swap, mode, note, wiring }: { swap: any; mode?: string; 
   const active = mode === 'class'
   const th: React.CSSProperties = { textAlign: 'right', padding: '6px 8px', fontWeight: 700, whiteSpace: 'nowrap' }
   const td: React.CSSProperties = { textAlign: 'right', padding: '6px 8px', whiteSpace: 'nowrap' }
-  const delta = (v: number) => <span style={{ color: v > 0 ? '#059669' : v < 0 ? '#dc2626' : 'var(--text3)' }}>{v > 0 ? '+' : ''}{fmt(v)}</span>
+  const delta = (v: number) => <span style={{ color: v > 0 ? 'var(--c-fg-059669)' : v < 0 ? 'var(--c-fg-dc2626)' : 'var(--text3)' }}>{v > 0 ? '+' : ''}{fmt(v)}</span>
   const pending = wiring?.class_map?.ambiguous_pending || []
   return (
     <div className="card" style={{ padding: 14, marginBottom: 18 }}>
@@ -581,14 +581,14 @@ function ClassLegSwap({ swap, mode, note, wiring }: { swap: any; mode?: string; 
         </span>
       </button>
       {open && <div style={{ marginTop: 12 }}>
-        {note && <p style={{ fontSize: 12, color: '#9a3412', background: '#fff7ed', border: '1px solid #fdba74', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6, margin: '0 0 10px' }}>{note}</p>}
+        {note && <p style={{ fontSize: 12, color: 'var(--c-fg-9a3412)', background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6, margin: '0 0 10px' }}>{note}</p>}
         <p style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, margin: '0 0 10px' }}>{swap.note}</p>
         <p style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.6, margin: '0 0 12px' }}>
           <b>Old:</b> {swap.old_source}<br /><b>New:</b> {swap.new_source}<br />
-          Change the switch and the class → leg map on <a href="/commcalc/ma-class-wiring" style={{ color: 'var(--accent,#2563eb)' }}>MA Product Class → Money</a>.
+          Change the switch and the class → leg map on <a href="/commcalc/ma-class-wiring" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>MA Product Class → Money</a>.
         </p>
         {!!pending.length && (
-          <p style={{ fontSize: 12, color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6, margin: '0 0 12px' }}>
+          <p style={{ fontSize: 12, color: 'var(--c-fg-b91c1c)', background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6, margin: '0 0 12px' }}>
             {pending.length} product name(s) flagged AMBIGUOUS are still unconfirmed, so they classify nothing and their dollars sit in “not classified”: {pending.map((a2: any) => a2.product_name).join(' · ')}
           </p>
         )}
@@ -610,7 +610,7 @@ function ClassLegSwap({ swap, mode, note, wiring }: { swap: any; mode?: string; 
                   <td style={td}>{delta(num(r.delta_residual))}</td><td style={td}>{delta(num(r.delta_airtime))}</td>
                   <td style={td}>{delta(num(r.delta_total))}</td>
                   <td style={td}>{fmt(num(r.class_excluded_discount))}</td>
-                  <td style={{ ...td, color: num(r.class_unclassified_lines) ? '#b91c1c' : undefined }}>{fmt(num(r.class_unclassified_discount))}</td>
+                  <td style={{ ...td, color: num(r.class_unclassified_lines) ? 'var(--c-fg-b91c1c)' : undefined }}>{fmt(num(r.class_unclassified_discount))}</td>
                 </tr>
               ))}
               <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
@@ -666,7 +666,7 @@ function SourceSwap({ swap }: { swap: any }) {
   const isLedgerActive = swap.active === 'ma_ledger'
   const th: React.CSSProperties = { textAlign: 'right', padding: '6px 8px', fontWeight: 700, whiteSpace: 'nowrap' }
   const td: React.CSSProperties = { textAlign: 'right', padding: '6px 8px', whiteSpace: 'nowrap' }
-  const delta = (v: number) => <span style={{ color: v > 0 ? '#059669' : v < 0 ? '#dc2626' : 'var(--text3)' }}>{v > 0 ? '+' : ''}{fmt(v)}</span>
+  const delta = (v: number) => <span style={{ color: v > 0 ? 'var(--c-fg-059669)' : v < 0 ? 'var(--c-fg-dc2626)' : 'var(--text3)' }}>{v > 0 ? '+' : ''}{fmt(v)}</span>
   return (
     <div className="card" style={{ padding: 14, marginBottom: 18 }}>
       <button onClick={() => setOpen(!open)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontWeight: 700, fontSize: 14, color: 'var(--text)' }}>
@@ -725,12 +725,12 @@ function SourceSwap({ swap }: { swap: any }) {
 // (e.g. the residual $ column points at an invoice NUMBER); tone 'info' (amber) = the figures are right
 // but a source month is missing, so a $0 is a data gap and not a calculation error.
 function NoteBanner({ text, tone }: { text: string; tone: 'warn' | 'info' }) {
-  const c = tone === 'warn' ? { bg: '#fef2f2', bd: '#dc2626', fg: '#991b1b' } : { bg: '#fffbeb', bd: '#f59e0b', fg: '#92400e' }
+  const c = tone === 'warn' ? { bg: 'var(--c-bg-fef2f2)', bd: 'var(--c-bg-dc2626)', fg: 'var(--c-fg-991b1b)' } : { bg: 'var(--c-bg-fffbeb)', bd: 'var(--c-bg-f59e0b)', fg: 'var(--c-fg-92400e)' }
   return <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 13, lineHeight: 1.5, color: c.fg, background: c.bg, borderLeft: `3px solid ${c.bd}` }}>{text}</div>
 }
 
 function RestrictedNote({ what }: { what: string }) {
-  return <div className="card" style={{ ...card, borderLeft: '3px solid #dc2626' }}>
+  return <div className="card" style={{ ...card, borderLeft: '3px solid var(--c-bg-dc2626)' }}>
     <div style={{ fontWeight: 700, marginBottom: 4 }}>🔒 Restricted</div>
     <p style={{ color: 'var(--text2)', fontSize: 13, margin: 0 }}>The {what} view is restricted for this tenant — you need the <b>carrier_residual</b> permission to view it.</p>
   </div>
@@ -793,7 +793,7 @@ function SourcesPanel({ carrierId, onSaved }: { carrierId: string; onSaved: () =
             {opts.ma_commission_sign && <Row label="MA commission sign (M1–M6 / rebate)">{sel('ma_commission_sign', opts.ma_commission_sign)}</Row>}
           </div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 14 }}>
-            <button onClick={save} style={{ padding: '7px 14px', borderRadius: 8, background: 'var(--accent)', color: '#fff', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer' }}>Save override</button>
+            <button onClick={save} style={{ padding: '7px 14px', borderRadius: 8, background: 'var(--accent)', color: 'var(--c-fg-ffffff)', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer' }}>Save override</button>
             {msg && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{msg}</span>}
           </div>
         </div>

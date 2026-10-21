@@ -114,12 +114,12 @@ export default function PaygoPage() {
                       <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 500 }}>{pretty(r.created_on)}</td>
                       <td style={{ padding: '9px 14px', fontSize: 12 }}>
                         {r.batch_type === 'pending'
-                          ? <span style={{ color: '#dc2626', fontWeight: 700 }}>PENDING</span>
+                          ? <span style={{ color: 'var(--c-fg-dc2626)', fontWeight: 700 }}>PENDING</span>
                           : <span style={{ color: 'var(--text3)' }}>approved</span>}
                       </td>
                       <td style={{ padding: '9px 14px', fontSize: 13, textAlign: 'right' }}>{(r.invoice_count ?? 0).toLocaleString()}</td>
                       <td style={{ padding: '9px 14px', fontSize: 13, textAlign: 'right', fontWeight: 700 }}>{fmt(r.amount || 0)}</td>
-                      <td style={{ padding: '9px 14px', fontSize: 13, textAlign: 'right', color: (r.amount_overdue || 0) > 0 ? '#d97706' : 'var(--text3)' }}>{fmt(r.amount_overdue || 0)}</td>
+                      <td style={{ padding: '9px 14px', fontSize: 13, textAlign: 'right', color: (r.amount_overdue || 0) > 0 ? 'var(--c-fg-d97706)' : 'var(--text3)' }}>{fmt(r.amount_overdue || 0)}</td>
                       <td style={{ padding: '9px 14px', fontSize: 12, color: 'var(--text2)' }}>{r.status || '—'}</td>
                     </tr>
                   ))}

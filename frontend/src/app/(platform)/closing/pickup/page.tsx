@@ -456,7 +456,7 @@ export default function CashPickupPage() {
               short pickup does not change, so on its own it can never show a shortfall. */}
           <Stat label="Actually picked"
             value={data.collected_actual_envelopes ? fmt(data.collected_actual || 0) : '—'}
-            color={data.collected_actual_variance < 0 ? '#dc2626' : undefined}
+            color={data.collected_actual_variance < 0 ? 'var(--c-fg-dc2626)' : undefined}
             sub={data.collected_actual_envelopes
               ? `${data.collected_actual_variance === 0 ? 'ties'
                   : data.collected_actual_variance < 0 ? `${fmt(data.collected_actual_variance)} short`
@@ -499,8 +499,8 @@ export default function CashPickupPage() {
           fallback (labeled, never presented as fact) and "no worked-signal recorded" (data gap, not an empty store). */}
       {data && !rangeMode && date && (
         (data.not_closed || []).length > 0 ? (
-          <div className="card" style={{ padding: 14, marginBottom: 16, borderLeft: '3px solid #dc2626' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: '#dc2626' }}>
+          <div className="card" style={{ padding: 14, marginBottom: 16, borderLeft: '3px solid var(--c-bg-dc2626)' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: 'var(--c-fg-dc2626)' }}>
               ⚠️ {data.not_closed.length} store{data.not_closed.length === 1 ? '' : 's'} did not do the daily closing for {date}
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -587,7 +587,7 @@ export default function CashPickupPage() {
                           <span style={{ display: 'block', fontSize: 10, fontWeight: 700, letterSpacing: 0.2, marginTop: 1, color: 'var(--text3)' }}>COLLECTING</span>
                         )}
                         {e.billpay_pos_disagrees && (
-                          <span style={{ display: 'block', fontSize: 10, fontWeight: 700, marginTop: 1, color: '#b45309' }}
+                          <span style={{ display: 'block', fontSize: 10, fontWeight: 700, marginTop: 1, color: 'var(--c-fg-b45309)' }}
                                 title={`The POS bill-pay figure for this store-day differs from the declarations by ${fmt(Math.abs(e.billpay_pos_gap || 0))}`}>POS DISAGREES</span>
                         )}
                       </td>
@@ -623,9 +623,9 @@ export default function CashPickupPage() {
                             ? <span style={{ color: 'var(--text3)', fontStyle: 'italic', fontSize: 12 }}>not recorded</span>
                             : <span style={{ fontWeight: 600 }}>
                                 {fmt(e.actual_picked_amount)}
-                                {e.pickup_variance_status === 'short' && <span style={{ color: '#dc2626', fontWeight: 700 }}> ⚠ {fmt(e.pickup_variance)} short</span>}
-                                {e.pickup_variance_status === 'over' && <span style={{ color: '#b45309', fontWeight: 700 }}> +{fmt(e.pickup_variance)} over</span>}
-                                {e.pickup_variance_status === 'match' && <span style={{ color: '#166534' }}> ✓</span>}
+                                {e.pickup_variance_status === 'short' && <span style={{ color: 'var(--c-fg-dc2626)', fontWeight: 700 }}> ⚠ {fmt(e.pickup_variance)} short</span>}
+                                {e.pickup_variance_status === 'over' && <span style={{ color: 'var(--c-fg-b45309)', fontWeight: 700 }}> +{fmt(e.pickup_variance)} over</span>}
+                                {e.pickup_variance_status === 'match' && <span style={{ color: 'var(--c-fg-166534)' }}> ✓</span>}
                                 {/* COUNTED BUT NOT SCOREABLE — shown, never silent (owner question
                                     2026-10-10). The expected figure nets bill-payment cash by the
                                     POS while the envelope was netted by the rep's own declared
@@ -660,19 +660,19 @@ export default function CashPickupPage() {
                                   standing. An empty field must LOOK empty; the declared figure is one
                                   column to the left and does not need repeating inside the input. */}
                               <input type="number" inputMode="decimal" step="0.01"
-                                style={{ ...sel, width: 96, ...(mustCount ? { borderColor: '#dc2626', background: '#fef2f2' } : {}) }}
+                                style={{ ...sel, width: 96, ...(mustCount ? { borderColor: 'var(--c-bg-dc2626)', background: 'var(--c-bg-fef2f2)' } : {}) }}
                                 placeholder={mustCount ? 'required' : 'count'} value={actuals[k] || ''}
                                 onChange={ev => setActuals(m => ({ ...m, [k]: ev.target.value }))}
                                 title={mustCount
                                   ? 'You marked this envelope opened — enter the cash you counted before confirming.'
                                   : 'Actual cash physically counted from this envelope (required once you tick "opened")'} />
-                              {mustCount && <span style={{ fontSize: 11, fontWeight: 700, color: '#dc2626' }}>count required</span>}
+                              {mustCount && <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-fg-dc2626)' }}>count required</span>}
                               {v != null && v !== 0 && (
-                                <span style={{ fontSize: 11, fontWeight: 700, color: v < 0 ? '#dc2626' : '#b45309' }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: v < 0 ? 'var(--c-fg-dc2626)' : 'var(--c-fg-b45309)' }}>
                                   {v < 0 ? `${fmt(v)} short` : `+${fmt(v)} over`}
                                 </span>
                               )}
-                              {v === 0 && <span style={{ fontSize: 11, color: '#166534' }}>✓</span>}
+                              {v === 0 && <span style={{ fontSize: 11, color: 'var(--c-fg-166534)' }}>✓</span>}
                             </span>
                           )
                         })()}
@@ -685,7 +685,7 @@ export default function CashPickupPage() {
                           title={e.pos_status === 'no_pos_data' ? 'No POS X-report for this store-day'
                             : `Store-day declared ${fmt(e.pos_declared_day)} vs POS ${fmt(e.pos_cash)} (Δ ${fmt(e.pos_delta)})`}>
                         {e.pos_cash == null ? <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>no POS data</span>
-                          : <>{fmt(e.pos_cash)}{e.pos_status === 'mismatch' ? ' ⚠' : e.pos_status === 'ok' ? <span style={{ color: '#166534' }}> ✓</span> : null}</>}
+                          : <>{fmt(e.pos_cash)}{e.pos_status === 'mismatch' ? ' ⚠' : e.pos_status === 'ok' ? <span style={{ color: 'var(--c-fg-166534)' }}> ✓</span> : null}</>}
                       </td>
                       <td style={cell}><EnvelopeViewLink row={e} label="📷 view" /></td>
                       <td style={cell}>
@@ -697,8 +697,8 @@ export default function CashPickupPage() {
                         {done && (e.disposition
                           ? <span style={{ fontSize: 12 }}>
                               {e.disposition === 'deposited' ? '🏦 Deposited' : '🤝 To mgmt'}
-                              {e.deposit_flagged && <span style={{ color: '#dc2626', fontWeight: 700 }}> · ⚠ {fmt(e.deposit_amount)} vs {fmt(e.cash)}</span>}
-                              {e.deposit_matched && <span style={{ color: '#166534' }}> · ✓ matched</span>}
+                              {e.deposit_flagged && <span style={{ color: 'var(--c-fg-dc2626)', fontWeight: 700 }}> · ⚠ {fmt(e.deposit_amount)} vs {fmt(e.cash)}</span>}
+                              {e.deposit_matched && <span style={{ color: 'var(--c-fg-166534)' }}> · ✓ matched</span>}
                               {e.deposit_url && <> · <a href={e.deposit_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>slip</a></>}
                             </span>
                           : <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -748,11 +748,11 @@ export default function CashPickupPage() {
                           {fmt(footTotals.actual)}
                           {footTotals.variance !== 0 && (
                             <span style={{ fontSize: 11, fontWeight: 700, marginLeft: 6,
-                              color: footTotals.variance < 0 ? '#dc2626' : '#b45309' }}>
+                              color: footTotals.variance < 0 ? 'var(--c-fg-dc2626)' : 'var(--c-fg-b45309)' }}>
                               {footTotals.variance < 0 ? `${fmt(footTotals.variance)} short` : `+${fmt(footTotals.variance)} over`}
                             </span>
                           )}
-                          {footTotals.variance === 0 && <span style={{ fontSize: 11, color: '#166534', marginLeft: 6 }}>✓</span>}
+                          {footTotals.variance === 0 && <span style={{ fontSize: 11, color: 'var(--c-fg-166534)', marginLeft: 6 }}>✓</span>}
                           <div style={{ fontWeight: 400, fontSize: 11, color: 'var(--text3)' }}>
                             over {footTotals.actualCount} counted envelope{footTotals.actualCount === 1 ? '' : 's'}
                             {footTotals.missingCount > 0 && ` · ${footTotals.missingCount} picked up but not counted`}
@@ -775,7 +775,7 @@ export default function CashPickupPage() {
               {busy ? '⏳ Confirming…' : `✅ Confirm pickup (${selectedKeys.length} · ${fmt(selTotal)})`}
             </button>
             {openedNoCount.length > 0 && (
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#dc2626' }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-fg-dc2626)' }}>
                 ⚠ {openedNoCount.length} envelope(s) marked opened still need the cash you counted.
               </span>
             )}
@@ -783,7 +783,7 @@ export default function CashPickupPage() {
                 than only when Confirm is pressed — the DM should see it while the row is still in
                 front of them, not after they think they are done. */}
             {strandedEdits.length > 0 && (
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#b45309' }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-fg-b45309)' }}>
                 ⚠ You entered details for {strandedEdits.length} envelope(s) you have not ticked for
                 pickup — tick them, or clear what you entered. They would not be saved.
               </span>

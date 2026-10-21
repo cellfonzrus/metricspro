@@ -58,7 +58,7 @@ export default function ReferralDetailPage() {
     setBusy(false)
   }
 
-  if (msg && !r) return <div style={{ padding: 20 }}><div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626' }}>{msg}</div></div>
+  if (msg && !r) return <div style={{ padding: 20 }}><div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)' }}>{msg}</div></div>
   if (!r) return <div style={{ padding: 20, color: 'var(--text2)' }}>Loading…</div>
 
   return (
@@ -66,17 +66,17 @@ export default function ReferralDetailPage() {
       <Link href="/referral/list" style={{ fontSize: 13 }}>← All referrals</Link>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '8px 0 14px' }}>
         <h1 style={{ fontSize: 22, fontWeight: 700 }}>Referral #{r.referral_no}</h1>
-        <span style={{ fontSize: 13, padding: '3px 12px', borderRadius: 999, color: '#fff', background: STATUS_COLOR[r.status] || '#6b7280' }}>
+        <span style={{ fontSize: 13, padding: '3px 12px', borderRadius: 999, color: 'var(--c-fg-ffffff)', background: STATUS_COLOR[r.status] || 'var(--c-bg-6b7280)' }}>
           {STATUS_LABEL[r.status] || r.status}
         </span>
       </div>
 
       {r.status === 'flagged_fraud' && (
-        <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginBottom: 14 }}>
+        <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginBottom: 14 }}>
           🚩 Flagged as suspected fraud: {r.fraud_reason || '—'}
         </div>
       )}
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginBottom: 14 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginBottom: 14 }}>{msg}</div>}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 14 }}>
         {/* Parties */}
@@ -120,7 +120,7 @@ export default function ReferralDetailPage() {
           {r.status === 'approved' && r.can_approve && <button disabled={busy} onClick={() => act('pay')} style={btnPrimary}>💸 Mark paid</button>}
           {['created', 'sent', 'redeemed', 'sale_logged', 'activated', 'commission_pending', 'approved'].includes(r.status) && (
             <>
-              <button disabled={busy} onClick={() => { const reason = prompt('Reason for flagging fraud?') || ''; if (reason) act('flag', { reason }) }} style={{ ...btn, borderColor: '#dc2626', color: '#dc2626' }}>🚩 Flag fraud</button>
+              <button disabled={busy} onClick={() => { const reason = prompt('Reason for flagging fraud?') || ''; if (reason) act('flag', { reason }) }} style={{ ...btn, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)' }}>🚩 Flag fraud</button>
               <button disabled={busy} onClick={() => { if (confirm('Void this referral?')) act('void', { reason: 'Voided from detail page' }) }} style={btn}>Void</button>
             </>
           )}
@@ -131,13 +131,13 @@ export default function ReferralDetailPage() {
           <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
             <div style={{ fontWeight: 600, marginBottom: 8 }}>Approve payout</div>
             {r.approval_conflict ? (
-              <div style={{ fontSize: 13, color: '#dc2626' }}>{r.approval_conflict}</div>
+              <div style={{ fontSize: 13, color: 'var(--c-fg-dc2626)' }}>{r.approval_conflict}</div>
             ) : r.can_approve ? (
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                 <div><span style={label}>Amount ($)</span><input value={amount} onChange={e => setAmount(e.target.value)} inputMode="decimal" style={{ ...input, width: 120 }} /></div>
                 <div><span style={label}>Payout date</span><input type="date" value={payoutDate} onChange={e => setPayoutDate(e.target.value)} style={{ ...input, width: 160 }} /></div>
                 <button disabled={busy} onClick={() => act('approve', { commission_amount: amount === '' ? null : Number(amount), payout_date: payoutDate || null })} style={btnPrimary}>Approve</button>
-                <button disabled={busy} onClick={() => { const reason = prompt('Reason for rejecting?') || ''; act('reject', { reason }) }} style={{ ...btn, borderColor: '#dc2626', color: '#dc2626' }}>Reject</button>
+                <button disabled={busy} onClick={() => { const reason = prompt('Reason for rejecting?') || ''; act('reject', { reason }) }} style={{ ...btn, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)' }}>Reject</button>
               </div>
             ) : (
               <div style={{ fontSize: 13, color: 'var(--text2)' }}>You do not have permission to approve payouts.</div>

@@ -162,7 +162,7 @@ export default function XTenderReconPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : data?.error ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {data.error}</div>
       ) : data?.ready === false ? (
         <div className="card" style={{ padding: 16, color: 'var(--text2)' }}>{data.note || <SetupNotice lead="Import an X report once this is switched on." detail="062_pos_tender_summary.sql" />}</div>
       ) : (
@@ -205,10 +205,10 @@ export default function XTenderReconPage() {
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, fontWeight: 600, color: vColor(r.card_variance) }}>{fmt(r.card_variance)}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: 'var(--text3)' }}>{r.pos_other ? fmt(r.pos_other) : '—'}</td>
                     <td style={{ padding: '7px 12px', fontSize: 12 }}>
-                      {r.match ? <span style={{ color: '#15803d' }}>✓ OK</span>
-                        : !r.in_closing ? <span style={{ color: '#b45309' }}>no closing sheet</span>
-                          : !r.in_pos ? <span style={{ color: '#b45309' }}>no X report</span>
-                            : <span style={{ color: '#b91c1c', fontWeight: 600 }}>⚠ mismatch</span>}
+                      {r.match ? <span style={{ color: 'var(--c-fg-15803d)' }}>✓ OK</span>
+                        : !r.in_closing ? <span style={{ color: 'var(--c-fg-b45309)' }}>no closing sheet</span>
+                          : !r.in_pos ? <span style={{ color: 'var(--c-fg-b45309)' }}>no X report</span>
+                            : <span style={{ color: 'var(--c-fg-b91c1c)', fontWeight: 600 }}>⚠ mismatch</span>}
                     </td>
                   </tr>
                 ))}

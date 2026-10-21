@@ -89,11 +89,11 @@ export default function PipelineBoardPage() {
         <Link href="/crm/leads/new" style={{ ...btnPrimary, textDecoration: 'none' }}>➕ Log a lead</Link>
       </div>
 
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginBottom: 12 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginBottom: 12 }}>{msg}</div>}
       {loading && <div style={{ color: 'var(--text2)' }}>Loading…</div>}
 
       {pending && (
-        <div style={{ ...panel, borderColor: '#2563eb', marginBottom: 12 }}>
+        <div style={{ ...panel, borderColor: 'var(--c-bg-2563eb)', marginBottom: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>
             Moving “{pending.lead.display_name}” to {pending.stage.name} — what happened?
           </div>

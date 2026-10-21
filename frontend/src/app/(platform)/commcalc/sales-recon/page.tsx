@@ -148,25 +148,25 @@ export default function SalesReconPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Sales Feed Recon</h1>
-          <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: 14 }}>
+          <p style={{ color: 'var(--c-fg-6b7280)', margin: '4px 0 0', fontSize: 14 }}>
             Monthly authoritative upload vs the daily {pos} feed — {period}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={flagAndNotify} disabled={syncing || loading || !canFlag}
             title={canFlag ? 'Write leaks/mismatches to the Flags page and notify the designated recipient' : 'No daily feed loaded yet — nothing to flag'}
-            style={{ background: (syncing || !canFlag) ? '#9ca3af' : '#b91c1c', color: 'white', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: (syncing || loading || !canFlag) ? 'default' : 'pointer', fontSize: 14 }}>
+            style={{ background: (syncing || !canFlag) ? 'var(--c-bg-9ca3af)' : 'var(--c-bg-b91c1c)', color: 'var(--c-fg-ffffff)', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: (syncing || loading || !canFlag) ? 'default' : 'pointer', fontSize: 14 }}>
             {syncing ? 'Flagging…' : 'Flag leaks & notify'}
           </button>
           <button onClick={load} disabled={loading}
-            style={{ background: loading ? '#9ca3af' : '#111827', color: 'white', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: loading ? 'default' : 'pointer', fontSize: 14 }}>
+            style={{ background: loading ? 'var(--c-bg-9ca3af)' : 'var(--c-bg-111827)', color: 'var(--c-fg-ffffff)', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: loading ? 'default' : 'pointer', fontSize: 14 }}>
             {loading ? 'Loading…' : 'Refresh'}
           </button>
         </div>
       </div>
 
-      {err && <div style={{ background: '#fef2f2', color: '#991b1b', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>{err}</div>}
-      {syncMsg && <div style={{ background: '#eff6ff', color: '#1e40af', border: '1px solid #bfdbfe', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>{syncMsg}</div>}
+      {err && <div style={{ background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-991b1b)', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>{err}</div>}
+      {syncMsg && <div style={{ background: 'var(--c-bg-eff6ff)', color: 'var(--c-fg-1e40af)', border: '1px solid var(--c-bg-bfdbfe)', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>{syncMsg}</div>}
 
       {/* APPLIES? then LOADED? (copy.ts) — a POS with no daily-feed kind is told so, never invited to upload one. */}
       {empty && (
@@ -183,8 +183,8 @@ export default function SalesReconPage() {
           by a side that has not arrived, so it is stated here rather than read as a leak count. */}
       {notComparable && verdict?.reason && (
         <div role="status" data-verdict={verdict.verdict}
-          style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: 12,
-            marginBottom: 16, fontSize: 13, color: '#92400e' }}>
+          style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 8, padding: 12,
+            marginBottom: 16, fontSize: 13, color: 'var(--c-fg-92400e)' }}>
           <strong>
             {verdict.verdict === 'archive_not_due'
               ? 'This month is still open — no monthly archive is due yet.'
@@ -201,20 +201,20 @@ export default function SalesReconPage() {
 
       {/* Reconciliation totals */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 20, flexWrap: 'wrap' }}>
-        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, flex: 1, minWidth: 200 }}>
-          <div style={{ fontSize: 13, color: '#6b7280' }}>Monthly (authoritative)</div>
+        <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, padding: 16, flex: 1, minWidth: 200 }}>
+          <div style={{ fontSize: 13, color: 'var(--c-fg-6b7280)' }}>Monthly (authoritative)</div>
           <div style={{ fontSize: 24, fontWeight: 700 }}>{fmt(s?.monthly_total || 0)}</div>
-          <div style={{ fontSize: 12, color: '#9ca3af' }}>{s?.monthly_trans || 0} transactions · {s?.monthly_lines || 0} lines</div>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-9ca3af)' }}>{s?.monthly_trans || 0} transactions · {s?.monthly_lines || 0} lines</div>
         </div>
-        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, flex: 1, minWidth: 200 }}>
-          <div style={{ fontSize: 13, color: '#6b7280' }}>{dailyFeedLabel(pos)}</div>
+        <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, padding: 16, flex: 1, minWidth: 200 }}>
+          <div style={{ fontSize: 13, color: 'var(--c-fg-6b7280)' }}>{dailyFeedLabel(pos)}</div>
           <div style={{ fontSize: 24, fontWeight: 700 }}>{fmt(s?.daily_total || 0)}</div>
-          <div style={{ fontSize: 12, color: '#9ca3af' }}>{s?.daily_trans || 0} transactions · {s?.daily_lines || 0} lines</div>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-9ca3af)' }}>{s?.daily_trans || 0} transactions · {s?.daily_lines || 0} lines</div>
         </div>
-        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, flex: 1, minWidth: 200 }}>
-          <div style={{ fontSize: 13, color: '#6b7280' }}>Matched transactions</div>
-          <div style={{ fontSize: 24, fontWeight: 700, color: '#059669' }}>{s?.matched || 0}</div>
-          <div style={{ fontSize: 12, color: '#9ca3af' }}>totals agree within $0.01</div>
+        <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, padding: 16, flex: 1, minWidth: 200 }}>
+          <div style={{ fontSize: 13, color: 'var(--c-fg-6b7280)' }}>Matched transactions</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--c-fg-059669)' }}>{s?.matched || 0}</div>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-9ca3af)' }}>totals agree within $0.01</div>
         </div>
       </div>
 
@@ -225,8 +225,8 @@ export default function SalesReconPage() {
           return (
             <button key={t.key} onClick={() => { setTab(t.key); setStoreFilter('') }}
               style={{ padding: '8px 16px', borderRadius: 8, fontSize: 14, fontWeight: 600,
-                border: active ? `2px solid ${t.color}` : '1px solid #e5e7eb',
-                background: active ? `${t.color}10` : 'white', color: active ? t.color : '#374151', cursor: 'pointer' }}>
+                border: active ? `2px solid ${t.color}` : '1px solid var(--c-bg-e5e7eb)',
+                background: active ? `${t.color}10` : 'white', color: active ? t.color : 'var(--c-fg-374151)', cursor: 'pointer' }}>
               {t.label} <span style={{ opacity: 0.7 }}>({tabCount(t.key)})</span>
             </button>
           )
@@ -234,38 +234,38 @@ export default function SalesReconPage() {
       </div>
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
-        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, flex: 1 }}>
-          <div style={{ fontSize: 13, color: '#6b7280' }}>{tabMeta.label} — value at stake</div>
+        <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, padding: 16, flex: 1 }}>
+          <div style={{ fontSize: 13, color: 'var(--c-fg-6b7280)' }}>{tabMeta.label} — value at stake</div>
           <div style={{ fontSize: 26, fontWeight: 700, color: tabMeta.color }}>{fmt(Math.abs(tabAmount || 0))}</div>
         </div>
-        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, flex: 1 }}>
-          <div style={{ fontSize: 13, color: '#6b7280' }}>Transactions</div>
+        <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, padding: 16, flex: 1 }}>
+          <div style={{ fontSize: 13, color: 'var(--c-fg-6b7280)' }}>Transactions</div>
           <div style={{ fontSize: 26, fontWeight: 700 }}>{rows.length}</div>
         </div>
       </div>
 
-      <div style={{ background: `${tabMeta.color}08`, border: `1px solid ${tabMeta.color}30`, borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: '#374151' }}>
+      <div style={{ background: `${tabMeta.color}08`, border: `1px solid ${tabMeta.color}30`, borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: 'var(--c-fg-374151)' }}>
         {tabMeta.blurb}
       </div>
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
         <select value={storeFilter} onChange={e => setStoreFilter(e.target.value)}
-          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14, maxWidth: 260 }}>
+          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-bg-e5e7eb)', fontSize: 14, maxWidth: 260 }}>
           <option value="">All stores</option>
           {stores.map(st => <option key={st} value={st}>{st}</option>)}
         </select>
         <input placeholder="Search Trans ID / store / rep" value={search} onChange={e => setSearch(e.target.value)}
-          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14, flex: 1, minWidth: 180 }} />
-        <label style={{ fontSize: 12, color: '#6b7280', display: 'flex', alignItems: 'center', gap: 4 }}>From
+          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-bg-e5e7eb)', fontSize: 14, flex: 1, minWidth: 180 }} />
+        <label style={{ fontSize: 12, color: 'var(--c-fg-6b7280)', display: 'flex', alignItems: 'center', gap: 4 }}>From
           <input type="date" value={dayFrom} onChange={e => setDayFrom(e.target.value)}
-            style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14 }} /></label>
-        <label style={{ fontSize: 12, color: '#6b7280', display: 'flex', alignItems: 'center', gap: 4 }}>To
+            style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid var(--c-bg-e5e7eb)', fontSize: 14 }} /></label>
+        <label style={{ fontSize: 12, color: 'var(--c-fg-6b7280)', display: 'flex', alignItems: 'center', gap: 4 }}>To
           <input type="date" value={dayTo} onChange={e => setDayTo(e.target.value)}
-            style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14 }} /></label>
+            style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid var(--c-bg-e5e7eb)', fontSize: 14 }} /></label>
         {(storeFilter || search || dayFrom || dayTo) && (
           <button onClick={() => { setStoreFilter(''); setSearch(''); setDayFrom(''); setDayTo('') }}
-            style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', fontSize: 14 }}>Clear</button>
+            style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-bg-e5e7eb)', background: 'var(--c-bg-ffffff)', cursor: 'pointer', fontSize: 14 }}>Clear</button>
         )}
         <div style={{ flex: 1 }} />
         {rows.length > 0 && (
@@ -276,15 +276,15 @@ export default function SalesReconPage() {
         )}
       </div>
 
-      {loading && <div style={{ color: '#6b7280', padding: 20 }}>Loading…</div>}
+      {loading && <div style={{ color: 'var(--c-fg-6b7280)', padding: 20 }}>Loading…</div>}
 
       {!loading && data && (
         <>
           {data.by_store.length > 0 && (
-            <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, marginBottom: 20, overflow: 'hidden' }}>
-              <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 14 }}>By Store (click to filter)</div>
+            <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, marginBottom: 20, overflow: 'hidden' }}>
+              <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--c-bg-e5e7eb)', fontWeight: 600, fontSize: 14 }}>By Store (click to filter)</div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-                <thead><tr style={{ background: '#f9fafb', textAlign: 'left' }}>
+                <thead><tr style={{ background: 'var(--c-bg-f9fafb)', textAlign: 'left' }}>
                   <th style={{ padding: '8px 16px' }}>Store</th>
                   <th style={{ padding: '8px 16px', textAlign: 'right' }}>Missing in Monthly</th>
                   <th style={{ padding: '8px 16px', textAlign: 'right' }}>Mismatch</th>
@@ -294,11 +294,11 @@ export default function SalesReconPage() {
                 <tbody>
                   {data.by_store.map(st => (
                     <tr key={st.store} onClick={() => setStoreFilter(storeFilter === st.store ? '' : st.store)}
-                      style={{ borderTop: '1px solid #f3f4f6', cursor: 'pointer', background: storeFilter === st.store ? '#eff6ff' : 'white' }}>
+                      style={{ borderTop: '1px solid var(--c-bg-f3f4f6)', cursor: 'pointer', background: storeFilter === st.store ? '#eff6ff' : 'white' }}>
                       <td style={{ padding: '8px 16px', fontWeight: 500 }}>{st.store}</td>
-                      <td style={{ padding: '8px 16px', textAlign: 'right', color: st.missing_in_monthly ? '#dc2626' : '#9ca3af' }}>{st.missing_in_monthly}</td>
-                      <td style={{ padding: '8px 16px', textAlign: 'right', color: st.amount_mismatch ? '#d97706' : '#9ca3af' }}>{st.amount_mismatch}</td>
-                      <td style={{ padding: '8px 16px', textAlign: 'right', color: st.missing_in_daily ? '#2563eb' : '#9ca3af' }}>{st.missing_in_daily}</td>
+                      <td style={{ padding: '8px 16px', textAlign: 'right', color: st.missing_in_monthly ? 'var(--c-fg-dc2626)' : 'var(--c-fg-9ca3af)' }}>{st.missing_in_monthly}</td>
+                      <td style={{ padding: '8px 16px', textAlign: 'right', color: st.amount_mismatch ? 'var(--c-fg-d97706)' : 'var(--c-fg-9ca3af)' }}>{st.amount_mismatch}</td>
+                      <td style={{ padding: '8px 16px', textAlign: 'right', color: st.missing_in_daily ? 'var(--c-fg-2563eb)' : 'var(--c-fg-9ca3af)' }}>{st.missing_in_daily}</td>
                       <td style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600 }}>{fmt(st.delta_total)}</td>
                     </tr>
                   ))}
@@ -307,9 +307,9 @@ export default function SalesReconPage() {
             </div>
           )}
 
-          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'auto' }}>
+          <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, overflow: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead><tr style={{ background: '#f9fafb', textAlign: 'left', position: 'sticky', top: 0 }}>
+              <thead><tr style={{ background: 'var(--c-bg-f9fafb)', textAlign: 'left', position: 'sticky', top: 0 }}>
                 <th style={{ padding: '8px 12px' }}>Trans ID</th>
                 <th style={{ padding: '8px 12px' }}>Store</th>
                 <th style={{ padding: '8px 12px' }}>Rep</th>
@@ -321,8 +321,8 @@ export default function SalesReconPage() {
               <tbody>
                 {rows.slice(0, 500).map((r, i) => (
                   <tr key={`${r.trans_id}-${i}`} onClick={() => openTxn(r.trans_id)} title="Click to investigate the line items"
-                    style={{ borderTop: '1px solid #f3f4f6', cursor: 'pointer' }}>
-                    <td style={{ padding: '6px 12px', fontFamily: 'monospace', fontSize: 12, color: '#2563eb' }}>{r.trans_id}</td>
+                    style={{ borderTop: '1px solid var(--c-bg-f3f4f6)', cursor: 'pointer' }}>
+                    <td style={{ padding: '6px 12px', fontFamily: 'monospace', fontSize: 12, color: 'var(--c-fg-2563eb)' }}>{r.trans_id}</td>
                     <td style={{ padding: '6px 12px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.store}</td>
                     <td style={{ padding: '6px 12px' }}>{r.salesperson}</td>
                     <td style={{ padding: '6px 12px' }}>{r.trans_date}</td>
@@ -334,12 +334,12 @@ export default function SalesReconPage() {
               </tbody>
             </table>
             {rows.length > 500 && (
-              <div style={{ padding: 12, textAlign: 'center', color: '#6b7280', fontSize: 13 }}>
+              <div style={{ padding: 12, textAlign: 'center', color: 'var(--c-fg-6b7280)', fontSize: 13 }}>
                 Showing first 500 of {rows.length}. Use filters to narrow.
               </div>
             )}
             {rows.length === 0 && (
-              <div style={{ padding: 20, textAlign: 'center', color: '#6b7280' }}>
+              <div style={{ padding: 20, textAlign: 'center', color: 'var(--c-fg-6b7280)' }}>
                 {data.has_feed ? 'No transactions in this bucket — clean.' : empty?.kind === 'not_applicable' ? `No daily feed is defined for ${pos}.` : 'No daily feed loaded yet.'}
               </div>
             )}
@@ -350,25 +350,25 @@ export default function SalesReconPage() {
       {(drillId) && (
         <div onClick={() => { setDrillId(''); setDrill(null) }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 12, maxWidth: 860, width: '100%', maxHeight: '85vh', overflowY: 'auto', padding: 18 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--c-bg-ffffff)', borderRadius: 12, maxWidth: 860, width: '100%', maxHeight: '85vh', overflowY: 'auto', padding: 18 }}>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
               <div style={{ fontWeight: 700, fontSize: 16 }}>🔎 Transaction {drillId}</div>
               <span style={{ flex: 1 }} />
-              <button onClick={() => { setDrillId(''); setDrill(null) }} style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', fontSize: 13 }}>Close</button>
+              <button onClick={() => { setDrillId(''); setDrill(null) }} style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid var(--c-bg-e5e7eb)', background: 'var(--c-bg-ffffff)', cursor: 'pointer', fontSize: 13 }}>Close</button>
             </div>
-            {drillBusy && <div style={{ color: '#6b7280', padding: 20 }}>Loading line items…</div>}
+            {drillBusy && <div style={{ color: 'var(--c-fg-6b7280)', padding: 20 }}>Loading line items…</div>}
             {drill && (
               <>
                 <div style={{ display: 'flex', gap: 12, fontSize: 13, marginBottom: 12, flexWrap: 'wrap' }}>
                   <span><b>Monthly:</b> {fmt(drill.monthly_total)} {drill.in_monthly ? '' : '(not in monthly file)'}</span>
                   <span><b>Daily feed:</b> {fmt(drill.daily_total)} {drill.in_daily ? '' : '(not in daily feed)'}</span>
-                  <span style={{ fontWeight: 700, color: Math.abs(drill.delta) > 0.01 ? '#dc2626' : '#15803d' }}>Δ {fmt(drill.delta)}</span>
+                  <span style={{ fontWeight: 700, color: Math.abs(drill.delta) > 0.01 ? 'var(--c-fg-dc2626)' : 'var(--c-fg-15803d)' }}>Δ {fmt(drill.delta)}</span>
                 </div>
                 <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
                   <ReconLines title="Monthly (authoritative file)" lines={drill.monthly} />
                   <ReconLines title={dailyFeedLabel(pos)} lines={drill.daily} />
                 </div>
-                <p style={{ fontSize: 12, color: '#6b7280', marginTop: 10 }}>
+                <p style={{ fontSize: 12, color: 'var(--c-fg-6b7280)', marginTop: 10 }}>
                   Compare the two sides — a line present on one side only, a price change, or a void explains the discrepancy.
                 </p>
               </>
@@ -382,18 +382,18 @@ export default function SalesReconPage() {
 
 function ReconLines({ title, lines }: { title: string; lines: any[] }) {
   return (
-    <div style={{ flex: '1 1 360px', minWidth: 300, border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-      <div style={{ padding: '8px 12px', fontWeight: 700, fontSize: 12, background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>{title} ({(lines || []).length})</div>
+    <div style={{ flex: '1 1 360px', minWidth: 300, border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ padding: '8px 12px', fontWeight: 700, fontSize: 12, background: 'var(--c-bg-f9fafb)', borderBottom: '1px solid var(--c-bg-e5e7eb)' }}>{title} ({(lines || []).length})</div>
       {(!lines || lines.length === 0)
-        ? <div style={{ padding: 14, color: '#9ca3af', fontSize: 13 }}>No lines on this side.</div>
+        ? <div style={{ padding: 14, color: 'var(--c-fg-9ca3af)', fontSize: 13 }}>No lines on this side.</div>
         : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <tbody>
               {lines.map((l: any, i: number) => (
-                <tr key={i} style={{ borderTop: '1px solid #f3f4f6', opacity: l.voided ? 0.5 : 1 }}>
+                <tr key={i} style={{ borderTop: '1px solid var(--c-bg-f3f4f6)', opacity: l.voided ? 0.5 : 1 }}>
                   <td style={{ padding: '5px 10px' }}>
-                    {l.product_desc || '—'}{l.voided && <span style={{ color: '#dc2626' }}> (void)</span>}
-                    {(l.department || l.contract_type) && <div style={{ fontSize: 10, color: '#9ca3af' }}>{[l.contract_type, l.department].filter(Boolean).join(' · ')}</div>}
+                    {l.product_desc || '—'}{l.voided && <span style={{ color: 'var(--c-fg-dc2626)' }}> (void)</span>}
+                    {(l.department || l.contract_type) && <div style={{ fontSize: 10, color: 'var(--c-fg-9ca3af)' }}>{[l.contract_type, l.department].filter(Boolean).join(' · ')}</div>}
                   </td>
                   <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{fmt(l.ext_price)}</td>
                 </tr>

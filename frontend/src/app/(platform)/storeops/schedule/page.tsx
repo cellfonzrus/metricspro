@@ -464,10 +464,10 @@ export default function SchedulePage() {
   const Cell = ({ date, cellShifts, onAdd, off }: { date: string; cellShifts: Shift[]; onAdd: () => void; off?: boolean }) => (
     <td style={{ padding: '4px 6px', textAlign: 'center', borderRight: '1px solid var(--border)', cursor: 'pointer', verticalAlign: 'top', background: off ? 'rgba(245,158,11,0.10)' : date === today ? 'rgba(37,99,235,0.04)' : undefined }}
       onClick={onAdd}>
-      {off && <div style={{ fontSize: 10, color: '#b45309', fontWeight: 700, marginBottom: 2 }} title="Approved time off">🌴 OFF</div>}
+      {off && <div style={{ fontSize: 10, color: 'var(--c-fg-b45309)', fontWeight: 700, marginBottom: 2 }} title="Approved time off">🌴 OFF</div>}
       {cellShifts.map(s => (
         <div key={s.id} title="Click to edit times" onClick={e => { e.stopPropagation(); openEdit(s) }}
-          style={{ background: 'var(--accent2)', borderRadius: 6, padding: '3px 6px', fontSize: 11, color: 'white', position: 'relative', marginBottom: 3, textAlign: 'left' }}>
+          style={{ background: 'var(--accent2)', borderRadius: 6, padding: '3px 6px', fontSize: 11, color: 'var(--c-fg-ffffff)', position: 'relative', marginBottom: 3, textAlign: 'left' }}>
           <div style={{ fontWeight: 600, paddingRight: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {view === 'store' ? s.employee_name : s.store_code}
           </div>
@@ -548,14 +548,14 @@ export default function SchedulePage() {
       </div>
 
       {notice && (
-        <div style={{ background: '#eff6ff', border: '1px solid #3b82f6', color: '#1e3a8a', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+        <div style={{ background: 'var(--c-bg-eff6ff)', border: '1px solid var(--c-bg-3b82f6)', color: 'var(--c-fg-1e3a8a)', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
           <span>🌴 {notice}</span>
-          <button onClick={() => setNotice(null)} style={{ background: 'none', border: 'none', color: '#1e3a8a', cursor: 'pointer', fontWeight: 700 }}>✕</button>
+          <button onClick={() => setNotice(null)} style={{ background: 'none', border: 'none', color: 'var(--c-fg-1e3a8a)', cursor: 'pointer', fontWeight: 700 }}>✕</button>
         </div>
       )}
 
       {conflicts.length > 0 && (
-        <div style={{ background: '#fef3c7', border: '1px solid #f59e0b', color: '#92400e', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13 }}>
+        <div style={{ background: 'var(--c-bg-fef3c7)', border: '1px solid var(--c-bg-f59e0b)', color: 'var(--c-fg-92400e)', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13 }}>
           ⚠️ Double-booking detected:{' '}
           {conflicts.slice(0, 4).map((c, i) => (
             <span key={i}><strong>{c.emp}</strong> at {c.stores.join(' & ')} on {dayLabel(c.date).dow} {dayLabel(c.date).md}{i < Math.min(conflicts.length, 4) - 1 ? '; ' : ''}</span>
@@ -565,7 +565,7 @@ export default function SchedulePage() {
       )}
 
       {view === 'store' && coverageGaps.length > 0 && (
-        <div style={{ background: '#fee2e2', border: '1px solid #ef4444', color: '#991b1b', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13 }}>
+        <div style={{ background: 'var(--c-bg-fee2e2)', border: '1px solid var(--c-bg-ef4444)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 13 }}>
           🪧 Coverage gaps — {coverageGaps.length} store-day{coverageGaps.length === 1 ? '' : 's'} with nobody scheduled:{' '}
           {coverageGaps.slice(0, 6).map((g, i) => (
             <span key={i}><strong>{g.store}</strong> {dayLabel(g.date).dow} {dayLabel(g.date).md}{i < Math.min(coverageGaps.length, 6) - 1 ? '; ' : ''}</span>
@@ -672,7 +672,7 @@ export default function SchedulePage() {
               {trend.increasing.week.slice(0, 8).map((r, i) => (
                 <li key={i}>
                   <strong>{r.employee}</strong> at <strong>{r.store}</strong> —{' '}
-                  <span style={{ color: '#15803d', fontWeight: 700 }}>+{r.delta.toFixed(1)}h</span>{' '}
+                  <span style={{ color: 'var(--c-fg-15803d)', fontWeight: 700 }}>+{r.delta.toFixed(1)}h</span>{' '}
                   <span style={{ color: 'var(--text3)' }}>({r.prior.toFixed(1)}h → {r.current.toFixed(1)}h)</span>
                 </li>
               ))}
@@ -704,7 +704,7 @@ export default function SchedulePage() {
               <button className="btn" style={{ borderRadius: 0, border: 'none', background: reportGran === 'week' ? 'var(--accent)' : 'transparent', color: reportGran === 'week' ? 'white' : 'var(--text2)' }} onClick={() => { setReportGran('week'); setDrillKey(null) }}>Week over week</button>
               <button className="btn" style={{ borderRadius: 0, border: 'none', background: reportGran === 'month' ? 'var(--accent)' : 'transparent', color: reportGran === 'month' ? 'white' : 'var(--text2)' }} onClick={() => { setReportGran('month'); setDrillKey(null) }}>Month over month</button>
             </div>
-            {trendErr && <div style={{ color: '#b91c1c', fontSize: 13, marginBottom: 10 }}>{trendErr}</div>}
+            {trendErr && <div style={{ color: 'var(--c-fg-b91c1c)', fontSize: 13, marginBottom: 10 }}>{trendErr}</div>}
             {!trend ? (
               <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}><div className="spinner" /></div>
             ) : (
@@ -746,7 +746,7 @@ export default function SchedulePage() {
                                       Object.entries(b.by_store).sort((a, c) => c[1] - a[1]).map(([k, v]) => (
                                         <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '2px 0' }}>
                                           <span>{k}</span>
-                                          <span>{v.toFixed(1)}h {b.store_deltas[k] != null && <em style={{ color: b.store_deltas[k] > 0 ? '#15803d' : '#b91c1c', fontStyle: 'normal' }}>({b.store_deltas[k] > 0 ? '+' : ''}{b.store_deltas[k].toFixed(1)})</em>}</span>
+                                          <span>{v.toFixed(1)}h {b.store_deltas[k] != null && <em style={{ color: b.store_deltas[k] > 0 ? 'var(--c-fg-15803d)' : 'var(--c-fg-b91c1c)', fontStyle: 'normal' }}>({b.store_deltas[k] > 0 ? '+' : ''}{b.store_deltas[k].toFixed(1)})</em>}</span>
                                         </div>
                                       ))}
                                   </div>
@@ -756,7 +756,7 @@ export default function SchedulePage() {
                                       Object.entries(b.by_employee).sort((a, c) => c[1] - a[1]).map(([k, v]) => (
                                         <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '2px 0' }}>
                                           <span>{k}</span>
-                                          <span>{v.toFixed(1)}h {b.employee_deltas[k] != null && <em style={{ color: b.employee_deltas[k] > 0 ? '#15803d' : '#b91c1c', fontStyle: 'normal' }}>({b.employee_deltas[k] > 0 ? '+' : ''}{b.employee_deltas[k].toFixed(1)})</em>}</span>
+                                          <span>{v.toFixed(1)}h {b.employee_deltas[k] != null && <em style={{ color: b.employee_deltas[k] > 0 ? 'var(--c-fg-15803d)' : 'var(--c-fg-b91c1c)', fontStyle: 'normal' }}>({b.employee_deltas[k] > 0 ? '+' : ''}{b.employee_deltas[k].toFixed(1)})</em>}</span>
                                         </div>
                                       ))}
                                   </div>

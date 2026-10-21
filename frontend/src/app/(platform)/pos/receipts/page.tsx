@@ -225,7 +225,7 @@ export default function ReceiptImportPage() {
         from another POS (review &amp; edit the fields, reprint it later in the same format).
       </p>
 
-      {error && <div style={{ background: '#fde8e8', color: '#9b1c1c', padding: '8px 12px', borderRadius: 6, marginBottom: 12, fontSize: 13 }}>{error}</div>}
+      {error && <div style={{ background: 'var(--c-bg-fde8e8)', color: 'var(--c-fg-9b1c1c)', padding: '8px 12px', borderRadius: 6, marginBottom: 12, fontSize: 13 }}>{error}</div>}
 
       {/* sales rebuilt from the two landed sales reports — the invoice-level export (with its tender
           columns) joined to the line-level export by invoice number; printed through the same renderer */}
@@ -254,8 +254,8 @@ export default function ReceiptImportPage() {
         )}
         <VendorPaidCard from={rbFrom} to={rbTo} />
         {rbResult && (
-          <div style={{ marginTop: 10, fontSize: 13, background: rbResult.ran && rbResult.ok ? 'var(--bg)' : '#fff4e5', padding: '8px 12px', borderRadius: 6 }}>
-            {!rbResult.ran && <div style={{ color: '#9b1c1c' }}>{rbResult.reason}</div>}
+          <div style={{ marginTop: 10, fontSize: 13, background: rbResult.ran && rbResult.ok ? 'var(--bg)' : 'var(--c-bg-fff4e5)', padding: '8px 12px', borderRadius: 6 }}>
+            {!rbResult.ran && <div style={{ color: 'var(--c-fg-9b1c1c)' }}>{rbResult.reason}</div>}
             {rbResult.ran && (
               <>
                 <div><b>{rbResult.invoices ?? 0}</b> invoice(s) · {rbResult.with_lines ?? 0} with lines · {rbResult.without_lines ?? 0} without · {rbResult.created ?? 0} created · {rbResult.replaced ?? 0} replaced{rbResult.failed ? ` · ${rbResult.failed} failed` : ''}{rbResult.format_label ? ` · ${rbResult.format_label} layout` : ''}</div>
@@ -281,7 +281,7 @@ export default function ReceiptImportPage() {
                   <td style={{ padding: 6 }}>{r.customer_name || '—'}</td>
                   <td style={{ padding: 6 }}>{money(r.total)}</td>
                   <td style={{ padding: 6 }}>{(r.payments || []).length ? (r.payments || []).map(p => `${p.label} ${money(p.amount)}`).join(', ') : '—'}</td>
-                  <td style={{ padding: 6, color: r.lines_found ? (r.lines_tie ? 'inherit' : '#9b5e00') : '#9b1c1c' }}>
+                  <td style={{ padding: 6, color: r.lines_found ? (r.lines_tie ? 'inherit' : 'var(--c-fg-9b5e00)') : 'var(--c-fg-9b1c1c)' }}>
                     {r.lines_found ?? 0}{r.lines_found ? (r.lines_tie ? '' : ' (do not tie)') : ' (none found)'}
                   </td>
                   <td style={{ padding: 6, whiteSpace: 'nowrap' }}>
@@ -399,7 +399,7 @@ export default function ReceiptImportPage() {
               <div style={{ flex: 1, minWidth: 240 }}><label style={label}>Note (optional) — saved on the import</label><input value={notes} onChange={e => setNotes(e.target.value)} style={input} /></div>
             </div>
           )}
-          {savedId && <div style={{ marginTop: 10, color: '#0a7d33', fontSize: 13 }}>✓ Saved. Use 🖨 Print to reprint in the original format.</div>}
+          {savedId && <div style={{ marginTop: 10, color: 'var(--c-fg-0a7d33)', fontSize: 13 }}>✓ Saved. Use 🖨 Print to reprint in the original format.</div>}
         </div>
       )}
 

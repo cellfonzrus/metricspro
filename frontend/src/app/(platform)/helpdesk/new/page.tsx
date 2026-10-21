@@ -76,7 +76,7 @@ export default function NewTicket() {
     <div style={{ padding: 24, maxWidth: 640 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>➕ Raise a ticket</h1>
       <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>Describe the issue; a manager will pick it up.</p>
-      {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 12, marginBottom: 12 }}>{err}</div>}
+      {err && <div className="card" style={{ borderColor: 'var(--c-bg-c0392b)', color: 'var(--c-fg-c0392b)', padding: 12, marginBottom: 12 }}>{err}</div>}
 
       <div className="card" style={{ padding: 16, display: 'grid', gap: 14 }}>
         <div><label style={lbl}>Subject *</label>

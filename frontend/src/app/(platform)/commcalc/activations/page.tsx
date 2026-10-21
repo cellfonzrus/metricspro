@@ -138,15 +138,15 @@ export default function ActivationsPage() {
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={load}>↻ Refresh</button>
       </div>
 
-      {err && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>❌ {err}</div>}
+      {err && <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>❌ {err}</div>}
       {loading && <div style={{ color: 'var(--text3)', fontSize: 13, padding: 20 }}>Loading…</div>}
       {actDetails.applies === 'not_defined' && (
-        <div role="status" style={{ fontSize: 12.5, color: '#1e40af', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '9px 12px', marginBottom: 10 }}>
+        <div role="status" style={{ fontSize: 12.5, color: 'var(--c-fg-1e40af)', background: 'var(--c-bg-eff6ff)', border: '1px solid var(--c-bg-bfdbfe)', borderRadius: 8, padding: '9px 12px', marginBottom: 10 }}>
           {notApplicableCopy({ pos, posDeclared, feedNoun: 'Activation Details report', purpose: 'count activations from' })}
         </div>
       )}
       {!loading && data?.note && actDetails.applies !== 'not_defined' && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>{data.note}</div>
+        <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', color: 'var(--c-fg-92400e)', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>{data.note}</div>
       )}
 
       {/* Grand total chips */}
@@ -250,7 +250,7 @@ export default function ActivationsPage() {
             : 'Executive MTD & the Sales Report currently derive activations from the sales feed. Switch them to the Activation Details basis of truth — no SQL needed. Reconcile above first to confirm the two sources line up.'}
         </div>
         <button className="btn" disabled={savingSrc}
-          style={{ fontSize: 12.5, fontWeight: 700, background: onAD ? '#f3f4f6' : 'var(--accent, #2563eb)', color: onAD ? 'var(--text2)' : '#fff' }}
+          style={{ fontSize: 12.5, fontWeight: 700, background: onAD ? 'var(--c-bg-f3f4f6)' : 'var(--accent, var(--c-bg-2563eb))', color: onAD ? 'var(--text2)' : 'var(--c-fg-ffffff)' }}
           onClick={() => setBasis(!onAD)}>
           {savingSrc ? 'Saving…' : onAD ? 'Switch back to the sales feed basis' : 'Use Activation Details as the basis of truth'}
         </button>
@@ -262,7 +262,7 @@ export default function ActivationsPage() {
 function Chip({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '8px 14px', minWidth: 120,
-      background: strong ? '#eff6ff' : 'var(--surface)' }}>
+      background: strong ? 'var(--c-bg-eff6ff)' : 'var(--surface)' }}>
       <div style={{ fontSize: 11, color: 'var(--text3)' }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 800 }}>{value}</div>
     </div>
@@ -272,7 +272,7 @@ function Chip({ label, value, strong }: { label: string; value: string; strong?:
 function ReconPanel({ recon }: { recon: any }) {
   const s = recon.status as string
   const ok = s === 'match'
-  const color = ok ? { bg: '#ecfdf5', bd: '#6ee7b7', fg: '#065f46' } : { bg: '#fffbeb', bd: '#fde68a', fg: '#92400e' }
+  const color = ok ? { bg: 'var(--c-bg-ecfdf5)', bd: 'var(--c-bg-6ee7b7)', fg: 'var(--c-fg-065f46)' } : { bg: 'var(--c-bg-fffbeb)', bd: 'var(--c-bg-fde68a)', fg: 'var(--c-fg-92400e)' }
   const t = recon.totals || {}
   const c = recon.counts || {}
   const rem = recon.remediation

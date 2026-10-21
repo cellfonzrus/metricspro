@@ -96,7 +96,7 @@ const poStatusColor = (s: string) => ({
 }[s] || '#f39c12')
 
 const smallBtn = (bg: string): React.CSSProperties => ({
-  background: bg, border: 'none', color: '#fff', borderRadius: 5,
+  background: bg, border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 5,
   padding: '4px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
 })
 
@@ -519,7 +519,7 @@ export default function PosInventoryPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {msg && <span style={{ fontSize: 13, color: '#dc2626' }}>{msg}</span>}
+          {msg && <span style={{ fontSize: 13, color: 'var(--c-fg-dc2626)' }}>{msg}</span>}
           <label style={{ fontSize: 12, color: 'var(--text2)' }}>Active store</label>
           <select value={activeStore} onChange={e => changeActiveStore(e.target.value)} style={{ ...input, width: 200 }}>
             <option value="">-- Select store --</option>
@@ -638,7 +638,7 @@ export default function PosInventoryPage() {
                       <td style={{ ...cell, color: 'var(--text2)' }}>{row.store_code || '—'}</td>
                       <td style={{ ...cell, color: 'var(--text2)' }}>${Number(row.retail_price || 0).toFixed(2)}</td>
                       <td style={cell}>
-                        <span style={{ fontWeight: 700, color: row.qty_on_hand <= 2 ? '#e74c3c' : row.qty_on_hand <= 5 ? '#f39c12' : '#27ae60' }}>
+                        <span style={{ fontWeight: 700, color: row.qty_on_hand <= 2 ? 'var(--c-fg-e74c3c)' : row.qty_on_hand <= 5 ? 'var(--c-fg-f39c12)' : 'var(--c-fg-27ae60)' }}>
                           {row.qty_on_hand}
                         </span>
                       </td>
@@ -778,7 +778,7 @@ export default function PosInventoryPage() {
                   style={{ textAlign: 'center', cursor: s.step === 1 ? 'pointer' : 'default', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '16px 24px', minWidth: 120 }}>
                   <div style={{ fontSize: 28, marginBottom: 6 }}>{s.icon}</div>
                   <div style={{ fontSize: 12, fontWeight: 600 }}>{s.label}</div>
-                  {s.sub && <div style={{ fontSize: 11, color: '#3498db', marginTop: 4 }}>{s.sub}</div>}
+                  {s.sub && <div style={{ fontSize: 11, color: 'var(--c-fg-3498db)', marginTop: 4 }}>{s.sub}</div>}
                 </div>
               ))}
             </div>
@@ -803,7 +803,7 @@ export default function PosInventoryPage() {
                       <td style={cell}>
                         <span style={{ ...badge, background: `${poStatusColor(po.status)}20`, color: poStatusColor(po.status) }}>{po.status}</span>
                       </td>
-                      <td style={{ ...cell, color: '#27ae60' }}>${Number(po.total_cost || 0).toFixed(2)}</td>
+                      <td style={{ ...cell, color: 'var(--c-fg-27ae60)' }}>${Number(po.total_cost || 0).toFixed(2)}</td>
                     </tr>
                   ))}
                   {purchaseOrders.length === 0 && (
@@ -957,7 +957,7 @@ export default function PosInventoryPage() {
                 </div>
                 {stdProductId && (
                   <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 6 }}>
-                    Available at source: <b style={{ color: (sourceQty[stdProductId] ?? 0) > 0 ? '#27ae60' : '#e74c3c' }}>{sourceQty[stdProductId] ?? 0}</b>
+                    Available at source: <b style={{ color: (sourceQty[stdProductId] ?? 0) > 0 ? 'var(--c-fg-27ae60)' : 'var(--c-fg-e74c3c)' }}>{sourceQty[stdProductId] ?? 0}</b>
                   </div>
                 )}
               </div>

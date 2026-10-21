@@ -62,7 +62,7 @@ export default function CrmDashboard() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🎯 Sales Pipeline</h1>
         <div style={{ flex: 1 }} />
-        <Link href="/crm/leads/new" style={{ ...btn, background: '#2563eb', borderColor: '#2563eb', color: '#fff', fontWeight: 600, textDecoration: 'none' }}>➕ Log a lead</Link>
+        <Link href="/crm/leads/new" style={{ ...btn, background: 'var(--c-bg-2563eb)', borderColor: 'var(--c-bg-2563eb)', color: 'var(--c-fg-ffffff)', fontWeight: 600, textDecoration: 'none' }}>➕ Log a lead</Link>
         <Link href="/crm/my-followups" style={{ ...btn, textDecoration: 'none' }}>🔔 My follow-ups</Link>
         <Link href="/crm/lookup" style={{ ...btn, textDecoration: 'none' }}>🔎 Customer lookup</Link>
       </div>
@@ -78,7 +78,7 @@ export default function CrmDashboard() {
         )}
       </div>
 
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginBottom: 14 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginBottom: 14 }}>{msg}</div>}
       {loading && <div style={{ color: 'var(--text2)' }}>Loading…</div>}
 
       {data && (
@@ -86,20 +86,20 @@ export default function CrmDashboard() {
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
             <Tile label="Open leads" value={data.totals.open} sub={`${data.totals.total} total`} />
             <Tile label="Pipeline value" value={fmtMoney(data.pipeline_value)} sub="open leads, at face value" />
-            <Tile label="Weighted forecast" value={fmtMoney(data.forecast)} sub="value × stage probability" color="#2563eb" />
-            <Tile label="Won" value={data.totals.won} sub={`${data.totals.win_rate}% win rate`} color="#16a34a" />
-            <Tile label="Lost" value={data.totals.lost} color="#dc2626" />
+            <Tile label="Weighted forecast" value={fmtMoney(data.forecast)} sub="value × stage probability" color="var(--c-fg-2563eb)" />
+            <Tile label="Won" value={data.totals.won} sub={`${data.totals.win_rate}% win rate`} color="var(--c-fg-16a34a)" />
+            <Tile label="Lost" value={data.totals.lost} color="var(--c-fg-dc2626)" />
           </div>
 
           {a && (a.stale_leads + a.overdue_tasks + a.missed_tasks + a.unassigned + a.agency_unanswered) > 0 && (
-            <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 14 }}>
+            <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', marginBottom: 14 }}>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>⚠️ Needs attention</div>
               <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 13 }}>
-                {a.overdue_tasks > 0 && <Link href="/crm/my-followups?scope=team" style={{ color: '#f39c12' }}>{a.overdue_tasks} overdue follow-up(s)</Link>}
-                {a.missed_tasks > 0 && <Link href="/crm/my-followups?scope=team&status=missed" style={{ color: '#dc2626' }}>{a.missed_tasks} missed follow-up(s)</Link>}
+                {a.overdue_tasks > 0 && <Link href="/crm/my-followups?scope=team" style={{ color: 'var(--c-fg-f39c12)' }}>{a.overdue_tasks} overdue follow-up(s)</Link>}
+                {a.missed_tasks > 0 && <Link href="/crm/my-followups?scope=team&status=missed" style={{ color: 'var(--c-fg-dc2626)' }}>{a.missed_tasks} missed follow-up(s)</Link>}
                 {a.stale_leads > 0 && <span>{a.stale_leads} lead(s) with no activity for {data.config.stale_lead_hours}h</span>}
-                {a.unassigned > 0 && <Link href="/crm/leads" style={{ color: '#f39c12' }}>{a.unassigned} lead(s) with no owner</Link>}
-                {a.agency_unanswered > 0 && <Link href="/crm/agencies" style={{ color: '#f39c12' }}>{a.agency_unanswered} agency lead(s) not answered</Link>}
+                {a.unassigned > 0 && <Link href="/crm/leads" style={{ color: 'var(--c-fg-f39c12)' }}>{a.unassigned} lead(s) with no owner</Link>}
+                {a.agency_unanswered > 0 && <Link href="/crm/agencies" style={{ color: 'var(--c-fg-f39c12)' }}>{a.agency_unanswered} agency lead(s) not answered</Link>}
               </div>
             </div>
           )}
@@ -115,7 +115,7 @@ export default function CrmDashboard() {
                     <span style={{ color: 'var(--text2)' }}>{f.count} · {fmtMoney(f.value)}</span>
                   </div>
                   <div style={{ height: 8, background: 'var(--surface)', borderRadius: 4, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${(f.count / maxCount) * 100}%`, background: f.is_won ? '#16a34a' : f.is_lost ? '#dc2626' : '#2563eb' }} />
+                    <div style={{ height: '100%', width: `${(f.count / maxCount) * 100}%`, background: f.is_won ? 'var(--c-bg-16a34a)' : f.is_lost ? 'var(--c-bg-dc2626)' : 'var(--c-bg-2563eb)' }} />
                   </div>
                 </div>
               ))}
@@ -131,7 +131,7 @@ export default function CrmDashboard() {
                     <tr key={r.employee_id}>
                       <td style={{ padding: '3px 0' }}>{r.employee_id}</td>
                       <td style={{ textAlign: 'center' }}>{r.leads}</td>
-                      <td style={{ textAlign: 'center', color: '#16a34a' }}>{r.won}</td>
+                      <td style={{ textAlign: 'center', color: 'var(--c-fg-16a34a)' }}>{r.won}</td>
                       <td style={{ textAlign: 'center' }}>{r.win_rate}%</td>
                     </tr>
                   ))}

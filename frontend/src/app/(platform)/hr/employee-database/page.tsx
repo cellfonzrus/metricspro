@@ -186,7 +186,7 @@ export default function EmployeeDatabasePage() {
         Every employee record collected across the roster + HR onboarding intake, in one exportable table.
         Direct-deposit numbers are masked to the last 4 digits by default — see the notice below.
       </p>
-      {msg && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>{msg}</div>}
+      {msg && <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>{msg}</div>}
 
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 10 }}>
@@ -210,7 +210,7 @@ export default function EmployeeDatabasePage() {
             ) : (
               <span style={{ color: 'var(--text3)' }}>Only an admin/super-admin can reveal the full values.</span>
             )}
-            {revealError && <span style={{ color: '#dc2626' }}>{revealError}</span>}
+            {revealError && <span style={{ color: 'var(--c-fg-dc2626)' }}>{revealError}</span>}
           </div>
         )}
 

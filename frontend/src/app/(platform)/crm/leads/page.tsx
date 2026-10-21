@@ -183,7 +183,7 @@ export default function LeadsPage() {
       </div>
 
       {sel.size > 0 && (
-        <div style={{ ...panel, display: 'flex', gap: 10, alignItems: 'end', flexWrap: 'wrap', marginBottom: 12, borderColor: '#2563eb' }}>
+        <div style={{ ...panel, display: 'flex', gap: 10, alignItems: 'end', flexWrap: 'wrap', marginBottom: 12, borderColor: 'var(--c-bg-2563eb)' }}>
           <div style={{ fontWeight: 600, fontSize: 13, alignSelf: 'center' }}>{sel.size} selected</div>
           <div><span style={label}>Assign to</span>
             <select value={bulkKind} onChange={e => { setBulkKind(e.target.value as any); setBulkTarget('') }} style={{ ...input, width: 120 }}>
@@ -210,7 +210,7 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {msg && <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 12 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', marginBottom: 12 }}>{msg}</div>}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
         <div style={{ fontSize: 13, color: 'var(--text2)' }}>{rows.length} lead(s)</div>
@@ -246,7 +246,7 @@ export default function LeadsPage() {
                   <td style={{ ...cell, color: STATUS_COLOR[l.status], fontWeight: 600 }}>{l.status}</td>
                   <td style={cell}>{l.source_name || '—'}</td>
                   <td style={cell}>{l.interest_name || '—'}</td>
-                  <td style={cell}>{l.agency_name ? `🤝 ${l.agency_name}` : (l.owner_employee_id || <span style={{ color: '#f39c12' }}>unassigned</span>)}</td>
+                  <td style={cell}>{l.agency_name ? `🤝 ${l.agency_name}` : (l.owner_employee_id || <span style={{ color: 'var(--c-fg-f39c12)' }}>unassigned</span>)}</td>
                   <td style={cell}>{fmtMoney(l.value_estimate)}</td>
                   <td style={{ ...cell, color: PRIORITY_COLOR[l.priority], fontWeight: 600 }}>{l.score}</td>
                   <td style={cell}>{l.next_action_at ? relTime(l.next_action_at) : '—'}</td>

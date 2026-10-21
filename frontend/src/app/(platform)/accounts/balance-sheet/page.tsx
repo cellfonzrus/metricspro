@@ -162,7 +162,7 @@ function BSInner() {
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           {!st.balanced && (
-            <div className="card" style={{ padding: 12, background: '#fef2f2', border: '1px solid #fecaca', fontSize: 13, color: '#991b1b' }}>
+            <div className="card" style={{ padding: 12, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', fontSize: 13, color: 'var(--c-fg-991b1b)' }}>
               ⚠ Assets ≠ Liabilities + Equity by <strong>{fmt(st.imbalance)}</strong>. Enter cash / opening balances on the <Link href="/accounts/journal">Journal</Link> page to balance.
             </div>
           )}
@@ -170,7 +170,7 @@ function BSInner() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <tbody>
                 {['asset', 'liability', 'equity'].map(t => <Section key={t} s={sec(t)} open={open} setOpen={setOpen} />)}
-                <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2, #f1f5f9)' }}>
+                <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2, var(--c-bg-f1f5f9))' }}>
                   <td style={{ padding: '10px 16px', fontWeight: 700, fontSize: 14 }}>Liabilities + Equity</td>
                   <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 700, fontSize: 14 }}>{fmt((st.liabilities_total || 0) + (st.equity_total || 0))}</td>
                 </tr>
@@ -188,7 +188,7 @@ function BSInner() {
               per-store/per-company rows inside it cannot be booked as negative cash — the shortfall
               is suppressed and surfaced here rather than silently dropped. */}
           {(st.journal_grains?.conflicts || []).length > 0 && (
-            <div style={{ fontSize: 12.5, color: '#991b1b', marginTop: 6 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--c-fg-991b1b)', marginTop: 6 }}>
               {st.journal_grains.conflicts.map((c: any, i: number) => (
                 <div key={i}>⚠ “{c.line}”: the {c.grain === 'tenant' ? 'tenant total' : 'company total'} you
                   entered ({fmt(c.stated)}) is less than the more detailed rows inside it ({fmt(c.finer)}).
@@ -206,7 +206,7 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
   if (!s) return null
   return (
     <>
-      <tr style={{ background: 'var(--surface2, #f8fafc)' }}>
+      <tr style={{ background: 'var(--surface2, var(--c-bg-f8fafc))' }}>
         <td colSpan={2} style={{ padding: '8px 16px', fontWeight: 700, fontSize: 12, textTransform: 'uppercase', color: 'var(--text2)' }}>{SEC[s.type] || s.type}</td>
       </tr>
       {s.lines.map((l: any) => {
@@ -218,13 +218,13 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
               <td style={{ padding: '7px 16px', fontSize: 13 }}>
                 {hasDetail && <button onClick={() => setOpen((o: any) => ({ ...o, [k]: !o[k] }))} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 11, marginRight: 6, padding: 0 }}>{open[k] ? '▾' : '▸'}</button>}
                 {l.label}
-                {l.kind === 'manual' && <span style={{ marginLeft: 6, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999 }}>manual</span>}
-                {l.kind === 'computed' && <span style={{ marginLeft: 6, fontSize: 10, color: '#3730a3', background: '#e0e7ff', padding: '1px 5px', borderRadius: 999 }}>computed</span>}
+                {l.kind === 'manual' && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '1px 5px', borderRadius: 999 }}>manual</span>}
+                {l.kind === 'computed' && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-fg-3730a3)', background: 'var(--c-bg-e0e7ff)', padding: '1px 5px', borderRadius: 999 }}>computed</span>}
                 {/* Same "declared, not measured" passthrough as the P&L. `engine._assemble` is shared
                     by both statements, so a note set on a BS line would otherwise render nowhere. */}
                 {l.note && (
                   <div style={{ marginTop: 3, fontSize: 11.5, lineHeight: 1.45, color: 'var(--text3)', maxWidth: 620 }}>
-                    <span style={{ marginRight: 5, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>not measured</span>
+                    <span style={{ marginRight: 5, fontSize: 10, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>not measured</span>
                     {l.note}
                   </div>
                 )}
@@ -232,7 +232,7 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
               <td style={{ padding: '7px 16px', textAlign: 'right', fontSize: 13, color: l.amount ? 'var(--text)' : 'var(--text3)' }}>{l.amount ? fmt(l.amount) : '—'}</td>
             </tr>
             {hasDetail && open[k] && Object.entries(l.detail).map(([dl, dv]: any) => (
-              <tr key={k + ':' + dl} style={{ background: '#fafbfc' }}>
+              <tr key={k + ':' + dl} style={{ background: 'var(--c-bg-fafbfc)' }}>
                 <td style={{ padding: '4px 16px 4px 40px', fontSize: 12, color: 'var(--text2)' }}>↳ {dl}</td>
                 <td style={{ padding: '4px 16px', textAlign: 'right', fontSize: 12, color: 'var(--text2)' }}>{fmt(dv)}</td>
               </tr>

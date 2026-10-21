@@ -130,7 +130,7 @@ export default function AssetLendingPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : data?.error ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {data.error}</div>
       ) : data?.configured === false ? (
         <div className="card" style={{ padding: 16, color: 'var(--text2)' }}>Distributor PayGo lending isn&apos;t configured yet (no batches found).</div>
       ) : (
@@ -149,10 +149,10 @@ export default function AssetLendingPage() {
               <div style={{ fontWeight: 700, fontSize: 14 }}>💵 How these bills were funded</div>
               {dist
                 ? <span style={{ fontSize: 12, color: 'var(--text3)' }}>recorded against distributor <strong>{dist.name}</strong> ({dist.arrangement})</span>
-                : <span style={{ fontSize: 12, color: '#b45309' }}>No consignment distributor found — add one on the Distributors page to track funding.</span>}
+                : <span style={{ fontSize: 12, color: 'var(--c-fg-b45309)' }}>No consignment distributor found — add one on the Distributors page to track funding.</span>}
               {funds?.totals && (
                 <span style={{ fontSize: 13, marginLeft: 'auto' }}>
-                  funded so far: <strong style={{ color: '#15803d' }}>own {fmt(funds.totals.own)}</strong> · <strong style={{ color: '#b45309' }}>borrowed {fmt(funds.totals.borrowed)}</strong> · total {fmt(funds.totals.total)}
+                  funded so far: <strong style={{ color: 'var(--c-fg-15803d)' }}>own {fmt(funds.totals.own)}</strong> · <strong style={{ color: 'var(--c-fg-b45309)' }}>borrowed {fmt(funds.totals.borrowed)}</strong> · total {fmt(funds.totals.total)}
                   {' '}<span style={{ color: 'var(--text3)' }}>vs {fmt(totals.lifetime_paid || 0)} billed</span>
                 </span>
               )}
@@ -258,10 +258,10 @@ export default function AssetLendingPage() {
                   <tr key={b.vip_payment_id} style={{ borderTop: '1px solid var(--border)', background: b.batch_type === 'pending' ? '#fffbeb' : undefined }}>
                     <td style={{ padding: '6px 12px', fontSize: 13, fontWeight: 600 }}>{b.created_on}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, color: 'var(--text2)' }}>{b.period || '—'}</td>
-                    <td style={{ padding: '6px 12px', fontSize: 12 }}>{b.batch_type === 'pending' ? <span style={{ color: '#b45309', fontWeight: 600 }}>PENDING</span> : 'approved'}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12 }}>{b.batch_type === 'pending' ? <span style={{ color: 'var(--c-fg-b45309)', fontWeight: 600 }}>PENDING</span> : 'approved'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right' }}>{b.invoice_count}</td>
                     <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', fontWeight: 600 }}>{fmt(b.amount)}</td>
-                    <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', color: (b.amount_overdue || 0) > 0 ? '#b91c1c' : 'var(--text3)' }}>{fmt(b.amount_overdue || 0)}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 13, textAlign: 'right', color: (b.amount_overdue || 0) > 0 ? 'var(--c-fg-b91c1c)' : 'var(--text3)' }}>{fmt(b.amount_overdue || 0)}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, color: b.status === 'Failed' ? '#b91c1c' : 'var(--text2)' }}>{b.status || (b.batch_type === 'pending' ? 'open' : '')}</td>
                   </tr>
                 ))}

@@ -81,7 +81,7 @@ export default function FinancialAnalysisPage() {
       return out
     })
     const series = top.map((k, i) => ({ key: k, name: labels[k] || k, type: 'bar' as const, stack: 'opex', money: true, color: TREND_COLORS[i % TREND_COLORS.length] }))
-    if (rows.some((r: any) => r.__other != null)) series.push({ key: '__other', name: 'Other', type: 'bar' as const, stack: 'opex', money: true, color: '#94a3b8' })
+    if (rows.some((r: any) => r.__other != null)) series.push({ key: '__other', name: 'Other', type: 'bar' as const, stack: 'opex', money: true, color: 'var(--c-fg-94a3b8)' })
     return { rows, series }
   }, [ana])
 
@@ -146,12 +146,12 @@ export default function FinancialAnalysisPage() {
             <div className="card" style={card}>
               <div style={cardTitle}>📈 Revenue · Gross profit · Net income {proj?.computed && <span style={{ fontWeight: 400, color: 'var(--text3)' }}>· dashed = projected ({proj.method})</span>}</div>
               <TrendChart data={plTrend} height={280} series={[
-                { key: 'revenue', name: 'Revenue', color: '#2e75b6', money: true },
-                { key: 'gross_profit', name: 'Gross profit', color: '#0891b2', money: true },
-                { key: 'net_income', name: 'Net income', color: '#16a34a', money: true },
-                { key: 'revenue_p', name: 'Revenue (proj)', color: '#2e75b6', money: true, dashed: true },
-                { key: 'gross_profit_p', name: 'GP (proj)', color: '#0891b2', money: true, dashed: true },
-                { key: 'net_income_p', name: 'NI (proj)', color: '#16a34a', money: true, dashed: true },
+                { key: 'revenue', name: 'Revenue', color: 'var(--c-fg-2e75b6)', money: true },
+                { key: 'gross_profit', name: 'Gross profit', color: 'var(--c-fg-0891b2)', money: true },
+                { key: 'net_income', name: 'Net income', color: 'var(--c-fg-16a34a)', money: true },
+                { key: 'revenue_p', name: 'Revenue (proj)', color: 'var(--c-fg-2e75b6)', money: true, dashed: true },
+                { key: 'gross_profit_p', name: 'GP (proj)', color: 'var(--c-fg-0891b2)', money: true, dashed: true },
+                { key: 'net_income_p', name: 'NI (proj)', color: 'var(--c-fg-16a34a)', money: true, dashed: true },
               ]} leftLabel="monthly $ from computed statements; dashed = deterministic projection" />
             </div>
             <div className="card" style={card}>
@@ -162,25 +162,25 @@ export default function FinancialAnalysisPage() {
             <div className="card" style={card}>
               <div style={cardTitle}>📐 Margin trend</div>
               <TrendChart data={marginTrend} height={260} leftMoney={false} series={[
-                { key: 'gross_margin', name: 'Gross margin %', color: '#7c3aed' },
-                { key: 'net_margin', name: 'Net margin %', color: '#16a34a' },
+                { key: 'gross_margin', name: 'Gross margin %', color: 'var(--c-fg-7c3aed)' },
+                { key: 'net_margin', name: 'Net margin %', color: 'var(--c-fg-16a34a)' },
               ]} leftLabel="% of revenue (gaps = no revenue that month)" />
             </div>
             <div className="card" style={card}>
               <div style={cardTitle}>💵 Cash & balance-sheet trend</div>
               <TrendChart data={cashTrend} height={260} series={[
-                { key: 'cash', name: 'Cash & equivalents', color: '#16a34a', money: true },
-                { key: 'assets', name: 'Total assets', color: '#2e75b6', money: true, dashed: true },
-                { key: 'liabilities', name: 'Total liabilities', color: '#dc2626', money: true, dashed: true },
+                { key: 'cash', name: 'Cash & equivalents', color: 'var(--c-fg-16a34a)', money: true },
+                { key: 'assets', name: 'Total assets', color: 'var(--c-fg-2e75b6)', money: true, dashed: true },
+                { key: 'liabilities', name: 'Total liabilities', color: 'var(--c-fg-dc2626)', money: true, dashed: true },
               ]} leftLabel="point-in-time balances per computed month" />
             </div>
             {companyCompare.length > 1 && (
               <div className="card" style={card}>
                 <div style={cardTitle}>🏢 Company comparison <span style={{ fontWeight: 400, color: 'var(--text3)' }}>· latest month</span></div>
                 <TrendChart data={companyCompare} height={260} series={[
-                  { key: 'revenue', name: 'Revenue', type: 'bar', money: true, color: '#2e75b6' },
-                  { key: 'gross_profit', name: 'Gross profit', type: 'bar', money: true, color: '#0891b2' },
-                  { key: 'net_income', name: 'Net income', type: 'bar', money: true, color: '#16a34a' },
+                  { key: 'revenue', name: 'Revenue', type: 'bar', money: true, color: 'var(--c-fg-2e75b6)' },
+                  { key: 'gross_profit', name: 'Gross profit', type: 'bar', money: true, color: 'var(--c-fg-0891b2)' },
+                  { key: 'net_income', name: 'Net income', type: 'bar', money: true, color: 'var(--c-fg-16a34a)' },
                 ]} leftLabel="per company statement scope" />
               </div>
             )}
@@ -188,8 +188,8 @@ export default function FinancialAnalysisPage() {
               <div className="card" style={card}>
                 <div style={cardTitle}>🏪 Store comparison <span style={{ fontWeight: 400, color: 'var(--text3)' }}>· latest month · top {storeCompare.length} by revenue</span></div>
                 <TrendChart data={storeCompare} height={260} series={[
-                  { key: 'revenue', name: 'Revenue', type: 'bar', money: true, color: '#2e75b6' },
-                  { key: 'net_income', name: 'Net income', type: 'bar', money: true, color: '#16a34a' },
+                  { key: 'revenue', name: 'Revenue', type: 'bar', money: true, color: 'var(--c-fg-2e75b6)' },
+                  { key: 'net_income', name: 'Net income', type: 'bar', money: true, color: 'var(--c-fg-16a34a)' },
                 ]} leftLabel="per store statement scope" />
               </div>
             )}
@@ -207,7 +207,7 @@ export default function FinancialAnalysisPage() {
                   </tr></thead>
                   <tbody>{proj.series.map((s: any) => (
                     <tr key={s.period} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
-                      <td style={{ padding: '5px 10px' }}>{s.period} <span style={{ fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999 }}>projected</span></td>
+                      <td style={{ padding: '5px 10px' }}>{s.period} <span style={{ fontSize: 10, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '1px 5px', borderRadius: 999 }}>projected</span></td>
                       {[s.revenue, s.cogs, s.opex, s.gross_profit, s.net_income].map((v, i) => <td key={i} style={{ padding: '5px 10px', textAlign: 'right' }}>{fmt(v)}</td>)}
                     </tr>
                   ))}</tbody>
@@ -239,7 +239,7 @@ export default function FinancialAnalysisPage() {
                 <div><span style={{ fontSize: 12, color: 'var(--text3)' }}>Low </span><span style={{ fontSize: 20, fontWeight: 700 }}>{fmt(val.summary.low)}</span></div>
                 <div><span style={{ fontSize: 12, color: 'var(--text3)' }}>Mid </span><span style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent)' }}>{fmt(val.summary.mid)}</span></div>
                 <div><span style={{ fontSize: 12, color: 'var(--text3)' }}>High </span><span style={{ fontSize: 20, fontWeight: 700 }}>{fmt(val.summary.high)}</span></div>
-                {val.summary.asset_floor_applied && <span style={{ fontSize: 11, color: '#92400e', background: '#fef3c7', padding: '2px 7px', borderRadius: 999 }}>asset floor lifted the low end</span>}
+                {val.summary.asset_floor_applied && <span style={{ fontSize: 11, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '2px 7px', borderRadius: 999 }}>asset floor lifted the low end</span>}
               </div>
               <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>{val.summary.basis}</div>
               <div style={{ overflowX: 'auto' }}>
@@ -269,7 +269,7 @@ export default function FinancialAnalysisPage() {
               <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
                 {(val.assumptions || []).map((a: string, i: number) => <div key={i}>· {a}</div>)}
               </div>
-              <div style={{ fontSize: 12, marginTop: 10, padding: '8px 10px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, color: '#92400e' }}>
+              <div style={{ fontSize: 12, marginTop: 10, padding: '8px 10px', background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 8, color: 'var(--c-fg-92400e)' }}>
                 ⚠️ {val.disclaimer}
               </div>
             </div>

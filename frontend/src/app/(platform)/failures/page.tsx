@@ -150,7 +150,7 @@ export default function FailureLogsPage() {
           Things the system couldn’t complete — grouped by similar nature, each with a plain-English
           <b> what this means</b> and <b>how to fix it</b>. Tick rows (or a whole group) and <b>Clear</b> to
           mark them reviewed — the rows are kept for the audit trail. {unreviewedTotal > 0 &&
-          <b style={{ color: '#dc2626' }}>{unreviewedTotal} unreviewed.</b>}
+          <b style={{ color: 'var(--c-fg-dc2626)' }}>{unreviewedTotal} unreviewed.</b>}
         </p>
       </div>
 
@@ -204,7 +204,7 @@ export default function FailureLogsPage() {
         <ReportExportBar title="Failure Logs" filename="failure_logs" columns={exportCols} rows={rows} />
       </div>
 
-      {err && <div className="card" style={{ padding: 14, color: '#dc2626' }}>{err}</div>}
+      {err && <div className="card" style={{ padding: 14, color: 'var(--c-fg-dc2626)' }}>{err}</div>}
       {loading ? <div className="card" style={{ padding: 16 }}>Loading…</div> : groups.length === 0 ? (
         <div className="card" style={{ padding: 16, color: 'var(--text3)' }}>No {reviewedFilter === 'false' ? 'unreviewed ' : ''}failures. 🎉</div>
       ) : (
@@ -218,13 +218,13 @@ export default function FailureLogsPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', flexWrap: 'wrap', background: 'var(--surface2)' }}>
                   <button onClick={() => setOpen(o => ({ ...o, [g.kind]: !o[g.kind] }))} aria-label="toggle"
                     style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--text2)', width: 16 }}>{isOpen ? '▾' : '▸'}</button>
-                  <span style={{ width: 8, height: 8, borderRadius: 8, background: SEV[g.severity] || '#888' }} />
+                  <span style={{ width: 8, height: 8, borderRadius: 8, background: SEV[g.severity] || 'var(--c-bg-888888)' }} />
                   <span style={{ fontWeight: 700, fontSize: 14 }}>{g.label}</span>
-                  {!g.known && <span title="Unrecognized error code" style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 8, background: '#f59e0b22', color: '#b45309', border: '1px solid #f59e0b55' }}>unknown code</span>}
+                  {!g.known && <span title="Unrecognized error code" style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 8, background: '#f59e0b22', color: 'var(--c-fg-b45309)', border: '1px solid #f59e0b55' }}>unknown code</span>}
                   <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {g.module}</span>
                   <span style={{ fontSize: 12, color: 'var(--text2)' }}>{g.count} occurrence{g.count === 1 ? '' : 's'}</span>
-                  {g.unreviewed_count > 0 && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: '#dc262622', color: '#dc2626', fontWeight: 600 }}>{g.unreviewed_count} unreviewed</span>}
-                  {g.all_reviewed && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: '#16a34a22', color: '#16a34a', fontWeight: 600 }}>all reviewed</span>}
+                  {g.unreviewed_count > 0 && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: '#dc262622', color: 'var(--c-fg-dc2626)', fontWeight: 600 }}>{g.unreviewed_count} unreviewed</span>}
+                  {g.all_reviewed && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: '#16a34a22', color: 'var(--c-fg-16a34a)', fontWeight: 600 }}>all reviewed</span>}
                   <span style={{ fontSize: 11, color: 'var(--text3)' }}>latest {when(g.latest_at)}</span>
                   <span style={{ flex: 1 }} />
                   {g.unreviewed_count > 0 && <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => clearGroup(g)}>Clear group</button>}

@@ -168,7 +168,7 @@ export default function ItemMappingPage() {
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               {registry.map(r => (
                 <span key={r.id} className="badge" style={{ fontSize: 12, background: 'var(--surface2)', padding: '4px 8px', borderRadius: 6 }}>
-                  {r.model} <button onClick={() => delModel(r)} style={{ marginLeft: 4, border: 'none', background: 'none', cursor: 'pointer', color: '#dc2626' }}>✕</button>
+                  {r.model} <button onClick={() => delModel(r)} style={{ marginLeft: 4, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--c-fg-dc2626)' }}>✕</button>
                 </span>
               ))}
               {registry.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>No manually-added models yet — the combobox also lists models already used on phones.</span>}
@@ -219,13 +219,13 @@ export default function ItemMappingPage() {
         </select>
         <button className="btn" onClick={seed}>📥 Seed from Product Catalog</button>
         <div style={{ flex: 1 }} />
-        {Object.entries(counts).map(([t, n]) => <span key={t} className="badge" style={{ fontSize: 11, background: TYPE_COLOR[t] || '#888', color: '#fff' }}>{t}: {n}</span>)}
+        {Object.entries(counts).map(([t, n]) => <span key={t} className="badge" style={{ fontSize: 11, background: TYPE_COLOR[t] || 'var(--c-bg-888888)', color: 'var(--c-fg-ffffff)' }}>{t}: {n}</span>)}
         {msg && <span style={{ fontSize: 13, width: '100%' }}>{msg}</span>}
       </div>
 
       {/* Bulk action bar */}
       {picked.size > 0 && (
-        <div className="card" style={{ padding: 10, marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', borderLeft: '4px solid #2563eb' }}>
+        <div className="card" style={{ padding: 10, marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', borderLeft: '4px solid var(--c-bg-2563eb)' }}>
           <b style={{ fontSize: 13 }}>{picked.size} selected →</b>
           <span style={{ fontSize: 12 }}>type</span>
           <select style={sel} value={bulkType} onChange={e => setBulkType(e.target.value)}>
@@ -283,7 +283,7 @@ export default function ItemMappingPage() {
                   <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{i.source || '—'}</td>
                   <td style={{ ...cell, whiteSpace: 'nowrap' }}>
                     <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 8px' }} onClick={() => save(i)}>💾</button>{' '}
-                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px', color: '#dc2626' }} onClick={() => del(i)}>🗑</button>
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px', color: 'var(--c-fg-dc2626)' }} onClick={() => del(i)}>🗑</button>
                   </td>
                 </tr>
               )

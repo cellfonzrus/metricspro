@@ -323,8 +323,8 @@ export default function EnvelopeReportPage() {
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '14px 0' }}>
         <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Envelopes</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.envelopes ?? 0}</div></div>
         <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Counted</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.counted ?? 0}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Short</div><div style={{ fontSize: 20, fontWeight: 700, color: '#c0392b' }}>{t.short ?? 0} · {fmt(t.short_total || 0)}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Over</div><div style={{ fontSize: 20, fontWeight: 700, color: '#b7791f' }}>{t.over ?? 0} · {fmt(t.over_total || 0)}</div></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Short</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-c0392b)' }}>{t.short ?? 0} · {fmt(t.short_total || 0)}</div></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Over</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-b7791f)' }}>{t.over ?? 0} · {fmt(t.over_total || 0)}</div></div>
         <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Chargebacks</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.chargebacks ?? 0} · {fmt(t.chargeback_total || 0)}</div></div>
       </div>
 
@@ -341,11 +341,11 @@ export default function EnvelopeReportPage() {
       </div>
 
       {data?.market_filter_skipped && (
-        <div className="card" style={{ padding: '8px 12px', marginBottom: 12, fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
+        <div className="card" style={{ padding: '8px 12px', marginBottom: 12, fontSize: 12, background: 'var(--c-bg-fff8e6)', border: '1px solid var(--c-bg-f3d98b)' }}>
           ⚠️ Your market filter could not be applied (store roster unavailable) — showing all markets rather than silently dropping stores.
         </div>
       )}
-      {err && <div className="card" style={{ padding: 12, marginBottom: 12, color: '#c0392b' }}>⚠️ {err}</div>}
+      {err && <div className="card" style={{ padding: 12, marginBottom: 12, color: 'var(--c-fg-c0392b)' }}>⚠️ {err}</div>}
       {loading && <div style={{ padding: 24, color: 'var(--text3)' }}>Loading…</div>}
 
       {!loading && view === 'employees' && (
@@ -372,18 +372,18 @@ export default function EnvelopeReportPage() {
                   <td style={{ padding: '6px 10px', color: e.uncounted ? 'var(--text2)' : 'var(--text3)' }}>
                     {e.uncounted || '—'}
                   </td>
-                  <td style={{ padding: '6px 10px', color: e.short ? '#c0392b' : 'var(--text3)' }}>{e.short || '—'}</td>
-                  <td style={{ padding: '6px 10px', color: e.short_total ? '#c0392b' : 'var(--text3)', fontWeight: e.short_total ? 600 : 400 }}>
+                  <td style={{ padding: '6px 10px', color: e.short ? 'var(--c-fg-c0392b)' : 'var(--text3)' }}>{e.short || '—'}</td>
+                  <td style={{ padding: '6px 10px', color: e.short_total ? 'var(--c-fg-c0392b)' : 'var(--text3)', fontWeight: e.short_total ? 600 : 400 }}>
                     {e.short_total ? fmt(e.short_total) : '—'}
                   </td>
-                  <td style={{ padding: '6px 10px', color: e.over ? '#b7791f' : 'var(--text3)' }}>{e.over || '—'}</td>
-                  <td style={{ padding: '6px 10px', color: e.over_total ? '#b7791f' : 'var(--text3)' }}>
+                  <td style={{ padding: '6px 10px', color: e.over ? 'var(--c-fg-b7791f)' : 'var(--text3)' }}>{e.over || '—'}</td>
+                  <td style={{ padding: '6px 10px', color: e.over_total ? 'var(--c-fg-b7791f)' : 'var(--text3)' }}>
                     {e.over_total ? fmt(e.over_total) : '—'}
                   </td>
                   <td style={{ padding: '6px 10px' }}>{e.match || '—'}</td>
                   {/* Net is shown BESIDE the gross figures, never instead of them: $50 short one day
                       and $50 over the next nets to zero while twice being the wrong cash. */}
-                  <td style={{ padding: '6px 10px', fontWeight: 600, color: e.net_variance < 0 ? '#c0392b' : e.net_variance > 0 ? '#b7791f' : 'var(--text3)' }}>
+                  <td style={{ padding: '6px 10px', fontWeight: 600, color: e.net_variance < 0 ? 'var(--c-fg-c0392b)' : e.net_variance > 0 ? 'var(--c-fg-b7791f)' : 'var(--text3)' }}>
                     {e.net_variance ? fmt(e.net_variance) : '—'}
                   </td>
                   <td style={{ padding: '6px 10px' }}>{e.chargebacks || '—'}</td>
@@ -443,7 +443,7 @@ export default function EnvelopeReportPage() {
                         onChange={e => setDraft(r.closing_row_id, { counted: e.target.value, comment: d.comment, chargeback: d.chargeback })}
                         style={{ width: 90, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13 }} />
                     </td>
-                    <td style={{ padding: '6px 10px', textAlign: 'right', color: (r.variance ?? 0) < 0 ? '#c0392b' : undefined }}>
+                    <td style={{ padding: '6px 10px', textAlign: 'right', color: (r.variance ?? 0) < 0 ? 'var(--c-fg-c0392b)' : undefined }}>
                       {r.variance != null ? fmt(r.variance) : '—'}
                     </td>
                     <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>

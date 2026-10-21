@@ -205,7 +205,7 @@ export default function AreaTargets({ period, stores, collective, scope, filterB
                 <span style={{ color: 'var(--text2)' }}>Today (area)</span>
                 <span style={{ fontWeight: 600 }}>{val(c.unit, m.today_target)}</span>
                 <span style={{ color: 'var(--text2)' }}>Still needed</span>
-                <span style={{ fontWeight: 600, color: Number(m.need) > 0 ? '#b45309' : 'var(--green)' }}>{val(c.unit, m.need)}</span>
+                <span style={{ fontWeight: 600, color: Number(m.need) > 0 ? 'var(--c-fg-b45309)' : 'var(--green)' }}>{val(c.unit, m.need)}</span>
                 <span style={{ color: 'var(--text2)' }}>Pace /day</span>
                 <span style={{ fontWeight: 600 }}>{val(c.unit, m.pace)}</span>
               </div>
@@ -221,7 +221,7 @@ export default function AreaTargets({ period, stores, collective, scope, filterB
               · boxes ÷ bill-payments across your stores · target {collective.conversion.target}%</span>
           </div>
           <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.1,
-                        color: collective.conversion.rate >= collective.conversion.target ? 'var(--green)' : '#dc2626' }}>
+                        color: collective.conversion.rate >= collective.conversion.target ? 'var(--green)' : 'var(--c-fg-dc2626)' }}>
             {collective.conversion.rate}%
           </div>
           <div style={{ fontSize: 11, color: 'var(--text3)' }}>

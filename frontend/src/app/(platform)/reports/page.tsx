@@ -61,12 +61,12 @@ export default function ReportCenterPage() {
               const inPortal = !!c?.enabled
               return (
                 <div key={r.href} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
-                  <Link href={r.href} style={{ fontWeight: 600, color: 'var(--accent, #2563eb)', textDecoration: 'none' }}>{r.label}</Link>
+                  <Link href={r.href} style={{ fontWeight: 600, color: 'var(--accent, var(--c-fg-2563eb))', textDecoration: 'none' }}>{r.label}</Link>
                   {!clearedFor(permissions, r) && admin && <span style={{ fontSize: 11, color: 'var(--text3)' }}>(you lack clearance to open)</span>}
                   <span style={{ flex: 1 }} />
                   {admin && (
                     <>
-                      <label style={{ fontSize: 12, fontWeight: 600, color: inPortal ? '#15803d' : 'var(--text3)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: inPortal ? 'var(--c-fg-15803d)' : 'var(--text3)', display: 'flex', alignItems: 'center', gap: 5 }}>
                         <input type="checkbox" checked={inPortal} disabled={busy === r.href}
                           onChange={e => save(r.href, r.label, grp.category, { enabled: e.target.checked })} /> Portal
                       </label>
@@ -79,7 +79,7 @@ export default function ReportCenterPage() {
                               <button key={rl.name} onClick={() => toggleRole(r.href, r.label, grp.category, rl.name)}
                                 title={(c?.roles || []).length === 0 ? 'No roles picked = all roles with clearance' : ''}
                                 style={{ padding: '2px 8px', borderRadius: 12, border: '1px solid var(--border)', cursor: 'pointer',
-                                  fontSize: 11, fontWeight: 600, background: on ? '#1E3A5F' : 'var(--surface)', color: on ? '#fff' : 'var(--text2)' }}>
+                                  fontSize: 11, fontWeight: 600, background: on ? 'var(--c-bg-1e3a5f)' : 'var(--surface)', color: on ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>
                                 {rl.display_name || rl.name}
                               </button>
                             )

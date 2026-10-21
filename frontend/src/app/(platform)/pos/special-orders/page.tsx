@@ -155,7 +155,7 @@ export default function SpecialOrdersPage() {
         </div>
       </div>
 
-      {msg && <div style={{ ...panel, marginBottom: 12, borderColor: '#dc2626', color: '#dc2626', fontSize: 13 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, marginBottom: 12, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', fontSize: 13 }}>{msg}</div>}
 
       {placed && (
         <div style={{ ...panel, marginBottom: 12, borderColor: 'var(--green)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>

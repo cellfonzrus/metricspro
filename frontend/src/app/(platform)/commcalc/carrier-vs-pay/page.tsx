@@ -73,7 +73,7 @@ function Earned({ r }: { r: Row }) {
   }
   const zero = r.carrier_earned_state === 'measured_zero'
   return (
-    <span style={{ color: zero ? 'var(--text3)' : '#15803d', fontWeight: zero ? 400 : 600 }}
+    <span style={{ color: zero ? 'var(--text3)' : 'var(--c-fg-15803d)', fontWeight: zero ? 400 : 600 }}
           title={r.carrier_earned_reason}>
       {fmt(r.carrier_earned)}{zero && <span style={{ fontSize: 11 }}> (measured)</span>}
     </span>
@@ -114,7 +114,7 @@ export default function CarrierVsPayPage() {
 
       {/* The posture banner. The whole risk of this screen is a reader treating the two columns as
           one ledger, so this is the sentence that stops them. */}
-      <div style={{ ...card, marginTop: 14, background: '#f0f9ff', borderColor: '#bae6fd' }}>
+      <div style={{ ...card, marginTop: 14, background: 'var(--c-bg-f0f9ff)', borderColor: 'var(--c-bg-bae6fd)' }}>
         <strong style={{ fontSize: 13 }}>Two ledgers, side by side. Never added together.</strong>
         <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 4 }}>
           {meta.difference_note || (
@@ -128,13 +128,13 @@ export default function CarrierVsPayPage() {
 
       {/* Absence is stated, not inferred. */}
       {meta.carrier_side && (
-        <div style={{ ...card, marginTop: 12, background: '#fffbeb', borderColor: '#fcd34d' }}>
+        <div style={{ ...card, marginTop: 12, background: 'var(--c-bg-fffbeb)', borderColor: 'var(--c-bg-fcd34d)' }}>
           <strong style={{ fontSize: 13 }}>The carrier side is not reported for this month.</strong>
           <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 4 }}>{meta.carrier_side}</div>
         </div>
       )}
       {!meta.carrier_side && notReported > 0 && (
-        <div style={{ ...card, marginTop: 12, background: '#fffbeb', borderColor: '#fcd34d' }}>
+        <div style={{ ...card, marginTop: 12, background: 'var(--c-bg-fffbeb)', borderColor: 'var(--c-bg-fcd34d)' }}>
           <strong style={{ fontSize: 13 }}>
             {notReported} rep(s) have no measured carrier figure.
           </strong>
@@ -159,7 +159,7 @@ export default function CarrierVsPayPage() {
       </div>
 
       {loading && <div style={{ marginTop: 16, color: 'var(--text2)' }}>Loading&hellip;</div>}
-      {err && <div style={{ marginTop: 16, color: '#dc2626', fontSize: 13 }}>&#10060; {err}</div>}
+      {err && <div style={{ marginTop: 16, color: 'var(--c-fg-dc2626)', fontSize: 13 }}>&#10060; {err}</div>}
 
       {t && (
         <>
@@ -211,7 +211,7 @@ export default function CarrierVsPayPage() {
                     <td style={{ padding: '6px 8px', textAlign: 'right' }}>
                       {r.employee_paid === null
                         ? <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>not calculated</span>
-                        : <span style={{ color: '#b45309' }}>{fmt(r.employee_paid)}</span>}
+                        : <span style={{ color: 'var(--c-fg-b45309)' }}>{fmt(r.employee_paid)}</span>}
                     </td>
                     <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
                       {r.difference === null

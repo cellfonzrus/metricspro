@@ -40,7 +40,7 @@ export default function MyCheckins() {
         <button style={btn} onClick={load} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
       </div>
 
-      {msg && <div style={{ ...panel, marginBottom: 14, borderColor: '#dc2626', color: '#dc2626' }}>{msg}</div>}
+      {msg && <div style={{ ...panel, marginBottom: 14, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)' }}>{msg}</div>}
 
       <div style={{ ...panel, marginBottom: 14 }}>
         <strong style={{ fontSize: 13 }}>What is recorded, and what is not</strong>

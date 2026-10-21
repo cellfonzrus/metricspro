@@ -36,7 +36,7 @@ type Payload = {
 const cell: CSSProperties = { padding: '7px 10px', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', fontSize: 12 }
 const th: CSSProperties = { textAlign: 'left', padding: 8, fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }
 const tile: CSSProperties = { background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', minWidth: 170, flex: '1 1 170px' }
-const small = (bg: string): CSSProperties => ({ background: bg, border: 'none', color: '#fff', borderRadius: 5, padding: '4px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' })
+const small = (bg: string): CSSProperties => ({ background: bg, border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 5, padding: '4px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' })
 const money = (n: number | null | undefined) => `$${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const statusColor: Record<string, string> = { new: '#6b7280', open: '#dc2626', assigned: '#d97706', verified: '#16a34a', dismissed: '#6b7280' }
 const overlay: CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }
@@ -111,9 +111,9 @@ export default function IntegrityFlags({ storeCode }: { storeCode: string }) {
         )}
       </div>
 
-      {data?.setup_note && <div style={{ fontSize: 13, color: '#b45309', marginBottom: 10 }}>⚠️ {data.setup_note}</div>}
-      {msg && <div style={{ fontSize: 13, color: '#16a34a', marginBottom: 10 }}>{msg}</div>}
-      {err && <div style={{ fontSize: 13, color: '#dc2626', marginBottom: 10 }}>{err}</div>}
+      {data?.setup_note && <div style={{ fontSize: 13, color: 'var(--c-fg-b45309)', marginBottom: 10 }}>⚠️ {data.setup_note}</div>}
+      {msg && <div style={{ fontSize: 13, color: 'var(--c-fg-16a34a)', marginBottom: 10 }}>{msg}</div>}
+      {err && <div style={{ fontSize: 13, color: 'var(--c-fg-dc2626)', marginBottom: 10 }}>{err}</div>}
 
       {s && (
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
@@ -171,9 +171,9 @@ export default function IntegrityFlags({ storeCode }: { storeCode: string }) {
                     </td>
                     <td style={{ ...cell, fontFamily: 'monospace' }}>{r.invoice_no || '—'}</td>
                     <td style={cell}>{r.sold_on || '—'}</td>
-                    <td style={cell}>{r.commission ? <>{money(r.commission.net_earned)} <span style={{ color: r.commission.kept ? '#16a34a' : '#6b7280' }}>{r.commission.kept ? 'kept' : 'charged back'}</span></> : '—'}</td>
+                    <td style={cell}>{r.commission ? <>{money(r.commission.net_earned)} <span style={{ color: r.commission.kept ? 'var(--c-fg-16a34a)' : 'var(--c-fg-6b7280)' }}>{r.commission.kept ? 'kept' : 'charged back'}</span></> : '—'}</td>
                     <td style={cell}>
-                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 600, background: `${statusColor[r.flag_status] || '#6b7280'}20`, color: statusColor[r.flag_status] || '#6b7280' }}>
+                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 600, background: `${statusColor[r.flag_status] || 'var(--c-bg-6b7280)'}20`, color: statusColor[r.flag_status] || 'var(--c-fg-6b7280)' }}>
                         {r.flag_status === 'new' ? 'not saved yet' : r.flag_status}
                       </span>
                       {!r.still_found && r.flag_status === 'assigned' ? <div style={{ fontSize: 10, color: 'var(--text3)' }}>moved out {r.assigned_at ? new Date(r.assigned_at).toLocaleDateString() : ''}{r.assigned_by ? ` by ${r.assigned_by}` : ''}</div> : null}

@@ -392,7 +392,7 @@ export default function LeasePanel({ storeCode }: { storeCode: string }) {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
         <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? '⏳ Saving…' : '💾 Save lease & insurance'}</button>
-        {msg && <span style={{ fontSize: 12, color: msg.startsWith('✓') ? '#166534' : '#b91c1c' }}>{msg}</span>}
+        {msg && <span style={{ fontSize: 12, color: msg.startsWith('✓') ? 'var(--c-fg-166534)' : 'var(--c-fg-b91c1c)' }}>{msg}</span>}
       </div>
     </div>
   )

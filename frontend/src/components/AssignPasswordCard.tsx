@@ -128,7 +128,7 @@ export default function AssignPasswordCard({ policy, users, canEdit, title, bare
   const errs = pw ? pwErrors(pw, pol) : []
   const head = title || 'Set an employee’s password'
   const body = !may ? (
-    <div style={{ fontSize: 12.5, color: '#b45309' }}>
+    <div style={{ fontSize: 12.5, color: 'var(--c-fg-b45309)' }}>
       You don&apos;t have permission to set passwords. Ask an administrator to grant you the
       <b> Security</b> setting, or to set it for you.
     </div>
@@ -146,7 +146,7 @@ export default function AssignPasswordCard({ policy, users, canEdit, title, bare
           <input type="text" value={pw} onChange={e => setPw(e.target.value)} placeholder="New password"
             style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, width: 200 }} />
           {errs.length > 0 && (
-            <ul style={{ margin: '6px 0 0', paddingLeft: 16, fontSize: 11, color: '#b45309' }}>
+            <ul style={{ margin: '6px 0 0', paddingLeft: 16, fontSize: 11, color: 'var(--c-fg-b45309)' }}>
               {errs.map((x, i) => <li key={i}>{x}</li>)}
             </ul>
           )}
@@ -159,7 +159,7 @@ export default function AssignPasswordCard({ policy, users, canEdit, title, bare
           {busy ? 'Setting…' : 'Set password'}
         </button>
       </div>
-      {msg && <div style={{ marginTop: 10, fontSize: 13, color: msg.startsWith('Failed') ? '#dc2626' : '#059669' }}>{msg}</div>}
+      {msg && <div style={{ marginTop: 10, fontSize: 13, color: msg.startsWith('Failed') ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)' }}>{msg}</div>}
     </>
   )
 

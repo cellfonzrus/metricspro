@@ -38,7 +38,7 @@ function StatusPill({ status }: { status: string }) {
   return (
     <span style={{
       fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20,
-      color: '#fff', background: STATUS_COLOR[status] || '#6b7280', textTransform: 'capitalize',
+      color: 'var(--c-fg-ffffff)', background: STATUS_COLOR[status] || 'var(--c-bg-6b7280)', textTransform: 'capitalize',
     }}>{status}</span>
   )
 }
@@ -119,18 +119,18 @@ export default function MarketingDashboard() {
         <button style={btn} onClick={load} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
       </div>
 
-      {msg && <div style={{ ...panel, marginBottom: 14, borderColor: '#dc2626', color: '#dc2626' }}>{msg}</div>}
-      {data?.error && <div style={{ ...panel, marginBottom: 14, borderColor: '#f39c12' }}>{data.error}</div>}
+      {msg && <div style={{ ...panel, marginBottom: 14, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)' }}>{msg}</div>}
+      {data?.error && <div style={{ ...panel, marginBottom: 14, borderColor: 'var(--c-bg-f39c12)' }}>{data.error}</div>}
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
         <Tile label="Upcoming" value={c?.upcoming ?? '—'} sub={`next ${ahead} days`} />
         <Tile label="Need attention" value={c?.needs_attention ?? '—'} sub="staffing, backup, kit"
-              color={(c?.needs_attention || 0) > 0 ? '#dc2626' : undefined} />
+              color={(c?.needs_attention || 0) > 0 ? 'var(--c-fg-dc2626)' : undefined} />
         {/* Only shown when the org actually turned approval on — an off-by-default feature should
             not occupy a tile explaining that nothing is pending. */}
         {data?.config?.approval_required && (
           <Tile label="Awaiting approval" value={c?.pending_approval ?? '—'}
-                color={(c?.pending_approval || 0) > 0 ? '#f39c12' : undefined} />
+                color={(c?.pending_approval || 0) > 0 ? 'var(--c-fg-f39c12)' : undefined} />
         )}
         <Tile label="Recently run" value={c?.recent ?? '—'} sub={`past ${back} days`} />
       </div>

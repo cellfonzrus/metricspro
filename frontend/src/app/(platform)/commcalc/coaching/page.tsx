@@ -9,7 +9,7 @@ import { GoogleRatingChips, GoogleRatingDetail, ratingsText, useGoogleRatings } 
 // Rep coaching — which KPIs each rep met vs missed + WHY they're losing money (commission at risk
 // below tier + chargebacks) + flags. Sorted by money left on the table. Admin/DM (market-scoped).
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
-const chip = (active: boolean): React.CSSProperties => ({ padding: '5px 11px', borderRadius: 16, border: '1px solid var(--border)', cursor: 'pointer', fontSize: 12, fontWeight: 600, background: active ? '#1E3A5F' : 'var(--surface)', color: active ? '#fff' : 'var(--text2)' })
+const chip = (active: boolean): React.CSSProperties => ({ padding: '5px 11px', borderRadius: 16, border: '1px solid var(--border)', cursor: 'pointer', fontSize: 12, fontWeight: 600, background: active ? 'var(--c-bg-1e3a5f)' : 'var(--surface)', color: active ? 'var(--c-fg-ffffff)' : 'var(--text2)' })
 const th: React.CSSProperties = { textAlign: 'right', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }
 const thL: React.CSSProperties = { ...th, textAlign: 'left' }
 const td: React.CSSProperties = { textAlign: 'right', padding: '8px 10px', borderTop: '1px solid var(--border)', fontSize: 13, whiteSpace: 'nowrap' }
@@ -147,12 +147,12 @@ export default function RepCoachingPage() {
                           <span style={{ display: 'block', marginTop: 2 }}><GoogleRatingChips list={googleFor(r.rep)} compact /></span>
                         </td>
                         <td style={tdL}>{r.store || '—'}</td>
-                        <td style={{ ...td, color: r.tier < 1 ? '#b45309' : 'var(--green, #16794a)', fontWeight: 600 }}>{Math.round(r.tier * 100)}%</td>
+                        <td style={{ ...td, color: r.tier < 1 ? 'var(--c-fg-b45309)' : 'var(--green, var(--c-fg-16794a))', fontWeight: 600 }}>{Math.round(r.tier * 100)}%</td>
                         <td style={td}>{r.kpis_met}/{r.total_kpis}</td>
-                        <td style={{ ...td, color: r.at_risk > 0 ? '#b45309' : 'var(--text3)' }}>{r.at_risk > 0 ? fmt(r.at_risk) : '—'}</td>
-                        <td style={{ ...td, color: r.chargeback_deducted > 0 ? '#b42318' : 'var(--text3)' }}>{r.chargeback_deducted > 0 ? fmt(r.chargeback_deducted) : '—'}</td>
-                        <td style={{ ...td, color: r.flag_high > 0 ? '#b42318' : 'var(--text3)' }}>{r.flag_count || '—'}{r.flag_high ? ` (${r.flag_high}!)` : ''}</td>
-                        <td style={{ ...td, fontWeight: 700, color: r.money_on_table > 0 ? '#b42318' : 'var(--text3)' }}>{fmt(r.money_on_table)}</td>
+                        <td style={{ ...td, color: r.at_risk > 0 ? 'var(--c-fg-b45309)' : 'var(--text3)' }}>{r.at_risk > 0 ? fmt(r.at_risk) : '—'}</td>
+                        <td style={{ ...td, color: r.chargeback_deducted > 0 ? 'var(--c-fg-b42318)' : 'var(--text3)' }}>{r.chargeback_deducted > 0 ? fmt(r.chargeback_deducted) : '—'}</td>
+                        <td style={{ ...td, color: r.flag_high > 0 ? 'var(--c-fg-b42318)' : 'var(--text3)' }}>{r.flag_count || '—'}{r.flag_high ? ` (${r.flag_high}!)` : ''}</td>
+                        <td style={{ ...td, fontWeight: 700, color: r.money_on_table > 0 ? 'var(--c-fg-b42318)' : 'var(--text3)' }}>{fmt(r.money_on_table)}</td>
                         <td style={td}></td>
                       </tr>
                       {open[k] && (
@@ -161,7 +161,7 @@ export default function RepCoachingPage() {
                             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '10px 0' }}>
                               {(r.kpis || []).map((kpi: any) => (
                                 <span key={kpi.kpi} style={{ fontSize: 12, padding: '3px 9px', borderRadius: 99, fontWeight: 600,
-                                  background: kpi.met ? '#e6f7ec' : '#fde8e8', color: kpi.met ? '#16794a' : '#b42318' }}>
+                                  background: kpi.met ? 'var(--c-bg-e6f7ec)' : 'var(--c-bg-fde8e8)', color: kpi.met ? 'var(--c-fg-16794a)' : 'var(--c-fg-b42318)' }}>
                                   {kpi.met ? '✓' : '✗'} {kpi.label} {kpi.actual}/{kpi.target}
                                 </span>
                               ))}
@@ -174,12 +174,12 @@ export default function RepCoachingPage() {
                               </div>
                             )}
                             {r.chargeback_deducted > 0 && (
-                              <div style={{ fontSize: 13, color: '#b42318', marginTop: 4 }}>🔻 {fmt(r.chargeback_deducted)} chargebacks deducted ({r.chargeback_count}).</div>
+                              <div style={{ fontSize: 13, color: 'var(--c-fg-b42318)', marginTop: 4 }}>🔻 {fmt(r.chargeback_deducted)} chargebacks deducted ({r.chargeback_count}).</div>
                             )}
                             {/* Ops-accountability chargebacks (retail-ops, POSTED) deducted from this person's
                                 commission — read-only; posted/waived on the DM Verify page. */}
                             {(r.ops_chargeback_deduction || 0) > 0 && (
-                              <div style={{ fontSize: 13, color: '#b42318', marginTop: 4 }}>
+                              <div style={{ fontSize: 13, color: 'var(--c-fg-b42318)', marginTop: 4 }}>
                                 🔻 {fmt(r.ops_chargeback_deduction)} ops chargebacks deducted:
                                 <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 12 }}>
                                   {(r.ops_chargeback_lines || []).map((l: any, i: number) => (

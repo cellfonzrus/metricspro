@@ -175,7 +175,7 @@ export default function SupplyVendorsPage() {
         Each vendor you order supplies from. For a vendor with an online portal, set its free-shipping threshold and
         approximate delivery time — the cart uses them to pick the cheapest way to order.
       </p>
-      {note && <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 12, fontSize: 13 }}>{note}</div>}
+      {note && <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', marginBottom: 12, fontSize: 13 }}>{note}</div>}
 
       <section style={{ ...panel, marginBottom: 14, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -186,7 +186,7 @@ export default function SupplyVendorsPage() {
           <tbody>
             {rows.map(v => (
               <tr key={v.id} style={{ opacity: v.is_active ? 1 : 0.5 }}>
-                <td style={cell}><button style={{ ...btn, border: 'none', padding: 0, background: 'none', color: '#2563eb' }} onClick={() => edit(v)}>{v.name}</button>
+                <td style={cell}><button style={{ ...btn, border: 'none', padding: 0, background: 'none', color: 'var(--c-fg-2563eb)' }} onClick={() => edit(v)}>{v.name}</button>
                   {!v.is_price_source && <div style={{ fontSize: 11, color: 'var(--text2)' }}>roster only</div>}</td>
                 <td style={cell}>{v.free_shipping_threshold == null ? '—' : fmtMoney(v.free_shipping_threshold)}</td>
                 <td style={cell}>{v.shipping_fee_below_threshold == null ? '—' : fmtMoney(v.shipping_fee_below_threshold)}</td>
@@ -195,7 +195,7 @@ export default function SupplyVendorsPage() {
                 <td style={cell}>{fmtDate(v.catalog_seen_at)}</td>
                 <td style={{ ...cell, fontSize: 11 }}>{v.recipe?.level || '—'}</td>
                 <td style={{ ...cell, fontSize: 11 }}>
-                  {(v.attention || []).filter(a => a.severity === 'warn').map(a => <div key={a.code} style={{ color: '#b45309' }}>• {a.text}</div>)}
+                  {(v.attention || []).filter(a => a.severity === 'warn').map(a => <div key={a.code} style={{ color: 'var(--c-fg-b45309)' }}>• {a.text}</div>)}
                 </td>
                 <td style={cell}>
                   <div style={{ display: 'flex', gap: 6 }}>
@@ -245,7 +245,7 @@ export default function SupplyVendorsPage() {
             <label style={{ ...label, marginTop: 8 }}>Portal config (JSON — a vendors.json block from the price-compare kit, plus an optional &quot;ordering&quot; recipe)</label>
             <textarea style={{ ...input, minHeight: 120, fontFamily: 'monospace', fontSize: 12 }} value={form.portal_config} onChange={f('portal_config')} />
             {current?.recipe && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 4 }}>Ordering: {current.recipe.text}</div>}
-            {(current?.recipe_errors || []).map(e => <div key={e} style={{ fontSize: 12, color: '#dc2626' }}>{e}</div>)}
+            {(current?.recipe_errors || []).map(e => <div key={e} style={{ fontSize: 12, color: 'var(--c-fg-dc2626)' }}>{e}</div>)}
           </>}
           <label style={{ ...label, marginTop: 8 }}>Terms / notes</label>
           <input style={input} value={form.terms} onChange={f('terms')} placeholder="Net 30…" />

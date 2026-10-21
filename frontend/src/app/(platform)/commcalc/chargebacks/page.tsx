@@ -157,7 +157,7 @@ export default function ChargebacksPage() {
         <select style={sel} value={fStore} onChange={e => setFStore(e.target.value)}><option value="">🏬 All stores</option>{stores.map(s => <option key={s} value={s}>{s}</option>)}</select>
         <select style={sel} value={fMonth} onChange={e => setFMonth(e.target.value)}><option value="">🗓️ All months</option>{months.map(m => <option key={m} value={m}>{m}</option>)}</select>
         <input style={{ ...sel, minWidth: 180 }} placeholder="Search customer / email / IMEI…" value={q} onChange={e => setQ(e.target.value)} />
-        {(fRep || fStore || fMonth || q) && <button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={() => { setFRep(''); setFStore(''); setFMonth(''); setQ('') }}>Clear</button>}
+        {(fRep || fStore || fMonth || q) && <button className="btn btn-secondary" style={{ fontSize: 12, color: 'var(--c-fg-dc2626)' }} onClick={() => { setFRep(''); setFStore(''); setFMonth(''); setQ('') }}>Clear</button>}
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>{filtered.length} of {rows.length}</span>
         <div style={{ flex: 1 }} />
         <ExportButtons payload={buildPayload} compact />
@@ -181,10 +181,10 @@ export default function ChargebacksPage() {
                 const done = r.status !== 'open'
                 const crit = r.severity === 'critical'
                 return (
-                  <tr key={r.id} style={{ borderLeft: crit ? '3px solid #b42318' : undefined }}>
+                  <tr key={r.id} style={{ borderLeft: crit ? '3px solid var(--c-bg-b42318)' : undefined }}>
                     <td style={cell}>
                       <div style={{ fontWeight: 600 }}>{SRC[r.source] || r.source}</div>
-                      {crit && <span style={{ fontSize: 10, color: '#b42318', fontWeight: 700 }}>CRITICAL</span>}
+                      {crit && <span style={{ fontSize: 10, color: 'var(--c-fg-b42318)', fontWeight: 700 }}>CRITICAL</span>}
                       {r.needs_review && <span style={{ fontSize: 10, color: 'var(--text3)' }}>{r.review ? ` · ${r.review}` : ' · needs review'}</span>}
                     </td>
                     <td style={cell}>{r.store_address || r.store_code || '—'}</td>

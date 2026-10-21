@@ -214,8 +214,8 @@ export default function FlagsPage() {
 
   const TH = ({ k, label, align = 'left' }: { k: string; label: string; align?: string }) => (
     <th onClick={() => sortBy(k)} style={{
-      padding: '10px 10px', fontSize: 11, fontWeight: 700, color: 'white', textAlign: align as any,
-      cursor: 'pointer', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#1e3a5f', zIndex: 2,
+      padding: '10px 10px', fontSize: 11, fontWeight: 700, color: 'var(--c-fg-ffffff)', textAlign: align as any,
+      cursor: 'pointer', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: 'var(--c-bg-1e3a5f)', zIndex: 2,
     }}>
       {label}{sortKey === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
     </th>
@@ -228,7 +228,7 @@ export default function FlagsPage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Flags & Compliance</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             {period} · {filtered.length} of {flags.length} flags · At risk: <strong style={{ color: 'var(--red)' }}>{fmt(totalAtRisk)}</strong>
-            {pendingReview > 0 && <> · <strong style={{ color: '#d97706' }}>{pendingReview} awaiting review</strong></>}
+            {pendingReview > 0 && <> · <strong style={{ color: 'var(--c-fg-d97706)' }}>{pendingReview} awaiting review</strong></>}
           </p>
         </div>
         <div style={{ display: 'inline-flex', gap: 6 }}>
@@ -293,7 +293,7 @@ export default function FlagsPage() {
           .sort((a, b) => b.total - a.total)
         if (!rows.length) return null
         return (
-          <div style={{ marginBottom: 20, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 12, background: 'white' }}>
+          <div style={{ marginBottom: 20, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 12, background: 'var(--c-bg-ffffff)' }}>
             <div onClick={() => setShowMatrix(!showMatrix)} style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: showMatrix ? '1px solid var(--border)' : 'none', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>{showMatrix ? '▾' : '▸'} Store Summary — {rows.length} stores{fStore ? ` · filtered: ${fStore.substring(0,24)}` : ' · click a store to filter details'}</span>
               <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>{showMatrix ? 'hide' : 'show'}</span>
@@ -302,13 +302,13 @@ export default function FlagsPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
               <thead>
                 <tr>
-                  <th style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, textAlign: 'left', position: 'sticky', left: 0, background: '#1e3a5f', color: 'white' }}>Store</th>
+                  <th style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--c-bg-1e3a5f)', color: 'var(--c-fg-ffffff)' }}>Store</th>
                   {allTypes.map(t => (
-                    <th key={t} style={{ padding: '8px 6px', fontSize: 9, fontWeight: 700, textAlign: 'center', background: '#1e3a5f', color: 'white', whiteSpace: 'nowrap' }}>
+                    <th key={t} style={{ padding: '8px 6px', fontSize: 9, fontWeight: 700, textAlign: 'center', background: 'var(--c-bg-1e3a5f)', color: 'var(--c-fg-ffffff)', whiteSpace: 'nowrap' }}>
                       {t.replace(/_/g, ' ')}
                     </th>
                   ))}
-                  <th style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, textAlign: 'center', background: '#0f2540', color: 'white' }}>Total</th>
+                  <th style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, textAlign: 'center', background: 'var(--c-bg-0f2540)', color: 'var(--c-fg-ffffff)' }}>Total</th>
                 </tr>
               </thead>
               <tbody>
@@ -321,7 +321,7 @@ export default function FlagsPage() {
                         {counts[t] || '·'}
                       </td>
                     ))}
-                    <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'center', fontWeight: 700, background: '#f1f5f9' }}>{total}</td>
+                    <td style={{ padding: '7px 10px', fontSize: 12, textAlign: 'center', fontWeight: 700, background: 'var(--c-bg-f1f5f9)' }}>{total}</td>
                   </tr>
                 ))}
               </tbody>
@@ -347,7 +347,7 @@ export default function FlagsPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
-        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 340px)', background: 'white', border: '1px solid var(--border)', borderRadius: 12 }}>
+        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 340px)', background: 'var(--c-bg-ffffff)', border: '1px solid var(--border)', borderRadius: 12 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
             <thead>
               <tr>
@@ -372,19 +372,19 @@ export default function FlagsPage() {
                 </td></tr>
               ) : filtered.map((f, i) => (
                 <tr key={f.id || i} style={{
-                  background: (f.status && f.status !== 'open') ? '#f8fafc' : i % 2 ? '#fafbfc' : 'white',
+                  background: (f.status && f.status !== 'open') ? 'var(--c-bg-f8fafc)' : i % 2 ? 'var(--c-bg-fafbfc)' : 'white',
                   borderBottom: '1px solid var(--border)',
                   opacity: (f.status && f.status !== 'open') ? 0.62 : 1,
                 }}>
                   <td style={{ padding: '8px 10px', fontSize: 12, fontWeight: 600 }}>{f.flag_type?.replace(/_/g,' ')}</td>
                   <td style={{ padding: '8px 10px' }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: SEVERITY_COLORS[f.severity] || '#64748b',
-                      background: (SEVERITY_COLORS[f.severity] || '#64748b') + '18', padding: '2px 7px', borderRadius: 999 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: SEVERITY_COLORS[f.severity] || 'var(--c-fg-64748b)',
+                      background: (SEVERITY_COLORS[f.severity] || 'var(--c-bg-64748b)') + '18', padding: '2px 7px', borderRadius: 999 }}>
                       {f.severity}
                     </span>
                   </td>
                   <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600,
-                    color: f.days_active != null && f.days_active <= 30 ? '#dc2626' : f.days_active != null && f.days_active <= 60 ? '#d97706' : 'var(--text)' }}>
+                    color: f.days_active != null && f.days_active <= 30 ? 'var(--c-fg-dc2626)' : f.days_active != null && f.days_active <= 60 ? 'var(--c-fg-d97706)' : 'var(--text)' }}>
                     {f.days_active != null ? f.days_active : '—'}
                   </td>
                   <td style={{ padding: '8px 10px', fontSize: 12 }}>{f.epay_salesperson || '—'}</td>
@@ -398,7 +398,7 @@ export default function FlagsPage() {
                   {/* The DM's decision. Since mig 287 it survives the nightly recalculation. */}
                   <td style={{ padding: '8px 10px', fontSize: 11, whiteSpace: 'nowrap' }}>
                     {f.status && f.status !== 'open' && (
-                      <div style={{ fontSize: 10, fontWeight: 700, color: '#475569' }}
+                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--c-fg-475569)' }}
                         title={f.resolved_reason || ''}>
                         {STATUS_LABEL[f.status] || f.status}
                         {f.resolved_at ? ` ${String(f.resolved_at).slice(0, 10)}` : ''}
@@ -408,7 +408,7 @@ export default function FlagsPage() {
                       <button onClick={() => { setReviewing(f); setReviewNote(f.action_taken || '') }}
                         title={`${f.action_taken || 'Reviewed'} — ${String(f.reviewed_at || '').slice(0, 10)}`}
                         style={{ border: 'none', background: 'transparent', padding: 0, cursor: 'pointer',
-                                 textAlign: 'left', color: '#15803d', fontWeight: 700, fontSize: 11 }}>
+                                 textAlign: 'left', color: 'var(--c-fg-15803d)', fontWeight: 700, fontSize: 11 }}>
                         ✓ {String(f.reviewed_by).split('@')[0]}
                       </button>
                     ) : (
@@ -429,7 +429,7 @@ export default function FlagsPage() {
           style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', display: 'flex',
                    alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 16 }}>
           <div onClick={e => e.stopPropagation()} className="card"
-            style={{ width: 520, maxWidth: '100%', padding: 20, background: 'white' }}>
+            style={{ width: 520, maxWidth: '100%', padding: 20, background: 'var(--c-bg-ffffff)' }}>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Review flag</h3>
             <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--text2)' }}>
               {(reviewing.flag_type || '').replace(/_/g, ' ')} · {reviewing.epay_salesperson || 'no rep'} ·{' '}

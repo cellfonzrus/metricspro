@@ -24,7 +24,7 @@ const STATUS_COLOR: Record<string, string> = {
 const when = (iso?: string | null) => { if (!iso) return '—'; try { return new Date(iso).toLocaleString() } catch { return iso } }
 
 function Pill({ s }: { s: string }) {
-  return <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap', textTransform: 'capitalize', background: (STATUS_COLOR[s] || '#888') + '22', color: STATUS_COLOR[s] || '#555', border: `1px solid ${(STATUS_COLOR[s] || '#888')}55` }}>{s.replace('_', ' ')}</span>
+  return <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap', textTransform: 'capitalize', background: (STATUS_COLOR[s] || 'var(--c-bg-888888)') + '22', color: STATUS_COLOR[s] || 'var(--c-fg-555555)', border: `1px solid ${(STATUS_COLOR[s] || 'var(--c-bg-888888)')}55` }}>{s.replace('_', ' ')}</span>
 }
 
 export default function FixRequestsPage() {
@@ -82,7 +82,7 @@ export default function FixRequestsPage() {
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🛠️ Fix Requests</h1>
         <span style={{ fontSize: 13, color: 'var(--text3)' }}>{rows.length} request{rows.length === 1 ? '' : 's'}
-          {queueCount > 0 && <span style={{ color: '#2563eb', fontWeight: 600 }}> · {queueCount} approved (queued)</span>}</span>
+          {queueCount > 0 && <span style={{ color: 'var(--c-fg-2563eb)', fontWeight: 600 }}> · {queueCount} approved (queued)</span>}</span>
         <span style={{ flex: 1 }} />
         <Link href="/admin/support/failures" className="btn btn-sm">🩺 Fleet Triage</Link>
         <Link href="/admin/support" className="btn btn-sm">🎧 Console</Link>
@@ -101,7 +101,7 @@ export default function FixRequestsPage() {
         <span style={{ flex: 1 }} />
         <ReportExportBar title="Fix Requests" filename="fix_requests" columns={exportCols} rows={rows} />
       </div>
-      {err && <div className="card" style={{ padding: 14, color: '#dc2626' }}>{err}</div>}
+      {err && <div className="card" style={{ padding: 14, color: 'var(--c-fg-dc2626)' }}>{err}</div>}
 
       {loading ? <div className="card" style={{ padding: 16 }}>Loading…</div> : rows.length === 0 ? (
         <div className="card" style={{ padding: 16, color: 'var(--text3)' }}>No fix requests yet. Club a group of failures on the Fleet Triage page to create one.</div>
@@ -136,7 +136,7 @@ export default function FixRequestsPage() {
               <div><b>Proposed action:</b> {detail.fr.proposed_action || '—'}</div>
               {detail.fr.code_hint && <div style={{ color: 'var(--text2)' }}><b>Code area:</b> <code>{detail.fr.code_hint}</code></div>}
               <div style={{ color: 'var(--text2)' }}><b>Affected:</b> {(detail.fr.affected_orgs || []).map(o => `${o.org_name || 'Tenant'} (${o.count})`).join(' · ') || '—'}</div>
-              {detail.fr.resolution && <div style={{ color: '#16a34a' }}><b>Resolution:</b> {detail.fr.resolution}</div>}
+              {detail.fr.resolution && <div style={{ color: 'var(--c-fg-16a34a)' }}><b>Resolution:</b> {detail.fr.resolution}</div>}
             </div>
 
             {/* Actions */}

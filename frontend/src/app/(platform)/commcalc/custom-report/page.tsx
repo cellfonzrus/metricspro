@@ -246,7 +246,7 @@ export default function CustomReportPage() {
             })}
             {registry.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Loading datasets…</span>}
           </div>
-          {regSource === 'code-default' && <div style={{ fontSize: 11, color: '#b45309', marginBottom: 8 }}><SetupNotice lead="Datasets: the built-in defaults (editing them for your company is not available yet)." detail="211" /></div>}
+          {regSource === 'code-default' && <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)', marginBottom: 8 }}><SetupNotice lead="Datasets: the built-in defaults (editing them for your company is not available yet)." detail="211" /></div>}
 
           {/* Per-dataset column pickers */}
           {selDatasets.map(k => {
@@ -274,19 +274,19 @@ export default function CustomReportPage() {
             {defs.map(df => (
               <span key={df.id} style={{ display: 'inline-flex', gap: 4, alignItems: 'center', background: 'var(--surface2)', borderRadius: 12, padding: '2px 4px 2px 10px', fontSize: 12 }}>
                 <span style={{ cursor: 'pointer' }} onClick={() => applyDefinition(df)}>{df.name}</span>
-                <span style={{ cursor: 'pointer', color: '#dc2626', fontWeight: 700, padding: '0 4px' }} onClick={() => deleteDefinition(df.id)}>✕</span>
+                <span style={{ cursor: 'pointer', color: 'var(--c-fg-dc2626)', fontWeight: 700, padding: '0 4px' }} onClick={() => deleteDefinition(df.id)}>✕</span>
               </span>
             ))}
             <div style={{ flex: 1 }} />
             <input style={{ ...sel, minWidth: 160 }} placeholder="Name this report…" value={defName} onChange={e => setDefName(e.target.value)} />
             <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={saveDefinition}>💾 Save</button>
           </div>
-          {msg && <div style={{ fontSize: 12, color: msg.startsWith('❌') ? '#dc2626' : 'var(--text3)', marginTop: 6 }}>{msg}</div>}
+          {msg && <div style={{ fontSize: 12, color: msg.startsWith('❌') ? 'var(--c-fg-dc2626)' : 'var(--text3)', marginTop: 6 }}>{msg}</div>}
         </div>
       )}
 
       {data?.error && (
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-991b1b)', fontSize: 13 }}>
           <b>❌ Custom Report could not run.</b> {data.error}
         </div>
       )}
@@ -315,7 +315,7 @@ export default function CustomReportPage() {
  *  the mean of the cells above it. Rendering does no arithmetic of its own. */
 function PivotView({ pivot }: { pivot: Pivot }) {
   if (!pivot.available) {
-    return <div style={{ fontSize: 12.5, color: '#b45309', marginBottom: 10 }}>⚠️ Pivot: {pivot.reason}</div>
+    return <div style={{ fontSize: 12.5, color: 'var(--c-fg-b45309)', marginBottom: 10 }}>⚠️ Pivot: {pivot.reason}</div>
   }
   const rk = pivot.row_keys || [], ck = pivot.col_keys || []
   const money = pivot.measure_type === 'money'
@@ -336,7 +336,7 @@ function PivotView({ pivot }: { pivot: Pivot }) {
         <span style={{ color: 'var(--text3)' }}> · {pivot.agg === 'avg' ? 'averaged' : pivot.agg === 'count' ? 'counted' : 'summed'}</span>
       </div>
       {pivot.truncated_cols && (
-        <div style={{ fontSize: 12, color: '#b45309', marginBottom: 6 }}>
+        <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginBottom: 6 }}>
           ⚠️ Showing the {ck.length} largest columns — {(pivot.dropped_cols || []).length} more are not
           displayed, and the totals below cover only what is shown. Narrow the filters or pick a
           coarser column field.
@@ -383,7 +383,7 @@ function SectionView({ section, period }: { section: Section; period: string }) 
     return (
       <div className="card" style={{ padding: 16 }}>
         <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>{section.name}</div>
-        <div style={{ fontSize: 13, color: '#b45309' }}>⚠️ {section.reason || 'dataset unavailable'}</div>
+        <div style={{ fontSize: 13, color: 'var(--c-fg-b45309)' }}>⚠️ {section.reason || 'dataset unavailable'}</div>
       </div>
     )
   }

@@ -85,7 +85,7 @@ export default function ReportRecipientsPage() {
               const r = draft[rep.report_key]; if (!r) return null
               return (
                 <tr key={rep.report_key}>
-                  <td style={cell}><b>{r.label}</b>{r.configured && <div style={{ fontSize: 10, color: '#16794a' }}>routed</div>}<div style={{ fontSize: 10, color: 'var(--text3)' }}>{rep.report_key}</div></td>
+                  <td style={cell}><b>{r.label}</b>{r.configured && <div style={{ fontSize: 10, color: 'var(--c-fg-16794a)' }}>routed</div>}<div style={{ fontSize: 10, color: 'var(--text3)' }}>{rep.report_key}</div></td>
                   <td style={cell}>
                     <select multiple value={r.recipient_ids} size={Math.min(4, Math.max(2, recipients.length))} style={{ ...sel, minWidth: 230, height: 'auto' }}
                       onChange={e => setRow(rep.report_key, { recipient_ids: Array.from(e.target.selectedOptions).map(o => o.value) })}>

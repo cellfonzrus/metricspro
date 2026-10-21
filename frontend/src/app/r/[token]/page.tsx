@@ -13,11 +13,11 @@ import { apiUrl } from '@/lib/apiBase'
 // allowed set (referral_core.ALLOWED_PRODUCTS), so this list is a convenience, not the source of truth.
 const PRODUCTS = ['Phone', 'Activations', 'Tablet', 'BYOD', 'Home Internet', 'Accessories']
 
-const wrap: React.CSSProperties = { minHeight: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }
-const card: React.CSSProperties = { background: '#fff', borderRadius: 16, padding: 24, maxWidth: 460, width: '100%', boxShadow: '0 10px 40px rgba(0,0,0,.3)' }
-const inp: React.CSSProperties = { padding: '12px 14px', borderRadius: 10, border: '1px solid #cbd5e1', fontSize: 16, width: '100%', boxSizing: 'border-box' }
-const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: '#334155', display: 'block', margin: '0 0 6px' }
-const btnP: React.CSSProperties = { padding: '13px 16px', borderRadius: 10, border: 'none', background: '#2563eb', color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer', width: '100%' }
+const wrap: React.CSSProperties = { minHeight: '100vh', background: 'var(--c-bg-0f172a)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }
+const card: React.CSSProperties = { background: 'var(--c-bg-ffffff)', borderRadius: 16, padding: 24, maxWidth: 460, width: '100%', boxShadow: '0 10px 40px rgba(0,0,0,.3)' }
+const inp: React.CSSProperties = { padding: '12px 14px', borderRadius: 10, border: '1px solid var(--c-bg-cbd5e1)', fontSize: 16, width: '100%', boxSizing: 'border-box' }
+const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: 'var(--c-fg-334155)', display: 'block', margin: '0 0 6px' }
+const btnP: React.CSSProperties = { padding: '13px 16px', borderRadius: 10, border: 'none', background: 'var(--c-bg-2563eb)', color: 'var(--c-fg-ffffff)', fontSize: 16, fontWeight: 700, cursor: 'pointer', width: '100%' }
 
 export default function RedeemPage() {
   const { token } = useParams<{ token: string }>()
@@ -59,13 +59,13 @@ export default function RedeemPage() {
     setBusy(false)
   }
 
-  if (state === 'loading') return <div style={wrap}><div style={{ ...card, textAlign: 'center', color: '#64748b' }}>Loading…</div></div>
+  if (state === 'loading') return <div style={wrap}><div style={{ ...card, textAlign: 'center', color: 'var(--c-fg-64748b)' }}>Loading…</div></div>
 
   if (state === 'invalid') return (
     <div style={wrap}><div style={{ ...card, textAlign: 'center' }}>
       <div style={{ fontSize: 40, marginBottom: 8 }}>🔗</div>
-      <h1 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>This referral link isn&apos;t valid</h1>
-      <p style={{ color: '#64748b', fontSize: 14, marginTop: 8 }}>
+      <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-0f172a)' }}>This referral link isn&apos;t valid</h1>
+      <p style={{ color: 'var(--c-fg-64748b)', fontSize: 14, marginTop: 8 }}>
         It may have already been used or expired. Please ask the store to create a new one.
       </p>
     </div></div>
@@ -74,8 +74,8 @@ export default function RedeemPage() {
   if (state === 'done') return (
     <div style={wrap}><div style={{ ...card, textAlign: 'center' }}>
       <div style={{ fontSize: 40, marginBottom: 8 }}>🎉</div>
-      <h1 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>Thanks — you&apos;re all set!</h1>
-      <p style={{ color: '#64748b', fontSize: 14, marginTop: 8 }}>
+      <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-0f172a)' }}>Thanks — you&apos;re all set!</h1>
+      <p style={{ color: 'var(--c-fg-64748b)', fontSize: 14, marginTop: 8 }}>
         Show this screen to the store staff. They&apos;ll take it from here.
       </p>
     </div></div>
@@ -84,8 +84,8 @@ export default function RedeemPage() {
   return (
     <div style={wrap}><div style={card}>
       <div style={{ fontSize: 34, marginBottom: 4 }}>🎁</div>
-      <h1 style={{ fontSize: 22, fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>You&apos;ve been referred!</h1>
-      <p style={{ color: '#64748b', fontSize: 14, marginBottom: 18 }}>
+      <h1 style={{ fontSize: 22, fontWeight: 800, color: 'var(--c-fg-0f172a)', marginBottom: 4 }}>You&apos;ve been referred!</h1>
+      <p style={{ color: 'var(--c-fg-64748b)', fontSize: 14, marginBottom: 18 }}>
         Fill this in at the counter — it helps us set you up faster (and rewards the friend who sent you).
       </p>
 
@@ -103,16 +103,16 @@ export default function RedeemPage() {
           {allowed.map(p => (
             <button key={p} type="button" onClick={() => toggle(p)}
               style={{ padding: '9px 14px', borderRadius: 999, fontSize: 14, cursor: 'pointer',
-                       border: products.includes(p) ? '1px solid #2563eb' : '1px solid #cbd5e1',
-                       background: products.includes(p) ? '#2563eb' : '#fff',
-                       color: products.includes(p) ? '#fff' : '#334155', fontWeight: 600 }}>
+                       border: products.includes(p) ? '1px solid var(--c-bg-2563eb)' : '1px solid var(--c-bg-cbd5e1)',
+                       background: products.includes(p) ? 'var(--c-bg-2563eb)' : 'var(--c-bg-ffffff)',
+                       color: products.includes(p) ? 'var(--c-fg-ffffff)' : 'var(--c-fg-334155)', fontWeight: 600 }}>
               {products.includes(p) ? '✓ ' : ''}{p}
             </button>
           ))}
         </div>
       </div>
 
-      {err && <div style={{ background: '#fef2f2', color: '#dc2626', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{err}</div>}
+      {err && <div style={{ background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-dc2626)', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{err}</div>}
       <button onClick={submit} disabled={busy || !phone.trim()} style={{ ...btnP, opacity: busy || !phone.trim() ? 0.6 : 1 }}>
         {busy ? 'Submitting…' : 'Submit'}
       </button>

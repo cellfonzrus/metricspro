@@ -12,11 +12,11 @@ const td: React.CSSProperties = { textAlign: 'left', padding: '7px 9px', borderT
 const mono: React.CSSProperties = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 11.5, color: 'var(--text2)' }
 
 const KIND_COLOR: Record<string, { bg: string; fg: string }> = {
-  ingest: { bg: '#eef2ff', fg: '#3730a3' },
-  display: { bg: '#ecfeff', fg: '#155e75' },
-  target: { bg: '#f0fdf4', fg: '#166534' },
-  recon: { bg: '#fef3c7', fg: '#92400e' },
-  pay: { bg: '#fee2e2', fg: '#991b1b' },
+  ingest: { bg: 'var(--c-bg-eef2ff)', fg: 'var(--c-fg-3730a3)' },
+  display: { bg: 'var(--c-bg-ecfeff)', fg: 'var(--c-fg-155e75)' },
+  target: { bg: 'var(--c-bg-f0fdf4)', fg: 'var(--c-fg-166534)' },
+  recon: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)' },
+  pay: { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)' },
 }
 
 type Edge = {
@@ -75,10 +75,10 @@ export default function SchematicPage() {
         </select>
       </div>
 
-      {err && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>❌ {err}</div>}
+      {err && <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>❌ {err}</div>}
       {loading && <div style={{ color: 'var(--text3)', fontSize: 13, padding: 20 }}>Loading…</div>}
       {!loading && data?.note && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>{data.note}</div>
+        <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', color: 'var(--c-fg-92400e)', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, marginBottom: 10 }}>{data.note}</div>
       )}
 
       {!loading && visibleSources.map((src: string) => {
@@ -86,7 +86,7 @@ export default function SchematicPage() {
         const label = edges[0]?.source_label || src
         return (
           <div key={src} style={{ marginBottom: 18, border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
-            <div style={{ background: 'var(--surface2, #f8fafc)', padding: '9px 12px', display: 'flex', gap: 8, alignItems: 'baseline' }}>
+            <div style={{ background: 'var(--surface2, var(--c-bg-f8fafc))', padding: '9px 12px', display: 'flex', gap: 8, alignItems: 'baseline' }}>
               <span style={{ fontSize: 14, fontWeight: 800 }}>{label}</span>
               <code style={{ ...mono }}>{src}</code>
               <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {edges.length} link{edges.length === 1 ? '' : 's'}</span>
@@ -107,8 +107,8 @@ export default function SchematicPage() {
                         <td style={td}><span style={{ background: kc.bg, color: kc.fg, borderRadius: 6, padding: '1px 7px', fontSize: 11, fontWeight: 700 }}>{e.kind}</span></td>
                         <td style={td}>
                           {e.auto_updated
-                            ? <span style={{ background: '#ecfdf5', color: '#065f46', borderRadius: 6, padding: '1px 7px', fontSize: 11, fontWeight: 700 }}>Auto</span>
-                            : <span style={{ background: '#fef2f2', color: '#991b1b', borderRadius: 6, padding: '1px 7px', fontSize: 11, fontWeight: 700 }}>Manual</span>}
+                            ? <span style={{ background: 'var(--c-bg-ecfdf5)', color: 'var(--c-fg-065f46)', borderRadius: 6, padding: '1px 7px', fontSize: 11, fontWeight: 700 }}>Auto</span>
+                            : <span style={{ background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-991b1b)', borderRadius: 6, padding: '1px 7px', fontSize: 11, fontWeight: 700 }}>Manual</span>}
                         </td>
                         <td style={{ ...td, ...mono, maxWidth: 240, whiteSpace: 'normal' }}>{e.effect_code || '—'}</td>
                         <td style={{ ...td, maxWidth: 360, whiteSpace: 'normal', color: 'var(--text2)' }}>{e.effect_english || '—'}</td>

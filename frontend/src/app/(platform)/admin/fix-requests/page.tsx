@@ -90,11 +90,11 @@ const CLASS_LABEL: Record<string, string> = {
 // lookup, so an unknown kind from a future backend still renders (falls back to `other`) instead of
 // blanking the row.
 const KIND: Record<string, { label: string; bg: string; fg: string; head: string }> = {
-  sql: { label: 'SQL', bg: '#ede9fe', fg: '#6d28d9', head: 'Run this SQL in the Supabase SQL editor' },
-  env: { label: 'ENV VAR', bg: '#e0f2fe', fg: '#0369a1', head: 'Set this environment variable (Railway → Variables)' },
-  config: { label: 'CONFIG', bg: '#fef3c7', fg: '#b45309', head: 'Fix this setting in the app' },
-  data: { label: 'DATA', bg: '#dcfce7', fg: '#15803d', head: 'Correct / re-upload this data' },
-  other: { label: 'ACTION', bg: '#f1f5f9', fg: '#475569', head: 'Do this' },
+  sql: { label: 'SQL', bg: 'var(--c-bg-ede9fe)', fg: 'var(--c-fg-6d28d9)', head: 'Run this SQL in the Supabase SQL editor' },
+  env: { label: 'ENV VAR', bg: 'var(--c-bg-e0f2fe)', fg: 'var(--c-fg-0369a1)', head: 'Set this environment variable (Railway → Variables)' },
+  config: { label: 'CONFIG', bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-b45309)', head: 'Fix this setting in the app' },
+  data: { label: 'DATA', bg: 'var(--c-bg-dcfce7)', fg: 'var(--c-fg-15803d)', head: 'Correct / re-upload this data' },
+  other: { label: 'ACTION', bg: 'var(--c-bg-f1f5f9)', fg: 'var(--c-fg-475569)', head: 'Do this' },
 }
 const kindOf = (k: string) => KIND[k] || KIND.other
 const pendingOf = (r: Fix) =>
@@ -132,7 +132,7 @@ function ActionChecklist({ fix, busyId, onMark }: {
         const body = isSql ? a.instruction : lines.slice(1).join('\n').trim()
         return (
           <div key={a.id} style={{
-            border: `1px solid ${done ? 'var(--border)' : '#fcd34d'}`, borderRadius: 9,
+            border: `1px solid ${done ? 'var(--border)' : 'var(--c-bg-fcd34d)'}`, borderRadius: 9,
             padding: '9px 11px', background: done ? 'var(--surface2)' : 'var(--surface)',
           }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -140,7 +140,7 @@ function ActionChecklist({ fix, busyId, onMark }: {
               <b style={{ fontSize: 13, textDecoration: done ? 'line-through' : 'none', color: done ? 'var(--text3)' : 'inherit' }}>{head}</b>
               <span style={{ flex: 1 }} />
               {done && (
-                <span style={{ fontSize: 11.5, color: '#16a34a' }}>
+                <span style={{ fontSize: 11.5, color: 'var(--c-fg-16a34a)' }}>
                   ✅ done{a.done_by ? ` · ${a.done_by}` : ''}{a.done_at ? ` · ${when(a.done_at)}` : ''}
                 </span>
               )}
@@ -382,27 +382,27 @@ export default function FixRequestsBoard() {
           bug = one row). Each row shows where the fix is parked, what proved it, and what the AI work cost.
           <b> Nothing here deploys anything:</b> a parked fix ships only when you say “push it” in chat, and
           that decision is then recorded on the row. There is deliberately no approve button on this page.
-          {' '}Once a fix ships it shows as <b style={{ color: '#16a34a' }}>FIXED</b> — and if it needs
+          {' '}Once a fix ships it shows as <b style={{ color: 'var(--c-fg-16a34a)' }}>FIXED</b> — and if it needs
           something from you before it actually works (run a SQL block, set an environment variable, correct
-          a setting, re-upload data), it stays <b style={{ color: '#b45309' }}>Action required</b> with a
+          a setting, re-upload data), it stays <b style={{ color: 'var(--c-fg-b45309)' }}>Action required</b> with a
           checklist you tick off.
         </p>
       </div>
 
-      {hint && <div className="card" style={{ padding: 12, marginBottom: 12, background: '#fffbeb', borderColor: '#fde68a', fontSize: 13 }}>{hint}</div>}
-      {err && <div className="card" style={{ padding: 12, marginBottom: 12, color: '#dc2626' }}>{err}</div>}
+      {hint && <div className="card" style={{ padding: 12, marginBottom: 12, background: 'var(--c-bg-fffbeb)', borderColor: 'var(--c-bg-fde68a)', fontSize: 13 }}>{hint}</div>}
+      {err && <div className="card" style={{ padding: 12, marginBottom: 12, color: 'var(--c-fg-dc2626)' }}>{err}</div>}
 
       {/* Period rollup tile — computed over the FILTERED rows, so it always agrees with the table + export */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
         <div style={tileBox}><div style={sub}>Fixes in view</div><div style={{ fontSize: 21, fontWeight: 700 }}>{nf(tile.fixes)}</div></div>
         <div style={tileBox}><div style={sub}>Tokens</div><div style={{ fontSize: 21, fontWeight: 700 }}>{nf(tile.tokens)}</div></div>
         <div style={tileBox}><div style={sub}>Cost (blended)</div><div style={{ fontSize: 21, fontWeight: 700 }}>{usd(tile.cost)}</div>
-          {tile.unpriced > 0 && <div style={{ ...sub, color: '#b45309' }}>{tile.unpriced} unpriced (no rate for that model)</div>}</div>
-        <div style={tileBox}><div style={sub}>Awaiting your push</div><div style={{ fontSize: 21, fontWeight: 700, color: '#d97706' }}>{nf(tile.parked)}</div></div>
-        <div style={tileBox}><div style={sub}>Fixed</div><div style={{ fontSize: 21, fontWeight: 700, color: '#16a34a' }}>{nf(tile.shipped)}</div></div>
-        <div style={{ ...tileBox, ...(tile.blocked > 0 ? { borderColor: '#fbbf24', background: '#fffbeb' } : {}) }}>
+          {tile.unpriced > 0 && <div style={{ ...sub, color: 'var(--c-fg-b45309)' }}>{tile.unpriced} unpriced (no rate for that model)</div>}</div>
+        <div style={tileBox}><div style={sub}>Awaiting your push</div><div style={{ fontSize: 21, fontWeight: 700, color: 'var(--c-fg-d97706)' }}>{nf(tile.parked)}</div></div>
+        <div style={tileBox}><div style={sub}>Fixed</div><div style={{ fontSize: 21, fontWeight: 700, color: 'var(--c-fg-16a34a)' }}>{nf(tile.shipped)}</div></div>
+        <div style={{ ...tileBox, ...(tile.blocked > 0 ? { borderColor: 'var(--c-bg-fbbf24)', background: 'var(--c-bg-fffbeb)' } : {}) }}>
           <div style={sub}>Needs YOU</div>
-          <div style={{ fontSize: 21, fontWeight: 700, color: tile.blocked > 0 ? '#b45309' : 'inherit' }}>{nf(tile.blocked)}</div>
+          <div style={{ fontSize: 21, fontWeight: 700, color: tile.blocked > 0 ? 'var(--c-fg-b45309)' : 'inherit' }}>{nf(tile.blocked)}</div>
           <div style={sub}>{tile.blocked > 0 ? `${nf(tile.steps)} step${tile.steps === 1 ? '' : 's'} outstanding` : 'nothing outstanding'}</div>
         </div>
       </div>
@@ -449,8 +449,8 @@ export default function FixRequestsBoard() {
             <label style={{
               fontSize: 12, display: 'inline-flex', gap: 5, alignItems: 'center', padding: '4px 8px',
               borderRadius: 8, fontWeight: onlyAction ? 700 : 400,
-              border: `1px solid ${onlyAction ? '#fbbf24' : 'var(--border)'}`,
-              background: onlyAction ? '#fffbeb' : 'transparent', color: onlyAction ? '#b45309' : 'var(--text2)',
+              border: `1px solid ${onlyAction ? 'var(--c-bg-fbbf24)' : 'var(--border)'}`,
+              background: onlyAction ? 'var(--c-bg-fffbeb)' : 'transparent', color: onlyAction ? 'var(--c-fg-b45309)' : 'var(--text2)',
             }}>
               <input type="checkbox" checked={onlyAction} onChange={e => setOnlyAction(e.target.checked)} />
               ⚠️ Action required only
@@ -466,9 +466,9 @@ export default function FixRequestsBoard() {
 
       {/* ── FIXED, but not working yet: the things only YOU can do (mig 719) ─────────────────────── */}
       {blockedRows.length > 0 && (
-        <div className="card" style={{ padding: 16, margin: '12px 0', background: '#fffbeb', borderColor: '#fcd34d' }}>
+        <div className="card" style={{ padding: 16, margin: '12px 0', background: 'var(--c-bg-fffbeb)', borderColor: 'var(--c-bg-fcd34d)' }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-            <b style={{ fontSize: 15, color: '#b45309' }}>⚠️ {blockedRows.length} fix{blockedRows.length === 1 ? '' : 'es'} shipped but not live yet — {nf(tile.steps)} step{tile.steps === 1 ? '' : 's'} need you</b>
+            <b style={{ fontSize: 15, color: 'var(--c-fg-b45309)' }}>⚠️ {blockedRows.length} fix{blockedRows.length === 1 ? '' : 'es'} shipped but not live yet — {nf(tile.steps)} step{tile.steps === 1 ? '' : 's'} need you</b>
             <span style={{ flex: 1 }} />
             {actionMsg && <span style={{ fontSize: 12.5 }}>{actionMsg}</span>}
           </div>
@@ -481,7 +481,7 @@ export default function FixRequestsBoard() {
             <details key={r.id} className="card" style={{ padding: 12, marginTop: 8, background: 'var(--surface)' }} open={blockedRows.length === 1}>
               <summary style={{ cursor: 'pointer', fontSize: 13.5, fontWeight: 600 }}>
                 {r.title || r.signature}
-                <span style={{ fontSize: 11, marginLeft: 8, padding: '1px 7px', borderRadius: 8, background: '#fef3c7', color: '#b45309', fontWeight: 700 }}>
+                <span style={{ fontSize: 11, marginLeft: 8, padding: '1px 7px', borderRadius: 8, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-b45309)', fontWeight: 700 }}>
                   {pendingOf(r)} step{pendingOf(r) === 1 ? '' : 's'} left
                 </span>
               </summary>
@@ -499,7 +499,7 @@ export default function FixRequestsBoard() {
           title="Auto-Fix Pipeline" subtitle="One row per distinct problem · tokens and cost per fix"
           filename="fix_requests" columns={cols} rows={filtered} totals stickyHeader
           onRowClick={openDetail}
-          rowStyle={(r: Fix) => (needsAction(r) ? { background: '#fffbeb' } : undefined)}
+          rowStyle={(r: Fix) => (needsAction(r) ? { background: 'var(--c-bg-fffbeb)' } : undefined)}
         />
       )}
 
@@ -507,13 +507,13 @@ export default function FixRequestsBoard() {
       {sel && (
         <div className="card" style={{ padding: 16, marginTop: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
-            <span style={{ width: 9, height: 9, borderRadius: 9, background: STATUS_COLOR[sel.status] || '#888' }} />
+            <span style={{ width: 9, height: 9, borderRadius: 9, background: STATUS_COLOR[sel.status] || 'var(--c-bg-888888)' }} />
             <b style={{ fontSize: 15 }}>{sel.title || sel.signature}</b>
-            <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: (STATUS_COLOR[sel.status] || '#888') + '22', color: STATUS_COLOR[sel.status] || '#888', fontWeight: 700 }}>
+            <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: (STATUS_COLOR[sel.status] || 'var(--c-bg-888888)') + '22', color: STATUS_COLOR[sel.status] || 'var(--c-fg-888888)', fontWeight: 700 }}>
               {sel.status === 'pushed' ? '✅ ' : ''}{STATUS_LABEL[sel.status] || sel.status}
             </span>
             {needsAction(sel) && (
-              <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: '#fef3c7', color: '#b45309', fontWeight: 700 }}>
+              <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-b45309)', fontWeight: 700 }}>
                 ⚠️ Action required ({pendingOf(sel)})
               </span>
             )}
@@ -524,14 +524,14 @@ export default function FixRequestsBoard() {
 
           {/* Phase-1 approval notice — a NOTE, never a button */}
           {(sel.status === 'gate1_parked') && (
-            <div style={{ padding: '9px 12px', borderRadius: 8, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13, marginBottom: 10 }}>
+            <div style={{ padding: '9px 12px', borderRadius: 8, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', fontSize: 13, marginBottom: 10 }}>
               ⏳ <b>Awaiting push approval — approve in chat.</b> This fix is built and parked on its branch.
               Nothing merges or deploys until you say “push it” in chat; a super-admin then records that
               approval against this row. {notes.approval}
             </div>
           )}
           {sel.status === 'approved' && (
-            <div style={{ padding: '9px 12px', borderRadius: 8, background: '#ecfeff', border: '1px solid #a5f3fc', fontSize: 13, marginBottom: 10 }}>
+            <div style={{ padding: '9px 12px', borderRadius: 8, background: 'var(--c-bg-ecfeff)', border: '1px solid var(--c-bg-a5f3fc)', fontSize: 13, marginBottom: 10 }}>
               ✔️ Your chat approval was recorded by <b>{sel.approved_by || '—'}</b> at {when(sel.approved_at)}. The
               merge/push itself is still done by the operator — this board never deploys.
             </div>
@@ -540,8 +540,8 @@ export default function FixRequestsBoard() {
           {sel.status === 'pushed' && (
             <div style={{
               padding: '9px 12px', borderRadius: 8, fontSize: 13, marginBottom: 10,
-              background: needsAction(sel) ? '#fffbeb' : '#f0fdf4',
-              border: `1px solid ${needsAction(sel) ? '#fcd34d' : '#bbf7d0'}`,
+              background: needsAction(sel) ? 'var(--c-bg-fffbeb)' : 'var(--c-bg-f0fdf4)',
+              border: `1px solid ${needsAction(sel) ? 'var(--c-bg-fcd34d)' : 'var(--c-bg-bbf7d0)'}`,
             }}>
               {needsAction(sel)
                 ? <><b>✅ FIXED — but not working yet.</b> The code shipped{sel.pushed_at ? ` ${when(sel.pushed_at)}` : ''}
@@ -557,7 +557,7 @@ export default function FixRequestsBoard() {
             <div style={{ fontSize: 13, marginBottom: 10 }}><b>What shipped:</b> {sel.resolved_note}</div>
           )}
           {sel.classification === 'money_touching' && (
-            <div style={{ padding: '9px 12px', borderRadius: 8, background: '#fef2f2', border: '1px solid #fecaca', fontSize: 13, marginBottom: 10 }}>
+            <div style={{ padding: '9px 12px', borderRadius: 8, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', fontSize: 13, marginBottom: 10 }}>
               💰 <b>Money-touching — owner-first.</b> Automation is never allowed to build this one; it waits
               for your explicit go-ahead (AGENT_CONTRACT §7).
             </div>

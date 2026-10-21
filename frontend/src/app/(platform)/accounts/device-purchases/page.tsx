@@ -182,7 +182,7 @@ export default function DevicePurchasesPage() {
       </div>
 
       {/* ── THE ONE LINE THAT KEEPS THIS REPORT FROM BEING MISREAD ───────────────────────────── */}
-      <div className="card" style={{ padding: '10px 14px', marginBottom: 14, borderLeft: '3px solid var(--accent, #6b7cff)' }}>
+      <div className="card" style={{ padding: '10px 14px', marginBottom: 14, borderLeft: '3px solid var(--accent, var(--c-bg-6b7cff))' }}>
         <div style={{ fontSize: 13 }}>
           <strong>This is PURCHASES, not COGS.</strong> It answers <em>&ldquo;what did the {distributor} bill
           us in this window?&rdquo;</em> — every billed unit, recognised on the invoice date, whether it has
@@ -202,7 +202,7 @@ export default function DevicePurchasesPage() {
         storeLabel="Stores…" marketLabel="Markets…" />
 
       {loading && <div className="card" style={{ padding: 14 }}>Loading…</div>}
-      {err && <div className="card" style={{ padding: 14, color: 'var(--danger, #c33)' }}>Could not load: {err}</div>}
+      {err && <div className="card" style={{ padding: 14, color: 'var(--danger, var(--c-fg-cc3333))' }}>Could not load: {err}</div>}
 
       {data && !loading && (
         <>

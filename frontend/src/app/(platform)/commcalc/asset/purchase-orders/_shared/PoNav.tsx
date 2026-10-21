@@ -19,9 +19,9 @@ export default function PoNav({ active }: { active: string }) {
         return (
           <Link key={t.href} href={t.href} className="btn" style={{
             textDecoration: 'none',
-            background: isActive ? 'var(--accent, #2563eb)' : undefined,
-            color: isActive ? '#fff' : undefined,
-            borderColor: isActive ? 'var(--accent, #2563eb)' : undefined,
+            background: isActive ? 'var(--accent, var(--c-bg-2563eb))' : undefined,
+            color: isActive ? 'var(--c-fg-ffffff)' : undefined,
+            borderColor: isActive ? 'var(--accent, var(--c-bg-2563eb))' : undefined,
           }}>{t.label}</Link>
         )
       })}

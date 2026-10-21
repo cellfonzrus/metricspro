@@ -101,11 +101,11 @@ const FIELD_HELP: Record<string, string> = {
 // specific = wins). ROLE (mig — none needed; scope is free TEXT) sits between employee and store: an
 // employee assignment OVERRIDES a rep's role assignment.
 const SCOPE_META: Record<string, { rank: number; color: string; bg: string; help: string }> = {
-  employee: { rank: 4, color: '#166534', bg: '#dcfce7', help: 'one specific rep (overrides their role)' },
-  role:     { rank: 3, color: '#1e40af', bg: '#dbeafe', help: 'every rep with this job role' },
-  store:    { rank: 2, color: '#92400e', bg: '#fef3c7', help: 'every rep at this store' },
-  market:   { rank: 1, color: '#6d28d9', bg: '#ede9fe', help: 'every rep in this market' },
-  default:  { rank: 0, color: '#475569', bg: '#f1f5f9', help: 'all reps (fallback)' },
+  employee: { rank: 4, color: 'var(--c-fg-166534)', bg: 'var(--c-bg-dcfce7)', help: 'one specific rep (overrides their role)' },
+  role:     { rank: 3, color: 'var(--c-fg-1e40af)', bg: 'var(--c-bg-dbeafe)', help: 'every rep with this job role' },
+  store:    { rank: 2, color: 'var(--c-fg-92400e)', bg: 'var(--c-bg-fef3c7)', help: 'every rep at this store' },
+  market:   { rank: 1, color: 'var(--c-fg-6d28d9)', bg: 'var(--c-bg-ede9fe)', help: 'every rep in this market' },
+  default:  { rank: 0, color: 'var(--c-fg-475569)', bg: 'var(--c-bg-f1f5f9)', help: 'all reps (fallback)' },
 }
 const ScopeBadge = ({ scope }: { scope: string }) => {
   const m = SCOPE_META[scope] || SCOPE_META.default
@@ -739,7 +739,7 @@ export default function CommissionPlansPage() {
           note="Saving a plan, rule, tier or assignment does not change anyone's pay by itself. Recalculate the period to write the new numbers into the Rep Incentive report." />
       </div>
 
-      {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || <SetupNotice detail="059_commission_plans.sql" />}</div>}
+      {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', fontSize: 13 }}>⚠️ {msg || <SetupNotice detail="059_commission_plans.sql" />}</div>}
 
       {/* PAYOUT STRUCTURE (owner directive) — the employee-facing "how commission is earned" document.
           Built from this tenant's real plan config; hand it to staff BEFORE they start selling. Download
@@ -791,8 +791,8 @@ export default function CommissionPlansPage() {
               {Array.from(new Set((p.assignments || []).map(a => a.scope || 'default')))
                 .sort((a, b) => (SCOPE_META[b]?.rank ?? 0) - (SCOPE_META[a]?.rank ?? 0))
                 .map(s => <ScopeBadge key={s} scope={s} />)}
-              {p.base_tier_metric && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#ede9fe', color: '#6d28d9' }}>tier: {p.base_tier_metric}</span>}
-              {!p.is_active && <span style={{ fontSize: 11, color: '#b45309' }}>inactive</span>}
+              {p.base_tier_metric && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: 'var(--c-bg-ede9fe)', color: 'var(--c-fg-6d28d9)' }}>tier: {p.base_tier_metric}</span>}
+              {!p.is_active && <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>inactive</span>}
               <span style={{ flex: 1 }} />
               {/* Per-team handout: this ONE plan's Payout Structure (per-plan variant of the all-plans doc
                   above). Read-only server-rendered PDF. */}
@@ -801,7 +801,7 @@ export default function CommissionPlansPage() {
                 title="Download this plan's Payout Structure PDF (per-team handout)">📄 Payout</button>
               <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => runPreview(p.id)}>👁️ Preview</button>
               <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setDraft({ ...blankPlan(), ...p, base_tier_metric: p.base_tier_metric || 'none', carrier_id: p.carrier_id || '', rules: p.rules || [], tiers: p.tiers || [], assignments: p.assignments || [] })}>Edit</button>
-              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => del(p.id)}>Delete</button>
+              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: 'var(--c-fg-dc2626)' }} onClick={() => del(p.id)}>Delete</button>
             </div>
           ))}
           {plans.length === 0 && ready && <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No plans yet — create one above.</div>}
@@ -844,7 +844,7 @@ export default function CommissionPlansPage() {
             </label>
           </div>
           {/* mig 297 — one-line explainer for the Activation source dropdown above. */}
-          <div style={{ fontSize: 11, color: '#64748b', marginTop: -8, marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: 'var(--c-fg-64748b)', marginTop: -8, marginBottom: 16 }}>
             <b>Activation source</b> controls where this plan&apos;s reps get their <b>activations</b> counted from.
             {' '}<b>Inherit</b> uses the org default (POS sales). <b>POS sales</b> always counts POS activations.
             {' '}<b>Activation Details report</b> pays activations from the uploaded report and suppresses POS
@@ -914,7 +914,7 @@ export default function CommissionPlansPage() {
                         {UNIT_BASES.map(u => <option key={u.value} value={u.value} title={u.help}>{u.label}</option>)}
                       </select>
                       {r.payout_kind === 'flat_per_unit' && !(r.unit_basis || '') && txnLevelFields.includes(r.match_field) && (
-                        <div style={{ fontSize: 10, color: '#b45309', marginTop: 2, maxWidth: 130 }}>
+                        <div style={{ fontSize: 10, color: 'var(--c-fg-b45309)', marginTop: 2, maxWidth: 130 }}>
                           auto → per device (this field describes the whole sale)
                         </div>
                       )}
@@ -944,7 +944,7 @@ export default function CommissionPlansPage() {
                           placeholder="pick employee…" onChange={v => updRule(i, { applies_scope_value: v || '' })} />
                       )}
                       {!!r.applies_scope_kind && !r.applies_scope_value && (
-                        <div style={{ fontSize: 10, color: '#b45309', marginTop: 2, maxWidth: 150 }}>
+                        <div style={{ fontSize: 10, color: 'var(--c-fg-b45309)', marginTop: 2, maxWidth: 150 }}>
                           pick a value — a scope with nothing chosen is saved as “everywhere”, never as “nobody”
                         </div>
                       )}
@@ -965,7 +965,7 @@ export default function CommissionPlansPage() {
                           </button>
                         : <span style={{ fontSize: 10, color: 'var(--text3)' }} title="The plan vocabulary endpoint is unreachable, so the measures the engine understands cannot be confirmed. A money condition is not editable against a guessed vocabulary.">unavailable</span>}
                     </td>
-                    <td style={td}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} onClick={() => delRule(i)}>✕</button></td>
+                    <td style={td}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-fg-dc2626)' }} onClick={() => delRule(i)}>✕</button></td>
                   </tr>
                   {qVocabReady && (qOpen[i] || hasQualifier(r)) && (
                     <tr>
@@ -1064,7 +1064,7 @@ export default function CommissionPlansPage() {
                     </td>
                     <td style={td}><input style={{ ...sel, width: 90 }} type="number" value={t.min_count} onChange={e => updTier(i, { min_count: Number(e.target.value) })} /></td>
                     <td style={td}><input style={{ ...sel, width: 90 }} type="number" step="0.01" value={t.multiplier} onChange={e => updTier(i, { multiplier: Number(e.target.value) })} /></td>
-                    <td style={td}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} onClick={() => delTier(i)}>✕</button></td>
+                    <td style={td}><button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-fg-dc2626)' }} onClick={() => delTier(i)}>✕</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -1105,7 +1105,7 @@ export default function CommissionPlansPage() {
                     </td>
                     <td style={td}><input style={{ ...sel, width: 70 }} type="number" value={a.priority || 0} onChange={e => updAssign(i, { priority: Number(e.target.value) })} /></td>
                     <td style={td}>
-                      <button title="Remove from this draft (applies when you save the plan)" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} onClick={() => delAssign(i)}>✕</button>
+                      <button title="Remove from this draft (applies when you save the plan)" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-fg-dc2626)' }} onClick={() => delAssign(i)}>✕</button>
                       {!!a.id && !!draft.id && (
                         <button className="btn btn-secondary" title="Remove this saved assignment now, without re-saving the plan" style={{ fontSize: 11, padding: '2px 7px', marginLeft: 4 }} onClick={() => removeSavedAssign(a)}>Remove now</button>
                       )}
@@ -1128,7 +1128,7 @@ export default function CommissionPlansPage() {
       {/* PREVIEW */}
       <div className="card" style={{ padding: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
-          <div style={{ fontWeight: 700, fontSize: 14 }}>👁️ Preview <span style={{ fontWeight: 400, fontSize: 12, color: '#b45309' }}>(read-only — does NOT change live incentives)</span></div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>👁️ Preview <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--c-fg-b45309)' }}>(read-only — does NOT change live incentives)</span></div>
           <span style={{ flex: 1 }} />
           <EntityPicker options={periodOptions} value={period || null} width={170} allowCreate clearable={false}
             placeholder="pick a period…" onChange={v => setPeriod(v || '')} onCreate={v => setPeriod(v)}
@@ -1137,7 +1137,7 @@ export default function CommissionPlansPage() {
           {preview?.by_rep?.length > 0 && <><ExportButtons payload={previewPayload} /><SendReportButton exportPayload={previewPayload} compact /></>}
         </div>
         {preview && (
-          preview.ready === false ? <div style={{ fontSize: 13, color: '#b45309' }}>{preview.note || SETUP_NOTICE}</div>
+          preview.ready === false ? <div style={{ fontSize: 13, color: 'var(--c-fg-b45309)' }}>{preview.note || SETUP_NOTICE}</div>
           : preview.by_rep?.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text3)' }}>{preview.note || 'No payout for this period (no matching sales / no plan resolved).'}</div>
           : (
             <>
@@ -1262,7 +1262,7 @@ export default function CommissionPlansPage() {
                 </table>
               </div>
             ) : (
-              <div style={{ fontSize: 13, color: '#b45309' }}>
+              <div style={{ fontSize: 13, color: 'var(--c-fg-b45309)' }}>
                 No Executive MTD rows for this plan’s stores in {period}. Check the store assignments and that {period} has sales.
               </div>
             )}
@@ -1337,7 +1337,7 @@ export default function CommissionPlansPage() {
           <div style={{ marginTop: 6 }}>
             <div style={{ fontSize: 12.5, marginBottom: 6 }}>
               <b>{period}</b>: total <b>{fmt(impact.totals?.before)}</b> before → <b>{fmt(impact.totals?.after)}</b> after
-              (<b style={{ color: (impact.totals?.delta || 0) < 0 ? '#b91c1c' : '#15803d' }}>{fmt(impact.totals?.delta)}</b>),
+              (<b style={{ color: (impact.totals?.delta || 0) < 0 ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-15803d)' }}>{fmt(impact.totals?.delta)}</b>),
               {' '}{impact.by_rep?.length || 0} rep(s) move, {impact.reps_unchanged} unchanged.
             </div>
             {!!(impact.by_rep || []).length && (
@@ -1348,7 +1348,7 @@ export default function CommissionPlansPage() {
                     {(impact.by_rep || []).map((r: any, i: number) => (
                       <tr key={i}>
                         <td style={td}>{r.rep}</td><td style={td}>{fmt(r.before)}</td><td style={td}>{fmt(r.after)}</td>
-                        <td style={{ ...td, color: r.delta < 0 ? '#b91c1c' : '#15803d', fontWeight: 700 }}>{fmt(r.delta)}</td>
+                        <td style={{ ...td, color: r.delta < 0 ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-15803d)', fontWeight: 700 }}>{fmt(r.delta)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1362,7 +1362,7 @@ export default function CommissionPlansPage() {
             )}
           </div>
         )}
-        {impact?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{impact.error}</div>}
+        {impact?.error && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)' }}>{impact.error}</div>}
         {audit && !audit.error && (
           <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
             <div style={{ fontSize: 12.5, marginBottom: 4 }}>
@@ -1388,7 +1388,7 @@ export default function CommissionPlansPage() {
             )}
           </div>
         )}
-        {audit?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{audit.error}</div>}
+        {audit?.error && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)' }}>{audit.error}</div>}
 
         {/* ── PAYOUT EXCLUSIONS (mig 261) ────────────────────────────────────────────────────────
             OWNER 2026-08-01: "there shgould be no paymentfor any rtr trasactions … but with mapping
@@ -1402,7 +1402,7 @@ export default function CommissionPlansPage() {
             <button className="btn btn-secondary" disabled={exclImpactBusy} onClick={runExclImpact}>{exclImpactBusy ? '…' : `What would this exclude in ${period}?`}</button>
           </div>
           {excl?.ready === false && (
-            <div style={{ fontSize: 11.5, color: '#92400e', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 6, padding: '6px 8px', marginBottom: 6 }}>
+            <div style={{ fontSize: 11.5, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fcd34d)', borderRadius: 6, padding: '6px 8px', marginBottom: 6 }}>
               Run <b>{excl.migration}</b> to make this list editable. The built-in mapping below is already in force.
             </div>
           )}
@@ -1413,7 +1413,7 @@ export default function CommissionPlansPage() {
                 <tr key={i}>
                   <td style={td}>{r.label || r.code || '—'}</td>
                   <td style={td}>{r.match_field}</td>
-                  <td style={td}>{r.match_op}{r.match_op === 'word' && <span title="matches the whole token only — a substring match on a short token would hit unrelated products (‘contains RTR’ also matches CARTRIDGE)" style={{ marginLeft: 4, color: '#2563eb' }}>ⓘ</span>}</td>
+                  <td style={td}>{r.match_op}{r.match_op === 'word' && <span title="matches the whole token only — a substring match on a short token would hit unrelated products (‘contains RTR’ also matches CARTRIDGE)" style={{ marginLeft: 4, color: 'var(--c-fg-2563eb)' }}>ⓘ</span>}</td>
                   <td style={td}><code>{r.match_value}</code></td>
                   <td style={td}>{r.enabled ? '✅' : '—'}{r.status === 'proposed' ? ' (proposed)' : ''}</td>
                   <td style={td}>{r.source === 'seed' ? 'built-in' : 'yours'}</td>
@@ -1421,7 +1421,7 @@ export default function CommissionPlansPage() {
                     {r.source === 'seed'
                       ? <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 8px' }} disabled={exclSaving}
                           onClick={() => saveExclusion({ ...r, enabled: false, source: 'tenant' })}>switch off</button>
-                      : <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }} disabled={exclSaving}
+                      : <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-fg-dc2626)' }} disabled={exclSaving}
                           onClick={() => deleteExclusion(r.id)}>✕</button>}
                   </td>
                 </tr>
@@ -1464,7 +1464,7 @@ export default function CommissionPlansPage() {
               )}
             </div>
           )}
-          {exclImpact?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{exclImpact.error}</div>}
+          {exclImpact?.error && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)' }}>{exclImpact.error}</div>}
         </div>
 
         {/* ── ACCESSORY %-OF-GP BASIS GUARD (mig 260) ────────────────────────────────────────────
@@ -1505,7 +1505,7 @@ export default function CommissionPlansPage() {
               {' '}(total {fmt(accImpact.totals?.delta)} across all reps).
               {accImpact.hypothesis_note && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{accImpact.hypothesis_note}</div>}
               {accImpact.accessory_definition_loaded === false && (
-                <div style={{ fontSize: 11.5, color: '#92400e', marginTop: 4 }}>
+                <div style={{ fontSize: 11.5, color: 'var(--c-fg-92400e)', marginTop: 4 }}>
                   No accessory definition is mapped for this tenant yet, so the guard has nothing to act on.
                   Map the products under <a href="/commcalc/accessory-definition" style={{ color: 'var(--accent)' }}>Accessory Definition</a> first.
                 </div>
@@ -1519,7 +1519,7 @@ export default function CommissionPlansPage() {
                         <td style={td}>{s.rep}</td><td style={td}>{s.product}</td>
                         <td style={td}>{fmt(s.ext_price)}</td><td style={td}>{fmt(s.gp)}</td>
                         <td style={td}>{fmt(s.was)}</td>
-                        <td style={{ ...td, fontWeight: 700, color: '#15803d' }}>{fmt(s.now)}</td>
+                        <td style={{ ...td, fontWeight: 700, color: 'var(--c-fg-15803d)' }}>{fmt(s.now)}</td>
                         <td style={{ ...td, fontSize: 11, color: 'var(--text3)' }}>{s.note}</td>
                       </tr>
                     ))}
@@ -1529,7 +1529,7 @@ export default function CommissionPlansPage() {
               <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>{accImpact.note}</div>
             </div>
           )}
-          {accImpact?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{accImpact.error}</div>}
+          {accImpact?.error && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)' }}>{accImpact.error}</div>}
         </div>
       </div>
 
@@ -1553,7 +1553,7 @@ export default function CommissionPlansPage() {
             {(sf.keywords || []).map((k: string) => (
               <code key={k} style={{ background: 'var(--bg2)', padding: '1px 5px', borderRadius: 4, marginRight: 4 }}>{k}</code>
             ))}
-            {sf.keywords_are_default && <span style={{ marginLeft: 6, color: '#b45309' }}>← the built-in default ({showBoost ? 'Boost' : 'default'} wording). Map your own below if your POS calls it something else.</span>}
+            {sf.keywords_are_default && <span style={{ marginLeft: 6, color: 'var(--c-fg-b45309)' }}>← the built-in default ({showBoost ? 'Boost' : 'default'} wording). Map your own below if your POS calls it something else.</span>}
           </div>
 
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 8 }}>
@@ -1623,7 +1623,7 @@ export default function CommissionPlansPage() {
                       <td style={td}>{c.first}</td><td style={td}>{c.last}</td>
                       <td style={td}>
                         {c.mapped_now
-                          ? <span style={{ color: '#15803d', fontWeight: 700 }}>✓ mapped</span>
+                          ? <span style={{ color: 'var(--c-fg-15803d)', fontWeight: 700 }}>✓ mapped</span>
                           : c.collects_money
                             ? <button className="btn btn-secondary" style={{ fontSize: 11, padding: '1px 8px' }} disabled={sfBusy}
                                 onClick={() => mapKeyword(c.product_desc)}>map as the fee</button>
@@ -1637,7 +1637,7 @@ export default function CommissionPlansPage() {
             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>{sfCand.note}</div>
           </div>
         )}
-        {sfCand?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{sfCand.error}</div>}
+        {sfCand?.error && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)' }}>{sfCand.error}</div>}
 
         {sfImpact && !sfImpact.error && (
           <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
@@ -1648,7 +1648,7 @@ export default function CommissionPlansPage() {
             </div>
             {sfImpact.hypothesis_note && <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>{sfImpact.hypothesis_note}</div>}
             {!!(sfImpact.warnings || []).length && (
-              <ul style={{ fontSize: 11.5, color: '#92400e', paddingLeft: 18, margin: '4px 0' }}>
+              <ul style={{ fontSize: 11.5, color: 'var(--c-fg-92400e)', paddingLeft: 18, margin: '4px 0' }}>
                 {sfImpact.warnings.slice(0, 8).map((w: any, i: number) => <li key={i}>{w.message}</li>)}
               </ul>
             )}
@@ -1660,7 +1660,7 @@ export default function CommissionPlansPage() {
                     <tr key={i}>
                       <td style={td}>{r.rep}</td><td style={td}>{fmt(r.collected)}</td><td style={td}>{r.lines}</td>
                       <td style={td}>{fmt(r.now)}</td><td style={td}>{fmt(r.with_pct)}</td>
-                      <td style={{ ...td, fontWeight: 700, color: r.delta > 0 ? '#15803d' : 'var(--text3)' }}>{fmt(r.delta)}</td>
+                      <td style={{ ...td, fontWeight: 700, color: r.delta > 0 ? 'var(--c-fg-15803d)' : 'var(--text3)' }}>{fmt(r.delta)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1669,7 +1669,7 @@ export default function CommissionPlansPage() {
             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>{sfImpact.note}</div>
           </div>
         )}
-        {sfImpact?.error && <div style={{ fontSize: 12.5, color: '#b91c1c' }}>{sfImpact.error}</div>}
+        {sfImpact?.error && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)' }}>{sfImpact.error}</div>}
       </div>
 
       {/* PLAN COVERAGE — why isn't the plan paying what I configured? (read-only diagnostic, mig 232) */}
@@ -1684,7 +1684,7 @@ export default function CommissionPlansPage() {
         {!cov && <div style={{ fontSize: 13, color: 'var(--text3)' }}>Uses the period above. Nothing is written and no calculation is triggered.</div>}
         {cov && (<>
           {cov.snapshot?.stale && (
-            <div style={{ background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 8, padding: '8px 10px', fontSize: 12.5, marginBottom: 10 }}>
+            <div style={{ background: 'var(--c-bg-fef3c7)', border: '1px solid var(--c-bg-fcd34d)', borderRadius: 8, padding: '8px 10px', fontSize: 12.5, marginBottom: 10 }}>
               ⚠️ <b>Stored snapshot is stale.</b> The plans compute {fmt(cov.snapshot.engine_total)} for {cov.period} but
               the saved incentive rows total {fmt(cov.snapshot.stored_total)} across {cov.snapshot.stored_rows} rows.
               The incentive pages show the SAVED numbers — run <b>Calculate</b> for this period to apply the current configuration.
@@ -1703,7 +1703,7 @@ export default function CommissionPlansPage() {
           <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 12.5, marginBottom: 10 }}>
             <span>carrier mode: <b>{cov.carrier_mode}</b></span>
             <span>reps paid: <b>{cov.totals?.reps ?? 0}</b></span>
-            <span>sellers with NO plan: <b style={{ color: (cov.coverage?.unassigned_count || 0) ? '#b91c1c' : undefined }}>{cov.coverage?.unassigned_count ?? 0}</b> ({fmt(cov.coverage?.unassigned_ext_price || 0)} of sales)</span>
+            <span>sellers with NO plan: <b style={{ color: (cov.coverage?.unassigned_count || 0) ? 'var(--c-fg-b91c1c)' : undefined }}>{cov.coverage?.unassigned_count ?? 0}</b> ({fmt(cov.coverage?.unassigned_ext_price || 0)} of sales)</span>
             <span>lines no rule matched: <b>{cov.coverage?.unmatched?.total_lines ?? 0}</b></span>
             <span>blank Contract Type: <b>{cov.coverage?.contract_type?.blank ?? 0}</b> / {cov.coverage?.contract_type?.sale_lines ?? 0} ({cov.coverage?.contract_type?.blank_pct ?? 0}%)</span>
           </div>
@@ -1742,7 +1742,7 @@ export default function CommissionPlansPage() {
                     <tr key={i}><td style={td}>{r.rep}</td><td style={td}>{r.plan_name}</td>
                       <td style={td}>{r.tier_units}</td><td style={td}>{r.tier_basis}</td>
                       <td style={td}>{r.tier_multiplier}×</td><td style={td}>{fmt(r.total_payout)}</td>
-                      <td style={{ ...td, color: (r.unmatched_lines || 0) ? '#b45309' : undefined }}>{r.unmatched_lines}</td>
+                      <td style={{ ...td, color: (r.unmatched_lines || 0) ? 'var(--c-fg-b45309)' : undefined }}>{r.unmatched_lines}</td>
                       <td style={td}>{fmt(r.unmatched_ext_price || 0)}</td></tr>
                   ))}</tbody>
                 </table>
@@ -1803,7 +1803,7 @@ export default function CommissionPlansPage() {
           </div>
 
           {/* apply bar — pick plan + apply to checked */}
-          <div className="card" style={{ padding: 12, marginBottom: 12, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', background: checked.size ? '#eff6ff' : 'var(--surface)' }}>
+          <div className="card" style={{ padding: 12, marginBottom: 12, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', background: checked.size ? 'var(--c-bg-eff6ff)' : 'var(--surface)' }}>
             <div style={{ fontSize: 13, fontWeight: 700 }}>{checked.size} selected</div>
             <span style={{ color: 'var(--text3)' }}>→</span>
             <EntityPicker width={280} placeholder="Pick a plan to assign…" options={planOptions}
@@ -1816,16 +1816,16 @@ export default function CommissionPlansPage() {
           </div>
 
           {bulkResult && !bulkResult.error && (
-            <div className="card" style={{ padding: 12, marginBottom: 12, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 13 }}>
+            <div className="card" style={{ padding: 12, marginBottom: 12, background: 'var(--c-bg-f0fdf4)', border: '1px solid var(--c-bg-bbf7d0)', fontSize: 13 }}>
               ✅ <strong>{bulkResult.plan_name}</strong> — {bulkResult.summary?.assigned || 0} newly assigned ·
               {' '}{bulkResult.summary?.replaced || 0} replaced ({bulkResult.summary?.rows_deleted || 0} old removed) ·
               {' '}{bulkResult.summary?.already || 0} already had it{bulkResult.summary?.skipped ? ` · ${bulkResult.summary.skipped} skipped (kept their other plan)` : ''}.
             </div>
           )}
-          {bulkResult?.error && <div className="card" style={{ padding: 12, marginBottom: 12, background: '#fef2f2', border: '1px solid #fecaca', fontSize: 13 }}>❌ {bulkResult.error}</div>}
+          {bulkResult?.error && <div className="card" style={{ padding: 12, marginBottom: 12, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', fontSize: 13 }}>❌ {bulkResult.error}</div>}
 
           {/* people table */}
-          {!roster.ready && <div className="card" style={{ padding: 14, marginBottom: 12, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ <SetupNotice lead="Plan assignments are not available yet." detail="059_commission_plans.sql" /></div>}
+          {!roster.ready && <div className="card" style={{ padding: 14, marginBottom: 12, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', fontSize: 13 }}>⚠️ <SetupNotice lead="Plan assignments are not available yet." detail="059_commission_plans.sql" /></div>}
           <div className="card" style={{ padding: 0 }}>
             <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text2)' }}>
               {filteredPeople.length} of {roster.people.length} people{fMarkets.length || fRoles.length || nameQuery ? ' (filtered)' : ''}
@@ -1848,7 +1848,7 @@ export default function CommissionPlansPage() {
                     const dup = (nameCounts[p.name.trim().toLowerCase()] || 0) > 1
                     const isChecked = checked.has(p.value)
                     return (
-                      <tr key={p.value} style={{ borderTop: '1px solid var(--border)', background: isChecked ? '#eff6ff' : undefined, cursor: 'pointer' }}
+                      <tr key={p.value} style={{ borderTop: '1px solid var(--border)', background: isChecked ? 'var(--c-bg-eff6ff)' : undefined, cursor: 'pointer' }}
                         onClick={() => toggleOne(p.value)}>
                         <td style={{ ...td, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
                           <input type="checkbox" checked={isChecked} onChange={() => toggleOne(p.value)} aria-label={`Select ${p.name}`} />
@@ -1856,9 +1856,9 @@ export default function CommissionPlansPage() {
                         <td style={td}>
                           <span style={{ fontWeight: 600 }}>{p.name}</span>
                           {dup && p.email && <span style={{ color: 'var(--text3)', fontSize: 11 }}> — {p.email}</span>}
-                          {!p.is_active && <span style={{ fontSize: 10, marginLeft: 6, color: '#b45309' }}>inactive</span>}
+                          {!p.is_active && <span style={{ fontSize: 10, marginLeft: 6, color: 'var(--c-fg-b45309)' }}>inactive</span>}
                         </td>
-                        <td style={td}>{p.role ? <span style={{ fontSize: 11, fontWeight: 700, padding: '1px 6px', borderRadius: 8, background: '#dbeafe', color: '#1e40af' }}>{p.role}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
+                        <td style={td}>{p.role ? <span style={{ fontSize: 11, fontWeight: 700, padding: '1px 6px', borderRadius: 8, background: 'var(--c-bg-dbeafe)', color: 'var(--c-fg-1e40af)' }}>{p.role}</span> : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
                         <td style={td}>{p.market || <span style={{ color: 'var(--text3)' }}>—</span>}</td>
                         <td style={td}>
                           {p.current_plans.length === 0 ? <span style={{ color: 'var(--text3)' }}>none</span> :
@@ -1885,7 +1885,7 @@ export default function CommissionPlansPage() {
                   <li><strong>{bulkPreview.newCount}</strong> will be newly assigned</li>
                   <li><strong>{bulkPreview.alreadyCount}</strong> already have this plan (skipped)</li>
                   {bulkPreview.replacePeople > 0 && (
-                    <li style={{ color: '#b45309' }}>
+                    <li style={{ color: 'var(--c-fg-b45309)' }}>
                       <strong>{bulkPreview.replacePeople}</strong> currently have a DIFFERENT plan — replacing removes
                       {' '}<strong>{bulkPreview.replaceRows}</strong> existing assignment{bulkPreview.replaceRows === 1 ? '' : 's'}
                     </li>
@@ -1930,7 +1930,7 @@ function PreviewRow({ row }: { row: any }) {
         <td style={{ ...td, fontWeight: 700 }}>{fmt(row.total_payout)}</td>
       </tr>
       {open && (row.rules || []).map((rb: any, j: number) => (
-        <tr key={j} style={{ background: '#f8fafc' }}>
+        <tr key={j} style={{ background: 'var(--c-bg-f8fafc)' }}>
           <td style={{ ...td, paddingLeft: 24, color: 'var(--text3)' }} colSpan={3}>{rb.label || rb.payout_kind} · {rb.payout_kind}{rb.tiered ? ' · tiered' : ''}{rb.qualifies === false ? ' · non-qualifying' : ''}</td>
           <td style={{ ...td, color: 'var(--text3)' }}>{rb.qualifying_units} / {rb.matched_lines}</td>
           <td style={td} colSpan={3} />

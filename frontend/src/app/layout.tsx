@@ -4,6 +4,7 @@ import './globals.css'
 import { AuthProvider } from '@/lib/auth-context'
 import UnsafeLinkGuard from '@/components/UnsafeLinkGuard'
 import { siteUrl } from '@/lib/apiBase'
+import { DEFAULT_THEME, PRE_PAINT, THEME_ATTR } from '@/lib/theme'
 
 // Load Inter for real (2026-08-29 design polish). The stylesheet has named 'Inter' as the UI face since
 // day one, but nothing ever LOADED it — every screen silently fell back to system-ui. next/font self-hosts
@@ -35,7 +36,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en" className={inter.variable} {...{ [THEME_ATTR]: DEFAULT_THEME }}>
+      {/* The theme is applied BEFORE the first paint. Left to an effect, the browser would paint the
+          server's default and then repaint — on this app a white flash in front of a black page. */}
+      <head><script dangerouslySetInnerHTML={{ __html: PRE_PAINT }} /></head>
       {/* UnsafeLinkGuard: app-wide `javascript:`/`vbscript:`/`data:text/html` click net (H6,
           2026-08-05 audit). Renders nothing; see the component header for why it is a deny-list. */}
       <body><AuthProvider><UnsafeLinkGuard />{children}</AuthProvider></body>

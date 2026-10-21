@@ -16,8 +16,8 @@ const td: React.CSSProperties = { padding: '7px 10px', borderTop: '1px solid var
 
 const thisMonth = () => localToday().slice(0, 7)
 const SEV: Record<string, { bg: string; fg: string; label: string }> = {
-  block: { bg: '#fde8e8', fg: '#b42318', label: '⛔ Block' },
-  flag: { bg: '#fef3e2', fg: '#b45309', label: '⚠️ Flag' },
+  block: { bg: 'var(--c-bg-fde8e8)', fg: 'var(--c-fg-b42318)', label: '⛔ Block' },
+  flag: { bg: 'var(--c-bg-fef3e2)', fg: 'var(--c-fg-b45309)', label: '⚠️ Flag' },
   pending: { bg: 'var(--surface2)', fg: 'var(--text3)', label: '⏳ Pending' },
 }
 
@@ -191,7 +191,7 @@ export default function ClosingReconPage() {
                           {e.reason}
                           {e.rep && e.rep !== '—' && (e.metric === 'cash' || e.metric === 'credit') && e.severity !== 'pending' && (
                             charged[`${e.date}|${e.rep}|${e.metric}`]
-                              ? <span style={{ color: '#16794a', fontSize: 11, marginLeft: 6 }}>✓ charged</span>
+                              ? <span style={{ color: 'var(--c-fg-16794a)', fontSize: 11, marginLeft: 6 }}>✓ charged</span>
                               : <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', marginLeft: 6 }} onClick={() => chargeRow(e)} title="Send to the chargeback bucket for this rep">🔻 Charge</button>
                           )}
                         </td>

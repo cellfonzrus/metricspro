@@ -151,14 +151,14 @@ export default function WatchdogAreaPage() {
     <div>
       <PageIntro
         title={data?.label || 'Management Watchdog'}
-        right={<Link href="/watchdog" style={{ fontSize: 13, color: 'var(--blue, #2563eb)' }}>
+        right={<Link href="/watchdog" style={{ fontSize: 13, color: 'var(--blue, var(--c-fg-2563eb))' }}>
           ← All areas
         </Link>}
         help={data?.blurb}
       />
 
       {err && (
-        <div style={{ border: '1px solid var(--red, #dc2626)', borderRadius: 8, padding: '10px 12px',
+        <div style={{ border: '1px solid var(--red, var(--c-bg-dc2626))', borderRadius: 8, padding: '10px 12px',
                       marginBottom: 14, fontSize: 13, color: 'var(--text2)' }}>
           This area could not be loaded: {err}
         </div>
@@ -269,7 +269,7 @@ export default function WatchdogAreaPage() {
 
           {area === 'voids' && (
             <p style={{ marginTop: 16, fontSize: 13 }}>
-              <Link href="/watchdog/void-register" style={{ color: 'var(--blue, #2563eb)' }}>
+              <Link href="/watchdog/void-register" style={{ color: 'var(--blue, var(--c-fg-2563eb))' }}>
                 Open the full void &amp; return register →
               </Link>
               <span style={{ color: 'var(--text2)', marginLeft: 8 }}>

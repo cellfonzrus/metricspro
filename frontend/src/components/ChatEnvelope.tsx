@@ -107,7 +107,7 @@ export default function ChatEnvelope() {
       {/* Rendered only for a count we actually READ and that is actually non-zero. */}
       {total != null && n > 0 && (
         <span aria-hidden style={{ position: 'absolute', top: -6, right: -6, minWidth: 17, height: 17,
-          padding: '0 4px', borderRadius: 999, background: '#dc2626', color: 'white', fontSize: 10,
+          padding: '0 4px', borderRadius: 999, background: 'var(--c-bg-dc2626)', color: 'var(--c-fg-ffffff)', fontSize: 10,
           fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           {n > 99 ? '99+' : n}
         </span>

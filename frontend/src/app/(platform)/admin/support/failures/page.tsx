@@ -99,7 +99,7 @@ export default function FleetFailureTriage() {
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🩺 Fleet Failure Triage</h1>
         <span style={{ fontSize: 13, color: 'var(--text3)' }}>Cross-tenant · {groups.length} group{groups.length === 1 ? '' : 's'}
-          {unreviewedTotal > 0 && <span style={{ color: '#dc2626', fontWeight: 600 }}> · {unreviewedTotal} unreviewed</span>}</span>
+          {unreviewedTotal > 0 && <span style={{ color: 'var(--c-fg-dc2626)', fontWeight: 600 }}> · {unreviewedTotal} unreviewed</span>}</span>
         <span style={{ flex: 1 }} />
         <Link href="/admin/support/fix-requests" className="btn btn-sm">🛠️ Fix Requests</Link>
         <Link href="/admin/support" className="btn btn-sm">🎧 Console</Link>
@@ -128,7 +128,7 @@ export default function FleetFailureTriage() {
         <ReportExportBar title="Fleet Failures" filename="fleet_failures" columns={exportCols} rows={rows} />
       </div>
       {msg && <div style={{ fontSize: 12.5, marginBottom: 8 }}>{msg}</div>}
-      {err && <div className="card" style={{ padding: 14, color: '#dc2626' }}>{err}</div>}
+      {err && <div className="card" style={{ padding: 14, color: 'var(--c-fg-dc2626)' }}>{err}</div>}
 
       {loading ? <div className="card" style={{ padding: 16 }}>Loading…</div> : groups.length === 0 ? (
         <div className="card" style={{ padding: 16, color: 'var(--text3)' }}>No {reviewedFilter === 'false' ? 'unreviewed ' : ''}failures across the fleet for this filter. 🎉</div>
@@ -141,13 +141,13 @@ export default function FleetFailureTriage() {
               <div key={g.kind} className="card" style={{ padding: 0, overflow: 'hidden', opacity: g.all_reviewed ? 0.78 : 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', flexWrap: 'wrap', background: 'var(--surface2)' }}>
                   <button onClick={() => setOpen(o => ({ ...o, [g.kind]: !o[g.kind] }))} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: 'var(--text2)', width: 16 }}>{isOpen ? '▾' : '▸'}</button>
-                  <span style={{ width: 8, height: 8, borderRadius: 8, background: SEV[g.severity] || '#888' }} />
+                  <span style={{ width: 8, height: 8, borderRadius: 8, background: SEV[g.severity] || 'var(--c-bg-888888)' }} />
                   <span style={{ fontWeight: 700, fontSize: 14 }}>{g.label}</span>
-                  {!g.known && <span title="Unrecognized error code" style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 8, background: '#f59e0b22', color: '#b45309', border: '1px solid #f59e0b55' }}>unknown code</span>}
+                  {!g.known && <span title="Unrecognized error code" style={{ fontSize: 10.5, padding: '1px 6px', borderRadius: 8, background: '#f59e0b22', color: 'var(--c-fg-b45309)', border: '1px solid #f59e0b55' }}>unknown code</span>}
                   <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {g.module}</span>
                   <span style={{ fontSize: 12, color: 'var(--text2)' }}>{g.count} · {g.affected_orgs.length} tenant{g.affected_orgs.length === 1 ? '' : 's'}</span>
-                  {g.unreviewed_count > 0 && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: '#dc262622', color: '#dc2626', fontWeight: 600 }}>{g.unreviewed_count} unreviewed</span>}
-                  {g.all_reviewed && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: '#16a34a22', color: '#16a34a', fontWeight: 600 }}>all reviewed</span>}
+                  {g.unreviewed_count > 0 && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: '#dc262622', color: 'var(--c-fg-dc2626)', fontWeight: 600 }}>{g.unreviewed_count} unreviewed</span>}
+                  {g.all_reviewed && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 8, background: '#16a34a22', color: 'var(--c-fg-16a34a)', fontWeight: 600 }}>all reviewed</span>}
                   <span style={{ fontSize: 11, color: 'var(--text3)' }}>latest {when(g.latest_at)}</span>
                   <span style={{ flex: 1 }} />
                   {g.unreviewed_count > 0 && <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => clearIds(grows.filter(r => !r.reviewed).map(r => r.id), true)}>Clear group</button>}

@@ -126,12 +126,12 @@ export default function HoursBudgetPage() {
                     <input style={inp} type="number" placeholder="—" value={val as any} onChange={e => setEdit(x => ({ ...x, [r.store_code]: e.target.value }))} />
                     {editing && <button className="btn btn-primary" style={{ fontSize: 11, padding: '3px 8px', marginLeft: 6 }} onClick={() => saveBudget(r.store_code)}>Save</button>}
                   </td>
-                  <td style={{ padding: '7px 9px', fontWeight: 700, color: r.over ? '#dc2626' : 'var(--text1)' }}>
+                  <td style={{ padding: '7px 9px', fontWeight: 700, color: r.over ? 'var(--c-fg-dc2626)' : 'var(--text1)' }}>
                     {r.used_hours}h{r.weekly_hours != null && <span style={{ fontWeight: 400, color: 'var(--text3)' }}> / {r.weekly_hours}h</span>}
                   </td>
                   <td style={{ padding: '7px 9px' }}>
-                    {r.over && !r.override && <span style={{ padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: '#991b1b', background: '#fee2e2' }}>⚠ Over budget</span>}
-                    {r.override && <span style={{ padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: '#166534', background: '#dcfce7' }}>✓ Override approved</span>}
+                    {r.over && !r.override && <span style={{ padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: 'var(--c-fg-991b1b)', background: 'var(--c-bg-fee2e2)' }}>⚠ Over budget</span>}
+                    {r.override && <span style={{ padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: 'var(--c-fg-166534)', background: 'var(--c-bg-dcfce7)' }}>✓ Override approved</span>}
                   </td>
                   <td style={{ padding: '7px 9px', textAlign: 'right' }}>
                     {r.over && !r.override && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => requestOverride(r.store_code)}>Request DM approval</button>}
@@ -146,7 +146,7 @@ export default function HoursBudgetPage() {
 
       <div className="card" style={{ padding: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <div style={{ fontWeight: 700, fontSize: 14 }}>Override approvals {pending.length > 0 && <span style={{ color: '#92400e' }}>· {pending.length} pending</span>}</div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Override approvals {pending.length > 0 && <span style={{ color: 'var(--c-fg-92400e)' }}>· {pending.length} pending</span>}</div>
           {visibleOvs.length > 0 && <ReportExportBar title="Hours Budget — Override Approvals" columns={ovCols} rows={visibleOvs} />}
         </div>
         {visibleOvs.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text3)' }}>No override requests.</div> : (
@@ -158,12 +158,12 @@ export default function HoursBudgetPage() {
                   <td style={{ padding: '7px 9px', fontWeight: 600 }}>{o.store_code}</td>
                   <td style={{ padding: '7px 9px' }}>{o.week_start}</td>
                   <td style={{ padding: '7px 9px', color: 'var(--text3)' }}>{o.reason || '—'}</td>
-                  <td style={{ padding: '7px 9px' }}>{o.status === 'pending' ? <b style={{ color: '#92400e' }}>Pending</b> : o.status === 'approved' ? <span style={{ color: '#166534' }}>Approved</span> : <span style={{ color: '#991b1b' }}>Denied</span>}</td>
+                  <td style={{ padding: '7px 9px' }}>{o.status === 'pending' ? <b style={{ color: 'var(--c-fg-92400e)' }}>Pending</b> : o.status === 'approved' ? <span style={{ color: 'var(--c-fg-166534)' }}>Approved</span> : <span style={{ color: 'var(--c-fg-991b1b)' }}>Denied</span>}</td>
                   <td style={{ padding: '7px 9px', color: 'var(--text3)' }}>{o.requested_by || '—'}</td>
                   <td style={{ padding: '7px 9px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {o.status === 'pending' && <>
                       <button className="btn btn-primary" style={{ fontSize: 12, padding: '3px 10px' }} onClick={() => decide(o, 'approve')}>✓ Approve</button>{' '}
-                      <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 10px', color: '#dc2626' }} onClick={() => decide(o, 'deny')}>✕ Deny</button>
+                      <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 10px', color: 'var(--c-fg-dc2626)' }} onClick={() => decide(o, 'deny')}>✕ Deny</button>
                     </>}
                     {o.status !== 'pending' && <span style={{ fontSize: 11, color: 'var(--text3)' }}>{o.decided_by}</span>}
                   </td>

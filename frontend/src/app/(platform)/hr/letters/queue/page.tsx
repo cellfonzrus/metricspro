@@ -6,8 +6,8 @@ import { useEffect, useState, useCallback } from 'react'
 import { api } from '@/lib/client'
 
 const btn: React.CSSProperties = { padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text1)', cursor: 'pointer', fontSize: 13 }
-const primaryBtn: React.CSSProperties = { ...btn, background: 'var(--accent)', color: '#fff', border: 'none' }
-const dangerBtn: React.CSSProperties = { ...btn, color: '#c0392b', borderColor: '#c0392b' }
+const primaryBtn: React.CSSProperties = { ...btn, background: 'var(--accent)', color: 'var(--c-fg-ffffff)', border: 'none' }
+const dangerBtn: React.CSSProperties = { ...btn, color: 'var(--c-fg-c0392b)', borderColor: 'var(--c-bg-c0392b)' }
 const box: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', color: 'var(--text1)', width: '100%' }
 
 export default function LettersQueuePage() {
@@ -59,8 +59,8 @@ export default function LettersQueuePage() {
       <p style={{ color: 'var(--text2)', fontSize: 13, marginTop: 0 }}>
         Letters queued for HR sign-off (approval-mode templates) or that failed to send on a retry.
       </p>
-      {err && <div style={{ color: '#c0392b', fontSize: 13, margin: '8px 0' }}>{err}</div>}
-      {msg && <div style={{ color: '#1e8e3e', fontSize: 13, margin: '8px 0' }}>{msg}</div>}
+      {err && <div style={{ color: 'var(--c-fg-c0392b)', fontSize: 13, margin: '8px 0' }}>{err}</div>}
+      {msg && <div style={{ color: 'var(--c-fg-1e8e3e)', fontSize: 13, margin: '8px 0' }}>{msg}</div>}
       {loading && <div style={{ fontSize: 13 }}>Loading…</div>}
       {!loading && rows.length === 0 && <div style={{ fontSize: 13, color: 'var(--text2)' }}>Nothing waiting for approval.</div>}
 
@@ -69,7 +69,7 @@ export default function LettersQueuePage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
             <div>
               <b>{r.employee_name || r.employee_id}</b> — {r.subject}
-              {r.status === 'failed' && <span style={{ color: '#c0392b', marginLeft: 8, fontSize: 12 }}>⚠️ previously failed: {r.send_error}</span>}
+              {r.status === 'failed' && <span style={{ color: 'var(--c-fg-c0392b)', marginLeft: 8, fontSize: 12 }}>⚠️ previously failed: {r.send_error}</span>}
               <div style={{ fontSize: 12, color: 'var(--text3)' }}>
                 {r.category}{r.escalation_tier ? ` · tier ${r.escalation_tier}` : ''} · {r.trigger === 'auto' ? 'auto-detected' : 'manual'} ·
                 {' '}{new Date(r.created_at).toLocaleString()}

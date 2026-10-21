@@ -209,7 +209,7 @@ function TrainingCenterBody() {
                     <div key={t.slug} className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
                         <div style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>{t.title}</div>
-                        {done && <span className="badge" style={{ fontSize: 11, background: '#e7f6ec', color: '#16794a' }}>✓ Done</span>}
+                        {done && <span className="badge" style={{ fontSize: 11, background: 'var(--c-bg-e7f6ec)', color: 'var(--c-fg-16794a)' }}>✓ Done</span>}
                         {t.is_tenant_override && (
                           <span className="badge" style={{ fontSize: 11 }} title="Your organisation has its own version of this walk-through">Custom</span>
                         )}

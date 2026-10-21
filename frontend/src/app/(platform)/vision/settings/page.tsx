@@ -122,15 +122,15 @@ export default function VisionSettingsPage() {
           shape for that. Shown only while Google is unlinked, so it stops nagging the moment it has
           served its purpose. */}
       {cfg.available && !status.google.linked && (
-        <div style={{ ...panel, marginBottom: 12, borderLeft: '3px solid #2563eb', fontSize: 13.5 }}>
+        <div style={{ ...panel, marginBottom: 12, borderLeft: '3px solid var(--c-bg-2563eb)', fontSize: 13.5 }}>
           <b>Connecting cameras for the first time?</b> The setup wizard walks it end to end — every
           console link, every value to paste, and the traps that only show up a week later.{' '}
           <Link href="/vision/onboarding" style={{ fontWeight: 600 }}>Start the wizard →</Link>
         </div>
       )}
 
-      {msg && <div style={{ ...panel, marginBottom: 12, borderLeft: '3px solid #16a34a', fontSize: 13 }}>{msg}</div>}
-      {err && <div style={{ ...panel, marginBottom: 12, borderColor: '#dc2626', color: '#dc2626', fontSize: 13 }}>{err}</div>}
+      {msg && <div style={{ ...panel, marginBottom: 12, borderLeft: '3px solid var(--c-bg-16a34a)', fontSize: 13 }}>{msg}</div>}
+      {err && <div style={{ ...panel, marginBottom: 12, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', fontSize: 13 }}>{err}</div>}
       {!canEdit && (
         <div style={{ ...panel, marginBottom: 12, fontSize: 13, color: 'var(--text2)' }}>
           You can view this page but not change it. Editing needs a company-wide role or the
@@ -205,12 +205,12 @@ export default function VisionSettingsPage() {
       <Section title="3 · Google (Nest) connection"
         note="Store cameras are reached through Google's Smart Device Management API. One Device Access project per company; the account that owns the cameras authorizes it once.">
         <div style={{ fontSize: 13.5, marginBottom: 10 }}>
-          Status: <b style={{ color: status.google.linked ? '#16a34a' : '#f39c12' }}>
+          Status: <b style={{ color: status.google.linked ? 'var(--c-fg-16a34a)' : 'var(--c-fg-f39c12)' }}>
             {status.google.linked ? 'Connected' : 'Not connected'}
           </b>
           {status.google.project_id && <span style={{ color: 'var(--text3)' }}> · project {status.google.project_id}</span>}
           {status.google.last_error && (
-            <div style={{ color: '#dc2626', fontSize: 12.5, marginTop: 6 }}>{status.google.last_error}</div>
+            <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 12.5, marginTop: 6 }}>{status.google.last_error}</div>
           )}
         </div>
         <GoogleLink canEdit={canEdit} google={status.google} onSaved={m => { setMsg(m); void load() }} />
@@ -255,7 +255,7 @@ export default function VisionSettingsPage() {
                       <td style={{ ...cell, fontWeight: 600 }}>
                         {h.structure_name}
                         {h.claimed_by_another_company && (
-                          <div style={{ fontSize: 11, color: '#f39c12', fontWeight: 400 }}>
+                          <div style={{ fontSize: 11, color: 'var(--c-fg-f39c12)', fontWeight: 400 }}>
                             already connected to another company
                           </div>
                         )}
@@ -365,7 +365,7 @@ export default function VisionSettingsPage() {
                 void for days. So this reports what ARRIVED, not what is configured. */}
             {status.events?.last_7d ? (
               <>
-                <b style={{ color: '#16a34a' }}>{status.events.last_7d} event(s)</b> in the last 7 days
+                <b style={{ color: 'var(--c-fg-16a34a)' }}>{status.events.last_7d} event(s)</b> in the last 7 days
                 {status.events.last_event_at && <> · most recent {fmtDateTime(status.events.last_event_at)}</>}
               </>
             ) : (
@@ -393,7 +393,7 @@ export default function VisionSettingsPage() {
       <Section title="5 · Edge analyzers"
         note="Video is never processed on our servers. A small box in each store holds the live feed and posts only derived numbers. Register one per store; the signing secret is shown once.">
         <div style={{ fontSize: 13.5, marginBottom: 10 }}>
-          {status.edge_agents.total} registered · <b style={{ color: status.edge_agents.online ? '#16a34a' : '#f39c12' }}>
+          {status.edge_agents.total} registered · <b style={{ color: status.edge_agents.online ? 'var(--c-fg-16a34a)' : 'var(--c-fg-f39c12)' }}>
             {status.edge_agents.online} online</b>
           {status.edge_agents.last_ingest_at && <span style={{ color: 'var(--text3)' }}> · last data {fmtDateTime(status.edge_agents.last_ingest_at)}</span>}
         </div>
@@ -408,7 +408,7 @@ export default function VisionSettingsPage() {
                   <td style={cell}>{a.store_code || '—'}</td>
                   <td style={cell}>
                     {a.awaiting_enrollment
-                      ? <span style={{ color: '#f39c12' }}>waiting to enroll</span>
+                      ? <span style={{ color: 'var(--c-fg-f39c12)' }}>waiting to enroll</span>
                       : a.last_seen_at ? fmtDateTime(a.last_seen_at) : 'never'}
                   </td>
                   <td style={cell}>
@@ -430,7 +430,7 @@ export default function VisionSettingsPage() {
           </table>
         )}
         {newSecret && (
-          <div style={{ ...panel, marginTop: 10, borderLeft: '3px solid #16a34a' }}>
+          <div style={{ ...panel, marginTop: 10, borderLeft: '3px solid var(--c-bg-16a34a)' }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
               Enrollment code for {newSecret.agent_key}
             </div>
@@ -577,7 +577,7 @@ function GoogleLink({ canEdit, google, onSaved }: {
   return (
     <div style={{ display: 'grid', gap: 8, maxWidth: 520 }}>
       {google.project_id && !dirty && (
-        <div style={{ ...panel, fontSize: 12.5, borderLeft: '3px solid #f39c12' }}>
+        <div style={{ ...panel, fontSize: 12.5, borderLeft: '3px solid var(--c-bg-f39c12)' }}>
           Saved. This Google account has not authorized us yet — enter the client secret below and
           authorize. The ids do not need retyping.
         </div>
@@ -606,7 +606,7 @@ function GoogleLink({ canEdit, google, onSaved }: {
         {busy ? 'Working…' : 'Authorize with Google'}
       </button></div>
       {cantAuthorize && canEdit && <div style={{ fontSize: 12, color: 'var(--text3)' }}>{cantAuthorize}</div>}
-      {err && <div style={{ color: '#dc2626', fontSize: 12.5 }}>{err}</div>}
+      {err && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 12.5 }}>{err}</div>}
     </div>
   )
 }

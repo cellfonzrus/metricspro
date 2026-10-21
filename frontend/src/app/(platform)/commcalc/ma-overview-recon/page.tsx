@@ -41,11 +41,11 @@ type Tile = {
 }
 
 const STATUS: Record<string, { tint: string; text: string; label: string }> = {
-  ok: { tint: 'rgba(34,197,94,.10)', text: '#16a34a', label: 'matches' },
-  off: { tint: 'rgba(239,68,68,.10)', text: '#dc2626', label: 'DELTA' },
+  ok: { tint: 'rgba(34,197,94,.10)', text: 'var(--c-fg-16a34a)', label: 'matches' },
+  off: { tint: 'rgba(239,68,68,.10)', text: 'var(--c-fg-dc2626)', label: 'DELTA' },
   unmapped: { tint: 'rgba(148,163,184,.12)', text: 'var(--text2)', label: 'no source mapped' },
   no_report: { tint: 'rgba(148,163,184,.12)', text: 'var(--text2)', label: 'no report uploaded' },
-  config_error: { tint: 'rgba(245,158,11,.12)', text: '#b45309', label: 'mapping error' },
+  config_error: { tint: 'rgba(245,158,11,.12)', text: 'var(--c-fg-b45309)', label: 'mapping error' },
 }
 
 const fmtVal = (v: number | null | undefined, kind: string) =>
@@ -191,7 +191,7 @@ export default function MaOverviewReconPage() {
     <div style={{ padding: 20, maxWidth: 1500 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
         <h1 style={{ margin: 0 }}>MA Overview — cross-check</h1>
-        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: 'rgba(34,197,94,.12)', color: '#16a34a' }}>
+        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: 'rgba(34,197,94,.12)', color: 'var(--c-fg-16a34a)' }}>
           READ-ONLY · changes no pay
         </span>
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openMapping}>⚙ Tile mapping</button>
@@ -243,7 +243,7 @@ export default function MaOverviewReconPage() {
               {rep.has_total_row ? ' + a report-level total row' : ''}</span>
             {rep.source_file && <span style={{ color: 'var(--text2)' }}>from <code>{rep.source_file}</code></span>}
             {rep.uploaded_at && <span style={{ color: 'var(--text2)' }}>stored {String(rep.uploaded_at).slice(0, 19).replace('T', ' ')}</span>}
-            {rep.stated_abbreviated && <span style={{ color: '#b45309' }}>⚠ stated values were abbreviated (1.1K / $28.3K) and expanded on ingest — small deltas are rounding, not data</span>}
+            {rep.stated_abbreviated && <span style={{ color: 'var(--c-fg-b45309)' }}>⚠ stated values were abbreviated (1.1K / $28.3K) and expanded on ingest — small deltas are rounding, not data</span>}
           </>
         ) : (
           <span style={{ color: 'var(--text2)' }}>
@@ -288,7 +288,7 @@ export default function MaOverviewReconPage() {
               </div>
               <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 6 }}>{srcText(t)}</div>
               {!!t.config_problems?.length && (
-                <div style={{ fontSize: 11, color: '#b45309', marginTop: 4 }}>⚠ {t.config_problems.join('; ')}</div>
+                <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)', marginTop: 4 }}>⚠ {t.config_problems.join('; ')}</div>
               )}
               {t.stated_from_total_row && (
                 <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 4 }}>stated from the report-level total row</div>
@@ -349,7 +349,7 @@ export default function MaOverviewReconPage() {
           </div>
           {!!d.rate_plan?.duplicates?.duplicate_rows && (
             <div style={{ marginTop: 8, padding: '7px 10px', borderRadius: 8, fontSize: 12,
-                          background: 'rgba(245,158,11,.12)', color: '#b45309' }}>
+                          background: 'rgba(245,158,11,.12)', color: 'var(--c-fg-b45309)' }}>
               ⚠ {d.rate_plan.duplicates.note}
             </div>
           )}
@@ -380,7 +380,7 @@ export default function MaOverviewReconPage() {
                 <tr key={v.value} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={td}>{v.value}</td>
                   <td style={{ ...td, textAlign: 'right' }}>{v.rows.toLocaleString()}</td>
-                  <td style={{ ...td, color: v.counted ? '#16a34a' : 'var(--text2)' }}>
+                  <td style={{ ...td, color: v.counted ? 'var(--c-fg-16a34a)' : 'var(--text2)' }}>
                     {v.counted ? 'counted' : 'excluded'}
                   </td>
                 </tr>
@@ -489,7 +489,7 @@ export default function MaOverviewReconPage() {
             <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setDrill(null)}>Close</button>
           </div>
           {drill.loading && <div style={{ fontSize: 13, color: 'var(--text2)' }}>Loading…</div>}
-          {drill.error && <div style={{ fontSize: 13, color: '#dc2626' }}>❌ {drill.error}</div>}
+          {drill.error && <div style={{ fontSize: 13, color: 'var(--c-fg-dc2626)' }}>❌ {drill.error}</div>}
           {drill.unmapped && <div style={{ fontSize: 13, color: 'var(--text2)' }}>{drill.note}</div>}
           {!!(drill.rows || []).length && (
             <>
@@ -659,7 +659,7 @@ function Explain({ title, value, detail, note, bad, money }: {
   return (
     <div style={{ flex: '1 1 240px', minWidth: 230, border: '1px solid var(--border)', borderRadius: 8, padding: '9px 11px' }} title={note || ''}>
       <div style={{ fontSize: 12, color: 'var(--text2)' }}>{title}</div>
-      <div style={{ fontSize: 18, fontWeight: 600, color: bad && Math.abs(n) > 0.005 ? '#dc2626' : undefined }}>
+      <div style={{ fontSize: 18, fontWeight: 600, color: bad && Math.abs(n) > 0.005 ? 'var(--c-fg-dc2626)' : undefined }}>
         {blank ? '—' : money ? fmt(n) : n.toLocaleString()}
       </div>
       {detail && <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 3, wordBreak: 'break-word' }}>{detail}</div>}

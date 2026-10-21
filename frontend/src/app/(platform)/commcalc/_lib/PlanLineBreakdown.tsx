@@ -86,14 +86,14 @@ export default function PlanLineBreakdown({ rows, compact, children, audience, c
   }
   // the ⛔'s own reason, in the open instead of only in a tooltip
   const why: React.CSSProperties = {
-    fontSize: 10.5, fontWeight: 400, color: '#b45309', lineHeight: 1.35, marginTop: 1,
+    fontSize: 10.5, fontWeight: 400, color: 'var(--c-fg-b45309)', lineHeight: 1.35, marginTop: 1,
     whiteSpace: 'normal', maxWidth: 230, marginLeft: 'auto', textAlign: 'right',
   }
   const chip = (on: boolean): React.CSSProperties => ({
     padding: '3px 10px', borderRadius: 999, fontSize: 11.5, fontWeight: 600, cursor: 'pointer',
     border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
     background: on ? 'var(--accent)' : 'var(--surface)',
-    color: on ? '#fff' : 'var(--text2)', whiteSpace: 'nowrap',
+    color: on ? 'var(--c-fg-ffffff)' : 'var(--text2)', whiteSpace: 'nowrap',
   })
 
   return (
@@ -251,7 +251,7 @@ export default function PlanLineBreakdown({ rows, compact, children, audience, c
                     <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>
                       {isFlatOnce(l) ? 'flat (once)' : fmt(l.amount as number)}
                       {l.suppressed && (
-                        <span style={{ color: '#dc2626', marginLeft: 4 }}
+                        <span style={{ color: 'var(--c-fg-dc2626)', marginLeft: 4 }}
                           title={`Not paid — ${l.suppressed_reason || 'suppressed by the pay gate'}`
                             + (l.would_have_paid ? ` · would have paid ${fmt(l.would_have_paid)}` : '')}>⛔</span>
                       )}

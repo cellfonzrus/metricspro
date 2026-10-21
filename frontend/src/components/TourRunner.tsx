@@ -182,7 +182,7 @@ export default function TourRunner() {
             position: 'fixed',
             top: rect.top - PAD, left: rect.left - PAD,
             width: rect.width + PAD * 2, height: rect.height + PAD * 2,
-            borderRadius: 10, border: '2px solid #2563eb',
+            borderRadius: 10, border: '2px solid var(--c-bg-2563eb)',
             boxShadow: '0 0 0 9999px rgba(15,23,42,0.55)', transition: 'all 140ms ease-out',
           }} />
         ) : (
@@ -193,13 +193,13 @@ export default function TourRunner() {
       {/* The step card */}
       <div role="dialog" aria-live="polite" aria-label={`Walk-through step ${idx + 1} of ${total}`}
         style={{
-          position: 'fixed', zIndex: 1401, background: 'white', borderRadius: 14,
+          position: 'fixed', zIndex: 1401, background: 'var(--c-bg-ffffff)', borderRadius: 14,
           boxShadow: '0 18px 50px rgba(0,0,0,0.32)', padding: '16px 18px 14px',
           maxWidth: '92vw', ...cardPos,
         }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
-            color: '#2563eb' }}>
+            color: 'var(--c-fg-2563eb)' }}>
             {tour?.title}
           </span>
           <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>{idx + 1} / {total}</span>

@@ -57,14 +57,14 @@ const Card = ({ children }: any) => <div className="card" style={{ padding: 16 }
 function Categories() {
   const { rows, msg, create, update, remove } = useList('categories')
   const [name, setName] = useState('')
-  return <Card>{msg && <div style={{ color: '#c0392b', fontSize: 12 }}>{msg}</div>}
+  return <Card>{msg && <div style={{ color: 'var(--c-fg-c0392b)', fontSize: 12 }}>{msg}</div>}
     <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>Set <b>alert emails</b> per category to route new-ticket emails (e.g. IT → IT lead, HR/Payroll → HR). Leave blank to use the shared list on the <b>settings</b> tab.</div>
     {rows.map(r => <Row key={r.id}>
       <input style={{ ...inp, width: 150 }} defaultValue={r.name} onBlur={e => e.target.value !== r.name && update(r.id, { name: e.target.value })} />
       <input style={{ ...inp, flex: 1, minWidth: 180 }} defaultValue={(r.notify_emails || []).join(', ')} placeholder="alert emails (optional)"
         onBlur={e => { const v = e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean); update(r.id, { notify_emails: v }) }} />
       <label style={{ fontSize: 12 }}><input type="checkbox" checked={r.is_active} onChange={e => update(r.id, { is_active: e.target.checked })} /> active</label>
-      <button className="btn btn-sm" style={{ color: '#c0392b' }} onClick={() => remove(r.id)}>Delete</button></Row>)}
+      <button className="btn btn-sm" style={{ color: 'var(--c-fg-c0392b)' }} onClick={() => remove(r.id)}>Delete</button></Row>)}
     <Row><input style={{ ...inp, flex: 1 }} placeholder="New category name" value={name} onChange={e => setName(e.target.value)} />
       <button className="btn btn-sm btn-primary" onClick={() => { if (name.trim()) { create({ name: name.trim(), sort_order: rows.length * 10 }); setName('') } }}>+ Add</button></Row>
   </Card>
@@ -72,36 +72,36 @@ function Categories() {
 
 function Priorities() {
   const { rows, msg, create, update, remove } = useList('priorities')
-  const [n, setN] = useState({ key: '', label: '', color: '#3b82f6' })
-  return <Card>{msg && <div style={{ color: '#c0392b', fontSize: 12 }}>{msg}</div>}
+  const [n, setN] = useState({ key: '', label: '', color: 'var(--c-fg-3b82f6)' })
+  return <Card>{msg && <div style={{ color: 'var(--c-fg-c0392b)', fontSize: 12 }}>{msg}</div>}
     {rows.map(r => <Row key={r.id}>
       <span style={{ fontFamily: 'monospace', fontSize: 12, width: 80, color: 'var(--text3)' }}>{r.key}</span>
       <input style={{ ...inp, flex: 1 }} defaultValue={r.label} onBlur={e => e.target.value !== r.label && update(r.id, { label: e.target.value })} />
       <input type="color" value={r.color || '#888888'} onChange={e => update(r.id, { color: e.target.value })} />
-      <button className="btn btn-sm" style={{ color: '#c0392b' }} onClick={() => remove(r.id)}>Delete</button></Row>)}
+      <button className="btn btn-sm" style={{ color: 'var(--c-fg-c0392b)' }} onClick={() => remove(r.id)}>Delete</button></Row>)}
     <Row><input style={{ ...inp, width: 110 }} placeholder="key" value={n.key} onChange={e => setN(v => ({ ...v, key: e.target.value }))} />
       <input style={{ ...inp, flex: 1 }} placeholder="label" value={n.label} onChange={e => setN(v => ({ ...v, label: e.target.value }))} />
       <input type="color" value={n.color} onChange={e => setN(v => ({ ...v, color: e.target.value }))} />
-      <button className="btn btn-sm btn-primary" onClick={() => { if (n.key && n.label) { create({ ...n, key: n.key.toLowerCase().replace(/\s+/g, '_'), sort_order: rows.length * 10 }); setN({ key: '', label: '', color: '#3b82f6' }) } }}>+ Add</button></Row>
+      <button className="btn btn-sm btn-primary" onClick={() => { if (n.key && n.label) { create({ ...n, key: n.key.toLowerCase().replace(/\s+/g, '_'), sort_order: rows.length * 10 }); setN({ key: '', label: '', color: 'var(--c-fg-3b82f6)' }) } }}>+ Add</button></Row>
   </Card>
 }
 
 function Statuses() {
   const { rows, msg, create, update, remove } = useList('statuses')
-  const [n, setN] = useState({ key: '', label: '', stage: 'open', color: '#3b82f6' })
+  const [n, setN] = useState({ key: '', label: '', stage: 'open', color: 'var(--c-fg-3b82f6)' })
   const stages = ['open', 'pending', 'done']
-  return <Card>{msg && <div style={{ color: '#c0392b', fontSize: 12 }}>{msg}</div>}
+  return <Card>{msg && <div style={{ color: 'var(--c-fg-c0392b)', fontSize: 12 }}>{msg}</div>}
     <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>Each status maps to a fixed lifecycle <b>stage</b> (open / pending / done) so dashboards keep working even when you rename labels.</div>
     {rows.map(r => <Row key={r.id}>
       <span style={{ fontFamily: 'monospace', fontSize: 12, width: 90, color: 'var(--text3)' }}>{r.key}</span>
       <input style={{ ...inp, flex: 1 }} defaultValue={r.label} onBlur={e => e.target.value !== r.label && update(r.id, { label: e.target.value })} />
       <select style={inp} value={r.stage} onChange={e => update(r.id, { stage: e.target.value })}>{stages.map(s => <option key={s}>{s}</option>)}</select>
       <input type="color" value={r.color || '#888888'} onChange={e => update(r.id, { color: e.target.value })} />
-      <button className="btn btn-sm" style={{ color: '#c0392b' }} onClick={() => remove(r.id)}>Delete</button></Row>)}
+      <button className="btn btn-sm" style={{ color: 'var(--c-fg-c0392b)' }} onClick={() => remove(r.id)}>Delete</button></Row>)}
     <Row><input style={{ ...inp, width: 110 }} placeholder="key" value={n.key} onChange={e => setN(v => ({ ...v, key: e.target.value }))} />
       <input style={{ ...inp, flex: 1 }} placeholder="label" value={n.label} onChange={e => setN(v => ({ ...v, label: e.target.value }))} />
       <select style={inp} value={n.stage} onChange={e => setN(v => ({ ...v, stage: e.target.value }))}>{stages.map(s => <option key={s}>{s}</option>)}</select>
-      <button className="btn btn-sm btn-primary" onClick={() => { if (n.key && n.label) { create({ ...n, key: n.key.toLowerCase().replace(/\s+/g, '_'), sort_order: rows.length * 10 }); setN({ key: '', label: '', stage: 'open', color: '#3b82f6' }) } }}>+ Add</button></Row>
+      <button className="btn btn-sm btn-primary" onClick={() => { if (n.key && n.label) { create({ ...n, key: n.key.toLowerCase().replace(/\s+/g, '_'), sort_order: rows.length * 10 }); setN({ key: '', label: '', stage: 'open', color: 'var(--c-fg-3b82f6)' }) } }}>+ Add</button></Row>
   </Card>
 }
 
@@ -109,14 +109,14 @@ function CustomFields() {
   const { rows, msg, create, update, remove } = useList('custom-fields')
   const types = ['text', 'textarea', 'number', 'date', 'select', 'multiselect', 'checkbox']
   const [n, setN] = useState({ field_key: '', label: '', field_type: 'text', options: '', is_required: false })
-  return <Card>{msg && <div style={{ color: '#c0392b', fontSize: 12 }}>{msg}</div>}
+  return <Card>{msg && <div style={{ color: 'var(--c-fg-c0392b)', fontSize: 12 }}>{msg}</div>}
     <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>Extra fields shown on the new-ticket form. For <b>select</b>, list options comma-separated.</div>
     {rows.map(r => <Row key={r.id}>
       <span style={{ fontFamily: 'monospace', fontSize: 12, width: 110, color: 'var(--text3)' }}>{r.field_key}</span>
       <input style={{ ...inp, flex: 1 }} defaultValue={r.label} onBlur={e => e.target.value !== r.label && update(r.id, { label: e.target.value })} />
       <span style={{ fontSize: 12, color: 'var(--text3)' }}>{r.field_type}</span>
       <label style={{ fontSize: 12 }}><input type="checkbox" checked={r.is_required} onChange={e => update(r.id, { is_required: e.target.checked })} /> required</label>
-      <button className="btn btn-sm" style={{ color: '#c0392b' }} onClick={() => remove(r.id)}>Delete</button></Row>)}
+      <button className="btn btn-sm" style={{ color: 'var(--c-fg-c0392b)' }} onClick={() => remove(r.id)}>Delete</button></Row>)}
     <Row><input style={{ ...inp, width: 120 }} placeholder="key" value={n.field_key} onChange={e => setN(v => ({ ...v, field_key: e.target.value }))} />
       <input style={{ ...inp, flex: 1 }} placeholder="label" value={n.label} onChange={e => setN(v => ({ ...v, label: e.target.value }))} />
       <select style={inp} value={n.field_type} onChange={e => setN(v => ({ ...v, field_type: e.target.value }))}>{types.map(t => <option key={t}>{t}</option>)}</select>
@@ -136,11 +136,11 @@ function Teams() {
   const [name, setName] = useState('')
   const [mem, setMem] = useState<Record<string, string>>({})
   const addMember = async (tid: string) => { const m = (mem[tid] || '').trim(); if (!m) return; await api(`${base}/teams/${tid}/members?${q}`, { method: 'POST', body: JSON.stringify({ member: m }) }); setMem(v => ({ ...v, [tid]: '' })); location.reload() }
-  return <Card>{msg && <div style={{ color: '#c0392b', fontSize: 12 }}>{msg}</div>}
+  return <Card>{msg && <div style={{ color: 'var(--c-fg-c0392b)', fontSize: 12 }}>{msg}</div>}
     {rows.map(r => <div key={r.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <b style={{ flex: 1 }}>{r.name}</b>
-        <button className="btn btn-sm" style={{ color: '#c0392b' }} onClick={() => remove(r.id)}>Delete</button></div>
+        <button className="btn btn-sm" style={{ color: 'var(--c-fg-c0392b)' }} onClick={() => remove(r.id)}>Delete</button></div>
       <div style={{ fontSize: 12, color: 'var(--text3)', margin: '4px 0' }}>{(r.members || []).map((m: any) => m.member || m).join(', ') || 'no members'}</div>
       <div style={{ display: 'flex', gap: 6 }}><input style={{ ...inp, width: 180 }} placeholder="add member (name/email)" value={mem[r.id] || ''} onChange={e => setMem(v => ({ ...v, [r.id]: e.target.value }))} />
         <button className="btn btn-sm" onClick={() => addMember(r.id)}>+ Member</button></div>
@@ -167,6 +167,6 @@ function Settings() {
     <div style={{ fontSize: 12, color: 'var(--text3)', margin: '4px 0 12px' }}>Comma-separated. Uses the existing Resend email channel.</div>
     <label style={{ fontSize: 13, fontWeight: 600 }}>Default assignee (optional)</label>
     <input style={{ ...inp, width: 240, marginTop: 4 }} defaultValue={s.default_assignee || ''} onChange={e => setS((v: any) => ({ ...v, default_assignee: e.target.value }))} placeholder="name / email" />
-    <div style={{ marginTop: 14 }}><button className="btn btn-primary" onClick={save}>💾 Save</button> <span style={{ marginLeft: 10, fontSize: 13, color: '#15803d' }}>{msg}</span></div>
+    <div style={{ marginTop: 14 }}><button className="btn btn-primary" onClick={save}>💾 Save</button> <span style={{ marginLeft: 10, fontSize: 13, color: 'var(--c-fg-15803d)' }}>{msg}</span></div>
   </Card>
 }

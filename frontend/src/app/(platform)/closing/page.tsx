@@ -190,7 +190,7 @@ export default function ClosingDashboard() {
       </div>
 
       {readiness && !readiness.ok && (
-        <Link href="/closing/readiness" className="card" style={{ display: 'block', padding: 12, marginBottom: 14, background: '#fdeaea', border: '1px solid #f3b4b4', textDecoration: 'none', color: 'inherit' }}>
+        <Link href="/closing/readiness" className="card" style={{ display: 'block', padding: 12, marginBottom: 14, background: 'var(--c-bg-fdeaea)', border: '1px solid var(--c-bg-f3b4b4)', textDecoration: 'none', color: 'inherit' }}>
           🔴 <b>{readiness.issues.filter((i: any) => i.severity === 'critical').length} critical wiring gap(s)</b> found for this tenant — {readiness.issues.find((i: any) => i.severity === 'critical')?.message} <span style={{ textDecoration: 'underline' }}>See all →</span>
         </Link>
       )}

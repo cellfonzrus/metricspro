@@ -102,16 +102,16 @@ export default function VisionHeatmapPage() {
         <button style={btn} onClick={() => void load()} disabled={busy}>{busy ? 'Loading…' : 'Refresh'}</button>
       </div>
 
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginBottom: 14 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginBottom: 14 }}>{msg}</div>}
 
       {/* Door counts */}
       {summary && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12, marginBottom: 14 }}>
-            <Stat label="Walked in" value={String(summary.total_in)} sub="entrance crossings" color="#2563eb" />
-            <Stat label="Customers" value={String(summary.customers)} sub={`≥ ${traffic.config.min_visit_seconds}s in store`} color="#16a34a" />
-            <Stat label="Average visit" value={fmtDuration(summary.avg_dwell_seconds)} sub={`median ${fmtDuration(summary.median_dwell_seconds)}`} color="#7c3aed" />
-            <Stat label="Busiest hour" value={summary.peak_hour === null ? '—' : hourLabel(summary.peak_hour)} sub={`${summary.peak_hour_in} in`} color="#f39c12" />
+            <Stat label="Walked in" value={String(summary.total_in)} sub="entrance crossings" color="var(--c-fg-2563eb)" />
+            <Stat label="Customers" value={String(summary.customers)} sub={`≥ ${traffic.config.min_visit_seconds}s in store`} color="var(--c-fg-16a34a)" />
+            <Stat label="Average visit" value={fmtDuration(summary.avg_dwell_seconds)} sub={`median ${fmtDuration(summary.median_dwell_seconds)}`} color="var(--c-fg-7c3aed)" />
+            <Stat label="Busiest hour" value={summary.peak_hour === null ? '—' : hourLabel(summary.peak_hour)} sub={`${summary.peak_hour_in} in`} color="var(--c-fg-f39c12)" />
           </div>
 
           <div style={{ ...panel, marginBottom: 14 }}>
@@ -243,8 +243,8 @@ function HourlyBars({ hourly }: { hourly: { hour: number; in: number; out: numbe
       {shown.map(h => (
         <div key={h.hour} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
           <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 2, width: '100%' }}>
-            <div title={`${h.in} in`} style={{ flex: 1, height: `${(h.in / peak) * 100}%`, background: '#2563eb', borderRadius: '3px 3px 0 0', minHeight: h.in ? 2 : 0 }} />
-            <div title={`${h.out} out`} style={{ flex: 1, height: `${(h.out / peak) * 100}%`, background: '#94a3b8', borderRadius: '3px 3px 0 0', minHeight: h.out ? 2 : 0 }} />
+            <div title={`${h.in} in`} style={{ flex: 1, height: `${(h.in / peak) * 100}%`, background: 'var(--c-bg-2563eb)', borderRadius: '3px 3px 0 0', minHeight: h.in ? 2 : 0 }} />
+            <div title={`${h.out} out`} style={{ flex: 1, height: `${(h.out / peak) * 100}%`, background: 'var(--c-bg-94a3b8)', borderRadius: '3px 3px 0 0', minHeight: h.out ? 2 : 0 }} />
           </div>
           <div style={{ fontSize: 10, color: 'var(--text3)' }}>{hourLabel(h.hour)}</div>
         </div>

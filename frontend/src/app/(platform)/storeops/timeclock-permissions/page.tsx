@@ -19,9 +19,9 @@ interface Perm {
   decided_by?: string; decided_at?: string; decision_note?: string
 }
 const badge: Record<string, { t: string; c: string; b: string }> = {
-  pending: { t: 'Pending', c: '#92400e', b: '#fef3c7' },
-  approved: { t: 'Approved', c: '#166534', b: '#dcfce7' },
-  denied: { t: 'Denied', c: '#991b1b', b: '#fee2e2' },
+  pending: { t: 'Pending', c: 'var(--c-fg-92400e)', b: 'var(--c-bg-fef3c7)' },
+  approved: { t: 'Approved', c: 'var(--c-fg-166534)', b: 'var(--c-bg-dcfce7)' },
+  denied: { t: 'Denied', c: 'var(--c-fg-991b1b)', b: 'var(--c-bg-fee2e2)' },
 }
 const kindLabel: Record<string, string> = {
   reclock_in: 'Re-clock-in (2nd session)',
@@ -97,7 +97,7 @@ export default function TimeclockPermissionsPage() {
 
       <div className="card" style={{ padding: 18, marginBottom: 18 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <div style={{ fontWeight: 700, fontSize: 14 }}>Permissions to approve {pending.length > 0 && <span style={{ color: '#92400e' }}>· {pending.length}</span>}</div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Permissions to approve {pending.length > 0 && <span style={{ color: 'var(--c-fg-92400e)' }}>· {pending.length}</span>}</div>
           {pending.length > 0 && <ReportExportBar title="Time-clock Permissions — Pending" columns={pendingCols} rows={pending} />}
         </div>
         {pending.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text3)' }}>Nothing waiting.</div> : (
@@ -114,7 +114,7 @@ export default function TimeclockPermissionsPage() {
                   <td style={{ padding: '7px 9px', color: 'var(--text3)' }}>{x.reason || '—'}</td>
                   <td style={{ padding: '7px 9px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button className="btn btn-primary" style={{ fontSize: 12, padding: '3px 10px' }} onClick={() => decide(x, 'approve')}>✓ Approve</button>{' '}
-                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 10px', color: '#dc2626' }} onClick={() => decide(x, 'deny')}>✕ Deny</button>
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 10px', color: 'var(--c-fg-dc2626)' }} onClick={() => decide(x, 'deny')}>✕ Deny</button>
                   </td>
                 </tr>
               ))}

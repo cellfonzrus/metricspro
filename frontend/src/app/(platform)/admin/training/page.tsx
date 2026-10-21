@@ -245,7 +245,7 @@ export default function AdminTrainingPage() {
 
             {isSuper && (
               <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5, marginBottom: 12,
-                padding: '8px 10px', borderRadius: 8, background: asPlatform ? '#eff6ff' : 'var(--bg2)' }}>
+                padding: '8px 10px', borderRadius: 8, background: asPlatform ? 'var(--c-bg-eff6ff)' : 'var(--bg2)' }}>
                 <input type="checkbox" checked={asPlatform} onChange={e => setAsPlatform(e.target.checked)} />
                 <span>
                   <b>Platform default</b> — save this for <b>every organisation</b> on MetricsPro.
@@ -340,7 +340,7 @@ export default function AdminTrainingPage() {
               <button className="btn btn-secondary" style={{ fontSize: 13, marginLeft: 'auto' }}
                 onClick={() => { setEditing(null); setSteps([]) }}>Cancel</button>
               {editing.id && (
-                <button className="btn btn-secondary" style={{ fontSize: 13, color: '#b42318' }}
+                <button className="btn btn-secondary" style={{ fontSize: 13, color: 'var(--c-fg-b42318)' }}
                   disabled={busy} onClick={() => remove(editing)}>Delete</button>
               )}
             </div>

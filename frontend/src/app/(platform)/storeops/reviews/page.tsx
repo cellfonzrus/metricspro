@@ -97,7 +97,7 @@ function PlanRow({ plan, onChanged }: { plan: ActionPlan; onChanged: () => void 
             onClick={() => call('dm-confirm-complete', {})}>✅ Confirm complete</button>
         </div>
       )}
-      {msg && <div style={{ fontSize: 11.5, color: '#b91c1c', marginTop: 4 }}>{msg}</div>}
+      {msg && <div style={{ fontSize: 11.5, color: 'var(--c-fg-b91c1c)', marginTop: 4 }}>{msg}</div>}
     </div>
   )
 }
@@ -175,8 +175,8 @@ export default function GoogleReviewsDashboardPage() {
         {filtered.map(s => {
           const above = s.status === 'above'
           const known = s.status !== 'unknown'
-          const bg = !known ? '#f1f5f9' : above ? '#e7f6ec' : '#fdeaea'
-          const fg = !known ? '#475569' : above ? '#166534' : '#b91c1c'
+          const bg = !known ? 'var(--c-bg-f1f5f9)' : above ? 'var(--c-bg-e7f6ec)' : 'var(--c-bg-fdeaea)'
+          const fg = !known ? 'var(--c-fg-475569)' : above ? 'var(--c-fg-166534)' : 'var(--c-fg-b91c1c)'
           return (
             <div key={s.store_code} className="card" style={{ padding: 0, overflow: 'hidden' }}>
               <div style={{ background: bg, padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -193,7 +193,7 @@ export default function GoogleReviewsDashboardPage() {
                 <div style={{ color: 'var(--text2)', marginBottom: 2 }}>{s.review_count ?? '—'} reviews on file</div>
                 <div style={{ color: 'var(--text3)', fontSize: 11, marginBottom: 6 }}>Updated {timeAgo(s.fetched_at)}</div>
                 {s.open_action_plan_count > 0 && (
-                  <div style={{ display: 'inline-block', background: '#fff7e6', color: '#92400e', borderRadius: 6, padding: '2px 8px', fontWeight: 700, fontSize: 11 }}>
+                  <div style={{ display: 'inline-block', background: 'var(--c-bg-fff7e6)', color: 'var(--c-fg-92400e)', borderRadius: 6, padding: '2px 8px', fontWeight: 700, fontSize: 11 }}>
                     {s.open_action_plan_count} open action plan{s.open_action_plan_count > 1 ? 's' : ''}
                   </div>
                 )}

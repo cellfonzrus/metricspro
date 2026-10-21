@@ -30,7 +30,7 @@ export default function DuplicateModal({ detail, busy, onCancel, onConfirm }: {
     <div style={overlay}>
       <div style={card}>
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <b style={{ fontSize: 14, color: '#b45309' }}>⚠️ Duplicate IMEI</b>
+          <b style={{ fontSize: 14, color: 'var(--c-fg-b45309)' }}>⚠️ Duplicate IMEI</b>
           <button onClick={onCancel} style={{ background: 'none', border: 'none', color: 'var(--text2)', fontSize: 20, cursor: 'pointer' }}>×</button>
         </div>
         <div style={{ padding: 20, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12, fontSize: 13 }}>

@@ -143,7 +143,7 @@ export default function LiabilitiesDuePage() {
       <StandardFilterBar value={filt} onChange={setFilt} periodMode="none" show={{ reps: false }}
         storeOptions={storeOpts} marketOptions={marketOpts} />
 
-      {err && <div className="card" style={{ padding: 14, color: 'crimson', marginBottom: 12 }}>{err}</div>}
+      {err && <div className="card" style={{ padding: 14, color: 'var(--c-fg-dc143c)', marginBottom: 12 }}>{err}</div>}
       {loading && <div style={{ color: 'var(--text2)', padding: 20 }}>Loading…</div>}
 
       {!loading && data && (
@@ -165,7 +165,7 @@ export default function LiabilitiesDuePage() {
             note={dist.configured
               ? 'Handset payables inside the vendor due-date window (the same mig-933 machinery as the Balance Sheet), attributed to stores via the processor-account index. Unmapped accounts show company-wide.'
               : 'Handset-payable order types are not configured for this org (Accounting settings) — the balance-sheet snapshot lines below still show the distributor position where computed.'}>
-            {dist.note && <div style={{ fontSize: 12.5, color: 'crimson', marginBottom: 8 }}>{dist.note}</div>}
+            {dist.note && <div style={{ fontSize: 12.5, color: 'var(--c-fg-dc143c)', marginBottom: 8 }}>{dist.note}</div>}
             {outstanding && (
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -208,7 +208,7 @@ export default function LiabilitiesDuePage() {
             note="A payroll is “due this week” when its pay period’s PAYDAY (your tenant’s pay-period settings) falls inside the week. Tax = employer FICA + amounts withheld from employees, estimated by the same calculator as the Payroll-with-Tax page.">
             {!payroll.allowed ? <Restricted what="Payroll" /> : (
               <>
-                {payroll.note && <div style={{ fontSize: 12.5, color: 'crimson', marginBottom: 8 }}>{payroll.note}</div>}
+                {payroll.note && <div style={{ fontSize: 12.5, color: 'var(--c-fg-dc143c)', marginBottom: 8 }}>{payroll.note}</div>}
                 {payrollDue.length === 0 && <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8 }}>No payday falls inside this week.</div>}
                 {payrollDue.map((p: any) => (
                   <div key={p.start} style={{ marginBottom: 10 }}>
@@ -241,7 +241,7 @@ export default function LiabilitiesDuePage() {
             note="Per the store’s lease setup: the store’s own rent-due rule, else your org default, else the house default (first week of the month) — the rent amount follows the explicit schedule, else the annual escalation, else current rent.">
             {!rents.allowed ? <Restricted what="Lease / rent data" /> : (
               <>
-                {rents.note && <div style={{ fontSize: 12.5, color: 'crimson', marginBottom: 8 }}>{rents.note}</div>}
+                {rents.note && <div style={{ fontSize: 12.5, color: 'var(--c-fg-dc143c)', marginBottom: 8 }}>{rents.note}</div>}
                 {rentRows.length === 0 && <div style={{ fontSize: 13, color: 'var(--text2)' }}>No store rent falls due this week.</div>}
                 {rentRows.length > 0 && (
                   <div style={{ overflowX: 'auto' }}>

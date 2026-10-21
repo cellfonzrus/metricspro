@@ -88,7 +88,7 @@ export default function OperatorLayout({ children }: { children: React.ReactNode
         <aside style={{ width: 230, flexShrink: 0, background: OPS.panel,
           borderRight: `1px solid ${OPS.border}`, display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '18px 16px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 28, height: 28, borderRadius: 8, background: OPS.accent, color: '#1c1917',
+            <div style={{ width: 28, height: 28, borderRadius: 8, background: OPS.accent, color: 'var(--c-fg-1c1917)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>M</div>
             <div style={{ lineHeight: 1.2 }}>
               <div style={{ fontWeight: 700, fontSize: 13.5 }}>MetricsPro</div>
@@ -106,7 +106,7 @@ export default function OperatorLayout({ children }: { children: React.ReactNode
                 <Link key={s.href} href={s.href} title={s.description}
                   style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px',
                     borderRadius: 8, textDecoration: 'none', fontSize: 13.2,
-                    color: active ? '#fff' : OPS.text2,
+                    color: active ? 'var(--c-fg-ffffff)' : OPS.text2,
                     background: active ? OPS.panelSoft : 'transparent' }}>
                   <span aria-hidden>{s.icon}</span>
                   <span style={{ flex: 1 }}>{s.label}</span>
@@ -147,7 +147,7 @@ function Splash({ text, children }: { text?: string; children?: React.ReactNode 
 
 const btn: React.CSSProperties = {
   display: 'inline-block', padding: '9px 16px', borderRadius: 9, fontSize: 13, fontWeight: 600,
-  background: OPS.accent, color: '#1c1917', border: 'none', cursor: 'pointer',
+  background: OPS.accent, color: 'var(--c-fg-1c1917)', border: 'none', cursor: 'pointer',
 }
 const btnGhost: React.CSSProperties = {
   padding: '7px 10px', borderRadius: 8, fontSize: 12.5, textAlign: 'left',

@@ -7,10 +7,10 @@ import { SendReportButton } from '@/lib/send-report'
 
 const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const badge = (s: string) => ({
-  ok: { t: '✓ matches', bg: '#dcfce7', c: '#166534' },
-  under: { t: '⚠ underpaid', bg: '#fee2e2', c: '#991b1b' },
-  over: { t: 'over', bg: '#fef9c3', c: '#854d0e' },
-} as any)[s] || { t: s, bg: '#f1f5f9', c: '#475569' }
+  ok: { t: '✓ matches', bg: 'var(--c-bg-dcfce7)', c: 'var(--c-fg-166534)' },
+  under: { t: '⚠ underpaid', bg: 'var(--c-bg-fee2e2)', c: 'var(--c-fg-991b1b)' },
+  over: { t: 'over', bg: 'var(--c-bg-fef9c3)', c: 'var(--c-fg-854d0e)' },
+} as any)[s] || { t: s, bg: 'var(--c-bg-f1f5f9)', c: 'var(--c-fg-475569)' }
 
 export default function ReconPage() {
   const { period } = usePeriod()
@@ -103,17 +103,17 @@ export default function ReconPage() {
               </div>
               {cw.attributed_pct != null && (
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
-                  Per-store attribution: <strong style={{ color: cw.attributed_pct >= 90 ? '#166534' : cw.attributed_pct >= 70 ? '#854d0e' : '#991b1b' }}>{cw.attributed_pct}%</strong> of MI+ATU $ attributed to a store by rep name
+                  Per-store attribution: <strong style={{ color: cw.attributed_pct >= 90 ? 'var(--c-fg-166534)' : cw.attributed_pct >= 70 ? 'var(--c-fg-854d0e)' : 'var(--c-fg-991b1b)' }}>{cw.attributed_pct}%</strong> of MI+ATU $ attributed to a store by rep name
                   {cw.mi_unattributed > 0 && <> · {fmt(cw.mi_unattributed)} unattributed (still counted company-wide)</>}.
                   {cw.top_unattributed_reps?.length > 0 && (
                     <>
-                      {' '}<button onClick={() => setOpen(o => ({ ...o, __unattr: !o.__unattr }))} style={{ border: 'none', background: 'none', color: 'var(--accent, #2563eb)', cursor: 'pointer', fontSize: 12, padding: 0 }}>
+                      {' '}<button onClick={() => setOpen(o => ({ ...o, __unattr: !o.__unattr }))} style={{ border: 'none', background: 'none', color: 'var(--accent, var(--c-fg-2563eb))', cursor: 'pointer', fontSize: 12, padding: 0 }}>
                         {open.__unattr ? 'hide' : 'show'} unmatched reps ▾
                       </button>
                       {open.__unattr && (
                         <div style={{ marginTop: 6, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
                           {cw.top_unattributed_reps.map((u: any) => <span key={u.rep}>{u.rep}: <strong>{fmt(u.amount)}</strong></span>)}
-                          <span style={{ color: 'var(--text3)' }}>— add these as aliases on <a href="/commcalc/targets/rep-map" style={{ color: 'var(--accent,#2563eb)' }}>Rep Map</a> to attribute them.</span>
+                          <span style={{ color: 'var(--text3)' }}>— add these as aliases on <a href="/commcalc/targets/rep-map" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Rep Map</a> to attribute them.</span>
                         </div>
                       )}
                     </>
@@ -148,11 +148,11 @@ export default function ReconPage() {
                           <td style={{ padding: '8px 16px' }}>{expandable && <span style={{ fontSize: 11, marginRight: 6 }}>{open[r.store] ? '▾' : '▸'}</span>}{r.store}</td>
                           <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(r.memo_total)}</td>
                           <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(r.mi_atu_total)}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: r.diff < 0 ? '#dc2626' : r.diff > 0 ? '#854d0e' : 'var(--text3)' }}>{fmt(r.diff)}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: r.diff < 0 ? 'var(--c-fg-dc2626)' : r.diff > 0 ? 'var(--c-fg-854d0e)' : 'var(--text3)' }}>{fmt(r.diff)}</td>
                           <td style={{ padding: '8px 12px', textAlign: 'center' }}><span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 600, background: badge(r.status).bg, color: badge(r.status).c }}>{badge(r.status).t}</span></td>
                         </tr>
                         {expandable && open[r.store] && (
-                          <tr style={{ background: '#fafbfc' }}>
+                          <tr style={{ background: 'var(--c-bg-fafbfc)' }}>
                             <td colSpan={5} style={{ padding: '10px 16px 14px 36px' }}>
                               {r.missed_days_note && <div style={{ fontSize: 13, marginBottom: byDay ? 10 : 0 }}>🧠 {r.missed_days_note}</div>}
                               {byDay && (
@@ -184,7 +184,7 @@ function Tile({ label, v, signed }: { label: string; v: number; signed?: boolean
   return (
     <div>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, color: signed ? (v < 0 ? '#dc2626' : v > 0 ? '#854d0e' : 'var(--text)') : 'var(--text)' }}>{fmt(v || 0)}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: signed ? (v < 0 ? 'var(--c-fg-dc2626)' : v > 0 ? 'var(--c-fg-854d0e)' : 'var(--text)') : 'var(--text)' }}>{fmt(v || 0)}</div>
     </div>
   )
 }

@@ -72,7 +72,7 @@ export default function LeadDetailPage() {
   }
 
   if (!lead) {
-    return <div style={{ padding: 20 }}>{msg ? <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626' }}>{msg}</div> : 'Loading…'}</div>
+    return <div style={{ padding: 20 }}>{msg ? <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)' }}>{msg}</div> : 'Loading…'}</div>
   }
 
   const openStages = (vocab?.stages || []).filter(s => s.is_active !== false)
@@ -96,7 +96,7 @@ export default function LeadDetailPage() {
         <Link href={`/crm/lookup?phone=${encodeURIComponent(lead.phone || '')}`} style={{ ...btn, textDecoration: 'none' }}>🔎 Customer history</Link>
       </div>
 
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginBottom: 12 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginBottom: 12 }}>{msg}</div>}
 
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         {/* ── left column: work the lead ─────────────────────────────────────────── */}
@@ -136,7 +136,7 @@ export default function LeadDetailPage() {
                       style={{ ...input, marginTop: 10, resize: 'vertical' }} />
             <div style={{ marginTop: 10, display: 'flex', gap: 10, alignItems: 'center' }}>
               <button onClick={dispose} disabled={busy || !dispId} style={btnPrimary}>Record outcome</button>
-              {chosen?.closes_lead && <span style={{ fontSize: 12, color: '#dc2626' }}>This closes the lead.</span>}
+              {chosen?.closes_lead && <span style={{ fontSize: 12, color: 'var(--c-fg-dc2626)' }}>This closes the lead.</span>}
               {chosen?.requires_followup && <span style={{ fontSize: 12, color: 'var(--text2)' }}>A follow-up will be booked automatically.</span>}
             </div>
           </div>
@@ -192,9 +192,9 @@ export default function LeadDetailPage() {
             <div style={{ fontSize: 13, marginBottom: 8 }}>
               {lead.agency_name
                 ? <>🤝 {lead.agency_name} {lead.agency_accepted_at
-                    ? <span style={{ color: '#16a34a' }}>· accepted</span>
-                    : <span style={{ color: '#f39c12' }}>· waiting for a response</span>}</>
-                : (lead.owner_employee_id || <span style={{ color: '#f39c12' }}>Nobody yet</span>)}
+                    ? <span style={{ color: 'var(--c-fg-16a34a)' }}>· accepted</span>
+                    : <span style={{ color: 'var(--c-fg-f39c12)' }}>· waiting for a response</span>}</>
+                : (lead.owner_employee_id || <span style={{ color: 'var(--c-fg-f39c12)' }}>Nobody yet</span>)}
             </div>
             <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
               <select value={assignKind} onChange={e => { setAssignKind(e.target.value as any); setAssignTarget('') }} style={{ ...input, width: 110 }}>
@@ -286,7 +286,7 @@ export default function LeadDetailPage() {
               </button>
             )}
             {lead.converted_customer_id && (
-              <div style={{ fontSize: 12, color: '#16a34a', marginTop: 8 }}>✅ Linked to a customer record.</div>
+              <div style={{ fontSize: 12, color: 'var(--c-fg-16a34a)', marginTop: 8 }}>✅ Linked to a customer record.</div>
             )}
           </div>
         </div>

@@ -100,7 +100,7 @@ export default function LedgerBatchUpload({ source, carrierId = '', statementTyp
           onChange={e => { pick(e.target.files); e.currentTarget.value = '' }} />
       </label>
       {(plan || result || err || (busy && files.length > 0)) && (
-        <div style={{ flexBasis: '100%', border: '1px solid var(--accent,#2563eb)', borderRadius: 10, padding: 14, background: 'var(--surface)' }}>
+        <div style={{ flexBasis: '100%', border: '1px solid var(--accent,var(--c-bg-2563eb))', borderRadius: 10, padding: 14, background: 'var(--surface)' }}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 8 }}>
             <b style={{ fontSize: 14 }}>{result ? 'Upload result' : `Several months — ${files.length} file(s)`}</b>
             <span style={{ fontSize: 12, color: 'var(--text3)' }}>
@@ -109,7 +109,7 @@ export default function LedgerBatchUpload({ source, carrierId = '', statementTyp
             <div style={{ flex: 1 }} />
             <button onClick={close} style={{ ...inp, cursor: 'pointer', fontSize: 11 }}>✕ close</button>
           </div>
-          {err && <div style={{ color: '#b91c1c', fontSize: 13, marginBottom: 8 }}>{err}</div>}
+          {err && <div style={{ color: 'var(--c-fg-b91c1c)', fontSize: 13, marginBottom: 8 }}>{err}</div>}
           {busy && <div style={{ color: 'var(--text3)', fontSize: 13 }}>Working…</div>}
 
           {plan && (
@@ -124,7 +124,7 @@ export default function LedgerBatchUpload({ source, carrierId = '', statementTyp
                     <tr key={p.index} style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={{ ...td, fontFamily: 'monospace', fontSize: 12 }}>{p.filename}</td>
                       <td style={td}>
-                        <input style={{ ...inp, width: 150, borderColor: p.period ? 'var(--border)' : '#b91c1c' }}
+                        <input style={{ ...inp, width: 150, borderColor: p.period ? 'var(--border)' : 'var(--c-bg-b91c1c)' }}
                           value={months[p.index] ?? ''} placeholder={p.period || 'e.g. August 2026'}
                           onChange={e => { const ms = [...months]; ms[p.index] = e.target.value; setMonths(ms); setDirty(true) }} />
                         <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
@@ -135,14 +135,14 @@ export default function LedgerBatchUpload({ source, carrierId = '', statementTyp
                       <td style={{ ...td, textAlign: 'right' }}>{money(p.payout_total)}</td>
                       <td style={td}>
                         {p.already
-                          ? <span style={{ color: '#9a3412' }}>Yes — {p.already.rows.toLocaleString('en-US')} rows, {money(p.already.payout_total)}
+                          ? <span style={{ color: 'var(--c-fg-9a3412)' }}>Yes — {p.already.rows.toLocaleString('en-US')} rows, {money(p.already.payout_total)}
                               {p.replaces.length ? ' · will be REPLACED' : ''}{p.other_origin.length ? ' · also holds an MA-data refresh' : ''}</span>
                           : <span style={{ color: 'var(--text3)' }}>No</span>}
                       </td>
                       <td style={{ ...td, fontSize: 12 }}>
-                        {p.blocking.map((b, i) => <div key={'b' + i} style={{ color: '#b91c1c' }}>⛔ {b}</div>)}
-                        {p.warnings.map((w, i) => <div key={'w' + i} style={{ color: '#9a3412' }}>⚠️ {w}</div>)}
-                        {!p.blocking.length && !p.warnings.length && <span style={{ color: '#15803d' }}>Ready</span>}
+                        {p.blocking.map((b, i) => <div key={'b' + i} style={{ color: 'var(--c-fg-b91c1c)' }}>⛔ {b}</div>)}
+                        {p.warnings.map((w, i) => <div key={'w' + i} style={{ color: 'var(--c-fg-9a3412)' }}>⚠️ {w}</div>)}
+                        {!p.blocking.length && !p.warnings.length && <span style={{ color: 'var(--c-fg-15803d)' }}>Ready</span>}
                       </td>
                       <td style={td}><button style={{ ...inp, cursor: 'pointer', fontSize: 11 }} disabled={busy} onClick={() => removeAt(p.index)}>Remove</button></td>
                     </tr>))}</tbody>
@@ -165,12 +165,12 @@ export default function LedgerBatchUpload({ source, carrierId = '', statementTyp
                 <div style={{ flex: 1 }} />
                 <button onClick={uploadAll} disabled={!canUpload}
                   style={{ ...inp, fontWeight: 700, cursor: canUpload ? 'pointer' : 'not-allowed',
-                    background: canUpload ? 'var(--accent,#2563eb)' : 'var(--surface)', color: canUpload ? '#fff' : 'var(--text3)' }}>
+                    background: canUpload ? 'var(--accent,var(--c-bg-2563eb))' : 'var(--surface)', color: canUpload ? 'var(--c-fg-ffffff)' : 'var(--text3)' }}>
                   Upload all ({plan.files.length})
                 </button>
               </div>
               {plan.refused && (
-                <div style={{ marginTop: 8, fontSize: 12, color: '#b91c1c' }}>
+                <div style={{ marginTop: 8, fontSize: 12, color: 'var(--c-fg-b91c1c)' }}>
                   Nothing can be uploaded until every ⛔ is fixed (set the month, or remove the file). {dirty ? 'Check the months again after editing.' : ''}
                 </div>
               )}

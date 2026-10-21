@@ -27,7 +27,7 @@ const PORTAL_TZ = 'America/New_York'   // business tz — keep punch times consi
 const shell: React.CSSProperties = { maxWidth: 900, margin: '0 auto', padding: 16, fontFamily: 'system-ui, -apple-system, sans-serif' }
 const box: React.CSSProperties = { maxWidth: 460, margin: '0 auto' }
 const bigBtn: React.CSSProperties = { width: '100%', padding: '18px', fontSize: 20, fontWeight: 700, borderRadius: 12, border: 'none', cursor: 'pointer' }
-const inp: React.CSSProperties = { width: '100%', marginTop: 5, padding: '11px 12px', borderRadius: 9, border: '1px solid #cbd5e1', fontSize: 15, boxSizing: 'border-box' }
+const inp: React.CSSProperties = { width: '100%', marginTop: 5, padding: '11px 12px', borderRadius: 9, border: '1px solid var(--c-bg-cbd5e1)', fontSize: 15, boxSizing: 'border-box' }
 
 export default function PortalPage() {
   const { loading: authLoading, session, user, token, signOut, refresh } = useAuth()
@@ -573,7 +573,7 @@ export default function PortalPage() {
       <div style={{ ...shell, textAlign: 'center', paddingTop: 80 }}>
         <div className="spinner" style={{ margin: '0 auto' }} />
         {slowAuth && (
-          <div style={{ marginTop: 18, fontSize: 14, color: '#64748b' }}>
+          <div style={{ marginTop: 18, fontSize: 14, color: 'var(--c-fg-64748b)' }}>
             Still connecting to the server — it may be busy right now.<br />
             This screen loads by itself as soon as it responds.
             <div style={{ marginTop: 12 }}>
@@ -589,24 +589,24 @@ export default function PortalPage() {
   if (!session) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%)', padding: 20 }}>
-        <div style={{ width: '100%', maxWidth: 380, background: 'white', borderRadius: 14, padding: '34px 30px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+        background: 'linear-gradient(135deg, var(--c-bg-1e3a5f) 0%, var(--c-bg-0f172a) 100%)', padding: 20 }}>
+        <div style={{ width: '100%', maxWidth: 380, background: 'var(--c-bg-ffffff)', borderRadius: 14, padding: '34px 30px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
           <div style={{ textAlign: 'center', marginBottom: 20 }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: '#1e3a5f' }}>MetricsPro</div>
-            <div style={{ fontSize: 13, color: '#64748b', marginTop: 2 }}>Sign in to clock in</div>
-            <div style={{ fontSize: 30, fontWeight: 700, fontVariantNumeric: 'tabular-nums', marginTop: 10, color: '#1e3a5f' }}>{now}</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--c-fg-1e3a5f)' }}>MetricsPro</div>
+            <div style={{ fontSize: 13, color: 'var(--c-fg-64748b)', marginTop: 2 }}>Sign in to clock in</div>
+            <div style={{ fontSize: 30, fontWeight: 700, fontVariantNumeric: 'tabular-nums', marginTop: 10, color: 'var(--c-fg-1e3a5f)' }}>{now}</div>
           </div>
           <form onSubmit={doLogin}>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Email</label>
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-fg-475569)' }}>Email</label>
             <input type="email" value={email} onChange={e => setEmail(e.target.value)} required autoFocus style={inp} placeholder="you@cellfonzrus.com" />
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#475569', marginTop: 14, display: 'block' }}>Password</label>
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-fg-475569)', marginTop: 14, display: 'block' }}>Password</label>
             <input type="password" value={password} onChange={e => setPassword(e.target.value)} required style={inp} placeholder="••••••••" />
-            {loginErr && <div style={{ color: '#dc2626', fontSize: 13, marginTop: 12 }}>{loginErr}</div>}
-            <button type="submit" disabled={loginBusy} style={{ ...bigBtn, marginTop: 18, padding: '13px 0', fontSize: 16, background: '#1e3a5f', color: 'white', opacity: loginBusy ? 0.7 : 1 }}>
+            {loginErr && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 13, marginTop: 12 }}>{loginErr}</div>}
+            <button type="submit" disabled={loginBusy} style={{ ...bigBtn, marginTop: 18, padding: '13px 0', fontSize: 16, background: 'var(--c-bg-1e3a5f)', color: 'var(--c-fg-ffffff)', opacity: loginBusy ? 0.7 : 1 }}>
               {loginBusy ? 'Signing in…' : 'Sign in'}
             </button>
           </form>
-          <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', marginTop: 16 }}>Trouble signing in? Contact your administrator.</div>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-94a3b8)', textAlign: 'center', marginTop: 16 }}>Trouble signing in? Contact your administrator.</div>
         </div>
       </div>
     )
@@ -667,7 +667,7 @@ export default function PortalPage() {
     <div style={shell}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: '#1E3A5F' }}>MetricsPro</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--c-fg-1e3a5f)' }}>MetricsPro</div>
           <div style={{ fontSize: 13, color: 'var(--text2)' }}>Hi, {empName || dash?.employee?.name || user?.email}{dash?.employee?.store ? ` · ${dash.employee.store}` : ''}</div>
         </div>
         <div style={{ textAlign: 'right' }}>
@@ -677,8 +677,8 @@ export default function PortalPage() {
       </div>
 
       {connErr && (
-        <div style={{ ...box, marginBottom: 12, padding: '10px 14px', borderRadius: 10, background: '#fef3c7',
-          border: '1px solid #f59e0b', color: '#92400e', fontSize: 13 }}>
+        <div style={{ ...box, marginBottom: 12, padding: '10px 14px', borderRadius: 10, background: 'var(--c-bg-fef3c7)',
+          border: '1px solid var(--c-bg-f59e0b)', color: 'var(--c-fg-92400e)', fontSize: 13 }}>
           ⚠️ {connErr}
         </div>
       )}
@@ -686,9 +686,9 @@ export default function PortalPage() {
       <div className="card" style={{ ...box, marginBottom: 18 }}>
         {mode === 'camera' && (
           <div style={{ marginBottom: 14, textAlign: 'center' }}>
-            <video ref={videoRef} playsInline muted style={{ width: '100%', borderRadius: 12, transform: 'scaleX(-1)', background: '#000', maxHeight: 320 }} />
+            <video ref={videoRef} playsInline muted style={{ width: '100%', borderRadius: 12, transform: 'scaleX(-1)', background: 'var(--c-bg-000000)', maxHeight: 320 }} />
             <div style={{ fontSize: 14, marginTop: 8, minHeight: 20 }}>{phase}</div>
-            <button onClick={closeCamera} style={{ ...bigBtn, padding: 10, fontSize: 14, background: '#eee', marginTop: 6 }}>Cancel</button>
+            <button onClick={closeCamera} style={{ ...bigBtn, padding: 10, fontSize: 14, background: 'var(--c-bg-eeeeee)', marginTop: 6 }}>Cancel</button>
           </div>
         )}
         <canvas ref={canvasRef} style={{ display: 'none' }} />
@@ -696,30 +696,30 @@ export default function PortalPage() {
         {mode === 'idle' && (
           clockedIn ? (
             <>
-              <div style={{ textAlign: 'center', marginBottom: 10, fontSize: 14, color: '#16794a' }}>
+              <div style={{ textAlign: 'center', marginBottom: 10, fontSize: 14, color: 'var(--c-fg-16794a)' }}>
                 ● On the clock since {status?.entry?.clock_in ? new Date(status.entry.clock_in).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: PORTAL_TZ }) : ''}{status?.entry?.store_code ? ` · ${status.entry.store_code}` : ''}
               </div>
-              <button disabled={busy} onClick={clockOut} style={{ ...bigBtn, background: '#dc2626', color: '#fff' }}>{busy ? '…' : 'CLOCK OUT'}</button>
+              <button disabled={busy} onClick={clockOut} style={{ ...bigBtn, background: 'var(--c-bg-dc2626)', color: 'var(--c-fg-ffffff)' }}>{busy ? '…' : 'CLOCK OUT'}</button>
             </>
           ) : (
             <>
               {allStores.length > 0 && (
                 <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 5 }}>Which store are you at?</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-fg-475569)', marginBottom: 5 }}>Which store are you at?</div>
                   <select value={selStore} onChange={e => setSelStore(e.target.value)} style={{ ...inp, marginTop: 0 }}>
                     {!selStore && <option value="">Select store…</option>}
                     {allStores.map(s => <option key={s.code} value={s.code}>{s.label}{stores.includes(s.code) ? '  ✓' : ''}</option>)}
                   </select>
                   {selStore && !stores.includes(selStore) && (
-                    <div style={{ fontSize: 12, color: '#b45309', marginTop: 5 }}>⚠️ You&apos;re not scheduled here — a manager will need to approve after the photo.</div>
+                    <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginTop: 5 }}>⚠️ You&apos;re not scheduled here — a manager will need to approve after the photo.</div>
                   )}
                 </div>
               )}
               <button disabled={busy || faceCfgLoading || waitingOnModels} onClick={faceOn && !faceError ? startClockIn : clockInNoFace}
-                style={{ ...bigBtn, background: '#f5a623', color: '#1E3A5F', opacity: (faceCfgLoading || waitingOnModels) ? 0.5 : 1 }}>
+                style={{ ...bigBtn, background: 'var(--c-bg-f5a623)', color: 'var(--c-fg-1e3a5f)', opacity: (faceCfgLoading || waitingOnModels) ? 0.5 : 1 }}>
                 {busy ? '…' : 'CLOCK IN'}
               </button>
-              <div style={{ fontSize: 12, color: '#666', textAlign: 'center', marginTop: 8 }}>
+              <div style={{ fontSize: 12, color: 'var(--c-fg-666666)', textAlign: 'center', marginTop: 8 }}>
                 {faceCfgLoading ? 'Checking clock-in settings…'
                   : !faceOn ? 'Clock-in takes a photo for the record — face recognition is off.'
                     : faceError ? 'Face models unavailable — clock-in will capture a selfie only.'
@@ -731,21 +731,21 @@ export default function PortalPage() {
           )
         )}
 
-        {msg && <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: msg.startsWith('✅') ? '#e7f6ec' : msg.startsWith('⏳') ? '#fff7e6' : '#fdeaea', fontSize: 14, textAlign: 'center' }}>{msg}</div>}
+        {msg && <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: msg.startsWith('✅') ? 'var(--c-bg-e7f6ec)' : msg.startsWith('⏳') ? 'var(--c-bg-fff7e6)' : 'var(--c-bg-fdeaea)', fontSize: 14, textAlign: 'center' }}>{msg}</div>}
 
         {/* ⏳ Block-and-hold waiting state (mig 915): the rep tapped in somewhere they're not scheduled.
             No time is accruing — their manager was notified to add them to the schedule, and the status
             poll flips this to "Clocked in" automatically once they do. Never the scary error. */}
         {pendingSched && !status?.clockedIn && (
-          <div style={{ marginTop: 12, padding: 14, borderRadius: 10, background: '#fff7e6', border: '1px solid #f5a623' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>
+          <div style={{ marginTop: 12, padding: 14, borderRadius: 10, background: 'var(--c-bg-fff7e6)', border: '1px solid var(--c-bg-f5a623)' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg-92400e)' }}>
               ⏳ Waiting for your manager{pendingSched.store_code ? ` · ${pendingSched.store_code}` : ''}
             </div>
-            <div style={{ fontSize: 12.5, color: '#78350f', marginTop: 6 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--c-fg-78350f)', marginTop: 6 }}>
               {pendingSched.message || "You're not scheduled at this location right now. Your manager has been notified to add you to the schedule — once they approve, you'll be clocked in automatically from the time you tapped in."}
             </div>
             {pendingSched.requested_at && (
-              <div style={{ fontSize: 11, color: '#92400e', marginTop: 6 }}>You tapped in at {pendingSched.requested_at}. This screen updates by itself — no need to tap again.</div>
+              <div style={{ fontSize: 11, color: 'var(--c-fg-92400e)', marginTop: 6 }}>You tapped in at {pendingSched.requested_at}. This screen updates by itself — no need to tap again.</div>
             )}
           </div>
         )}
@@ -754,11 +754,11 @@ export default function PortalPage() {
             (second session after an auto-clock-out, or extra time worked past the scheduled end + grace).
             Shows on BOTH the kiosk here AND the DM's approval board; counts toward hours only once approved. */}
         {Array.isArray(status?.pending_permissions) && status.pending_permissions.length > 0 && (
-          <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: '#fff7e6', border: '1px solid #f5a623' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>
+          <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: 'var(--c-bg-fff7e6)', border: '1px solid var(--c-bg-f5a623)' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg-92400e)' }}>
               ⏳ Pending your DM’s permission ({status.pending_permissions.length})
             </div>
-            <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: '#78350f' }}>
+            <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: 'var(--c-fg-78350f)' }}>
               {status.pending_permissions.slice(0, 5).map((p: any) => (
                 <li key={p.id}>
                   {p.kind === 'reclock_in'
@@ -768,26 +768,26 @@ export default function PortalPage() {
                 </li>
               ))}
             </ul>
-            <div style={{ fontSize: 11, color: '#92400e', marginTop: 6 }}>This time counts toward your hours only after your DM approves it.</div>
+            <div style={{ fontSize: 11, color: 'var(--c-fg-92400e)', marginTop: 6 }}>This time counts toward your hours only after your DM approves it.</div>
           </div>
         )}
 
         {/* ⚠ non-blocking notice: open pending missed-closing items for this employee (never blocks
             the punch that just succeeded — informational only, so they know to go complete it). */}
         {missedClosing && (
-          <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: '#fff7e6', border: '1px solid #f5a623' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>{missedClosing.message}</div>
+          <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: 'var(--c-bg-fff7e6)', border: '1px solid var(--c-bg-f5a623)' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg-92400e)' }}>{missedClosing.message}</div>
             {(missedClosing.items || []).length > 0 && (
-              <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: '#78350f' }}>
+              <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: 'var(--c-fg-78350f)' }}>
                 {missedClosing.items.slice(0, 5).map((it: any, i: number) => (
                   <li key={it.id || i}>{it.store_code || 'store'} — {it.incident_date || ''}</li>
                 ))}
               </ul>
             )}
-            <div style={{ fontSize: 11, color: '#92400e', marginTop: 6 }}>Complete the store closing for these dates to clear this.</div>
+            <div style={{ fontSize: 11, color: 'var(--c-fg-92400e)', marginTop: 6 }}>Complete the store closing for these dates to clear this.</div>
           </div>
         )}
-        <div style={{ marginTop: 16, fontSize: 12, color: '#999', textAlign: 'center' }}>
+        <div style={{ marginTop: 16, fontSize: 12, color: 'var(--c-fg-999999)', textAlign: 'center' }}>
           {gpsRef.current.lat ? 'GPS ✓' : 'GPS off'} · {!faceOn ? 'photo only' : modelsReady ? 'face ✓' : faceError ? 'face ✗' : 'face …'}
         </div>
       </div>
@@ -795,26 +795,26 @@ export default function PortalPage() {
       {/* priority-sell acknowledgment — store has phones in the final % of their pay window (module 095) */}
       {prio && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 16 }}>
-          <div style={{ background: '#fff', borderRadius: 14, padding: 22, width: '100%', maxWidth: 420, maxHeight: '85vh', overflow: 'auto' }}>
-            <div style={{ fontSize: 17, fontWeight: 800, color: '#1E3A5F' }}>📱 Sell these phones today</div>
-            <div style={{ fontSize: 13, color: '#475569', margin: '6px 0 12px' }}>
+          <div style={{ background: 'var(--c-bg-ffffff)', borderRadius: 14, padding: 22, width: '100%', maxWidth: 420, maxHeight: '85vh', overflow: 'auto' }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: 'var(--c-fg-1e3a5f)' }}>📱 Sell these phones today</div>
+            <div style={{ fontSize: 13, color: 'var(--c-fg-475569)', margin: '6px 0 12px' }}>
               These devices at <b>{prio.store_code}</b> are near their payment due date. Prioritize selling them today.
             </div>
-            <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', marginBottom: 14 }}>
+            <div style={{ border: '1px solid var(--c-bg-e2e8f0)', borderRadius: 10, overflow: 'hidden', marginBottom: 14 }}>
               {(prio.priority || []).map((p: any, i: number) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderBottom: i < prio.priority.length - 1 ? '1px solid #f1f5f9' : 'none', fontSize: 13 }}>
-                  <span><b>{p.device_model || '—'}</b> <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#64748b' }}>{p.imei}</span></span>
-                  <span style={{ color: '#d97706', fontWeight: 600 }}>due {p.window_end || p.due_date || '—'}</span>
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderBottom: i < prio.priority.length - 1 ? '1px solid var(--c-bg-f1f5f9)' : 'none', fontSize: 13 }}>
+                  <span><b>{p.device_model || '—'}</b> <span style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--c-fg-64748b)' }}>{p.imei}</span></span>
+                  <span style={{ color: 'var(--c-fg-d97706)', fontWeight: 600 }}>due {p.window_end || p.due_date || '—'}</span>
                 </div>
               ))}
             </div>
-            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, color: '#334155', cursor: 'pointer' }}>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, color: 'var(--c-fg-334155)', cursor: 'pointer' }}>
               <input type="checkbox" checked={prioChecked} onChange={e => setPrioChecked(e.target.checked)} style={{ marginTop: 3 }} />
               <span>I will prioritize selling these phones today.</span>
             </label>
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <button disabled={!prioChecked || busy} onClick={confirmPriorityAck} style={{ ...bigBtn, padding: '12px 0', fontSize: 15, background: prioChecked ? '#059669' : '#94a3b8', color: '#fff', opacity: busy ? 0.7 : 1 }}>{busy ? 'Clocking in…' : 'Acknowledge & clock in'}</button>
-              <button onClick={() => { setPrio(null); setMsg('') }} style={{ ...bigBtn, padding: '12px 0', fontSize: 15, background: '#eee', color: '#333', flex: '0 0 90px' }}>Cancel</button>
+              <button disabled={!prioChecked || busy} onClick={confirmPriorityAck} style={{ ...bigBtn, padding: '12px 0', fontSize: 15, background: prioChecked ? 'var(--c-bg-059669)' : 'var(--c-bg-94a3b8)', color: 'var(--c-fg-ffffff)', opacity: busy ? 0.7 : 1 }}>{busy ? 'Clocking in…' : 'Acknowledge & clock in'}</button>
+              <button onClick={() => { setPrio(null); setMsg('') }} style={{ ...bigBtn, padding: '12px 0', fontSize: 15, background: 'var(--c-bg-eeeeee)', color: 'var(--c-fg-333333)', flex: '0 0 90px' }}>Cancel</button>
             </div>
           </div>
         </div>
@@ -823,19 +823,19 @@ export default function PortalPage() {
       {/* manager override — the employee is at a store they're not scheduled for */}
       {ovr && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 16 }}>
-          <div style={{ background: '#fff', borderRadius: 14, padding: 22, width: '100%', maxWidth: 380 }}>
-            <div style={{ fontSize: 17, fontWeight: 800, color: '#1E3A5F' }}>Manager approval</div>
-            <div style={{ fontSize: 13, color: '#475569', margin: '6px 0 14px' }}>
+          <div style={{ background: 'var(--c-bg-ffffff)', borderRadius: 14, padding: 22, width: '100%', maxWidth: 380 }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: 'var(--c-fg-1e3a5f)' }}>Manager approval</div>
+            <div style={{ fontSize: 13, color: 'var(--c-fg-475569)', margin: '6px 0 14px' }}>
               {empName || 'This employee'} isn&apos;t scheduled at <b>{ovr.store_code}</b> today. A manager can approve — this also adds today&apos;s shift there.
             </div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Manager email</label>
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-fg-475569)' }}>Manager email</label>
             <input type="email" value={mgr.email} onChange={e => setMgr(m => ({ ...m, email: e.target.value }))} style={inp} placeholder="manager@…" autoFocus />
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#475569', marginTop: 12, display: 'block' }}>Manager password</label>
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-fg-475569)', marginTop: 12, display: 'block' }}>Manager password</label>
             <input type="password" value={mgr.pw} onChange={e => setMgr(m => ({ ...m, pw: e.target.value }))} style={inp} placeholder="••••••••" />
-            {mgr.err && <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>{mgr.err}</div>}
+            {mgr.err && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 13, marginTop: 10 }}>{mgr.err}</div>}
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <button disabled={mgr.busy} onClick={submitOverride} style={{ ...bigBtn, padding: '12px 0', fontSize: 15, background: '#059669', color: '#fff', opacity: mgr.busy ? 0.7 : 1 }}>{mgr.busy ? 'Approving…' : 'Approve & clock in'}</button>
-              <button onClick={() => { setOvr(null); setMgr({ email: '', pw: '', busy: false, err: '' }); setMsg('') }} style={{ ...bigBtn, padding: '12px 0', fontSize: 15, background: '#eee', color: '#333', flex: '0 0 90px' }}>Cancel</button>
+              <button disabled={mgr.busy} onClick={submitOverride} style={{ ...bigBtn, padding: '12px 0', fontSize: 15, background: 'var(--c-bg-059669)', color: 'var(--c-fg-ffffff)', opacity: mgr.busy ? 0.7 : 1 }}>{mgr.busy ? 'Approving…' : 'Approve & clock in'}</button>
+              <button onClick={() => { setOvr(null); setMgr({ email: '', pw: '', busy: false, err: '' }); setMsg('') }} style={{ ...bigBtn, padding: '12px 0', fontSize: 15, background: 'var(--c-bg-eeeeee)', color: 'var(--c-fg-333333)', flex: '0 0 90px' }}>Cancel</button>
             </div>
           </div>
         </div>
@@ -879,10 +879,10 @@ function TabBtn({ k, label, tab, setTab, badge }:
   return (
     <button onClick={() => setTab(k)} style={{
       padding: '9px 14px', borderRadius: 9, border: '1px solid var(--border)', cursor: 'pointer',
-      fontSize: 14, fontWeight: 600, background: active ? '#1E3A5F' : 'var(--surface)',
-      color: active ? '#fff' : 'var(--text2)' }}>
+      fontSize: 14, fontWeight: 600, background: active ? 'var(--c-bg-1e3a5f)' : 'var(--surface)',
+      color: active ? 'var(--c-fg-ffffff)' : 'var(--text2)' }}>
       {label}
-      {badge ? <span style={{ marginLeft: 6, background: '#dc2626', color: '#fff', borderRadius: 10,
+      {badge ? <span style={{ marginLeft: 6, background: 'var(--c-bg-dc2626)', color: 'var(--c-fg-ffffff)', borderRadius: 10,
         padding: '0 7px', fontSize: 12, fontWeight: 700 }}>{badge}</span> : null}
     </button>
   )

@@ -27,30 +27,30 @@ export default function Error({ error, reset }: { error: Error & { digest?: stri
       fontFamily: 'var(--font-inter), system-ui, sans-serif',
     }}>
       <div style={{
-        maxWidth: 480, width: '100%', background: '#fff', border: '1px solid #e2e8f0',
+        maxWidth: 480, width: '100%', background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e2e8f0)',
         borderRadius: 12, padding: '28px 26px',
       }}>
-        <h1 style={{ fontSize: 19, fontWeight: 700, margin: '0 0 10px', color: '#0f172a' }}>
+        <h1 style={{ fontSize: 19, fontWeight: 700, margin: '0 0 10px', color: 'var(--c-fg-0f172a)' }}>
           This screen didn’t load
         </h1>
-        <p style={{ fontSize: 14, lineHeight: 1.6, color: '#475569', margin: '0 0 8px' }}>
+        <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--c-fg-475569)', margin: '0 0 8px' }}>
           Something failed while building this page. Your data is untouched — nothing was saved or
           changed by this error.
         </p>
-        <p style={{ fontSize: 13, lineHeight: 1.6, color: '#64748b', margin: '0 0 20px' }}>
+        <p style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--c-fg-64748b)', margin: '0 0 20px' }}>
           Try again below. If it keeps happening, send an admin the reference
           {' '}<code style={{
-            background: '#f1f5f9', padding: '2px 6px', borderRadius: 4, fontSize: 12.5,
+            background: 'var(--c-bg-f1f5f9)', padding: '2px 6px', borderRadius: 4, fontSize: 12.5,
           }}>{error?.digest || 'unavailable'}</code>{' '}
           — it points at the exact server log entry.
         </p>
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={reset} style={{
-            background: '#0f172a', color: '#fff', border: 'none', padding: '9px 18px',
+            background: 'var(--c-bg-0f172a)', color: 'var(--c-fg-ffffff)', border: 'none', padding: '9px 18px',
             borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer',
           }}>Try again</button>
           <a href="/" style={{
-            background: '#f1f5f9', color: '#0f172a', textDecoration: 'none', padding: '9px 18px',
+            background: 'var(--c-bg-f1f5f9)', color: 'var(--c-fg-0f172a)', textDecoration: 'none', padding: '9px 18px',
             borderRadius: 8, fontSize: 14, fontWeight: 600,
           }}>Back to dashboard</a>
         </div>

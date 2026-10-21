@@ -31,9 +31,9 @@ function monthLabel(m: string | null | undefined): string {
 }
 
 const STATUS_STYLE: Record<string, { bg: string; fg: string; icon: string; title: string }> = {
-  missing: { bg: '#fee2e2', fg: '#991b1b', icon: '⚑', title: 'Missing' },
-  unconfirmed_missing: { bg: '#fef3c7', fg: '#92400e', icon: '⚠︎', title: 'No payment reached us that month' },
-  not_measured: { bg: '#e0e7ff', fg: '#3730a3', icon: '◻︎', title: 'Not measured' },
+  missing: { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)', icon: '⚑', title: 'Missing' },
+  unconfirmed_missing: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚠︎', title: 'No payment reached us that month' },
+  not_measured: { bg: 'var(--c-bg-e0e7ff)', fg: 'var(--c-fg-3730a3)', icon: '◻︎', title: 'Not measured' },
   not_due: { bg: 'var(--surface2)', fg: 'var(--text3)', icon: '…', title: 'Not yet owed' },
   received: { bg: 'var(--surface2)', fg: 'var(--text2)', icon: '✓', title: 'Received' },
 }
@@ -86,7 +86,7 @@ export default function MdfEntitlementCoveragePage() {
   const Tile = ({ label, value, sub, warn }: { label: string; value: string; sub?: string; warn?: boolean }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 200 }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? '#991b1b' : 'var(--text1)' }}>{value}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? 'var(--c-fg-991b1b)' : 'var(--text1)' }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
     </div>
   )
@@ -121,13 +121,13 @@ export default function MdfEntitlementCoveragePage() {
       </div>
 
       {data?.error &&
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-991b1b)', fontSize: 13 }}>
           <b>❌ This report could not be built.</b> {data.error}
         </div>}
 
       {/* THE ABSENCE THAT MAKES THE WHOLE REPORT UNANSWERABLE, said before any number is shown. */}
       {!loading && !data?.error && data?.configured === false &&
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#e0e7ff', color: '#3730a3', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-e0e7ff)', color: 'var(--c-fg-3730a3)', fontSize: 13 }}>
           <b>◻︎ No entitlement has been declared for this company</b>, so no store-month can be judged
           against one. Declare which payment category is the entitlement and how many months it runs,
           and this report fills in. Until then every store reads <i>not measured</i> — never a gap.
@@ -135,7 +135,7 @@ export default function MdfEntitlementCoveragePage() {
 
       {/* THE HONEST ANSWER TODAY, and the one thing only the owner can supply. */}
       {!loading && !data?.error && data?.configured !== false && (totals.windows_undeclared || 0) > 0 &&
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#e0e7ff', color: '#3730a3', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-e0e7ff)', color: 'var(--c-fg-3730a3)', fontSize: 13 }}>
           <b>◻︎ {totals.windows_undeclared} store{totals.windows_undeclared === 1 ? '' : 's'} have no declared first entitled month.</b>{' '}
           Nothing in the carrier’s feed says when a store’s {data?.term_months || ''}-month entitlement
           began, so a month with no payment cannot be told apart from the entitlement having run out —

@@ -123,7 +123,7 @@ export default function CarrierMappingPage() {
         <ol style={{ margin: '10px 0 6px 18px', fontSize: 13, lineHeight: 1.7, color: 'var(--text2)' }}>
           <li><b>Add your carrier</b> in the Carriers table below (Name + optional short code) if it isn&apos;t listed.</li>
           <li>In <b>“Mapping rules for:”</b> pick the carrier you&apos;re mapping.</li>
-          <li>Look at <b style={{ color: '#b42318' }}>⚠️ categories that need mapping</b> — these are the REAL category
+          <li>Look at <b style={{ color: 'var(--c-fg-b42318)' }}>⚠️ categories that need mapping</b> — these are the REAL category
             labels found in that carrier&apos;s comp data for {period}. For each, choose a component and click <b>Map</b>.
             (Fastest way — you only map what actually appears.)</li>
           <li>Or add a rule by hand in the <b>rules table</b>: <b>pick a category</b> from the dropdown (it lists the
@@ -207,7 +207,7 @@ export default function CarrierMappingPage() {
 
       {/* Unmapped categories panel */}
       {unmapped.length > 0 && (
-        <div className="card" style={{ padding: 14, marginBottom: 18, borderLeft: '4px solid #b42318' }}>
+        <div className="card" style={{ padding: 14, marginBottom: 18, borderLeft: '4px solid var(--c-bg-b42318)' }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>⚠️ {unmapped.length} categories need mapping ({period})</div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <tbody>

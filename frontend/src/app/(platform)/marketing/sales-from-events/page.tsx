@@ -43,7 +43,7 @@ const money = (n: any) => (n === null || n === undefined ? '—' : fmtMoney(n))
 function Attribution({ a }: { a: any }) {
   if (!a) return null
   return (
-    <div style={{ ...panel, borderLeft: '3px solid #f39c12', marginBottom: 12, fontSize: 12,
+    <div style={{ ...panel, borderLeft: '3px solid var(--c-bg-f39c12)', marginBottom: 12, fontSize: 12,
                   color: 'var(--text2)', lineHeight: 1.55 }}>
       <div style={{ fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>{a.headline}</div>
       <div>{a.detail}</div>
@@ -53,7 +53,7 @@ function Attribution({ a }: { a: any }) {
         Event register(s): <b>{(a.registers || []).join(', ') || 'none configured'}</b>
         {' · '}Counted as an activation: <b>{(a.activation_classes_counted || []).join(', ')}</b>
       </div>
-      {a.source_note && <div style={{ marginTop: 6, color: '#b45309' }}>{a.source_note}</div>}
+      {a.source_note && <div style={{ marginTop: 6, color: 'var(--c-fg-b45309)' }}>{a.source_note}</div>}
     </div>
   )
 }
@@ -150,7 +150,7 @@ export default function SalesFromEventsPage() {
         </button>}
       />
 
-      {err && <div style={{ ...panel, marginTop: 12, borderLeft: '3px solid #dc2626', fontSize: 13 }}>{err}</div>}
+      {err && <div style={{ ...panel, marginTop: 12, borderLeft: '3px solid var(--c-bg-dc2626)', fontSize: 13 }}>{err}</div>}
       {cur && <div style={{ marginTop: 12 }}><Attribution a={cur.attribution} /></div>}
       {cur && <Empty reason={cur.empty_reason} />}
 
@@ -228,7 +228,7 @@ function SalesTab({ d }: { d: any }) {
               <tr key={i} style={r.countable ? undefined : { opacity: 0.55 }}>
                 <td style={cell}>
                   {r.line_class_label || '—'}
-                  {!r.countable && <span style={{ fontSize: 10, color: '#b91c1c' }}> · not counted</span>}
+                  {!r.countable && <span style={{ fontSize: 10, color: 'var(--c-fg-b91c1c)' }}> · not counted</span>}
                 </td>
                 {fields.map(f => (
                   <td key={f} style={{ ...cell, whiteSpace: 'nowrap' }}>
@@ -253,7 +253,7 @@ function RetentionTab({ d }: { d: any }) {
   const reasons: Record<string, string> = d.unmatched_reasons || {}
   return (
     <>
-      <div style={{ ...panel, borderLeft: '3px solid #2563eb', marginBottom: 12, fontSize: 12,
+      <div style={{ ...panel, borderLeft: '3px solid var(--c-bg-2563eb)', marginBottom: 12, fontSize: 12,
                     color: 'var(--text2)', lineHeight: 1.55 }}>
         <div style={{ fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>{d.basis?.headline}</div>
         <div>{d.basis?.detail}</div>
@@ -275,8 +275,8 @@ function RetentionTab({ d }: { d: any }) {
               <tr key={w.window}>
                 <td style={cell}><b>{w.label}</b></td>
                 <td style={cell}>{nf(w.lines)}</td>
-                <td style={{ ...cell, color: '#16a34a', fontWeight: 600 }}>{nf(w.active)}</td>
-                <td style={{ ...cell, color: '#dc2626' }}>{nf(w.churned)}</td>
+                <td style={{ ...cell, color: 'var(--c-fg-16a34a)', fontWeight: 600 }}>{nf(w.active)}</td>
+                <td style={{ ...cell, color: 'var(--c-fg-dc2626)' }}>{nf(w.churned)}</td>
                 {/* GREY, never red: "we could not look it up" must not look like a loss. */}
                 <td style={{ ...cell, color: 'var(--text2)' }}>{nf(w.unmatched)}</td>
                 <td style={{ ...cell, fontWeight: 700 }}>
@@ -315,8 +315,8 @@ function RetentionTab({ d }: { d: any }) {
               <tr key={b.store}>
                 <td style={cell}>{b.store}</td>
                 <td style={cell}>{nf(b.lines)}</td>
-                <td style={{ ...cell, color: '#16a34a' }}>{nf(b.active)}</td>
-                <td style={{ ...cell, color: '#dc2626' }}>{nf(b.churned)}</td>
+                <td style={{ ...cell, color: 'var(--c-fg-16a34a)' }}>{nf(b.active)}</td>
+                <td style={{ ...cell, color: 'var(--c-fg-dc2626)' }}>{nf(b.churned)}</td>
                 <td style={{ ...cell, color: 'var(--text2)' }}>{nf(b.unmatched)}</td>
                 <td style={{ ...cell, fontWeight: 600 }}>{pct(b.retention_pct)}</td>
               </tr>
@@ -337,7 +337,7 @@ function RetentionTab({ d }: { d: any }) {
             {(d.feed_coverage || []).map((f: any) => (
               <tr key={f.period}>
                 <td style={cell}>{f.label || f.period}</td>
-                <td style={{ ...cell, color: f.loaded ? '#16a34a' : '#b45309' }}>
+                <td style={{ ...cell, color: f.loaded ? 'var(--c-fg-16a34a)' : 'var(--c-fg-b45309)' }}>
                   {f.loaded ? 'loaded' : 'not loaded'}
                 </td>
                 <td style={cell}>{nf(f.matched_rows)}</td>
@@ -367,11 +367,11 @@ function CommissionDetail({ pn, fb }: { pn: any; fb: any }) {
   return (
     <div style={{ marginTop: 8, fontSize: 12 }}>
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'baseline' }}>
-        <span style={{ color: '#16a34a' }}><b>{nf(st.paid)}</b> paid</span>
+        <span style={{ color: 'var(--c-fg-16a34a)' }}><b>{nf(st.paid)}</b> paid</span>
         <span style={{ color: 'var(--text2)' }}>
           <b>{nf(st.matched_unpaid)}</b> matched, nothing paid yet (a measured zero)
         </span>
-        <span style={{ color: st.unmatchable ? '#b45309' : 'var(--text2)' }}>
+        <span style={{ color: st.unmatchable ? 'var(--c-fg-b45309)' : 'var(--text2)' }}>
           <b>{nf(st.unmatchable)}</b> could not be looked up
         </span>
         <button style={{ ...btn, padding: '2px 8px' }} onClick={() => setOpen(o => !o)}>
@@ -380,7 +380,7 @@ function CommissionDetail({ pn, fb }: { pn: any; fb: any }) {
       </div>
 
       {st.unmatchable > 0 && (
-        <div style={{ marginTop: 6, color: '#b45309' }}>
+        <div style={{ marginTop: 6, color: 'var(--c-fg-b45309)' }}>
           {(pn.unmatchable || []).map((u: any) => (
             <div key={u.reason} style={{ marginBottom: 3 }}>
               <b>{nf(u.count)} line(s) — {u.reason}:</b> {u.note}
@@ -396,7 +396,7 @@ function CommissionDetail({ pn, fb }: { pn: any; fb: any }) {
       )}
 
       {unc.total > 0 && (
-        <div style={{ marginTop: 6, color: '#b45309' }}>
+        <div style={{ marginTop: 6, color: 'var(--c-fg-b45309)' }}>
           <b>{money(unc.total)} paid against these numbers has no category rule configured</b>
           {' ('}{Object.keys(unc.labels || {}).join(', ')}{'). '}
           {pn.unclassified_note}
@@ -452,7 +452,7 @@ function CommissionDetail({ pn, fb }: { pn: any; fb: any }) {
 function RoiTab({ d, onSaved }: { d: any; onSaved: () => void }) {
   return (
     <>
-      <div style={{ ...panel, borderLeft: '3px solid #2563eb', marginBottom: 12, fontSize: 12,
+      <div style={{ ...panel, borderLeft: '3px solid var(--c-bg-2563eb)', marginBottom: 12, fontSize: 12,
                     color: 'var(--text2)', lineHeight: 1.55 }}>
         <div style={{ fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>
           How the commission figure is arrived at
@@ -461,7 +461,7 @@ function RoiTab({ d, onSaved }: { d: any; onSaved: () => void }) {
         {d.commission_basis_note && (
           <div style={{ marginTop: 6 }}>{d.commission_basis_note}</div>
         )}
-        <div style={{ marginTop: 6, fontWeight: 600, color: '#b45309' }}>
+        <div style={{ marginTop: 6, fontWeight: 600, color: 'var(--c-fg-b45309)' }}>
           Measured as of {d.commission_as_of || '—'}
           {(d.commission_periods_read || []).length > 0
             ? ` · read across ${(d.commission_periods_read || []).length} feed period(s): ${(d.commission_periods_read || []).join(', ')}`
@@ -532,7 +532,7 @@ function RoiDay({ row, onSaved }: { row: any; onSaved: () => void }) {
           <div style={{ fontSize: 12, color: 'var(--text2)' }}>
             {row.event_linked
               ? <>Linked to event <b>{row.event?.title}</b> ({row.event?.status})</>
-              : <span style={{ color: '#b45309' }}>
+              : <span style={{ color: 'var(--c-fg-b45309)' }}>
                   No event record covers this store and date — the report still runs, and what it
                   cannot derive is asked for below.
                 </span>}
@@ -551,7 +551,7 @@ function RoiDay({ row, onSaved }: { row: any; onSaved: () => void }) {
       </div>
 
       {row.reason && (
-        <div style={{ marginTop: 8, fontSize: 12, color: '#b45309' }}>{row.reason}</div>
+        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--c-fg-b45309)' }}>{row.reason}</div>
       )}
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>

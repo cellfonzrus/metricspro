@@ -160,7 +160,7 @@ export default function ClosingManagementPage() {
         storeLabel="Stores…" marketLabel="Markets…" repLabel="Employees…"
       />
       {data?.market_filter_skipped && (
-        <div className="card" style={{ padding: '8px 12px', margin: '10px 0', fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
+        <div className="card" style={{ padding: '8px 12px', margin: '10px 0', fontSize: 12, background: 'var(--c-bg-fff8e6)', border: '1px solid var(--c-bg-f3d98b)' }}>
           ⚠️ Your market filter could not be applied (store roster unavailable) — showing all markets rather than silently dropping stores.
         </div>
       )}
@@ -173,7 +173,7 @@ export default function ClosingManagementPage() {
           <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 6 }}>Management Review is limited to company-wide leadership. Ask an admin to grant your role the “Closing: Management Review” page at <ScreenLink to="roles_access">Administration → Roles</ScreenLink>.</div>
         </div>
       ) : err ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {err}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {err}</div>
       ) : groups.length === 0 ? (
         <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>
           Nothing to review for {mode === 'date' ? date : period}{onlyReview ? ' — no multi-try or auto-accepted closings.' : '.'}
@@ -184,21 +184,21 @@ export default function ClosingManagementPage() {
             const key = `${g.close_date}|${g.store_code}|${g.employee_name}`
             const isOpen = open[key]
             return (
-              <div key={i} className="card" style={{ padding: 0, overflow: 'hidden', border: g.auto_accepted ? '1px solid #f3b4b4' : undefined }}>
+              <div key={i} className="card" style={{ padding: 0, overflow: 'hidden', border: g.auto_accepted ? '1px solid var(--c-bg-f3b4b4)' : undefined }}>
                 <div role="button" tabIndex={0} onClick={() => setOpen(o => ({ ...o, [key]: !o[key] }))}
                   onKeyDown={e => { if (e.key === 'Enter') setOpen(o => ({ ...o, [key]: !o[key] })) }}
-                  style={{ width: '100%', textAlign: 'left', background: g.auto_accepted ? '#fffafa' : 'var(--surface)', border: 'none', cursor: 'pointer', padding: '11px 14px', display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                  style={{ width: '100%', textAlign: 'left', background: g.auto_accepted ? 'var(--c-bg-fffafa)' : 'var(--surface)', border: 'none', cursor: 'pointer', padding: '11px 14px', display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
                   <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 13, fontWeight: 700 }}>{g.store_address || g.store_code}</span>
                     <span style={{ fontSize: 13 }}>{g.employee_name || '—'}</span>
                     <span style={{ fontSize: 12, color: 'var(--text3)' }}>{g.close_date}</span>
-                    <span className="badge" style={{ fontSize: 11, background: g.attempts >= 3 ? '#fbe4e4' : 'var(--surface2)', color: g.attempts >= 3 ? '#b42318' : 'var(--text2)' }}>{g.attempts === 0 ? 'never counted' : `${g.attempts} attempt${g.attempts > 1 ? 's' : ''}`}</span>
-                    {g.auto_accepted && <span className="badge" style={{ fontSize: 11, background: '#b42318', color: '#fff' }}>⚑ auto-accepted — review</span>}
+                    <span className="badge" style={{ fontSize: 11, background: g.attempts >= 3 ? 'var(--c-bg-fbe4e4)' : 'var(--surface2)', color: g.attempts >= 3 ? 'var(--c-fg-b42318)' : 'var(--text2)' }}>{g.attempts === 0 ? 'never counted' : `${g.attempts} attempt${g.attempts > 1 ? 's' : ''}`}</span>
+                    {g.auto_accepted && <span className="badge" style={{ fontSize: 11, background: 'var(--c-bg-b42318)', color: 'var(--c-fg-ffffff)' }}>⚑ auto-accepted — review</span>}
                     {/* A REFUSED submit (index §29.11): the rep tried and NO closing was stored. Before
                         this existed the attempt left no trace at all, so a missing closing could not be
                         told apart from one never submitted. */}
-                    {g.refusals > 0 && <span className="badge" style={{ fontSize: 11, background: '#fef3c7', color: '#92400e' }}>⚠ {g.refusals} submit{g.refusals > 1 ? 's' : ''} turned away — {REFUSAL_WORDS[g.last_refusal_code] || 'see tries'}</span>}
-                    {g.released_at && <span className="badge" style={{ fontSize: 11, background: '#dbeafe', color: '#1d4ed8' }}>🔓 released by {g.released_by || 'management'}{g.correction_count ? ` · corrected ${g.correction_count}×` : ''}</span>}
+                    {g.refusals > 0 && <span className="badge" style={{ fontSize: 11, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)' }}>⚠ {g.refusals} submit{g.refusals > 1 ? 's' : ''} turned away — {REFUSAL_WORDS[g.last_refusal_code] || 'see tries'}</span>}
+                    {g.released_at && <span className="badge" style={{ fontSize: 11, background: 'var(--c-bg-dbeafe)', color: 'var(--c-fg-1d4ed8)' }}>🔓 released by {g.released_by || 'management'}{g.correction_count ? ` · corrected ${g.correction_count}×` : ''}</span>}
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     {/* MANAGEMENT OVERRIDE (mig 502): release this exact daily_closing row so the rep can
@@ -226,14 +226,14 @@ export default function ClosingManagementPage() {
                     <span style={{ fontSize: 12, color: 'var(--text3)' }}>{isOpen ? '▲ hide tries' : '▼ show tries'}</span>
                   </div>
                 </div>
-                {relMsg[key] && <div style={{ fontSize: 11, padding: '0 14px 8px', color: relMsg[key].startsWith('❌') ? '#b91c1c' : 'var(--text2)' }}>{relMsg[key]}</div>}
+                {relMsg[key] && <div style={{ fontSize: 11, padding: '0 14px 8px', color: relMsg[key].startsWith('❌') ? 'var(--c-fg-b91c1c)' : 'var(--text2)' }}>{relMsg[key]}</div>}
                 {refPlan[key]?.ok && (
                   <div style={{ fontSize: 11, padding: '0 14px 10px', color: 'var(--text2)' }}>
                     Moving this closing to <b>{refPlan[key].to_store_code}</b>
                     {(refPlan[key]?.moves || []).length
                       ? <> also moves {(refPlan[key]?.moves || []).map(m => `${m.count} × ${m.table.replace(/^.*\./, '').replace(/_/g, ' ')}`).join(', ')}.</>
                       : <> moves nothing else — no cash pickup, expense or count is recorded against this store-day.</>}
-                    {(refPlan[key]?.review || []).map((rv, i) => <div key={i} style={{ color: '#92400e' }}>⚠ {rv.message}</div>)}
+                    {(refPlan[key]?.review || []).map((rv, i) => <div key={i} style={{ color: 'var(--c-fg-92400e)' }}>⚠ {rv.message}</div>)}
                     <div style={{ marginTop: 6 }}>
                       <button className="btn" style={{ fontSize: 11, padding: '3px 8px' }}
                         disabled={relBusy[key]}
@@ -268,10 +268,10 @@ export default function ClosingManagementPage() {
                             <td style={{ padding: '5px 8px', fontSize: 12, textAlign: 'right' }}>{fmt(t.entered_credit)}</td>
                             <td style={{ padding: '5px 8px', fontSize: 12 }}><Dir d={t.credit_dir} credit /></td>
                             <td style={{ padding: '5px 8px', fontSize: 12 }}>
-                              {t.refused ? <span style={{ color: '#92400e', fontWeight: 600 }} title={t.refusal_detail || undefined}>turned away — {REFUSAL_WORDS[t.refusal_code] || t.refusal_code}</span>
-                                : t.blocked ? <span style={{ color: '#b45309' }}>recount</span>
-                                  : t.auto_accepted ? <span style={{ color: '#b42318', fontWeight: 600 }}>auto-accepted</span>
-                                    : <span style={{ color: '#15803d' }}>accepted</span>}
+                              {t.refused ? <span style={{ color: 'var(--c-fg-92400e)', fontWeight: 600 }} title={t.refusal_detail || undefined}>turned away — {REFUSAL_WORDS[t.refusal_code] || t.refusal_code}</span>
+                                : t.blocked ? <span style={{ color: 'var(--c-fg-b45309)' }}>recount</span>
+                                  : t.auto_accepted ? <span style={{ color: 'var(--c-fg-b42318)', fontWeight: 600 }}>auto-accepted</span>
+                                    : <span style={{ color: 'var(--c-fg-15803d)' }}>accepted</span>}
                             </td>
                           </tr>
                         ))}
@@ -313,7 +313,7 @@ const REFUSAL_WORDS: Record<string, string> = {
 function lastTry(g: any) { return g.tries?.[g.tries.length - 1] || {} }
 
 function Dir({ d, credit }: { d?: string; credit?: boolean }) {
-  if (!d || d === 'ok') return <span style={{ color: '#15803d' }}>ok</span>
+  if (!d || d === 'ok') return <span style={{ color: 'var(--c-fg-15803d)' }}>ok</span>
   const bad = credit ? d === 'over' : d === 'short'
-  return <span style={{ color: bad ? '#b91c1c' : '#b45309', fontWeight: 600 }}>{d}</span>
+  return <span style={{ color: bad ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-b45309)', fontWeight: 600 }}>{d}</span>
 }

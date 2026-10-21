@@ -110,7 +110,7 @@ export default function CrmSettingsPage() {
         How your team sells: the stages, the outcomes, how fast a follow-up is chased and who a lead goes to.
       </div>
       {cfg && !cfg.can_edit && (
-        <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 12 }}>
+        <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', marginBottom: 12 }}>
           You can view this setup but not change it — the “CRM” settings permission is needed.
         </div>
       )}
