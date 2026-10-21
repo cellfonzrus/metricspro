@@ -26,10 +26,13 @@
 //
 // Run:  node frontend/prove_nav_accents.mjs      (no network, no DB, no React, no npm install)
 import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
+// The REAL rbac.ts, type-stripped by Node >= 22.18 (it imports nothing), so §H drives the actual
+// declarations and the actual applyNavLayout rather than a copy of them.
+const R = await import(pathToFileURL(join(HERE, 'src/lib/rbac.ts')).href)
 const css = readFileSync(join(HERE, 'src/app/globals.css'), 'utf8')
 const tsx = readFileSync(join(HERE, 'src/app/(platform)/layout.tsx'), 'utf8')
 
@@ -93,7 +96,12 @@ ck('layout.tsx names no colour when assigning the accent',
   !/--mp-accent[^\n]*#[0-9a-fA-F]{3}/.test(tsx))
 // The nav rules themselves must read the variable rather than repeat a colour. The one exception is
 // the pre-@supports fallback, which is deliberately the old white-on-navy.
-const supportsBlock = (css.match(/@supports \(color: color-mix[\s\S]*?\n\}/) || [''])[0]
+// There are TWO @supports blocks now (the headings and the rows); this is the rows'. Selecting it by
+// content rather than by position is deliberate: a third block, or a reordering, must not silently
+// point these checks at the wrong rules.
+const supportsBlocks = css.match(/@supports \(color: color-mix[\s\S]*?\n\}/g) || []
+const supportsBlock = supportsBlocks.find(b => b.includes('.mp-nav-item {')) || ''
+ck('the rows\' @supports block was found', supportsBlock.length > 0)
 ck('the coloured nav rules use var(--mp-accent), not literals',
   supportsBlock.includes('var(--mp-accent)') && !/#[0-9a-fA-F]{3,6}/.test(supportsBlock.replace(/#ffffff/gi, '')),
   supportsBlock.match(/#[0-9a-fA-F]{3,6}/g))
@@ -196,6 +204,61 @@ ck('G5b a tinted icon chip is rejected — an emoji would ignore it',
 const sameSlot = [1, 1, 2]
 ck('G5 two adjacent rows sharing a slot is rejected', !sameSlot.every((s, i) => i === 0 || s !== sameSlot[i - 1]))
 ck('G6 a palette of one colour is rejected', !([{ n: 1 }].length >= 2))
+
+// ── H. the group HEADINGS (owner ask 2026-10-21) ────────────────────────────────────────────────
+console.log('\nH. a heading is bolder, coloured from the same palette, and carries its icon')
+const tsxGroup = (tsx.match(/className="mp-nav-group"[\s\S]{0,400}/) || [''])[0]
+ck('the heading takes a slot of the same rotation', /className="mp-nav-group"[^>]*style=\{accentStyle\(groupIndex\)\}/.test(tsx))
+ck('the heading renders the icon the nav gives it, spelling none of its own',
+  /className="mp-nav-group-icon"[^>]*>\{groupIconGlyph\}/.test(tsx) && !/mp-nav-group-icon[^>]*>['"]\p{Emoji}/u.test(tsxGroup))
+
+// Every group declares one, so a new group cannot ship headingless.
+const undeclared = R.NAV.filter(g => !g.icon).map(g => g.group)
+ck('every built-in nav group declares an icon', undeclared.length === 0, undeclared)
+const catsNoIcon = R.REPORT_CATEGORIES.filter(c => !c.icon).map(c => c.key)
+ck('every report category declares an icon', catsNoIcon.length === 0, catsNoIcon)
+ck('groupIcon answers from the declaration', R.NAV.every(g => R.groupIcon(g.group) === g.icon))
+ck('a report category resolves by the label the sidebar shows it under',
+  R.REPORT_CATEGORIES.every(c => R.groupIcon(c.label) === c.icon))
+ck('a group nobody declared (one a tenant created) takes the fallback, never a blank',
+  R.groupIcon('A group a tenant invented') === R.GROUP_ICON_FALLBACK && R.GROUP_ICON_FALLBACK.length > 0)
+
+// The icon must survive the per-tenant layout, which rebuilds every group by NAME.
+const onePage = R.NAV.find(g => g.items.length)
+const built = R.applyNavLayout(R.NAV)
+ck('applyNavLayout carries an icon onto every group it returns',
+  built.length > 0 && built.every(g => typeof g.icon === 'string' && g.icon.length > 0))
+ck('a built-in group keeps its own icon through the layout',
+  built.find(g => g.group === onePage.group)?.icon === onePage.icon)
+const moved = R.applyNavLayout(R.NAV, { items: { [onePage.items[0].href]: { group: 'Tenant Group' } } })
+const tenant = moved.find(g => g.group === 'Tenant Group')
+ck('a group a tenant creates still gets the fallback icon', tenant?.icon === R.GROUP_ICON_FALLBACK, tenant?.icon)
+const cat = built.find(g => g.group.startsWith('Reports · '))
+ck('a Reports category gets its declared icon, not the fallback',
+  !cat || (cat.icon && cat.icon !== R.GROUP_ICON_FALLBACK), cat?.icon)
+
+// The look itself: bolder and bigger than a row, same palette, same left edge.
+const num = (re, src = css) => Number((src.match(re) || [])[1])
+const groupRule = (css.match(/\.mp-nav-group \{[\s\S]*?\}/) || [''])[0]
+const itemRule = (css.match(/\.mp-nav-item \{[\s\S]*?\}/) || [''])[0]
+ck(`a heading is bolder than a row (${num(/font-weight: (\d+)/, groupRule)} vs ${num(/font-weight: (\d+)/, itemRule)})`,
+  num(/font-weight: (\d+)/, groupRule) > num(/font-weight: (\d+)/, itemRule))
+ck('a heading is larger than it was (9.5px) so it reads as a heading',
+  num(/font-size: ([\d.]+)px/, groupRule) > 9.5, num(/font-size: ([\d.]+)px/, groupRule))
+ck('the heading is coloured from the SAME --mp-accent, not a palette of its own',
+  /\.mp-nav-group \{ color: color-mix\(in srgb, var\(--mp-accent\) (\d+)%, #ffffff\); \}/.test(css))
+const headMix = num(/\.mp-nav-group \{ color: color-mix\(in srgb, var\(--mp-accent\) (\d+)%/) / 100
+for (const sl of slots) {
+  const worst = Math.min(...NAVY.map(bg => contrast(mix(hex(sl.hex), WHITE, headMix), bg)))
+  ck(`slot ${sl.n} ${sl.hex}: heading text ${worst.toFixed(2)}:1 >= ${AA}`, worst >= AA, worst)
+}
+ck('the heading text is left-aligned (a <button> would otherwise centre it)',
+  /text-align: left/.test(groupRule))
+ck('the heading icon sits in the same width slot as a row chip, so the left edge is one line',
+  num(/\.mp-nav-group-icon \{ width: (\d+)px/) === num(/\.mp-nav-icon \{[^}]*width: (\d+)px/, supportsBlock))
+ck('H-neg a heading that kept the row weight would be rejected', !(450 > 450))
+ck('H-neg a second icon list in the layout would be rejected',
+  /mp-nav-group-icon[^>]*>['"]\p{Emoji}/u.test(`<span className="mp-nav-group-icon">'🏪'`))
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

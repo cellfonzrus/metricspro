@@ -30191,7 +30191,25 @@ a browser without `color-mix()` keeps today's nav rather than rendering somethin
 
 | Lock | What fails the build |
 | --- | --- |
-| `frontend/prove_nav_accents.mjs` (**61 checks**, CI job *Sidebar colour proof*) | reads the REAL `globals.css` and `layout.tsx`: the palette is declared once with contiguous slots; `NAV_ACCENT_SLOTS` equals that count; the rows dereference `var(--nav-accent-N)` and spell no colour; neighbours never share a slot; the icon chip is a painted BOX with a size of its own and **not** a `color` on the glyph (the invisible-change regression); **per-slot contrast computed** for resting / hover / active, the chip's standoff from the rail, and the active row's filled background and thicker bar; the `@supports` fallback is intact; seven negative controls (a gap in the palette, a count disagreement, a literal colour, a label with no white left, a tinted chip, two adjacent rows sharing a slot, a one-colour palette) |
+| `frontend/prove_nav_accents.mjs` (**86 checks**, CI job *Sidebar colour proof*) | reads the REAL `globals.css` and `layout.tsx`: the palette is declared once with contiguous slots; `NAV_ACCENT_SLOTS` equals that count; the rows dereference `var(--nav-accent-N)` and spell no colour; neighbours never share a slot; the icon chip is a painted BOX with a size of its own and **not** a `color` on the glyph (the invisible-change regression); **per-slot contrast computed** for resting / hover / active, the chip's standoff from the rail, and the active row's filled background and thicker bar; the `@supports` fallback is intact; §H for the headings — every group and every report category declares an icon, `groupIcon` answers from the declaration, the fallback covers a tenant-created group, `applyNavLayout` carries the icon through (driven against the REAL `rbac.ts`), and the heading is bolder, larger, left-aligned and contrast-checked per slot; nine negative controls (a gap in the palette, a count disagreement, a literal colour, a label with no white left, a tinted chip, two adjacent rows sharing a slot, a one-colour palette) |
+
+### §CORE-14.5 THE GROUP HEADINGS (owner ask 2026-10-21)
+
+Owner, with the rows already live: *"side menu looks good when clicked on the first label but the look
+of the first label like CRM .POS , finance etc needs to be in bolder and with different colors and
+favicon"*. The headings had stayed 9.5px, weight 700, flat `rgba(255,255,255,0.4)` — the one part of
+the rail the colour had not reached.
+
+| Link | Where |
+| --- | --- |
+| which icon a group has (ONE home) | `rbac.groupIcon(group)`, DERIVED from the declarations — `NavGroup.icon` on every built-in group and `icon` on every `REPORT_CATEGORIES` row — with `GROUP_ICON_FALLBACK` for a group a tenant created at `/admin/menu`, which declares nothing |
+| how it survives the tenant layout | `applyNavLayout` rebuilds every group by NAME, so it returns `icon: groupIcon(group)` rather than carrying the input object's field; an item moved into another group, a tenant group and a Reports category all resolve the same way |
+| the heading's colour | the SAME `--mp-accent` rotation as the rows, keyed by the group's index, at the same 85% mix — a heading differs from its rows by **weight and size**, not by a palette of its own |
+| the look | 11px / weight 800 (was 9.5px / 700), the icon in a 21px slot so a heading and its rows share one left edge, and `text-align: left` because a `<button>` would otherwise centre the label now that it is the flexible child |
+
+Every heading colour is computed against the rail exactly as the rows are (5.0:1 – 7.4:1). The
+sidebar spells **no icon of its own**: it renders what the nav hands it, which is why a group that
+nobody declared gets a folder rather than a gap where its neighbours have an icon.
 
 ### §CORE-14.4 WHAT IS NOT DONE HERE
 

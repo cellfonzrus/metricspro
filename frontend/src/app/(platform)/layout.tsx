@@ -499,7 +499,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                 </span>
               </button>
             ))
-          ) : groups.map(({ group, items, subs }) => {
+          ) : groups.map(({ group, icon: groupIconGlyph, items, subs }, groupIndex) => {
             // In the icon rail (collapsed) every item shows as an icon (no headers); in the full
             // sidebar only the open group's items render.
             const isOpen = collapsed || openGroup === group
@@ -543,8 +543,12 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
             <div key={group} style={{ marginBottom: collapsed ? 0 : 1 }}>
               {!collapsed && (
                 <button onClick={() => setOpenGroup(g => (g === group ? null : group))}
-                  className="mp-nav-group" aria-expanded={isOpen}>
-                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  className="mp-nav-group" aria-expanded={isOpen} style={accentStyle(groupIndex)}>
+                  {/* The heading's own icon. It comes from rbac's one home through applyNavLayout, so a
+                      tenant-created group gets the fallback instead of a gap where its neighbours have
+                      one, and this file names no icon of its own. */}
+                  <span className="mp-nav-group-icon" aria-hidden>{groupIconGlyph}</span>
+                  <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {labelOf('group:' + group, group)}
                   </span>
                   <span aria-hidden style={{ fontSize: 8, opacity: 0.75, display: 'inline-block',
