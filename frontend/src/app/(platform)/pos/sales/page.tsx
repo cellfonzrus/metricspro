@@ -1735,7 +1735,7 @@ export default function PosSalesPage() {
                   address and number are shown and editable, and the line under them says what name
                   the customer will see it come from, so nobody has to send one to find out. */}
               {lastSaleId && receiptView && (
-                <SendReceiptPanel saleId={lastSaleId} view={receiptView} choice={printChoice}
+                <SendReceiptPanel key={lastSaleId} saleId={lastSaleId} view={receiptView} choice={printChoice}
                   onEmailSent={saveReceiptEmailToProfile} />
               )}
               {lastWasActivation && lastSaleId && (
@@ -1788,7 +1788,7 @@ export default function PosSalesPage() {
                       }} />
                     {/* The same send panel the till has (§POS-09): a counter opening a receipt from
                         yesterday can hand it over, not only print it. */}
-                    <SendReceiptPanel saleId={reprintSaleId} view={reprintView} choice={reprintChoice} />
+                    <SendReceiptPanel key={reprintSaleId} saleId={reprintSaleId} view={reprintView} choice={reprintChoice} />
                   </>
                 : <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 12 }}>Reading the receipt…</div>}
               <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}

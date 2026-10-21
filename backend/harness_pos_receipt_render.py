@@ -1073,6 +1073,7 @@ print("\n§Q  SENDING A RECEIPT — one home, two channels, every screen (§POS-
 from app.modules.notify import whatsapp_window as wa_win  # noqa: E402
 
 panel = read(PANEL_SEND)
+REPRINT_MOUNT = "<SendReceiptPanel key={reprintSaleId} saleId={reprintSaleId}"
 WA_META = read("backend/app/modules/notify/channels/whatsapp_meta.py")
 CUSTOMER = {"email": "jane@example.com", "phone_primary": "(212) 555-0123"}
 
@@ -1116,10 +1117,10 @@ check("Q8 the till keeps its own half (an address onto the customer's profile) a
       "saveReceiptEmailToProfile" in reg and "onEmailSent={saveReceiptEmailToProfile}" in reg
       and reg.count("onEmailSent") == 1        # the till's one use of it; the prop lives in the panel
       and panel.count("onEmailSent?.(") == 1
-      and "onEmailSent" not in reg.split("<SendReceiptPanel saleId={reprintSaleId}")[1])
+      and "onEmailSent" not in reg.split(REPRINT_MOUNT)[1])
 check("Q9 the Sale Log reprint can SEND, which is the ask — not only print",
-      "<SendReceiptPanel saleId={reprintSaleId}" in reg
-      and "reprintChoice" in reg.split("<SendReceiptPanel saleId={reprintSaleId}")[1][:200])
+      REPRINT_MOUNT in reg
+      and "reprintChoice" in reg.split(REPRINT_MOUNT)[1][:200])
 check("Q10 the copy sent is the copy that was handed over (the print choice rides with it)",
       "choice={printChoice}" in reg and "choice={reprintChoice}" in reg
       and "choiceParams(choice)" in read(CLIENT))
@@ -1145,6 +1146,15 @@ check("Q15 RULE TWO — no tenant, carrier or country is written into either sid
       and not re.search(r'\+1\b', code_only(SR_SRC)))
 check("Q16 §POS-09 is registered in the index with its one home",
       "POS-09" in idx and "SendReceiptPanel" in idx)
+# One customer's address on another customer's receipt is the defect this shape prevents. The panel
+# is MOUNTED per sale rather than copying a prop into state after the fact, so there is nothing to
+# go stale: opening a different sale mounts a fresh panel with that sale's own answer.
+check("Q17 a different sale is a different panel, so no address can be carried onto it",
+      "useEffect" not in panel
+      and panel.count("useState(view.email.to)") == 1
+      and panel.count("useState(view.whatsapp.to)") == 1
+      and reg.count("<SendReceiptPanel key={lastSaleId} saleId={lastSaleId}") == 1
+      and reg.count(REPRINT_MOUNT) == 1)
 
 print("\n§J  negative controls")
 check("neg-B a default that drifted on one side only is RED",

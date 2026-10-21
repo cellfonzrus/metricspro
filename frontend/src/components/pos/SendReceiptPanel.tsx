@@ -14,7 +14,7 @@
 // So both screens mount THIS, and a channel added here reaches every screen at once. It decides
 // nothing: the server says who the receipt would go to on each channel, whether it can be sent, and
 // what the customer will see it come from (`SaleReceipt.email` / `.whatsapp`), and this asks.
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { emailSaleReceipt, whatsappSaleReceipt, type PrintChoice, type SaleReceipt } from '@/lib/pos-receipt'
 
 /** The server's own sentence where there is one — it already says what to do about the failure. */
@@ -34,15 +34,14 @@ export function SendReceiptPanel({ saleId, view, choice, onEmailSent }: {
    *  does not pass this, because a reprint is not where a profile is edited. */
   onEmailSent?: (address: string) => void
 }) {
+  // The address and number START as the server's answer for THIS sale and are the cashier's to edit
+  // from there. Both screens mount this with `key={saleId}`, so opening a different sale mounts a
+  // fresh panel rather than carrying one customer's address onto another's receipt — which is why
+  // there is no effect here copying a prop into state after the fact.
   const [email, setEmail] = useState(view.email.to)
   const [phone, setPhone] = useState(view.whatsapp.to)
   const [busy, setBusy] = useState<'' | 'email' | 'whatsapp'>('')
   const [said, setSaid] = useState('')
-
-  // The address and number come from the server's answer, and that answer is re-read whenever the
-  // print choice changes, so they follow the sale on screen rather than whichever one was open first.
-  useEffect(() => { setEmail(view.email.to); setSaid('') }, [view.email.to])
-  useEffect(() => { setPhone(view.whatsapp.to) }, [view.whatsapp.to])
 
   async function send(channel: 'email' | 'whatsapp') {
     setBusy(channel)
