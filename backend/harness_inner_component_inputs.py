@@ -26,6 +26,22 @@ ONE HOME, DEREFERENCED: the marketing form controls (`Field`, `Area`, `Picker`) 
 in `frontend/src/lib/marketingForm.tsx`, and both marketing event pages READ them rather than keeping
 a copy each — the page that holds a form is not the place that decides what a form control is.
 
+WHAT THIS EXTENDS, AND WHY IT IS NOT A SECOND MECHANISM. The general rule already exists and already
+runs: ESLint's `react-hooks/static-components` ("Cannot create components during render"), enforced by
+`npm run lint:gate` over `frontend/eslint_pending.txt` and held in place by
+`backend/harness_frontend_lint_lock.py` (which pins the rule sets, so the rule cannot be switched off
+to reach green). That gate is a RATCHET by design: its register explains that hook-rule fixes change
+runtime behaviour on money screens, so the debt is paid off deliberately rather than all at once. This
+change pays off four of its entries — 43 findings in the four screens above, plus two more — and the
+register and `PINNED_TOTAL` were lowered with it.
+
+A ratchet, though, permits the remaining entries to stay, and 13 files still carry one. That is the
+right call for a wasted remount; it is NOT the right call for a keystroke that does not arrive. So
+this lock is the SUBSET THAT MAY NEVER BE RATCHETED: not every nested component, only one that reaches
+a control a user types into — and for those there is no pending list, no excuse entry and no budget.
+The two are one mechanism at two strengths, not two answers to one question: ESLint decides whether a
+component is created during render, and this lock decides which of those cost the user a character.
+
 WHAT THIS LOCK FAILS ON
   1. a component declared inside another component, in any .tsx under frontend/src, that renders a
      control a user types into — an <input> whose type is not one of the click-only kinds, or a

@@ -26,7 +26,7 @@ type SectionCtx = {
   reasonId: string; setReasonId: (v: string) => void
   note: string; setNote: (v: string) => void
   dispositions: Disposition[]
-  reasons: any[]
+  reasons: unknown[]
   chosen: Disposition | undefined
   complete: (t: Task, withOutcome: boolean) => void
   snooze: (t: Task, hours: number) => void

@@ -5098,6 +5098,15 @@ as a market-grant keyset member; ambiguity fails closed):
   fixpoint — and if either event page keeps a second copy of the controls, or no workflow runs the lock), CI job
   *Nothing a user types into is declared inside another component* in `org-scope-guard.yml`. Run against a checkout
   of `main` it names all five.
+  **It EXTENDS the mechanism that already existed, at a strength a ratchet cannot give.** ESLint's
+  `react-hooks/static-components` already flags every component created during render, enforced by `npm run lint:gate`
+  over `frontend/eslint_pending.txt` and pinned by `harness_frontend_lint_lock.py` (§CORE-02, so the rule cannot be
+  switched off to reach green) — but deliberately as a RATCHET, because hook-rule fixes change runtime behaviour on
+  money screens. This change pays off four of its entries (43 findings) and lowers `PINNED_TOTAL` 5643 → 5588; 13
+  files still carry the rule as accepted debt, which is right for a wasted remount and wrong for a lost keystroke.
+  So the lock is the subset that may NEVER be ratcheted: only a nested component reaching a control a user types into,
+  with no pending list and no excuse entry. ESLint decides what is created during render; the lock decides which of
+  those cost the user a character.
 - **Phase W2 — tiled Payroll & Workforce dashboards + period alignment (owner directive 2026-09-01,
   frontend-only, no new endpoints):**
   - **Two tile hubs** (landings, deliberately NOT in `REPORT_TREES`/`REPORT_DIRECTORY` as new

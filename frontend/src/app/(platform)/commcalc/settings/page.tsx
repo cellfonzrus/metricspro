@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo, type Dispatch, type SetStateAction } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api, apiDownload, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { usePosTerm } from '@/lib/report-labels'
@@ -69,8 +69,8 @@ function parsePromoPrice(sampleDesc: string): string {
 // with it: the owner's 2026-10-21 report ("only letter at a time is entered") on the marketing
 // create form, the same defect in this screen. `cfg`/`setCfg` therefore arrive as props instead of
 // being closed over. Locked by backend/harness_inner_component_inputs.py.
-function Field({ label, field, cfg, setCfg, prefix = '', suffix = '' }: {
-  label: string; field: string; cfg: any; setCfg: Dispatch<SetStateAction<any>>
+function Field({ label, value, onChange, prefix = '', suffix = '' }: {
+  label: string; value: number | string; onChange: (v: number) => void
   prefix?: string; suffix?: string
 }) {
   return (
@@ -84,8 +84,8 @@ function Field({ label, field, cfg, setCfg, prefix = '', suffix = '' }: {
           className="input"
           type="number"
           step="0.01"
-          value={cfg[field] ?? ''}
-          onChange={e => setCfg((c: any) => ({ ...c, [field]: parseFloat(e.target.value) || 0 }))}
+          value={value}
+          onChange={e => onChange(parseFloat(e.target.value) || 0)}
           style={{ width: 100 }}
         />
         {suffix && <span style={{ color: 'var(--text2)', fontSize: 13 }}>{suffix}</span>}
@@ -100,6 +100,9 @@ export default function SettingsPage() {
   const apiPeriod = toApiPeriod(period)
 
   const [cfg, setCfg] = useState<any>(DEFAULTS)
+  // One setter for every rate field, so the module-scope Field needs neither cfg nor setCfg.
+  const setField = (field: string) => (v: number) =>
+    setCfg((c: Record<string, unknown>) => ({ ...c, [field]: v }))
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -593,17 +596,17 @@ export default function SettingsPage() {
           <div className="card">
             <div style={{ fontWeight: 600, marginBottom: 16 }}>Per-Transaction Flat Rates</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
-              <Field label="Premium Activation" field="premium_flat" cfg={cfg} setCfg={setCfg} prefix="$" suffix="per act" />
-              <Field label="BYOD Activation" field="byod_flat" cfg={cfg} setCfg={setCfg} prefix="$" suffix="per act" />
-              <Field label="Device Upgrade" field="upgrade_flat" cfg={cfg} setCfg={setCfg} prefix="$" suffix="per act" />
-              <Field label="Trade-In SPIFF" field="trade_in_spiff" cfg={cfg} setCfg={setCfg} prefix="$" suffix="per trade" />
-              <Field label="ACIMA Financing SPIFF" field="acima_spiff" cfg={cfg} setCfg={setCfg} prefix="$" suffix="per txn" />
-              <Field label="Additional BYOD SPIFF" field="byod_extra_spiff" cfg={cfg} setCfg={setCfg} prefix="$" suffix="per act" />
+              <Field label="Premium Activation" value={cfg.premium_flat ?? ''} onChange={setField('premium_flat')} prefix="$" suffix="per act" />
+              <Field label="BYOD Activation" value={cfg.byod_flat ?? ''} onChange={setField('byod_flat')} prefix="$" suffix="per act" />
+              <Field label="Device Upgrade" value={cfg.upgrade_flat ?? ''} onChange={setField('upgrade_flat')} prefix="$" suffix="per act" />
+              <Field label="Trade-In SPIFF" value={cfg.trade_in_spiff ?? ''} onChange={setField('trade_in_spiff')} prefix="$" suffix="per trade" />
+              <Field label="ACIMA Financing SPIFF" value={cfg.acima_spiff ?? ''} onChange={setField('acima_spiff')} prefix="$" suffix="per txn" />
+              <Field label="Additional BYOD SPIFF" value={cfg.byod_extra_spiff ?? ''} onChange={setField('byod_extra_spiff')} prefix="$" suffix="per act" />
             </div>
             <div style={{ fontWeight: 600, margin: '24px 0 16px' }}>GP-Based Rates</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
-              <Field label="Accessories (Ondigo dept)" field="acc_rate" cfg={cfg} setCfg={setCfg} suffix="= 10% of GP" />
-              <Field label="Device Setup Fees" field="setup_fee_rate" cfg={cfg} setCfg={setCfg} suffix="= 10% of GP" />
+              <Field label="Accessories (Ondigo dept)" value={cfg.acc_rate ?? ''} onChange={setField('acc_rate')} suffix="= 10% of GP" />
+              <Field label="Device Setup Fees" value={cfg.setup_fee_rate ?? ''} onChange={setField('setup_fee_rate')} suffix="= 10% of GP" />
             </div>
           </div>
         </div>
@@ -613,13 +616,13 @@ export default function SettingsPage() {
         <div className="card">
           <div style={{ fontWeight: 600, marginBottom: 16 }}>KPI Targets (minimum % to pass)</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
-            <Field label="ATU %" field="kpi_atu_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
-            <Field label="Carrier Protect %" field="kpi_protect_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
-            <Field label="Carrier App %" field="kpi_boostapp_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
-            <Field label="Family Plan %" field="kpi_familyplan_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
-            <Field label="BYOD %" field="kpi_byod_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
-            <Field label="3MR %" field="kpi_tmr3_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
-            <Field label="AAL Conversion %" field="kpi_aal_target" cfg={cfg} setCfg={setCfg} suffix="% target" />
+            <Field label="ATU %" value={cfg.kpi_atu_target ?? ''} onChange={setField('kpi_atu_target')} suffix="% target" />
+            <Field label="Carrier Protect %" value={cfg.kpi_protect_target ?? ''} onChange={setField('kpi_protect_target')} suffix="% target" />
+            <Field label="Carrier App %" value={cfg.kpi_boostapp_target ?? ''} onChange={setField('kpi_boostapp_target')} suffix="% target" />
+            <Field label="Family Plan %" value={cfg.kpi_familyplan_target ?? ''} onChange={setField('kpi_familyplan_target')} suffix="% target" />
+            <Field label="BYOD %" value={cfg.kpi_byod_target ?? ''} onChange={setField('kpi_byod_target')} suffix="% target" />
+            <Field label="3MR %" value={cfg.kpi_tmr3_target ?? ''} onChange={setField('kpi_tmr3_target')} suffix="% target" />
+            <Field label="AAL Conversion %" value={cfg.kpi_aal_target ?? ''} onChange={setField('kpi_aal_target')} suffix="% target" />
           </div>
         </div>
       )}
@@ -628,10 +631,10 @@ export default function SettingsPage() {
         <div className="card">
           <div style={{ fontWeight: 600, marginBottom: 16 }}>Tier Structure</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 20 }}>
-            <Field label="KPIs needed for 100% tier" field="tier_100_min_kpis" cfg={cfg} setCfg={setCfg} suffix="of 7 KPIs" />
-            <Field label="KPIs needed for 75% tier" field="tier_75_min_kpis" cfg={cfg} setCfg={setCfg} suffix="of 7 KPIs" />
-            <Field label="75% tier multiplier" field="tier_75_pct" cfg={cfg} setCfg={setCfg} suffix="(0.75 = 75%)" />
-            <Field label="50% tier multiplier" field="tier_50_pct" cfg={cfg} setCfg={setCfg} suffix="(0.50 = 50%)" />
+            <Field label="KPIs needed for 100% tier" value={cfg.tier_100_min_kpis ?? ''} onChange={setField('tier_100_min_kpis')} suffix="of 7 KPIs" />
+            <Field label="KPIs needed for 75% tier" value={cfg.tier_75_min_kpis ?? ''} onChange={setField('tier_75_min_kpis')} suffix="of 7 KPIs" />
+            <Field label="75% tier multiplier" value={cfg.tier_75_pct ?? ''} onChange={setField('tier_75_pct')} suffix="(0.75 = 75%)" />
+            <Field label="50% tier multiplier" value={cfg.tier_50_pct ?? ''} onChange={setField('tier_50_pct')} suffix="(0.50 = 50%)" />
           </div>
           <div style={{ marginTop: 20 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
