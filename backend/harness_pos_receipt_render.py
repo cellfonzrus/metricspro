@@ -30,6 +30,9 @@ stdlib only, DB-free.
   §O THE CUSTOMER'S OWN ADDRESS (§POS-07) — "what does this customer's record say, written out" had
      no home, so the receipt carried their name alone while an imported copy of the same receipt
      carried their address. One home, every medium, and a lock on a second copy.
+  §P THE RECEIPT AS A FILE (§POS-08) — the emailed receipt also leaves as a PDF: a third MEDIUM of
+     the same two content homes (the slip's own rows, the POS layout's own words), read back with
+     pdfplumber so the checks are on what the customer's reader shows.
   §M THE DECLARED FORMAT HAS ONE SHAPE (§POS-05, the 2026-10-20 print crash, ref 357a4772) — "which
      receipt format has this tenant declared" had three derivations in two shapes (the registry ROW
      and the format MODULE), so the day one's `.get("label")` was copied onto the other every receipt
@@ -713,8 +716,10 @@ check("M8 LOCK — no caller reads a label or a module off the record by hand",
       'fmt.get("label")' not in ROUTER_CODE and "fmt.LABEL" not in ROUTER_CODE
       and 'fmt.get("module")' not in ROUTER_CODE
       and ROUTER_CODE.count('_sr.layout_options(fmt["label"])') == 2)
+# THREE call sites since §POS-08: the print/email body, the admin preview, and the PDF attachment.
+# The count is the lock — a fourth that passed the RECORD instead would be the §POS-05 crash again.
 check("M9 LOCK — the renderer is handed the MODULE, never the record",
-      ROUTER_CODE.count('fmt=fmt["module"]') == 2 and "fmt=fmt," not in ROUTER_CODE)
+      ROUTER_CODE.count('fmt=fmt["module"]') == 3 and "fmt=fmt," not in ROUTER_CODE)
 check("M10 the one home never raises when the declaration cannot be read",
       declared_format_survives_a_broken_read())
 check("M11 §POS-05 is registered in the index with its one home",
@@ -832,8 +837,10 @@ check("N16 a receipt nobody ticked carries nothing — no heading, no digits, in
           sr.slip_model(SNAP, ALL_ON)))
       and sr.slip_model(SNAP, ALL_ON)["blocks"] == [])
 ROUTER_N = code_only(read(ROUTER))
+# THREE media are handed the one string since §POS-08 (the HTML body, the printer's bytes, the PDF
+# attachment) and it is still built ONCE. Both numbers are the lock.
 check("N17 LOCK — the paragraph is built ONCE and every medium is handed that string",
-      ROUTER_N.count("_remit.block(") == 1 and ROUTER_N.count("remit_block=remit_block") == 2
+      ROUTER_N.count("_remit.block(") == 1 and ROUTER_N.count("remit_block=remit_block") == 3
       and code_only(SR_SRC).count("def block(") == 0)
 check("N18 LOCK — the settings read every POS login can call answers these two keys MASKED",
       "_remit.KEYS" in ROUTER_N and "_remit.mask(_remit.open_setting_value(" in ROUTER_N
@@ -931,9 +938,12 @@ _copies = sorted({os.path.relpath(os.path.join(b, f), ROOT).replace(os.sep, "/")
                  - {"backend/" + a for a in BT_ALLOWED})
 check("O12 LOCK — nothing else writes a customer's address out for a human", not _copies,
       f"a second copy appeared in {_copies}")
-check("O13 the reader hands the SAME lines to both media",
-      router.count("customer_lines=customer_lines") == 2
-      and "customer_lines = _bill_to.lines(customer)" in router)
+# Read ONCE and handed to THREE media since §POS-08: the HTML body, the printer's byte stream and
+# the PDF attachment. Both numbers are the lock — a medium that read the customer again could show
+# a different address from the one on the paper copy.
+check("O13 the reader hands the SAME lines to every medium",
+      router.count("customer_lines=customer_lines") == 3
+      and router.count("customer_lines = _bill_to.lines(customer)") == 1)
 check("O14 the admin preview shows the block, so a toggle can be seen before it ships",
       "_bill_to.lines(PREVIEW_CUSTOMER)" in router and "PREVIEW_CUSTOMER" in router)
 check("O15 RULE TWO — no tenant, carrier or real address is written into the rule",
@@ -941,6 +951,115 @@ check("O15 RULE TWO — no tenant, carrier or real address is written into the r
       and not re.search(r"\b\d{5}\b", code_only(BT_SRC)))
 check("O16 §POS-07 is registered in the index with its one home",
       "POS-07" in idx and "customer_bill_to" in idx)
+
+print("\n§P  THE RECEIPT AS A FILE — a third medium, not a third receipt (§POS-08)")
+# Owner 2026-10-21, verbatim: *"the receipt is going the body of the meial it should as a pdf
+# attachment aswell"*. An emailed receipt in the body of the mail is one the customer cannot keep.
+from app.modules.pos import receipt_pdf_render as rpdf  # noqa: E402
+import pdfplumber  # noqa: E402  (already a backend dependency — the format parsers read PDFs with it)
+
+RPDF_SRC = read("backend/app/modules/pos/receipt_pdf_render.py")
+T58 = sr.template_view({"show_customer": True, "paper_width_mm": 58})
+T_POS = sr.template_view({"show_customer": True, "paper_width_mm": 80,
+                          "layout": sr.LAYOUT_POS_FORMAT})
+REMIT_BLOCK = "Pay by bank transfer\nRouting number: 021000021\nAccount number: 1234567890"
+
+
+def pdf_pages(data):
+    """(page sizes, the text of each page) — read back with the same library the parsers use, so a
+    check here is a check on what a customer's reader will actually show."""
+    with pdfplumber.open(io.BytesIO(data)) as doc:
+        return ([(round(pg.width, 2), round(pg.height, 2)) for pg in doc.pages],
+                [(pg.extract_text() or "") for pg in doc.pages])
+
+
+SLIP_PDF = rpdf.receipt_pdf(SNAP, ALL_ON, brand=BRAND, store_name="STORE 1",
+                            disclaimer_blocks=[{"text": "Return policy", "signature": True}],
+                            employee_name="A. Rep", customer_lines=CUST_LINES,
+                            remit_block=REMIT_BLOCK)
+SLIP_SIZES, SLIP_TEXT = pdf_pages(SLIP_PDF)
+SLIP_ALL = "\n".join(SLIP_TEXT)
+
+check("P1 it is a real PDF, and a till slip is ONE page however long it is (a roll has no break)",
+      SLIP_PDF[:5] == b"%PDF-" and len(SLIP_SIZES) == 1)
+check("P2 the page is as wide as the roll the store declared, not a letter sheet",
+      SLIP_SIZES[0][0] == round(80 * rpdf.PT_PER_MM, 2)
+      and pdf_pages(rpdf.receipt_pdf(SNAP, T58, store_name="STORE 1"))[0][0][0]
+      == round(58 * rpdf.PT_PER_MM, 2))
+_slip_rows = [r["text"].strip() for r in esc.lines(
+    sr.slip_model(SNAP, ALL_ON, brand=BRAND, store_name="STORE 1",
+                  disclaimer_blocks=[{"text": "Return policy", "signature": True}],
+                  employee_name="A. Rep", customer_lines=CUST_LINES, remit_block=REMIT_BLOCK))
+              if r["text"].strip() and set(r["text"].strip()) != {"-"}]
+# Compared with runs of spaces collapsed on BOTH sides: a PDF reader re-spaces a line that the
+# printer pads with blanks to right-align a figure (`receipt_escpos.two_col`), so the words and their
+# order are the fact here, not the padding — which §L already pins on the printer's own bytes.
+def _flat(t):
+    return " ".join(str(t).split())
+
+
+_SLIP_FLAT = _flat(SLIP_ALL)
+check("P3 the file says exactly what the printer cuts — every row of the one content home is in it",
+      all(_flat(row) in _SLIP_FLAT for row in _slip_rows),
+      f"missing {[r for r in _slip_rows if _flat(r) not in _SLIP_FLAT][:3]}")
+check("P4 the figures are the snapshot's own, not recomputed for the file",
+      f'{SNAP["total"]:,.2f}' in SLIP_ALL and f'{SNAP["tax_total"]:,.2f}' in SLIP_ALL)
+check("P5 the pay-by-bank block rides into the file when THIS print asked for it (§POS-06)",
+      "Pay by bank transfer" in SLIP_ALL and "021000021" in SLIP_ALL
+      and "Pay by bank transfer" not in "\n".join(pdf_pages(
+          rpdf.receipt_pdf(SNAP, ALL_ON, store_name="STORE 1"))[1]))
+check("P6 the customer's own address rides into it too (§POS-07)",
+      all(ln in SLIP_ALL for ln in CUST_LINES))
+
+DOC_PDF = rpdf.receipt_pdf(SNAP, T_POS, fmt=RQ_ROW["module"], render_words=_render.render_words,
+                           store_lines=["STORE 1", "1 Example St"], customer_lines=CUST_LINES)
+DOC_SIZES, DOC_TEXT = pdf_pages(DOC_PDF)
+check("P7 the tenant's own POS layout is the file's layout too, on its own page size",
+      len(DOC_SIZES) == 1 and DOC_SIZES[0] == (612.0, 792.0)
+      and "John Smith" in DOC_TEXT[0] and CUST_LINES[0] in DOC_TEXT[0])
+# THE DEFECT THIS FOUND. Touching the canvas after a page is closed opens the next one, and the
+# library then writes that empty page into the file — a blank second sheet in a customer's receipt.
+check("P8 no blank page is written after the last one",
+      all(txt.strip() for txt in DOC_TEXT))
+_long = dict(SNAP_IN)
+_long["items"] = [{"description": f"Item {i}", "serial": "", "qty": 1, "unit_price": 10.0,
+                   "discount": 0, "line_total": 10.0} for i in range(120)]
+_long_pdf = rpdf.receipt_pdf(sr.snapshot_view(_long, {"status": "completed"}), T_POS,
+                             fmt=RQ_ROW["module"], render_words=_render.render_words,
+                             store_lines=["STORE 1"])
+_long_sizes, _long_text = pdf_pages(_long_pdf)
+_long_all = "\n".join(_long_text)
+check("P9 a receipt longer than the page continues onto the next one and drops no line",
+      len(_long_sizes) > 1 and "Item 0" in _long_all and "Item 119" in _long_all
+      and all(txt.strip() for txt in _long_text))
+check("P10 the LAYOUT is not decided here — it is the same `clean_layout` the mail body asks",
+      "_sr.clean_layout(" in RPDF_SRC
+      and code_only(RPDF_SRC).count("clean_layout") == 1
+      and "layout_note" not in RPDF_SRC)
+check("P11 nothing about CONTENT is decided here — no toggle, no figure, no line of its own",
+      not re.search(r'template_v\[|show_[a-z_]+|\b(items|totals|subtotal|tax_total|total|paid|'
+                    r'discount_total|head_lines|footer|blocks)\b', code_only(RPDF_SRC))
+      and "slip_model" in RPDF_SRC and "document(" in RPDF_SRC
+      # the sale's number, for the file's own name and title, is all it takes from the snapshot
+      and code_only(RPDF_SRC).count('snap[') == 1 and 'transaction_id' in RPDF_SRC)
+check("P12 one home for the printed name, so the file cannot say John S. where the mail says John Smith",
+      "for_render(" in RPDF_SRC and code_only(SR_SRC).count("def for_render") == 1
+      and not re.search(r'customer_name.*=.*customer_display', code_only(RPDF_SRC)))
+check("P13 the attachment is named for the sale, so two receipts can be told apart",
+      rpdf.filename(77) == "receipt-77.pdf" and rpdf.filename("") == "receipt.pdf"
+      and rpdf.filename("77/../etc") == "receipt-77etc.pdf")
+check("P14 the mail carries it, and ONLY a path that attaches one pays to build it",
+      'want_pdf=True' in router and router.count("want_pdf=True") == 1
+      and '"application/pdf"' in router
+      and 'pdf_bytes, pdf_error = b"", ""' in router)
+check("P15 a file that cannot be built does not cost the customer their receipt",
+      re.search(r'except Exception as exc:\s*\n\s*pdf_bytes, pdf_error = b""', router)
+      and "went in the body only" in router and '"attached":' in router)
+check("P16 RULE TWO — no tenant, POS or printer make is named in the renderer",
+      not re.search(r"(?i)\b(vzone|luxelink|cellfonz|boost|epson|citizen|star\s*tsp)\b",
+                    code_only(RPDF_SRC)))
+check("P17 §POS-08 is registered in the index with its one home",
+      "POS-08" in idx and "receipt_pdf_render" in idx)
 
 print("\n§J  negative controls")
 check("neg-B a default that drifted on one side only is RED",
@@ -993,6 +1112,13 @@ check("neg-O2 a home that invented a line for an empty record would be RED",
       and bt.block("", None)["lines"] == [])
 check("neg-O3 the lock really can fail — the same regex finds the two homes it allows",
       len([a for a in BT_ALLOWED if _assembly.search(code_only(read("backend/" + a)))]) == 2)
+check("neg-P a file that re-decided the layout would be RED (it asks the one resolver)",
+      rpdf.receipt_pdf(SNAP, T_POS)[:5] == b"%PDF-"
+      and pdf_pages(rpdf.receipt_pdf(SNAP, T_POS))[0][0][0] == round(80 * rpdf.PT_PER_MM, 2))
+check("neg-P2 a renderer that wrote the roll at letter width would be RED",
+      SLIP_SIZES[0][0] < 300 and DOC_SIZES[0][0] == 612.0)
+check("neg-P3 an empty document still yields a valid one-page file, never a crash",
+      rpdf.words_pdf([])[:5] == b"%PDF-" and len(pdf_pages(rpdf.words_pdf([]))[0]) == 1)
 check("neg-N3 a checksum that passed anything would be RED",
       sum(1 for n in range(10**8, 10**8 + 400)
           if rmt.routing_checksum_ok(str(n).zfill(9))) == 40)
