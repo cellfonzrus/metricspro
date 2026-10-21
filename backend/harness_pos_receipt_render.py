@@ -33,6 +33,8 @@ stdlib only, DB-free.
   §P THE RECEIPT AS A FILE (§POS-08) — the emailed receipt also leaves as a PDF: a third MEDIUM of
      the same two content homes (the slip's own rows, the POS layout's own words), read back with
      pdfplumber so the checks are on what the customer's reader shows.
+  §Q SENDING A RECEIPT (§POS-09) — email and WhatsApp from ONE panel, mounted by the till and the
+     Sale Log alike, with the number rule dereferenced from the channel that owns it.
   §M THE DECLARED FORMAT HAS ONE SHAPE (§POS-05, the 2026-10-20 print crash, ref 357a4772) — "which
      receipt format has this tenant declared" had three derivations in two shapes (the registry ROW
      and the format MODULE), so the day one's `.get("label")` was copied onto the other every receipt
@@ -55,6 +57,7 @@ from app.modules.core import tenant_identity as ti  # noqa: E402
 _pass = _fail = 0
 ROUTER = "backend/app/modules/pos/router.py"
 REGISTER = "frontend/src/app/(platform)/pos/sales/page.tsx"
+PANEL_SEND = "frontend/src/components/pos/SendReceiptPanel.tsx"
 EDITOR = "frontend/src/components/pos/ReceiptTemplateSection.tsx"
 CLIENT = "frontend/src/lib/pos-receipt.ts"
 POS_CONFIG_TS = "frontend/src/lib/pos-config.ts"
@@ -356,10 +359,11 @@ check("H2 it asks the one client home instead",
 check("H3 the till copy, the reprint and the auto-print all go through that one call, declared once",
       reg.count("const printSaleReceipt = useCallback(") == 1
       and reg.count("printSaleReceipt(") >= 3)
-check("H4 the emailed copy is sent through the one client home too", "emailSaleReceipt(" in reg)
+check("H4 the emailed copy is sent through the one client home too",
+      "emailSaleReceipt(" in read(PANEL_SEND))
 check("H5 the register still SHOWS the address and lets it be edited",
-      "Email the receipt to" in reg and "setEmailTo(" in reg)
-check("H6 and says who it will come from", "sees it from" in reg)
+      "Email the receipt to" in read(PANEL_SEND) and "setEmail(" in read(PANEL_SEND))
+check("H6 and says who it will come from", "sees it from" in read(PANEL_SEND))
 editor = read(EDITOR)
 check("H7 the admin screen no longer draws its own imitation of a receipt",
       "VERIZON" not in editor and "iPhone 15 Pro" not in editor)
@@ -470,7 +474,7 @@ check("K13 the emailed copy is the copy that was PRINTED (the same choice rides 
       "want_layout=body.get" in mail and "want_paper=body.get" in mail)
 cl = read(CLIENT)
 check("K14 the client spells the choice ONCE for both the print and the email path",
-      cl.count("function choiceParams") == 1 and cl.count("choiceParams(choice)") == 2)
+      cl.count("function choiceParams") == 1 and cl.count("choiceParams(choice)") == 3)
 check("K15 the till and the Sale Log reprint share ONE picker, which offers only the server's own "
       "formats (a second copy is how one counter gets a format the other does not)",
       read("frontend/src/components/pos/PrintFormatPicker.tsx").count("view.layout_options") == 1
@@ -1049,7 +1053,7 @@ check("P13 the attachment is named for the sale, so two receipts can be told apa
       rpdf.filename(77) == "receipt-77.pdf" and rpdf.filename("") == "receipt.pdf"
       and rpdf.filename("77/../etc") == "receipt-77etc.pdf")
 check("P14 the mail carries it, and ONLY a path that attaches one pays to build it",
-      'want_pdf=True' in router and router.count("want_pdf=True") == 1
+      'want_pdf=True' in router and router.count("want_pdf=True") == 2
       and '"application/pdf"' in router
       and 'pdf_bytes, pdf_error = b"", ""' in router)
 check("P15 a file that cannot be built does not cost the customer their receipt",
@@ -1060,6 +1064,87 @@ check("P16 RULE TWO — no tenant, POS or printer make is named in the renderer"
                     code_only(RPDF_SRC)))
 check("P17 §POS-08 is registered in the index with its one home",
       "POS-08" in idx and "receipt_pdf_render" in idx)
+
+print("\n§Q  SENDING A RECEIPT — one home, two channels, every screen (§POS-09)")
+# Owner 2026-10-21, verbatim: *"i need the emial option in sales log viewer and the send notification
+# option via whats app also"*. The class: "send this receipt to the customer" lived inline in the
+# till's completion modal, keyed to the sale just rung, so the Sale Log could only PRINT — and a
+# second channel would have had to be built twice.
+from app.modules.notify import whatsapp_window as wa_win  # noqa: E402
+
+panel = read(PANEL_SEND)
+WA_META = read("backend/app/modules/notify/channels/whatsapp_meta.py")
+CUSTOMER = {"email": "jane@example.com", "phone_primary": "(212) 555-0123"}
+
+
+def wa_view(customer=None, typed=None, digits=wa_win.digits):
+    return sr.whatsapp_view(SNAP, BRAND, ALL_ON, {}, customer=customer, typed=typed,
+                            tenant_name="Example Wireless", digits=digits)
+
+
+check("Q1 the two channels answer the SAME question in the same shape, from one home",
+      set(wa_view(CUSTOMER)) == {"to", "to_source", "valid", "from_name", "caption"}
+      and set(sr.email_view(SNAP, BRAND, ALL_ON, {}, customer=CUSTOMER))
+      - {"subject", "body_declared"} == {"to", "to_source", "valid", "from_name"})
+check("Q2 the typed number beats the customer's, and nothing is invented",
+      wa_view(CUSTOMER, "+1 646 555 9999")["to"] == "16465559999"
+      and wa_view(CUSTOMER, "+1 646 555 9999")["to_source"] == "typed"
+      and wa_view(CUSTOMER)["to"] == "12125550123"
+      and wa_view(CUSTOMER)["to_source"] == "customer"
+      and wa_view({})["to"] == "" and wa_view({})["to_source"] == "none")
+check("Q3 an unusable number is refused on the screen, before the provider ever sees it",
+      wa_view(CUSTOMER)["valid"] and not wa_view({}, "555-0123")["valid"]
+      and not wa_view({})["valid"])
+check("Q4 what counts as a phone number is WhatsApp's own rule, DEREFERENCED — not a second copy",
+      "from app.modules.notify import whatsapp_window" in WA_META
+      and "_win.digits(raw)" in WA_META
+      and not re.search(r'c\.isdigit\(\)', code_only(WA_META))
+      and not re.search(r'isdigit\(\) for|\.isdigit\(\) if', code_only(SR_SRC))
+      and wa_view({}, "2125550123")["to"] == wa_win.digits("2125550123"))
+check("Q5 a receipt sent on WhatsApp announces itself exactly as the emailed one does",
+      wa_view(CUSTOMER)["caption"]
+      == sr.email_view(SNAP, BRAND, ALL_ON, {}, customer=CUSTOMER,
+                       tenant_name="Example Wireless")["subject"])
+check("Q6 the screen is told who it comes from on this channel too",
+      wa_view(CUSTOMER)["from_name"] == sr.company_name(BRAND, "Example Wireless"))
+
+check("Q7 ONE sender in the browser, and both screens mount it",
+      panel.count("emailSaleReceipt(") == 1 and panel.count("whatsappSaleReceipt(") == 1
+      and reg.count("<SendReceiptPanel") == 2
+      and "emailSaleReceipt" not in reg)
+check("Q8 the till keeps its own half (an address onto the customer's profile) and no more",
+      "saveReceiptEmailToProfile" in reg and "onEmailSent={saveReceiptEmailToProfile}" in reg
+      and reg.count("onEmailSent") == 1        # the till's one use of it; the prop lives in the panel
+      and panel.count("onEmailSent?.(") == 1
+      and "onEmailSent" not in reg.split("<SendReceiptPanel saleId={reprintSaleId}")[1])
+check("Q9 the Sale Log reprint can SEND, which is the ask — not only print",
+      "<SendReceiptPanel saleId={reprintSaleId}" in reg
+      and "reprintChoice" in reg.split("<SendReceiptPanel saleId={reprintSaleId}")[1][:200])
+check("Q10 the copy sent is the copy that was handed over (the print choice rides with it)",
+      "choice={printChoice}" in reg and "choice={reprintChoice}" in reg
+      and "choiceParams(choice)" in read(CLIENT))
+
+ROUTER_Q = router.split("def whatsapp_sale_receipt(")[1].split("@router.")[0]
+check("Q11 the file it sends is the §POS-08 receipt, built once by the one renderer",
+      "want_pdf=True" in ROUTER_Q and 'bundle["pdf_bytes"]' in ROUTER_Q
+      and '"application/pdf"' in ROUTER_Q)
+check("Q12 it never claims an attachment it does not have",
+      'if not bundle["pdf_bytes"]:' in ROUTER_Q and "nothing to send" in ROUTER_Q)
+check("Q13 WHEN a business may send a file is Meta's rule, and that ladder is not re-implemented",
+      "send_document_detailed(" in ROUTER_Q
+      and not re.search(r'httpx|plan_delivery|graph\.facebook', ROUTER_Q)
+      and "window" not in code_only(ROUTER_Q))   # the docstring NAMES Meta's window; the code never
+                                                 # measures it — that is whatsapp_meta's job
+check("Q14 a refusal is a sentence, never a 500",
+      # three 400s: an unrenderable receipt, no number at all, and a number that is not one
+      ROUTER_Q.count("HTTPException(400") == 3 and "HTTPException(503" in ROUTER_Q
+      and "HTTPException(502" in ROUTER_Q)
+check("Q15 RULE TWO — no tenant, carrier or country is written into either side",
+      not re.search(r"(?i)\b(vzone|luxelink|cellfonz|boost|whatsapp\s*business\s*api\s*key)\b",
+                    code_only(panel))
+      and not re.search(r'\+1\b', code_only(SR_SRC)))
+check("Q16 §POS-09 is registered in the index with its one home",
+      "POS-09" in idx and "SendReceiptPanel" in idx)
 
 print("\n§J  negative controls")
 check("neg-B a default that drifted on one side only is RED",
@@ -1112,6 +1197,11 @@ check("neg-O2 a home that invented a line for an empty record would be RED",
       and bt.block("", None)["lines"] == [])
 check("neg-O3 the lock really can fail — the same regex finds the two homes it allows",
       len([a for a in BT_ALLOWED if _assembly.search(code_only(read("backend/" + a)))]) == 2)
+check("neg-Q a seven-digit number called sendable would be RED",
+      not wa_view({}, "5550123")["valid"] and wa_view({}, "2125550123")["valid"])
+check("neg-Q2 a view that normalised the number ITSELF would be RED (it is handed the rule)",
+      wa_view({}, "(212) 555-0123", None)["to"] == "(212) 555-0123"
+      and not wa_view({}, "(212) 555-0123", None)["valid"])
 check("neg-P a file that re-decided the layout would be RED (it asks the one resolver)",
       rpdf.receipt_pdf(SNAP, T_POS)[:5] == b"%PDF-"
       and pdf_pages(rpdf.receipt_pdf(SNAP, T_POS))[0][0][0] == round(80 * rpdf.PT_PER_MM, 2))

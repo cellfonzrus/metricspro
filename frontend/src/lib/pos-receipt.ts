@@ -39,6 +39,17 @@ export interface PrintChoice {
   remit?: boolean
 }
 
+/** Where a receipt would go on WhatsApp, and whether it can go at all (§POS-09). The same shape
+ *  `ReceiptEmailView` has, because the screen asks the same question of both channels: who is this
+ *  going to, whose is it, and is it sendable. `caption` is the one line that rides with the file. */
+export interface ReceiptWhatsappView {
+  to: string
+  to_source: 'typed' | 'customer' | 'none'
+  valid: boolean
+  from_name: string
+  caption: string
+}
+
 export interface SaleReceipt {
   html: string
   layout: string
@@ -75,6 +86,7 @@ export interface SaleReceipt {
    *  place, for the paper copy and the cut slip alike. */
   escpos_base64: string
   email: ReceiptEmailView
+  whatsapp: ReceiptWhatsappView
   company_name: string
 }
 
@@ -127,6 +139,13 @@ export async function fetchSaleReceipt(saleId: string, choice?: PrintChoice): Pr
       from_name: String(rec.email?.from_name || ''),
       subject: String(rec.email?.subject || ''),
     },
+    whatsapp: {
+      to: String(rec.whatsapp?.to || ''),
+      to_source: (rec.whatsapp?.to_source || 'none') as ReceiptWhatsappView['to_source'],
+      valid: rec.whatsapp?.valid === true,
+      from_name: String(rec.whatsapp?.from_name || ''),
+      caption: String(rec.whatsapp?.caption || ''),
+    },
     company_name: String(rec.company_name || ''),
   }
 }
@@ -134,12 +153,31 @@ export async function fetchSaleReceipt(saleId: string, choice?: PrintChoice): Pr
 /** Email it. `to` blank = the address the server already showed (the customer's own); `choice`
  *  blank = the store's own setting. Passing the SAME choice the screen printed with is what keeps
  *  the emailed copy identical to the paper one. */
-export async function emailSaleReceipt(saleId: string, to?: string, choice?: PrintChoice): Promise<{ to: string; from_name: string }> {
+export async function emailSaleReceipt(
+  saleId: string, to?: string, choice?: PrintChoice,
+): Promise<{ to: string; from_name: string; attached: boolean; message: string }> {
   const r = await api(`/api/v1/pos/sales/${saleId}/email-receipt`, {
     method: 'POST',
     body: JSON.stringify({ to: (to || '').trim() || null, ...choiceParams(choice) }),
   })
-  return { to: String(r?.to || ''), from_name: String(r?.from_name || '') }
+  // `attached` says whether the PDF rode along (§POS-08). A mail that went with the body alone is
+  // still a sent receipt, so the screen says which happened rather than claiming the file.
+  return { to: String(r?.to || ''), from_name: String(r?.from_name || ''),
+    attached: r?.attached === true, message: String(r?.message || '') }
+}
+
+/** Send it over WhatsApp (§POS-09). `to` blank = the number the server already showed (the
+ *  customer's own); `choice` blank = the store's own setting. The receipt itself is the PDF the
+ *  server builds, so the file the customer keeps is the receipt that was handed over. Throws the
+ *  server's own sentence, which already says what to do about it. */
+export async function whatsappSaleReceipt(
+  saleId: string, to?: string, choice?: PrintChoice,
+): Promise<{ to: string; attached: boolean; message: string }> {
+  const r = await api(`/api/v1/pos/sales/${saleId}/whatsapp-receipt`, {
+    method: 'POST',
+    body: JSON.stringify({ to: (to || '').trim() || null, ...choiceParams(choice) }),
+  })
+  return { to: String(r?.to || ''), attached: r?.attached === true, message: String(r?.message || '') }
 }
 
 /** Print HTML the server rendered, without navigating away from the till. */
