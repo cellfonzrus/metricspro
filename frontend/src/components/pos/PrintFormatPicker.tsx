@@ -30,6 +30,9 @@ export function PrintFormatPicker({ view, choice, onChange, disabled }: {
   const layout = String(choice.layout || view.layout)
   const paper = String(choice.paper_width_mm ?? view.paper_width_mm)
   const destination = String(choice.destination || view.destination)
+  // The tick is OFF unless this print asked for it, every time — there is no stored default, so
+  // `view.remit` is only ever true because the choice already said so.
+  const remit = choice.remit === true
   return (
     <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 12, textAlign: 'left' }}>
       <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6 }}>Print this receipt as:</div>
@@ -78,6 +81,29 @@ export function PrintFormatPicker({ view, choice, onChange, disabled }: {
             ? `This store prints on ${view.printer_label}. Choose the printer itself in the print dialog.`
             : 'No receipt printer is recorded for this store yet — add one in POS → Settings → Receipt Content & Printing so staff know which it is.'}
       </div>
+      {/* PAY BY BANK TRANSFER (§POS-06, owner 2026-10-21). The tick is only offered where the
+          register setup holds BOTH numbers — a box that printed half a bank account, or nothing at
+          all, would read as the system having forgotten the rest. The numbers are shown masked so
+          the cashier can confirm WHICH account the customer is about to be told to pay into, and
+          they are not editable here: typing one at the counter is how a customer's payment gets
+          redirected, so it takes the settings right (POS → Settings). */}
+      {view.remit_available ? (
+        <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 10, cursor: disabled ? 'default' : 'pointer' }}>
+          <input type="checkbox" checked={remit} disabled={disabled} style={{ marginTop: 2 }}
+            onChange={e => onChange({ ...choice, remit: e.target.checked })} />
+          <span style={{ fontSize: 12, lineHeight: 1.5 }}>
+            Print our bank details so the customer can pay by transfer
+            <span style={{ display: 'block', fontSize: 11, color: 'var(--text3)' }}>
+              Routing {view.remit_routing_masked} · Account {view.remit_account_masked}
+            </span>
+          </span>
+        </label>
+      ) : (
+        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8, lineHeight: 1.5 }}>
+          To offer bank transfer on a receipt, add the routing and account number under
+          {' '}POS → Settings → Pay by bank transfer.
+        </div>
+      )}
       {view.layout_note && (
         <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4, lineHeight: 1.5 }}>{view.layout_note}</div>
       )}

@@ -23,6 +23,10 @@ stdlib only, DB-free.
   §H ONE HOME — the register builds no receipt HTML of its own and the admin screen draws no
      imitation of one; both dereference the server. The `From:` header is assembled in one place.
   §I ENDPOINT WIRING + REGISTRATION.
+  §N PAY BY BANK TRANSFER (§POS-06) — the account a receipt tells a customer to pay into: validated
+     before it is stored (a routing number has a check digit), sealed at rest and masked everywhere a
+     screen can see it, settable only with the settings right and tickable by anyone who prints — and
+     ONE paragraph that four media render without any of them deciding what it says.
   §M THE DECLARED FORMAT HAS ONE SHAPE (§POS-05, the 2026-10-20 print crash, ref 357a4772) — "which
      receipt format has this tenant declared" had three derivations in two shapes (the registry ROW
      and the format MODULE), so the day one's `.get("label")` was copied onto the other every receipt
@@ -713,6 +717,150 @@ check("M10 the one home never raises when the declaration cannot be read",
 check("M11 §POS-05 is registered in the index with its one home",
       "POS-05" in idx and "declared_format" in idx)
 
+print("\n§N  PAY BY BANK TRANSFER — one paragraph, every medium, sealed at rest (§POS-06)")
+# Owner 2026-10-21, verbatim: *"need to add the option of adding the payment information to the
+# customer when creating the receipt for the customer as a check mark, two boxes to fill out routing
+# number and account number to be sent to the customer, tehy will be saved in the register set up"*.
+#
+# WHAT §N PINS. The numbers are VALIDATED before they are stored (a routing number has a check digit,
+# and a receipt is the one place a wrong number is expensive). They are SEALED at rest and masked
+# everywhere a screen can see them, because `GET /pos/settings` is read by every POS login and this
+# house found two bank routing numbers in plain text on 2026-10-12. The block is ONE paragraph built
+# in one place, so the paper copy, the emailed copy, the printer's byte stream and the tenant's own
+# POS layout cannot word it or number it differently. And a tick cannot print half a bank account.
+from app.core import crypto as _crypto                      # noqa: E402
+from app.modules.pos import receipt_remit as rmt            # noqa: E402
+
+RMT_SRC = read("backend/app/modules/pos/receipt_remit.py")
+REMIT_FIELDS = "frontend/src/components/pos/ReceiptRemitFields.tsx"
+remit_tsx = read(REMIT_FIELDS)
+cfg_tsx = read("frontend/src/components/pos/PosConfigSection.tsx")
+
+#: A real routing number's checksum holds; the same digits with one pair transposed does not. Both
+#: are arithmetic over a published format, so neither names a bank (RULE TWO).
+GOOD_ROUTING = "021000021"
+BAD_ROUTING = "021000012"            # last two digits swapped
+GOOD_ACCOUNT = "1234567890"
+DECLARED_ROWS = [
+    {"store_code": None, "key": rmt.ROUTING_KEY, "value": rmt.seal_setting_value(GOOD_ROUTING)},
+    {"store_code": None, "key": rmt.ACCOUNT_KEY, "value": rmt.seal_setting_value(GOOD_ACCOUNT)},
+]
+
+
+def refuses_remit(fn, value):
+    try:
+        fn(value)
+        return False
+    except rmt.RemitError:
+        return True
+
+
+check("N1 the two settings that hold a bank number are DECLARED once, and the server knows them",
+      rmt.KEYS == (rmt.ROUTING_KEY, rmt.ACCOUNT_KEY)
+      and all(k in pc.SERVER_DEFAULTS for k in rmt.KEYS)
+      and all(pc.SERVER_DEFAULTS[k] == "" for k in rmt.KEYS))
+check("N2 a routing number must pass its own check digit — a transposed pair is REFUSED",
+      rmt.clean_routing(GOOD_ROUTING) == GOOD_ROUTING
+      and rmt.routing_checksum_ok(GOOD_ROUTING) and not rmt.routing_checksum_ok(BAD_ROUTING)
+      and refuses_remit(rmt.clean_routing, BAD_ROUTING)
+      and refuses_remit(rmt.clean_routing, "02100002"))
+check("N3 what a person typed is stored as DIGITS — spaces, dashes and letters never reach a slip",
+      rmt.clean_routing(" 021-000 021 ") == GOOD_ROUTING
+      and rmt.clean_account("1234-567890") == GOOD_ACCOUNT
+      and refuses_remit(rmt.clean_account, "12")
+      and refuses_remit(rmt.clean_account, "1" * 18))
+check("N4 blank CLEARS a number rather than refusing it (a store that stops taking transfers)",
+      rmt.clean_routing("") == "" and rmt.clean_account(None) == ""
+      and rmt.seal_setting_value("") == "")
+check("N5 a screen only ever sees the last four",
+      rmt.mask(GOOD_ACCOUNT) == "••••••7890" and rmt.mask("1234") == "••••"
+      and rmt.mask("") == "" and GOOD_ACCOUNT not in rmt.mask(GOOD_ACCOUNT))
+check("N6 stored SEALED, and the round trip is the digits again",
+      rmt.open_setting_value(rmt.seal_setting_value(GOOD_ACCOUNT)) == GOOD_ACCOUNT
+      and (not _crypto.is_enabled()
+           or _crypto.is_encrypted(rmt.seal_setting_value(GOOD_ACCOUNT))))
+check("N7 the store override → org default rule is DEREFERENCED, never re-derived here",
+      "_poscfg.effective(" in RMT_SRC and "store_code" in RMT_SRC
+      and rmt.declared(DECLARED_ROWS)["routing"] == GOOD_ROUTING
+      and rmt.declared(DECLARED_ROWS + [
+          {"store_code": "S9", "key": rmt.ROUTING_KEY,
+           "value": rmt.seal_setting_value("011000015")}], "S9")["routing"] == "011000015")
+check("N8 half a bank account is not a payment instruction, and never prints",
+      rmt.declared(DECLARED_ROWS)["available"] is True
+      and rmt.declared(DECLARED_ROWS[:1])["available"] is False
+      and rmt.block(rmt.declared(DECLARED_ROWS[:1]), include=True) == ""
+      and rmt.block(rmt.declared([]), include=True) == "")
+check("N9 off unless THIS receipt asked for it, and a tick cannot turn it on with nothing declared",
+      sr.print_choice(T_ORG, remit_available=True)["remit"] is False
+      and sr.print_choice(T_ORG, want_remit="1", remit_available=True)["remit"] is True
+      and sr.print_choice(T_ORG, want_remit="1", remit_available=False)["remit"] is False
+      and sr.print_choice(T_ORG, want_remit="1", remit_available=True)["remit_source"] == "request"
+      and sr.print_choice(T_ORG, remit_available=True)["remit_source"] == "off")
+check("N10 the wire has ONE spelling of a tick",
+      all(sr._asked(v) for v in (True, "1", "true", "on", "YES"))
+      and not any(sr._asked(v) for v in (None, "", "0", "false", "off", "no")))
+
+REMIT_BLOCK = rmt.block(rmt.declared(DECLARED_ROWS), include=True)
+check("N11 the paragraph names the two numbers in full and says what it is for",
+      GOOD_ROUTING in REMIT_BLOCK and GOOD_ACCOUNT in REMIT_BLOCK
+      and rmt.HEADING in REMIT_BLOCK and REMIT_BLOCK.count("\n") == 2)
+check("N12 it rides the slip's own footer blocks, LAST, and never takes a signature line",
+      sr.slip_model(SNAP, ALL_ON, remit_block=REMIT_BLOCK)["blocks"][-1]
+      == {"text": REMIT_BLOCK, "signature": False}
+      and len(sr.slip_model(SNAP, ALL_ON, disclaimer_blocks=[{"text": "legal", "signature": True}],
+                            remit_block=REMIT_BLOCK)["blocks"]) == 2
+      and sr.slip_model(SNAP, ALL_ON, disclaimer_blocks=[{"text": "legal", "signature": True}],
+                        remit_block=REMIT_BLOCK)["blocks"][0]["text"] == "legal")
+check("N13 the PAPER copy carries it",
+      GOOD_ROUTING in sr.thermal_html(SNAP, ALL_ON, remit_block=REMIT_BLOCK)
+      and GOOD_ACCOUNT in sr.thermal_html(SNAP, ALL_ON, remit_block=REMIT_BLOCK))
+ESC_TEXT = " ".join(ln["text"] for ln in esc.lines(
+    sr.slip_model(SNAP, ALL_ON, remit_block=REMIT_BLOCK)))
+check("N14 the PRINTER's own byte stream carries the same numbers — no renderer change was needed",
+      GOOD_ROUTING in ESC_TEXT and GOOD_ACCOUNT in ESC_TEXT
+      and "remit" not in code_only(ESC_SRC))
+check("N15 the tenant's own POS layout carries it too, in the Document's own free-text block",
+      sr.document(SNAP, RQ_ROW["module"], ALL_ON, remit_block=REMIT_BLOCK)["comments"] == REMIT_BLOCK
+      and sr.document(SNAP, RQ_ROW["module"], ALL_ON)["comments"] is None)
+check("N16 a receipt nobody ticked carries nothing — no heading, no digits, in any medium",
+      REMIT_BLOCK not in sr.thermal_html(SNAP, ALL_ON)
+      and rmt.HEADING not in sr.thermal_html(SNAP, ALL_ON)
+      and GOOD_ACCOUNT not in " ".join(ln["text"] for ln in esc.lines(
+          sr.slip_model(SNAP, ALL_ON)))
+      and sr.slip_model(SNAP, ALL_ON)["blocks"] == [])
+ROUTER_N = code_only(read(ROUTER))
+check("N17 LOCK — the paragraph is built ONCE and every medium is handed that string",
+      ROUTER_N.count("_remit.block(") == 1 and ROUTER_N.count("remit_block=remit_block") == 2
+      and code_only(SR_SRC).count("def block(") == 0)
+check("N18 LOCK — the settings read every POS login can call answers these two keys MASKED",
+      "_remit.KEYS" in ROUTER_N and "_remit.mask(_remit.open_setting_value(" in ROUTER_N
+      and ROUTER_N.count("def list_settings(") == 1)
+check("N19 LOCK — the editor is gated like every other setting write, and is the ONE writer",
+      'PUT /pos/receipt-remit' in read(ROUTER)
+      and ROUTER_N.count("def upsert_receipt_remit(") == 1
+      and '_require_pos_perm(authorization, org_id, "pos_settings")' in ROUTER_N.split(
+          "def upsert_receipt_remit(")[1].split("def ")[0]
+      and ROUTER_N.split("def upsert_receipt_remit(")[1].split("def ")[0].count(
+          "upsert_pos_setting(") == 1)
+check("N20 LOCK — one sealer, and the family is registered so old rows cannot stay in the clear",
+      code_only(RMT_SRC).count("crypto.encrypt(") == 1
+      and "receipt_remit" in read("backend/app/core/encryption_backfill.py")
+      and "app/modules/pos/receipt_remit.py" in read("backend/app/core/encryption_backfill.py")
+      and "receipt_remit.seal_setting_value" in read("backend/app/core/encryption_backfill.py"))
+check("N21 the counter may TICK it but not TYPE it — the numbers are read-only on the print screen",
+      "remit_available" in read("frontend/src/components/pos/PrintFormatPicker.tsx")
+      and "remit_routing_masked" in read("frontend/src/components/pos/PrintFormatPicker.tsx")
+      and "saveReceiptRemit" not in read("frontend/src/components/pos/PrintFormatPicker.tsx"))
+check("N22 the generic settings screen cannot save the MASK over the real number",
+      "sensitive" in cfg_tsx and "filter(def => !def.sensitive)" in cfg_tsx
+      and "sensitive: true" in ts and "saveReceiptRemit" in remit_tsx)
+check("N23 RULE TWO — no bank and no tenant is named in any of it",
+      not re.search(r"(?i)\b(chase|wells\s*fargo|citibank|citizens|navy\s*federal|"
+                    r"vzone|luxelink|cellfonz)\b",
+                    code_only(RMT_SRC) + remit_tsx))
+check("N24 §POS-06 is registered in the index with its one home",
+      "POS-06" in idx and "receipt_remit" in idx and "Pay by bank" in idx)
+
 print("\n§J  negative controls")
 check("neg-B a default that drifted on one side only is RED",
       ts_default("brand_company_name")[1] == pc.SERVER_DEFAULTS["brand_company_name"]
@@ -745,6 +893,20 @@ check("neg-M the two shapes really are different — this is the mix-up, not a s
 check("neg-M2 a record that invented a label for an unregistered POS would be RED",
       declared_as(["a-pos-nobody-registered"])["label"] == ""
       and RQ_ROW["label"] not in str(declared_as(["a-pos-nobody-registered"])))
+
+check("neg-N a bank number stored in the clear would be RED (the 2026-10-12 class)",
+      not _crypto.is_enabled()
+      or rmt.seal_setting_value(GOOD_ACCOUNT) != GOOD_ACCOUNT)
+# This one FOUND A DEFECT in its own subject: `digits("••••••7890")` is "7890", a perfectly valid
+# four-digit account number, so a mask handed back would have silently replaced the real account
+# with its own last four and every receipt after it would have carried an unpayable number.
+check("neg-N2 a masked value saved back as the real number would be RED",
+      refuses_remit(rmt.clean_account, rmt.mask(GOOD_ACCOUNT))
+      and refuses_remit(rmt.clean_routing, rmt.mask(GOOD_ROUTING))
+      and rmt.digits(rmt.mask(GOOD_ACCOUNT)) == GOOD_ACCOUNT[-4:])
+check("neg-N3 a checksum that passed anything would be RED",
+      sum(1 for n in range(10**8, 10**8 + 400)
+          if rmt.routing_checksum_ok(str(n).zfill(9))) == 40)
 
 print(f"\n{_pass} passed, {_fail} failed")
 if _fail:

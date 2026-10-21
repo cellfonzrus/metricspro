@@ -1226,7 +1226,17 @@ _all_routes = _flatten_routes(real_app.routes)
 # `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 3 and `'^-.*@router\.'` = 0 —
 # three added, NONE removed, 1795 + 3 = 1798, the figure this harness measured on this tree. So the
 # pin was re-taken on counted, named additions, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1798"))
+# RE-PINNED 2026-10-21, 1798 -> 1799 (index §POS-06). Every record above stays. The delta is ONE
+# route and it is named: PUT /pos/receipt-remit (declare or clear the bank account a receipt tells a
+# customer to pay into — the two boxes in the register setup). It is a WRITE, gated on the existing
+# `pos_settings` permission, org-scoped, and it lands through `upsert_pos_setting`, the one writer of
+# pos.pos_settings, so no second insert path exists. No existing writer changed, no existing route
+# moved, and no report, statement, GP, commission or tax figure gains an input — the value it stores
+# is printed on a receipt and read by nothing else. Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
+# one added, NONE removed, 1798 + 1 = 1799, the figure this harness measured on this tree. So the
+# pin was re-taken on counted, named additions, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1799"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

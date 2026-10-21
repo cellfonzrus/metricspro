@@ -316,6 +316,43 @@ def backfill_receipt_imports(client, *, dry_run: bool = False, page: int = _PAGE
 #           Reading a registry for WHICH while deciding HOW yourself is a HALF-dereference, and a
 #           half-dereference is a whole second home. §I of the lock holds every sweep to its sealer
 #           and fails the build on an encrypt call anywhere in this module.
+def backfill_receipt_remit(client, *, dry_run: bool = False, page: int = _PAGE) -> dict:
+    """Seal any pay-by-bank number still stored as plaintext in pos.pos_settings (§POS-06).
+
+    WHICH ROWS: the ones whose `key` is in `pos.receipt_remit.KEYS` — the writer's own declaration of
+    which two settings hold bank numbers, never a key spelled again here. Every other setting in that
+    table is ordinary configuration and is left alone.
+
+    HOW a value is sealed is `receipt_remit.seal_setting_value`, the same function the editor calls.
+    Returns {scanned, sealed, enabled}.
+    """
+    if not crypto.is_enabled():
+        return {"scanned": 0, "sealed": 0, "enabled": False}
+    from app.modules.pos import receipt_remit as _remit
+    tbl = client.schema("pos").table("pos_settings")
+    scanned = sealed = 0
+    offset = 0
+    while True:
+        rows = (tbl.select("id,key,value").in_("key", list(_remit.KEYS))
+                .order("id", desc=False).range(offset, offset + page - 1).execute().data) or []
+        if not rows:
+            break
+        for row in rows:
+            scanned += 1
+            value = row.get("value")
+            if not value or crypto.is_encrypted(value):
+                continue
+            if dry_run:
+                sealed += 1
+                continue
+            tbl.update({"value": _remit.seal_setting_value(value)}).eq("id", row["id"]).execute()
+            sealed += 1
+        if len(rows) < page:
+            break
+        offset += page
+    return {"scanned": scanned, "sealed": sealed, "enabled": True}
+
+
 SWEEPS: dict[str, dict] = {
     "customer_pins": {
         "writer": "app/modules/pos/router.py",
@@ -341,6 +378,13 @@ SWEEPS: dict[str, dict] = {
         "stores": ("pos.receipt_imports.imei / notes / parsed / raw_ocr + imei_bidx",),
         "sweep": "backfill_receipt_imports",
         "sealer": "app.modules.pos.receipt_import.seal_stored_row",
+    },
+    "receipt_remit": {
+        "writer": "app/modules/pos/receipt_remit.py",             # index §POS-06
+        "stores": ("pos.pos_settings.value for the keys receipt_remit.KEYS names"
+                   " (the account a customer is told to pay into)",),
+        "sweep": "backfill_receipt_remit",
+        "sealer": "app.modules.pos.receipt_remit.seal_setting_value",
     },
 }
 

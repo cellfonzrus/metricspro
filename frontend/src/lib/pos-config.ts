@@ -22,6 +22,14 @@ export interface PosSettingDef {
   options?: { value: string; label: string }[]
   /** shown when a toggle is stored but not yet enforced anywhere */
   notYetEnforced?: string
+  /** A value this screen must NOT edit as a plain box (§POS-06).
+   *
+   *  `GET /pos/settings` answers a sensitive setting MASKED, so the generic editor below would show
+   *  '••••1234' in a text input and write that string back over the real number the first time
+   *  anybody pressed Save. It is declared here anyway — the key's default is pinned, key by key,
+   *  against the server's own `SERVER_DEFAULTS` by harness_pos_receipt_render.py §B — and
+   *  `PosConfigSection` skips it in favour of the one editor that validates and seals it. */
+  sensitive?: true
 }
 
 export interface PosSettingSection {
@@ -264,6 +272,21 @@ export const POS_SETTING_SECTIONS: PosSettingSection[] = [
         label: 'Till helper address',
         hint: 'Where the helper listens on the counter PC. Leave it as it is unless you were told otherwise when the helper was installed.',
         type: 'text', default: 'http://127.0.0.1:9100/print',
+      },
+      // PAY BY BANK TRANSFER (owner 2026-10-21, §POS-06). Declared here so the defaults stay pinned
+      // to the server's, and `sensitive` so this screen never renders them as plain boxes: the two
+      // numbers are edited by ReceiptRemitFields, which validates them and stores them encrypted.
+      {
+        key: 'receipt_remit_routing_number',
+        label: 'Routing number printed on receipts',
+        hint: 'The bank account a customer is told to pay into. Set it under Pay by bank transfer below.',
+        type: 'text', default: '', sensitive: true,
+      },
+      {
+        key: 'receipt_remit_account_number',
+        label: 'Account number printed on receipts',
+        hint: 'Set it under Pay by bank transfer below. Staff tick a box on the receipt screen to put it on a receipt.',
+        type: 'text', default: '', sensitive: true,
       },
       {
         key: 'receipt_layout',

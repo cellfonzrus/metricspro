@@ -34,6 +34,9 @@ export interface PrintChoice {
    *  receipt printer itself, through the helper on this counter's PC (§POS-04). Blank = whatever
    *  this store set as its default, which is the dialog until someone turns direct printing on. */
   destination?: string
+  /** Put the store's pay-by-bank details on THIS receipt (§POS-06). Off unless ticked, every time:
+   *  which customer is paying by bank transfer is known at the counter and nowhere else. */
+  remit?: boolean
 }
 
 export interface SaleReceipt {
@@ -58,6 +61,15 @@ export interface SaleReceipt {
   destination_options: PrintOption[]
   /** Where the till helper listens on this counter's PC. */
   helper_url: string
+  /** Whether THIS copy carries the store's pay-by-bank details, and whether it could at all
+   *  (§POS-06: false until the register setup holds BOTH numbers). The masked numbers are here so
+   *  the screen can say which account the customer will be told to pay into before it prints; the
+   *  full numbers are only ever inside `html` / `escpos_base64`, and only when `remit` is true. */
+  remit: boolean
+  remit_source: string
+  remit_available: boolean
+  remit_routing_masked: string
+  remit_account_masked: string
   /** The printer's own bytes, sent ONLY when the destination is the printer. The register carries
    *  them to the helper and never looks inside: the receipt is rendered on the server, in one
    *  place, for the paper copy and the cut slip alike. */
@@ -76,6 +88,9 @@ function choiceParams(choice?: PrintChoice): Record<string, string> {
   if (layout) out.layout = layout
   if (paper) out.paper_width_mm = paper
   if (destination) out.destination = destination
+  // Sent only when it is ON: an absent parameter and "0" mean the same thing to the server, and a
+  // receipt that carries nobody's bank details is the ordinary case.
+  if (choice?.remit) out.remit = '1'
   return out
 }
 
@@ -100,6 +115,11 @@ export async function fetchSaleReceipt(saleId: string, choice?: PrintChoice): Pr
     destination_options: Array.isArray(rec.destination_options) ? rec.destination_options : [],
     helper_url: String(rec.helper_url || ''),
     escpos_base64: String(rec.escpos_base64 || ''),
+    remit: rec.remit === true,
+    remit_source: String(rec.remit_source || 'off'),
+    remit_available: rec.remit_available === true,
+    remit_routing_masked: String(rec.remit_routing_masked || ''),
+    remit_account_masked: String(rec.remit_account_masked || ''),
     email: {
       to: String(rec.email?.to || ''),
       to_source: (rec.email?.to_source || 'none') as ReceiptEmailView['to_source'],
@@ -135,6 +155,33 @@ export function printReceiptHtml(html: string): void {
     iframe.contentWindow?.focus()
     iframe.contentWindow?.print()
     setTimeout(() => iframe.remove(), 2000)
+  }
+}
+
+/** What the register setup holds for "pay by bank transfer" — masked, which is all a screen ever
+ *  sees of it. `encryption_enabled` is false on a server with no field-encryption key, and the
+ *  editor says so rather than implying a protection that is not there. */
+export interface ReceiptRemitView {
+  routing_masked: string
+  account_masked: string
+  available: boolean
+  encryption_enabled: boolean
+}
+
+/** Declare (or clear) the account a customer is told to pay into (§POS-06). THE only client home
+ *  for this write: the generic POS-settings save must never touch these two keys, because what it
+ *  holds for them is the mask. A blank number clears it. Throws the server's own sentence — it
+ *  already says what is wrong with the number that was typed. */
+export async function saveReceiptRemit(
+  body: { routing_number?: string; account_number?: string; store_code?: string },
+): Promise<ReceiptRemitView> {
+  const r = await api('/api/v1/pos/receipt-remit', { method: 'PUT', body: JSON.stringify(body) })
+  const v = r?.remit || {}
+  return {
+    routing_masked: String(v.routing_masked || ''),
+    account_masked: String(v.account_masked || ''),
+    available: v.available === true,
+    encryption_enabled: r?.encryption_enabled === true,
   }
 }
 

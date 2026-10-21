@@ -62,6 +62,13 @@ SERVER_DEFAULTS: dict[str, object] = {
     # Where the till helper listens on the counter PC. It is a setting, not a constant in code, so a
     # store that runs it on another port says so without a release.
     "receipt_helper_url": "http://127.0.0.1:9100/print",
+    # PAY BY BANK TRANSFER (owner 2026-10-21, §POS-06). The account a customer is told to pay into,
+    # declared in the register setup — per store, so a shop with its own bank account says so, and
+    # the org row serves the rest. STORED ENCRYPTED: these two keys are the only POS settings that
+    # are, and `pos/receipt_remit.py` is the one home for that (its `KEYS` names this pair). This
+    # module stays PURE and never decrypts: it resolves which ROW applies, and the reader opens it.
+    "receipt_remit_routing_number": "",
+    "receipt_remit_account_number": "",
 }
 
 #: Which disclaimer targets mean "print on a POS receipt" — the browser's own rule, stated once.
