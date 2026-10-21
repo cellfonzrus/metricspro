@@ -2155,6 +2155,7 @@ from app.modules.pos import pos_config_effective as _poscfg
 from app.modules.pos import receipt_escpos as _escpos
 from app.modules.pos import receipt_remit as _remit
 from app.modules.pos import customer_bill_to as _bill_to
+from app.modules.pos import receipt_pdf_render as _rpdf_out
 from app.modules.core import tenant_identity as _tenant
 
 
@@ -2196,7 +2197,7 @@ def _declared_format(client, org_id: str) -> dict:
 
 def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
                     want_layout=None, want_paper=None, want_destination=None,
-                    want_remit=None) -> dict:
+                    want_remit=None, want_pdf=False) -> dict:
     """Everything a receipt needs, read once: the template, the effective POS config, the store
     block, the customer, the tenant's name and the declared format. One reader, so the printed copy
     and the emailed copy can never be built from different inputs.
@@ -2209,6 +2210,10 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
     `want_destination` is where this copy GOES (owner 2026-10-20, §POS-04): the operating system's
     print dialog, as every store has always had, or the till printer itself through the helper on the
     counter PC. A store's own setting is only the DEFAULT; both are offered on every print.
+
+    `want_pdf` builds the receipt as a FILE as well (owner 2026-10-21, §POS-08) — the same two
+    content homes, a third medium. Only a path that is going to ATTACH one asks for it, because a
+    print screen has no use for a file and building one costs a page render.
 
     `want_remit` is the pay-by-bank tick (owner 2026-10-21, §POS-06) — print the account this store
     told the customer to pay into. Off unless this print asks for it, and it cannot be turned on at
@@ -2276,8 +2281,27 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
         remit_block=remit_block,
         customer_lines=customer_lines,
     )
+    # The same receipt as a FILE (§POS-08), from the same inputs and the same layout rule — built
+    # only when something is going to attach it. A file that cannot be built never costs the customer
+    # their receipt: what can still be sent is sent, and the answer says the file is missing.
+    pdf_bytes, pdf_error = b"", ""
+    if want_pdf:
+        try:
+            pdf_bytes = _rpdf_out.receipt_pdf(
+                snap, template, fmt=fmt["module"], render_words=_rrender.render_words,
+                brand=brand, disclaimer_blocks=blocks,
+                store_name=store_name, store_lines=store_lines,
+                fold_discount=fold_discount, tenant_name=tenant_name,
+                employee_name=employee_name,
+                short_customer_name=_poscfg.flag(rows, "receipt_customer_short_name", store_code),
+                remit_block=remit_block, customer_lines=customer_lines)
+        except Exception as exc:
+            pdf_bytes, pdf_error = b"", f"{type(exc).__name__}: {str(exc)[:160]}"
     return {
         "html": html,
+        "pdf_bytes": pdf_bytes,
+        "pdf_error": pdf_error,
+        "pdf_filename": _rpdf_out.filename(snap["transaction_id"]),
         "layout": choice["layout"],
         "layout_note": choice["layout_note"],
         "layout_source": choice["layout_source"],
@@ -2429,7 +2453,7 @@ async def email_sale_receipt(sale_id: str, body: dict = None,
     client = sb()
     sale = _load_sale(client, org_id, sale_id)
     try:
-        bundle = _receipt_bundle(client, org_id, sale, typed_email=body.get("to"),
+        bundle = _receipt_bundle(client, org_id, sale, want_pdf=True, typed_email=body.get("to"),
                                  want_layout=body.get("layout"),
                                  want_paper=body.get("paper_width_mm"),
                                  want_remit=body.get("remit"))
@@ -2445,14 +2469,24 @@ async def email_sale_receipt(sale_id: str, body: dict = None,
         raise HTTPException(503, "emailing receipts isn't switched on for this platform yet "
                                  "(no mail provider configured)")
     html = _sr.body_html(view["body_declared"], bundle["company_name"]) + bundle["html"]
+    # The receipt rides BOTH ways (owner 2026-10-21, §POS-08): in the body, where the customer reads
+    # it without opening anything, and as a file they can keep, forward or print. A file that could
+    # not be built does not hold up the mail — it is reported instead.
+    attachments = ([(bundle["pdf_filename"], bundle["pdf_bytes"], "application/pdf")]
+                   if bundle["pdf_bytes"] else [])
     try:
-        mid = await _mail.send_email(view["to"], view["subject"], html, [],
+        mid = await _mail.send_email(view["to"], view["subject"], html, attachments,
                                      from_name=bundle["company_name"] or None)
     except Exception as e:
         raise HTTPException(502, f"the mail provider refused it: {str(e)[:200]}")
+    msg = f"Receipt emailed to {view['to']}."
+    if not attachments:
+        msg += " The PDF copy could not be built, so it went in the body only."
     return {"sent": True, "to": view["to"], "from_name": view["from_name"],
             "subject": view["subject"], "provider_message_id": mid or None,
-            "message": f"Receipt emailed to {view['to']}."}
+            "attached": bool(attachments), "attachment_name": bundle["pdf_filename"],
+            "attachment_error": bundle["pdf_error"] or None,
+            "message": msg}
 
 
 @router.get("/register/drawer-cash")

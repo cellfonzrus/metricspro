@@ -542,6 +542,16 @@ def document(snap, fmt, template_v, brand=None, store_lines=None, tenant_name=""
     return doc
 
 
+def for_render(snap, *, short_customer_name=False) -> dict:
+    """The snapshot as every MEDIUM renders it — the one place the customer's printed name is decided
+    (`receipt_customer_short_name`). The HTML body, the printer's byte stream and the PDF attachment
+    all pass through here, so a receipt cannot be "John Smith" in the mail and "John S." in the file
+    attached to it (§POS-08)."""
+    out = dict(snap or {})
+    out["customer_name"] = customer_display(out.get("customer_name"), short=short_customer_name)
+    return out
+
+
 def html(snap, template_v, *, render_document=None, fmt=None, brand=None, disclaimer_blocks=None,
          store_name="", store_lines=None, fold_discount=False, tenant_name="",
          employee_name="", short_customer_name=False, remit_block="", customer_lines=None) -> str:
@@ -552,8 +562,7 @@ def html(snap, template_v, *, render_document=None, fmt=None, brand=None, discla
     """
     layout = clean_layout((template_v or {}).get("layout"),
                           format_available=bool(fmt and render_document))
-    snap = dict(snap)
-    snap["customer_name"] = customer_display(snap.get("customer_name"), short=short_customer_name)
+    snap = for_render(snap, short_customer_name=short_customer_name)
     if layout == LAYOUT_POS_FORMAT:
         return render_document(document(snap, fmt, template_v, brand=brand,
                                         store_lines=store_lines, tenant_name=tenant_name,
