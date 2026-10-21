@@ -2154,6 +2154,7 @@ from app.modules.pos import sale_receipt as _sr
 from app.modules.pos import pos_config_effective as _poscfg
 from app.modules.pos import receipt_escpos as _escpos
 from app.modules.pos import receipt_remit as _remit
+from app.modules.pos import customer_bill_to as _bill_to
 from app.modules.core import tenant_identity as _tenant
 
 
@@ -2223,7 +2224,7 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
     if sale.get("customer_id"):
         try:
             crows = (client.schema("pos").table("customers")
-                     .select("id,first_name,last_name,company_name,email")
+                     .select("id,first_name,last_name,company_name,email," + _bill_to.COLUMNS)
                      .eq("org_id", org_id).eq("id", sale["customer_id"]).limit(1).execute().data) or []
             customer = crows[0] if crows else {}
         except Exception:
@@ -2259,6 +2260,10 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
     # emailed copy, the printer's byte stream and the tenant's own POS layout cannot word it or
     # number it differently.
     remit_block = _remit.block(remit, include=choice["remit"])
+    # The customer's own address, written out once (§POS-07). Owner 2026-10-21: the receipt shows the
+    # complete address this platform holds for them. Blank for a walk-in with no record, and the
+    # wording is `customer_bill_to`'s, never this reader's.
+    customer_lines = _bill_to.lines(customer)
     html = _sr.html(
         snap, template,
         render_document=_rrender.render_html, fmt=fmt["module"],
@@ -2269,6 +2274,7 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
         employee_name=employee_name,
         short_customer_name=_poscfg.flag(rows, "receipt_customer_short_name", store_code),
         remit_block=remit_block,
+        customer_lines=customer_lines,
     )
     return {
         "html": html,
@@ -2301,7 +2307,7 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
             _sr.slip_model(snap, template, brand=brand, disclaimer_blocks=blocks,
                            store_name=store_name, fold_discount=fold_discount,
                            tenant_name=tenant_name, employee_name=employee_name,
-                           remit_block=remit_block))
+                           remit_block=remit_block, customer_lines=customer_lines))
             if choice["destination"] == _sr.DEST_DIRECT else ""),
         "email": _sr.email_view(snap, brand, template, settings_text, customer=customer,
                                 typed=typed_email, tenant_name=tenant_name),
@@ -2338,6 +2344,13 @@ PREVIEW_SNAPSHOT = {
 }
 
 
+#: The sample customer the preview's bill-to block is drawn from — a RECORD, read through
+#: `customer_bill_to` like a real one, so the admin sees the block their toggle actually produces.
+#: RULE TWO: an invented street, no tenant's own.
+PREVIEW_CUSTOMER = {"address_1": "42 Example Avenue", "address_2": "Apt 3B",
+                    "city": "Anytown", "state": "NY", "zip": "11219"}
+
+
 @router.post("/receipt-template/preview")
 def preview_receipt_template(body: dict = None, org_id: str = ORG_ID):
     """What a receipt would look like with the template the admin is EDITING — rendered by the same
@@ -2365,6 +2378,7 @@ def preview_receipt_template(body: dict = None, org_id: str = ORG_ID):
         tenant_name=tenant_name,
         employee_name="A. Rep" if template["show_employee"] else "",
         short_customer_name=_poscfg.flag(rows, "receipt_customer_short_name", ""),
+        customer_lines=_bill_to.lines(PREVIEW_CUSTOMER),
     )
     return {"html": html, "sample": True,
             "layout": _sr.clean_layout(template["layout"], format_available=fmt["available"]),

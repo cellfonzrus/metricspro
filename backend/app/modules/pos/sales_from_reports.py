@@ -438,8 +438,13 @@ def _store_header_fn(client, org_id):
 
 def _customer_lines_fn(client, org_id):
     """customer name → the address lines the POS customer record knows (matched the way the importer
-    matches: the full name); [] when unknown. Read once per distinct name."""
+    matches: the full name); [] when unknown. Read once per distinct name.
+
+    The WORDING of those lines is not decided here: `customer_bill_to.lines` is the one home for
+    "this customer's address, written out" (§POS-07), so an imported receipt and the till slip of the
+    same customer cannot write their address two ways."""
     from app.modules.pos import receipt_import as _ri
+    from app.modules.pos import customer_bill_to as _bt
     cache = {}
 
     def fn(name):
@@ -449,13 +454,8 @@ def _customer_lines_fn(client, org_id):
         if n in cache:
             return cache[n]
         row = _ri.find_customer(client, org_id, {"customer_name": n})
-        lines = []
-        if row:
-            a1 = " ".join(x for x in (_s(row.get("address_1")), _s(row.get("address_2"))) if x)
-            city = " ".join(x for x in (_s(row.get("city")), _s(row.get("state")), _s(row.get("zip"))) if x)
-            lines = [x for x in (a1, city) if x]
-        cache[n] = lines
-        return lines
+        cache[n] = _bt.lines(row)
+        return cache[n]
     return fn
 
 

@@ -27,6 +27,9 @@ stdlib only, DB-free.
      before it is stored (a routing number has a check digit), sealed at rest and masked everywhere a
      screen can see it, settable only with the settings right and tickable by anyone who prints — and
      ONE paragraph that four media render without any of them deciding what it says.
+  §O THE CUSTOMER'S OWN ADDRESS (§POS-07) — "what does this customer's record say, written out" had
+     no home, so the receipt carried their name alone while an imported copy of the same receipt
+     carried their address. One home, every medium, and a lock on a second copy.
   §M THE DECLARED FORMAT HAS ONE SHAPE (§POS-05, the 2026-10-20 print crash, ref 357a4772) — "which
      receipt format has this tenant declared" had three derivations in two shapes (the registry ROW
      and the format MODULE), so the day one's `.get("label")` was copied onto the other every receipt
@@ -861,6 +864,84 @@ check("N23 RULE TWO — no bank and no tenant is named in any of it",
 check("N24 §POS-06 is registered in the index with its one home",
       "POS-06" in idx and "receipt_remit" in idx and "Pay by bank" in idx)
 
+print("\n§O  THE CUSTOMER'S OWN ADDRESS — one home, every medium (§POS-07)")
+# Owner 2026-10-21, verbatim: *"teh receipt shoudl show the complete address for the customer as in
+# the system"*. The CLASS, not the instance: "what does this customer's record say, written out"
+# had no home, so the one caller that wanted it (the receipt rebuilt from an imported report) spelled
+# the five columns itself and the till slip carried the name alone.
+from app.modules.pos import customer_bill_to as bt  # noqa: E402
+
+BT_SRC = read("backend/app/modules/pos/customer_bill_to.py")
+SFR_SRC = read("backend/app/modules/pos/sales_from_reports.py")
+CUST = {"id": "c1", "first_name": "John", "last_name": "Smith",
+        "address_1": "123 Main Street", "address_2": "Apt 2",
+        "city": "Brooklyn", "state": "NY", "zip": "11219"}
+CUST_LINES = bt.lines(CUST)
+
+check("O1 the whole record prints as the street then the city, state and postal code",
+      CUST_LINES == ["123 Main Street Apt 2", "Brooklyn NY 11219"])
+check("O2 a half-filled record prints what it knows and leaves no blank line",
+      bt.lines({"address_1": "123 Main Street"}) == ["123 Main Street"]
+      and bt.lines({"city": "Brooklyn", "zip": "11219"}) == ["Brooklyn 11219"]
+      and all(ln.strip() for ln in bt.lines({"address_2": "  ", "state": "NY"})))
+check("O3 a walk-in with no record is [] and never an error",
+      bt.lines(None) == [] and bt.lines({}) == [] and bt.has_address({}) is False
+      and bt.has_address(CUST) is True)
+check("O4 the five columns are named ONCE and a reader dereferences them",
+      bt.FIELDS == ("address_1", "address_2", "city", "state", "zip")
+      and bt.COLUMNS == "address_1,address_2,city,state,zip"
+      and "_bill_to.COLUMNS" in router
+      and not re.search(r'select\("[^"]*address_1', code_only(router)))
+check("O5 the bill-to block leads with the name, then where they are",
+      bt.block("John Smith", CUST)["lines"] == ["John Smith"] + CUST_LINES
+      and bt.block("", CUST)["lines"] == CUST_LINES)
+
+slip = sr.slip_model(SNAP, ALL_ON, brand=BRAND, store_name="STORE 1", customer_lines=CUST_LINES)
+heads = [h["text"] for h in slip["head_lines"]]
+check("O6 the till slip prints the address directly under the customer's name",
+      heads.index("Customer: John Smith") + 1 == heads.index(CUST_LINES[0])
+      and heads.index(CUST_LINES[0]) + 1 == heads.index(CUST_LINES[1]))
+check("O7 the printer's byte stream carries it too — the same model, no change to the renderer",
+      all(ln.encode("cp437") in esc.payload(slip) for ln in CUST_LINES)
+      and "customer_lines" not in ESC_SRC)
+check("O8 the paper copy and the emailed copy carry it (one renderer of that model)",
+      all(ln in sr.thermal_html(SNAP, ALL_ON, customer_lines=CUST_LINES) for ln in CUST_LINES))
+doc = sr.document(SNAP, RQ_ROW["module"], ALL_ON, store_lines=["STORE 1"], customer_lines=CUST_LINES)
+check("O9 the tenant's own POS layout bills to the same block",
+      doc["bill_to"]["lines"] == ["John Smith"] + CUST_LINES
+      and doc["bill_to"]["name"] == "John Smith")
+off = sr.template_view({"show_customer": False, "paper_width_mm": 80})
+check("O10 one toggle, one block — with the customer hidden, the address is hidden with it",
+      not any(CUST_LINES[0] in h["text"]
+              for h in sr.slip_model(SNAP, off, customer_lines=CUST_LINES)["head_lines"])
+      and sr.document(SNAP, RQ_ROW["module"], off, customer_lines=CUST_LINES)["bill_to"]["lines"] == [])
+check("O11 the imported-receipt path dereferences the one home instead of its own copy",
+      "_bt.lines(row)" in SFR_SRC
+      and not re.search(r'address_[12]', code_only(SFR_SRC)))
+# THE LOCK. One axis, the assembly: a join() or an f-string that mentions an address field. Only the
+# display home and the COMPARISON home (`customer_identity.norm_address`, a different question with a
+# different shape) may hold one. A second copy appearing anywhere under backend/app fails the build.
+BT_ALLOWED = {"app/modules/pos/customer_bill_to.py", "app/modules/pos/customer_identity.py"}
+_assembly = re.compile(r'(?:join\([^\n]{0,200}|f["\'][^\n"\']{0,200})'
+                       r'(?:address_1|address_2|["\']city["\'])')
+_copies = sorted({os.path.relpath(os.path.join(b, f), ROOT).replace(os.sep, "/")
+                  for b, _, fs in os.walk(os.path.join(ROOT, "backend", "app"))
+                  for f in fs if f.endswith(".py")
+                  and _assembly.search(code_only(read(os.path.relpath(os.path.join(b, f), ROOT))))}
+                 - {"backend/" + a for a in BT_ALLOWED})
+check("O12 LOCK — nothing else writes a customer's address out for a human", not _copies,
+      f"a second copy appeared in {_copies}")
+check("O13 the reader hands the SAME lines to both media",
+      router.count("customer_lines=customer_lines") == 2
+      and "customer_lines = _bill_to.lines(customer)" in router)
+check("O14 the admin preview shows the block, so a toggle can be seen before it ships",
+      "_bill_to.lines(PREVIEW_CUSTOMER)" in router and "PREVIEW_CUSTOMER" in router)
+check("O15 RULE TWO — no tenant, carrier or real address is written into the rule",
+      not re.search(r"(?i)\b(vzone|luxelink|cellfonz|boost|total\s*wireless)\b", code_only(BT_SRC))
+      and not re.search(r"\b\d{5}\b", code_only(BT_SRC)))
+check("O16 §POS-07 is registered in the index with its one home",
+      "POS-07" in idx and "customer_bill_to" in idx)
+
 print("\n§J  negative controls")
 check("neg-B a default that drifted on one side only is RED",
       ts_default("brand_company_name")[1] == pc.SERVER_DEFAULTS["brand_company_name"]
@@ -904,6 +985,14 @@ check("neg-N2 a masked value saved back as the real number would be RED",
       refuses_remit(rmt.clean_account, rmt.mask(GOOD_ACCOUNT))
       and refuses_remit(rmt.clean_routing, rmt.mask(GOOD_ROUTING))
       and rmt.digits(rmt.mask(GOOD_ACCOUNT)) == GOOD_ACCOUNT[-4:])
+check("neg-O a renderer that printed the address with the customer hidden would be RED",
+      "Brooklyn" in str(sr.slip_model(SNAP, ALL_ON, customer_lines=CUST_LINES)["head_lines"])
+      and "Brooklyn" not in str(sr.slip_model(SNAP, off, customer_lines=CUST_LINES)["head_lines"]))
+check("neg-O2 a home that invented a line for an empty record would be RED",
+      bt.lines({"address_1": "", "city": None}) == []
+      and bt.block("", None)["lines"] == [])
+check("neg-O3 the lock really can fail — the same regex finds the two homes it allows",
+      len([a for a in BT_ALLOWED if _assembly.search(code_only(read("backend/" + a)))]) == 2)
 check("neg-N3 a checksum that passed anything would be RED",
       sum(1 for n in range(10**8, 10**8 + 400)
           if rmt.routing_checksum_ok(str(n).zfill(9))) == 40)
