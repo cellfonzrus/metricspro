@@ -423,6 +423,8 @@ on:
       - "backend/app/modules/pos/receipt_escpos.py"
       - "backend/app/modules/pos/sales_from_reports.py"
       - "backend/app/modules/pos/receipt_remit.py"
+      - "backend/app/modules/pos/customer_bill_to.py"
+      - "backend/app/modules/pos/customer_identity.py"
       - "backend/app/core/encryption_backfill.py"
       - "frontend/src/components/pos/ReceiptRemitFields.tsx"
       - "frontend/src/components/pos/PosConfigSection.tsx"

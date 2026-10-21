@@ -293,7 +293,8 @@ def _esc(v) -> str:
 
 
 def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name="",
-               fold_discount=False, tenant_name="", employee_name="", remit_block="") -> dict:
+               fold_discount=False, tenant_name="", employee_name="", remit_block="",
+               customer_lines=None) -> dict:
     """THE CONTENT of a till slip: which lines print, in what order, with what figures.
 
     WHY THIS EXISTS (owner 2026-10-20: *"the receipts will print to the thermal printer only if
@@ -341,6 +342,10 @@ def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name=
     head_lines.append({"text": snap["date"]})
     if t["show_customer"] and snap["customer_name"]:
         head_lines.append({"text": f'Customer: {snap["customer_name"]}'})
+        # Their address as the record holds it (§POS-07) — the lines come from
+        # `customer_bill_to.lines`, never assembled here, so the till slip, the printer's byte
+        # stream and an imported copy of the same receipt word one address one way.
+        head_lines += [{"text": ln} for ln in (customer_lines or []) if str(ln or "").strip()]
     if t["show_employee"] and employee_name:
         head_lines.append({"text": f"Served by: {employee_name}"})
     if snap["status"] == "voided":
@@ -378,14 +383,16 @@ def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name=
 
 
 def thermal_html(snap, template_v, brand=None, disclaimer_blocks=None, store_name="",
-                 fold_discount=False, tenant_name="", employee_name="", remit_block="") -> str:
+                 fold_discount=False, tenant_name="", employee_name="", remit_block="",
+                 customer_lines=None) -> str:
     """The 58/80 mm till slip as HTML — ONE of the two renderers of `slip_model`, the one a browser
     prints and an email carries. Field for field what the register's own `buildReceiptHtml` used to
     print, every figure now read from the model rather than recomputed here."""
     t = template_v
     m = slip_model(snap, template_v, brand=brand, disclaimer_blocks=disclaimer_blocks,
                    store_name=store_name, fold_discount=fold_discount, tenant_name=tenant_name,
-                   employee_name=employee_name, remit_block=remit_block)
+                   employee_name=employee_name, remit_block=remit_block,
+                   customer_lines=customer_lines)
     width = PAPER_PX.get(t["paper_width_mm"], PAPER_PX[DEFAULT_PAPER_MM])
     font = t["font_size_px"]
     small = max(9, font - 2)
@@ -454,7 +461,7 @@ def thermal_html(snap, template_v, brand=None, disclaimer_blocks=None, store_nam
 
 # ── the tenant's own POS layout ───────────────────────────────────────────────────────────────────
 def document(snap, fmt, template_v, brand=None, store_lines=None, tenant_name="",
-             employee_name="", remit_block="") -> dict:
+             employee_name="", remit_block="", customer_lines=None) -> dict:
     """The sale as the SAME structured Document an imported receipt of this POS is parsed into — so
     `receipt_formats.render.render_html` prints it in that POS's layout with no renderer change, and
     the tenant's own uploaded receipts and its register's receipts finally look alike.
@@ -482,7 +489,10 @@ def document(snap, fmt, template_v, brand=None, store_lines=None, tenant_name=""
     if employee_name:
         doc["meta"].append({"key": "sales_person", "label": "Sales Person", "value": employee_name})
     if (template_v or {}).get("show_customer") and snap["customer_name"]:
-        doc["bill_to"]["lines"] = [snap["customer_name"]]
+        # The same bill-to block an imported receipt of this POS carries: the name, then the address
+        # the customer's record holds (§POS-07, `customer_bill_to`).
+        doc["bill_to"]["lines"] = ([snap["customer_name"]]
+                                   + [ln for ln in (customer_lines or []) if str(ln or "").strip()])
         doc["bill_to"]["name"] = snap["customer_name"]
 
     cols = list(getattr(fmt, "COLUMNS", []) or [])
@@ -534,7 +544,7 @@ def document(snap, fmt, template_v, brand=None, store_lines=None, tenant_name=""
 
 def html(snap, template_v, *, render_document=None, fmt=None, brand=None, disclaimer_blocks=None,
          store_name="", store_lines=None, fold_discount=False, tenant_name="",
-         employee_name="", short_customer_name=False, remit_block="") -> str:
+         employee_name="", short_customer_name=False, remit_block="", customer_lines=None) -> str:
     """THE receipt of this sale, as print-ready HTML — the only answer, for print, reprint and email.
 
     `render_document` is injected (`receipt_formats.render.render_html`) so this module stays pure and
@@ -547,11 +557,12 @@ def html(snap, template_v, *, render_document=None, fmt=None, brand=None, discla
     if layout == LAYOUT_POS_FORMAT:
         return render_document(document(snap, fmt, template_v, brand=brand,
                                         store_lines=store_lines, tenant_name=tenant_name,
-                                        employee_name=employee_name, remit_block=remit_block))
+                                        employee_name=employee_name, remit_block=remit_block,
+                                        customer_lines=customer_lines))
     return thermal_html(snap, template_v, brand=brand, disclaimer_blocks=disclaimer_blocks,
                         store_name=store_name, fold_discount=fold_discount,
                         tenant_name=tenant_name, employee_name=employee_name,
-                        remit_block=remit_block)
+                        remit_block=remit_block, customer_lines=customer_lines)
 
 
 # ── WHAT THIS PRINT USES ──────────────────────────────────────────────────────────────────────────
