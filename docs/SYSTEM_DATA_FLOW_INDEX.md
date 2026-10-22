@@ -148,6 +148,7 @@ Primary code homes:
 | COMMCALC-21 | **A non-payment somebody chose is not a finding** | "The multi-month notice lists 115 home internet and 290 tablet activations as 'did not pay'. I excluded those on purpose. Which of these lines is a problem, which is my own setting being restated at me, and how does a surface know the difference instead of asserting one reason for all of them?" |
 | COMMCALC-22 | **A claim with no amount cannot be filed** | "Trace the 4 devices paid twice and the 200 sales that matched no commission — they should be part of the discrepancies to be filed with the carrier if we did not get paid." The discrepancy report already held them, and wrote $0.00 on every single one, so the hub's open-$ card summed to nothing. Which non-payments are claims against the carrier at all, which are facts about our own feed, and what is a claim worth? |
 | COMMCALC-24 | **A live session is read where it lives** | "I press Live login on the UPS portal and the panel says no live session is running, every time, for days. Which process holds a live browser session, which endpoints may answer a question about one, and what should a process that holds none say instead of 'nothing is running'?" |
+| COMMCALC-27 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks, and the page sent one web request per character typed. What is the operator's keystroke charged for before it runs, and what work has no business on the latency path of their next action? |
 
 ---
 
@@ -25922,6 +25923,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-24 | commcalc |
 | COMMCALC-25 | commcalc |
 | COMMCALC-26 | commcalc |
+| COMMCALC-27 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -32909,3 +32911,85 @@ Same class: §COMMCALC-25 (the filters on the same screens, and the window home 
 095 and `payable_source_map`), §23z (Device Payable as at a date — the other windowed payable surface,
 and the leading-edge lesson that a feed's own incompleteness is not a defect), §COMMCALC-03 (the
 handset price home this dereferences), §13a (the store→market resolver the ledger rows use).
+
+---
+
+## §COMMCALC-27. THE OPERATOR'S INPUT IS SERVICED BEFORE THE NEXT FRAME TICK (owner report 2026-10-22)
+
+Owner, on the UPS Team Portal live login, the day after §COMMCALC-24 made the window visible to him
+at all: *"it just freezes , it is not swift access, must easier it seems i hvae to press hard"*.
+
+**The class, not the instance.** `_preauth_loop` and `_post_auth_loop` are SINGLE-THREADED: one
+thread streams frames (`_pump`), detects state (`_preauth_detect`) and executes the human's input
+(`_do_input`). Both serviced exactly ONE queued command per iteration, and every iteration began
+with a full `_pump` — 80ms in CDP mode, 300ms without. `_do_click` then ended with a mandatory
+~750ms burst of `wait_for_timeout(250)` plus `vp._wait_settle` plus a re-classification for auth.
+So the Nth click was charged for the (N-1)th click's VERIFICATION before it was even dequeued: a
+burst drained at a few events a second. Pressing again — the rational response — lengthened the
+queue and made it worse. The general fact that was wrong is not "the UPS portal is slow"; it is that
+**work which only makes sense once the operator has STOPPED was sitting on the latency path of their
+next action, and their input was waiting behind a frame tick.**
+
+### COMMCALC-27.1 Duplicate check (the build gate)
+
+Searched the index and the tree for an existing home for "how promptly does operator input reach the
+page": §COMMCALC-10 (`preloop_limit` / `inactivity_limit` — how long a phase may go WITHOUT
+progress, a different question), §COMMCALC-13/24 (what a session leaves on the row, and which
+process may answer about one), §41 (the forwarder, which adds one network hop per event but does not
+schedule them), `_FRAME_PUMP_MS` / `_FALLBACK_PUMP_MS` / `_FRAME_GUARANTEE_S` (frame CADENCE, not
+input servicing). No second mechanism answers this; `_preauth_loop` was the only servicer and is
+EXTENDED here rather than joined by a sibling. `backend/scratchpad/live_login_lowlat_proof.py` is a
+scratch probe of the FRAME path, not a lock, and is untouched.
+
+### COMMCALC-27.2 One fact, one home, dereferenced
+
+- **`live_login.operator_input_pending()`** — THE one reader of "is the operator still acting".
+  PURE and never raises: an unreadable queue reads as NOT pending, so the failure mode is the old
+  always-settle behaviour rather than silently skipping verification forever.
+- **`live_login._next_input()`** — pops HUMAN INPUT only, so draining a burst can never reorder or
+  swallow a `SUBMIT_CODE` / `RESEND` / `CANCEL` / `PULL`.
+- **`live_login._INPUT_DRAIN_MAX`** — the one declared bound on a drain, so a flood still cannot
+  starve the inactivity check or the frame pump.
+- `_do_click` DEREFERENCES `operator_input_pending` and keeps no copy of the rule; the harness fails
+  the build if any other method reads the queue depth for this decision.
+
+**The frontend half of the same question.** The backend can only service what reaches it, and
+`commcalc/email-imports/page.tsx` used to `await` ONE POST PER CHARACTER — a 12-character password
+was 12 sequential round trips, each crossing the §41 forwarder, before the first letter appeared
+("i cannot put the password , it is very slow", 2026-10-22). Keystrokes are now buffered in
+`pendingTextRef` and flushed as ONE `type` event on `LIVE_TYPE_FLUSH_MS` (70ms, one home in the
+page). Ordering is the invariant that makes batching safe: `flushText()` runs before ANY other event
+(named key, click, double-click, scroll), and every event goes out on ONE promise chain
+(`sendChainRef`), so a flushed password can never land behind the Enter that submits it. The
+`LiveInputEvent` union types both senders, which also pays off one entry of the lint register rather
+than adding to it.
+
+### COMMCALC-27.3 The siblings, fixed here rather than excused
+
+- **`_post_auth_loop` has the identical defect** and is fixed in the same change: "take control" on
+  an authenticated session is the same operator typing into the same single-threaded loop.
+- The **last click of a burst still settles in full** — nothing pending behind it — so a human
+  finishing sign-in is still concluded from their own click, and `_preauth_detect` re-classifies
+  every `_CLASSIFY_POLL_S` regardless. The fix removes latency, not verification.
+- **RULE TWO:** no portal, tenant or processor name appears anywhere on the latency path; the
+  harness asserts their absence.
+
+### COMMCALC-27.4 Locked
+
+`backend/harness_live_input_latency.py` — **68 checks, DB-free, no browser**: one home + purity
+(§A), input-only draining (§B), THE LOCK that BOTH loops drain (§C), the bound and that the pump and
+idle check still run every iteration (§D), the behaviour on a fake page — burst skipped while input
+is queued, taken in full for the last click (§E), order-preserving and lossless draining (§F), and
+armed negative controls including the pre-change one-command-per-tick shape and a cap of 1 (§G), and
+the FRONTEND half — no awaited request per character, and every event on one ordered chain (§H).
+Wired into CI in the `carrier-vocab-guard` lock job, whose path filter names the live-view page as
+well as the harness.
+
+### COMMCALC-27.5 Cross-references
+
+Same home, other axes: §COMMCALC-13 (what a finished session leaves on the row), §COMMCALC-24 (which
+process may answer about a session). Same class: §19.18 (a mechanism written and its callers left
+unwired). Neighbours: §COMMCALC-10 (the progress watchdog on the same session), §COMMCALC-11 (the
+human check these clicks are solving), §41 (the forwarder each event now crosses), §COMMCALC-07 (the
+UPS pull this login exists to feed).
+

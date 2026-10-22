@@ -185,7 +185,7 @@
 9	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/distributors/page.tsx
 25	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/dlar-vs-platform/page.tsx
 3	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/dlar/sweep/page.tsx
-157	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/email-imports/page.tsx
+156	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/email-imports/page.tsx
 3	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/epay-fee-recon/page.tsx
 3	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/epay/sweep/page.tsx
 12	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/exec/mtd/page.tsx
