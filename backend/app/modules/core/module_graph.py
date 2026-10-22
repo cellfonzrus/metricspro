@@ -1579,6 +1579,14 @@ FACTS: dict[str, dict] = {
             # retired: it paged without an ORDER BY, so a device whose payment row was never served
             # read as "no evidence" and bucketed the appeal as not_recoverable.
             'app/modules/recovery/engine.py': ('_feed_read',),
+            # §COMMCALC-26 — the three reads the declared-terms work added, wired to this home from
+            # the start rather than keeping a fourth private page loop: the unsold per-IMEI ledger
+            # (a device missed here reads as SOLD, which is the one thing the out-of-pocket verdict
+            # must never get wrong), the vendor feed the invoice-due report falls back to, and the
+            # model scan that builds the unit-price map (a model missed prices nothing).
+            'app/modules/payables/engine.py': ('_feed_read',),
+            'app/modules/payables/unsold_inventory.py': ('_feed_read',),
+            'app/modules/payables/vendor_invoice.py': ('_feed_read',),
         },
     },
     'payment_category_map': {
