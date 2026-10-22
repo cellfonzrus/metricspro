@@ -1236,7 +1236,16 @@ _all_routes = _flatten_routes(real_app.routes)
 # `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
 # one added, NONE removed, 1798 + 1 = 1799, the figure this harness measured on this tree. So the
 # pin was re-taken on counted, named additions, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1799"))
+# RE-PINNED 2026-10-21, 1799 -> 1800 (index §POS-09). Every record above stays. The delta is ONE
+# route and it is named: POST /pos/sales/{sale_id}/whatsapp-receipt (send a sale's receipt to the
+# customer over WhatsApp, as the §POS-08 PDF). It WRITES nothing in this database — it reads the sale
+# and hands the already-built file to the channel's own sender, whose 24h-window ladder decides what
+# Meta will carry — so no table gains a writer and no report, statement, GP, commission or tax figure
+# gains an input. Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
+# one added, NONE removed, 1799 + 1 = 1800, the figure this harness measured on this tree. So the
+# pin was re-taken on counted, named additions, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1800"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

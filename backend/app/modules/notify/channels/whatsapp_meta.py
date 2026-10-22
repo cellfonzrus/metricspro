@@ -80,16 +80,18 @@ def is_configured() -> bool:
 
 
 def _to_number(raw) -> str:
-    """The Meta Cloud API `to` must be digits-only with a country code. Strip +/spaces/dashes/parens;
-    prepend the US country code '1' to a bare 10-digit number (how reps are commonly stored). This is
-    the transport-layer defense-in-depth: callers should already pass a normalized '+<cc>...' number
-    (core.auth_security.normalize_phone), and stripping the '+' here is BYTE-COMPATIBLE with that (and
-    with the pre-existing notify send format). Without this an unprefixed 2125550123 hits Meta #131030
-    'not in allowed list'."""
-    digits = "".join(c for c in str(raw or "") if c.isdigit())
-    if len(digits) == 10:
-        digits = "1" + digits
-    return digits
+    """The Meta Cloud API `to`: digits only, with a country code. The transport-layer defence — callers
+    should already pass a normalized '+<cc>...' number (`core.auth_security.normalize_phone`), and
+    stripping the '+' is BYTE-COMPATIBLE with that. Without it an unprefixed 2125550123 hits Meta
+    #131030 'not in allowed list'.
+
+    DEREFERENCED, not copied (§POS-09): `whatsapp_window.digits` is the one home for this rule, and
+    it has to be — a number recorded from an inbound `from` is matched against one we later send TO,
+    so the two sides answering it differently would silently lose the 24h window. This function kept
+    its own copy of those four lines until a third caller (a receipt sent over WhatsApp) needed the
+    same answer."""
+    from app.modules.notify import whatsapp_window as _win
+    return _win.digits(raw)
 
 
 def _base() -> str:

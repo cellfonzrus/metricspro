@@ -36,10 +36,13 @@ import {
 } from '@/lib/pos-held-sale'
 // THE receipt (lib/pos-receipt) — rendered on the server so the till copy, the reprint and the
 // emailed copy are one thing; this screen prints what it is handed (§POS-02).
-import { emailSaleReceipt, fetchSaleReceipt, printReceiptHtml, printViaHelper } from '@/lib/pos-receipt'
+import { fetchSaleReceipt, printReceiptHtml, printViaHelper } from '@/lib/pos-receipt'
 import type { PrintChoice, SaleReceipt } from '@/lib/pos-receipt'
 // THE format picker — one home, shared with the Sale Log reprint (§POS-03).
 import { PrintFormatPicker } from '@/components/pos/PrintFormatPicker'
+// THE one way a receipt is SENT (§POS-09) — email and WhatsApp, shared by the completion modal and
+// the Sale Log reprint, so a counter can hand over yesterday's receipt too.
+import { SendReceiptPanel } from '@/components/pos/SendReceiptPanel'
 
 interface Product {
   id: string
@@ -218,12 +221,6 @@ export default function PosSalesPage() {
   const autoPrintedTxn = useRef<number | null>(null)
   // receipt_prompt_email: customer id to offer an email capture for in the completion modal
   const [emailPromptCustomer, setEmailPromptCustomer] = useState<string | null>(null)
-  // The emailed receipt (§POS-02): what the server says it would send, where, and from whom — all of
-  // it SHOWN before the cashier presses Send, and the address editable right there.
-  const [emailTo, setEmailTo] = useState('')
-  const [emailFromName, setEmailFromName] = useState('')
-  const [emailSending, setEmailSending] = useState(false)
-  const [emailSentTo, setEmailSentTo] = useState('')
   // THE PRINT FORMAT (§POS-03, owner 2026-10-19). What the server says this sale can print as and
   // what it resolved to, plus what the cashier asked for FOR THIS PRINT. Nothing is saved: the
   // store's own declared setting is where the next receipt starts from again.
@@ -427,21 +424,15 @@ export default function PosSalesPage() {
     }
   }, [])
 
-  // The completion modal asks the server who the receipt would go to, so the screen shows the real
-  // address (the customer's own) rather than an empty box the cashier has to guess at. Called where
-  // the modal is OPENED rather than from an effect watching it: opening the modal is the event, and
-  // an effect would re-ask on every unrelated re-render while the modal is up.
-  async function loadReceiptEmailView(saleId: string, choice?: PrintChoice) {
-    setEmailSentTo('')
-    setEmailTo('')
-    setEmailFromName('')
+  // The completion modal asks the server for the whole receipt view — who it would go to on each
+  // channel, and the formats this store may print in — so the screen shows the real address, number
+  // and choice rather than empty boxes a cashier has to guess at. Called where the modal is OPENED
+  // rather than from an effect watching it: opening the modal is the event, and an effect would
+  // re-ask on every unrelated re-render while the modal is up.
+  async function loadReceiptView(saleId: string, choice?: PrintChoice) {
+    setReceiptView(null)
     try {
-      const rec = await fetchSaleReceipt(saleId, choice)
-      setEmailTo(rec.email.to)
-      setEmailFromName(rec.email.from_name)
-      // The same answer carries the formats this store may print in and which one it resolved to,
-      // so the modal shows the real choice rather than a guess at it.
-      setReceiptView(rec)
+      setReceiptView(await fetchSaleReceipt(saleId, choice))
     } catch {
       // The receipt box simply stays empty and the format picker stays hidden — the cashier can
       // still type an address and still print (which asks the server for the receipt itself and
@@ -449,25 +440,16 @@ export default function PosSalesPage() {
     }
   }
 
-  async function sendReceiptEmail() {
-    if (!lastSaleId) return
-    setEmailSending(true)
+  // An address the customer gave AT THE TILL is worth keeping on their profile, which is what the
+  // capture prompt (receipt_prompt_email) was asking for anyway. The sending itself is the send
+  // panel's (§POS-09) — this is the half that is the till's own business, and a reprint in the Sale
+  // Log deliberately does not do it.
+  async function saveReceiptEmailToProfile(address: string) {
+    if (!emailPromptCustomer || !address) return
     try {
-      // The printed choice goes with it, so the customer's copy is the one that was handed over.
-      const res = await emailSaleReceipt(lastSaleId, emailTo, printChoice)
-      setEmailSentTo(res.to)
-      // An address the customer gave at the till is worth keeping on their profile, which is what
-      // the capture prompt (receipt_prompt_email) was asking for anyway.
-      if (emailPromptCustomer && emailTo.trim()) {
-        try {
-          await api(`/api/v1/pos/customers/${emailPromptCustomer}`, { method: 'PATCH', body: JSON.stringify({ email: emailTo.trim() }) })
-          setEmailPromptCustomer(null)
-        } catch { /* the receipt went out; saving it to the profile is the lesser half */ }
-      }
-    } catch (err: any) {
-      alert(`Could not email the receipt: ${err?.message || err}`)
-    }
-    setEmailSending(false)
+      await api(`/api/v1/pos/customers/${emailPromptCustomer}`, { method: 'PATCH', body: JSON.stringify({ email: address }) })
+      setEmailPromptCustomer(null)
+    } catch { /* the receipt went out; saving it to the profile is the lesser half */ }
   }
 
   // receipt_auto_print: when the completion modal opens, fire the same print path as the
@@ -990,7 +972,7 @@ export default function PosSalesPage() {
     setSelectedCustomer(null)
     setShowPayment(false)
     setShowReceipt(true)
-    loadReceiptEmailView(sale.id)
+    loadReceiptView(sale.id)
     setAmountTendered('')
     setIsActivationSale(false)
     setSaving(false)
@@ -1744,28 +1726,13 @@ export default function PosSalesPage() {
                   </div>
                 )}
               </div>
-              {/* EMAIL THE RECEIPT (§POS-02) — the address is shown and editable, and the line under
-                  it says what name the customer will see it come from, so nobody has to send one to
-                  find out. */}
-              <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 12, textAlign: 'left' }}>
-                <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6 }}>Email the receipt to:</div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <input type="email" value={emailTo} onChange={e => { setEmailTo(e.target.value); setEmailSentTo('') }}
-                    onKeyDown={e => { if (e.key === 'Enter' && !emailSending) sendReceiptEmail() }}
-                    placeholder="name@example.com" style={{ ...inputStyle, flex: 1, minWidth: 0 }} />
-                  <button className="btn btn-primary" style={{ fontSize: 12, padding: '7px 12px', cursor: emailSending ? 'wait' : 'pointer', opacity: emailSending || !emailTo.trim() ? 0.6 : 1 }}
-                    onClick={sendReceiptEmail} disabled={emailSending || !emailTo.trim()}>
-                    {emailSending ? 'Sending…' : 'Send'}
-                  </button>
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
-                  {emailSentTo
-                    ? `Sent to ${emailSentTo}.`
-                    : emailFromName
-                      ? `The customer sees it from ${emailFromName}.`
-                      : 'No company name is set yet, so it arrives with the platform name — set one in POS → Settings → Receipt Template.'}
-                </div>
-              </div>
+              {/* SEND THE RECEIPT (§POS-02 email, §POS-09 the one home for both channels) — the
+                  address and number are shown and editable, and the line under them says what name
+                  the customer will see it come from, so nobody has to send one to find out. */}
+              {lastSaleId && receiptView && (
+                <SendReceiptPanel key={lastSaleId} saleId={lastSaleId} view={receiptView} choice={printChoice}
+                  onEmailSent={saveReceiptEmailToProfile} />
+              )}
               {lastWasActivation && lastSaleId && (
                 <a href={`/pos/activations?sale=${lastSaleId}&customer=${lastSaleCustomerId || ''}`}
                   title={mustPrint ? mustPrintTitle : undefined}
@@ -1779,7 +1746,7 @@ export default function PosSalesPage() {
               <PrintFormatPicker view={receiptView} choice={printChoice}
                 onChange={next => {
                   setPrintChoice(next)
-                  if (lastSaleId) loadReceiptEmailView(lastSaleId, next)
+                  if (lastSaleId) loadReceiptView(lastSaleId, next)
                 }} />
               <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginBottom: 8 }}
                 onClick={async () => { if (await printSaleReceipt(lastSaleId, printChoice)) setReceiptPrinted(true) }}>
@@ -1808,11 +1775,16 @@ export default function PosSalesPage() {
             </div>
             <div style={{ padding: 20 }}>
               {reprintView
-                ? <PrintFormatPicker view={reprintView} choice={reprintChoice}
-                    onChange={async next => {
-                      setReprintChoice(next)
-                      try { setReprintView(await fetchSaleReceipt(reprintSaleId, next)) } catch { /* the picker keeps the last answer */ }
-                    }} />
+                ? <>
+                    <PrintFormatPicker view={reprintView} choice={reprintChoice}
+                      onChange={async next => {
+                        setReprintChoice(next)
+                        try { setReprintView(await fetchSaleReceipt(reprintSaleId, next)) } catch { /* the picker keeps the last answer */ }
+                      }} />
+                    {/* The same send panel the till has (§POS-09): a counter opening a receipt from
+                        yesterday can hand it over, not only print it. */}
+                    <SendReceiptPanel key={reprintSaleId} saleId={reprintSaleId} view={reprintView} choice={reprintChoice} />
+                  </>
                 : <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 12 }}>Reading the receipt…</div>}
               <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}
                 disabled={!reprintView}
