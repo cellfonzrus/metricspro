@@ -1823,12 +1823,14 @@ async def get_aging(
         "by_model": by_model_shown,
         "by_model_meta": {"total_models": by_model_total, "shown": len(by_model_shown),
                           "omitted": max(0, by_model_total - len(by_model_shown))},
-        "bucket_basis": ("acquired_date / date range narrows which devices are INCLUDED; the "
-                         "aging bucket is always computed AS OF TODAY, not the filter range, and "
-                         "its EDGES are the carrier's own declared selling window (mig 1091 "
-                         "payable_source_map.sell_within_days - Boost 60, Total 12), never a single "
-                         "hard-coded ladder. Rows with owed_to_vip > 0 but no usable acquired_date "
-                         "land in 'unknown_age', not silently dropped."),
+        # NO SETUP INTERNALS IN THIS SENTENCE (§19.36): it leaves the API, so it names what the
+        # buckets MEAN, never the migration or column a declared window is stored in. The numbers
+        # themselves travel in `aging_policy` above, where a screen can read them per carrier.
+        "bucket_basis": ("A date range narrows which devices are INCLUDED; the aging bucket is "
+                         "always computed AS OF TODAY, not the filter range, and its EDGES are "
+                         "each carrier's own declared selling window rather than a single ladder "
+                         "for every carrier. A device with an amount owed but no usable purchase "
+                         "date lands in 'unknown_age', not silently dropped."),
         "filters": {"store": store or None, "market": market or None, "month": month, "year": year,
                     "date_from": date_from or None, "date_to": date_to or None},
     }

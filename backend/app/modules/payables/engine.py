@@ -158,15 +158,13 @@ def _unit_price_map(client, org_id, cfg):
         model_field = str(cfg.get("owed_price_model_field") or cfg.get("model_field") or "").strip()
         names = set()
         if src and model_field:
-            page, rows = 0, []
-            while page <= 80:
-                chunk = (client.schema("commcalc").table(src).select(model_field)
-                         .eq("org_id", org_id)
-                         .range(page * PAGE, page * PAGE + PAGE - 1).execute().data) or []
-                rows.extend({"sku": r.get(model_field)} for r in chunk)
-                if len(chunk) < PAGE:
-                    break
-                page += 1
+            from app.modules.core import feed_read as _feed_read
+            # The paging order is the one home's: an unordered paged read serves some rows twice
+            # and others never, and a model MISSED here is a handset that silently prices nothing
+            # (§19.48 / core/feed_read.py).
+            rows = [{"sku": r.get(model_field)} for r in _feed_read.read_all(
+                lambda: client.schema("commcalc").table(src).select(model_field)
+                .eq("org_id", org_id))]
             names = _cogs.ma_device_product_names(rows)
         # `names or None`: with no evidence the price home falls back to its own order-type
         # allowlist, which is its documented behaviour for a caller that has no commission feed —

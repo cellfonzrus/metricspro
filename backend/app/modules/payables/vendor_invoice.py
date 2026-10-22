@@ -117,25 +117,25 @@ def summarize(entries) -> dict:
             "unnumbered_amount": round(sum(e["amount_due"] for e in unnumbered), 2)}
 
 
-def fetch_feed_rows(client, org_id, date_from="", date_to="", cap=120):
+def fetch_feed_rows(client, org_id, date_from="", date_to=""):
     """The feed's dated charge rows. I/O ONLY — every rule above is applied by the pure functions.
     Never raises: a tenant without the table gets an empty list and the caller says so."""
-    out, page, PAGE = [], 0, 1000
+    from app.modules.core import feed_read as _feed_read
     win = _dw.resolve_window(date_from, date_to, 0) if (date_from or date_to) else None
+
+    def _make():
+        # A FRESH builder per page; the stable paging order is the one home's, because a paged read
+        # with no total order serves some rows twice and others never (§19.48 / core/feed_read.py).
+        q = (client.schema("commcalc").table(VENDOR_FEED_TABLE)
+             .select("merchant_invoice,due_date,retail_cost,order_type,product_name,"
+                     "account_name,tx_date,order_number")
+             .eq("org_id", org_id).not_.is_("due_date", "null"))
+        if win:
+            q = _dw.apply_window(q, "due_date", win)
+        return q
+
     try:
-        while page <= cap:
-            q = (client.schema("commcalc").table(VENDOR_FEED_TABLE)
-                 .select("merchant_invoice,due_date,retail_cost,order_type,product_name,"
-                         "account_name,tx_date,order_number")
-                 .eq("org_id", org_id).not_.is_("due_date", "null"))
-            if win:
-                q = _dw.apply_window(q, "due_date", win)
-            chunk = q.range(page * PAGE, page * PAGE + PAGE - 1).execute().data or []
-            out.extend(chunk)
-            if len(chunk) < PAGE:
-                break
-            page += 1
+        return _feed_read.read_all(_make)
     except Exception as e:
         print(f"WARN vendor_invoice fetch_feed_rows failed: {e}")
         return []
-    return out

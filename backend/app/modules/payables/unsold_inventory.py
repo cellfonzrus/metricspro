@@ -75,8 +75,12 @@ def fetch_unsold_from_ledger(client, org_id, carrier_ids=(), date_from="", date_
     invents an exposure. `date_from`/`date_to` narrow by invoice date through the one window home.
     """
     from app.modules.commcalc import date_window as _dw
-    out, page = [], 0
-    while page <= 80:
+    from app.modules.core import feed_read as _feed_read
+
+    def _make():
+        # A FRESH builder per page (postgrest builders carry their last range), and the paging
+        # order is applied by the one home — an unordered paged read serves some rows twice and
+        # others never (§19.48 / core/feed_read.py).
         q = (client.schema("commcalc").table("device_payable_ledger")
              .select("imei,store,device_model,carrier_id,owed,net_owed,invoice_date,due_date,"
                      "sold_flag,sold_date,status,owed_source,due_source")
@@ -86,30 +90,29 @@ def fetch_unsold_from_ledger(client, org_id, carrier_ids=(), date_from="", date_
         if date_from or date_to:
             q = _dw.apply_window(q, "invoice_date",
                                  _dw.resolve_window(date_from, date_to, 0))
-        chunk = q.range(page * PAGE, page * PAGE + PAGE - 1).execute().data or []
-        for r in chunk:
-            out.append({
-                "esn_imei": r.get("imei"),
-                "store": r.get("store"),
-                "device_model": r.get("device_model"),
-                "carrier_id": r.get("carrier_id"),
-                "category": "On Inventory",        # the vocabulary the report filters on
-                "status": r.get("status"),
-                "acquired_date": r.get("invoice_date"),
-                "due_date": r.get("due_date"),
-                "date_sold": r.get("sold_date"),
-                "owed_to_vip": r.get("owed"),
-                "selling_price": None,
-                "reimbursement": None,
-                # PROVENANCE, carried so the screen can say where each figure came from instead of
-                # implying it came from a consignment ledger this tenant does not have.
-                "_source": SOURCE_LEDGER,
-                "_owed_source": r.get("owed_source"),
-                "_due_source": r.get("due_source"),
-            })
-        if len(chunk) < PAGE:
-            break
-        page += 1
+        return q
+
+    out = []
+    for r in _feed_read.read_all(_make):
+        out.append({
+            "esn_imei": r.get("imei"),
+            "store": r.get("store"),
+            "device_model": r.get("device_model"),
+            "carrier_id": r.get("carrier_id"),
+            "category": "On Inventory",        # the vocabulary the report filters on
+            "status": r.get("status"),
+            "acquired_date": r.get("invoice_date"),
+            "due_date": r.get("due_date"),
+            "date_sold": r.get("sold_date"),
+            "owed_to_vip": r.get("owed"),
+            "selling_price": None,
+            "reimbursement": None,
+            # PROVENANCE, carried so the screen can say where each figure came from instead of
+            # implying it came from a consignment ledger this tenant does not have.
+            "_source": SOURCE_LEDGER,
+            "_owed_source": r.get("owed_source"),
+            "_due_source": r.get("due_source"),
+        })
     return out
 
 
