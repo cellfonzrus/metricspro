@@ -6,6 +6,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
+import { buildForecastMatrix, matrixExportColumns, matrixExportRows, FORECAST_METRICS, type ForecastMetric } from '@/lib/forecast-matrix'
 import type { StoreOpt } from '@/lib/market-store-cascade'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 
@@ -61,6 +62,12 @@ function PayablesPageBody() {
   const [horizon, setHorizon] = useState(7)
   const [fRows, setFRows] = useState<any[]>([])
   const [fMeta, setFMeta] = useState<any>({})
+  // Forecast view: the per-line LIST, or the GRID a purchase order reads off (owner 2026-10-22:
+  // "the forecasting should summarize in grid format to be exported to understand how many phones
+  // are needed of a particular model per store"). Both are the SAME filtered rows — the grid is a
+  // pivot of them (lib/forecast-matrix), never a second fetch, so they can never disagree.
+  const [fView, setFView] = useState<'list' | 'grid'>('grid')
+  const [fMetric, setFMetric] = useState<ForecastMetric>('recommend_order')
   // phone mapping
   const [candidates, setCandidates] = useState<any[]>([])
   const [mappings, setMappings] = useState<any[]>([])
@@ -68,6 +75,7 @@ function PayablesPageBody() {
   // payables
   const [status, setStatus] = useState('')
   const [pRows, setPRows] = useState<any[]>([])
+  const [pMeta, setPMeta] = useState<any>({})
   const [drill, setDrill] = useState<any | null>(null)
   // owed-by-date
   const [oRows, setORows] = useState<any[]>([])
@@ -75,10 +83,16 @@ function PayablesPageBody() {
   const [loading, setLoading] = useState(false)
   const [settings, setSettings] = useState<any>({ priority_ack_enabled: false, priority_window_pct: 25 })
   const [showSettings, setShowSettings] = useState(false)
-  // RULE FIVE — shared standardized store/market filter (pick-don't-type, org-scoped options). Drives the
-  // forecast + payables tabs CLIENT-SIDE (their rows carry `store`). The Daily-Owed tab is a server-side
-  // date-aggregate with no store dimension, so it honors a SINGLE selected store server-side (0 or >1
-  // selected → all stores). org_id is injected by the shared client from the caller's JWT — never hardcoded.
+  // RULE FIVE — the shared filter bar, now carrying the FULL core set for this screen: date RANGE +
+  // market + store (pick-don't-type, org-scoped options). Reps are omitted and that deviation is the
+  // documented kind: a payable is a fact about a device and a vendor, not about who sold it.
+  //
+  // WHO APPLIES WHAT. The date range is applied SERVER-SIDE on all three data tabs (a forecast row is
+  // an aggregate over the window and carries no date for a client filter to read). Store/market are
+  // applied client-side over the loaded rows, matched on the row's canonical `store_key`. The
+  // Daily-Owed tab is a date aggregate with no store dimension, so it honors a SINGLE selected store
+  // server-side (0 or >1 selected → all stores). org_id is injected by the shared client from the
+  // caller's JWT — never hardcoded.
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const owedStore = filt.stores.length === 1 ? filt.stores[0] : ''
 
@@ -99,14 +113,27 @@ function PayablesPageBody() {
   useEffect(() => {
     apiCached(`/api/v1/payables/filter-options`, LOOKUP)
       .then((d: any) => {
-        setRoster((d?.stores || []).map((x: any) => ({ id: x.store, label: x.store, market: x.market || null })))
+        // THE OPTION'S id IS THE CANONICAL STORE KEY, its label the roster's spelling (owner report
+        // 2026-10-22: "the filter for market brings up the forecasting but the filter for store does
+        // not bring up anything"). The market half always worked because every row is STAMPED with a
+        // resolved market; the store half compared the option's spelling against the row's own, and
+        // the feeds spell a store differently from the roster — measured live that day, 13 of 33
+        // asset_ledger spellings and 15 of 37 ledger spellings matched NO option, so picking those
+        // stores returned nothing. Both sides now carry `store_key` (account.store_identity, §64)
+        // and the comparison is made on that, so a spelling difference can no longer hide rows.
+        setRoster((d?.stores || []).map((x: any) => ({ id: x.store_key || x.store, label: x.store, market: x.market || null })))
         setRosterMarkets((d?.markets || []).map((m: any) => String(m)).filter(Boolean))
       })
       .catch(() => { setRoster([]); setRosterMarkets([]) })
   }, [])
-  useEffect(() => { if (tab === 'forecast') loadForecast() }, [tab, lookback, horizon])
-  useEffect(() => { if (tab === 'payables') loadPayables() }, [tab, status])
-  useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, owedStore])
+  // The DATE RANGE is applied SERVER-SIDE on all three data tabs, not client-side over loaded rows.
+  // It has to be: a forecast row is an AGGREGATE over the sales window and carries no date of its
+  // own, so there is nothing on it for a client-side date filter to read — the window must reach the
+  // query that builds it. Payables/Daily Owed window on `due_date` for the same consistency, which
+  // also means `limit` counts rows inside the range instead of rows before it.
+  useEffect(() => { if (tab === 'forecast') loadForecast() }, [tab, lookback, horizon, filt.period, filt.periodTo])
+  useEffect(() => { if (tab === 'payables') loadPayables() }, [tab, status, filt.period, filt.periodTo])
+  useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, owedStore, filt.period, filt.periodTo])
   useEffect(() => { if (tab === 'map') loadMap() }, [tab])
 
   async function rebuild() {
@@ -126,6 +153,8 @@ function PayablesPageBody() {
     setLoading(true)
     try {
       const qs = new URLSearchParams({ lookback: String(lookback), horizon: String(horizon) })
+      if (filt.period) qs.set('start', filt.period)      // the shared bar's date RANGE — the sales window
+      if (filt.periodTo) qs.set('end', filt.periodTo)
       const d = await api(`/api/v1/payables/forecast?${qs}`); setFRows(d.rows || []); setFMeta(d)
     } catch (e) { console.error(e) }
     setLoading(false)
@@ -155,7 +184,9 @@ function PayablesPageBody() {
     try {
       const qs = new URLSearchParams()
       if (status) qs.set('status', status)
-      const d = await api(`/api/v1/payables/payables${qs.toString() ? `?${qs}` : ''}`); setPRows(d.rows || [])
+      if (filt.period) qs.set('start', filt.period)      // windows on due_date
+      if (filt.periodTo) qs.set('end', filt.periodTo)
+      const d = await api(`/api/v1/payables/payables${qs.toString() ? `?${qs}` : ''}`); setPRows(d.rows || []); setPMeta(d || {})
     } catch (e) { console.error(e) }
     setLoading(false)
   }
@@ -164,6 +195,8 @@ function PayablesPageBody() {
     try {
       const qs = new URLSearchParams()
       if (owedStore) qs.set('store', owedStore)   // date-aggregate has no store dim → single-store server filter
+      if (filt.period) qs.set('start', filt.period)
+      if (filt.periodTo) qs.set('end', filt.periodTo)
       const d = await api(`/api/v1/payables/owed-by-date${qs.toString() ? `?${qs}` : ''}`); setORows(d.rows || []); setOMeta(d || {})
     } catch (e) { console.error(e) }
     setLoading(false)
@@ -180,8 +213,21 @@ function PayablesPageBody() {
 
   // Pick-don't-type filter options from the ALREADY-org-scoped rows the page loaded (forecast ∪ payables
   // carry `store`; `market` shows only if the ledger has it → the market picker self-hides when absent).
-  const facc = { store: (r: any) => r.store, market: (r: any) => r.market }
+  // The store a selection BINDS to is the row's canonical key, never the feed's spelling (see the
+  // roster comment above). `store` stays the display value everywhere it is printed.
+  const facc = { store: (r: any) => r.store_key || r.store, market: (r: any) => r.market }
   const filterOpts = useMemo(() => optionsFromRows([...fRows, ...pRows], facc), [fRows, pRows])   // eslint-disable-line react-hooks/exhaustive-deps
+  // key -> the spelling to SHOW for it, first seen in the loaded rows. A store present in the data
+  // but missing from the roster must stay selectable, and it must read as its own name.
+  const rowStoreLabels = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const r of [...fRows, ...pRows]) {
+      const k = String(r.store_key || r.store || '').trim()
+      const lbl = String(r.store || '').trim()
+      if (k && lbl && !m.has(k)) m.set(k, lbl)
+    }
+    return m
+  }, [fRows, pRows])
   // Cascade options = the org roster (which carries the markets) UNION any store present in the loaded
   // rows but missing from the roster — a store that genuinely has payables must never become unselectable
   // just because it isn't on the roster yet.
@@ -190,10 +236,10 @@ function PayablesPageBody() {
     roster.forEach(r => seen.set(r.id.trim().toLowerCase(), r))
     filterOpts.stores.forEach(st => {
       const k = st.trim().toLowerCase()
-      if (!seen.has(k)) seen.set(k, { id: st, label: st, market: null })
+      if (!seen.has(k)) seen.set(k, { id: st, label: rowStoreLabels.get(st) || st, market: null })
     })
     return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label))
-  }, [roster, filterOpts.stores])
+  }, [roster, filterOpts.stores, rowStoreLabels])
 
   const fRowsF = useMemo(() => filterRows(fRows, filt, facc), [fRows, filt])   // eslint-disable-line react-hooks/exhaustive-deps
   const pRowsF = useMemo(() => filterRows(pRows, filt, facc), [pRows, filt])   // eslint-disable-line react-hooks/exhaustive-deps
@@ -202,6 +248,12 @@ function PayablesPageBody() {
   // on Payables doesn't follow you to Forecast, where it has no meaning.
   const getCell = useCallback((r: any, field: string) => r?.[field], [])
   const fSort = useTableSort(fRowsF, getCell)
+  // THE GRID a purchase order reads off: stores down the side, models across the top, built from the
+  // SAME filtered rows the list shows (lib/forecast-matrix - a pivot, never a second derivation).
+  const fMatrix = useMemo(() => buildForecastMatrix(fRowsF, fMetric), [fRowsF, fMetric])
+  const fGridRows = useMemo(() => matrixExportRows(fMatrix), [fMatrix])
+  const fGridCols = useMemo(() => matrixExportColumns(fMatrix) as ExportColumn[], [fMatrix])
+  const fMetricLabel = FORECAST_METRICS.find(x => x.id === fMetric)?.label || 'Units'
   const pSort = useTableSort(pRowsF, getCell)
   const oSort = useTableSort(oRows, getCell)
 
@@ -211,6 +263,12 @@ function PayablesPageBody() {
   // RULE FOUR export — reflects the ACTIVE tab (what-you-see-is-what-exports). The Phone-Mapping tab is a
   // config surface (mapping input), so it is exempt (no export bar there).
   const exportSpec = (): { title: string; filename: string; columns: ExportColumn[]; rows: any[] } | null => {
+    // THE GRID IS WHAT EXPORTS WHEN THE GRID IS WHAT YOU SEE (RULE FOUR). Same pivot, same cells -
+    // the spreadsheet a buyer opens is the screen they were reading, one column per model.
+    if (tab === 'forecast' && fView === 'grid') return {
+      title: `Device Forecast — ${fMetricLabel} by store × model`,
+      filename: `device_forecast_grid_${fMetric}`, rows: fGridRows, columns: fGridCols,
+    }
     if (tab === 'forecast') return {
       title: 'Device Forecast', filename: 'device_forecast', rows: fRowsF,
       columns: [
@@ -294,8 +352,28 @@ function PayablesPageBody() {
         ))}
         {tab === 'forecast' && (
           <>
+            {/* LIST or GRID (owner 2026-10-22). The grid is the orderable shape: one row per store,
+                one column per model, every cell a unit count you can put on a purchase order. */}
+            <div style={{ display: 'flex', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)' }}>
+              {(['grid', 'list'] as const).map(v => (
+                <button key={v} onClick={() => setFView(v)}
+                  style={{ padding: '7px 12px', border: 'none', fontSize: 13, cursor: 'pointer',
+                    background: fView === v ? 'var(--accent, #2563eb)' : 'var(--surface)',
+                    color: fView === v ? '#fff' : 'var(--text)', fontWeight: fView === v ? 600 : 400 }}>
+                  {v === 'grid' ? 'Grid' : 'List'}
+                </button>
+              ))}
+            </div>
+            {fView === 'grid' && (
+              <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                Show: <select value={fMetric} onChange={e => setFMetric(e.target.value as ForecastMetric)} style={sel}>
+                  {FORECAST_METRICS.map(x => <option key={x.id} value={x.id} title={x.tip}>{x.label}</option>)}
+                </select>
+              </label>
+            )}
             <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-              Look-back (days): <input type="number" min={1} max={365} value={lookback} onChange={e => setLookback(+e.target.value || 7)} style={{ ...sel, width: 64 }} />
+              Look-back (days): <input type="number" min={1} max={365} value={lookback} onChange={e => setLookback(+e.target.value || 7)} style={{ ...sel, width: 64 }}
+                disabled={!!(filt.period || filt.periodTo)} title={(filt.period || filt.periodTo) ? 'A date range is picked, so the window is that range' : ''} />
             </label>
             <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
               Order for next (days): <input type="number" min={1} max={365} value={horizon} onChange={e => setHorizon(+e.target.value || 7)} style={{ ...sel, width: 64 }} />
@@ -328,10 +406,10 @@ function PayablesPageBody() {
           marketOptions rides the same endpoint's canonical org_market_options list (∪ row stamps)
           for the non-cascade fallback; in cascade mode the roster's per-store market stamps —
           resolved server-side through the same canonical union resolver — drive the picker. */}
-      {tab !== 'map' && (cascade.length > 0 || rosterMarkets.length > 0 || filterOpts.stores.length > 0 || filterOpts.markets.length > 0) && (
-        <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false, reps: false }}
+      {tab !== 'map' && (
+        <StandardFilterBar value={filt} onChange={setFilt} show={{ reps: false }} periodMode="range"
           cascadeStores={cascade}
-          storeOptions={filterOpts.stores}
+          storeOptions={cascade.map(c => ({ id: c.id, label: c.label }))}
           marketOptions={[...new Set([...rosterMarkets, ...filterOpts.markets])].sort()} />
       )}
 
@@ -340,10 +418,87 @@ function PayablesPageBody() {
       {tab === 'forecast' && !loading && (
         <>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
-            Velocity from the last {fMeta.lookback ?? lookback} days → order for the next {fMeta.horizon ?? horizon} days, per carrier.
+            {/* THE WINDOW IS NAMED, never implied. `window` comes back from the endpoint (the one
+                home resolved it), so the screen states the days it actually measured rather than
+                echoing whichever control you last touched. */}
+            {fMeta.window?.basis === 'explicit_range'
+              ? <>Velocity over <b>{fMeta.window.start || '…'} to {fMeta.window.end || '…'}</b> ({fMeta.window.days} day{fMeta.window.days === 1 ? '' : 's'})</>
+              : <>Velocity from the last {fMeta.window?.days ?? fMeta.lookback ?? lookback} days</>}
+            {' → '}order for the next {fMeta.horizon ?? horizon} days, per carrier.
             {(fMeta.unmapped ?? 0) > 0 && <> · <button onClick={() => setTab('map')} style={{ background: 'none', border: 'none', color: 'var(--c-fg-d97706)', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' }}>{fMeta.unmapped} unmapped model(s)</button> — map them so sales &amp; stock line up.</>}
             {(fMeta.unassigned_store ?? 0) > 0 && <> · <b>{fMeta.unassigned_store}</b> row(s) with no store — a Total/marketplace order is placed against the dealer account, so its store is resolved from the POS line that sold the device; these could not be resolved.</>}
           </div>
+          {/* ── THE GRID (owner 2026-10-22) — stores down the side, models across the top ────────
+              Every cell is the chosen figure for that store and that model; a store with none of a
+              model shows a dash rather than a 0, so what you must actually buy stands out. Carrier
+              is folded away here on purpose: a model belongs to one carrier, and the buyer's
+              question is "how many of this phone, for this store". The per-carrier line is one
+              click away on List, and the grid respects every filter above it. */}
+          {fView === 'grid' && (
+            fMatrix.stores.length === 0 ? (
+              <div className="card" style={{ padding: 20, fontSize: 13, color: 'var(--text2)', maxWidth: 820 }}>
+                No device sales landed in this window, so there is nothing to project. Widen the date
+                range (or the look-back), or check that the sales feed has reached these days.
+              </div>
+            ) : (
+              <>
+                {fMatrix.empty && (
+                  <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
+                    Every cell is zero — on current velocity, stock on hand covers the next
+                    {' '}{fMeta.horizon ?? horizon} days. That is an answer, not an empty grid.
+                  </div>
+                )}
+                <div style={{ overflowX: 'auto', marginBottom: 8 }}>
+                  <table style={{ borderCollapse: 'collapse', minWidth: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...th, position: 'sticky', left: 0, background: 'var(--surface)', minWidth: 190 }}>Store</th>
+                        {fMatrix.models.map(mo => (
+                          <th key={mo} style={{ ...th, textAlign: 'right', whiteSpace: 'nowrap' }} title={mo}>{mo}</th>
+                        ))}
+                        <th style={{ ...th, textAlign: 'right', fontWeight: 700 }}>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fMatrix.stores.map(st => (
+                        <tr key={st.key}>
+                          <td style={{ ...td, position: 'sticky', left: 0, background: 'var(--surface)', fontWeight: 500 }}>
+                            {st.label}
+                          </td>
+                          {fMatrix.models.map(mo => {
+                            const v = fMatrix.cell(st.key, mo)
+                            return (
+                              <td key={mo} style={{ ...td, textAlign: 'right',
+                                fontWeight: v > 0 && fMetric === 'recommend_order' ? 700 : 400,
+                                color: v > 0 && fMetric === 'recommend_order' ? 'var(--c-fg-d97706)' : v === 0 ? 'var(--muted)' : 'inherit' }}>
+                                {v === 0 ? '—' : v}
+                              </td>
+                            )
+                          })}
+                          <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>{fMatrix.storeTotal(st.key)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td style={{ ...td, position: 'sticky', left: 0, background: 'var(--surface)', fontWeight: 800 }}>TOTAL</td>
+                        {fMatrix.models.map(mo => (
+                          <td key={mo} style={{ ...td, textAlign: 'right', fontWeight: 800 }}>{fMatrix.modelTotal(mo)}</td>
+                        ))}
+                        <td style={{ ...td, textAlign: 'right', fontWeight: 800 }}>{fMatrix.grandTotal}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                  {fMetricLabel} · {fMatrix.stores.length} store{fMatrix.stores.length === 1 ? '' : 's'} ×
+                  {' '}{fMatrix.models.length} model{fMatrix.models.length === 1 ? '' : 's'}. Export carries
+                  every column, including the ones scrolled off to the right.
+                </div>
+              </>
+            )
+          )}
+          {fView === 'list' && (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>
               <SortableTh field="carrier" sort={fSort.sort} onSort={fSort.toggle} style={th}>Carrier</SortableTh>
@@ -360,6 +515,7 @@ function PayablesPageBody() {
                 <td style={{ ...td, fontWeight: r.recommend_order > 0 ? 700 : 400, color: r.recommend_order > 0 ? 'var(--c-fg-d97706)' : 'inherit' }}>{r.recommend_order}</td></tr>
             ))}</tbody>
           </table>
+          )}
         </>
       )}
 
@@ -376,6 +532,14 @@ function PayablesPageBody() {
           {' · '}<b>Open</b> = inside the window, nothing to do yet.
           {' · '}An <b>Owed</b> of “—” means no invoice has priced this device — a discrepancy at $0 is a
           <i> missing rebate on an unpriced device</i>, not a $0 loss.
+          {/* A DATE RANGE WINDOWS `due_date`, AND AN UNDATED ROW FALLS OUT OF EVERY RANGE. That is
+              the right way to fail (guessing a date would invent one) but it is invisible, so it is
+              SAID: these rows are the unpriced devices above, which have no invoice and therefore no
+              due date. Without this line their absence reads as "nothing is owed in this range". */}
+          {(pMeta.undated_excluded ?? 0) > 0 && (
+            <><br /><b style={{ color: 'var(--c-fg-d97706)' }}>{pMeta.undated_excluded}</b> row(s) carry
+            {' '}<b>no due date</b> and are therefore outside the date range you picked — clear the range to see them.</>
+          )}
         </div>
       )}
       {tab === 'payables' && !loading && (

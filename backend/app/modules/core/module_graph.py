@@ -739,6 +739,13 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/vidapay_sweep.py': ('_sid_fold',),
             'app/modules/storeops/clockin_evidence.py': ('_sid_fold',),
             'app/modules/storeops/clock_variance.py': ('_sid_fold',),
+            # §15 (2026-10-22) — THE STORE FILTER on Device Forecasting & Vendor Payables. Its store
+            # picker compared the roster's spelling against each row's own, so every store the feeds
+            # spell differently returned an empty report while the MARKET filter (which was already
+            # resolved) worked — measured live: 13 of 33 asset_ledger spellings and 15 of 37 ledger
+            # spellings matched no option at all. Rows and options are now both STAMPED with this
+            # home's key, and the comparison is made on that.
+            'app/modules/payables/router.py': ('_sid',),
         },
     },
     'carrier_dollar_component': {

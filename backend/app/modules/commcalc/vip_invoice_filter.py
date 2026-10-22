@@ -27,6 +27,7 @@ UNRESOLVED SPELLINGS ARE REPORTED, NOT HIDDEN. A distributor spelling the vocabu
 be an invented number. `summarize` therefore counts those rows and the screen says so, so a
 missing store reads as a mapping row to add rather than as money that is not there.
 """
+from app.modules.commcalc import date_window
 from app.modules.commcalc.calculator import safe_float
 
 # The invoice money buckets that make up "fees". One list, read by the totals, the fees-by-type
@@ -42,31 +43,23 @@ SUMMARY_COLS = ("location,created_on,sub_total,shipping,discount,other_cost,"
 
 
 def _day(v) -> str:
-    """A row timestamp reduced to its YYYY-MM-DD day, '' when there is none. `created_on` is a
-    timestamptz ('2026-06-03T08:49:34+00:00'), and a date-range filter is stated in days, so the
-    comparison is made on days — never on a timestamp against a bare date, which silently drops
-    everything booked after midnight on the `to` day."""
-    s = str(v or "").strip()
-    return s[:10] if len(s) >= 10 else ""
+    """A row timestamp reduced to its YYYY-MM-DD day, '' when there is none. DEREFERENCED from the
+    one day-window home (`commcalc/date_window.py`) rather than kept here: a date-range filter is
+    stated in days, and the comparison must never be made on a timestamp against a bare date, which
+    silently drops everything booked after midnight on the `to` day."""
+    return date_window.day(v)
 
 
 def in_date_window(row, date_from: str = "", date_to: str = "", field: str = "created_on") -> bool:
     """PURE: is this invoice inside the [date_from, date_to] window, both ends INCLUSIVE?
 
-    An empty end is open. A row with NO date is excluded once a window is set (the same
-    fail-closed convention `standard-filters.ts periodOk` uses on the client, so the screen and the
-    server agree about a dateless row instead of each dropping a different set)."""
-    f, t = _day(date_from), _day(date_to)
-    if not f and not t:
-        return True
-    d = _day(row.get(field) if hasattr(row, "get") else None)
-    if not d:
-        return False
-    if f and d < f:
-        return False
-    if t and d > t:
-        return False
-    return True
+    THE RULE IS NOT WRITTEN HERE. It is `date_window.row_in_window` — the ONE home for "which days
+    is this surface measuring", read identically by the Device Forecasting / Vendor Payables
+    endpoints (§15 module 095). An empty end is open; a row with NO date is excluded once a window
+    is set (the same fail-closed convention `standard-filters.ts periodOk` uses on the client, so
+    the screen and the server agree about a dateless row instead of each dropping a different set).
+    """
+    return date_window.row_in_window(row, date_from, date_to, field)
 
 
 def select(rows, *, store_matcher=None, date_from: str = "", date_to: str = "",

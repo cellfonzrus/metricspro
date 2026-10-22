@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
 from app.modules.asset.router import _norm_imei, _vip_invoice_map, _epay_payments_map
+from app.modules.commcalc import date_window
 from app.modules.payables import engine
 
 router = APIRouter()
@@ -84,6 +85,51 @@ def _market_by_store(client, org_id):
         return lambda s: ""
 
 
+# ── STORE IDENTITY (owner report 2026-10-22: "the filter for market brings up the forecasting but
+#    the filter for store does not bring up anything") ─────────────────────────────────────────────
+#
+# SAME CLASS AS THE MARKET DEFECT ABOVE, AND THE REASON ONLY THE STORE HALF WAS STILL BROKEN. The
+# market half is RESOLVED: every row gets `market = _market_of(resolver, row.store)`, and that
+# resolver accepts any spelling, so picking a market matches rows whatever they call the store. The
+# store half was compared as a STRING — the picker's label against `row.store` — so it only ever
+# matched the stores whose rows happen to spell themselves the way the roster does.
+#
+# §13e (2026-10-02) made that failure the normal case rather than the exception: `fold_store_spellings`
+# collapses the dropdown to ONE option per physical store, which means for every store spelled two
+# ways the surviving option is, by construction, not the spelling the other half of the rows carry.
+#
+# THE FIX IS THE CLASS, not the store: a store SELECTION binds through the canonical store identity,
+# exactly as the market selection already does. Both the rows and the options are stamped with
+# `store_key` — `account.store_identity.store_key` over `coa.store_resolver`, THE one home for
+# "which store is this string" (§64) — and the comparison is made on that key. Nothing here states a
+# spelling rule of its own, so a new alias row teaches this filter and the P&L in the same instant.
+def _store_key_resolver(client, org_id):
+    """`resolve(raw) -> canonical store spelling` — I/O dereferenced from `coa.store_resolver`, whose
+    chain is `store_identity.build_store_resolver` (§64). Degrades to a no-op: an unresolvable store
+    keys on its own stripped spelling, so it groups with itself and stays SELECTABLE, never dropped."""
+    try:
+        from app.modules.account import coa as _coa
+        return _coa.store_resolver(client, org_id)
+    except Exception as e:
+        print(f"WARN payables _store_key_resolver failed (store filter falls back to raw spelling): {e}")
+        return None
+
+
+def _store_key(resolve, store) -> str:
+    """The canonical key a store option and a store row are compared ON. One home, read."""
+    from app.modules.account import store_identity as _sid
+    return _sid.store_key(resolve, store)
+
+
+def _store_selected(resolve, wanted: str):
+    """A predicate for an explicit `?store=` parameter, honoured through the SAME identity as the
+    client-side filter. Returns None when nothing was asked for, so a caller can skip the work."""
+    if not (wanted or "").strip():
+        return None
+    want = _store_key(resolve, wanted)
+    return lambda st: _store_key(resolve, st) == want
+
+
 def _market_of(mmap, store):
     if not store:
         return None
@@ -120,18 +166,34 @@ def rebuild(carrier_id: str = "", org_id: str = ORG_ID):
 
 # ── Part A — forecast (phones only) ───────────────────────────────────────────
 @router.get("/forecast")
-def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = "", carrier: str = "", org_id: str = ORG_ID):
-    """Phones-only ordering forecast, SEPARATE PER CARRIER. Velocity = units sold in the last `lookback`
-    days; projected demand = velocity × the next `horizon` days; recommend_order = max(0, projected −
-    on_hand). Both windows are user-defined. Carrier + canonical model come from the PHONE MAPPING table
-    (commcalc.device_model_alias, mig 096); an unmapped model falls back to its source carrier + raw name
-    and is flagged so it can be curated (the onboarding to-do). Sales sources: raw_sales (Boost) +
-    raw_ma_commission (Total). On-hand: asset_ledger unsold (Boost consignment)."""
+def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = "", carrier: str = "",
+             start: str = "", end: str = "", org_id: str = ORG_ID):
+    """Phones-only ordering forecast, SEPARATE PER CARRIER. Velocity = units sold inside the SALES
+    WINDOW; projected demand = velocity × the next `horizon` days; recommend_order = max(0, projected −
+    on_hand). Carrier + canonical model come from the PHONE MAPPING table (commcalc.device_model_alias,
+    mig 096); an unmapped model falls back to its source carrier + raw name and is flagged so it can be
+    curated (the onboarding to-do). Sales sources: raw_sales (Boost) + raw_ma_commission (Total).
+    On-hand: asset_ledger unsold (Boost consignment) — a SNAPSHOT, deliberately not windowed.
+
+    THE SALES WINDOW IS ONE FACT WITH TWO FRONT ENDS (`commcalc/date_window.resolve_window`, the one
+    home): `start`/`end` give it explicitly — which is what the shared filter bar's date RANGE sends —
+    and `lookback` states the same window as a number of days back from today. Whichever answered,
+    velocity is divided by the window's OWN inclusive day count, so the two can never disagree, and
+    `window` in the response names which basis was used. On-hand is not windowed: stock on the shelf
+    today is not a fact about a past date range.
+    """
     client = sb()
     if days:                                     # back-compat: a single `days` sets both windows
         lookback = horizon = days
-    lookback = max(1, min(lookback, 365))
-    horizon = max(1, min(horizon, 365))
+    horizon = date_window.clamp_days(horizon)
+    win = date_window.resolve_window(start, end, lookback)
+    lookback = win["days"]                       # the divisor is the WINDOW's day count, never a second number
+    # An explicit ?store= is honoured through the canonical store IDENTITY, not a string equality —
+    # `raw_sales.store` / `asset_ledger.store` / the roster each spell a store their own way, and a
+    # server-side .eq() on one of those spellings is the defect the store filter had (see
+    # _store_key_resolver). The scan is therefore unfiltered and the predicate decides.
+    skey = _store_key_resolver(client, org_id)
+    want_store = _store_selected(skey, store)
     pmap = engine.load_phone_map(client, org_id)
     carriers = client.schema("commcalc").table("carrier").select("id,name,code").eq("org_id", org_id).execute().data or []
     cby = {c["id"]: c.get("name") for c in carriers}
@@ -143,7 +205,9 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
         return None, sub.capitalize()
     boost_id, boost_name = _find("boost")
     total_id, total_name = _find("total")
-    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=lookback)).isoformat()
+    # Sales-side bounds come from the resolved window, applied through the same helper every other
+    # windowed surface uses, so "inclusive at both ends" is stated once (date_window.apply_window).
+    _sales_window = date_window.apply_window
 
     agg = {}   # (carrier, store, canonical) -> row
 
@@ -161,8 +225,8 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
     def sq():
         q = (client.schema("commcalc").table("raw_sales")
              .select("store,product_desc,department,category,voided,trans_type,salesperson")
-             .eq("org_id", org_id).gte("trans_date", cutoff))
-        return q.eq("store", store) if store else q
+             .eq("org_id", org_id))
+        return _sales_window(q, "trans_date", win)
     for r in _fetch_all(sq):
         if (r.get("voided") or "").upper() == "YES" or (r.get("trans_type") or "") == "Return":
             continue
@@ -170,6 +234,8 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
             continue
         sp = (r.get("salesperson") or "").strip().lower()
         if not sp or sp == "admin":
+            continue
+        if want_store and not want_store(r.get("store")):
             continue
         _bucket(r.get("product_desc"), boost_id, boost_name, r.get("store"))["units"] += 1
 
@@ -181,8 +247,8 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
     # renders as "(unassigned)" rather than being attached to a store it wasn't ordered for.
     ma_store = {}
     try:
-        for r in _fetch_all(lambda: client.schema("commcalc").table("raw_sales")
-                            .select("serial_1,store").eq("org_id", org_id).gte("trans_date", cutoff)):
+        for r in _fetch_all(lambda: _sales_window(client.schema("commcalc").table("raw_sales")
+                            .select("serial_1,store").eq("org_id", org_id), "trans_date", win)):
             sn = str(r.get("serial_1") or "").strip()
             st = str(r.get("store") or "").strip()
             if sn and st:
@@ -193,8 +259,8 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
         # merchant_account_id feeds the mig-314 account→store fallback; a live DB whose
         # raw_ma_commission predates that column still forecasts (defensive two-step select).
         def _maq(cols):
-            return lambda: (client.schema("commcalc").table("raw_ma_commission")
-                            .select(cols).eq("org_id", org_id).gte("tx_date", cutoff))
+            return lambda: _sales_window(client.schema("commcalc").table("raw_ma_commission")
+                                         .select(cols).eq("org_id", org_id), "tx_date", win)
         try:
             ma_rows = _fetch_all(_maq("sku,imei,tx_date,merchant_account_id"))
         except Exception:
@@ -215,7 +281,7 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
             raw_imei = str(r.get("imei") or "").strip()
             st = (ma_store.get(raw_imei)      # POS sale line still wins when it exists
                   or ma_resolve(_norm_imei(raw_imei), r.get("merchant_account_id")))
-            if store and st != store:      # honor an explicit ?store= the same way the Boost leg does
+            if want_store and not want_store(st):   # same identity as the Boost leg, not a string eq
                 continue
             _bucket(r.get("sku"), total_id, total_name, st)["units"] += 1
     except Exception:
@@ -225,9 +291,11 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
     def oq():
         q = (client.schema("commcalc").table("asset_ledger")
              .select("store,device_model,date_sold,category").eq("org_id", org_id))
-        return q.eq("store", store) if store else q
+        return q
     for r in _fetch_all(oq):
         if r.get("date_sold") or "on inventory" not in (r.get("category") or "").lower():
+            continue
+        if want_store and not want_store(r.get("store")):
             continue
         _bucket(r.get("device_model"), boost_id, boost_name, r.get("store"))["on_hand"] += 1
 
@@ -241,11 +309,18 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
         e["projected_demand"] = int(round(rate * horizon))
         e["recommend_order"] = max(0, e["projected_demand"] - e["on_hand"])
         e["market"] = _market_of(mmap, e.get("store"))
+        # THE KEY THE STORE FILTER COMPARES ON (owner report 2026-10-22). The row keeps its own
+        # spelling for display; `store_key` is what a picked option is matched against, so a store
+        # the feeds spell differently from the roster is selectable at last.
+        e["store_key"] = _store_key(skey, e.get("store"))
         out.append(e)
     if carrier:
         out = [r for r in out if (r["carrier"] or "").lower() == carrier.lower()]
     out.sort(key=lambda x: (x["recommend_order"], x["units"]), reverse=True)
     return {"lookback": lookback, "horizon": horizon, "store": store or None,
+            # The window that was actually measured, named (start/end/days/basis) so the screen can
+            # SAY "velocity over 1-31 Oct" instead of implying a range it was never given.
+            "window": win,
             "carriers": sorted({r["carrier"] for r in out if r["carrier"]}),
             "unmapped": sum(1 for r in out if not r["mapped"]),
             # How many rows still have no store, so the page can SAY "n rows unassigned" instead of
@@ -256,16 +331,37 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
 
 # ── Part B — payables + offsets + due ─────────────────────────────────────────
 @router.get("/payables")
-def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit: int = 500, org_id: str = ORG_ID):
+def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit: int = 500,
+                  start: str = "", end: str = "", org_id: str = ORG_ID):
+    """The per-IMEI ledger, optionally narrowed to a DUE-DATE window (`start`/`end`, both ends
+    inclusive — the shared filter bar's date range) and to one store.
+
+    THE WINDOW IS DEREFERENCED, not written here (`commcalc/date_window`, the one home), so this
+    screen's range means exactly what the Distributor Invoices range and the Daily Owed range mean.
+    A ledger row with NO due date is fail-closed out of every window — which is correct and would be
+    invisible, so `undated_excluded` REPORTS how many rows the window could not judge rather than
+    letting a reader take their absence for "nothing is owed".
+
+    A store is matched through the canonical store identity (see `_store_key_resolver`), never by
+    string equality: the scan is therefore unfiltered on store and truncated AFTER the predicate, so
+    `limit` still means "this many rows I can see" rather than "this many before filtering".
+    """
     client = sb()
+    win = date_window.resolve_window(start, end, 0) if (start or end) else None
+    skey = _store_key_resolver(client, org_id)
+    want_store = _store_selected(skey, store)
     q = (client.schema("commcalc").table("device_payable_ledger").select("*").eq("org_id", org_id))
     if carrier_id:
         q = q.eq("carrier_id", carrier_id)
-    if store:
-        q = q.eq("store", store)
     if status:
         q = q.eq("status", status)
-    rows = q.order("net_owed", desc=True).limit(limit).execute().data or []
+    if win:
+        q = date_window.apply_window(q, "due_date", win)
+    scan = max(limit, 5000) if want_store else limit
+    rows = q.order("net_owed", desc=True).limit(scan).execute().data or []
+    undated = date_window.undated(rows, "due_date") if win else 0
+    if want_store:
+        rows = [r for r in rows if want_store(r.get("store"))][:limit]
     # 2026-09-04: fill BLANK stores through the canonical Total/MA attribution (inventory snapshot →
     # mig-314 account index; see engine.ma_store_resolution) at READ time, so the page heals before
     # the next rebuild persists it (measured: 0 of 1,192 luxelink ledger rows carried a store once
@@ -285,7 +381,11 @@ def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit
         v = vip.get(_norm_imei(r.get("imei")))
         r["vip_invoice_number"] = v["vip_invoice_number"] if v else None
         r["market"] = _market_of(mmap, r.get("store"))   # RULE FIVE — see _market_by_store
+        r["store_key"] = _store_key(skey, r.get("store"))   # the key the store filter compares on
     return {"rows": rows, "total": len(rows),
+            "window": win,
+            # Fail-closed rows the window could not judge, SAID OUT LOUD (see the docstring).
+            "undated_excluded": undated,
             "unassigned_store": sum(1 for r in rows if not (r.get("store") or "").strip())}
 
 
@@ -349,6 +449,13 @@ def payables_filter_options(org_id: str = ORG_ID):
     if not stores and not market_list:
         return {"stores": [], "markets": [], "source": "unavailable"}
     stores.sort(key=lambda s: s["store"])
+    # EVERY OPTION CARRIES THE KEY THE ROWS ARE COMPARED ON (owner report 2026-10-22). The label
+    # stays the roster's spelling — that is what a human recognises — but what a selection BINDS is
+    # the canonical identity, so the §13e fold (one option per physical store) can no longer leave
+    # the surviving option unable to match the other spelling's rows.
+    _skey = _store_key_resolver(client, org_id)
+    for _s in stores:
+        _s["store_key"] = _store_key(_skey, _s["store"])
     # ONE OPTION PER PHYSICAL STORE (owner 2026-10-02). The dedupe above is EXACT-STRING, so one
     # store spelled two ways across the two vocabularies was still offered twice (measured live
     # that day: 32 options for 31 stores — "1 S 60th street" and "1 S 60th St, Philadelphia").
@@ -407,11 +514,16 @@ def due(as_of: str = "", store: str = "", carrier_id: str = "", org_id: str = OR
          .eq("org_id", org_id).eq("billing_friday", as_of))
     if carrier_id:
         q = q.eq("carrier_id", carrier_id)
-    if store:
-        q = q.eq("store", store)
+    # SIBLING OF THE SAME DEFECT (2026-10-22). This endpoint narrowed by store with a string equality
+    # too, so a store the feeds spell differently from the roster returned an empty DUE report. Same
+    # identity, same one home — fixed here in the same change rather than left for the next report to
+    # rediscover.
+    want_store = _store_selected(_store_key_resolver(client, org_id), store)
     rows = q.limit(20000).execute().data or []
     agg = {"aging": {"count": 0, "owed": 0.0}, "billed": {"count": 0, "owed": 0.0}}
     for r in rows:
+        if want_store and not want_store(r.get("store")):
+            continue
         b = "aging" if r.get("bill_path") == "aging" else "billed"
         agg[b]["count"] += 1
         agg[b]["owed"] += float(r.get("owed") or 0)
@@ -426,7 +538,7 @@ def due(as_of: str = "", store: str = "", carrier_id: str = "", org_id: str = OR
 _VENDOR_FEED_TABLE = "raw_ma_daily_tx"
 
 
-def _owed_from_vendor_feed(client, org_id, start, end):
+def _owed_from_vendor_feed(client, org_id, win):
     """Daily owed straight from the PROCESSOR'S OWN feed — `raw_ma_daily_tx.due_date`.
 
     OWNER 2026-08-10: "if we have the actual due date build that and ship it."  We do. This is the
@@ -453,10 +565,10 @@ def _owed_from_vendor_feed(client, org_id, start, end):
             q = (client.schema("commcalc").table(_VENDOR_FEED_TABLE)
                  .select("due_date,retail_cost,account_name")
                  .eq("org_id", org_id).not_.is_("due_date", "null"))
-            if start:
-                q = q.gte("due_date", start)
-            if end:
-                q = q.lte("due_date", end)
+            # The SAME window home the ledger path reads (2026-10-22) — this fallback used to carry
+            # its own gte/lte pair, which is how one screen ends up with two meanings of "inclusive".
+            if win:
+                q = date_window.apply_window(q, "due_date", win)
             chunk = q.range(start_at, start_at + page - 1).execute().data or []
             for r in chunk:
                 amt = r.get("retail_cost")
@@ -496,17 +608,20 @@ def owed_by_date(start: str = "", end: str = "", store: str = "", org_id: str = 
         carries no amounts at all (every Total/MA tenant). Per ORDER LINE, not per device.
     """
     client = sb()
+    # The window is the SAME one home every other surface here reads, so "both ends inclusive" is
+    # stated once (date_window) instead of three times as a gte/lte pair.
+    win = date_window.resolve_window(start, end, 0) if (start or end) else None
+    skey = _store_key_resolver(client, org_id)
+    want_store = _store_selected(skey, store)
     q = (client.schema("commcalc").table("device_payable_ledger")
          .select("due_date,net_owed,owed,store").eq("org_id", org_id))
-    if start:
-        q = q.gte("due_date", start)
-    if end:
-        q = q.lte("due_date", end)
-    if store:
-        q = q.eq("store", store)
+    if win:
+        q = date_window.apply_window(q, "due_date", win)
     rows = q.limit(50000).execute().data or []
     by_date = {}
     for r in rows:
+        if want_store and not want_store(r.get("store")):   # canonical identity, not a string eq
+            continue
         d = r.get("due_date")
         if not d:
             continue
@@ -520,12 +635,12 @@ def owed_by_date(start: str = "", end: str = "", store: str = "", org_id: str = 
     out.sort(key=lambda x: x["due_date"])
     if out:
         return {"rows": out, "total_owed": round(sum(x["owed"] for x in out), 2),
-                "source": "device_ledger", "grain": "device"}
+                "source": "device_ledger", "grain": "device", "window": win}
 
     # The ledger produced nothing — which for a Total/MA tenant is not "you owe nothing", it is "no
     # device carries an amount". Fall back to the processor's own dated amounts and SAY so, including
     # the grain change, rather than showing an empty table.
-    vrows, vmeta = _owed_from_vendor_feed(client, org_id, start, end)
+    vrows, vmeta = _owed_from_vendor_feed(client, org_id, win)
     if not vrows:
         return {"rows": [], "total_owed": 0.0, "source": None, "grain": None}
     note = ("Dated from the processor's own feed (MA Daily Tx `due_date`), not from the per-IMEI "
