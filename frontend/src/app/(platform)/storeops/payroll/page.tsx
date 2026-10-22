@@ -275,7 +275,7 @@ export default function PayrollPage() {
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             {periodName} · {visibleRows.length} employees{visibleRows.length !== rows.length ? ` (of ${rows.length})` : ''}
             {(overAlone.size > 0 || overStores.size > 0) && (
-              <span style={{ color: '#dc2626', fontWeight: 600 }}> · ⚠ {overStores.size || overAlone.size} store-week(s) over their configured weekly hours limit (highlighted below)</span>
+              <span style={{ color: 'var(--c-fg-dc2626)', fontWeight: 600 }}> · ⚠ {overStores.size || overAlone.size} store-week(s) over their configured weekly hours limit (highlighted below)</span>
             )}
           </p>
         </div>

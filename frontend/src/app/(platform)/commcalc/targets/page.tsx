@@ -183,7 +183,7 @@ export default function DailyTargetsPage() {
   return (
     <div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
-        <a href="/commcalc/targets" style={{ padding: '7px 16px', borderRadius: 9, fontSize: 13, fontWeight: 600, textDecoration: 'none', background: 'var(--accent)', color: '#fff', border: '1px solid var(--border)' }}>Daily Targets</a>
+        <a href="/commcalc/targets" style={{ padding: '7px 16px', borderRadius: 9, fontSize: 13, fontWeight: 600, textDecoration: 'none', background: 'var(--accent)', color: 'var(--c-fg-ffffff)', border: '1px solid var(--border)' }}>Daily Targets</a>
         <a href="/commcalc/targets/action-plan" style={{ padding: '7px 16px', borderRadius: 9, fontSize: 13, fontWeight: 600, textDecoration: 'none', background: 'var(--surface2)', color: 'var(--text2)', border: '1px solid var(--border)' }}>Action Plan</a>
       </div>
       <div style={{ marginBottom: 20 }}>
@@ -214,7 +214,7 @@ export default function DailyTargetsPage() {
         </div>
         {setupHint.length > 0 && summary.length > 0 && (
           <div style={{ margin: '10px 16px 0', padding: '9px 12px', borderRadius: 6, fontSize: 12.5,
-            background: 'var(--warning-bg, #fff7ed)', border: '1px solid var(--warning, #f59e0b)', color: 'var(--text2)' }}>
+            background: 'var(--warning-bg, var(--c-bg-fff7ed))', border: '1px solid var(--warning, var(--c-bg-f59e0b))', color: 'var(--text2)' }}>
             {setupHint.map((h, i) => <div key={i}>⚙️ <LinkedText text={h} /></div>)}
           </div>
         )}
@@ -260,7 +260,7 @@ export default function DailyTargetsPage() {
                                 appears for a month where it already had a target or real sales, so the
                                 history reads correctly. `!== false` (never `=== true`) — the flag is nullable. */}
                             {s.is_active === false && (
-                              <span style={{ color: '#b91c1c', marginLeft: 6, fontWeight: 600 }}
+                              <span style={{ color: 'var(--c-fg-b91c1c)', marginLeft: 6, fontWeight: 600 }}
                                 title="This store is switched off in StoreOps. It is shown here because it had a target or sales in this month.">
                                 · closed store
                               </span>
@@ -358,7 +358,7 @@ export default function DailyTargetsPage() {
       </div>
 
       {detail && !detail.has_schedule && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '8px 14px', marginBottom: 16, fontSize: 13, color: '#92400e' }}>
+        <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 10, padding: '8px 14px', marginBottom: 16, fontSize: 13, color: 'var(--c-fg-92400e)' }}>
           ⚠️ No StoreOps schedule loaded for this {scope === 'rep' ? 'rep' : 'store'} this period — targets can&apos;t be schedule-weighted, so the full remaining balance is shown under <strong>Pace</strong> and today&apos;s target is 0.
         </div>
       )}
@@ -413,7 +413,7 @@ export default function DailyTargetsPage() {
                 </div>
               </div>
               {detail.scope === 'rep' && detail.conversion.rep?.below_store && (
-                <div style={{ marginTop: 12, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#b91c1c' }}>
+                <div style={{ marginTop: 12, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: 'var(--c-fg-b91c1c)' }}>
                   ⚠️ <strong>{detail.rep}</strong>&apos;s conversion ({detail.conversion.rep.rate}%) is below the store ({detail.conversion.store.rate}%) — this rep is pulling the store&apos;s productivity down.
                 </div>
               )}
@@ -448,7 +448,7 @@ export default function DailyTargetsPage() {
                       <tr key={rp.rep} style={{ borderBottom: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
                         <td style={td}>
                           <span style={{ fontWeight: 600 }}>{rp.rep}</span>
-                          {rp.below_store && rp.conversion?.billpays > 0 && <span style={{ color: '#dc2626', fontSize: 11 }}> · ⚠️ below store</span>}
+                          {rp.below_store && rp.conversion?.billpays > 0 && <span style={{ color: 'var(--c-fg-dc2626)', fontSize: 11 }}> · ⚠️ below store</span>}
                         </td>
                         {repCats.map(c => (
                           <td key={c.key} style={td}>
@@ -496,7 +496,7 @@ export default function DailyTargetsPage() {
                   return (
                     <tr key={d.date} style={{
                       borderBottom: '1px solid var(--border)',
-                      background: d.is_today ? '#eff6ff' : 'transparent',
+                      background: d.is_today ? 'var(--c-bg-eff6ff)' : 'transparent',
                     }}>
                       <td style={{ ...td, fontWeight: d.is_today ? 700 : 400 }}>
                         {d.date}{d.is_today ? ' · today' : ''}
@@ -531,8 +531,8 @@ function FreshnessBanner({ daily, dlar, period }: { daily?: any; dlar?: any; per
   const dlarAge = daysAgo(dlar?.last_run_at)
   // amber if a day+ stale, red if missing entirely
   const tone = daily ? (dAge != null && dAge >= 2 ? '#b45309' : 'var(--text2)') : '#dc2626'
-  const bg = daily ? (dAge != null && dAge >= 2 ? '#fffbeb' : 'var(--surface2)') : '#fef2f2'
-  const border = daily ? (dAge != null && dAge >= 2 ? '#fde68a' : 'var(--border)') : '#fecaca'
+  const bg = daily ? (dAge != null && dAge >= 2 ? 'var(--c-bg-fffbeb)' : 'var(--surface2)') : 'var(--c-bg-fef2f2)'
+  const border = daily ? (dAge != null && dAge >= 2 ? 'var(--c-bg-fde68a)' : 'var(--border)') : 'var(--c-bg-fecaca)'
   return (
     <div className="card" style={{ padding: '10px 14px', marginBottom: 20, background: bg, border: `1px solid ${border}`, fontSize: 13, display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
       <span style={{ fontWeight: 600, color: 'var(--text2)' }}>📥 Data freshness</span>

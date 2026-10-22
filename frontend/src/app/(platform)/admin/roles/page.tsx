@@ -101,7 +101,7 @@ function ViewAsEmployeeCard() {
   if (!allowed) return null
   return (
     <div className="card" data-tour-id="roles-view-as" style={{ padding: 16, marginBottom: 18,
-      borderLeft: '5px solid #7f1d1d', background: '#fef2f2' }}>
+      borderLeft: '5px solid var(--c-bg-7f1d1d)', background: 'var(--c-bg-fef2f2)' }}>
       <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>👁️ View the app as an employee</div>
       <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10, maxWidth: 780, lineHeight: 1.55 }}>
         Open the app exactly as this person sees it, so you can reproduce a problem they reported instead
@@ -123,7 +123,7 @@ function ViewAsEmployeeCard() {
             try { await startImpersonation(pick, reason) }
             catch (e: any) { setErr(e?.message || 'Could not start'); setBusy(false) }
           }}
-          style={{ background: '#7f1d1d', color: '#fff', fontWeight: 700,
+          style={{ background: 'var(--c-bg-7f1d1d)', color: 'var(--c-fg-ffffff)', fontWeight: 700,
             cursor: pick && !busy ? 'pointer' : 'not-allowed', opacity: pick && !busy ? 1 : 0.6 }}>
           {busy ? 'Starting…' : '👁️ View as this employee'}
         </button>
@@ -134,7 +134,7 @@ function ViewAsEmployeeCard() {
           super-admins and other roles that can themselves sign in as others are deliberately excluded.
         </div>
       )}
-      {err && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 8 }}>{err}</div>}
+      {err && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)', marginTop: 8 }}>{err}</div>}
     </div>
   )
 }
@@ -153,11 +153,11 @@ function accessState(e: Emp): Access {
   const activeLogin = e.login_status === 'active'
   const invited = e.login_status === 'invited' || (!e.login_status && !!e.has_login)
   const hasLogin = activeLogin || invited || !!e.has_login
-  if (hasLogin && !hasRole) return { key: 'login_no_role', label: '⚠ login · NO ROLE', bg: '#fee2e2', fg: '#991b1b',
+  if (hasLogin && !hasRole) return { key: 'login_no_role', label: '⚠ login · NO ROLE', bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)',
     title: 'This login exists but no role is assigned — when they sign in they see "Account not set up". Pick a role in the Role column, then press Save.' }
-  if (activeLogin) return { key: 'active', label: '✓ active', bg: '#dbeafe', fg: '#1e40af',
+  if (activeLogin) return { key: 'active', label: '✓ active', bg: 'var(--c-bg-dbeafe)', fg: 'var(--c-fg-1e40af)',
     title: 'Role assigned and this person has signed in.' }
-  if (invited) return { key: 'invited', label: '⏳ invited', bg: '#fef3c7', fg: '#92400e',
+  if (invited) return { key: 'invited', label: '⏳ invited', bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)',
     title: 'Role assigned and an access code was issued — waiting for their first sign-in.' }
   if (hasRole) return { key: 'role_only', label: '● role · no login', bg: 'var(--surface2)', fg: 'var(--text2)',
     title: 'Role assigned, but no login has been created yet — press "Create login".' }
@@ -678,8 +678,8 @@ export default function RolesAdminPage() {
       {/* Master switch */}
       <div className="card" style={{ padding: '14px 18px', marginBottom: 18, display: 'flex',
         alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
-        borderLeft: `5px solid ${enforce ? '#059669' : '#d97706'}`,
-        background: enforce ? '#f0fdf4' : '#fffbeb' }}>
+        borderLeft: `5px solid ${enforce ? 'var(--c-bg-059669)' : 'var(--c-bg-d97706)'}`,
+        background: enforce ? 'var(--c-bg-f0fdf4)' : 'var(--c-bg-fffbeb)' }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 700 }}>
             {enforce == null ? 'Login enforcement: …' : enforce ? '🔒 Login enforcement is ON' : '🔓 Login enforcement is OFF (app open)'}
@@ -691,7 +691,7 @@ export default function RolesAdminPage() {
           </div>
         </div>
         <button className="btn" onClick={toggleEnforce} disabled={enforce == null}
-          style={{ background: enforce ? '#dc2626' : '#059669', color: '#fff', fontWeight: 600 }}>
+          style={{ background: enforce ? 'var(--c-bg-dc2626)' : 'var(--c-bg-059669)', color: 'var(--c-fg-ffffff)', fontWeight: 600 }}>
           {enforce ? 'Turn OFF enforcement' : 'Turn ON enforcement'}
         </button>
       </div>
@@ -751,7 +751,7 @@ export default function RolesAdminPage() {
                     <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 12, marginLeft: 6 }}>({r.name})</span>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    {r.name !== 'admin' && <button className="btn btn-secondary" style={{ color: '#dc2626' }} onClick={() => deleteRole(r)}>🗑 Delete</button>}
+                    {r.name !== 'admin' && <button className="btn btn-secondary" style={{ color: 'var(--c-fg-dc2626)' }} onClick={() => deleteRole(r)}>🗑 Delete</button>}
                     <button className="btn btn-primary" onClick={() => saveRole(r)}>💾 Save</button>
                   </div>
                 </div>
@@ -777,7 +777,7 @@ export default function RolesAdminPage() {
                               {m.label}
                             </label>
                             {needs.length > 0 && (
-                              <div style={{ gridColumn: '1 / -1', fontSize: 11, color: 'var(--warn, #b45309)', margin: '-2px 0 4px 22px' }}>
+                              <div style={{ gridColumn: '1 / -1', fontSize: 11, color: 'var(--warn, var(--c-fg-b45309))', margin: '-2px 0 4px 22px' }}>
                                 ⚠ “{m.label}” is on, but its report pages stay hidden until you also tick{' '}
                                 <b>{needs.map(label).join(' + ')}</b> under <b>Reports</b> →
                               </div>
@@ -912,7 +912,7 @@ export default function RolesAdminPage() {
                         those default-open for a company-wide role, and signing in as another human is
                         not something that should ever arrive switched on. */}
                     <div data-tour-id="roles-impersonate-toggle" style={{ marginTop: 14, padding: 10, borderRadius: 8,
-                      border: '1px solid #fecaca', background: '#fef2f2' }}>
+                      border: '1px solid var(--c-bg-fecaca)', background: 'var(--c-bg-fef2f2)' }}>
                       <label style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 13, fontWeight: 600 }}>
                         <input type="checkbox" checked={p.impersonate === true}
                           onChange={ev => setPerm(r.id, pp => ({ ...pp, impersonate: ev.target.checked }))} />
@@ -1047,12 +1047,12 @@ export default function RolesAdminPage() {
               then hit "Account not set up" — from their side it looks like the whole app is broken.
               Own-tenant data only; no names are exposed beyond this admin's own roster. */}
           {loginNoRole.length > 0 && (
-            <div className="card" style={{ padding: 14, marginBottom: 16, background: '#fef2f2',
-              border: '1px solid #fecaca', borderLeft: '5px solid #dc2626' }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#991b1b', marginBottom: 4 }}>
+            <div className="card" style={{ padding: 14, marginBottom: 16, background: 'var(--c-bg-fef2f2)',
+              border: '1px solid var(--c-bg-fecaca)', borderLeft: '5px solid var(--c-bg-dc2626)' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg-991b1b)', marginBottom: 4 }}>
                 ⚠️ {loginNoRole.length} {loginNoRole.length === 1 ? 'person has' : 'people have'} a login but NO role assigned
               </div>
-              <div style={{ fontSize: 12.5, color: '#7f1d1d' }}>
+              <div style={{ fontSize: 12.5, color: 'var(--c-fg-7f1d1d)' }}>
                 They can sign in, but the app shows them <b>&ldquo;Account not set up&rdquo;</b> until a role is
                 assigned — it looks to them like every module is broken. Pick a role in the <b>Role</b>
                 column for each, then press <b>Save</b>:{' '}
@@ -1062,8 +1062,8 @@ export default function RolesAdminPage() {
           )}
 
           {tempList.length > 0 && (
-            <div className="card" style={{ padding: 14, marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a' }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>
+            <div className="card" style={{ padding: 14, marginBottom: 16, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg-92400e)', marginBottom: 6 }}>
                 🔑 Access codes — hand each to the person. New users set a password on first sign-in;
                 anyone who already uses MetricsPro signs in with their existing password and enters this
                 code to connect this company.
@@ -1095,11 +1095,11 @@ export default function RolesAdminPage() {
                       <td style={{ padding: '8px 12px' }}>
                         {e.id > 0
                           ? <input
-                              style={{ ...sel, width: 200, ...(e.app_role && !(e.email || '').trim() ? { borderColor: '#dc2626', background: '#fef2f2' } : {}) }}
+                              style={{ ...sel, width: 200, ...(e.app_role && !(e.email || '').trim() ? { borderColor: 'var(--c-bg-dc2626)', background: 'var(--c-bg-fef2f2)' } : {}) }}
                               type="email" value={e.email || ''}
                               placeholder={e.app_role && !(e.email || '').trim() ? '✉️ email required for this role' : 'add email…'}
                               onChange={ev => setEmp(e.id, { email: ev.target.value })} />
-                          : <span style={{ fontSize: 12, color: e.email ? 'var(--text2)' : '#dc2626' }}>{e.email || 'no email'}</span>}
+                          : <span style={{ fontSize: 12, color: e.email ? 'var(--text2)' : 'var(--c-fg-dc2626)' }}>{e.email || 'no email'}</span>}
                       </td>
                       <td style={{ padding: '8px 12px' }}>
                         <select style={sel} value={e.app_role || ''} onChange={ev => setEmp(e.id, { app_role: ev.target.value })}>
@@ -1125,7 +1125,7 @@ export default function RolesAdminPage() {
                           const mk = marketsOf(e.app_market)
                           if (!mk.length || !(sc === 'store' || sc === 'self')) return null
                           return (
-                            <div style={{ fontSize: 10.5, color: '#b45309', marginTop: 3, maxWidth: 150, lineHeight: 1.35 }}
+                            <div style={{ fontSize: 10.5, color: 'var(--c-fg-b45309)', marginTop: 3, maxWidth: 150, lineHeight: 1.35 }}
                               title={`This role's reporting scope is "${sc === 'self' ? 'only their own data' : 'their store'}", but the market grant above opens every store in ${mk.join(' + ')}. Clear the market if they should only see their store.`}>
                               ⚠ market grant widens past “{sc === 'self' ? 'own data' : 'their store'}”
                             </div>
@@ -1160,7 +1160,7 @@ export default function RolesAdminPage() {
                       <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
                         <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => assign(e)}>Save</button>{' '}
                         {(() => { const p = dirtySlices(e, empSnapOf(e), ROLES_EMPLOYEE_ROW_SLICES); return p.length
-                          ? <span style={{ fontSize: 11, color: '#b45309', marginRight: 6 }} title="Save (or 💾 Save details) sends these">● unsaved: {p.map(x => x.label).join(', ')}</span>
+                          ? <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)', marginRight: 6 }} title="Save (or 💾 Save details) sends these">● unsaved: {p.map(x => x.label).join(', ')}</span>
                           : null })()}
                         {e.email && <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => createLogin(e)}>
                           {e.has_login ? 'Reset pw' : 'Create login'}</button>}{' '}
@@ -1184,12 +1184,12 @@ export default function RolesAdminPage() {
                     {e.email && scopePrev[(e.email || '').toLowerCase()] && (() => {
                       const sp = scopePrev[(e.email || '').toLowerCase()]
                       return (
-                        <tr style={{ background: '#f5f3ff' }}>
+                        <tr style={{ background: 'var(--c-bg-f5f3ff)' }}>
                           <td colSpan={7} style={{ padding: '10px 16px', borderTop: '1px dashed var(--border)', fontSize: 12 }}>
                             <div style={{ display: 'grid', gap: 6 }}>
                               <div><strong>Reporting</strong> (whose numbers they see) —{' '}
                                 {sp.reporting?.unrestricted
-                                  ? <span style={{ color: '#b45309', fontWeight: 700 }}>EVERY store (role scope = all stores)</span>
+                                  ? <span style={{ color: 'var(--c-fg-b45309)', fontWeight: 700 }}>EVERY store (role scope = all stores)</span>
                                   : <span><strong>{(sp.reporting?.stores || []).length}</strong> store(s): {(sp.reporting?.stores || []).join(', ') || '— none —'}</span>}
                               </div>
                               <div><strong>Scheduling</strong> (whom they can put on a shift) —{' '}
@@ -1203,7 +1203,7 @@ export default function RolesAdminPage() {
                                   logging in as anyone, and each half can then be cleared on its own
                                   in the columns above. */}
                               {sp.grants && (
-                                <div style={{ display: 'grid', gap: 3, padding: '6px 8px', background: '#fff', borderRadius: 6, border: '1px solid var(--border)' }}>
+                                <div style={{ display: 'grid', gap: 3, padding: '6px 8px', background: 'var(--c-bg-ffffff)', borderRadius: 6, border: '1px solid var(--border)' }}>
                                   <div><strong>Market grant</strong> —{' '}
                                     {(sp.grants.market?.granted || []).length
                                       ? <>{sp.grants.market.granted.join(', ')} → <strong>{(sp.grants.market.codes || []).length}</strong> store(s)</>
@@ -1215,14 +1215,14 @@ export default function RolesAdminPage() {
                                       : <span style={{ color: 'var(--text3)' }}>none</span>}
                                   </div>
                                   {sp.grants.market_widens_beyond_store_scope && (
-                                    <div style={{ color: '#b45309', fontWeight: 600 }}>
+                                    <div style={{ color: 'var(--c-fg-b45309)', fontWeight: 600 }}>
                                       ⚠ This role&apos;s scope is “{sp.scope === 'self' ? 'only their own data' : 'their store'}”, but the
                                       MARKET grant above is what they actually see. Clear the market to hold them to their store —
                                       the store grant is untouched by that.
                                     </div>
                                   )}
                                   {(sp.grants.store?.unresolved || []).length > 0 && (
-                                    <div style={{ color: '#b91c1c', fontWeight: 600 }}>
+                                    <div style={{ color: 'var(--c-fg-b91c1c)', fontWeight: 600 }}>
                                       ⚠ Not a real store, grants nothing: {sp.grants.store.unresolved.join(', ')} — pick the store in the Store column.
                                     </div>
                                   )}
@@ -1231,7 +1231,7 @@ export default function RolesAdminPage() {
                                       <strong>Their own store</strong> —{' '}
                                       {(sp.grants.own_store || []).length
                                         ? <>{sp.grants.own_store.join(', ')}</>
-                                        : <span style={{ color: '#b91c1c', fontWeight: 600 }}>none resolvable</span>}
+                                        : <span style={{ color: 'var(--c-fg-b91c1c)', fontWeight: 600 }}>none resolvable</span>}
                                       <span style={{ color: 'var(--text3)' }}> · {sp.grants.own_store_why}</span>
                                     </div>
                                   )}
@@ -1243,7 +1243,7 @@ export default function RolesAdminPage() {
                                 {(sp.org_unit_stores || []).length > 0 && <> · Org-unit stores: {sp.org_unit_stores.join(', ')}</>}
                               </div>
                               {(sp.unresolved_markets || []).length > 0 && (
-                                <div style={{ color: '#b91c1c', fontWeight: 600 }}>
+                                <div style={{ color: 'var(--c-fg-b91c1c)', fontWeight: 600 }}>
                                   ⚠ These markets matched NO store and grant nothing: {sp.unresolved_markets.join(', ')}
                                   <span style={{ fontWeight: 400 }}> — the tenant knows: {(sp.org_markets || []).join(', ') || '(none)'}</span>
                                 </div>
@@ -1256,7 +1256,7 @@ export default function RolesAdminPage() {
                       )
                     })()}
                     {e.email && revealed[e.email] && (
-                      <tr style={{ background: '#f0f9ff' }}>
+                      <tr style={{ background: 'var(--c-bg-f0f9ff)' }}>
                         <td colSpan={7} style={{ padding: '10px 16px', borderTop: '1px dashed var(--border)', fontSize: 12 }}>
                           {revealed[e.email].code_available ? (
                             <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1276,7 +1276,7 @@ export default function RolesAdminPage() {
                       </tr>
                     )}
                     {widgetEmp === e.id && (
-                      <tr style={{ background: '#f8fafc' }}>
+                      <tr style={{ background: 'var(--c-bg-f8fafc)' }}>
                         <td colSpan={7} style={{ padding: '10px 16px', borderTop: '1px dashed var(--border)' }}>
                           <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
                             Dashboard widgets for {e.name} <span style={{ fontWeight: 400, color: 'var(--text3)' }}>
@@ -1288,7 +1288,7 @@ export default function RolesAdminPage() {
                               return (
                                 <label key={wd.k} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13,
                                   padding: '2px 7px', borderRadius: 6, border: '1px solid var(--border)',
-                                  background: overridden ? '#fef9c3' : 'var(--surface)' }}>
+                                  background: overridden ? 'var(--c-bg-fef9c3)' : 'var(--surface)' }}>
                                   <input type="checkbox" checked={widgetEffective(e, wd.k)}
                                     onChange={ev => toggleWidget(e, wd.k, ev.target.checked)} />
                                   {wd.label}{overridden ? ' •' : ''}
@@ -1303,7 +1303,7 @@ export default function RolesAdminPage() {
                       </tr>
                     )}
                     {editEmp === e.id && (
-                      <tr style={{ background: '#f8fafc' }}>
+                      <tr style={{ background: 'var(--c-bg-f8fafc)' }}>
                         <td colSpan={7} style={{ padding: '12px 16px', borderTop: '1px dashed var(--border)' }}>
                           {e.id > 0 ? (
                             <>
@@ -1330,7 +1330,7 @@ export default function RolesAdminPage() {
                               </div>
                               <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => saveDetails(e)}>💾 Save details</button>{' '}
                               <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => removeEmp(e, 'deactivate')}>🚫 Deactivate (revoke login)</button>{' '}
-                              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px', color: '#dc2626' }} onClick={() => removeEmp(e, 'delete')}>🗑 Delete permanently</button>
+                              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px', color: 'var(--c-fg-dc2626)' }} onClick={() => removeEmp(e, 'delete')}>🗑 Delete permanently</button>
                               <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
                                 Delete removes the employee + role assignment + login everywhere. History keyed by name (commissions, closing) is kept.
                               </div>
@@ -1339,7 +1339,7 @@ export default function RolesAdminPage() {
                             <>
                               <div style={{ fontSize: 12, marginBottom: 8 }}>✋ Manually-added Roles user — no StoreOps roster row to edit.</div>
                               <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => removeEmp(e, 'deactivate')}>🚫 Deactivate (revoke login)</button>{' '}
-                              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px', color: '#dc2626' }} onClick={() => removeEmp(e, 'delete')}>🗑 Delete permanently</button>
+                              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px', color: 'var(--c-fg-dc2626)' }} onClick={() => removeEmp(e, 'delete')}>🗑 Delete permanently</button>
                             </>
                           )}
                         </td>
@@ -1384,7 +1384,7 @@ function StorePicker({ value, stores, placeholder, single, invalid, onChange }:
   const shown = q.trim()
     ? stores.filter(s => s.label.toLowerCase().includes(q.trim().toLowerCase()))
     : stores
-  const btn: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid ' + (invalid ? '#dc2626' : 'var(--border)'), fontSize: 13, background: invalid ? '#fef2f2' : 'var(--surface)', color: invalid ? '#b91c1c' : undefined, cursor: 'pointer', minWidth: 120, display: 'inline-flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }
+  const btn: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid ' + (invalid ? 'var(--c-bg-dc2626)' : 'var(--border)'), fontSize: 13, background: invalid ? 'var(--c-bg-fef2f2)' : 'var(--surface)', color: invalid ? 'var(--c-fg-b91c1c)' : undefined, cursor: 'pointer', minWidth: 120, display: 'inline-flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }
   return (
     <div style={{ position: 'relative', display: 'inline-block' }}>
       <button type="button" onClick={() => setOpen(o => !o)} style={btn}
@@ -1399,7 +1399,7 @@ function StorePicker({ value, stores, placeholder, single, invalid, onChange }:
             <input autoFocus value={q} onChange={ev => setQ(ev.target.value)} placeholder="Type to filter…"
               style={{ width: '100%', padding: '5px 8px', marginBottom: 6, borderRadius: 6, border: '1px solid var(--border)', fontSize: 12.5 }} />
             {invalid && (
-              <div style={{ fontSize: 11.5, color: '#b91c1c', padding: '2px 6px 6px' }}>
+              <div style={{ fontSize: 11.5, color: 'var(--c-fg-b91c1c)', padding: '2px 6px 6px' }}>
                 Currently set to <b>{Array.from(chosen)[0]}</b>, which is not a store in this company.
                 Pick the real one below.
               </div>
@@ -1439,7 +1439,7 @@ function MarketPicker({ value, markets, invalid, onChange }:
     onChange(Array.from(next).join(', '))
   }
   const label = chosen.size === 0 ? 'Market(s)…' : chosen.size === 1 ? Array.from(chosen)[0] : `${chosen.size} markets`
-  const btn: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid ' + (invalid ? '#dc2626' : 'var(--border)'), fontSize: 13, background: invalid ? '#fef2f2' : 'var(--surface)', color: invalid ? '#b91c1c' : undefined, cursor: 'pointer', minWidth: 120, display: 'inline-flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }
+  const btn: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid ' + (invalid ? 'var(--c-bg-dc2626)' : 'var(--border)'), fontSize: 13, background: invalid ? 'var(--c-bg-fef2f2)' : 'var(--surface)', color: invalid ? 'var(--c-fg-b91c1c)' : undefined, cursor: 'pointer', minWidth: 120, display: 'inline-flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }
   return (
     <div style={{ position: 'relative', display: 'inline-block' }}>
       <button type="button" onClick={() => setOpen(o => !o)} style={btn}
@@ -1452,7 +1452,7 @@ function MarketPicker({ value, markets, invalid, onChange }:
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
           <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 41, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 8, minWidth: 200, maxHeight: 300, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.18)' }}>
             {dead.length > 0 && (
-              <div style={{ fontSize: 11.5, color: '#b91c1c', padding: '2px 6px 6px' }}>
+              <div style={{ fontSize: 11.5, color: 'var(--c-fg-b91c1c)', padding: '2px 6px 6px' }}>
                 <b>{dead.join(', ')}</b> {dead.length > 1 ? 'are' : 'is'} not a market in this company and
                 grant{dead.length > 1 ? '' : 's'} nothing. Tick the real market, then save.
               </div>

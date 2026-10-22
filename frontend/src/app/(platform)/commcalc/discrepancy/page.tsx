@@ -39,11 +39,11 @@ type PhantomStore = { business_address: string; total: number; count: number; ro
 type PhantomResp = { period: string; phantom_total: number; phantom_count: number; matched_total: number; by_store: PhantomStore[] }
 
 const STATUS_TABS = [
-  { key: 'open', label: 'Open (Receivable)', color: '#dc2626' },
-  { key: 'pending', label: 'Pending (recent)', color: '#2563eb' },
-  { key: 'lagged', label: 'Lagged (MI/ATU)', color: '#d97706' },
-  { key: 'info', label: 'Info (SIMCR)', color: '#6b7280' },
-  { key: 'phantom', label: 'Phantom (paid, no sale)', color: '#7c3aed' },
+  { key: 'open', label: 'Open (Receivable)', color: 'var(--c-fg-dc2626)' },
+  { key: 'pending', label: 'Pending (recent)', color: 'var(--c-fg-2563eb)' },
+  { key: 'lagged', label: 'Lagged (MI/ATU)', color: 'var(--c-fg-d97706)' },
+  { key: 'info', label: 'Info (SIMCR)', color: 'var(--c-fg-6b7280)' },
+  { key: 'phantom', label: 'Phantom (paid, no sale)', color: 'var(--c-fg-7c3aed)' },
 ]
 
 export default function DiscrepancyPage() {
@@ -190,15 +190,15 @@ export default function DiscrepancyPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Pay Discrepancy</h1>
-          <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: 14 }}>Bounties earned vs paid by the Carrier — {period}</p>
+          <p style={{ color: 'var(--c-fg-6b7280)', margin: '4px 0 0', fontSize: 14 }}>Bounties earned vs paid by the Carrier — {period}</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => setShowLegend(!showLegend)}
-            style={{ background: 'white', color: '#374151', border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 16px', fontWeight: 600, cursor: 'pointer', fontSize: 14 }}>
+            style={{ background: 'var(--c-bg-ffffff)', color: 'var(--c-fg-374151)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 8, padding: '10px 16px', fontWeight: 600, cursor: 'pointer', fontSize: 14 }}>
             {showLegend ? 'Hide' : 'What do these mean?'}
           </button>
           <button onClick={runDetection} disabled={running}
-            style={{ background: running ? '#9ca3af' : '#111827', color: 'white', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: running ? 'default' : 'pointer', fontSize: 14 }}>
+            style={{ background: running ? 'var(--c-bg-9ca3af)' : 'var(--c-bg-111827)', color: 'var(--c-fg-ffffff)', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, cursor: running ? 'default' : 'pointer', fontSize: 14 }}>
             {running ? 'Running…' : 'Run Detection'}
           </button>
           {(isPhantom ? phantomRows.length : filteredRows.length) > 0 && <ExportButtons payload={buildPayload} />}
@@ -211,17 +211,17 @@ export default function DiscrepancyPage() {
       </div>
 
       {showLegend && (
-        <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+        <div style={{ background: 'var(--c-bg-f9fafb)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, padding: 16, marginBottom: 16 }}>
           <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>Commission Types</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 24px', fontSize: 13 }}>
             {Object.entries(COMP_DESCRIPTIONS).map(([k, v]) => (
-              <div key={k}><strong style={{ color: '#111827' }}>{k}</strong> — <span style={{ color: '#6b7280' }}>{v.split('—')[1]}</span></div>
+              <div key={k}><strong style={{ color: 'var(--c-fg-111827)' }}>{k}</strong> — <span style={{ color: 'var(--c-fg-6b7280)' }}>{v.split('—')[1]}</span></div>
             ))}
           </div>
         </div>
       )}
 
-      {err && <div style={{ background: '#fef2f2', color: '#991b1b', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>{err}</div>}
+      {err && <div style={{ background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-991b1b)', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>{err}</div>}
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
         {STATUS_TABS.map(t => {
@@ -229,8 +229,8 @@ export default function DiscrepancyPage() {
           return (
             <button key={t.key} onClick={() => { setStatusTab(t.key); setStoreFilter(''); setCompFilter('') }}
               style={{ padding: '8px 16px', borderRadius: 8, fontSize: 14, fontWeight: 600,
-                border: active ? `2px solid ${t.color}` : '1px solid #e5e7eb',
-                background: active ? `${t.color}10` : 'white', color: active ? t.color : '#374151', cursor: 'pointer' }}>
+                border: active ? `2px solid ${t.color}` : '1px solid var(--c-bg-e5e7eb)',
+                background: active ? `${t.color}10` : 'white', color: active ? t.color : 'var(--c-fg-374151)', cursor: 'pointer' }}>
               {t.label} <span style={{ opacity: 0.7 }}>({tabCount(t.key)})</span>
             </button>
           )
@@ -238,8 +238,8 @@ export default function DiscrepancyPage() {
       </div>
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
-        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, flex: 1 }}>
-          <div style={{ fontSize: 13, color: '#6b7280' }}>
+        <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, padding: 16, flex: 1 }}>
+          <div style={{ fontSize: 13, color: 'var(--c-fg-6b7280)' }}>
             {statusTab === 'open' ? 'Total Receivable from Carrier'
               : statusTab === 'pending' ? 'Pending (too recent to reconcile)'
               : statusTab === 'lagged' ? 'Lagged (awaiting prior-period data)'
@@ -250,31 +250,31 @@ export default function DiscrepancyPage() {
             {isPhantom ? fmt(phantom?.phantom_total || 0) : fmt(tabTotal)}
           </div>
         </div>
-        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, flex: 1 }}>
-          <div style={{ fontSize: 13, color: '#6b7280' }}>Line items</div>
+        <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, padding: 16, flex: 1 }}>
+          <div style={{ fontSize: 13, color: 'var(--c-fg-6b7280)' }}>Line items</div>
           <div style={{ fontSize: 28, fontWeight: 700 }}>{isPhantom ? (phantom?.phantom_count || 0) : filteredRows.length}</div>
         </div>
-        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16, flex: 1 }}>
-          <div style={{ fontSize: 13, color: '#6b7280' }}>{isPhantom ? 'Stores' : 'Stores affected'}</div>
+        <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, padding: 16, flex: 1 }}>
+          <div style={{ fontSize: 13, color: 'var(--c-fg-6b7280)' }}>{isPhantom ? 'Stores' : 'Stores affected'}</div>
           <div style={{ fontSize: 28, fontWeight: 700 }}>{isPhantom ? (phantom?.by_store.length || 0) : storeSummary.length}</div>
         </div>
       </div>
 
       {isPhantom && (
-        <div style={{ background: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: '#6b21a8' }}>
+        <div style={{ background: 'var(--c-bg-faf5ff)', border: '1px solid var(--c-bg-e9d5ff)', borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: 'var(--c-fg-6b21a8)' }}>
           These payments don&apos;t match any sale or subscriber record. Large items (esp. device reimbursements) are worth investigating — small bounties are often data-coverage gaps from stores whose sales aren&apos;t loaded yet.
         </div>
       )}
 
-      {loading && <div style={{ color: '#6b7280', padding: 20 }}>Loading…</div>}
-      {!loading && !data && <div style={{ color: '#6b7280', padding: 20 }}>No results yet. Click Run Detection.</div>}
+      {loading && <div style={{ color: 'var(--c-fg-6b7280)', padding: 20 }}>Loading…</div>}
+      {!loading && !data && <div style={{ color: 'var(--c-fg-6b7280)', padding: 20 }}>No results yet. Click Run Detection.</div>}
 
       {!loading && data && (
         <>
-          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, marginBottom: 20, overflow: 'hidden' }}>
-            <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 14 }}>By Store (click to filter)</div>
+          <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, marginBottom: 20, overflow: 'hidden' }}>
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--c-bg-e5e7eb)', fontWeight: 600, fontSize: 14 }}>By Store (click to filter)</div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-              <thead><tr style={{ background: '#f9fafb', textAlign: 'left' }}>
+              <thead><tr style={{ background: 'var(--c-bg-f9fafb)', textAlign: 'left' }}>
                 <th style={{ padding: '8px 16px' }}>Store</th>
                 <th style={{ padding: '8px 16px', textAlign: 'right' }}>Line Items</th>
                 <th style={{ padding: '8px 16px', textAlign: 'right' }}>{statusTab === 'open' ? 'Gap' : 'Amount'}</th>
@@ -282,7 +282,7 @@ export default function DiscrepancyPage() {
               <tbody>
                 {storeSummary.map(s => (
                   <tr key={s.store} onClick={() => setStoreFilter(storeFilter === s.store ? '' : s.store)}
-                    style={{ borderTop: '1px solid #f3f4f6', cursor: 'pointer', background: storeFilter === s.store ? '#eff6ff' : 'white' }}>
+                    style={{ borderTop: '1px solid var(--c-bg-f3f4f6)', cursor: 'pointer', background: storeFilter === s.store ? '#eff6ff' : 'white' }}>
                     <td style={{ padding: '8px 16px', fontWeight: 500 }}>{s.store}</td>
                     <td style={{ padding: '8px 16px', textAlign: 'right' }}>{s.count}</td>
                     <td style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600 }}>{fmt(s.gap)}</td>
@@ -294,27 +294,27 @@ export default function DiscrepancyPage() {
 
           <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
             <select value={storeFilter} onChange={e => setStoreFilter(e.target.value)}
-              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14, maxWidth: 260 }}>
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-bg-e5e7eb)', fontSize: 14, maxWidth: 260 }}>
               <option value="">All stores</option>
               {filterStores.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
             <select value={compFilter} onChange={e => setCompFilter(e.target.value)}
-              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14 }}>
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-bg-e5e7eb)', fontSize: 14 }}>
               <option value="">All types</option>
               {filterTypes.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
             <input placeholder="Search IMEI / MDN / device / rep" value={search} onChange={e => setSearch(e.target.value)}
-              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14, flex: 1, minWidth: 200 }} />
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-bg-e5e7eb)', fontSize: 14, flex: 1, minWidth: 200 }} />
             {(storeFilter || compFilter || search) && (
               <button onClick={() => { setStoreFilter(''); setCompFilter(''); setSearch('') }}
-                style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', fontSize: 14 }}>Clear</button>
+                style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--c-bg-e5e7eb)', background: 'var(--c-bg-ffffff)', cursor: 'pointer', fontSize: 14 }}>Clear</button>
             )}
           </div>
 
-          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'auto' }}>
+          <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, overflow: 'auto' }}>
             {isPhantom ? (
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead><tr style={{ background: '#f9fafb', textAlign: 'left', position: 'sticky', top: 0 }}>
+                <thead><tr style={{ background: 'var(--c-bg-f9fafb)', textAlign: 'left', position: 'sticky', top: 0 }}>
                   <th style={{ padding: '8px 12px' }}>Store Address</th>
                   <th style={{ padding: '8px 12px' }}>Payment Type</th>
                   <th style={{ padding: '8px 12px' }}>IMEI</th>
@@ -324,20 +324,20 @@ export default function DiscrepancyPage() {
                 </tr></thead>
                 <tbody>
                   {phantomRows.slice(0, 500).map((r, i) => (
-                    <tr key={i} style={{ borderTop: '1px solid #f3f4f6' }}>
+                    <tr key={i} style={{ borderTop: '1px solid var(--c-bg-f3f4f6)' }}>
                       <td style={{ padding: '6px 12px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.business_address}</td>
                       <td style={{ padding: '6px 12px', fontWeight: 500 }}>{r.payment_type}</td>
                       <td style={{ padding: '6px 12px', fontFamily: 'monospace', fontSize: 12 }}>{r.imei}</td>
                       <td style={{ padding: '6px 12px' }}>{r.mdn}</td>
                       <td style={{ padding: '6px 12px' }}>{r.payment_date}</td>
-                      <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600, color: r.amount > 100 ? '#7c3aed' : '#374151' }}>{fmt(r.amount)}</td>
+                      <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600, color: r.amount > 100 ? 'var(--c-fg-7c3aed)' : 'var(--c-fg-374151)' }}>{fmt(r.amount)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead><tr style={{ background: '#f9fafb', textAlign: 'left', position: 'sticky', top: 0 }}>
+                <thead><tr style={{ background: 'var(--c-bg-f9fafb)', textAlign: 'left', position: 'sticky', top: 0 }}>
                   <th style={{ padding: '8px 12px' }}>Store</th>
                   <th style={{ padding: '8px 12px' }}>Type</th>
                   <th style={{ padding: '8px 12px', textAlign: 'center' }}>Mo</th>
@@ -352,7 +352,7 @@ export default function DiscrepancyPage() {
                 </tr></thead>
                 <tbody>
                   {filteredRows.slice(0, 500).map(r => (
-                    <tr key={r.id} style={{ borderTop: '1px solid #f3f4f6' }}>
+                    <tr key={r.id} style={{ borderTop: '1px solid var(--c-bg-f3f4f6)' }}>
                       <td style={{ padding: '6px 12px' }}>{r.store}</td>
                       <td style={{ padding: '6px 12px', fontWeight: 600 }} title={COMP_DESCRIPTIONS[r.comp_type] || ''}>{r.comp_type}</td>
                       <td style={{ padding: '6px 12px', textAlign: 'center' }}>{r.bounty_month}</td>
@@ -363,19 +363,19 @@ export default function DiscrepancyPage() {
                       <td style={{ padding: '6px 12px', textAlign: 'right' }}>{fmt(r.commissionable_mrc)}</td>
                       <td style={{ padding: '6px 12px', textAlign: 'right' }}>{fmt(r.expected_amount)}</td>
                       <td style={{ padding: '6px 12px', textAlign: 'right' }}>{fmt(r.received_amount)}</td>
-                      <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600, color: r.gap > 0.5 ? '#dc2626' : '#6b7280' }}>{fmt(r.gap)}</td>
+                      <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600, color: r.gap > 0.5 ? 'var(--c-fg-dc2626)' : 'var(--c-fg-6b7280)' }}>{fmt(r.gap)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
             {((isPhantom ? phantomRows : filteredRows).length > 500) && (
-              <div style={{ padding: 12, textAlign: 'center', color: '#6b7280', fontSize: 13 }}>
+              <div style={{ padding: 12, textAlign: 'center', color: 'var(--c-fg-6b7280)', fontSize: 13 }}>
                 Showing first 500 of {(isPhantom ? phantomRows : filteredRows).length} rows. Use filters to narrow.
               </div>
             )}
             {(isPhantom ? phantomRows : filteredRows).length === 0 && (
-              <div style={{ padding: 20, textAlign: 'center', color: '#6b7280' }}>No rows match.</div>
+              <div style={{ padding: 20, textAlign: 'center', color: 'var(--c-fg-6b7280)' }}>No rows match.</div>
             )}
           </div>
         </>

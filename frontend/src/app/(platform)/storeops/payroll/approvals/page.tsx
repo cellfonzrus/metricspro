@@ -50,7 +50,7 @@ const EMPTY_EDIT: Edit = { hours: '', reason: '', adj: '', adjReason: '' }
 
 const card: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }
 const btn: React.CSSProperties = { padding: '7px 13px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 13, cursor: 'pointer', fontWeight: 600 }
-const btnP: React.CSSProperties = { ...btn, background: 'var(--accent)', color: '#fff', border: 'none' }
+const btnP: React.CSSProperties = { ...btn, background: 'var(--accent)', color: 'var(--c-fg-ffffff)', border: 'none' }
 const money = (n?: number | null) => `$${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 function Pill({ status }: { status: string }) {
@@ -294,9 +294,9 @@ export default function PayrollApprovalsPage() {
         </div>
       )}
 
-      {!ready && <div style={{ ...card, background: '#fff7ed', borderColor: '#fdba74', color: '#9a3412', marginBottom: 12 }}>{note}</div>}
-      {err && <div style={{ ...card, background: '#fef2f2', borderColor: '#fca5a5', color: '#991b1b', marginBottom: 12, fontSize: 13 }}>{err}</div>}
-      {msg && <div style={{ ...card, background: '#ecfdf5', borderColor: '#a7f3d0', color: '#065f46', marginBottom: 12, fontSize: 13 }}>{msg}</div>}
+      {!ready && <div style={{ ...card, background: 'var(--c-bg-fff7ed)', borderColor: 'var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', marginBottom: 12 }}>{note}</div>}
+      {err && <div style={{ ...card, background: 'var(--c-bg-fef2f2)', borderColor: 'var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)', marginBottom: 12, fontSize: 13 }}>{err}</div>}
+      {msg && <div style={{ ...card, background: 'var(--c-bg-ecfdf5)', borderColor: 'var(--c-bg-a7f3d0)', color: 'var(--c-fg-065f46)', marginBottom: 12, fontSize: 13 }}>{msg}</div>}
 
       <div style={{ ...card, marginBottom: 12 }}>
         <StandardFilterBar value={f} onChange={setF} periodMode="range"
@@ -347,7 +347,7 @@ export default function PayrollApprovalsPage() {
             {payers.map(p => <option key={p.id} value={p.id}>{p.name}{p.is_default ? ' (default)' : ''}</option>)}
           </select>
           {isAdmin && (
-            <button style={{ ...btn, opacity: selIds.length && !busy ? 1 : 0.5, color: '#b45309' }}
+            <button style={{ ...btn, opacity: selIds.length && !busy ? 1 : 0.5, color: 'var(--c-fg-b45309)' }}
               disabled={!selIds.length || busy} onClick={override}>⚠ Pay without approval</button>
           )}
           <div style={{ width: 1, height: 22, background: 'var(--border)' }} />
@@ -389,7 +389,7 @@ export default function PayrollApprovalsPage() {
               const changed = typed !== '' && Number(typed) !== (r.hours_source ?? 0)
               const adjusted = (e?.adj ?? '') !== '' && Number(e?.adj) !== (r.adjustment_hours ?? 0)
               return (
-                <tr key={r.employee_id} style={{ background: r.held ? '#fffbeb' : undefined }}>
+                <tr key={r.employee_id} style={{ background: r.held ? 'var(--c-bg-fffbeb)' : undefined }}>
                   <td><input type="checkbox" checked={!!sel[r.employee_id]}
                     onChange={ev => setSel(s => ({ ...s, [r.employee_id]: ev.target.checked }))} /></td>
                   <td>
@@ -398,7 +398,7 @@ export default function PayrollApprovalsPage() {
                     {/* A 0.00 that means "the clock has nothing" must not look like a real zero. When
                         the POS proves they were working, say so — that is the correction to make. */}
                     {r.no_clock_record && (
-                      <div style={{ fontSize: 10.5, color: '#b45309', marginTop: 2 }}>
+                      <div style={{ fontSize: 10.5, color: 'var(--c-fg-b45309)', marginTop: 2 }}>
                         {r.worked_days_evidence?.length
                           ? `no clock record — POS shows ${r.worked_days_evidence.length} day(s) worked`
                           : 'no clock record this period'}
@@ -416,12 +416,12 @@ export default function PayrollApprovalsPage() {
                   <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                     {r.hours_worked ?? '—'}
                     {r.hours_drifted && (
-                      <div style={{ fontSize: 10, color: '#b45309' }} title={`Was ${r.worked_at_approval} when this was approved`}>
+                      <div style={{ fontSize: 10, color: 'var(--c-fg-b45309)' }} title={`Was ${r.worked_at_approval} when this was approved`}>
                         changed since sign-off
                       </div>
                     )}
                   </td>
-                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: r.lunch_hours ? '#b45309' : 'var(--text3)' }}>
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: r.lunch_hours ? 'var(--c-fg-b45309)' : 'var(--text3)' }}>
                     {r.lunch_hours ? `− ${r.lunch_hours.toFixed(2)}` : '—'}
                   </td>
                   <td style={{ textAlign: 'right' }}>
@@ -429,15 +429,15 @@ export default function PayrollApprovalsPage() {
                       onChange={ev => setEdit(r.employee_id, { adj: ev.target.value })}
                       title="+ adds hours, − takes them away"
                       style={{ width: 60, padding: '4px 6px', textAlign: 'right', borderRadius: 6, fontSize: 13,
-                        border: `1px solid ${adjusted ? '#f59e0b' : 'var(--border)'}`, background: 'var(--surface)' }} />
+                        border: `1px solid ${adjusted ? 'var(--c-bg-f59e0b)' : 'var(--border)'}`, background: 'var(--surface)' }} />
                     {adjusted && (
                       <input value={e?.adjReason || ''} placeholder="reason (required)"
                         onChange={ev => setEdit(r.employee_id, { adjReason: ev.target.value })}
                         style={{ display: 'block', marginTop: 4, width: 150, padding: '4px 6px', fontSize: 11.5,
-                          borderRadius: 6, border: '1px solid #f59e0b', background: 'var(--surface)' }} />
+                          borderRadius: 6, border: '1px solid var(--c-bg-f59e0b)', background: 'var(--surface)' }} />
                     )}
                     {!adjusted && !!r.adjustment_hours && (
-                      <div style={{ fontSize: 10.5, color: '#b45309' }} title={r.adjustment_reason || ''}>
+                      <div style={{ fontSize: 10.5, color: 'var(--c-fg-b45309)' }} title={r.adjustment_reason || ''}>
                         {r.adjustment_reason ? r.adjustment_reason.slice(0, 24) : 'adjusted'}
                       </div>
                     )}
@@ -451,15 +451,15 @@ export default function PayrollApprovalsPage() {
                     <input value={typed} placeholder={String(r.hours_effective ?? '')} inputMode="decimal"
                       onChange={ev => setEdit(r.employee_id, { hours: ev.target.value })}
                       style={{ width: 66, padding: '4px 6px', textAlign: 'right', borderRadius: 6, fontSize: 13,
-                        border: `1px solid ${changed ? '#f59e0b' : 'var(--border)'}`, background: 'var(--surface)' }} />
+                        border: `1px solid ${changed ? 'var(--c-bg-f59e0b)' : 'var(--border)'}`, background: 'var(--surface)' }} />
                     {changed && (
                       <input value={e?.reason || ''} placeholder="reason (required)"
                         onChange={ev => setEdit(r.employee_id, { reason: ev.target.value })}
                         style={{ display: 'block', marginTop: 4, width: 150, padding: '4px 6px', fontSize: 11.5,
-                          borderRadius: 6, border: '1px solid #f59e0b', background: 'var(--surface)' }} />
+                          borderRadius: 6, border: '1px solid var(--c-bg-f59e0b)', background: 'var(--surface)' }} />
                     )}
                     {r.hours_corrected && !changed && (
-                      <div style={{ fontSize: 10.5, color: '#b45309' }}>was {r.hours_source}</div>
+                      <div style={{ fontSize: 10.5, color: 'var(--c-fg-b45309)' }}>was {r.hours_source}</div>
                     )}
                   </td>
                   {canSeePay && <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{money(r.pay_effective)}</td>}
@@ -468,14 +468,14 @@ export default function PayrollApprovalsPage() {
                   <td>
                     {r.payer_name
                       ? <><div>{r.payer_name}</div><div style={{ fontSize: 10, color: 'var(--text3)' }}>via {r.payer_from}</div></>
-                      : <span style={{ color: '#b45309', fontSize: 12 }}>not routed</span>}
+                      : <span style={{ color: 'var(--c-fg-b45309)', fontSize: 12 }}>not routed</span>}
                   </td>
                   <td style={{ fontSize: 11.5 }}>
-                    {r.dispatch_status === 'sent' && <span style={{ color: '#15803d', fontWeight: 600 }}>sent {(r.dispatched_at || '').slice(0, 10)}</span>}
-                    {r.dispatch_status === 'failed' && <span style={{ color: '#991b1b', fontWeight: 600 }}>send failed</span>}
+                    {r.dispatch_status === 'sent' && <span style={{ color: 'var(--c-fg-15803d)', fontWeight: 600 }}>sent {(r.dispatched_at || '').slice(0, 10)}</span>}
+                    {r.dispatch_status === 'failed' && <span style={{ color: 'var(--c-fg-991b1b)', fontWeight: 600 }}>send failed</span>}
                     {r.dispatch_status !== 'sent' && r.dispatch_status !== 'failed' && r.held &&
-                      <span style={{ color: '#b45309', fontWeight: 600 }}>held</span>}
-                    {r.override_by && <div style={{ color: '#b45309' }}>override: {r.override_reason}</div>}
+                      <span style={{ color: 'var(--c-fg-b45309)', fontWeight: 600 }}>held</span>}
+                    {r.override_by && <div style={{ color: 'var(--c-fg-b45309)' }}>override: {r.override_reason}</div>}
                   </td>
                 </tr>
               )

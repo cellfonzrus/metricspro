@@ -70,7 +70,7 @@ const isGateError = (m: string) => /device_cost_recon/i.test(m) || /restricted/i
 function LockNote() {
   return (
     <div className="card" style={{ padding: 18, marginTop: 14, fontSize: 13, lineHeight: 1.7,
-      background: 'var(--surface2, #f8fafc)', border: '1px solid var(--border)' }}>
+      background: 'var(--surface2, var(--c-bg-f8fafc))', border: '1px solid var(--border)' }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🔒 This report is restricted</div>
       Ask an admin to grant <b>“Device cost reconciliation”</b> on your role
       (<ScreenLink to="roles_access">Roles &amp; Access</ScreenLink> → your role → sensitive data grants). This report has <b>no default access</b>:
@@ -352,7 +352,7 @@ export default function DeviceCostReconPage() {
               <div style={{ fontSize: 20, fontWeight: 800 }}>{money(s.amount)}</div>
               <div style={{ fontSize: 12, color: 'var(--text3)' }}>
                 {n0(s.rows)} rows
-                {s.unlinkable_rows ? <span style={{ color: '#b45309' }}> · {n0(s.unlinkable_rows)} un-linkable ({money(s.unlinkable_amount)})</span> : null}
+                {s.unlinkable_rows ? <span style={{ color: 'var(--c-fg-b45309)' }}> · {n0(s.unlinkable_rows)} un-linkable ({money(s.unlinkable_amount)})</span> : null}
                 {s.priceless_rows ? ` · ${n0(s.priceless_rows)} with no $` : ''}
               </div>
             </div>
@@ -360,7 +360,7 @@ export default function DeviceCostReconPage() {
         </div>
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
-          <div style={{ ...tile, borderColor: '#fca5a5' }}>
+          <div style={{ ...tile, borderColor: 'var(--c-bg-fca5a5)' }}>
             <div style={tileCap}>⚠️ Naive four-source sum</div>
             <div style={{ fontSize: 22, fontWeight: 800 }}>{money(t.naive_total)}</div>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>
@@ -369,9 +369,9 @@ export default function DeviceCostReconPage() {
           </div>
           <button onClick={() => setOverlapOnly(v => !v)} style={{ ...tile, textAlign: 'left', cursor: 'pointer',
             background: overlapOnly ? 'var(--surface2)' : 'transparent',
-            borderColor: t.overlap?.devices ? '#fcd34d' : 'var(--border)' }}>
+            borderColor: t.overlap?.devices ? 'var(--c-bg-fcd34d)' : 'var(--border)' }}>
             <div style={tileCap}>🔗 Matched overlap</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: t.overlap?.devices ? '#b45309' : undefined }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: t.overlap?.devices ? 'var(--c-fg-b45309)' : undefined }}>
               {money(t.overlap?.duplicate_amount)}
             </div>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>
@@ -380,14 +380,14 @@ export default function DeviceCostReconPage() {
           </button>
           <button onClick={() => setUnlinkOnly(v => !v)} style={{ ...tile, textAlign: 'left', cursor: 'pointer',
             background: unlinkOnly ? 'var(--surface2)' : 'transparent',
-            borderColor: t.unlinkable?.rows ? '#fcd34d' : 'var(--border)' }}>
+            borderColor: t.unlinkable?.rows ? 'var(--c-bg-fcd34d)' : 'var(--border)' }}>
             <div style={tileCap}>🚫 Cannot reach an IMEI</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: t.unlinkable?.rows ? '#b45309' : undefined }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: t.unlinkable?.rows ? 'var(--c-fg-b45309)' : undefined }}>
               {money(t.unlinkable?.amount)}
             </div>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>{n0(t.unlinkable?.rows)} row(s) — counted, never assumed unique</div>
           </button>
-          <div style={{ ...tile, borderColor: '#a7f3d0' }}>
+          <div style={{ ...tile, borderColor: 'var(--c-bg-a7f3d0)' }}>
             <div style={tileCap}>§9 policy would recognize</div>
             <div style={{ fontSize: 22, fontWeight: 800 }}>{money(pol?.recognized_amount)}</div>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>
@@ -401,7 +401,7 @@ export default function DeviceCostReconPage() {
               {t.today?.available ? "the P&L's own route" : (t.today?.note || 'unavailable')}
             </div>
           </div>
-          <div style={{ ...tile, borderColor: t.net_delta ? '#93c5fd' : 'var(--border)' }}>
+          <div style={{ ...tile, borderColor: t.net_delta ? 'var(--c-bg-93c5fd)' : 'var(--border)' }}>
             <div style={tileCap}>Net delta (policy − today)</div>
             <div style={{ fontSize: 22, fontWeight: 800,
               color: t.net_delta == null ? undefined : (t.net_delta > 0 ? '#b91c1c' : '#15803d') }}>
@@ -424,7 +424,7 @@ export default function DeviceCostReconPage() {
         </div>
 
         {d.degraded?.length > 0 && (
-          <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13, background: '#fef2f2', border: '1px solid #fecaca' }}>
+          <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)' }}>
             <b>Some of this window could not be read in full.</b> The numbers below are still real, but
             they are bounds, not totals:
             <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
@@ -434,7 +434,7 @@ export default function DeviceCostReconPage() {
         )}
 
         {d.note && (
-          <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13, background: '#fffbeb', border: '1px solid #fde68a' }}>
+          <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)' }}>
             ⚠️ {d.note}
           </div>
         )}
@@ -470,11 +470,11 @@ export default function DeviceCostReconPage() {
                     <td style={{ ...td, color: 'var(--text3)' }}>{r.market}</td>
                     <td style={td}>{money(r.today)}</td>
                     <td style={td}>{money(r.policy)}</td>
-                    <td style={{ ...td, fontWeight: 700, color: r.delta > 0 ? '#b91c1c' : (r.delta < 0 ? '#15803d' : undefined) }}>
+                    <td style={{ ...td, fontWeight: 700, color: r.delta > 0 ? 'var(--c-fg-b91c1c)' : (r.delta < 0 ? 'var(--c-fg-15803d)' : undefined) }}>
                       {money(r.delta)}
                     </td>
                     <td style={{ ...td, color: 'var(--text3)' }}>{pct(r.delta_pct)}</td>
-                    <td style={{ ...td, color: r.at_risk ? '#b45309' : 'var(--text3)' }}>{money(r.at_risk)}</td>
+                    <td style={{ ...td, color: r.at_risk ? 'var(--c-fg-b45309)' : 'var(--text3)' }}>{money(r.at_risk)}</td>
                     <td style={{ ...td, fontSize: 11, color: 'var(--text3)' }}>
                       {r.only_in === 'today' ? 'today only' : r.only_in === 'policy' ? 'policy only' : ''}
                     </td>
@@ -491,7 +491,7 @@ export default function DeviceCostReconPage() {
                   <td style={td} colSpan={3}>TOTAL — {n0(d.delta_totals?.months)} month(s), {n0(d.delta_totals?.stores)} store(s)</td>
                   <td style={td}>{money(d.delta_totals?.today)}</td>
                   <td style={td}>{money(d.delta_totals?.policy)}</td>
-                  <td style={{ ...td, color: (d.delta_totals?.delta || 0) > 0 ? '#b91c1c' : '#15803d' }}>{money(d.delta_totals?.delta)}</td>
+                  <td style={{ ...td, color: (d.delta_totals?.delta || 0) > 0 ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-15803d)' }}>{money(d.delta_totals?.delta)}</td>
                   <td style={td}>{pct(d.delta_totals?.delta_pct)}</td>
                   <td style={td}>{money(d.delta_totals?.at_risk)}</td>
                   <td style={td} />
@@ -517,14 +517,14 @@ export default function DeviceCostReconPage() {
               {inv?.snapshot_as_of_to ? ` (snapshot as of ${inv.snapshot_as_of_to})` : ''};
               the consignment ledger separately values {n0(inv?.ledger_unsold_devices)} unsold device(s) at
               {' '}{money(inv?.ledger_unsold_amount)}
-              {inv?.double_valued_devices ? <span style={{ color: '#b45309' }}> — {n0(inv.double_valued_devices)} device(s)
+              {inv?.double_valued_devices ? <span style={{ color: 'var(--c-fg-b45309)' }}> — {n0(inv.double_valued_devices)} device(s)
                 ({money(inv.double_valued_amount)}) are valued by BOTH</span> : null}.
             </div>
-            <div style={{ color: '#b45309' }}><b>Δ(inventory) is not derivable.</b> {inv?.delta_note}</div>
+            <div style={{ color: 'var(--c-fg-b45309)' }}><b>Δ(inventory) is not derivable.</b> {inv?.delta_note}</div>
             <div><b>Liability (§9 Q2).</b> {liab?.note} Unsold consignment owed:
               {' '}<b>{money(liab?.unsold_owed)}</b> across {n0(liab?.unsold_devices)} device(s).</div>
-            {liab?.definition_note && <div style={{ color: '#b45309' }}>{liab.definition_note}</div>}
-            {d.today?.available === false && <div style={{ color: '#b91c1c' }}><b>Today&apos;s leg unavailable.</b> {d.today?.note}</div>}
+            {liab?.definition_note && <div style={{ color: 'var(--c-fg-b45309)' }}>{liab.definition_note}</div>}
+            {d.today?.available === false && <div style={{ color: 'var(--c-fg-b91c1c)' }}><b>Today&apos;s leg unavailable.</b> {d.today?.note}</div>}
             {d.today?.available && <div style={{ color: 'var(--text3)' }}>
               Today&apos;s leg: <code>{d.today.route}</code> — {d.today.basis}.
             </div>}
@@ -544,7 +544,7 @@ export default function DeviceCostReconPage() {
             {(d.overlap_summary?.pairs || []).map((p: any) => (
               <div key={p.code} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', minWidth: 230 }}>
                 <div style={{ fontSize: 12, fontWeight: 700 }}>{p.label}</div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: p.devices ? '#b45309' : undefined }}>
+                <div style={{ fontSize: 18, fontWeight: 800, color: p.devices ? 'var(--c-fg-b45309)' : undefined }}>
                   {money(p.duplicate_amount)}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>{n0(p.devices)} device(s) · {p.why}</div>
@@ -570,7 +570,7 @@ export default function DeviceCostReconPage() {
                     <td style={{ ...td, fontSize: 12 }}>{(o.pair_labels || []).join(' · ')}</td>
                     <td style={td}>{n0(o.rows)}</td>
                     <td style={td}>{money(o.gross_amount)}</td>
-                    <td style={{ ...td, fontWeight: 700, color: '#b45309' }}>{money(o.duplicate_amount)}</td>
+                    <td style={{ ...td, fontWeight: 700, color: 'var(--c-fg-b45309)' }}>{money(o.duplicate_amount)}</td>
                     <td style={{ ...td, fontSize: 12 }}>{(o.stores || []).join(' · ')}</td>
                     <td style={{ ...td, fontSize: 12 }}>{(o.products || []).join(' · ')}</td>
                   </tr>
@@ -585,7 +585,7 @@ export default function DeviceCostReconPage() {
             </table>
           </div>
           {d.overlap_total > overlaps.length && (
-            <div style={{ padding: '8px 14px', fontSize: 12, color: '#b45309' }}>
+            <div style={{ padding: '8px 14px', fontSize: 12, color: 'var(--c-fg-b45309)' }}>
               Showing the {overlaps.length} biggest of {n0(d.overlap_total)} overlapping devices — the
               tiles above still describe all of them.
             </div>
@@ -617,8 +617,8 @@ export default function DeviceCostReconPage() {
                     <td style={td}>{n0(s.rows)}</td>
                     <td style={td}>{money(s.amount)}</td>
                     <td style={td}>{n0(s.linkable_rows)}</td>
-                    <td style={{ ...td, color: s.unlinkable_rows ? '#b45309' : undefined }}>{n0(s.unlinkable_rows)}</td>
-                    <td style={{ ...td, color: s.unlinkable_rows ? '#b45309' : undefined }}>{money(s.unlinkable_amount)}</td>
+                    <td style={{ ...td, color: s.unlinkable_rows ? 'var(--c-fg-b45309)' : undefined }}>{n0(s.unlinkable_rows)}</td>
+                    <td style={{ ...td, color: s.unlinkable_rows ? 'var(--c-fg-b45309)' : undefined }}>{money(s.unlinkable_amount)}</td>
                     <td style={td}>{n0(s.priceless_rows)}</td>
                     <td style={{ ...td, fontSize: 11, color: 'var(--text3)' }}>{(s.reasons || []).join(' · ')}</td>
                   </tr>
@@ -668,8 +668,8 @@ export default function DeviceCostReconPage() {
                     <td style={td}>{n0(g.devices)}</td>
                     <td style={td}>{money(g.amount)}</td>
                     <td style={{ ...td, fontWeight: 700 }}>{money(g.recognized_amount)}</td>
-                    <td style={{ ...td, color: g.suppressed_amount ? '#b45309' : undefined }}>{money(g.suppressed_amount)}</td>
-                    <td style={{ ...td, color: g.unlinkable_rows ? '#b45309' : undefined }}>{n0(g.unlinkable_rows)}</td>
+                    <td style={{ ...td, color: g.suppressed_amount ? 'var(--c-fg-b45309)' : undefined }}>{money(g.suppressed_amount)}</td>
+                    <td style={{ ...td, color: g.unlinkable_rows ? 'var(--c-fg-b45309)' : undefined }}>{n0(g.unlinkable_rows)}</td>
                     <td style={td}>{n0(g.priceless_rows)}</td>
                   </tr>
                 ))}
@@ -735,16 +735,16 @@ export default function DeviceCostReconPage() {
           {(d.distributors || []).length > 0 && (
             <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text2)' }}>
               <b>Arrangements read from this org&apos;s config</b> (commcalc.distributors — edit at{' '}
-              <a href="/commcalc/distributors" style={{ color: 'var(--accent,#2563eb)' }}>Distributors</a>,
+              <a href="/commcalc/distributors" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Distributors</a>,
               and map a carrier&apos;s cost columns at{' '}
-              <a href="/commcalc/payables" style={{ color: 'var(--accent,#2563eb)' }}>Payables → source maps</a>):
+              <a href="/commcalc/payables" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Payables → source maps</a>):
               {' '}{(d.distributors || []).map((x: any) => `${x.name} (${x.arrangement || 'unset'}${x.has_asset_lending ? ', asset lending' : ''})`).join(' · ')}
             </div>
           )}
         </Collapsible>
 
         {d.truncated && (
-          <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8 }}>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginBottom: 8 }}>
             Showing the first {rows.length} of {n0(d.total_rows)} matching cost rows — the tiles, the
             rollup and the delta preview still describe all {n0(d.total_rows)}. Narrow the filters to see
             the rest.
@@ -764,9 +764,9 @@ export default function DeviceCostReconPage() {
         />
 
         <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 14, lineHeight: 1.6 }}>
-          Row shading: <b style={{ color: '#15803d' }}>green</b> — the §9 policy would recognize this row
-          as the device&apos;s cost. <b style={{ color: '#b91c1c' }}>red</b> — suppressed as a duplicate of
-          the same IMEI. <b style={{ color: '#b45309' }}>amber</b> — the row cannot be joined to an IMEI at
+          Row shading: <b style={{ color: 'var(--c-fg-15803d)' }}>green</b> — the §9 policy would recognize this row
+          as the device&apos;s cost. <b style={{ color: 'var(--c-fg-b91c1c)' }}>red</b> — suppressed as a duplicate of
+          the same IMEI. <b style={{ color: 'var(--c-fg-b45309)' }}>amber</b> — the row cannot be joined to an IMEI at
           all, so nothing can prove it is or is not a duplicate. A row with no usable dollar is counted and
           left out of every sum rather than added as $0. There is deliberately <b>no TOTAL row</b> on this
           table: adding all four sources together is the double-count this page exists to expose — read the

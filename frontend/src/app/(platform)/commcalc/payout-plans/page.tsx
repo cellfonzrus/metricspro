@@ -73,7 +73,7 @@ export default function PayoutPlansHub() {
       .finally(() => setDiagBusy(false))
   }
 
-  const chip = (bg: string, color = '#fff') => ({
+  const chip = (bg: string, color = 'var(--c-fg-ffffff)') => ({
     padding: '2px 9px', borderRadius: 999, fontSize: 11, fontWeight: 700,
     background: bg, color, display: 'inline-block',
   })
@@ -108,7 +108,7 @@ export default function PayoutPlansHub() {
       </div>
 
       {loading && <div className="card" style={{ padding: 16 }}>Loading…</div>}
-      {err && <div className="card" style={{ padding: 16, color: '#dc2626' }}>Failed to load: {err}</div>}
+      {err && <div className="card" style={{ padding: 16, color: 'var(--c-fg-dc2626)' }}>Failed to load: {err}</div>}
 
       {ov && !loading && (
         <>
@@ -139,7 +139,7 @@ export default function PayoutPlansHub() {
                     <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 10 }}>
                       Incentive plans: <b>{c.plan_count}</b> &nbsp;·&nbsp; Rep assignments: <b>{c.assignment_count}</b> &nbsp;·&nbsp; Payout schedules: <b>{c.schedule_count}</b>
                       {!c.ready && (
-                        <div style={{ color: '#dc2626', marginTop: 6 }}>
+                        <div style={{ color: 'var(--c-fg-dc2626)', marginTop: 6 }}>
                           ⚠️ No plan assignment or schedule — reps on this carrier will calculate to <b>$0</b> until you add one.
                         </div>
                       )}
@@ -185,7 +185,7 @@ export default function PayoutPlansHub() {
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>
               Read-only. Checks the exact roster sources + plan/installment engines for this period and tells you what’s missing.
             </div>
-            {diagErr && <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>Failed: {diagErr}</div>}
+            {diagErr && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 13, marginTop: 10 }}>Failed: {diagErr}</div>}
             {diag && (
               <div style={{ marginTop: 12 }}>
                 <ol style={{ margin: '0 0 12px 18px', fontSize: 13, lineHeight: 1.7 }}>
@@ -218,7 +218,7 @@ export default function PayoutPlansHub() {
                         {pl.assignments.length > 0 && (
                           <span style={{ color: 'var(--text3)' }}> · {pl.assignments.map(a => `${a.scope}=${a.value ?? '(any)'}`).join(', ')}</span>
                         )}
-                        {!pl.is_active && <span style={{ color: '#dc2626' }}> · INACTIVE</span>}
+                        {!pl.is_active && <span style={{ color: 'var(--c-fg-dc2626)' }}> · INACTIVE</span>}
                       </div>
                     ))}
                   </div>

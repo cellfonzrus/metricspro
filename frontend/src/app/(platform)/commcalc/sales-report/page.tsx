@@ -317,7 +317,7 @@ export default function SalesReportPage() {
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openDiag}>🔍 Data diagnostics</button>
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openAccCfg}>⚙️ Classification settings</button>
         <WhereAreMyRowsButton period={period} />
-        {data?.source === 'daily_sales_feed' && <span style={{ fontSize: 11, color: '#b45309' }}>source: daily email feed (not yet promoted into the monthly sales upload — enable ‘auto’ on Connectors)</span>}
+        {data?.source === 'daily_sales_feed' && <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>source: daily email feed (not yet promoted into the monthly sales upload — enable ‘auto’ on Connectors)</span>}
       </div>
 
       {/* NARRATIVE BANNER — plain-English "how sales are tracking vs last month" above the grid.
@@ -326,7 +326,7 @@ export default function SalesReportPage() {
 
       {/* PROMINENT error banner (was a tiny inline span that read as "no data"). A read failure now says so. */}
       {data?.error && (
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-991b1b)', fontSize: 13 }}>
           <b>❌ Sales Report could not read this month.</b> {data.error}
           <div style={{ marginTop: 6 }}><WhereAreMyRowsButton period={period} /></div>
         </div>
@@ -350,11 +350,11 @@ export default function SalesReportPage() {
       {/* SOURCE OF TRUTH (mig 923): activations/BYOD/upgrades on this report come from the Activation Details
           basis (matches Exec MTD + the POS figure), not the sales feed. Shown only when that basis is active. */}
       {data?.activation_source?.active && (
-        <div style={{ fontSize: 12.5, background: '#ecfdf5', color: '#065f46', border: '1px solid #6ee7b7',
+        <div style={{ fontSize: 12.5, background: 'var(--c-bg-ecfdf5)', color: 'var(--c-fg-065f46)', border: '1px solid var(--c-bg-6ee7b7)',
                       borderRadius: 8, padding: '8px 12px', marginBottom: 14 }}>
           ✓ Activations, BYOD and Upgrades on this report come from the <b>Activation Details</b> basis of truth
           (matches Executive MTD &amp; the {pos} figure). Other columns come from the sales feed.{' '}
-          <Link href="/commcalc/activations" style={{ color: '#065f46', fontWeight: 700, textDecoration: 'underline' }}>
+          <Link href="/commcalc/activations" style={{ color: 'var(--c-fg-065f46)', fontWeight: 700, textDecoration: 'underline' }}>
             Activations report &amp; reconciliation →
           </Link>
         </div>
@@ -363,8 +363,8 @@ export default function SalesReportPage() {
       {/* Activation-classification VISIBILITY (mig 213/224): a tenant whose activations read 0 sees exactly
           WHY (blank / unrecognized contract types) and where to map them — never a silent 0 again. */}
       {data?.classification_gaps?.note && (
-        <div style={{ fontSize: 12.5, background: 'var(--warn-bg, #fff6e5)', color: 'var(--warn-fg, #7a5200)',
-                      border: '1px solid var(--warn-border, #f0d28a)', borderRadius: 8, padding: '8px 12px', marginBottom: 14 }}>
+        <div style={{ fontSize: 12.5, background: 'var(--warn-bg, var(--c-bg-fff6e5))', color: 'var(--warn-fg, var(--c-fg-7a5200))',
+                      border: '1px solid var(--warn-border, var(--c-bg-f0d28a))', borderRadius: 8, padding: '8px 12px', marginBottom: 14 }}>
           ⚠️ {data.classification_gaps.note}
           {(data.classification_gaps.rescued_by_rules ?? 0) > 0 &&
             <> · <b>{data.classification_gaps.rescued_by_rules}</b> blank-contract-type transaction(s) already classified by your activation rules.</>}
@@ -450,7 +450,7 @@ export default function SalesReportPage() {
             {drillBusy ? (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Loading transactions…</div>
             ) : detail?.error ? (
-              <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>❌ {detail.error}</div>
+              <div style={{ padding: 20, color: 'var(--c-fg-dc2626)', fontSize: 13 }}>❌ {detail.error}</div>
             ) : (detail?.transactions || []).length === 0 ? (
               <div style={{ padding: 20, color: 'var(--text3)', fontSize: 13 }}>No transaction detail found for this cell.</div>
             ) : (
@@ -518,7 +518,7 @@ export default function SalesReportPage() {
             {diagBusy ? (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Loading…</div>
             ) : diag.error ? (
-              <div style={{ padding: 20, color: '#dc2626', fontSize: 13 }}>❌ {diag.error}</div>
+              <div style={{ padding: 20, color: 'var(--c-fg-dc2626)', fontSize: 13 }}>❌ {diag.error}</div>
             ) : (
               <>
                 <div style={{ fontSize: 13, marginBottom: 12, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
@@ -531,7 +531,7 @@ export default function SalesReportPage() {
                   return (
                     <div key={tbl} style={{ marginBottom: 16 }}>
                       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>{tbl} <span style={{ fontWeight: 400, color: 'var(--text3)' }}>· {d.rows ?? 0} rows{d.periods ? ` · periods: ${Object.keys(d.periods).join(', ') || '—'}` : ''}</span></div>
-                      {d.error ? <div style={{ fontSize: 12, color: '#dc2626' }}>{d.error}</div> : (
+                      {d.error ? <div style={{ fontSize: 12, color: 'var(--c-fg-dc2626)' }}>{d.error}</div> : (
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                           {[['Contract Types', d.contract_types], ['Departments', d.departments], ['Categories', d.categories], ['Products (non-phone lines = accessories live here)', d.products_on_nonphone_lines]].map(([lbl, obj]: any) => (
                             <div key={lbl}>
@@ -572,7 +572,7 @@ export default function SalesReportPage() {
             {!unm ? (
               <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>{unmBusy ? 'Loading…' : ' '}</div>
             ) : unm.error ? (
-              <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#991b1b' }}>❌ {unm.error}</div>
+              <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: 'var(--c-fg-991b1b)' }}>❌ {unm.error}</div>
             ) : (unm.by_line || []).length === 0 ? (
               <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>No unmatched activation candidates for this period — nothing to map. ✅</div>
             ) : (
@@ -647,7 +647,7 @@ export default function SalesReportPage() {
             ) : (
               <>
                 {!accCanEdit && (
-                  <div style={{ background: '#fef9c3', border: '1px solid #fde047', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#92400e', marginBottom: 10 }}>
+                  <div style={{ background: 'var(--c-bg-fef9c3)', border: '1px solid var(--c-bg-fde047)', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: 'var(--c-fg-92400e)', marginBottom: 10 }}>
                     🔒 Read-only. Editing Classification settings requires the <b>Classification settings</b> permission — ask an administrator to grant it (<ScreenLink to="roles_access">Roles &amp; Access</ScreenLink> &rarr; settings permissions).
                   </div>
                 )}
@@ -674,7 +674,7 @@ export default function SalesReportPage() {
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
                     {accSel.p.map(k => (
                       <span key={k} style={{ display: 'inline-flex', gap: 4, alignItems: 'center', background: 'var(--surface2)', borderRadius: 12, padding: '2px 8px', fontSize: 12 }}>
-                        {k}<span style={{ cursor: 'pointer', color: '#dc2626', fontWeight: 700 }} onClick={() => setAccSel(s => ({ ...s, p: s.p.filter(x => x !== k) }))}>✕</span>
+                        {k}<span style={{ cursor: 'pointer', color: 'var(--c-fg-dc2626)', fontWeight: 700 }} onClick={() => setAccSel(s => ({ ...s, p: s.p.filter(x => x !== k) }))}>✕</span>
                       </span>
                     ))}
                     {accSel.p.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>none</span>}
@@ -841,7 +841,7 @@ export default function SalesReportPage() {
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
                     {accSel.setup.map(k => (
                       <span key={k} style={{ display: 'inline-flex', gap: 4, alignItems: 'center', background: 'var(--surface2)', borderRadius: 12, padding: '2px 8px', fontSize: 12 }}>
-                        {k}<span style={{ cursor: 'pointer', color: '#dc2626', fontWeight: 700 }} onClick={() => setAccSel(s => ({ ...s, setup: s.setup.filter(x => x !== k) }))}>✕</span>
+                        {k}<span style={{ cursor: 'pointer', color: 'var(--c-fg-dc2626)', fontWeight: 700 }} onClick={() => setAccSel(s => ({ ...s, setup: s.setup.filter(x => x !== k) }))}>✕</span>
                       </span>
                     ))}
                     {accSel.setup.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>none</span>}
@@ -914,7 +914,7 @@ export default function SalesReportPage() {
                   )}
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, gap: 8 }}>
-                  <span style={{ fontSize: 12, color: accMsg.startsWith('❌') ? '#dc2626' : 'var(--text3)' }}>{accMsg}</span>
+                  <span style={{ fontSize: 12, color: accMsg.startsWith('❌') ? 'var(--c-fg-dc2626)' : 'var(--text3)' }}>{accMsg}</span>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={!accCanEdit} onClick={() => { setAccSel({ d: [], c: [], p: [], a: [], box: [], setup: [], billpay: [] }); setKwInput(''); setSetupInput('') }}>Clear all</button>
                     <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={!accCanEdit} onClick={saveAccCfg}>Save</button>

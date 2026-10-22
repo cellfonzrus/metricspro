@@ -22,10 +22,10 @@ const cellR: React.CSSProperties = { ...cell, textAlign: 'right', fontVariantNum
 
 function AgingBadge({ bucket }: { bucket: any }) {
   const c = bucket?.key === 'missed'
-    ? { bg: '#fde8e8', fg: '#c81e1e', bd: '#f8b4b4' }
+    ? { bg: 'var(--c-bg-fde8e8)', fg: 'var(--c-fg-c81e1e)', bd: 'var(--c-bg-f8b4b4)' }
     : bucket?.key === 'warn'
-      ? { bg: '#fff4e5', fg: '#b45309', bd: '#fed7aa' }
-      : { bg: '#e6f7ec', fg: '#16794a', bd: '#b7e4c7' }
+      ? { bg: 'var(--c-bg-fff4e5)', fg: 'var(--c-fg-b45309)', bd: 'var(--c-bg-fed7aa)' }
+      : { bg: 'var(--c-bg-e6f7ec)', fg: 'var(--c-fg-16794a)', bd: 'var(--c-bg-b7e4c7)' }
   return (
     <span style={{ background: c.bg, color: c.fg, border: `1px solid ${c.bd}`, borderRadius: 6, padding: '2px 8px', fontSize: 12, fontWeight: 700 }}>
       {bucket?.label} · {bucket?.range}
@@ -184,8 +184,8 @@ export default function DeviceHistoryLookup() {
 
   const p = res?.prompt
   const promptStyle: React.CSSProperties = p?.kind === 'upgrade'
-    ? { background: '#e6f7ec', color: '#16794a', border: '1px solid #b7e4c7' }
-    : { background: '#fff4e5', color: '#b45309', border: '1px solid #fed7aa' }
+    ? { background: 'var(--c-bg-e6f7ec)', color: 'var(--c-fg-16794a)', border: '1px solid var(--c-bg-b7e4c7)' }
+    : { background: 'var(--c-bg-fff4e5)', color: 'var(--c-fg-b45309)', border: '1px solid var(--c-bg-fed7aa)' }
 
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -218,7 +218,7 @@ export default function DeviceHistoryLookup() {
           </div>
         )}
 
-        {err && <div style={{ marginTop: 12, color: 'var(--red, #dc2626)', fontSize: 13 }}>⚠ {err}</div>}
+        {err && <div style={{ marginTop: 12, color: 'var(--red, var(--c-fg-dc2626))', fontSize: 13 }}>⚠ {err}</div>}
 
         {res && !res.found && !err && (
           <div style={{ marginTop: 14 }}>

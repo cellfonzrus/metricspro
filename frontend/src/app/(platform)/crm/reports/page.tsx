@@ -107,14 +107,14 @@ export default function CrmReportsPage() {
           ))}
       </div>
 
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginBottom: 12 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginBottom: 12 }}>{msg}</div>}
       {loading && <div style={{ color: 'var(--text2)' }}>Loading…</div>}
 
       {tab === 'conversion' && conv && (
         <div style={{ ...panel, marginBottom: 12, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
           <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>TOTAL</div><div style={{ fontSize: 22, fontWeight: 700 }}>{conv.totals.total}</div></div>
-          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>WON</div><div style={{ fontSize: 22, fontWeight: 700, color: '#16a34a' }}>{conv.totals.won}</div></div>
-          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>LOST</div><div style={{ fontSize: 22, fontWeight: 700, color: '#dc2626' }}>{conv.totals.lost}</div></div>
+          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>WON</div><div style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-fg-16a34a)' }}>{conv.totals.won}</div></div>
+          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>LOST</div><div style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-fg-dc2626)' }}>{conv.totals.lost}</div></div>
           <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>WIN RATE</div><div style={{ fontSize: 22, fontWeight: 700 }}>{conv.totals.win_rate}%</div></div>
           <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>CLOSE RATE</div><div style={{ fontSize: 22, fontWeight: 700 }}>{conv.totals.close_rate}%</div></div>
         </div>

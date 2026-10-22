@@ -79,7 +79,7 @@ export default function ManagementWatchdogPage() {
       />
 
       {err && (
-        <div style={{ border: '1px solid var(--red, #dc2626)', borderRadius: 8, padding: '10px 12px',
+        <div style={{ border: '1px solid var(--red, var(--c-bg-dc2626))', borderRadius: 8, padding: '10px 12px',
                       marginBottom: 14, fontSize: 13, color: 'var(--text2)' }}>
           The watchdog board could not be loaded: {err}
           {/* Deliberately NOT rendered as "0 findings" — a failed read and a clean estate must never
@@ -129,7 +129,7 @@ export default function ManagementWatchdogPage() {
                     {a.worst_severity && (
                       <span style={{ alignSelf: 'flex-start', fontSize: 10, fontWeight: 700,
                                      letterSpacing: '0.4px', color: colour,
-                                     background: (colour || '#64748b') + '18',
+                                     background: (colour || 'var(--c-bg-64748b)') + '18',
                                      padding: '2px 7px', borderRadius: 999 }}>
                         {a.worst_severity}
                       </span>
@@ -150,7 +150,7 @@ export default function ManagementWatchdogPage() {
           </div>
 
           <div style={{ marginTop: 18, fontSize: 13 }}>
-            <Link href="/watchdog/void-register" style={{ color: 'var(--blue, #2563eb)' }}>
+            <Link href="/watchdog/void-register" style={{ color: 'var(--blue, var(--c-fg-2563eb))' }}>
               Open the void &amp; return register →
             </Link>
             <span style={{ color: 'var(--text2)', marginLeft: 8 }}>

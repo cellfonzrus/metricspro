@@ -1147,7 +1147,7 @@ export default function PlanInstallmentsPage() {
               </div>
             )}
             {conflicts.length > 0 && (
-              <div className="card" style={{ padding: 10, marginBottom: 10, borderLeft: '4px solid #dc2626', fontSize: 12 }}>
+              <div className="card" style={{ padding: 10, marginBottom: 10, borderLeft: '4px solid var(--c-bg-dc2626)', fontSize: 12 }}>
                 <b>⚠️ Cross-menu conflict — nothing was saved.</b> These products already carry a different category on the{' '}
                 <a href="/commcalc/item-mapping" style={{ color: 'var(--accent)' }}>Item / Model Mapping</a> menu. Resolve the divergence there first, or change your selection.
                 <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>

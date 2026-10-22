@@ -109,7 +109,7 @@ export default function VisionBehaviorPage() {
       {msg && <div style={{ ...panel, marginBottom: 14, fontSize: 13 }}>{msg}</div>}
 
       {data?.disclaimer && (
-        <div style={{ ...panel, marginBottom: 14, borderLeft: '3px solid #f39c12', fontSize: 12.5, color: 'var(--text2)' }}>
+        <div style={{ ...panel, marginBottom: 14, borderLeft: '3px solid var(--c-bg-f39c12)', fontSize: 12.5, color: 'var(--text2)' }}>
           ⚠️ {data.disclaimer}
         </div>
       )}
@@ -198,7 +198,7 @@ function EmployeeDetail({ employee }: { employee: BehaviorEmployee }) {
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 70 }}>
           {employee.series.map(s => (
             <div key={s.local_date} title={`${s.local_date}: ${s.score} over ${s.interactions} conversation(s)`}
-              style={{ flex: 1, height: `${(s.score / peak) * 100}%`, minHeight: 2, background: '#2563eb', borderRadius: '3px 3px 0 0' }} />
+              style={{ flex: 1, height: `${(s.score / peak) * 100}%`, minHeight: 2, background: 'var(--c-bg-2563eb)', borderRadius: '3px 3px 0 0' }} />
           ))}
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 6 }}>
@@ -210,10 +210,10 @@ function EmployeeDetail({ employee }: { employee: BehaviorEmployee }) {
 }
 
 function ScoreChip({ score }: { score: number }) {
-  const color = score >= 75 ? '#16a34a' : score >= 50 ? '#f39c12' : '#dc2626'
+  const color = score >= 75 ? 'var(--c-fg-16a34a)' : score >= 50 ? 'var(--c-fg-f39c12)' : 'var(--c-fg-dc2626)'
   return (
     <span style={{ display: 'inline-block', minWidth: 42, textAlign: 'center', padding: '2px 8px',
-      borderRadius: 6, background: color, color: '#fff', fontWeight: 700, fontSize: 12.5 }}>
+      borderRadius: 6, background: color, color: 'var(--c-fg-ffffff)', fontWeight: 700, fontSize: 12.5 }}>
       {score}
     </span>
   )

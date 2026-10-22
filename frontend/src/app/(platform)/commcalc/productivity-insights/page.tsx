@@ -9,7 +9,7 @@ import { usePeriod } from '@/lib/period-context'
 const REC_STYLE: Record<string, { icon: string; color: string }> = {
   recognize: { icon: '🌟', color: 'var(--green)' },
   schedule: { icon: '📅', color: 'var(--accent)' },
-  coach: { icon: '🎓', color: '#b45309' },
+  coach: { icon: '🎓', color: 'var(--c-fg-b45309)' },
 }
 
 export default function ProductivityInsightsPage() {

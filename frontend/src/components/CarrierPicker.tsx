@@ -66,7 +66,7 @@ export default function CarrierPicker({ canEdit }: { canEdit: boolean }) {
   const chip = (selected: boolean) => ({
     padding: '8px 14px', borderRadius: 999, fontSize: 14, cursor: canEdit ? 'pointer' : 'default',
     border: `1.5px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
-    background: selected ? 'var(--accent)' : 'var(--surface)', color: selected ? '#fff' : 'var(--text1)',
+    background: selected ? 'var(--accent)' : 'var(--surface)', color: selected ? 'var(--c-fg-ffffff)' : 'var(--text1)',
     fontWeight: selected ? 700 : 500, opacity: canEdit ? 1 : 0.75,
   })
   const extras = carriers.filter(c => !PRESETS.some(p => matchOf(p)?.id === c.id))

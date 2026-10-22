@@ -100,7 +100,7 @@ export default function EpaySweepAdmin() {
         portal login here so a password change never needs a code change.
       </p>
 
-      <div className="card" style={{ padding: '10px 14px', marginBottom: 18, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>
+      <div className="card" style={{ padding: '10px 14px', marginBottom: 18, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', fontSize: 13 }}>
         ⚙️ The epay portal is a WAF-protected single-page app, so this sweep drives a <strong>headless browser</strong>
         (not a simple form login). It logs in, runs the <strong>“Monthly Incentive &amp; ATU Subscriber Details”</strong> report
         for the current month, downloads it, and loads it into MI/ATU data — replacing the manual upload. This needs the

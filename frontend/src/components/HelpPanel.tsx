@@ -92,13 +92,13 @@ export default function HelpPanel() {
       <TourRunner />
       <button onClick={() => setOpen(true)} title="Help for this page"
         aria-label="Open help" style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)',
-          background: 'white', border: '1px solid var(--border)', borderRadius: 8, width: 30, height: 30,
+          background: 'var(--c-bg-ffffff)', border: '1px solid var(--border)', borderRadius: 8, width: 30, height: 30,
           cursor: 'pointer', lineHeight: 1 }}>?</button>
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)', zIndex: 40 }} />
           <div style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 380, maxWidth: '92vw',
-            background: 'white', borderLeft: '1px solid var(--border)', boxShadow: '-8px 0 30px rgba(0,0,0,0.12)',
+            background: 'var(--c-bg-ffffff)', borderLeft: '1px solid var(--border)', boxShadow: '-8px 0 30px rgba(0,0,0,0.12)',
             zIndex: 41, display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex',
               alignItems: 'center', justifyContent: 'space-between' }}>
@@ -121,7 +121,7 @@ export default function HelpPanel() {
                           background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 10,
                           padding: '9px 11px', marginBottom: 6 }}>
                         <div style={{ fontSize: 13, fontWeight: 700 }}>
-                          ▶︎ {t.title} {done && <span style={{ color: '#16794a', fontWeight: 600 }}>✓</span>}
+                          ▶︎ {t.title} {done && <span style={{ color: 'var(--c-fg-16794a)', fontWeight: 600 }}>✓</span>}
                         </div>
                         {t.description && (
                           <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2, lineHeight: 1.45 }}>

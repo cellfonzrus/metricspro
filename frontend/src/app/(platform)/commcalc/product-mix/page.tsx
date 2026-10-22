@@ -40,14 +40,14 @@ function pct(v: number | null | undefined, digits = 1): string {
 }
 
 const VERDICT_STYLE: Record<string, { bg: string; fg: string; icon: string; label: string }> = {
-  both: { bg: '#fee2e2', fg: '#991b1b', icon: '⚑', label: 'Low on both' },
-  accessory_only: { bg: '#fef3c7', fg: '#92400e', icon: '⚠︎', label: 'Low accessory per box' },
-  port_only: { bg: '#fef3c7', fg: '#92400e', icon: '⚠︎', label: 'Low port share' },
+  both: { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)', icon: '⚑', label: 'Low on both' },
+  accessory_only: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚠︎', label: 'Low accessory per box' },
+  port_only: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚠︎', label: 'Low port share' },
   clear: { bg: 'var(--surface2)', fg: 'var(--text2)', icon: '✓', label: 'At or above the median' },
 }
 const CAVEAT_STYLE: Record<string, { bg: string; fg: string; icon: string }> = {
-  cannot_answer: { bg: '#fee2e2', fg: '#991b1b', icon: '⚑' },
-  understated: { bg: '#fef3c7', fg: '#92400e', icon: '⚠︎' },
+  cannot_answer: { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)', icon: '⚑' },
+  understated: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚠︎' },
   partial: { bg: 'var(--surface2)', fg: 'var(--text2)', icon: 'ℹ︎' },
 }
 
@@ -120,7 +120,7 @@ export default function ProductMixPage() {
   const Tile = ({ label, value, sub, warn }: { label: string; value: string; sub?: string; warn?: boolean }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 190 }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? '#92400e' : 'var(--text1)' }}>{value}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? 'var(--c-fg-92400e)' : 'var(--text1)' }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
     </div>
   )
@@ -157,7 +157,7 @@ export default function ProductMixPage() {
       </div>
 
       {data?.error &&
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-991b1b)', fontSize: 13 }}>
           <b>❌ Product Mix could not be built.</b> {data.error}
         </div>}
 
@@ -241,7 +241,7 @@ export default function ProductMixPage() {
 
       {/* A plan that did not run is not the same as no store being behind. */}
       {!loading && data?.action_plan_error &&
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#fef3c7', color: '#92400e', fontSize: 13 }}>
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)', fontSize: 13 }}>
           <b>⚠︎ The traffic-band comparison did not run</b>, so there is no store action plan below. That
           is not a finding of nobody lagging. ({data.action_plan_error})
         </div>}

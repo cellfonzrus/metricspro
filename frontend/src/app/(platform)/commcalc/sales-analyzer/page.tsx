@@ -100,7 +100,7 @@ export default function SalesAnalyzerPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : data?.error ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {data.error}</div>
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
@@ -132,8 +132,8 @@ export default function SalesAnalyzerPage() {
                     <td style={{ padding: '7px 12px', fontSize: 13 }}>{r.rep}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{r.cohort}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{r.retained}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: r.churned ? '#b91c1c' : 'var(--text3)' }}>{r.churned}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, fontWeight: 600, color: r.retention_pct >= 70 ? '#15803d' : '#b45309' }}>{r.retention_pct}%</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: r.churned ? 'var(--c-fg-b91c1c)' : 'var(--text3)' }}>{r.churned}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, fontWeight: 600, color: r.retention_pct >= 70 ? 'var(--c-fg-15803d)' : 'var(--c-fg-b45309)' }}>{r.retention_pct}%</td>
                   </tr>
                 ))}
                 {reps.length === 0 && <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No cohort activations found for {data?.cohort_month}.</td></tr>}
@@ -169,22 +169,22 @@ export default function SalesAnalyzerPage() {
               </tr></thead>
               <tbody>
                 {churned.map((c: any, i: number) => (
-                  <tr key={i} style={{ borderTop: '1px solid var(--border)', background: '#fffafa' }}>
+                  <tr key={i} style={{ borderTop: '1px solid var(--border)', background: 'var(--c-bg-fffafa)' }}>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{c.rep}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{c.phone_number}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{c.device_model || '—'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right' }}>{c.sold_for ? fmt(c.sold_for) : '—'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: 'var(--text3)' }}>{c.device_cost ? fmt(c.device_cost) : '—'}</td>
-                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: (c.margin ?? 0) <= 0 ? '#b91c1c' : '#15803d', fontWeight: 600 }}>{c.sold_for ? fmt(c.margin) : '—'}</td>
-                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: (c.accessory_sale ?? 0) <= 0 ? '#b45309' : 'var(--text)' }}>{(c.accessory_sale ?? 0) > 0 ? fmt(c.accessory_sale) : '$0'}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: (c.margin ?? 0) <= 0 ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-15803d)', fontWeight: 600 }}>{c.sold_for ? fmt(c.margin) : '—'}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: (c.accessory_sale ?? 0) <= 0 ? 'var(--c-fg-b45309)' : 'var(--text)' }}>{(c.accessory_sale ?? 0) > 0 ? fmt(c.accessory_sale) : '$0'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right' }}>{c.charged_mrc ? fmt(c.charged_mrc) : '—'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}><LossPill type={c.loss_type} reasons={c.loss_reasons} /></td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{c.store || '—'}</td>
-                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: c.fast_churn ? '#b91c1c' : undefined }}>{c.days_active}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: c.fast_churn ? 'var(--c-fg-b91c1c)' : undefined }}>{c.days_active}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{c.reason}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'center' }}>
                       {flagged[`${c.phone_number || ''}|${c.activation_date || ''}`]
-                        ? <span style={{ color: '#16794a', fontSize: 11 }}>✓ flagged</span>
+                        ? <span style={{ color: 'var(--c-fg-16794a)', fontSize: 11 }}>✓ flagged</span>
                         : <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => flagChurn(c)} title="Send to the Chargebacks & Fraud bucket for this rep">🔻 Charge</button>}
                     </td>
                   </tr>
@@ -202,9 +202,9 @@ export default function SalesAnalyzerPage() {
 
 function LossPill({ type, reasons }: { type?: string; reasons?: string[] }) {
   const cfg: Record<string, { bg: string; fg: string; label: string }> = {
-    employee: { bg: '#fef3c7', fg: '#92400e', label: '👤 Employee' },
-    customer: { bg: '#dcfce7', fg: '#15803d', label: '🙂 Customer' },
-    mixed: { bg: '#e5e7eb', fg: '#374151', label: '◐ Mixed' },
+    employee: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', label: '👤 Employee' },
+    customer: { bg: 'var(--c-bg-dcfce7)', fg: 'var(--c-fg-15803d)', label: '🙂 Customer' },
+    mixed: { bg: 'var(--c-bg-e5e7eb)', fg: 'var(--c-fg-374151)', label: '◐ Mixed' },
   }
   const c = cfg[type || 'mixed'] || cfg.mixed
   return (

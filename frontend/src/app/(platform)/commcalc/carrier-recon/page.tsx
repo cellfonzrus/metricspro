@@ -26,7 +26,7 @@ const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 8, border: 
 const lbl: React.CSSProperties = { fontSize: 12, color: 'var(--text2)', display: 'inline-flex', flexDirection: 'column', gap: 4 }
 const tabBtn: (on: boolean) => React.CSSProperties = (on) => ({
   padding: '6px 12px', fontSize: 13, cursor: 'pointer', borderRadius: 8, border: '1px solid var(--border)',
-  background: on ? 'var(--accent, #2563eb)' : 'var(--surface)', color: on ? '#fff' : 'var(--text)', fontWeight: on ? 700 : 500,
+  background: on ? 'var(--accent, var(--c-bg-2563eb))' : 'var(--surface)', color: on ? 'var(--c-fg-ffffff)' : 'var(--text)', fontWeight: on ? 700 : 500,
 })
 
 const money = (n: number) => fmt(Math.round((n || 0) * 100) / 100)
@@ -166,13 +166,13 @@ export default function CarrierReconPage() {
         </label>
         <button onClick={upload} disabled={busy} className="card"
           style={{ padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: busy ? 'wait' : 'pointer',
-            background: 'var(--accent, #2563eb)', color: '#fff', border: 'none', borderRadius: 8 }}>
+            background: 'var(--accent, var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', border: 'none', borderRadius: 8 }}>
           {busy ? 'Reconciling…' : 'Upload & reconcile'}
         </button>
       </div>
 
       {err && (
-        <div className="card" style={{ ...card, padding: 12, marginTop: 12, borderColor: '#b91c1c', color: '#b91c1c', fontSize: 13 }}>
+        <div className="card" style={{ ...card, padding: 12, marginTop: 12, borderColor: 'var(--c-bg-b91c1c)', color: 'var(--c-fg-b91c1c)', fontSize: 13 }}>
           ⚠️ {err}
         </div>
       )}
@@ -197,9 +197,9 @@ export default function CarrierReconPage() {
 
           {/* unmatched callout — never silently dropped */}
           {data.unmatched_stores.length > 0 && (
-            <div className="card" style={{ ...card, padding: 12, marginBottom: 14, borderColor: '#b45309',
-              background: 'var(--surface2, #fffbeb)', fontSize: 13 }}>
-              <b style={{ color: '#b45309' }}>⚠️ {data.unmatched_stores.length} workbook store(s) could not be matched to our data</b>{' '}
+            <div className="card" style={{ ...card, padding: 12, marginBottom: 14, borderColor: 'var(--c-bg-b45309)',
+              background: 'var(--surface2, var(--c-bg-fffbeb))', fontSize: 13 }}>
+              <b style={{ color: 'var(--c-fg-b45309)' }}>⚠️ {data.unmatched_stores.length} workbook store(s) could not be matched to our data</b>{' '}
               — shown below with a zeroed “Ours” column, never dropped. Fix a mapping at{' '}
               <ScreenLink to="store_matching" /> to resolve them:
               <div style={{ marginTop: 6, color: 'var(--text2)' }}>{data.unmatched_stores.join(' · ')}</div>
@@ -237,7 +237,7 @@ export default function CarrierReconPage() {
                     <tr key={r.store} style={{ borderBottom: '1px solid var(--border)' }}>
                       <td style={{ ...tdL, position: 'sticky', left: 0, background: 'var(--surface)', fontWeight: 600 }}>
                         {r.store}
-                        {!r.matched && <span title="No match on our side" style={{ marginLeft: 6, color: '#b45309' }}>⚠️</span>}
+                        {!r.matched && <span title="No match on our side" style={{ marginLeft: 6, color: 'var(--c-fg-b45309)' }}>⚠️</span>}
                       </td>
                       {FIELDS.map(f => (
                         <TripleCells key={f.key} boost={r.boost[f.key]} ours={r.ours[f.key]} diff={r.diff[f.key]} />
@@ -255,8 +255,8 @@ export default function CarrierReconPage() {
                 </tfoot>
               </table>
               <div style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text3)' }}>
-                Diff = Boost − Ours. <span style={{ color: '#15803d' }}>Green</span> = match within $0.01,{' '}
-                <span style={{ color: '#b45309' }}>amber</span> = small gap, <span style={{ color: '#b91c1c' }}>red</span> = large gap.
+                Diff = Boost − Ours. <span style={{ color: 'var(--c-fg-15803d)' }}>Green</span> = match within $0.01,{' '}
+                <span style={{ color: 'var(--c-fg-b45309)' }}>amber</span> = small gap, <span style={{ color: 'var(--c-fg-b91c1c)' }}>red</span> = large gap.
               </div>
             </div>
           )}

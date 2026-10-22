@@ -100,7 +100,7 @@ export default function RecoveryPage() {
           <button className="btn btn-secondary" onClick={() => setCfgOpen(v => !v)}>⚙️ Settings</button>
         </div>
       </div>
-      {msg && <div style={{ ...card, background: 'var(--surface2, #f6f7f9)', fontSize: 13 }}>{msg}</div>}
+      {msg && <div style={{ ...card, background: 'var(--surface2, var(--c-bg-f6f7f9))', fontSize: 13 }}>{msg}</div>}
 
       {cfgOpen && cfg && (
         <div style={card}>
@@ -182,7 +182,7 @@ export default function RecoveryPage() {
                     <td style={cell}>{r.evidence ? `${r.evidence.type} ${r.evidence.date || ''}` : '—'}</td>
                   </tr>
                   {open[r.id] && r.rebuttal && (
-                    <tr><td colSpan={7} style={{ ...cell, background: 'var(--surface2, #f6f7f9)', color: 'var(--text2)' }}>📝 {r.rebuttal}</td></tr>
+                    <tr><td colSpan={7} style={{ ...cell, background: 'var(--surface2, var(--c-bg-f6f7f9))', color: 'var(--text2)' }}>📝 {r.rebuttal}</td></tr>
                   )}
                 </Fragment>
               ))}

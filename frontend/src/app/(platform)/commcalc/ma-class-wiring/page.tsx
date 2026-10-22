@@ -185,18 +185,18 @@ export default function MaClassWiringPage() {
         Where the MA product classification actually changes a number. Two places, two switches, both
         starting on <b>Legacy</b> — exactly what the system does today. Each switch shows what would move
         <b> before</b> you flip it, and flipping back is the same dropdown (no deploy, no SQL, no recompute).
-        Classify names on <a href="/commcalc/ma-product-class" style={{ color: 'var(--accent,#2563eb)' }}>MA Product Name Classification →</a>
+        Classify names on <a href="/commcalc/ma-product-class" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>MA Product Name Classification →</a>
       </p>
 
       {msg && <div style={{ ...card, marginBottom: 12, padding: '9px 13px', fontSize: 13 }}>{msg}</div>}
       {cfg && !cfg.ready && (
-        <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '9px 13px', fontSize: 13, marginBottom: 12 }}>
+        <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '9px 13px', fontSize: 13, marginBottom: 12 }}>
           Run migration <code>{cfg.migration}</code> to save a switch. Until then both consumers read
           <b> Legacy</b> and nothing on this page can change a number.
         </div>
       )}
       {ro && (
-        <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e40af', borderRadius: 8, padding: '9px 13px', fontSize: 13, marginBottom: 12 }}>
+        <div style={{ background: 'var(--c-bg-eff6ff)', border: '1px solid var(--c-bg-bfdbfe)', color: 'var(--c-fg-1e40af)', borderRadius: 8, padding: '9px 13px', fontSize: 13, marginBottom: 12 }}>
           You can read every delta on this page, but only an administrator can flip a switch.
         </div>
       )}
@@ -206,11 +206,11 @@ export default function MaClassWiringPage() {
         <div style={card}>
           <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Only confirmed classifications move money</div>
           <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', fontSize: 13 }}>
-            <div><b style={{ fontSize: 19, color: '#15803d' }}>{st.confirmed}</b> confirmed — these classify</div>
-            <div><b style={{ fontSize: 19, color: '#b45309' }}>{st.proposed}</b> proposed — these classify <b>nothing</b></div>
+            <div><b style={{ fontSize: 19, color: 'var(--c-fg-15803d)' }}>{st.confirmed}</b> confirmed — these classify</div>
+            <div><b style={{ fontSize: 19, color: 'var(--c-fg-b45309)' }}>{st.proposed}</b> proposed — these classify <b>nothing</b></div>
           </div>
           {!!st.ambiguous_pending?.length && (
-            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginTop: 10, lineHeight: 1.6 }}>
+            <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', color: 'var(--c-fg-b91c1c)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginTop: 10, lineHeight: 1.6 }}>
               <b>{st.ambiguous_pending.length} name(s) flagged AMBIGUOUS are still unconfirmed, so they classify nothing:</b>
               <ul style={{ margin: '6px 0 0 18px' }}>
                 {st.ambiguous_pending.map(a => (
@@ -225,7 +225,7 @@ export default function MaClassWiringPage() {
             </div>
           )}
           {cfg?.class_migration && (
-            <div style={{ fontSize: 12.5, color: '#9a3412', marginTop: 8 }}>Migration <code>{cfg.class_migration}</code> has not been run — there are no saved classifications yet.</div>
+            <div style={{ fontSize: 12.5, color: 'var(--c-fg-9a3412)', marginTop: 8 }}>Migration <code>{cfg.class_migration}</code> has not been run — there are no saved classifications yet.</div>
           )}
         </div>
       )}
@@ -240,14 +240,14 @@ export default function MaClassWiringPage() {
               <select style={sel} disabled={!!ro || busy || !cfg.ready} value={cfg.modes[c.key] || 'legacy'} onChange={e => setMode(c.key, e.target.value)}>
                 {cfg.mode_options.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
               </select>
-              <span style={{ fontSize: 12, fontWeight: 700, color: (cfg.modes[c.key] === 'class') ? '#15803d' : 'var(--text3)' }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: (cfg.modes[c.key] === 'class') ? 'var(--c-fg-15803d)' : 'var(--text3)' }}>
                 {cfg.modes[c.key] === 'class' ? 'LIVE — reading classes' : 'legacy — today’s behaviour'}
               </span>
             </div>
           ))}
           <div style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 10, lineHeight: 1.6 }}>{cfg.note}</div>
           {!!cfg.conflicts?.length && (
-            <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginTop: 10 }}>
+            <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginTop: 10 }}>
               {cfg.conflicts.map(c => <div key={c.product_class}>⚠️ {c.why}</div>)}
             </div>
           )}
@@ -273,11 +273,11 @@ export default function MaClassWiringPage() {
             </tr></thead>
             <tbody>
               {props_.map(p => (
-                <tr key={p.product_class} style={{ borderTop: '1px solid var(--border)', background: p.warning ? '#fff7ed' : undefined }}>
+                <tr key={p.product_class} style={{ borderTop: '1px solid var(--border)', background: p.warning ? 'var(--c-bg-fff7ed)' : undefined }}>
                   <td style={{ padding: '6px 8px', fontWeight: 600 }}>
                     {p.product_class}
-                    {p.already_configured && <span style={{ fontSize: 11, color: '#15803d', marginLeft: 6 }}>already a rule → {p.current_category}</span>}
-                    {p.warning && <div style={{ fontSize: 11.5, color: '#9a3412', marginTop: 3, maxWidth: 460, lineHeight: 1.5 }}>⚠️ {p.warning}</div>}
+                    {p.already_configured && <span style={{ fontSize: 11, color: 'var(--c-fg-15803d)', marginLeft: 6 }}>already a rule → {p.current_category}</span>}
+                    {p.warning && <div style={{ fontSize: 11.5, color: 'var(--c-fg-9a3412)', marginTop: 3, maxWidth: 460, lineHeight: 1.5 }}>⚠️ {p.warning}</div>}
                     {!!p.examples.length && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>{p.examples.slice(0, 3).join(' · ')}</div>}
                   </td>
                   <td style={{ padding: '6px 8px' }}>{p.lines.toLocaleString()}</td>
@@ -296,7 +296,7 @@ export default function MaClassWiringPage() {
               ))}
             </tbody>
           </table>
-          <button onClick={applyRules} disabled={!!ro || busy} style={{ ...sel, cursor: 'pointer', marginTop: 10, fontWeight: 700, background: 'var(--accent,#2563eb)', color: '#fff', border: 'none', opacity: ro ? .5 : 1 }}>
+          <button onClick={applyRules} disabled={!!ro || busy} style={{ ...sel, cursor: 'pointer', marginTop: 10, fontWeight: 700, background: 'var(--accent,var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', border: 'none', opacity: ro ? .5 : 1 }}>
             Save the picked rules
           </button>
           <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 10 }}>Nothing is applied until you press this, and nothing pays differently until the switch is flipped.</span>
@@ -306,7 +306,7 @@ export default function MaClassWiringPage() {
       {!!cfg?.class_rules?.length && (
         <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 10 }}>
           Class rules configured: {cfg.class_rules.map(r => <code key={r.pattern} style={{ marginRight: 8 }}>{r.pattern} → {cfg.category_labels[r.category] || r.category}</code>)}
-          {' · '}<a href="/commcalc/commission-category-map" style={{ color: 'var(--accent,#2563eb)' }}>edit on Category → Bucket Map</a>
+          {' · '}<a href="/commcalc/commission-category-map" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>edit on Category → Bucket Map</a>
         </div>
       )}
 
@@ -324,12 +324,12 @@ export default function MaClassWiringPage() {
             </div>
             <div style={{ ...card, marginBottom: 0, minWidth: 190 }}>
               <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text3)' }}>Payout total with classes</div>
-              <div style={{ fontSize: 19, fontWeight: 700, color: delta.totals.class.payout_total !== delta.totals.legacy.payout_total ? '#b45309' : undefined }}>{money(delta.totals.class.payout_total)}</div>
+              <div style={{ fontSize: 19, fontWeight: 700, color: delta.totals.class.payout_total !== delta.totals.legacy.payout_total ? 'var(--c-fg-b45309)' : undefined }}>{money(delta.totals.class.payout_total)}</div>
             </div>
             {!!delta.drift_rows && (
               <div style={{ ...card, marginBottom: 0, minWidth: 190 }}>
                 <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text3)' }}>Pre-existing drift</div>
-                <div style={{ fontSize: 19, fontWeight: 700, color: '#9a3412' }}>{delta.drift_rows.toLocaleString()}</div>
+                <div style={{ fontSize: 19, fontWeight: 700, color: 'var(--c-fg-9a3412)' }}>{delta.drift_rows.toLocaleString()}</div>
                 <div style={{ fontSize: 12, color: 'var(--text2)' }}>stored ≠ today’s rules — not part of this delta</div>
               </div>
             )}
@@ -383,7 +383,7 @@ export default function MaClassWiringPage() {
                       {cfg.leg_options.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
                     </select>
                   </td>
-                  <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{l.default_leg}{l.income_leg !== l.default_leg && <b style={{ color: '#b45309' }}> · changed</b>}</td>
+                  <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{l.default_leg}{l.income_leg !== l.default_leg && <b style={{ color: 'var(--c-fg-b45309)' }}> · changed</b>}</td>
                 </tr>
               ))}
             </tbody>
@@ -392,7 +392,7 @@ export default function MaClassWiringPage() {
       )}
 
       {income?.class_note && (
-        <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '9px 13px', fontSize: 12.5, marginBottom: 12, lineHeight: 1.6 }}>{income.class_note}</div>
+        <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '9px 13px', fontSize: 12.5, marginBottom: 12, lineHeight: 1.6 }}>{income.class_note}</div>
       )}
       {income?.class_swap && (
         <>
@@ -400,12 +400,12 @@ export default function MaClassWiringPage() {
             <div style={{ ...card, marginBottom: 0, minWidth: 190 }}>
               <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text3)' }}>Residual today → with classes</div>
               <div style={{ fontSize: 17, fontWeight: 700 }}>{money(income.class_swap.totals.old_residual)} → {money(income.class_swap.totals.new_residual)}</div>
-              <div style={{ fontSize: 12, color: income.class_swap.totals.delta_residual ? '#b45309' : 'var(--text2)' }}>Δ {money(income.class_swap.totals.delta_residual)}</div>
+              <div style={{ fontSize: 12, color: income.class_swap.totals.delta_residual ? 'var(--c-fg-b45309)' : 'var(--text2)' }}>Δ {money(income.class_swap.totals.delta_residual)}</div>
             </div>
             <div style={{ ...card, marginBottom: 0, minWidth: 190 }}>
               <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text3)' }}>Airtime today → with classes</div>
               <div style={{ fontSize: 17, fontWeight: 700 }}>{money(income.class_swap.totals.old_airtime)} → {money(income.class_swap.totals.new_airtime)}</div>
-              <div style={{ fontSize: 12, color: income.class_swap.totals.delta_airtime ? '#b45309' : 'var(--text2)' }}>Δ {money(income.class_swap.totals.delta_airtime)}</div>
+              <div style={{ fontSize: 12, color: income.class_swap.totals.delta_airtime ? 'var(--c-fg-b45309)' : 'var(--text2)' }}>Δ {money(income.class_swap.totals.delta_airtime)}</div>
             </div>
             <div style={{ ...card, marginBottom: 0, minWidth: 210 }}>
               <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text3)' }}>Leaves the total</div>
@@ -414,7 +414,7 @@ export default function MaClassWiringPage() {
             </div>
             <div style={{ ...card, marginBottom: 0, minWidth: 210 }}>
               <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text3)' }}>Not classified at all</div>
-              <div style={{ fontSize: 17, fontWeight: 700, color: income.class_swap.totals.class_unclassified_lines ? '#b91c1c' : undefined }}>{money(income.class_swap.totals.class_unclassified_discount)}</div>
+              <div style={{ fontSize: 17, fontWeight: 700, color: income.class_swap.totals.class_unclassified_lines ? 'var(--c-fg-b91c1c)' : undefined }}>{money(income.class_swap.totals.class_unclassified_discount)}</div>
               <div style={{ fontSize: 12, color: 'var(--text2)' }}>{income.class_swap.totals.class_unclassified_lines} lines — classify them or they leave the total</div>
             </div>
           </div>
@@ -437,7 +437,7 @@ export default function MaClassWiringPage() {
                       <td style={{ padding: '5px 8px', textAlign: 'right' }}>{c.lines.toLocaleString()}</td>
                       <td style={{ padding: '5px 8px', textAlign: 'right' }}>{money(c.residual)}</td>
                       <td style={{ padding: '5px 8px', textAlign: 'right' }}>{money(c.airtime)}</td>
-                      <td style={{ padding: '5px 8px', textAlign: 'right', color: c.excluded_discount ? '#9a3412' : undefined }}>{money(c.excluded_discount)}</td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right', color: c.excluded_discount ? 'var(--c-fg-9a3412)' : undefined }}>{money(c.excluded_discount)}</td>
                     </tr>
                   ))}
                 </tbody>

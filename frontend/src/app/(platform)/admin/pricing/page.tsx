@@ -136,11 +136,11 @@ export default function PricingAdmin() {
         Nothing is visible to the public until you tick <b>Published</b>.
       </p>
 
-      {!ready && <div className="card" style={{ borderColor: '#f59e0b', color: '#b45309', padding: 12, marginBottom: 12 }}>
+      {!ready && <div className="card" style={{ borderColor: 'var(--c-bg-f59e0b)', color: 'var(--c-fg-b45309)', padding: 12, marginBottom: 12 }}>
         ⚠️ Migration <code>908_pricing_and_trial.sql</code> hasn&apos;t been applied yet — prices and the trial length
         can&apos;t be saved. Run it in the Supabase SQL editor.</div>}
-      {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 12, marginBottom: 12 }}>{err}</div>}
-      {note && <div className="card" style={{ borderColor: '#16a34a', color: '#16a34a', padding: 12, marginBottom: 12 }}>{note}</div>}
+      {err && <div className="card" style={{ borderColor: 'var(--c-bg-c0392b)', color: 'var(--c-fg-c0392b)', padding: 12, marginBottom: 12 }}>{err}</div>}
+      {note && <div className="card" style={{ borderColor: 'var(--c-bg-16a34a)', color: 'var(--c-fg-16a34a)', padding: 12, marginBottom: 12 }}>{note}</div>}
 
       {/* ── Free trial ───────────────────────────────────────────────────────────── */}
       <div className="card" style={{ marginBottom: 16 }}>
@@ -223,7 +223,7 @@ export default function PricingAdmin() {
                 <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 400 }}>{p.tagline || p.key}</div>
               </span>
               <span style={{ flex: 1, minWidth: 130, fontSize: 13.5 }}>
-                {p.price ? <b>{fmt(p.price)}</b> : <span style={{ color: '#b45309' }}>no price set</span>}
+                {p.price ? <b>{fmt(p.price)}</b> : <span style={{ color: 'var(--c-fg-b45309)' }}>no price set</span>}
                 <span style={{ color: 'var(--text3)' }}> / {p.cycle}</span>
                 {p.unit_label && <div style={{ fontSize: 12, color: 'var(--text3)' }}>{p.unit_label}</div>}
               </span>
@@ -238,7 +238,7 @@ export default function PricingAdmin() {
                 <button className="btn btn-secondary" disabled={busy} onClick={() => togglePublish(p)}>
                   {p.is_public ? 'Unpublish' : 'Publish'}
                 </button>
-                <button className="btn btn-secondary" style={{ color: '#c0392b' }} disabled={busy}
+                <button className="btn btn-secondary" style={{ color: 'var(--c-fg-c0392b)' }} disabled={busy}
                   onClick={() => removePackage(p.key)}>Delete</button>
               </span>
             </div>
@@ -262,7 +262,7 @@ export default function PricingAdmin() {
               <div key={t.org_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px',
                 borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
                 <span style={{ flex: 1.3, minWidth: 150, fontWeight: 600 }}>
-                  {t.name}{!t.is_active && <span style={{ color: '#b45309', fontSize: 12 }}> · disabled</span>}
+                  {t.name}{!t.is_active && <span style={{ color: 'var(--c-fg-b45309)', fontSize: 12 }}> · disabled</span>}
                 </span>
                 <span style={{ flex: 1, minWidth: 130, fontSize: 13 }}>
                   <span style={{ color: statusColor[st] || 'var(--text2)', fontWeight: 600 }}>
@@ -362,7 +362,7 @@ export default function PricingAdmin() {
               </div>
             </div>
             {draft.is_public && !draft.price &&
-              <div style={{ marginTop: 12, fontSize: 13, color: '#b45309' }}>
+              <div style={{ marginTop: 12, fontSize: 13, color: 'var(--c-fg-b45309)' }}>
                 ⚠️ This is published with no price — the site will show it as &ldquo;Talk to us&rdquo;.
               </div>}
             <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>

@@ -10,7 +10,7 @@ import { sourceLabel } from '@/lib/sourceLabels'
 // Unified connector registry (SaaS framework Phase 2): every vendor portal + the reports it provides
 // + live sweep status, with a generic run-now. The single source of truth for the data pipeline.
 const TWOFA: Record<string, { bg: string; fg: string }> = {
-  ok: { bg: '#e6f7ec', fg: '#16794a' }, needs_setup: { bg: '#fef3e2', fg: '#b45309' }, blocked: { bg: '#fde8e8', fg: '#b42318' },
+  ok: { bg: 'var(--c-bg-e6f7ec)', fg: 'var(--c-fg-16794a)' }, needs_setup: { bg: 'var(--c-bg-fef3e2)', fg: 'var(--c-fg-b45309)' }, blocked: { bg: 'var(--c-bg-fde8e8)', fg: 'var(--c-fg-b42318)' },
 }
 const dt = (s: string) => s ? new Date(s).toLocaleString() : '—'
 const fin: React.CSSProperties = { padding: '6px 9px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -172,14 +172,14 @@ export default function ConnectorsPage() {
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>
                   <a href={c.portal_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{c.portal_url}</a> · {c.auth_type}
                   <span style={{ marginLeft: 8, background: tf.bg, color: tf.fg, padding: '1px 7px', borderRadius: 99, fontSize: 11, fontWeight: 600 }}>2FA: {c.twofa_status}</span>
-                  <span style={{ marginLeft: 6, fontSize: 11, color: c.automatable ? '#16794a' : '#b45309', fontWeight: 600 }}>{c.automatable ? 'auto' : 'manual-only'}</span>
+                  <span style={{ marginLeft: 6, fontSize: 11, color: c.automatable ? 'var(--c-fg-16794a)' : 'var(--c-fg-b45309)', fontWeight: 600 }}>{c.automatable ? 'auto' : 'manual-only'}</span>
                 </div>
                 {c.config_table && (
                   <div style={{ fontSize: 11, marginTop: 4, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <span style={{ background: credReady ? '#e6f7ec' : '#fef3e2', color: credReady ? '#16794a' : '#b45309', padding: '1px 7px', borderRadius: 99, fontWeight: 600 }}>
+                    <span style={{ background: credReady ? 'var(--c-bg-e6f7ec)' : 'var(--c-bg-fef3e2)', color: credReady ? 'var(--c-fg-16794a)' : 'var(--c-fg-b45309)', padding: '1px 7px', borderRadius: 99, fontWeight: 600 }}>
                       {credReady ? `🔑 credentials set${cr.user_hint ? ` (${cr.user_hint})` : ''}` : '⚠️ no credentials'}
                     </span>
-                    <span style={{ background: ready ? '#e6f7ec' : 'var(--surface2)', color: ready ? '#16794a' : 'var(--text3)', padding: '1px 7px', borderRadius: 99, fontWeight: 600 }}>
+                    <span style={{ background: ready ? 'var(--c-bg-e6f7ec)' : 'var(--surface2)', color: ready ? 'var(--c-fg-16794a)' : 'var(--text3)', padding: '1px 7px', borderRadius: 99, fontWeight: 600 }}>
                       {ready ? '✅ ready to auto-run' : `needs setup: ${missing}`}
                     </span>
                     {!credReady && <span style={{ color: 'var(--text3)' }}>set credentials on the vendor’s sweep page</span>}
@@ -247,7 +247,7 @@ export default function ConnectorsPage() {
                         <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)' }}>
                           <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
                             <input type="checkbox" checked={!!r.auto} onChange={e => setReport(r, { auto: e.target.checked })} />
-                            <span style={{ color: r.auto ? '#16794a' : '#b45309', fontWeight: 600 }}>{r.auto ? 'auto' : 'manual'}</span>
+                            <span style={{ color: r.auto ? 'var(--c-fg-16794a)' : 'var(--c-fg-b45309)', fontWeight: 600 }}>{r.auto ? 'auto' : 'manual'}</span>
                           </label>
                         </td>
                         <td style={{ padding: '6px 9px', borderTop: '1px solid var(--border)' }}></td>

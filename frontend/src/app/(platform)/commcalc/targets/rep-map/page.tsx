@@ -58,7 +58,7 @@ export default function RepMapPage() {
       {msg && <div style={{ fontSize: 13, marginBottom: 12, color: 'var(--text2)' }}>{msg}</div>}
 
       {!loading && data.configured === false && (
-        <div className="card" style={{ padding: 16, marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', fontSize: 13 }}>
+        <div className="card" style={{ padding: 16, marginBottom: 16, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', color: 'var(--c-fg-92400e)', fontSize: 13 }}>
           ⚠️ <SetupNotice lead="Saving merges is not available yet." detail="016_rep_aliases.sql" />
         </div>
       )}
@@ -71,7 +71,7 @@ export default function RepMapPage() {
             <input style={{ ...inp, width: '100%', marginBottom: 10 }} placeholder="Search names…" value={search} onChange={e => setSearch(e.target.value)} />
             <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
               {names.map(n => (
-                <label key={n} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid var(--border)', fontSize: 13, cursor: 'pointer', background: sel.has(n) ? '#eff6ff' : 'transparent' }}>
+                <label key={n} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid var(--border)', fontSize: 13, cursor: 'pointer', background: sel.has(n) ? 'var(--c-bg-eff6ff)' : 'transparent' }}>
                   <input type="checkbox" checked={sel.has(n)} onChange={() => toggle(n)} />{n}
                 </label>
               ))}

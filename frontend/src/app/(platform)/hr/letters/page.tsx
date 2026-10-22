@@ -25,7 +25,7 @@ type Template = {
 const th: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }
 const td: React.CSSProperties = { padding: '8px 10px', fontSize: 13, borderTop: '1px solid var(--border)', verticalAlign: 'top' }
 const btn: React.CSSProperties = { padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text1)', cursor: 'pointer', fontSize: 13 }
-const primaryBtn: React.CSSProperties = { ...btn, background: 'var(--accent)', color: '#fff', border: 'none' }
+const primaryBtn: React.CSSProperties = { ...btn, background: 'var(--accent)', color: 'var(--c-fg-ffffff)', border: 'none' }
 const box: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', color: 'var(--text1)', width: '100%' }
 
 export default function HRLettersPage() {
@@ -97,8 +97,8 @@ export default function HRLettersPage() {
         see everything ever sent on the <Link href="/hr/letters/sent" style={{ color: 'var(--accent)' }}>Sent Letters</Link> log.
       </p>
 
-      {err && <div style={{ color: '#c0392b', fontSize: 13, margin: '8px 0' }}>{err}</div>}
-      {msg && <div style={{ color: '#1e8e3e', fontSize: 13, margin: '8px 0' }}>{msg}</div>}
+      {err && <div style={{ color: 'var(--c-fg-c0392b)', fontSize: 13, margin: '8px 0' }}>{err}</div>}
+      {msg && <div style={{ color: 'var(--c-fg-1e8e3e)', fontSize: 13, margin: '8px 0' }}>{msg}</div>}
       {loading && <div style={{ fontSize: 13, color: 'var(--text2)' }}>Loading…</div>}
 
       {config && (
@@ -179,7 +179,7 @@ export default function HRLettersPage() {
               </label>
             </div>
             {(editing.escalation_tier === 3 || editing.escalation_tier === 5) && draft.delivery_mode === 'auto' && (
-              <div style={{ color: '#b8860b', fontSize: 12, marginBottom: 10 }}>
+              <div style={{ color: 'var(--c-fg-b8860b)', fontSize: 12, marginBottom: 10 }}>
                 ⚠️ This is a tier-{editing.escalation_tier} disciplinary letter (suspension/termination language).
                 The safe default is &quot;Needs HR approval&quot; — only switch to auto-send if you&apos;re sure.
               </div>

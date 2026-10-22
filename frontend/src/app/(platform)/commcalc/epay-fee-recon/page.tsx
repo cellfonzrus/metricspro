@@ -136,9 +136,9 @@ export default function EpayFeeReconPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
         <Stat label="System fee (raw sales)" value={fmt(totals.system_fee)} />
-        <Stat label="Portal fee (DTD)" value={fmt(totals.portal_fee)} color="#16a34a" />
-        <Stat label="Net variance" value={`${totals.var >= 0 ? '+' : ''}${fmt(totals.var)}`} color={Math.abs(totals.var) > 0.005 ? '#dc2626' : 'var(--text1)'} />
-        <Stat label="Store‑days flagged" value={`${totals.flagged} / ${rows.length}`} color={totals.flagged ? '#dc2626' : '#059669'} />
+        <Stat label="Portal fee (DTD)" value={fmt(totals.portal_fee)} color="var(--c-fg-16a34a)" />
+        <Stat label="Net variance" value={`${totals.var >= 0 ? '+' : ''}${fmt(totals.var)}`} color={Math.abs(totals.var) > 0.005 ? 'var(--c-fg-dc2626)' : 'var(--text1)'} />
+        <Stat label="Store‑days flagged" value={`${totals.flagged} / ${rows.length}`} color={totals.flagged ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'} />
       </div>
 
       <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
@@ -158,7 +158,7 @@ export default function EpayFeeReconPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : err ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {err}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {err}</div>
       ) : rows.length === 0 ? (
         <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>
           No ePay fee data for {rangeLabel}.
@@ -172,17 +172,17 @@ export default function EpayFeeReconPage() {
             </tr></thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={`${r.store_code}_${r.close_date}_${i}`} style={{ borderTop: '1px solid var(--border)', background: r.flag ? '#fffafa' : undefined }}>
+                <tr key={`${r.store_code}_${r.close_date}_${i}`} style={{ borderTop: '1px solid var(--border)', background: r.flag ? 'var(--c-bg-fffafa)' : undefined }}>
                   <td style={{ padding: '9px 12px', fontSize: 13, fontWeight: 600 }}>{addr(r.store_code)}</td>
                   <td style={{ padding: '9px 12px', fontSize: 12, color: 'var(--text3)' }}>{market(r.store_code) || '—'}</td>
                   <td style={{ padding: '9px 12px', fontSize: 13, color: 'var(--text2)' }}>{r.close_date}</td>
                   <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(r.system_fee)}</td>
-                  <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: '#16a34a' }}>{fmt(r.portal_fee)}</td>
-                  <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, fontWeight: 700, color: r.flag ? '#dc2626' : 'var(--text1)' }}>{r.var >= 0 ? '+' : ''}{fmt(r.var)}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, color: 'var(--c-fg-16a34a)' }}>{fmt(r.portal_fee)}</td>
+                  <td style={{ padding: '9px 12px', textAlign: 'right', fontSize: 13, fontWeight: 700, color: r.flag ? 'var(--c-fg-dc2626)' : 'var(--text1)' }}>{r.var >= 0 ? '+' : ''}{fmt(r.var)}</td>
                   <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: 12 }}>
                     {r.flag
-                      ? <span style={{ background: '#fee2e2', color: '#b91c1c', borderRadius: 5, padding: '1px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>{statusText(r)}</span>
-                      : <span style={{ color: '#059669' }}>✓ OK</span>}
+                      ? <span style={{ background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-b91c1c)', borderRadius: 5, padding: '1px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>{statusText(r)}</span>
+                      : <span style={{ color: 'var(--c-fg-059669)' }}>✓ OK</span>}
                   </td>
                 </tr>
               ))}
@@ -192,8 +192,8 @@ export default function EpayFeeReconPage() {
                 <td style={{ padding: '10px 12px', fontSize: 13 }}>TOTAL ({rows.length} store‑days)</td>
                 <td /><td />
                 <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(totals.system_fee)}</td>
-                <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: 13, color: '#16a34a' }}>{fmt(totals.portal_fee)}</td>
-                <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: 13, color: Math.abs(totals.var) > 0.005 ? '#dc2626' : 'var(--text1)' }}>{totals.var >= 0 ? '+' : ''}{fmt(totals.var)}</td>
+                <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: 13, color: 'var(--c-fg-16a34a)' }}>{fmt(totals.portal_fee)}</td>
+                <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: 13, color: Math.abs(totals.var) > 0.005 ? 'var(--c-fg-dc2626)' : 'var(--text1)' }}>{totals.var >= 0 ? '+' : ''}{fmt(totals.var)}</td>
                 <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>{totals.flagged} flagged</td>
               </tr>
             </tfoot>

@@ -46,7 +46,7 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
         {loading ? (
           <div style={{ padding: 40, textAlign: 'center' }}><div className="spinner" /></div>
         ) : err ? (
-          <div style={{ color: '#dc2626', fontSize: 13 }}>{err}</div>
+          <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 13 }}>{err}</div>
         ) : !data || !data.days?.length ? (
           <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>
             No shifts or punches in range.
@@ -96,7 +96,7 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
               {data.total_lunch_deduction_hours ? (
                 <div className="card" style={{ padding: '8px 14px' }} title="Auto lunch-break deduction — already netted OUT of Actual above (HONESTY: shown here as its own explicit line, never a silent subtraction). See ⚙ Lunch Break Settings on the Time Clock page.">
                   <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase' }}>Lunch deducted (auto)</div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: '#b45309' }}>− {fmtN(data.total_lunch_deduction_hours)}h</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--c-fg-b45309)' }}>− {fmtN(data.total_lunch_deduction_hours)}h</div>
                 </div>
               ) : null}
             </div>
@@ -144,7 +144,7 @@ export default function ActualHoursDrilldown({ employeeId, name, start, end, onC
                     <td style={{ padding: '6px 8px', fontWeight: 700 }}>
                       {fmtN(d.actual_hours)}h
                       {d.lunch_deduction_applied ? (
-                        <div style={{ fontSize: 11, fontWeight: 400, color: '#b45309' }}>− {fmtN(d.lunch_deduction_hours)}h lunch (auto)</div>
+                        <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--c-fg-b45309)' }}>− {fmtN(d.lunch_deduction_hours)}h lunch (auto)</div>
                       ) : d.lunch_deduction_skip_reason === 'real_break_present' ? (
                         <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--text3)' }} title="Gapped punch-pairs — a real break already happened, or this is a split shift; auto-deduction never applies on top">no auto lunch (real break/split shift)</div>
                       ) : null}

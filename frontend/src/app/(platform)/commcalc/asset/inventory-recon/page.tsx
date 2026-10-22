@@ -115,10 +115,10 @@ export default function InventoryReconPage() {
     if (!c) return <td key={key} style={td}>—</td>
     const bad = c.diff !== 0
     return (
-      <td key={key} style={{ ...td, background: bad ? '#fef2f2' : undefined }}>
+      <td key={key} style={{ ...td, background: bad ? 'var(--c-bg-fef2f2)' : undefined }}>
         <span style={{ color: 'var(--text2)' }}>{c.asset}</span>
         <span style={{ color: 'var(--text3)' }}> / {c.b2b}</span>
-        {bad && <strong style={{ color: c.diff > 0 ? '#b45309' : '#dc2626', marginLeft: 4 }}>{c.diff > 0 ? '+' : ''}{c.diff}</strong>}
+        {bad && <strong style={{ color: c.diff > 0 ? 'var(--c-fg-b45309)' : 'var(--c-fg-dc2626)', marginLeft: 4 }}>{c.diff > 0 ? '+' : ''}{c.diff}</strong>}
       </td>
     )
   }
@@ -146,11 +146,11 @@ export default function InventoryReconPage() {
       </div>
 
       {invRecon.applies === 'not_defined' && (
-        <div role="status" className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e40af', fontSize: 13 }}>
+        <div role="status" className="card" style={{ padding: '10px 14px', marginBottom: 14, background: 'var(--c-bg-eff6ff)', border: '1px solid var(--c-bg-bfdbfe)', color: 'var(--c-fg-1e40af)', fontSize: 13 }}>
           {notApplicableCopy({ pos, posDeclared, feedNoun: 'inventory snapshot', kindNoun: 'inventory-recon', purpose: 'reconcile the asset ledger against' })}
         </div>
       )}
-      <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>
+      <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', fontSize: 13 }}>
         ⚙️ Auto-import from the {pos} portal is pending the live portal sweep. Until it&apos;s wired,
         upload a {pos} <b>Inventory Aging</b> export below (columns: <code>store</code>, <code>category</code>, <code>qty</code> —
         plus an optional $ <code>value</code>/<code>cost</code> column). If the file has a $ column, this same upload also
@@ -185,7 +185,7 @@ export default function InventoryReconPage() {
 
       {/* Summary */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-        <div className="card" style={{ padding: '12px 16px' }}><div style={{ fontSize: 12, color: 'var(--text2)' }}>Mismatched stores</div><div style={{ fontSize: 20, fontWeight: 700, color: (data?.mismatch_stores || 0) ? '#dc2626' : '#059669' }}>{data?.mismatch_stores ?? 0}</div></div>
+        <div className="card" style={{ padding: '12px 16px' }}><div style={{ fontSize: 12, color: 'var(--text2)' }}>Mismatched stores</div><div style={{ fontSize: 20, fontWeight: 700, color: (data?.mismatch_stores || 0) ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)' }}>{data?.mismatch_stores ?? 0}</div></div>
         <div className="card" style={{ padding: '12px 16px' }}><div style={{ fontSize: 12, color: 'var(--text2)' }}>Total |diff| units</div><div style={{ fontSize: 20, fontWeight: 700 }}>{data?.total_abs_diff ?? 0}</div></div>
         <div className="card" style={{ padding: '12px 16px' }}><div style={{ fontSize: 12, color: 'var(--text2)' }}>{pos} snapshot</div><div style={{ fontSize: 16, fontWeight: 700 }}>{data?.b2b_loaded ? (data?.as_of || '—') : 'none yet'}</div></div>
       </div>
@@ -215,10 +215,10 @@ export default function InventoryReconPage() {
             </tr></thead>
             <tbody>
               {rows.map(r => (
-                <tr key={r.store} style={{ background: r.total_abs_diff > 0 ? '#fff7f7' : undefined }}>
+                <tr key={r.store} style={{ background: r.total_abs_diff > 0 ? 'var(--c-bg-fff7f7)' : undefined }}>
                   <td style={{ ...td, textAlign: 'left', fontWeight: 600 }}>{r.store}{!r.in_asset && <span className="badge" style={{ fontSize: 10, marginLeft: 6 }}>{pos} only</span>}<div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>{r.market || ''}</div></td>
                   {buckets.map(b => diffCell(r.categories[b], b))}
-                  <td style={{ ...td, fontWeight: 700, color: r.total_abs_diff > 0 ? '#dc2626' : '#059669' }}>{r.total_abs_diff}</td>
+                  <td style={{ ...td, fontWeight: 700, color: r.total_abs_diff > 0 ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)' }}>{r.total_abs_diff}</td>
                 </tr>
               ))}
               {rows.length === 0 && <tr><td colSpan={buckets.length + 2} style={{ ...td, color: 'var(--text3)' }}>No rows.</td></tr>}

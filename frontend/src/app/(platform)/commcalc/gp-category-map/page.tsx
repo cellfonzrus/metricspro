@@ -143,7 +143,7 @@ export default function GpCategoryMapPage() {
         Leave a department on its <b>default</b> to keep the built-in behavior.
       </p>
       {!ready && (
-        <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
+        <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
           <SetupNotice lead="Saving overrides is not available yet — the report uses the built-in defaults." detail="069_gp_category_map.sql" />
         </div>
       )}
@@ -259,7 +259,7 @@ export default function GpCategoryMapPage() {
                                     <td style={{ padding: '5px 6px' }}>
                                       {it.product_desc || <span style={{ color: 'var(--text3)' }}>{it.item_key}</span>}
                                       {it.sku && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--text3)' }}>{it.sku}</span>}
-                                      {it.returns > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999 }}>{it.returns} return{it.returns === 1 ? '' : 's'}</span>}
+                                      {it.returns > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '1px 5px', borderRadius: 999 }}>{it.returns} return{it.returns === 1 ? '' : 's'}</span>}
                                     </td>
                                     <td style={{ padding: '5px 6px', textAlign: 'right', color: 'var(--text2)' }}>{it.lines.toLocaleString()}</td>
                                     <td style={{ padding: '5px 6px', textAlign: 'right', color: 'var(--text2)' }}>

@@ -32,7 +32,7 @@ export default function ShowsIn({ info, loaded = true, lead = 'This upload will 
   if (!info) return null
   const cons = info.consumers || []
   if (!cons.length) {
-    return <div style={{ ...wrap, ...style }}>{lead}: <span style={{ color: '#b45309' }}>{info.note || 'no report reads this yet'}</span></div>
+    return <div style={{ ...wrap, ...style }}>{lead}: <span style={{ color: 'var(--c-fg-b45309)' }}>{info.note || 'no report reads this yet'}</span></div>
   }
   const shown = compact ? cons.slice(0, 4) : cons
   return (
@@ -46,7 +46,7 @@ export default function ShowsIn({ info, loaded = true, lead = 'This upload will 
           {c.lines && c.lines.length > 0 && (
             <span data-pl-lines={c.lines.map(l => l.key).join(',')} title={c.lines.map(l => `${l.label}: ${(l.buckets || []).join(', ')}`).join(' · ')}>
               {' → '}{c.lines.map(l => l.label).join(', ')}
-              {c.active === false && <span style={{ color: '#b45309' }}> (not the P&L source yet)</span>}
+              {c.active === false && <span style={{ color: 'var(--c-fg-b45309)' }}> (not the P&L source yet)</span>}
             </span>
           )}
           {c.gate && <span title="this reader gates the landing: a file blank on every field it needs is refused" style={{ marginLeft: 3, color: 'var(--text3)' }}>*</span>}

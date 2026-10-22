@@ -57,14 +57,14 @@ export default function VendorPaidCard({ from, to }: { from: string; to: string 
         vendor-paid tender — then save and rebuild. Phones and accessories are never picked (they have a cost).
       </div>
       <button className="btn btn-secondary" disabled={busy} onClick={load}>{busy ? 'Reading…' : ev ? 'Re-check' : 'Show the proposed words'}</button>
-      {err && <div style={{ color: '#9b1c1c', marginTop: 8 }}>{err}</div>}
-      {msg && <div style={{ color: '#0a7d33', marginTop: 8 }}>✓ {msg}</div>}
+      {err && <div style={{ color: 'var(--c-fg-9b1c1c)', marginTop: 8 }}>{err}</div>}
+      {msg && <div style={{ color: 'var(--c-fg-0a7d33)', marginTop: 8 }}>✓ {msg}</div>}
       {ev && (
         <div style={{ marginTop: 10 }}>
           <div>{ev.invoices.toLocaleString()} invoice(s) and {ev.lines.toLocaleString()} line(s) in {from} – {to}.</div>
           {ev.saved.tokens.length > 0
             ? <div style={{ marginTop: 4 }}><b>Saved rule:</b> {ev.saved.tokens.map(t => `'${t}'`).join(', ')}{ev.saved_proof && <> — {ev.saved_proof.words}</>}</div>
-            : <div style={{ marginTop: 4, color: '#b45309' }}>No rule saved yet — the lines the vendor paid print their amounts on the rebuilt receipts.</div>}
+            : <div style={{ marginTop: 4, color: 'var(--c-fg-b45309)' }}>No rule saved yet — the lines the vendor paid print their amounts on the rebuilt receipts.</div>}
           {ev.proposal && (
             <div style={{ marginTop: 6 }}>
               <b>Proposed from your lines:</b> {ev.proposal.proof.words}

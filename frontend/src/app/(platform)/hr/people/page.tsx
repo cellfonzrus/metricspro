@@ -208,7 +208,7 @@ export default function HRPeoplePage() {
           </div>
         )}
         {tempPw && (
-          <div style={{ marginTop: 10, padding: 10, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontFamily: 'monospace', fontSize: 12 }}>
+          <div style={{ marginTop: 10, padding: 10, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 8, fontFamily: 'monospace', fontSize: 12 }}>
             🔑 Temp password (hand out; user resets on first sign-in): <strong>{tempPw}</strong>
           </div>
         )}
@@ -236,7 +236,7 @@ export default function HRPeoplePage() {
                   <td style={{ padding: '7px 12px', fontSize: 12 }}>{p.app_role || '—'}</td>
                   <td style={{ padding: '7px 12px', fontSize: 12 }}>{p.has_login ? '✓' : '—'}</td>
                   <td style={{ padding: '7px 12px', fontSize: 12 }}>{p.employee_id
-                    ? <a href={`/hr/onboarding/${p.employee_id}`} style={{ color: 'var(--accent,#2563eb)' }}>Open →</a>
+                    ? <a href={`/hr/onboarding/${p.employee_id}`} style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Open →</a>
                     : '—'}</td>
                 </tr>
               ))}

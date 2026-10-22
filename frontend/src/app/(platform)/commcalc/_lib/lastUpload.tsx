@@ -120,7 +120,7 @@ export function LastUploadLine({ rec, loaded = true, tracked = true }:
   return (
     <>
       {rec?.last_at ? (
-        <div style={{ ...muted, color: '#15803d' }}>
+        <div style={{ ...muted, color: 'var(--c-fg-15803d)' }}>
           📅 Last upload: {fmtStamp(rec.last_at)}
           {rec.rows_saved != null ? ` · ${Number(rec.rows_saved).toLocaleString()} rows` : ''}
           {coverageText(rec) ? ` · ${coverageText(rec)}` : ''}
@@ -130,7 +130,7 @@ export function LastUploadLine({ rec, loaded = true, tracked = true }:
         <div style={muted}>📅 No data uploaded yet</div>
       )}
       {attempt && (
-        <div style={{ ...muted, marginTop: 4, color: '#b45309' }}>
+        <div style={{ ...muted, marginTop: 4, color: 'var(--c-fg-b45309)' }}>
           ⚠️ Newer attempt {fmtStamp(attempt.at)} saved no rows{attempt.skipped ? ` (${attempt.skipped.replace(/_/g, ' ')})` : ''}
           {attempt.source_label ? ` · via ${attempt.source_label}` : ''} — see “Where are my rows?”.
         </div>

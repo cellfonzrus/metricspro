@@ -181,7 +181,7 @@ export default function OrgChartPage() {
         people &amp; manager(s); dashed = no manager assigned. People roll up via their home store; pin someone to a different
         unit from the detail card. Edit units &amp; managers on <a href="/admin/org">Org Structure</a>.
       </p>
-      {err && <div className="card oc-noprint" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 12, marginBottom: 12 }}>{err}</div>}
+      {err && <div className="card oc-noprint" style={{ borderColor: 'var(--c-bg-c0392b)', color: 'var(--c-fg-c0392b)', padding: 12, marginBottom: 12 }}>{err}</div>}
 
       {loading ? (
         <div style={{ padding: 24, color: 'var(--text3)' }}>Loading org chart…</div>
@@ -234,7 +234,7 @@ export default function OrgChartPage() {
                 <button className="lnk" onClick={() => { setDetailEmp(e.id); setDetailUnit(null) }} style={{ fontWeight: e.is_manager ? 700 : 500 }}>{e.is_manager ? '★ ' : ''}{e.name}</button>
                 {e.role && <span style={{ fontSize: 11, color: 'var(--text3)' }}>· {e.role}</span>}
                 {e.home_store && <span style={{ fontSize: 11, color: 'var(--text3)' }}>· 🏬 {e.home_store}</span>}
-                {e.org_unit_id && <span style={{ fontSize: 10, color: '#1E3A5F', background: '#e7eefc', padding: '0 5px', borderRadius: 8 }}>pinned</span>}
+                {e.org_unit_id && <span style={{ fontSize: 10, color: 'var(--c-fg-1e3a5f)', background: 'var(--c-bg-e7eefc)', padding: '0 5px', borderRadius: 8 }}>pinned</span>}
               </div>
             ))}
           </Section>

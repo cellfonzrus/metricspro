@@ -209,9 +209,9 @@ export default function AccessoryFlagsPage() {
                 <td style={cell}><input type="checkbox" checked={!!picked[r.dedupe_key]} onChange={e => setPicked(p => ({ ...p, [r.dedupe_key]: e.target.checked }))} /></td>
                 <td style={cell}>{(r.trans_date || '').slice(0, 10)}</td>
                 <td style={cell}>{r.store || '—'}</td>
-                <td style={cell}>{r.rep || <span style={{ color: '#dc2626' }}>no rep</span>}</td>
+                <td style={cell}>{r.rep || <span style={{ color: 'var(--c-fg-dc2626)' }}>no rep</span>}</td>
                 <td style={{ ...cell, whiteSpace: 'normal', maxWidth: 240 }}>
-                  <button onClick={() => openReceipt(r.trans_id)} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent, #2563eb)', textAlign: 'left', fontSize: 13 }}>{r.item_desc || '—'}</button>
+                  <button onClick={() => openReceipt(r.trans_id)} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent, var(--c-fg-2563eb))', textAlign: 'left', fontSize: 13 }}>{r.item_desc || '—'}</button>
                 </td>
                 <td style={cell}>{r.sku || '—'}</td>
                 <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{[r.department, r.category].filter(Boolean).join(' / ') || '—'}</td>
@@ -247,7 +247,7 @@ export default function AccessoryFlagsPage() {
 function Tile({ label, value, sub, onClick, active }: { label: string; value: string; sub?: string; onClick?: () => void; active?: boolean }) {
   return (
     <div className="card" onClick={onClick} style={{ flex: '1 1 170px', minWidth: 150, padding: 14,
-      cursor: onClick ? 'pointer' : 'default', border: active ? '2px solid #1E3A5F' : undefined,
+      cursor: onClick ? 'pointer' : 'default', border: active ? '2px solid var(--c-bg-1e3a5f)' : undefined,
       outline: active ? 'none' : undefined }}>
       <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{label}{active ? ' •' : ''}</div>
       <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{value}</div>
@@ -269,7 +269,7 @@ function AggCard({ title, rows, onPick, active }: { title: string; rows: Agg[]; 
             {rows.map(a => (
               <tr key={a.name} onClick={() => onPick(a.name)} style={{ cursor: 'pointer', background: active === a.name ? 'var(--surface2)' : undefined }}>
                 <td style={{ ...cell, whiteSpace: 'normal' }}>{a.name}</td>
-                <td style={{ ...cell, textAlign: 'right' }}>{a.flags}{a.under ? <span style={{ color: '#92400e', fontSize: 11 }}> ({a.under}▼)</span> : ''}</td>
+                <td style={{ ...cell, textAlign: 'right' }}>{a.flags}{a.under ? <span style={{ color: 'var(--c-fg-92400e)', fontSize: 11 }}> ({a.under}▼)</span> : ''}</td>
                 <td style={{ ...cell, textAlign: 'right', fontWeight: 600 }}>{money(a.total)}</td>
               </tr>
             ))}
@@ -302,8 +302,8 @@ function StoreRepCard({ rows, onPick, activeStore, activeRep }:
                   <td style={{ ...cell, whiteSpace: 'normal' }}>{a.store}</td>
                   <td style={{ ...cell, whiteSpace: 'normal' }}>{a.rep}</td>
                   <td style={{ ...cell, textAlign: 'right', fontWeight: 600 }}>{a.flags}</td>
-                  <td style={{ ...cell, textAlign: 'right', color: '#b42318' }}>{a.over || ''}</td>
-                  <td style={{ ...cell, textAlign: 'right', color: '#92400e' }}>{a.under || ''}</td>
+                  <td style={{ ...cell, textAlign: 'right', color: 'var(--c-fg-b42318)' }}>{a.over || ''}</td>
+                  <td style={{ ...cell, textAlign: 'right', color: 'var(--c-fg-92400e)' }}>{a.under || ''}</td>
                   <td style={{ ...cell, textAlign: 'right' }}>{a.txns}</td>
                   <td style={{ ...cell, textAlign: 'right', fontWeight: 600 }}>{money(a.total)}</td>
                 </tr>
@@ -347,7 +347,7 @@ function ReceiptModal({ receipt, busy, onClose }: { receipt: Receipt | null; bus
                 {receipt.lines.map((l, i) => (
                   <tr key={i} style={{ opacity: l.voided ? 0.5 : 1 }}>
                     <td style={{ ...cell, whiteSpace: 'normal', maxWidth: 260 }}>
-                      {l.product_desc || '—'}{l.voided && <span style={{ color: '#dc2626', fontSize: 11 }}> (void)</span>}
+                      {l.product_desc || '—'}{l.voided && <span style={{ color: 'var(--c-fg-dc2626)', fontSize: 11 }}> (void)</span>}
                       {(l.mdn || l.serial_1) && <div style={{ fontSize: 11, color: 'var(--text3)' }}>{[l.mdn, l.serial_1].filter(Boolean).join(' · ')}</div>}
                     </td>
                     <td style={cell}>{l.item_type || '—'}</td>

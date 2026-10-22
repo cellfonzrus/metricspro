@@ -115,12 +115,12 @@ export default function SupplyCartPage() {
             <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Items</div>{fmtMoney(plan.items_total)}</div>
             <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Shipping</div>{fmtMoney(plan.shipping_total)}</div>
             {plan.delivery_days?.max != null && <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>Arrives in</div>{plan.delivery_days?.min ?? '?'}–{plan.delivery_days.max} days</div>}
-            {(plan.savings_vs_single_vendor ?? 0) > 0 && <div style={{ color: '#16a34a' }}>Saves {fmtMoney(plan.savings_vs_single_vendor)} vs the best single vendor</div>}
-            {(plan.savings_vs_cheapest_each_item ?? 0) > 0 && <div style={{ color: '#16a34a' }}>Saves {fmtMoney(plan.savings_vs_cheapest_each_item)} vs buying each item wherever it is cheapest</div>}
+            {(plan.savings_vs_single_vendor ?? 0) > 0 && <div style={{ color: 'var(--c-fg-16a34a)' }}>Saves {fmtMoney(plan.savings_vs_single_vendor)} vs the best single vendor</div>}
+            {(plan.savings_vs_cheapest_each_item ?? 0) > 0 && <div style={{ color: 'var(--c-fg-16a34a)' }}>Saves {fmtMoney(plan.savings_vs_cheapest_each_item)} vs buying each item wherever it is cheapest</div>}
           </div>
-          {(plan.hints || []).map(h => <div key={h} style={{ fontSize: 13, color: '#2563eb', marginBottom: 4 }}>💡 {h}</div>)}
-          {(plan.flags || []).map(h => <div key={h} style={{ fontSize: 13, color: '#b45309', marginBottom: 4 }}>⚠️ {h}</div>)}
-          {(plan.unfillable || []).map(u => <div key={u.key} style={{ fontSize: 13, color: '#dc2626', marginBottom: 4 }}>✖ {u.label}: {u.reason}</div>)}
+          {(plan.hints || []).map(h => <div key={h} style={{ fontSize: 13, color: 'var(--c-fg-2563eb)', marginBottom: 4 }}>💡 {h}</div>)}
+          {(plan.flags || []).map(h => <div key={h} style={{ fontSize: 13, color: 'var(--c-fg-b45309)', marginBottom: 4 }}>⚠️ {h}</div>)}
+          {(plan.unfillable || []).map(u => <div key={u.key} style={{ fontSize: 13, color: 'var(--c-fg-dc2626)', marginBottom: 4 }}>✖ {u.label}: {u.reason}</div>)}
           {(plan.vendors || []).map(v => (
             <div key={v.vendor} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10, marginTop: 10 }}>
               <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'baseline' }}>
@@ -139,7 +139,7 @@ export default function SupplyCartPage() {
                 <tbody>
                   {v.lines.map(ln => (
                     <tr key={ln.key}>
-                      <td style={cell}>{ln.label || ln.name}{(ln.flags || []).map(f => <div key={f} style={{ fontSize: 11, color: '#b45309' }}>{f}</div>)}</td>
+                      <td style={cell}>{ln.label || ln.name}{(ln.flags || []).map(f => <div key={f} style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>{f}</div>)}</td>
                       <td style={cell}>{ln.packs}{ln.pack_qty ? ` × ${ln.pack_qty}` : ''}</td>
                       <td style={cell}>{fmtMoney(ln.unit_price)}</td>
                       <td style={cell}>{fmtMoney(ln.line_total)}</td>

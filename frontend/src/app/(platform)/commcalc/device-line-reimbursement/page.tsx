@@ -27,9 +27,9 @@ function money(v: number | null | undefined): string {
 
 const STATUS_STYLE: Record<string, { bg: string; fg: string; icon: string; title: string }> = {
   paid: { bg: 'var(--surface2)', fg: 'var(--text2)', icon: '✓', title: 'Paid to this store' },
-  paid_to_other_store: { bg: '#fee2e2', fg: '#991b1b', icon: '⇄', title: 'Paid to a different store' },
-  not_paid: { bg: '#fef3c7', fg: '#92400e', icon: '⚑', title: 'Not paid anywhere' },
-  not_measured: { bg: '#e0e7ff', fg: '#3730a3', icon: '◻︎', title: 'Not measured' },
+  paid_to_other_store: { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)', icon: '⇄', title: 'Paid to a different store' },
+  not_paid: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚑', title: 'Not paid anywhere' },
+  not_measured: { bg: 'var(--c-bg-e0e7ff)', fg: 'var(--c-fg-3730a3)', icon: '◻︎', title: 'Not measured' },
 }
 const STATUS_ORDER = ['paid_to_other_store', 'not_paid', 'not_measured', 'paid']
 
@@ -87,7 +87,7 @@ export default function DeviceLineReimbursementPage() {
   const Tile = ({ label, value, sub, warn }: { label: string; value: string; sub?: string; warn?: boolean }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 190 }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? '#991b1b' : 'var(--text1)' }}>{value}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? 'var(--c-fg-991b1b)' : 'var(--text1)' }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
     </div>
   )
@@ -136,13 +136,13 @@ export default function DeviceLineReimbursementPage() {
       </div>
 
       {data?.error &&
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-991b1b)', fontSize: 13 }}>
           <b>❌ This report could not be built.</b> {data.error}
         </div>}
 
       {/* THE ABSENCE THAT MAKES THE WHOLE REPORT UNANSWERABLE, said before any number is shown. */}
       {!loading && !data?.error && data?.configured === false &&
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#e0e7ff', color: '#3730a3', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-e0e7ff)', color: 'var(--c-fg-3730a3)', fontSize: 13 }}>
           <b>◻︎ Nothing is declared as device-financing money</b>, so no device can be said to have been
           paid or not paid. Declare which carrier component books on its own P&L line and this report
           fills in. Until then every row reads <i>not measured</i> — never $0.00.
@@ -169,7 +169,7 @@ export default function DeviceLineReimbursementPage() {
       {/* Device-financing money the carrier paid with no device on the line — reported so the paid
           side is never quietly understated by what could not be placed on a device. */}
       {!loading && !data?.error && (totals.carrier_paid_unidentified || 0) > 0 &&
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, background: '#fef3c7', color: '#92400e', fontSize: 13 }}>
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)', fontSize: 13 }}>
           <b>⚠︎ {fmt(totals.carrier_paid_unidentified)}</b> of device-financing money on{' '}
           {totals.carrier_paid_unidentified_rows} carrier line{totals.carrier_paid_unidentified_rows === 1 ? '' : 's'}{' '}
           carries no device identifier, so it could not be matched to any device. It is not in the

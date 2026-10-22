@@ -292,7 +292,7 @@ export default function TimeClockAdminPage() {
         <span className="badge" style={{ fontSize: 12 }}>{visibleRows.length} punches</span>
         <span className="badge" style={{ fontSize: 12 }}>{totalHours.toFixed(2)} hrs</span>
         {totalLunch > 0 && <span className="badge" style={{ fontSize: 12 }} title="Total auto lunch deduction across the visible punches">− {totalLunch.toFixed(2)} hrs lunch (auto)</span>}
-        {openCount > 0 && <span className="badge" style={{ fontSize: 12, background: '#16794a', color: '#fff' }}>{openCount} clocked in</span>}
+        {openCount > 0 && <span className="badge" style={{ fontSize: 12, background: 'var(--c-bg-16794a)', color: 'var(--c-fg-ffffff)' }}>{openCount} clocked in</span>}
         <ReportExportBar title="Time Clock" subtitle={`${filt.period} → ${filt.periodTo}`} filename={`timeclock-${filt.period}_${filt.periodTo}`} columns={cols} rows={visibleRows} />
         {msg && <span style={{ fontSize: 13, width: '100%' }}>{msg}</span>}
       </div>
@@ -319,17 +319,17 @@ export default function TimeClockAdminPage() {
                   <td style={cell}>{r.employee_name || empName(r.employee_id)}</td>
                   <td style={cell}>{r.work_date}</td>
                   <td style={cell}>{fmtTime(r.clock_in)}</td>
-                  <td style={cell}>{r.clock_out ? fmtTime(r.clock_out) : <span style={{ color: '#16794a', fontWeight: 600 }}>open</span>}</td>
+                  <td style={cell}>{r.clock_out ? fmtTime(r.clock_out) : <span style={{ color: 'var(--c-fg-16794a)', fontWeight: 600 }}>open</span>}</td>
                   <td style={cell}>
                     {r.hours != null ? Number(r.hours).toFixed(2) : '—'}
                     {r.lunch_deduction_hours > 0 && (
-                      <div style={{ fontSize: 11, color: '#b45309' }} title="Auto lunch deduction — configurable per tenant/employee, see ⚙ Lunch Break Settings">
+                      <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }} title="Auto lunch deduction — configurable per tenant/employee, see ⚙ Lunch Break Settings">
                         − {Number(r.lunch_deduction_hours).toFixed(2)}h lunch (auto) = {(Number(r.hours) - Number(r.lunch_deduction_hours)).toFixed(2)}h net
                       </div>
                     )}
                     {edits && edits.length > 0 && (
                       <button onClick={() => gotoChangeLog(r.employee_id, r.work_date)} title={describeEdits(edits)}
-                        style={{ marginLeft: 6, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--accent,#2563eb)', fontSize: 12 }}>
+                        style={{ marginLeft: 6, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--accent,var(--c-fg-2563eb))', fontSize: 12 }}>
                         ✎ edited
                       </button>
                     )}
@@ -370,15 +370,15 @@ export default function TimeClockAdminPage() {
                 <tr key={m.id}>
                   <td style={cell}>{empName(m.employee_id)}</td>
                   <td style={cell}>{m.work_date}</td>
-                  <td style={{ ...cell, fontWeight: 600, color: Number(m.hours) < 0 ? '#dc2626' : 'inherit' }}>{Number(m.hours) > 0 ? '+' : ''}{Number(m.hours).toFixed(2)}h</td>
+                  <td style={{ ...cell, fontWeight: 600, color: Number(m.hours) < 0 ? 'var(--c-fg-dc2626)' : 'inherit' }}>{Number(m.hours) > 0 ? '+' : ''}{Number(m.hours).toFixed(2)}h</td>
                   <td style={cell}>{m.reason}</td>
                   <td style={cell}>
                     {edits && edits.length > 0 && (
                       <button onClick={() => gotoChangeLog(m.employee_id, m.work_date)} title={describeEdits(edits)}
-                        style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--accent,#2563eb)', fontSize: 12 }}>✎</button>
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--accent,var(--c-fg-2563eb))', fontSize: 12 }}>✎</button>
                     )}
                   </td>
-                  <td style={cell}><button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={() => delManual(m.id)}>✕</button></td>
+                  <td style={cell}><button className="btn btn-secondary" style={{ fontSize: 12, color: 'var(--c-fg-dc2626)' }} onClick={() => delManual(m.id)}>✕</button></td>
                 </tr>
               )
             })}
@@ -457,7 +457,7 @@ function FaceSettingsPanel({ cfg, onSaved, onClose }: { cfg: any; onSaved: (t: a
         {msg && <span style={{ fontSize: 12 }}>{msg}</span>}
       </div>
       {turningOn && (
-        <div style={{ fontSize: 12, color: '#92400e', background: '#fff7e6', border: '1px solid #f5a623', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fff7e6)', border: '1px solid var(--c-bg-f5a623)', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
           ⚠️ Saving this ON records face-recognition consent as <b>signed</b> for every employee who has
           no consent record yet ({s.unrecorded ?? '—'} people), dated now and marked
           &quot;assumed_on_enable&quot;. Employees already recorded as declined are left alone. Per the
@@ -565,7 +565,7 @@ function FaceRetentionPanel({ cfg, onSaved, onClose }: { cfg: any; onSaved: (t: 
               {preview.purge_all && ' (tenant-wide purge-on-disable is active)'}
             </span>
             {preview.candidates > 0 && (
-              <button className="btn" style={{ fontSize: 13, color: '#b91c1c', borderColor: '#b91c1c' }} disabled={busy} onClick={destroyNow}>Destroy now</button>
+              <button className="btn" style={{ fontSize: 13, color: 'var(--c-fg-b91c1c)', borderColor: 'var(--c-bg-b91c1c)' }} disabled={busy} onClick={destroyNow}>Destroy now</button>
             )}
           </>
         )}

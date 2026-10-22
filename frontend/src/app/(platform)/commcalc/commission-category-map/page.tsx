@@ -120,20 +120,20 @@ export default function CommissionCategoryMapPage() {
         Rules that classify a carrier&apos;s labels into the five canonical buckets. First match by ascending
         priority wins; payouts are <b>negative</b> amounts. Pick a template ({carrierNames} / your own) — a
         new tenant can adopt a preconfigured one or fork it. See results on{' '}
-        <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,#2563eb)' }}>Commission Ledger →</a>
+        <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Commission Ledger →</a>
       </p>
       <p style={{ color: 'var(--text2)', fontSize: 12.5, marginBottom: 8, maxWidth: 900, lineHeight: 1.5 }}>
         Looking for what KIND of money each MA Daily Tx line is — commission vs spiff vs residual vs a
         customer bill payment vs a device sale? That is a separate, exact-match classification of the
         <code> product_name</code> column:{' '}
-        <a href="/commcalc/ma-product-class" style={{ color: 'var(--accent,#2563eb)' }}>MA Product Name Classification →</a>
+        <a href="/commcalc/ma-product-class" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>MA Product Name Classification →</a>
       </p>
       <p style={{ color: 'var(--text2)', fontSize: 12.5, marginBottom: 8, maxWidth: 900, lineHeight: 1.5 }}>
         A rule can now match on <b>is product class</b> instead of a keyword — one rule per class, and a
         <b> confirmed</b> class always beats a keyword rule whatever its priority. Class rules are
         <b> inert</b> until the Commission Ledger switch is set to “Product class”, and only CONFIRMED
         classifications ever match. Switch, class → leg map and the before/after delta live on{' '}
-        <a href="/commcalc/ma-class-wiring" style={{ color: 'var(--accent,#2563eb)' }}>MA Product Class → Money →</a>
+        <a href="/commcalc/ma-class-wiring" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>MA Product Class → Money →</a>
       </p>
       <p style={{ color: 'var(--text2)', fontSize: 12.5, marginBottom: 8, maxWidth: 900, lineHeight: 1.5 }}>
         Each rule now also carries a <b>Leg</b>: is this money <b>1st Month</b> commission (received in the
@@ -142,18 +142,18 @@ export default function CommissionCategoryMapPage() {
         whenever the label already says which month it is (&ldquo;… MONTH 4&rdquo;, &ldquo;… M1&rdquo;).
         Set it only for labels whose source never states a month. Category and Leg are independent: adding
         a leg never moves a line out of the bucket it is already in. Same split, same rules, on{' '}
-        <a href="/commcalc/gp" style={{ color: 'var(--accent,#2563eb)' }}>Gross Profit →</a> and{' '}
-        <a href="/commcalc/commission-legs" style={{ color: 'var(--accent,#2563eb)' }}>Commission received over M1-M12 →</a>
+        <a href="/commcalc/gp" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Gross Profit →</a> and{' '}
+        <a href="/commcalc/commission-legs" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Commission received over M1-M12 →</a>
         {legHelp ? <><br /><span style={{ fontSize: 12, color: 'var(--text3)' }}>{legHelp}</span></> : null}
       </p>
       {!ready && (
-        <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
+        <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
           <SetupNotice lead="Editing rules is not available yet — the classifier uses the built-in defaults (shown below, read-only)." detail="071_commission_ledger.sql" />
         </div>
       )}
       {usingDefaults && ready && <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>No saved rules for this template yet — showing built-in defaults. Save one to start a custom set.</div>}
       {noRules && ready && (
-        <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
+        <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
           {noRules} Add your first rule below — the labels your own file uses are listed under “Observed”.
         </div>
       )}
@@ -161,7 +161,7 @@ export default function CommissionCategoryMapPage() {
         <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 10 }}>
           Amount column{conv.amount_header ? <> (<code>{conv.amount_header}</code>)</> : null}: <b>{conv.label}</b>.
           {' '}Change it on{' '}
-          <a href="/commcalc/column-mapping" style={{ color: 'var(--accent,#2563eb)' }}>Column Mapping →</a>
+          <a href="/commcalc/column-mapping" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Column Mapping →</a>
           {conv.is_default ? ' (not declared — reading it the long-standing way)' : ''}
         </div>
       )}
@@ -173,9 +173,9 @@ export default function CommissionCategoryMapPage() {
         <ol style={{ margin: '10px 0 6px 18px', fontSize: 13, lineHeight: 1.7, color: 'var(--text2)' }}>
           <li>Pick the <b>Template</b> for the carrier/file you&apos;re mapping ({carrierNames2} or <b>＋ New template</b> for your own).</li>
           <li><b>Import that carrier&apos;s commission file</b> on the{' '}
-            <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,#2563eb)' }}>Commission Ledger</a> page,
+            <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Commission Ledger</a> page,
             so its real labels appear in the table at the bottom of this page.</li>
-          <li>Scroll to <b>“Observed labels in the ledger”</b> — <b style={{ color: '#9a3412' }}>orange rows land in
+          <li>Scroll to <b>“Observed labels in the ledger”</b> — <b style={{ color: 'var(--c-fg-9a3412)' }}>orange rows land in
             “other”</b> (not yet classified). Those are exactly what you need to map.</li>
           <li>In <b>“Add rule”</b>: choose the <b>field</b> to look at, how to <b>match</b> it, type the <b>pattern</b>,
             choose the <b>bucket</b> it belongs to, then <b>Add</b>.</li>
@@ -192,7 +192,7 @@ export default function CommissionCategoryMapPage() {
             ℹ️ <b>Not the same as “Carrier Mapping”.</b> THIS page classifies a carrier&apos;s <b>commission-file line
             items</b> into the 5 <b>Commission Ledger</b> buckets. To classify a carrier&apos;s <b>comp / residual
             statement</b> into the 4 components for <b>Total Compensation</b>, use{' '}
-            <a href="/commcalc/carrier-mapping" style={{ color: 'var(--accent,#2563eb)' }}>Carrier Mapping</a>.
+            <a href="/commcalc/carrier-mapping" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Carrier Mapping</a>.
           </div>
         </div>
       </details>
@@ -261,7 +261,7 @@ export default function CommissionCategoryMapPage() {
         </select>
         <select style={inp} value={nr.sign_rule} onChange={e => setNr({ ...nr, sign_rule: e.target.value })}>{meta.sign_rules.map(s => <option key={s} value={s}>{s === 'any' ? 'any sign' : 'negative only'}</option>)}</select>
         <input style={{ ...inp, width: 64 }} type="number" value={nr.priority} onChange={e => setNr({ ...nr, priority: Number(e.target.value) })} title="priority (lower wins)" />
-        <button onClick={addRule} style={{ ...inp, cursor: 'pointer', fontWeight: 700, background: 'var(--accent,#2563eb)', color: '#fff', border: 'none' }}>Add</button>
+        <button onClick={addRule} style={{ ...inp, cursor: 'pointer', fontWeight: 700, background: 'var(--accent,var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', border: 'none' }}>Add</button>
       </div>
 
       {/* observed labels in the imported ledger */}
@@ -338,12 +338,12 @@ function BucketsPanel({ onChanged }: { onChanged: () => void }) {
       </summary>
       <p style={{ color: 'var(--text2)', fontSize: 12.5, margin: '8px 0', lineHeight: 1.5 }}>{d.note}</p>
       {!d.ready && (
-        <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
+        <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
           Run migration <code>{d.migration}</code> to define buckets. Until then these are the built-in defaults, read-only, and a line cannot be booked to a bucket that has no column of its own.
         </div>
       )}
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 10px', fontSize: 13, marginBottom: 8 }}>{msg}</div>}
-      {!!d.unlisted_in_ledger.length && <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8 }}>Ledger lines are filed under bucket keys no longer listed: {d.unlisted_in_ledger.join(', ')} — they still count in every net; re-activate the bucket to show them by name.</div>}
+      {!!d.unlisted_in_ledger.length && <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginBottom: 8 }}>Ledger lines are filed under bucket keys no longer listed: {d.unlisted_in_ledger.join(', ')} — they still count in every net; re-activate the bucket to show them by name.</div>}
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
         <thead><tr style={{ textAlign: 'left', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>
           <th style={{ padding: '4px 6px' }}>Order</th><th style={{ padding: '4px 6px' }}>Label</th><th style={{ padding: '4px 6px' }}>Key</th><th style={{ padding: '4px 6px' }}>Kind</th>
@@ -370,7 +370,7 @@ function BucketsPanel({ onChanged }: { onChanged: () => void }) {
               <td style={{ padding: '3px 6px' }}><input type="checkbox" checked={!!r.is_active} onChange={e => setEdit(x => ({ ...x, [b.key]: { ...x[b.key], is_active: e.target.checked } }))} disabled={!d.ready} /></td>
               <td style={{ padding: '3px 6px', textAlign: 'right', color: 'var(--text2)' }}>{b.ledger_lines ?? 0}{d.usage_scan_truncated ? '+' : ''}</td>
               <td style={{ padding: '3px 6px', whiteSpace: 'nowrap' }}>
-                {dirty && <button onClick={() => save(r)} style={{ ...inp, cursor: 'pointer', fontSize: 11, padding: '3px 8px', background: 'var(--accent,#2563eb)', color: '#fff', border: 'none' }}>Save</button>}
+                {dirty && <button onClick={() => save(r)} style={{ ...inp, cursor: 'pointer', fontSize: 11, padding: '3px 8px', background: 'var(--accent,var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', border: 'none' }}>Save</button>}
                 {!b.column_backed && b.source === 'tenant' && !b.ledger_lines && <button onClick={() => remove(b)} title="delete your row (only when no ledger line uses it)" style={{ ...inp, cursor: 'pointer', fontSize: 11, padding: '3px 8px', marginLeft: 4 }}>✕</button>}
               </td>
             </tr>) })}

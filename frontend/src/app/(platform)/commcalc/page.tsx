@@ -159,7 +159,7 @@ export default function CommCalcDashboard() {
   const KPI_CARDS = [
     { label: 'Total Incentive Payout', value: fmt(totalPayout), color: 'var(--accent)', icon: '💰', hero: true },
     { label: 'Total Activations', value: totalActs.toLocaleString(), color: 'var(--green)', icon: '📱' },
-    { label: 'Total Upgrades', value: totalUpgrades.toLocaleString(), color: '#7c3aed', icon: '🔄' },
+    { label: 'Total Upgrades', value: totalUpgrades.toLocaleString(), color: 'var(--c-fg-7c3aed)', icon: '🔄' },
     { label: 'Reps Calculated', value: reps.length.toLocaleString(), color: 'var(--amber)', icon: '👥' },
   ]
 
@@ -276,7 +276,7 @@ export default function CommCalcDashboard() {
       {/* Unpaid-activation warnings — a SUCCESSFUL calc that still left activations paying $0 */}
       {calcWarn && (
         <div className="card" style={{ borderLeft: '4px solid var(--amber)', background: 'var(--surface2)', marginBottom: 24 }}>
-          <div style={{ fontWeight: 700, color: '#b45309', marginBottom: 6 }}>
+          <div style={{ fontWeight: 700, color: 'var(--c-fg-b45309)', marginBottom: 6 }}>
             ⚠ Calculated — but {calcWarn.counts?.unpaid_activations || 0} transaction(s) paid nothing
             {calcWarn.counts?.unassigned_reps ? ` and ${calcWarn.counts.unassigned_reps} seller(s) have no plan attached` : ''}
           </div>
@@ -326,7 +326,7 @@ export default function CommCalcDashboard() {
               <a href="/commcalc/payout-plans" style={{ color: 'var(--accent)' }}>Incentive Payout Plans</a>.
             </div>
           )}
-          {isBoost && [{pct: 100, color: '#16a34a'}, {pct: 75, color: '#d97706'}, {pct: 50, color: '#dc2626'}].map(({ pct, color }) => (
+          {isBoost && [{pct: 100, color: 'var(--c-fg-16a34a)'}, {pct: 75, color: 'var(--c-fg-d97706)'}, {pct: 50, color: 'var(--c-fg-dc2626)'}].map(({ pct, color }) => (
             <div key={pct} style={{ marginBottom: 12 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color }}>{pct}% Tier</span>

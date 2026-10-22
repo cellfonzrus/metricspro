@@ -23,9 +23,9 @@ interface ChargebackRow {
 }
 
 const STATUS_STYLE: Record<string, { bg: string; fg: string }> = {
-  posted: { bg: '#fdeaea', fg: '#b91c1c' },
-  pending: { bg: '#fff7e6', fg: '#92400e' },
-  waived: { bg: '#e7f6ec', fg: '#166534' },
+  posted: { bg: 'var(--c-bg-fdeaea)', fg: 'var(--c-fg-b91c1c)' },
+  pending: { bg: 'var(--c-bg-fff7e6)', fg: 'var(--c-fg-92400e)' },
+  waived: { bg: 'var(--c-bg-e7f6ec)', fg: 'var(--c-fg-166534)' },
 }
 
 export default function PayrollChargebacksPanel({ month, onDeductions }:
@@ -119,7 +119,7 @@ export default function PayrollChargebacksPanel({ month, onDeductions }:
                       <td>
                         {r.reason_label || r.reason}
                         {isOverflowChild && (
-                          <div style={{ fontSize: 10, color: '#b45309', marginTop: 2 }}>
+                          <div style={{ fontSize: 10, color: 'var(--c-fg-b45309)', marginTop: 2 }}>
                             ↳ overflow from commission{r.posted_ref ? ` — ${r.posted_ref}` : ''}
                           </div>
                         )}

@@ -76,7 +76,7 @@ function RowTable({ rows, accent }: { rows: Row[]; accent: string }) {
           {rows.map((r, i) => {
             const st = stateFor(r); const imei = r.esn_imei || ''
             return (
-            <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background: st.missing ? '#fff1f2' : (i%2===0?'transparent':'var(--surface2)') }}>
+            <tr key={r.id} style={{ borderTop:'1px solid var(--border)', background: st.missing ? 'var(--c-bg-fff1f2)' : (i%2===0?'transparent':'var(--surface2)') }}>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.store || '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, color:'var(--text2)' }}>{r.market || '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.device_model || '—'}</td>
@@ -123,9 +123,9 @@ function ByModelTable({ rows, meta }: { rows: ByModel[]; meta: { total_models: n
             <tr key={m.device_model} style={{ borderTop:'1px solid var(--border)', background: i%2===0?'transparent':'var(--surface2)' }}>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{m.device_model}</td>
               <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right' }}>{m.under45}</td>
-              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'#d97706', fontWeight:600 }}>{m.warn}</td>
-              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'#dc2626', fontWeight:600 }}>{m.missed}</td>
-              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'#6b7280' }}>{m.unknown_age}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'var(--c-fg-d97706)', fontWeight:600 }}>{m.warn}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'var(--c-fg-dc2626)', fontWeight:600 }}>{m.missed}</td>
+              <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'var(--c-fg-6b7280)' }}>{m.unknown_age}</td>
               <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', color:'var(--text3)' }}>{m.zero}</td>
               <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right', fontWeight:700 }}>{m.total}</td>
               <td style={{ padding:'8px 12px', fontSize:12, textAlign:'right' }}>{fmt(m.owed)}</td>
@@ -285,7 +285,7 @@ export default function AgingPage() {
 
       {/* Stale data banner */}
       {isStale && (
-        <div style={{ background:'#fef2f2', border:'1px solid #fecaca', borderRadius:10, padding:'12px 16px', marginBottom:16, fontSize:13, color:'#991b1b' }}>
+        <div style={{ background:'var(--c-bg-fef2f2)', border:'1px solid var(--c-bg-fecaca)', borderRadius:10, padding:'12px 16px', marginBottom:16, fontSize:13, color:'var(--c-fg-991b1b)' }}>
           ⚠️ <strong>Data is {staleDays} days old</strong> (as of {data?.data_as_of}). Aging is measured from today, so the 45–60 warning window may be empty until you upload a current Asset_Lending.xlsx.
         </div>
       )}
@@ -335,11 +335,11 @@ export default function AgingPage() {
         <>
           {/* WARN alert */}
           {data.buckets.warn.count > 0 && (
-            <div style={{ background:'#fffbeb', border:'2px solid #f59e0b', borderRadius:10, padding:'14px 18px', marginBottom:20 }}>
-              <div style={{ fontSize:15, fontWeight:700, color:'#92400e' }}>
+            <div style={{ background:'var(--c-bg-fffbeb)', border:'2px solid var(--c-bg-f59e0b)', borderRadius:10, padding:'14px 18px', marginBottom:20 }}>
+              <div style={{ fontSize:15, fontWeight:700, color:'var(--c-fg-92400e)' }}>
                 🚨 {data.buckets.warn.count} device{data.buckets.warn.count>1?'s':''} in the 45–60 day window — sell before day 60
               </div>
-              <div style={{ fontSize:13, color:'#92400e', marginTop:4 }}>
+              <div style={{ fontSize:13, color:'var(--c-fg-92400e)', marginTop:4 }}>
                 {fmt(data.buckets.warn.owed)} at risk of being billed unsold. These have days left; act now.
               </div>
             </div>
@@ -362,9 +362,9 @@ export default function AgingPage() {
           {/* Bucket cards */}
           <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:16, marginBottom:24 }}>
             {[
-              { key:'under45', label:'Under 45 Days', sub:'safe — runway remains', color:'#059669', b:data.buckets.under45 },
-              { key:'warn',    label:'45–60 Days (WARN)', sub:'sell before day 60', color:'#d97706', b:data.buckets.warn },
-              { key:'missed',  label:'Over 60 Days (MISSED)', sub:'past due — billed unsold', color:'#dc2626', b:data.buckets.missed },
+              { key:'under45', label:'Under 45 Days', sub:'safe — runway remains', color:'var(--c-fg-059669)', b:data.buckets.under45 },
+              { key:'warn',    label:'45–60 Days (WARN)', sub:'sell before day 60', color:'var(--c-fg-d97706)', b:data.buckets.warn },
+              { key:'missed',  label:'Over 60 Days (MISSED)', sub:'past due — billed unsold', color:'var(--c-fg-dc2626)', b:data.buckets.missed },
             ].map(c => (
               <div key={c.key} className="card" style={{ padding:'18px 22px', borderTop:`3px solid ${c.color}` }}>
                 <div style={{ fontSize:12, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', letterSpacing:'0.05em' }}>{c.label}</div>
@@ -386,7 +386,7 @@ export default function AgingPage() {
 
           {/* WARN list */}
           <div className="card" style={{ padding:0, marginBottom:20 }}>
-            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, color:'#92400e' }}>
+            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, color:'var(--c-fg-92400e)' }}>
               🟠 45–60 Day Warning ({data.buckets.warn.count})
             </div>
             <RowTable rows={data.buckets.warn.rows} accent="#d97706" />
@@ -394,7 +394,7 @@ export default function AgingPage() {
 
           {/* MISSED list */}
           <div className="card" style={{ padding:0, marginBottom:20 }}>
-            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, color:'#991b1b' }}>
+            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, color:'var(--c-fg-991b1b)' }}>
               🔴 Over 60 Days — Billed Unsold ({data.buckets.missed.count})
             </div>
             <RowTable rows={data.buckets.missed.rows} accent="#dc2626" />
@@ -402,7 +402,7 @@ export default function AgingPage() {
 
           {/* UNDER 45 list */}
           <div className="card" style={{ padding:0, marginBottom:20 }}>
-            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, color:'#065f46' }}>
+            <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--border)', fontWeight:600, fontSize:14, color:'var(--c-fg-065f46)' }}>
               🟢 Under 45 Days ({data.buckets.under45.count})
             </div>
             <RowTable rows={data.buckets.under45.rows} accent="#059669" />

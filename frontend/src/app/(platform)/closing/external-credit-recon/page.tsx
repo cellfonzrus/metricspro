@@ -26,12 +26,12 @@ const csv = (a: string[]) => (a.length ? a.join(',') : undefined)
 // Status → how it reads. The three verdicts, then the HONEST GAPS — a gap is deliberately styled
 // as "no evidence", never as a balanced day.
 const STATUS_BADGE: Record<string, { label: string; color: string }> = {
-  short: { label: '🔻 Short', color: '#c0392b' },
-  over: { label: '🔺 Over', color: '#b7791f' },
-  match: { label: '✅ Match', color: '#237a4b' },
+  short: { label: '🔻 Short', color: 'var(--c-fg-c0392b)' },
+  over: { label: '🔺 Over', color: 'var(--c-fg-b7791f)' },
+  match: { label: '✅ Match', color: 'var(--c-fg-237a4b)' },
   no_processor_data: { label: '— No processor data', color: 'var(--text3)' },
   no_declared_data: { label: '— Nothing declared', color: 'var(--text3)' },
-  dm_merged: { label: '⚠️ DM total not split', color: '#b7791f' },
+  dm_merged: { label: '⚠️ DM total not split', color: 'var(--c-fg-b7791f)' },
 }
 const BASIS_NOTE: Record<string, string> = {
   rep: 'as entered by the employee',
@@ -166,32 +166,32 @@ export default function CardSettlementReconPage() {
         <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Store-days</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.cells ?? 0}</div></div>
         <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Declared</div><div style={{ fontSize: 20, fontWeight: 700 }}>{fmt(t.declared_total || 0)}</div></div>
         <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Processor settled</div><div style={{ fontSize: 20, fontWeight: 700 }}>{fmt(t.settled_total || 0)}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Short</div><div style={{ fontSize: 20, fontWeight: 700, color: '#c0392b' }}>{t.short ?? 0} · {fmt(t.short_total || 0)}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Over</div><div style={{ fontSize: 20, fontWeight: 700, color: '#b7791f' }}>{t.over ?? 0} · {fmt(t.over_total || 0)}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Matched</div><div style={{ fontSize: 20, fontWeight: 700, color: '#237a4b' }}>{t.match ?? 0}</div></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Short</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-c0392b)' }}>{t.short ?? 0} · {fmt(t.short_total || 0)}</div></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Over</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-b7791f)' }}>{t.over ?? 0} · {fmt(t.over_total || 0)}</div></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Matched</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-237a4b)' }}>{t.match ?? 0}</div></div>
         <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Without evidence</div><div style={{ fontSize: 20, fontWeight: 700 }}>{gaps}</div></div>
       </div>
 
       {/* Feed honesty: say plainly when a processor's daily pull has not registered or has not
           landed for the window, instead of rendering zeros that look reconciled. */}
       {!loading && Object.entries(feeds).some(([, f]: any) => !f.registered) && (
-        <div className="card" style={{ padding: '8px 12px', marginBottom: 12, fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
+        <div className="card" style={{ padding: '8px 12px', marginBottom: 12, fontSize: 12, background: 'var(--c-bg-fff8e6)', border: '1px solid var(--c-bg-f3d98b)' }}>
           ⚠️ No daily settlement feed is registered yet for{' '}
           {Object.entries(feeds).filter(([, f]: any) => !f.registered).map(([r]) => roleTitle(r)).join(' · ')}
           {' '}— those store-days show “no processor data” rather than a zero.
         </div>
       )}
       {!loading && (data?.unmapped_count || 0) > 0 && (
-        <div className="card" style={{ padding: '8px 12px', marginBottom: 12, fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
+        <div className="card" style={{ padding: '8px 12px', marginBottom: 12, fontSize: 12, background: 'var(--c-bg-fff8e6)', border: '1px solid var(--c-bg-f3d98b)' }}>
           ⚠️ {data.unmapped_count} settled row(s) could not be matched to a store — add the terminal’s merchant ID to that store in Store Management so its money is counted.
         </div>
       )}
       {data?.market_filter_skipped && (
-        <div className="card" style={{ padding: '8px 12px', marginBottom: 12, fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
+        <div className="card" style={{ padding: '8px 12px', marginBottom: 12, fontSize: 12, background: 'var(--c-bg-fff8e6)', border: '1px solid var(--c-bg-f3d98b)' }}>
           ⚠️ Your market filter could not be applied (store roster unavailable) — showing all markets rather than silently dropping stores.
         </div>
       )}
-      {err && <div className="card" style={{ padding: 12, marginBottom: 12, color: '#c0392b' }}>⚠️ {err}</div>}
+      {err && <div className="card" style={{ padding: 12, marginBottom: 12, color: 'var(--c-fg-c0392b)' }}>⚠️ {err}</div>}
       {loading && <div style={{ padding: 24, color: 'var(--text3)' }}>Loading…</div>}
 
       {!loading && !err && (

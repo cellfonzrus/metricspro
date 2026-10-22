@@ -472,7 +472,7 @@ export default function PosCustomersPage() {
               <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }} disabled={busy} onClick={() => unmerge(selected.id)}>Un-merge</button>
             </div>
           )}
-          {aliasInfo.words.map(w => <div key={w} style={{ color: '#b45309' }}>{w}</div>)}
+          {aliasInfo.words.map(w => <div key={w} style={{ color: 'var(--c-fg-b45309)' }}>{w}</div>)}
         </div>
       )}
 
@@ -494,7 +494,7 @@ export default function PosCustomersPage() {
       </div>
 
       {listError && (
-        <div style={{ ...panel, marginBottom: 14, fontSize: 12, color: '#dc2626' }}>{listError}</div>
+        <div style={{ ...panel, marginBottom: 14, fontSize: 12, color: 'var(--c-fg-dc2626)' }}>{listError}</div>
       )}
 
       {/* Accounts table */}
@@ -550,7 +550,7 @@ export default function PosCustomersPage() {
               <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Select a customer to view their phone lines</div>
             ) : (
               <>
-                {linesError && <div style={{ color: '#dc2626', fontSize: 12, marginBottom: 10 }}>{linesError}</div>}
+                {linesError && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 12, marginBottom: 10 }}>{linesError}</div>}
                 {linesWords.map(w => <div key={w} style={{ color: 'var(--text2)', fontSize: 12, marginBottom: 8 }}>{w}</div>)}
                 {lines.length > 0 && (
                   <div className="table-wrapper" style={{ overflowX: 'auto' }}>
@@ -611,7 +611,7 @@ export default function PosCustomersPage() {
               <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Select a customer to view notes</div>
             ) : (
               <>
-                {notesError && <div style={{ color: '#dc2626', fontSize: 12, marginBottom: 10 }}>{notesError}</div>}
+                {notesError && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 12, marginBottom: 10 }}>{notesError}</div>}
                 <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
                   <textarea value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="Type a note about this customer..." style={{ ...input, resize: 'none', height: 60, flex: 1 }} />
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignSelf: 'flex-end' }}>
@@ -650,7 +650,7 @@ export default function PosCustomersPage() {
               <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>Select a customer to view what they paid per invoice</div>
             ) : (
               <>
-                {invoicesError && <div style={{ color: '#dc2626', fontSize: 12, marginBottom: 10 }}>{invoicesError}</div>}
+                {invoicesError && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 12, marginBottom: 10 }}>{invoicesError}</div>}
                 {invoicesWords.map(w => <div key={w} style={{ color: 'var(--text2)', fontSize: 12, marginBottom: 8 }}>{w}</div>)}
                 {invoices.length > 0 && (
                   <div className="table-wrapper" style={{ overflowX: 'auto' }}>
@@ -667,7 +667,7 @@ export default function PosCustomersPage() {
                             <td style={{ ...cell, color: 'var(--text2)' }}>{r.store_code || ''}</td>
                             <td style={cell}>{fmt(r.total)}</td>
                             <td style={{ ...cell, fontWeight: 600 }}>{fmt(r.paid)}</td>
-                            <td style={{ ...cell, color: Math.abs(r.balance) >= 0.005 ? '#b45309' : 'var(--text2)' }}>{fmt(r.balance)}</td>
+                            <td style={{ ...cell, color: Math.abs(r.balance) >= 0.005 ? 'var(--c-fg-b45309)' : 'var(--text2)' }}>{fmt(r.balance)}</td>
                             <td style={{ ...cell, color: 'var(--text2)', whiteSpace: 'normal' }}>
                               {r.payments.length ? r.payments.map(p => `${p.label} ${fmt(p.amount)}`).join(' · ') : 'no payment lines recorded'}
                             </td>
@@ -942,7 +942,7 @@ export default function PosCustomersPage() {
               <button onClick={() => setShowNotes(false)} style={{ background: 'none', border: 'none', color: 'var(--text2)', fontSize: 20, cursor: 'pointer' }}>×</button>
             </div>
             <div style={{ padding: 16, flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {notesError && <div style={{ color: '#dc2626', fontSize: 12 }}>{notesError}</div>}
+              {notesError && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 12 }}>{notesError}</div>}
               {notes.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 13, textAlign: 'center', padding: 20 }}>No notes yet</div>}
               {notes.map(n => (
                 <div key={n.id} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px' }}>

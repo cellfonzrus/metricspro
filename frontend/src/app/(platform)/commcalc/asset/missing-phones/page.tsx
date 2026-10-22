@@ -57,12 +57,12 @@ export default function MissingPhonesPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : data?.error ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {data.error}</div>
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 14, marginBottom: 16 }}>
-            <Stat label="Missing phones flagged" value={`${data.count || 0}`} color="#dc2626" />
-            <Stat label="Owed-to-distributor at risk" value={fmt(data.owed_total)} color="#d97706" />
+            <Stat label="Missing phones flagged" value={`${data.count || 0}`} color="var(--c-fg-dc2626)" />
+            <Stat label="Owed-to-distributor at risk" value={fmt(data.owed_total)} color="var(--c-fg-d97706)" />
           </div>
 
           <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
@@ -84,7 +84,7 @@ export default function MissingPhonesPage() {
                 <tbody>
                   {rows.map((r, i) => (
                     <tr key={(r.esn_imei || '') + i} style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : undefined }}>
-                      <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.store || <span style={{ color: '#dc2626' }}>not in ledger</span>}{r.market ? ` · ${r.market}` : ''}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.store || <span style={{ color: 'var(--c-fg-dc2626)' }}>not in ledger</span>}{r.market ? ` · ${r.market}` : ''}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.device_model || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 11, fontFamily: 'monospace' }}>{r.esn_imei || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.acquired_date || '—'}</td>

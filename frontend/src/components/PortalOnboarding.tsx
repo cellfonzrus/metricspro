@@ -10,9 +10,9 @@ import EntityPicker, { US_STATES } from '@/components/EntityPicker'
 // apiUpload() attach the token); the backend derives the employee from it.
 
 const card: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 18 }
-const inp: React.CSSProperties = { padding: '10px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 15, width: '100%', boxSizing: 'border-box' }
-const btnP: React.CSSProperties = { padding: '10px 16px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' }
-const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: '#334155', display: 'block', margin: '0 0 4px' }
+const inp: React.CSSProperties = { padding: '10px 12px', borderRadius: 8, border: '1px solid var(--c-bg-cbd5e1)', fontSize: 15, width: '100%', boxSizing: 'border-box' }
+const btnP: React.CSSProperties = { padding: '10px 16px', borderRadius: 8, border: 'none', background: 'var(--c-bg-2563eb)', color: 'var(--c-fg-ffffff)', fontSize: 15, fontWeight: 600, cursor: 'pointer' }
+const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: 'var(--c-fg-334155)', display: 'block', margin: '0 0 4px' }
 const SECTION_LABEL: Record<string, string> = { personal: 'Your details', address: 'Home address', emergency: 'Emergency contact', work_eligibility: 'Work eligibility (I-9)', tax: 'Tax withholding (W-4)', direct_deposit: 'Direct deposit', policies: 'Policy acknowledgements', custom: 'Additional info' }
 // Item 2: client-side format hint (real enforcement is server-side, magic-byte sniffed — see
 // hr/router.py _format_allowed). Config-driven off tenant_config.upload_allowed_formats.
@@ -124,7 +124,7 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
     setBusy(false)
   }
 
-  if (err) return <div style={{ ...card, color: '#991b1b' }}>{err}</div>
+  if (err) return <div style={{ ...card, color: 'var(--c-fg-991b1b)' }}>{err}</div>
   if (!d) return <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><div className="spinner" /></div>
   if (!d.ready) return <div style={card}>Onboarding isn&apos;t set up yet. Ask HR.</div>
 
@@ -143,19 +143,19 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* item 4: persistent notice, shown on every visit while any work-auth doc is outstanding */}
       {(d.work_auth_pending || []).length > 0 && (
-        <div style={{ ...card, background: '#fef2f2', borderColor: '#fca5a5', color: '#991b1b', fontSize: 14 }}>
+        <div style={{ ...card, background: 'var(--c-bg-fef2f2)', borderColor: 'var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)', fontSize: 14 }}>
           ⛔ {d.work_auth_notice || 'Your work-authorization documents are still outstanding. Your payroll will be delayed until these documents are submitted.'}
         </div>
       )}
       {/* Gate-1 fold N1: persistent (survives reload, unlike `note`) — bank details were withheld
           until the disclaimer is acknowledged. */}
       {ddPending && (
-        <div style={{ ...card, background: '#fffbeb', borderColor: '#fde68a', color: '#92400e', fontSize: 14 }}>
+        <div style={{ ...card, background: 'var(--c-bg-fffbeb)', borderColor: 'var(--c-bg-fde68a)', color: 'var(--c-fg-92400e)', fontSize: 14 }}>
           🏦 Bank details pending — add your initials to finish direct deposit (see &quot;Your information&quot; below).
         </div>
       )}
       {d.progress && <div style={{ ...card, padding: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ flex: 1, height: 8, background: '#e2e8f0', borderRadius: 8, overflow: 'hidden' }}><div style={{ width: `${d.progress.total ? Math.round(d.progress.done / d.progress.total * 100) : 0}%`, height: '100%', background: '#059669' }} /></div>
+        <div style={{ flex: 1, height: 8, background: 'var(--c-bg-e2e8f0)', borderRadius: 8, overflow: 'hidden' }}><div style={{ width: `${d.progress.total ? Math.round(d.progress.done / d.progress.total * 100) : 0}%`, height: '100%', background: 'var(--c-bg-059669)' }} /></div>
         <span style={{ fontSize: 13, color: 'var(--text2)' }}>{d.progress.done}/{d.progress.total} done</span>
       </div>}
       {note && <div style={{ ...card, padding: 12,
@@ -163,33 +163,33 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
         borderColor: noteKind === 'err' ? '#fca5a5' : noteKind === 'warn' ? '#fde68a' : '#a7f3d0',
         color: noteKind === 'err' ? '#991b1b' : noteKind === 'warn' ? '#92400e' : '#065f46', fontSize: 14 }}>{note}</div>}
 
-      <div style={{ ...card, borderColor: d.needs_work_state ? '#fca5a5' : 'var(--border)' }}>
+      <div style={{ ...card, borderColor: d.needs_work_state ? 'var(--c-bg-fca5a5)' : 'var(--border)' }}>
         <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Which state will you work in?</div>
         <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8 }}>We&apos;ll show only your state&apos;s tax forms.</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <EntityPicker options={US_STATES} value={d.work_state || null} width={200} disabled={busy}
             onChange={v => { if (v) saveState(v) }} placeholder="Select state…" clearable={false} />
-          {d.work_state && <span style={{ fontSize: 13, color: '#059669' }}>✓ {d.work_state}</span>}
+          {d.work_state && <span style={{ fontSize: 13, color: 'var(--c-fg-059669)' }}>✓ {d.work_state}</span>}
         </div>
       </div>
 
       {fields.length > 0 && (
         <div style={card}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Your information {d.intake_submitted && (ddPending ? <span style={{ fontSize: 12, color: '#92400e', fontWeight: 600 }}>· bank details pending</span> : <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>· saved ✓</span>)}</div>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Your information {d.intake_submitted && (ddPending ? <span style={{ fontSize: 12, color: 'var(--c-fg-92400e)', fontWeight: 600 }}>· bank details pending</span> : <span style={{ fontSize: 12, color: 'var(--c-fg-059669)', fontWeight: 600 }}>· saved ✓</span>)}</div>
           <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 12 }}>This fills your employee record automatically.</div>
           {sections.map(sec => (
             <div key={sec} style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4, margin: '0 0 8px' }}>{SECTION_LABEL[sec] || sec}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-fg-94a3b8)', textTransform: 'uppercase', letterSpacing: 0.4, margin: '0 0 8px' }}>{SECTION_LABEL[sec] || sec}</div>
               {/* item 3a: bold disclaimer above the bank-details fields */}
               {sec === 'direct_deposit' && (
-                <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 12px', marginBottom: 10, fontSize: 13, fontWeight: 700, color: '#92400e' }}>
+                <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 8, padding: '10px 12px', marginBottom: 10, fontSize: 13, fontWeight: 700, color: 'var(--c-fg-92400e)' }}>
                   {d.tenant_config?.dd_disclaimer_text || 'By providing bank account information for direct deposit, I certify the routing and account numbers above are correct. If I submit incorrect information, my employer and the payroll processing company are NOT liable for any loss, delay, or misdirection of my wages that results.'}
                 </div>
               )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 {fields.filter(f => (f.section || 'personal') === sec).map(f => (
                   <div key={f.key} style={{ gridColumn: f.field_type === 'select' || f.key === 'address_line1' ? 'span 2' : 'auto' }}>
-                    <label style={lbl}>{f.label}{f.required && <span style={{ color: '#ef4444' }}> *</span>}{f.sensitive && <span style={{ color: '#94a3b8', fontWeight: 400 }}> · private</span>}</label>
+                    <label style={lbl}>{f.label}{f.required && <span style={{ color: 'var(--c-fg-ef4444)' }}> *</span>}{f.sensitive && <span style={{ color: 'var(--c-fg-94a3b8)', fontWeight: 400 }}> · private</span>}</label>
                     {f.field_type === 'select'
                       ? <select style={inp} value={vals[f.key] || ''} onChange={e => setVals(v => ({ ...v, [f.key]: e.target.value }))}>
                           <option value="">Select…</option>
@@ -200,13 +200,13 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
                           onBlur={f.key === 'dd_routing' ? (e => checkRouting(e.target.value)) : undefined}
                           placeholder={f.help_text || ''} />}
                     {/* item 3b: ABA checksum + bank-name confirmation, shown right under the routing field */}
-                    {f.key === 'dd_routing' && routingBusy && <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>Checking…</div>}
+                    {f.key === 'dd_routing' && routingBusy && <div style={{ fontSize: 12, color: 'var(--c-fg-64748b)', marginTop: 4 }}>Checking…</div>}
                     {f.key === 'dd_routing' && !routingBusy && routingInfo && (
                       routingInfo.valid_checksum ? (
-                        <div style={{ fontSize: 12, color: '#059669', marginTop: 4 }}>
+                        <div style={{ fontSize: 12, color: 'var(--c-fg-059669)', marginTop: 4 }}>
                           ✓ Valid routing number{routingInfo.bank_name ? <> — you&apos;re entering an account at <b>{routingInfo.bank_name}</b>. Correct?</> : ''}
                         </div>
-                      ) : <div style={{ fontSize: 12, color: '#dc2626', marginTop: 4 }}>⚠️ That doesn&apos;t look like a valid routing number — please double-check it.</div>
+                      ) : <div style={{ fontSize: 12, color: 'var(--c-fg-dc2626)', marginTop: 4 }}>⚠️ That doesn&apos;t look like a valid routing number — please double-check it.</div>
                     )}
                   </div>
                 ))}
@@ -214,12 +214,12 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
               {/* item 3a: typed-initials acknowledgment, shown once per employee (server also gates this) */}
               {sec === 'direct_deposit' && !d.dd_disclaimer_signed && (
                 <div style={{ marginTop: 10 }}>
-                  <label style={lbl}>Type your initials to confirm the disclaimer above<span style={{ color: '#ef4444' }}> *</span></label>
+                  <label style={lbl}>Type your initials to confirm the disclaimer above<span style={{ color: 'var(--c-fg-ef4444)' }}> *</span></label>
                   <input style={{ ...inp, maxWidth: 120 }} maxLength={6} value={ddInitials} onChange={e => setDdInitials(e.target.value)} placeholder="e.g. JB" />
                 </div>
               )}
               {sec === 'direct_deposit' && d.dd_disclaimer_signed && (
-                <div style={{ marginTop: 8, fontSize: 12, color: '#059669' }}>✓ Disclaimer acknowledged</div>
+                <div style={{ marginTop: 8, fontSize: 12, color: 'var(--c-fg-059669)' }}>✓ Disclaimer acknowledged</div>
               )}
             </div>
           ))}
@@ -231,30 +231,30 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
         <div key={c.key} style={card}>
           <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 10 }}>{c.label}</div>
           {c.tasks.map(t => (
-            <div key={t.id} style={{ padding: '10px 0', borderTop: '1px solid #f1f5f9' }}>
+            <div key={t.id} style={{ padding: '10px 0', borderTop: '1px solid var(--c-bg-f1f5f9)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 15 }}>{t.status === 'returned' ? '⚠️' : (t.has_document || t.status === 'verified' ? '✅' : '⬜')}</span>
                 <span style={{ fontSize: 15, fontWeight: 600 }}>{t.label}</span>
-                {t.work_auth && <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b' }}>required for payroll</span>}
+                {t.work_auth && <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)' }}>required for payroll</span>}
               </div>
               {t.description && <div style={{ fontSize: 13, color: 'var(--text2)', margin: '2px 0 0 23px' }}>{t.description}</div>}
               {t.status === 'returned' && (
-                <div style={{ margin: '6px 0 0 23px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: '#991b1b' }}>
+                <div style={{ margin: '6px 0 0 23px', background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: 'var(--c-fg-991b1b)' }}>
                   ↩ <b>Returned — please fix and resubmit.</b>
                   {(t.missing_fields || []).length > 0 && <div style={{ marginTop: 2 }}>Missing: <b>{(t.missing_fields || []).join(', ')}</b></div>}
                   {t.returned_reason && <div style={{ fontSize: 12, marginTop: 2 }}>{t.returned_reason}</div>}
                 </div>
               )}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '8px 0 0 23px' }}>
-                {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📄 Open {t.doc_label || 'form'}</a>}
-                {t.template_url && <a href={t.template_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>📎 {t.template_name || 'Download template'}</a>}
-                {t.sample_url && <a href={t.sample_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>👁 View completed sample</a>}
-                <button onClick={() => setSigning(t)} disabled={busy} style={{ padding: '7px 12px', borderRadius: 8, border: 'none', background: '#059669', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>✍️ Fill &amp; sign online</button>
-                {t.requires_upload && <label style={{ padding: '7px 12px', borderRadius: 8, background: t.has_document ? '#f8fafc' : '#2563eb', color: t.has_document ? '#334155' : '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: t.has_document ? '1px solid #cbd5e1' : 'none' }}>
+                {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid var(--c-bg-cbd5e1)', fontSize: 13, color: 'var(--c-fg-2563eb)', textDecoration: 'none', fontWeight: 600 }}>📄 Open {t.doc_label || 'form'}</a>}
+                {t.template_url && <a href={t.template_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid var(--c-bg-cbd5e1)', fontSize: 13, color: 'var(--c-fg-2563eb)', textDecoration: 'none', fontWeight: 600 }}>📎 {t.template_name || 'Download template'}</a>}
+                {t.sample_url && <a href={t.sample_url} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', borderRadius: 8, border: '1px solid var(--c-bg-cbd5e1)', fontSize: 13, color: 'var(--c-fg-2563eb)', textDecoration: 'none', fontWeight: 600 }}>👁 View completed sample</a>}
+                <button onClick={() => setSigning(t)} disabled={busy} style={{ padding: '7px 12px', borderRadius: 8, border: 'none', background: 'var(--c-bg-059669)', color: 'var(--c-fg-ffffff)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>✍️ Fill &amp; sign online</button>
+                {t.requires_upload && <label style={{ padding: '7px 12px', borderRadius: 8, background: t.has_document ? 'var(--c-bg-f8fafc)' : 'var(--c-bg-2563eb)', color: t.has_document ? 'var(--c-fg-334155)' : 'var(--c-fg-ffffff)', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: t.has_document ? '1px solid var(--c-bg-cbd5e1)' : 'none' }}>
                   {t.has_document ? '+ Add another file' : '⬆ Upload signed copy'}
                   <input type="file" accept={acceptAttr(d?.tenant_config?.upload_allowed_formats)} style={{ display: 'none' }} disabled={busy} onChange={e => { const f = e.target.files?.[0]; if (f) upload(t, f); e.currentTarget.value = '' }} />
                 </label>}
-                {t.signed_at && <span style={{ fontSize: 12, color: '#059669' }}>✍️ signed online</span>}
+                {t.signed_at && <span style={{ fontSize: 12, color: 'var(--c-fg-059669)' }}>✍️ signed online</span>}
               </div>
               {/* migration 402: every file on this document, each independently viewable — and, only
                   while employee_can_delete says the task is still editable, individually removable. */}
@@ -262,8 +262,8 @@ export default function PortalOnboarding({ onCount }: { onCount?: (remaining: nu
                 <div style={{ margin: '6px 0 0 23px', display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {(t.documents || []).map(f => (
                     <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                      <button onClick={() => viewFile(t, f)} style={{ background: 'none', border: 'none', padding: 0, color: '#2563eb', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}>📄 {f.name}</button>
-                      {f.employee_can_delete && <button onClick={() => deleteFile(t, f)} disabled={busy} title="Remove this file" style={{ background: 'none', border: 'none', padding: 0, color: '#dc2626', cursor: 'pointer', fontSize: 12 }}>✕ remove</button>}
+                      <button onClick={() => viewFile(t, f)} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--c-fg-2563eb)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}>📄 {f.name}</button>
+                      {f.employee_can_delete && <button onClick={() => deleteFile(t, f)} disabled={busy} title="Remove this file" style={{ background: 'none', border: 'none', padding: 0, color: 'var(--c-fg-dc2626)', cursor: 'pointer', fontSize: 12 }}>✕ remove</button>}
                     </div>
                   ))}
                 </div>

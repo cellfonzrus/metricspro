@@ -51,8 +51,8 @@ export default function DedupeCard({ onDone }: { onDone: () => void }) {
         Preview first — nothing changes until you click Apply.
       </div>
       <button className="btn btn-secondary" disabled={busy} onClick={preview}>{busy && !plan ? 'Reading…' : plan ? 'Preview again' : 'Preview the cleanup'}</button>
-      {err && <div style={{ color: '#9b1c1c', marginTop: 8 }}>{err}</div>}
-      {msg && <div style={{ color: '#0a7d33', marginTop: 8 }}>✓ {msg}</div>}
+      {err && <div style={{ color: 'var(--c-fg-9b1c1c)', marginTop: 8 }}>{err}</div>}
+      {msg && <div style={{ color: 'var(--c-fg-0a7d33)', marginTop: 8 }}>✓ {msg}</div>}
       {plan && (
         <div style={{ marginTop: 10 }}>
           {words.map(w => <div key={w}>• {w}</div>)}

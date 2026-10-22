@@ -9,9 +9,9 @@
 export default function Mark({ size = 26 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" style={{ display: 'block', flex: 'none' }}>
-      <rect fill="#c9770f" x="3" y="3" width="19" height="19" rx="4" />
-      <rect fill="#217a5e" x="10" y="10" width="19" height="19" rx="4" />
-      <rect fill="#c9770f" x="10" y="10" width="12" height="12" rx="3" opacity=".55" />
+      <rect fill="var(--c-fg-c9770f)" x="3" y="3" width="19" height="19" rx="4" />
+      <rect fill="var(--c-fg-217a5e)" x="10" y="10" width="19" height="19" rx="4" />
+      <rect fill="var(--c-fg-c9770f)" x="10" y="10" width="12" height="12" rx="3" opacity=".55" />
     </svg>
   )
 }

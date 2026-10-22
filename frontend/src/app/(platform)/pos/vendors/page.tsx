@@ -110,10 +110,10 @@ export default function PosVendorsPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {msg && <span style={{ fontSize: 13, color: '#dc2626' }}>{msg}</span>}
+          {msg && <span style={{ fontSize: 13, color: 'var(--c-fg-dc2626)' }}>{msg}</span>}
           <button className="btn btn-primary" onClick={openNew}>+ Create New</button>
           {selected && <button className="btn btn-secondary" onClick={openEdit}>View/Edit</button>}
-          {selected && <button className="btn btn-secondary" style={{ color: '#dc2626' }} onClick={deleteSelected}>Delete</button>}
+          {selected && <button className="btn btn-secondary" style={{ color: 'var(--c-fg-dc2626)' }} onClick={deleteSelected}>Delete</button>}
         </div>
       </div>
 

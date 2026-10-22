@@ -103,7 +103,7 @@ export default function ImpersonationAuditPage() {
       </div>
 
       {!ready && (
-        <div className="card" style={{ padding: 14, marginBottom: 16, background: '#fffbeb', borderLeft: '5px solid #f59e0b' }}>
+        <div className="card" style={{ padding: 14, marginBottom: 16, background: 'var(--c-bg-fffbeb)', borderLeft: '5px solid var(--c-bg-f59e0b)' }}>
           <b>Not set up yet.</b> <SetupNotice detail="730 (impersonation audit tables)" />
           Until they are, nobody can sign in as an employee at all — the feature refuses to start rather
           than run without a record.
@@ -147,13 +147,13 @@ export default function ImpersonationAuditPage() {
       )}
 
       {live.length > 0 && (
-        <div className="card" style={{ padding: 14, marginBottom: 16, background: '#fef2f2', borderLeft: '5px solid #7f1d1d' }}>
+        <div className="card" style={{ padding: 14, marginBottom: 16, background: 'var(--c-bg-fef2f2)', borderLeft: '5px solid var(--c-bg-7f1d1d)' }}>
           <b>{live.length} session{live.length === 1 ? '' : 's'} open right now.</b>{' '}
           {live.map(s => `${s.actor_email || 'an admin'} → ${s.target_name || s.target_email || 'employee'}`).join(' · ')}
         </div>
       )}
 
-      {err && <div className="card" style={{ padding: 14, marginBottom: 16, color: '#b91c1c' }}>{err}</div>}
+      {err && <div className="card" style={{ padding: 14, marginBottom: 16, color: 'var(--c-fg-b91c1c)' }}>{err}</div>}
 
       <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -189,7 +189,7 @@ export default function ImpersonationAuditPage() {
                 <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>{mins(s.started_at, s.ended_at)}</td>
                 <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
                   {s.ended_at ? `${when(s.ended_at)}${s.end_reason ? ` (${s.end_reason})` : ''}`
-                              : <b style={{ color: '#7f1d1d' }}>still open</b>}
+                              : <b style={{ color: 'var(--c-fg-7f1d1d)' }}>still open</b>}
                 </td>
                 <td style={{ padding: '9px 12px', color: 'var(--text3)' }}>{s.ip || '—'}</td>
                 <td style={{ padding: '9px 12px' }}>
@@ -215,7 +215,7 @@ export default function ImpersonationAuditPage() {
                             <span style={{ fontFamily: 'ui-monospace, monospace' }}>
                               {a.method ? `${a.method} ` : ''}{a.path || ''}
                             </span>
-                            {a.status ? <span style={{ color: a.status < 400 ? '#059669' : '#b91c1c' }}>{a.status}</span> : null}
+                            {a.status ? <span style={{ color: a.status < 400 ? 'var(--c-fg-059669)' : 'var(--c-fg-b91c1c)' }}>{a.status}</span> : null}
                           </div>
                         ))}
                       </div>

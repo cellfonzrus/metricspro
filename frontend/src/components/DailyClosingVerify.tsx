@@ -44,9 +44,9 @@ const GATE_LABEL: Record<string, string> = {
   recon_pending: '⏳ Pending',
 }
 const GATE_COLOR: Record<string, React.CSSProperties> = {
-  ok: { background: '#e6f7ec', color: '#16794a' },
-  flagged: { background: '#fef3e2', color: '#b45309' },
-  blocked: { background: '#fde8e8', color: '#b42318' },
+  ok: { background: 'var(--c-bg-e6f7ec)', color: 'var(--c-fg-16794a)' },
+  flagged: { background: 'var(--c-bg-fef3e2)', color: 'var(--c-fg-b45309)' },
+  blocked: { background: 'var(--c-bg-fde8e8)', color: 'var(--c-fg-b42318)' },
   recon_pending: { background: 'var(--surface2)', color: 'var(--text3)' },
 }
 // `resolved` (OWNER BUG REPORT 2026-07-29, "management removed block still showing on dm verify" +
@@ -94,8 +94,8 @@ const csv = (a: string[]) => (a.length ? a.join(',') : undefined)
 // panel only shows the buttons when the server says `can_decide`). retail-ops-14: now honors the
 // SAME active filter bar as the rest of the page (previously called with zero filter params).
 const badgeStyle: Record<string, React.CSSProperties> = {
-  pending: { background: '#fef3e2', color: '#b45309' },
-  posted: { background: '#fbe4e4', color: '#b42318' },
+  pending: { background: 'var(--c-bg-fef3e2)', color: 'var(--c-fg-b45309)' },
+  posted: { background: 'var(--c-bg-fbe4e4)', color: 'var(--c-fg-b42318)' },
   waived: { background: 'var(--surface2)', color: 'var(--text3)' },
 }
 
@@ -143,7 +143,7 @@ function MissedChargebacksPanel({ filt }: { filt: StandardFilterValue }) {
   if (rows.length === 0) return null  // no missed verifications ever recorded (within the active filters) -> no banner at all
 
   return (
-    <div className="card" style={{ padding: 14, marginBottom: 16, border: totals.pending > 0 ? '1px solid #f3b4b4' : undefined }}>
+    <div className="card" style={{ padding: 14, marginBottom: 16, border: totals.pending > 0 ? '1px solid var(--c-bg-f3b4b4)' : undefined }}>
       <div role="button" tabIndex={0} onClick={() => setOpen(o => !o)} onKeyDown={e => { if (e.key === 'Enter') setOpen(o => !o) }}
         style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', cursor: 'pointer' }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -151,8 +151,8 @@ function MissedChargebacksPanel({ filt }: { filt: StandardFilterValue }) {
           <span style={{ fontSize: 12, color: 'var(--text3)' }}>{rows.length} missed DM verification{rows.length === 1 ? '' : 's'}</span>
         </div>
         <div style={{ display: 'flex', gap: 14, alignItems: 'center', fontSize: 12 }}>
-          <span>Pending: <b style={{ color: '#b45309' }}>{fmt(totals.pending)}</b></span>
-          <span>Posted: <b style={{ color: '#b42318' }}>{fmt(totals.posted)}</b></span>
+          <span>Pending: <b style={{ color: 'var(--c-fg-b45309)' }}>{fmt(totals.pending)}</b></span>
+          <span>Posted: <b style={{ color: 'var(--c-fg-b42318)' }}>{fmt(totals.posted)}</b></span>
           <span>To be foregone from commission: <b>{fmt(totals.to_be_foregone)}</b></span>
           <span style={{ color: 'var(--text3)' }}>{open ? '▲' : '▼'}</span>
         </div>
@@ -186,7 +186,7 @@ function MissedChargebacksPanel({ filt }: { filt: StandardFilterValue }) {
                           onClick={() => decide(r.id, 'waived')}>{busy[r.id] ? '⏳' : 'Waive'}</button>
                       </div>
                     )}
-                    {msg[r.id] && <div style={{ fontSize: 11, color: '#b91c1c' }}>{msg[r.id]}</div>}
+                    {msg[r.id] && <div style={{ fontSize: 11, color: 'var(--c-fg-b91c1c)' }}>{msg[r.id]}</div>}
                   </td>
                 </tr>
               ))}
@@ -563,7 +563,7 @@ export default function DailyClosingVerify() {
       </div>
 
       {autoNote && (
-        <div className="card" style={{ padding: '8px 12px', marginBottom: 14, fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
+        <div className="card" style={{ padding: '8px 12px', marginBottom: 14, fontSize: 12, background: 'var(--c-bg-fff8e6)', border: '1px solid var(--c-bg-f3d98b)' }}>
           ℹ️ {autoNote}
         </div>
       )}
@@ -590,7 +590,7 @@ export default function DailyClosingVerify() {
         </div>
       )}
       {data?.range_capped && (
-        <div className="card" style={{ padding: '8px 12px', marginBottom: 14, fontSize: 12, background: '#fff8e6', border: '1px solid #f3d98b' }}>
+        <div className="card" style={{ padding: '8px 12px', marginBottom: 14, fontSize: 12, background: 'var(--c-bg-fff8e6)', border: '1px solid var(--c-bg-f3d98b)' }}>
           ⚠️ This range has more days than can be loaded at once — narrowed to the {data.dates_computed} most recent of {data.dates_requested} requested. Narrow the date range to see the rest.
         </div>
       )}
@@ -625,7 +625,7 @@ export default function DailyClosingVerify() {
         const autoAcceptedRep = (s.reps || []).find((r: any) => r.auto_accepted)
         const releasedRep = (s.reps || []).find((r: any) => r.released_at)
         return (
-          <div key={k} className="card" style={{ padding: 16, marginBottom: 14, borderLeft: `4px solid ${ver ? 'var(--green, #16794a)' : recon?.discrepancy ? 'var(--amber, #b45309)' : 'var(--border)'}` }}>
+          <div key={k} className="card" style={{ padding: 16, marginBottom: 14, borderLeft: `4px solid ${ver ? 'var(--green, var(--c-bg-16794a))' : recon?.discrepancy ? 'var(--amber, var(--c-bg-b45309))' : 'var(--border)'}` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 700 }}>{s.store_address || s.store_name}{isRange && <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text3)' }}> · {s.close_date}</span>}</div>
@@ -645,11 +645,11 @@ export default function DailyClosingVerify() {
                   </span>
                 )}
                 {ver
-                  ? <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--green, #16794a)' }}>✅ Verified by {s.verification.verified_by}</span>
+                  ? <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--green, var(--c-fg-16794a))' }}>✅ Verified by {s.verification.verified_by}</span>
                   : <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)' }}>Unverified</span>}
                 {s.dm_corrected && (
                   <span title="Store-day totals, reconciliation, deposits and the incentive gate all reflect the DM's verified corrections. Per-rep rows below stay as submitted."
-                    style={{ fontSize: 11, fontWeight: 700, color: '#1d4ed8', background: '#e0e7ff', padding: '2px 7px', borderRadius: 6 }}>
+                    style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-fg-1d4ed8)', background: 'var(--c-bg-e0e7ff)', padding: '2px 7px', borderRadius: 6 }}>
                     ✎ DM-corrected
                   </span>
                 )}
@@ -662,7 +662,7 @@ export default function DailyClosingVerify() {
                 store nobody worked while $2,826 of declared cash sat in the submit trail. The state
                 is the server's (closing/unfinished_day); the screen only words it. */}
             {s.no_closing_submitted && s.unfinished?.state === 'awaiting_correction' && (
-              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: '#92400e', background: '#fef3c7', padding: '6px 10px', borderRadius: 8 }}>
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '6px 10px', borderRadius: 8 }}>
                 ✎ Entered, awaiting correction — {s.unfinished.employee_name || 'a rep'} entered{' '}
                 {fmt(s.unfinished.entered?.declared_cash)} cash on {s.unfinished.tries === 1 ? 'one try' : `${s.unfinished.tries} tries`} and
                 {' '}was sent back to recount. Nothing is recorded for the day until it is resubmitted.
@@ -676,17 +676,17 @@ export default function DailyClosingVerify() {
               </div>
             )}
             {s.no_closing_submitted && s.unfinished?.state === 'turned_away' && (
-              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: '#92400e', background: '#fef3c7', padding: '6px 10px', borderRadius: 8 }}>
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '6px 10px', borderRadius: 8 }}>
                 ⚠ {s.unfinished.turned_away} submit{s.unfinished.turned_away > 1 ? 's' : ''} turned away for this store — nothing was recorded. The reason is on Management Review.
               </div>
             )}
             {s.no_closing_submitted && (!s.unfinished || s.unfinished.state === 'not_started') && (
-              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: '#b42318', background: '#fde8e8', padding: '6px 10px', borderRadius: 8 }}>
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: 'var(--c-fg-b42318)', background: 'var(--c-bg-fde8e8)', padding: '6px 10px', borderRadius: 8 }}>
                 🚫 No closing submitted for this store — but {s.worked_reps?.join(', ') || 'reps'} worked here today.
               </div>
             )}
             {s.missing_reps?.length > 0 && !s.no_closing_submitted && (
-              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--amber, #b45309)' }}>
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--amber, var(--c-fg-b45309))' }}>
                 ⚠️ Worked but no closing submitted: {s.missing_reps.join(', ')}
               </div>
             )}
@@ -695,7 +695,7 @@ export default function DailyClosingVerify() {
                 to print the static assignee verbatim; it now names the person who actually closed and
                 says here, once, why the assignment did not apply. */}
             {s.closer_note && (
-              <div style={{ marginTop: 6, fontSize: 12, color: '#9a3412', background: '#ffedd5', padding: '6px 10px', borderRadius: 8 }}>
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--c-fg-9a3412)', background: 'var(--c-bg-ffedd5)', padding: '6px 10px', borderRadius: 8 }}>
                 {/* The note NAMES a screen ("clear the assignment under Cash Setup") — owner
                     directive 2026-09-08: a named destination must be a LINK. LinkedText turns the
                     backend's own sentence into one, self-gated, without a second copy of the text. */}
@@ -706,18 +706,18 @@ export default function DailyClosingVerify() {
                 rule — amber only when the money is off (or there is no X-report to tie it against,
                 which is not the same as tying). */}
             {s.partial_closing?.flag && !s.no_closing_submitted && (
-              <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: 'var(--amber, #b45309)', background: '#fffbeb', border: '1px solid #fcd34d', padding: '6px 10px', borderRadius: 8 }}>
+              <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: 'var(--amber, var(--c-fg-b45309))', background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fcd34d)', padding: '6px 10px', borderRadius: 8 }}>
                 🧾 {s.partial_closing.note} <span style={{ fontWeight: 400 }}>— DM to verify.</span>
               </div>
             )}
             {s.partial_closing && !s.partial_closing.flag && s.partial_closing.missing?.length > 0
               && s.partial_closing.money_ok === true && !s.no_closing_submitted && (
-              <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--green, #16794a)' }}>
+              <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--green, var(--c-fg-16794a))' }}>
                 ✅ {s.partial_closing.note}
               </div>
             )}
             {s.cross_login?.length > 0 && (
-              <div style={{ marginTop: 6, fontSize: 12, color: '#9a3412', background: '#ffedd5', padding: '6px 10px', borderRadius: 8 }}>
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--c-fg-9a3412)', background: 'var(--c-bg-ffedd5)', padding: '6px 10px', borderRadius: 8 }}>
                 🔐 Sold under a different login than clock-in: {s.cross_login.map((c: any) => c.logins?.length ? `${c.salesperson} (as ${c.logins.join(', ')})` : c.salesperson).join('; ')}
               </div>
             )}
@@ -764,19 +764,19 @@ export default function DailyClosingVerify() {
             </div>
 
             {expPending > 0 && (
-              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: '#9a3412', background: '#ffedd5', padding: '6px 10px', borderRadius: 8 }}>
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: 'var(--c-fg-9a3412)', background: 'var(--c-bg-ffedd5)', padding: '6px 10px', borderRadius: 8 }}>
                 💵 {expPending} rep expense{expPending === 1 ? '' : 's'} awaiting your approval — open the rep rows below to review and approve.
               </div>
             )}
 
             {/* POS reconciliation */}
             {recon && (
-              <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, background: recon.discrepancy ? '#fef3e2' : '#e6f7ec', fontSize: 13 }}>
+              <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, background: recon.discrepancy ? 'var(--c-bg-fef3e2)' : 'var(--c-bg-e6f7ec)', fontSize: 13 }}>
                 <strong>{pos} reconciliation:</strong>{' '}
                 Activations closing {recon.closing_activations} vs {pos} {recon.b2b_activations}{' '}
-                {recon.act_var !== 0 ? <b style={{ color: 'var(--amber, #b45309)' }}>(Δ{recon.act_var > 0 ? '+' : ''}{recon.act_var})</b> : '✓'}
+                {recon.act_var !== 0 ? <b style={{ color: 'var(--amber, var(--c-fg-b45309))' }}>(Δ{recon.act_var > 0 ? '+' : ''}{recon.act_var})</b> : '✓'}
                 {' · '}Upgrades closing {recon.closing_upgrades} vs {pos} {recon.b2b_upgrades}{' '}
-                {recon.upg_var !== 0 ? <b style={{ color: 'var(--amber, #b45309)' }}>(Δ{recon.upg_var > 0 ? '+' : ''}{recon.upg_var})</b> : '✓'}
+                {recon.upg_var !== 0 ? <b style={{ color: 'var(--amber, var(--c-fg-b45309))' }}>(Δ{recon.upg_var > 0 ? '+' : ''}{recon.upg_var})</b> : '✓'}
                 <span style={{ color: 'var(--text3)' }}>{' · '}Acc GP ({pos}) {fmt(recon.b2b_acc_gp)}</span>
               </div>
             )}
@@ -809,7 +809,7 @@ export default function DailyClosingVerify() {
                         {m.pending
                           ? <span style={{ color: 'var(--text3)' }}> · X-report pending</span>
                           : <> vs {tenderSourceLabel(s.money_recon.tender_source, true)} {fmt(m.b2b)}{' '}
-                              <b style={{ color: m.flag ? 'var(--amber, #b45309)' : 'var(--green, #16794a)' }}>
+                              <b style={{ color: m.flag ? 'var(--amber, var(--c-fg-b45309))' : 'var(--green, var(--c-fg-16794a))' }}>
                                 {m.flag ? `Δ${(m.var ?? 0) > 0 ? '+' : ''}${fmt(m.var)}` : '✓'}</b></>}
                       </div>
                     )
@@ -824,7 +824,7 @@ export default function DailyClosingVerify() {
                       {s.money_recon.epay.portal_pending
                         ? <span style={{ color: 'var(--text3)' }}> · portal pending</span>
                         : <> vs portal {fmt(s.money_recon.epay.portal)}{' '}
-                            <b style={{ color: s.money_recon.epay.flag ? 'var(--amber, #b45309)' : 'var(--green, #16794a)' }}>
+                            <b style={{ color: s.money_recon.epay.flag ? 'var(--amber, var(--c-fg-b45309))' : 'var(--green, var(--c-fg-16794a))' }}>
                               {s.money_recon.epay.flag ? `Δ${(s.money_recon.epay.var ?? 0) > 0 ? '+' : ''}${fmt(s.money_recon.epay.var)}` : '✓'}</b>
                             {typeof s.money_recon.epay.portal_fee === 'number' && s.money_recon.epay.portal_fee > 0
                               ? <span style={{ color: 'var(--text3)' }}> · fee {fmt(s.money_recon.epay.portal_fee)}</span> : null}</>}
@@ -878,7 +878,7 @@ export default function DailyClosingVerify() {
                             ? <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, whiteSpace: 'nowrap' }}>
                                 <input type="checkbox" checked={!!r.expense_approved} onChange={e => approveExpense(r, e.target.checked)} />
                                 {r.expense_approved
-                                  ? <span style={{ color: 'var(--green, #16794a)', fontWeight: 600 }}>approved{r.expense_approved_by ? ` · ${r.expense_approved_by}` : ''}</span>
+                                  ? <span style={{ color: 'var(--green, var(--c-fg-16794a))', fontWeight: 600 }}>approved{r.expense_approved_by ? ` · ${r.expense_approved_by}` : ''}</span>
                                   : <span style={{ color: 'var(--text3)' }}>approve</span>}
                               </label>
                             : <span style={{ color: 'var(--text3)' }}>—</span>}
@@ -894,9 +894,9 @@ export default function DailyClosingVerify() {
                                     {e.description ? <span style={{ color: 'var(--text3)' }}> · {e.description}</span> : null}
                                     {' '}
                                     {e.status === 'approved'
-                                      ? <span style={{ color: 'var(--green, #16794a)', fontWeight: 600 }}>✓ approved</span>
+                                      ? <span style={{ color: 'var(--green, var(--c-fg-16794a))', fontWeight: 600 }}>✓ approved</span>
                                       : e.status === 'rejected'
-                                      ? <span style={{ color: '#b42318', fontWeight: 600 }}>✕ rejected</span>
+                                      ? <span style={{ color: 'var(--c-fg-b42318)', fontWeight: 600 }}>✕ rejected</span>
                                       : <span style={{ display: 'inline-flex', gap: 4 }}>
                                           <button className="btn btn-secondary" style={{ fontSize: 10, padding: '1px 6px' }}
                                             onClick={() => decideExpenseLine(r, e.id, 'approved')}>approve</button>

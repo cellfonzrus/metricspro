@@ -99,7 +99,7 @@ export default function AccountsDashboard() {
       </div>
 
       {!health.engine_configured && (
-        <div className="card" style={{ padding: 12, marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13, color: '#92400e' }}>
+        <div className="card" style={{ padding: 12, marginBottom: 16, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', fontSize: 13, color: 'var(--c-fg-92400e)' }}>
           ⚠️ The written analysis isn&apos;t switched on yet — statements compute with exact deterministic numbers, but without the written narrative. Contact support to enable it.
         </div>
       )}
@@ -129,7 +129,7 @@ export default function AccountsDashboard() {
                 <Tile label="Total Assets" v={consolidated.assets} />
                 <div style={{ alignSelf: 'center' }}>
                   <span style={{ fontSize: 12, padding: '3px 9px', borderRadius: 999, fontWeight: 600,
-                    background: consolidated.balanced ? '#dcfce7' : '#fee2e2', color: consolidated.balanced ? '#166534' : '#991b1b' }}>
+                    background: consolidated.balanced ? 'var(--c-bg-dcfce7)' : 'var(--c-bg-fee2e2)', color: consolidated.balanced ? 'var(--c-fg-166534)' : 'var(--c-fg-991b1b)' }}>
                     {consolidated.balanced ? '✓ Balance sheet balances' : '⚠ Not balanced — enter cash/opening balances'}
                   </span>
                 </div>
@@ -397,7 +397,7 @@ function Tile({ label, v, accent }: { label: string; v: number; accent?: boolean
   return (
     <div>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, color: accent ? (v >= 0 ? 'var(--green, #16a34a)' : 'var(--red, #dc2626)') : 'var(--text)' }}>{fmt(v || 0)}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: accent ? (v >= 0 ? 'var(--green, var(--c-fg-16a34a))' : 'var(--red, var(--c-fg-dc2626))') : 'var(--text)' }}>{fmt(v || 0)}</div>
     </div>
   )
 }
@@ -410,7 +410,7 @@ function ExpenseCell({ row }: { row: ScopeRow }) {
   const e = scopeExpenses(row)
   if (!e.reported) {
     return <span title="No computed P&L for this scope and period — nothing to report, which is not the same as zero."
-      style={{ fontSize: 11, color: 'var(--text3)', background: 'var(--surface2, #f1f5f9)', padding: '1px 6px', borderRadius: 999 }}>not reported</span>
+      style={{ fontSize: 11, color: 'var(--text3)', background: 'var(--surface2, var(--c-bg-f1f5f9))', padding: '1px 6px', borderRadius: 999 }}>not reported</span>
   }
   return <>{fmt(e.amount)}</>
 }
@@ -461,7 +461,7 @@ function ScopeTable({ title, rows, period }: { title: string; rows: ScopeRow[]; 
               const label = scopeDisplay(s)
               return (
                 <Fragment key={s.scope_key}>
-                  <tr style={{ borderTop: '1px solid var(--border)', fontSize: 13, background: open ? 'var(--surface2, #f8fafc)' : undefined }}>
+                  <tr style={{ borderTop: '1px solid var(--border)', fontSize: 13, background: open ? 'var(--surface2, var(--c-bg-f8fafc))' : undefined }}>
                     <td style={{ padding: '8px 16px', fontWeight: 500 }}>
                       {/* THE DRILL-DOWN HANDLE — same mechanism for every scope row, no per-tenant
                           or per-store branching. Expanding reads the canonical stored statement. */}
@@ -476,7 +476,7 @@ function ScopeTable({ title, rows, period }: { title: string; rows: ScopeRow[]; 
                     <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(s.revenue || 0)}</td>
                     <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(s.gross_profit || 0)}</td>
                     <td style={{ padding: '8px 12px', textAlign: 'right' }}><ExpenseCell row={s} /></td>
-                    <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: (s.net_income || 0) >= 0 ? '#16a34a' : '#dc2626' }}>{fmt(s.net_income || 0)}</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600, color: (s.net_income || 0) >= 0 ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)' }}>{fmt(s.net_income || 0)}</td>
                     <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(s.assets || 0)}</td>
                     <td style={{ padding: '8px 12px', textAlign: 'center' }}>{s.balanced ? '\u2713' : '\u26a0'}</td>
                     <td style={{ padding: '8px 16px', whiteSpace: 'nowrap' }}>
@@ -485,7 +485,7 @@ function ScopeTable({ title, rows, period }: { title: string; rows: ScopeRow[]; 
                     </td>
                   </tr>
                   {open && (
-                    <tr style={{ background: 'var(--surface2, #f8fafc)' }}>
+                    <tr style={{ background: 'var(--surface2, var(--c-bg-f8fafc))' }}>
                       <td colSpan={8} style={{ padding: '0 16px 14px' }}>
                         {/* Keyed on the row AND the period: opening a different scope, or
                             changing the month, gives a FRESH panel at the top of its drill
@@ -617,7 +617,7 @@ function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
   const atRoot = path.length === drillRootLevels(row.scope_key, scopeDisplay(row)).length
 
   return (
-    <div className="card" style={{ padding: 14, background: 'var(--surface, #fff)' }}>
+    <div className="card" style={{ padding: 14, background: 'var(--surface, var(--c-bg-ffffff))' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
         <div style={{ fontSize: 12, fontWeight: 700 }}>
           {/* The breadcrumb IS the way back up. Clicking a crumb truncates the path to it. */}
@@ -627,7 +627,7 @@ function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
               {i === path.length - 1
                 ? <span>{p.label}</span>
                 : <button onClick={() => setPath(path.slice(0, i + 1))}
-                    style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--link, #2563eb)', fontSize: 12, fontWeight: 700 }}>
+                    style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--link, var(--c-fg-2563eb))', fontSize: 12, fontWeight: 700 }}>
                     {p.label}
                   </button>}
             </Fragment>
@@ -644,7 +644,7 @@ function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
       </div>
 
       {state === 'loading' && <div style={{ padding: 12, color: 'var(--text3)', fontSize: 12 }}>Reading the statement…</div>}
-      {state === 'error' && <div style={{ padding: 12, color: '#991b1b', fontSize: 12 }}>Could not read this statement: {err}</div>}
+      {state === 'error' && <div style={{ padding: 12, color: 'var(--c-fg-991b1b)', fontSize: 12 }}>Could not read this statement: {err}</div>}
       {state === 'uncomputed' && (
         <div style={{ padding: 12, color: 'var(--text3)', fontSize: 12 }}>
           No P&amp;L computed for this selection and period — there is nothing to report, which is not the same as $0.00.
@@ -676,7 +676,7 @@ function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
                   <tr key={`${c.kind}:${c.key}`} style={{ borderTop: '1px solid var(--border)', fontSize: 12 }}>
                     <td style={{ padding: '5px 10px' }}>
                       <button onClick={() => setPath([...path, c])}
-                        style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--link, #2563eb)', fontSize: 12, textAlign: 'left' }}>
+                        style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--link, var(--c-fg-2563eb))', fontSize: 12, textAlign: 'left' }}>
                         ▸ {c.label}
                       </button>
                     </td>
@@ -689,7 +689,7 @@ function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
                             <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(t.revenue)}</td>
                             <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(t.gross_profit)}</td>
                             <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(t.expenses)}</td>
-                            <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 600, color: t.net_income >= 0 ? '#16a34a' : '#dc2626' }}>{fmt(t.net_income)}</td>
+                            <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 600, color: t.net_income >= 0 ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)' }}>{fmt(t.net_income)}</td>
                           </>}
                   </tr>
                 )
@@ -742,7 +742,7 @@ function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
                                 measured $0 from an unmeasured one by looking at the number. */}
                             {l.note && (
                               <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text3)', maxWidth: 560 }}>
-                                <span style={{ marginRight: 5, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>not measured</span>
+                                <span style={{ marginRight: 5, fontSize: 10, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>not measured</span>
                                 {l.note}
                               </div>
                             )}
@@ -762,7 +762,7 @@ function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
                             accumulation — a mismatch means a stale snapshot, and the reader is told. */}
                         {open && lt.checked && !lt.agree && (
                           <tr>
-                            <td colSpan={2} style={{ padding: '2px 4px 6px 43px', fontSize: 11, color: '#991b1b' }}>
+                            <td colSpan={2} style={{ padding: '2px 4px 6px 43px', fontSize: 11, color: 'var(--c-fg-991b1b)' }}>
                               ⚠ These rows add to {fmt(lt.detail)} against {fmt(Number(l.amount || 0))} on the line ({fmt(lt.delta)} apart) — recompute this period, then re-open.
                             </td>
                           </tr>
@@ -789,7 +789,7 @@ function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
               </tr>
               <tr>
                 <td style={{ padding: '5px 4px', fontSize: 13, fontWeight: 700 }}>Net Income</td>
-                <td style={{ padding: '5px 4px', textAlign: 'right', fontSize: 13, fontWeight: 700, color: Number(st?.net_income || 0) >= 0 ? '#16a34a' : '#dc2626' }}>{fmt(Number(st?.net_income || 0))}</td>
+                <td style={{ padding: '5px 4px', textAlign: 'right', fontSize: 13, fontWeight: 700, color: Number(st?.net_income || 0) >= 0 ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)' }}>{fmt(Number(st?.net_income || 0))}</td>
               </tr>
             </tbody>
           </table>
@@ -798,13 +798,13 @@ function ScopeDrillDown({ row, period }: { row: ScopeRow; period: string }) {
               snapshot through the same definition, so a mismatch means something upstream changed
               between the two reads — and the reader is told, not shown a quiet second number. It is
               checked only at the ROOT of the drill: a market or a store is a part, not the whole. */}
-          <div style={{ marginTop: 8, fontSize: 11.5, color: atRoot && tie.checked && !tie.agree ? '#991b1b' : 'var(--text3)' }}>
+          <div style={{ marginTop: 8, fontSize: 11.5, color: atRoot && tie.checked && !tie.agree ? 'var(--c-fg-991b1b)' : 'var(--text3)' }}>
             {atRoot && tie.checked && tie.agree && <>✓ Expenses here tie to the Expenses column above, and to the P&amp;L for this scope — one statement, read once.</>}
             {atRoot && tie.checked && !tie.agree && <>⚠ The expenses here sum to {fmt(tie.detail)} against {fmt(col.amount)} in the column ({fmt(tie.delta)} apart) — the snapshot changed between the two reads. Recompute, then re-open.</>}
             {atRoot && !tie.checked && <>Figures read from the stored statement for this scope.</>}
             {!atRoot && <>Figures read from the same stored per-store statements the P&amp;L page reads, filtered to this selection — the rungs above add up to this one.</>}
             {atRoot && ident.checked && !ident.agree && (
-              <div style={{ color: '#991b1b', marginTop: 3 }}>
+              <div style={{ color: 'var(--c-fg-991b1b)', marginTop: 3 }}>
                 ⚠ Gross Profit − Expenses does not equal Net Income for this scope ({fmt(ident.delta)} apart).
               </div>
             )}

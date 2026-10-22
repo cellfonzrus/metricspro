@@ -23,8 +23,8 @@ type Pkg = {
   price_note?: string | null; features?: string[] | null; is_featured?: boolean
 }
 
-const inp: React.CSSProperties = { width: '100%', marginTop: 5, padding: '11px 12px', borderRadius: 9, border: '1px solid #cbd5e1', fontSize: 15, boxSizing: 'border-box' }
-const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: '#475569', marginTop: 14, display: 'block' }
+const inp: React.CSSProperties = { width: '100%', marginTop: 5, padding: '11px 12px', borderRadius: 9, border: '1px solid var(--c-bg-cbd5e1)', fontSize: 15, boxSizing: 'border-box' }
+const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--c-fg-475569)', marginTop: 14, display: 'block' }
 
 function money(amount: number, currency?: string | null) {
   try {
@@ -78,12 +78,12 @@ export default function SignupPage() {
     } catch (e: any) { setErr(e?.message || 'Signup failed') } finally { setBusy(false) }
   }
 
-  const card: React.CSSProperties = { width: '100%', maxWidth: pkgs.length ? 660 : 420, background: 'white', borderRadius: 14, padding: '34px 30px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }
-  const wrap: React.CSSProperties = { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%)', padding: 20 }
+  const card: React.CSSProperties = { width: '100%', maxWidth: pkgs.length ? 660 : 420, background: 'var(--c-bg-ffffff)', borderRadius: 14, padding: '34px 30px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }
+  const wrap: React.CSSProperties = { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, var(--c-bg-1e3a5f) 0%, var(--c-bg-0f172a) 100%)', padding: 20 }
   const brand = (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9 }}>
       <Mark size={24} />
-      <span style={{ fontSize: 22, fontWeight: 800, color: '#1e3a5f', letterSpacing: '-.02em' }}>MetricsPro</span>
+      <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--c-fg-1e3a5f)', letterSpacing: '-.02em' }}>MetricsPro</span>
     </div>
   )
 
@@ -91,18 +91,18 @@ export default function SignupPage() {
   if (!open) return (
     <div style={wrap}><div style={{ ...card, maxWidth: 420, textAlign: 'center' }}>
       {brand}
-      <p style={{ color: '#475569', marginTop: 16 }}>Self-serve signup isn’t open yet. Contact us to get your company onboarded.</p>
-      <Link href="/login" style={{ color: '#2563eb' }}>← Back to sign in</Link>
+      <p style={{ color: 'var(--c-fg-475569)', marginTop: 16 }}>Self-serve signup isn’t open yet. Contact us to get your company onboarded.</p>
+      <Link href="/login" style={{ color: 'var(--c-fg-2563eb)' }}>← Back to sign in</Link>
     </div></div>
   )
   if (done) return (
     <div style={wrap}><div style={{ ...card, maxWidth: 420, textAlign: 'center' }}>
       <div style={{ fontSize: 40 }}>✅</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: '#1e3a5f', marginTop: 8 }}>Company created</div>
-      <p style={{ color: '#475569', marginTop: 8 }}>
+      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-1e3a5f)', marginTop: 8 }}>Company created</div>
+      <p style={{ color: 'var(--c-fg-475569)', marginTop: 8 }}>
         Your {trialDays}-day trial has started. Sign in with <b>{f.admin_email}</b> and the password you chose.
       </p>
-      <Link href="/login" style={{ display: 'inline-block', marginTop: 12, padding: '11px 18px', background: '#1e3a5f', color: '#fff', borderRadius: 9, fontWeight: 700, textDecoration: 'none' }}>Go to sign in →</Link>
+      <Link href="/login" style={{ display: 'inline-block', marginTop: 12, padding: '11px 18px', background: 'var(--c-bg-1e3a5f)', color: 'var(--c-fg-ffffff)', borderRadius: 9, fontWeight: 700, textDecoration: 'none' }}>Go to sign in →</Link>
     </div></div>
   )
 
@@ -111,15 +111,15 @@ export default function SignupPage() {
       <div style={card}>
         <div style={{ textAlign: 'center', marginBottom: 6 }}>
           {brand}
-          <div style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>
+          <div style={{ fontSize: 13, color: 'var(--c-fg-64748b)', marginTop: 4 }}>
             Create your company account — {trialDays} days free, no card required
           </div>
         </div>
 
         {pkgs.length > 0 && (
           <div style={{ marginTop: 20 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 8 }}>
-              Choose a plan <span style={{ fontWeight: 400, color: '#94a3b8' }}>— nothing is charged during the trial</span>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-fg-475569)', marginBottom: 8 }}>
+              Choose a plan <span style={{ fontWeight: 400, color: 'var(--c-fg-94a3b8)' }}>— nothing is charged during the trial</span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(pkgs.length, 3)}, 1fr)`, gap: 10 }}>
               {pkgs.map(p => {
@@ -129,27 +129,27 @@ export default function SignupPage() {
                     aria-pressed={on}
                     style={{
                       textAlign: 'left', cursor: 'pointer', padding: '14px 14px 16px', borderRadius: 11,
-                      background: on ? '#fdf2df' : '#fff', border: `1.5px solid ${on ? '#c9770f' : '#e2e8f0'}`,
+                      background: on ? 'var(--c-bg-fdf2df)' : 'var(--c-bg-ffffff)', border: `1.5px solid ${on ? 'var(--c-bg-c9770f)' : 'var(--c-bg-e2e8f0)'}`,
                       boxShadow: on ? '0 1px 2px rgba(13,27,38,.06)' : 'none',
                     }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 15, fontWeight: 700, color: '#0f172a' }}>{p.name}</span>
-                      {p.is_featured && <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: '#c9770f', background: '#fdf2df', padding: '3px 5px', borderRadius: 3 }}>Popular</span>}
+                      <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-fg-0f172a)' }}>{p.name}</span>
+                      {p.is_featured && <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-fg-c9770f)', background: 'var(--c-bg-fdf2df)', padding: '3px 5px', borderRadius: 3 }}>Popular</span>}
                     </div>
                     <div style={{ marginTop: 6, fontVariantNumeric: 'tabular-nums' }}>
                       {Number(p.price) > 0
-                        ? <><span style={{ fontSize: 21, fontWeight: 700, color: '#0f172a' }}>{money(Number(p.price), p.currency)}</span>
+                        ? <><span style={{ fontSize: 21, fontWeight: 700, color: 'var(--c-fg-0f172a)' }}>{money(Number(p.price), p.currency)}</span>
                             {/* Own line: "per store / month" is long enough to break mid-phrase
                                 beside the figure at this card width, which reads as a typo. */}
-                            <span style={{ display: 'block', fontSize: 11.5, color: '#64748b', marginTop: 2 }}>{p.unit_label || `per ${p.cycle === 'annual' ? 'year' : 'month'}`}</span></>
-                        : <span style={{ fontSize: 15, fontWeight: 600, color: '#475569' }}>Talk to us</span>}
+                            <span style={{ display: 'block', fontSize: 11.5, color: 'var(--c-fg-64748b)', marginTop: 2 }}>{p.unit_label || `per ${p.cycle === 'annual' ? 'year' : 'month'}`}</span></>
+                        : <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--c-fg-475569)' }}>Talk to us</span>}
                     </div>
-                    {p.tagline && <div style={{ fontSize: 12, color: '#64748b', marginTop: 6, lineHeight: 1.45 }}>{p.tagline}</div>}
+                    {p.tagline && <div style={{ fontSize: 12, color: 'var(--c-fg-64748b)', marginTop: 6, lineHeight: 1.45 }}>{p.tagline}</div>}
                     {!!(p.features && p.features.length) && (
                       <ul style={{ margin: '9px 0 0', padding: 0, listStyle: 'none', display: 'grid', gap: 4 }}>
                         {p.features.map((x, i) => (
-                          <li key={i} style={{ fontSize: 11.5, color: '#475569', paddingLeft: 13, position: 'relative' }}>
-                            <span style={{ position: 'absolute', left: 0, color: '#217a5e', fontWeight: 700 }}>✓</span>{x}
+                          <li key={i} style={{ fontSize: 11.5, color: 'var(--c-fg-475569)', paddingLeft: 13, position: 'relative' }}>
+                            <span style={{ position: 'absolute', left: 0, color: 'var(--c-fg-217a5e)', fontWeight: 700 }}>✓</span>{x}
                           </li>
                         ))}
                       </ul>
@@ -180,18 +180,18 @@ export default function SignupPage() {
               <input style={inp} type="password" required minLength={8} value={f.password} onChange={e => setF(v => ({ ...v, password: e.target.value }))} placeholder="••••••••" />
             </div>
           </div>
-          {err && <div style={{ color: '#dc2626', fontSize: 13, marginTop: 12 }}>{err}</div>}
-          <button type="submit" disabled={busy} style={{ width: '100%', marginTop: 18, padding: '13px 0', fontSize: 16, fontWeight: 700, background: '#1e3a5f', color: 'white', border: 'none', borderRadius: 10, cursor: 'pointer', opacity: busy ? 0.7 : 1 }}>
+          {err && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 13, marginTop: 12 }}>{err}</div>}
+          <button type="submit" disabled={busy} style={{ width: '100%', marginTop: 18, padding: '13px 0', fontSize: 16, fontWeight: 700, background: 'var(--c-bg-1e3a5f)', color: 'var(--c-fg-ffffff)', border: 'none', borderRadius: 10, cursor: 'pointer', opacity: busy ? 0.7 : 1 }}>
             {busy ? 'Creating…' : `Start my ${trialDays}-day trial`}
           </button>
-          <div style={{ fontSize: 11.5, color: '#94a3b8', textAlign: 'center', marginTop: 10, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 11.5, color: 'var(--c-fg-94a3b8)', textAlign: 'center', marginTop: 10, lineHeight: 1.5 }}>
             By creating an account you agree to our{' '}
-            <a href="https://metricspro.tech/legal/terms.html" target="_blank" rel="noopener noreferrer" style={{ color: '#64748b' }}>Terms</a>{' and '}
-            <a href="https://metricspro.tech/legal/privacy.html" target="_blank" rel="noopener noreferrer" style={{ color: '#64748b' }}>Privacy Policy</a>.
+            <a href="https://metricspro.tech/legal/terms.html" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--c-fg-64748b)' }}>Terms</a>{' and '}
+            <a href="https://metricspro.tech/legal/privacy.html" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--c-fg-64748b)' }}>Privacy Policy</a>.
           </div>
         </form>
-        <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', marginTop: 14 }}>
-          Already have an account? <Link href="/login" style={{ color: '#2563eb' }}>Sign in</Link>
+        <div style={{ fontSize: 12, color: 'var(--c-fg-94a3b8)', textAlign: 'center', marginTop: 14 }}>
+          Already have an account? <Link href="/login" style={{ color: 'var(--c-fg-2563eb)' }}>Sign in</Link>
         </div>
       </div>
     </div>

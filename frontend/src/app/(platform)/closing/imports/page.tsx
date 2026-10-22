@@ -105,7 +105,7 @@ export default function ClosingImportsPage() {
           <li><b>Share</b> the responses sheet (Viewer) with the service-account email below.</li>
           <li>Paste the sheet id, pick a schedule, and enable.</li>
         </ol>
-        <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 7, background: saOk ? '#e6f7ec' : '#fef3e2' }}>
+        <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 7, background: saOk ? 'var(--c-bg-e6f7ec)' : 'var(--c-bg-fef3e2)' }}>
           {saOk
             ? <>✅ Service account configured: <b>{cfg.service_account_email || '(key set)'}</b> — share the sheet with this address.</>
             : <>⚠️ The Google service-account key isn&apos;t installed on the server yet. Contact support to enable auto-import.</>}

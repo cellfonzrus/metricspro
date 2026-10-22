@@ -156,7 +156,7 @@ export default function KpiMetricsAdminPage() {
         not appear for them at all. This is the only place a KPI comes into existence.
       </p>
 
-      <div style={{ ...card, marginTop: 14, background: '#f0f9ff', borderColor: '#bae6fd' }}>
+      <div style={{ ...card, marginTop: 14, background: 'var(--c-bg-f0f9ff)', borderColor: 'var(--c-bg-bae6fd)' }}>
         <strong style={{ fontSize: 13 }}>Why a tenant sees nothing here</strong>
         <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 4 }}>
           An organisation with no rows below measures no KPIs yet &mdash; that is a blank slate, not a
@@ -181,11 +181,11 @@ export default function KpiMetricsAdminPage() {
         </span>
       </div>
 
-      {err && <div style={{ ...card, marginTop: 12, borderColor: '#fecaca', background: '#fef2f2', color: '#b91c1c', fontSize: 13 }}>{err}</div>}
-      {msg && <div style={{ ...card, marginTop: 12, borderColor: '#bbf7d0', background: '#f0fdf4', color: '#15803d', fontSize: 13 }}>{msg}</div>}
+      {err && <div style={{ ...card, marginTop: 12, borderColor: 'var(--c-bg-fecaca)', background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-b91c1c)', fontSize: 13 }}>{err}</div>}
+      {msg && <div style={{ ...card, marginTop: 12, borderColor: 'var(--c-bg-bbf7d0)', background: 'var(--c-bg-f0fdf4)', color: 'var(--c-fg-15803d)', fontSize: 13 }}>{msg}</div>}
 
       {!loading && !ready && (
-        <div style={{ ...card, marginTop: 16, borderColor: '#fed7aa', background: '#fff7ed', color: '#9a3412', fontSize: 13 }}>
+        <div style={{ ...card, marginTop: 16, borderColor: 'var(--c-bg-fed7aa)', background: 'var(--c-bg-fff7ed)', color: 'var(--c-fg-9a3412)', fontSize: 13 }}>
           <strong>Nothing can be saved here yet</strong> &mdash; this is not an organisation with no KPIs,
           it is a setting that is not switched on. <SetupNotice detail="060_carrier_kpi_metrics.sql" />
         </div>

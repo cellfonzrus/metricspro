@@ -21,7 +21,7 @@ export default function ReferralDashboard() {
     })()
   }, [])
 
-  if (msg) return <div style={{ padding: 20 }}><div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626' }}>{msg}</div></div>
+  if (msg) return <div style={{ padding: 20 }}><div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)' }}>{msg}</div></div>
   if (!data) return <div style={{ padding: 20, color: 'var(--text2)' }}>Loading…</div>
 
   const funnel: { status: string; label: string; count: number }[] = data.funnel || []
@@ -36,10 +36,10 @@ export default function ReferralDashboard() {
 
       {/* Money + counts row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12, marginBottom: 16 }}>
-        <Stat label="Awaiting approval" value={fmtMoney(data.pending_approval_amount)} sub={`${data.pending_approval_count} referral(s)`} color="#f39c12" />
-        <Stat label="Approved · unpaid" value={fmtMoney(data.approved_unpaid_amount)} sub={`${data.approved_unpaid_count} referral(s)`} color="#16a34a" />
-        <Stat label="Paid to date" value={fmtMoney(data.paid_amount)} sub={`${data.paid_count} referral(s)`} color="#15803d" />
-        <Stat label="Fraud flags" value={String(data.fraud_flag_count)} sub="need review" color="#dc2626" />
+        <Stat label="Awaiting approval" value={fmtMoney(data.pending_approval_amount)} sub={`${data.pending_approval_count} referral(s)`} color="var(--c-fg-f39c12)" />
+        <Stat label="Approved · unpaid" value={fmtMoney(data.approved_unpaid_amount)} sub={`${data.approved_unpaid_count} referral(s)`} color="var(--c-fg-16a34a)" />
+        <Stat label="Paid to date" value={fmtMoney(data.paid_amount)} sub={`${data.paid_count} referral(s)`} color="var(--c-fg-15803d)" />
+        <Stat label="Fraud flags" value={String(data.fraud_flag_count)} sub="need review" color="var(--c-fg-dc2626)" />
       </div>
 
       {/* Funnel */}
@@ -49,7 +49,7 @@ export default function ReferralDashboard() {
           <div key={f.status} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
             <div style={{ width: 130, fontSize: 12, color: 'var(--text2)' }}>{f.label}</div>
             <div style={{ flex: 1, background: 'var(--surface)', borderRadius: 5, overflow: 'hidden', height: 20 }}>
-              <div style={{ width: `${(f.count / maxCount) * 100}%`, minWidth: f.count ? 4 : 0, height: '100%', background: STATUS_COLOR[f.status] || '#6b7280' }} />
+              <div style={{ width: `${(f.count / maxCount) * 100}%`, minWidth: f.count ? 4 : 0, height: '100%', background: STATUS_COLOR[f.status] || 'var(--c-bg-6b7280)' }} />
             </div>
             <div style={{ width: 36, textAlign: 'right', fontWeight: 600, fontSize: 13 }}>{f.count}</div>
           </div>
@@ -77,7 +77,7 @@ function Stat({ label, value, sub, color }: { label: string; value: string; sub:
 
 function QueueTable({ title, rows, empty, danger }: { title: string; rows: Referral[]; empty: string; danger?: boolean }) {
   return (
-    <div style={{ ...panel, marginBottom: 16, ...(danger ? { borderColor: '#dc2626' } : {}) }}>
+    <div style={{ ...panel, marginBottom: 16, ...(danger ? { borderColor: 'var(--c-bg-dc2626)' } : {}) }}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>{title} <span style={{ color: 'var(--text2)', fontWeight: 400 }}>({rows.length})</span></div>
       {rows.length === 0 ? <div style={{ fontSize: 13, color: 'var(--text2)' }}>{empty}</div> : (
         <div style={{ overflowX: 'auto' }}>
@@ -106,5 +106,5 @@ function QueueTable({ title, rows, empty, danger }: { title: string; rows: Refer
 }
 
 export function Pill({ status }: { status: string }) {
-  return <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, color: '#fff', background: STATUS_COLOR[status] || '#6b7280' }}>{STATUS_LABEL[status] || status}</span>
+  return <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, color: 'var(--c-fg-ffffff)', background: STATUS_COLOR[status] || 'var(--c-bg-6b7280)' }}>{STATUS_LABEL[status] || status}</span>
 }

@@ -110,7 +110,7 @@ export default function EnvelopePayoutPage() {
             {plan === null ? <span style={{ fontSize: 12 }}>Loading plan…</span> : (
               <>
                 {plan.shortfall > 0 && (
-                  <div style={{ fontSize: 12, color: '#b42318', marginBottom: 6 }}>
+                  <div style={{ fontSize: 12, color: 'var(--c-fg-b42318)', marginBottom: 6 }}>
                     ⚠️ Only {fmt(plan.total_taken)} available across {plan.open_envelopes} open envelope(s) — short {fmt(plan.shortfall)}.
                   </div>
                 )}
@@ -183,7 +183,7 @@ export default function EnvelopePayoutPage() {
             <Stat label="Salary due" value={fmt(due?.salary_due)} />
             <Stat label="Expenses due" value={fmt(due?.expenses_due)} />
             <Stat label="Total cash required" value={fmt(due?.total_cash_required)} bold />
-            <Stat label="Cash on hand (this store)" value={cashOnHand == null ? '—' : fmt(cashOnHand)} color={cashOnHand != null && due?.total_cash_required > cashOnHand ? '#b42318' : undefined} />
+            <Stat label="Cash on hand (this store)" value={cashOnHand == null ? '—' : fmt(cashOnHand)} color={cashOnHand != null && due?.total_cash_required > cashOnHand ? 'var(--c-fg-b42318)' : undefined} />
           </div>
           {(due?.notes || []).map((n: string, i: number) => (
             <div key={i} style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>ℹ️ {n}</div>

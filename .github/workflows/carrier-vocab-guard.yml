@@ -947,6 +947,11 @@ on:
       # the sidebar colour rotation lock — the palette's ONE home (globals.css) and the rows that
       # dereference it (the platform layout) are both under frontend/src/**, but the proof itself is not
       - "frontend/prove_nav_accents.mjs"
+      - "frontend/prove_theme_tokens.mjs"
+      - "frontend/theme_palette.mjs"
+      - "frontend/theme_ambiguous_pin.txt"
+      - "frontend/src/lib/theme.ts"
+      - "frontend/src/app/globals.css"
       - "frontend/src/**"
       - "backend/app/**/*.py"
       - "backend/app/data/support_docs_seed.json"
@@ -1506,6 +1511,22 @@ jobs:
       - name: Run the sidebar colour proof (palette one home; slot count agreement; WCAG AA per state; negative controls)
         working-directory: frontend
         run: node prove_nav_accents.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE DARK-THEME LOCK (index §CORE-15) drives the REAL theme_palette.mjs and the REAL globals.css under
+  # Node 22 (no npm install — neither imports anything): the stylesheet is exactly what the generator
+  # produces, every colour a page reads is defined for BOTH themes, nothing pale survives on black, and
+  # only lib/theme.ts spells the switch. The pinned count of call sites whose property names no role may
+  # only shrink.
+  theme-token-proof:
+    name: Dark theme lock (one palette, both themes, nothing pale left on black)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Run the dark-theme lock (generator = stylesheet; every token in both themes; WCAG AA; the pin only shrinks)
+        working-directory: frontend
+        run: node prove_theme_tokens.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE NAV DEEP-LINK PROOF (index §19.40) drives the REAL rbac.ts and urlTab.ts under Node 22 (type stripping; neither
   # imports anything, so no npm install): a deep-link menu entry (/hr?tab=employees) is visible exactly when its page is,

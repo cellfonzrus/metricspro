@@ -170,14 +170,14 @@ export default function PosConfigSection({ stores, rows, loading, loadError, rel
     const d = draft[def.key]
     if (!scope) {
       return resolved.sources[def.key] === 'org'
-        ? { text: 'ORG DEFAULT', background: '#2980b9', color: 'white' }
+        ? { text: 'ORG DEFAULT', background: 'var(--c-bg-2980b9)', color: 'var(--c-fg-ffffff)' }
         : { text: 'SYSTEM DEFAULT', background: 'var(--surface2)', color: 'var(--text2)' }
     }
     const overridden = d ? d.kind === 'set' : resolved.sources[def.key] === 'override'
-    if (overridden) return { text: 'OVERRIDDEN HERE', background: '#f39c12', color: 'white' }
+    if (overridden) return { text: 'OVERRIDDEN HERE', background: 'var(--c-bg-f39c12)', color: 'var(--c-fg-ffffff)' }
     const src = d?.kind === 'revert' ? orgResolved.sources[def.key] : resolved.sources[def.key]
     return src === 'org'
-      ? { text: 'INHERITED', background: '#2980b9', color: 'white' }
+      ? { text: 'INHERITED', background: 'var(--c-bg-2980b9)', color: 'var(--c-fg-ffffff)' }
       : { text: 'SYSTEM DEFAULT', background: 'var(--surface2)', color: 'var(--text2)' }
   }
 
@@ -221,14 +221,14 @@ export default function PosConfigSection({ stores, rows, loading, loadError, rel
           <span style={{ fontSize: 13, color: 'var(--text2)' }}>$</span>
           <input type="number" min={0} step={0.01} value={String(v)} disabled={saving}
             onChange={e => setDraftValue(def, e.target.value)}
-            style={{ ...input, width: 90, borderColor: fieldErrors[def.key] ? '#dc2626' : 'var(--border)' }} />
+            style={{ ...input, width: 90, borderColor: fieldErrors[def.key] ? 'var(--c-bg-dc2626)' : 'var(--border)' }} />
         </span>
       )
     }
     return (
       <input type="number" min={0} step={1} value={String(v)} disabled={saving}
         onChange={e => setDraftValue(def, e.target.value)}
-        style={{ ...input, width: 90, opacity: dim, borderColor: fieldErrors[def.key] ? '#dc2626' : 'var(--border)' }} />
+        style={{ ...input, width: 90, opacity: dim, borderColor: fieldErrors[def.key] ? 'var(--c-bg-dc2626)' : 'var(--border)' }} />
     )
   }
 
@@ -241,8 +241,8 @@ export default function PosConfigSection({ stores, rows, loading, loadError, rel
           <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>Register rules, cash controls, and payment settings — org-wide defaults with per-store overrides</div>
         </div>
         <div style={{ fontSize: 12 }}>
-          {saving && <span style={{ color: '#f39c12' }}>saving…</span>}
-          {!saving && savedAt && <span style={{ color: '#16a34a' }}>saved {savedAt}</span>}
+          {saving && <span style={{ color: 'var(--c-fg-f39c12)' }}>saving…</span>}
+          {!saving && savedAt && <span style={{ color: 'var(--c-fg-16a34a)' }}>saved {savedAt}</span>}
         </div>
       </div>
 
@@ -263,7 +263,7 @@ export default function PosConfigSection({ stores, rows, loading, loadError, rel
       </div>
 
       {loadError && (
-        <div style={{ margin: '12px 16px', border: '1px solid #dc2626', color: '#dc2626', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>{loadError}</div>
+        <div style={{ margin: '12px 16px', border: '1px solid var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>{loadError}</div>
       )}
 
       {loading ? (
@@ -289,17 +289,17 @@ export default function PosConfigSection({ stores, rows, loading, loadError, rel
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 13, fontWeight: 600 }}>{def.label}</span>
                       <span style={{ ...badge, background: b.background, color: b.color }}>{b.text}</span>
-                      {modified && <span style={{ fontSize: 11, color: '#f39c12' }}>● modified</span>}
+                      {modified && <span style={{ fontSize: 11, color: 'var(--c-fg-f39c12)' }}>● modified</span>}
                       {canRevert && (
                         <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => revertToInherited(def)}>↩ Revert to inherited</button>
                       )}
                     </div>
                     {def.hint && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>{def.hint}</div>}
                     {def.notYetEnforced && (
-                      <div style={{ fontSize: 11, color: '#f39c12', marginTop: 2 }}>⏳ {def.notYetEnforced}</div>
+                      <div style={{ fontSize: 11, color: 'var(--c-fg-f39c12)', marginTop: 2 }}>⏳ {def.notYetEnforced}</div>
                     )}
                     {fieldErrors[def.key] && (
-                      <div style={{ fontSize: 11, color: '#dc2626', marginTop: 2 }}>{fieldErrors[def.key]}</div>
+                      <div style={{ fontSize: 11, color: 'var(--c-fg-dc2626)', marginTop: 2 }}>{fieldErrors[def.key]}</div>
                     )}
                   </div>
                   <div style={{ flexShrink: 0 }}>{renderControl(def)}</div>
@@ -311,13 +311,13 @@ export default function PosConfigSection({ stores, rows, loading, loadError, rel
       )}
 
       {saveError && (
-        <div style={{ margin: '12px 16px', border: '1px solid #dc2626', color: '#dc2626', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>{saveError}</div>
+        <div style={{ margin: '12px 16px', border: '1px solid var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>{saveError}</div>
       )}
 
       {/* Apply / Cancel bar */}
       {draftCount > 0 && (
         <div style={{ position: 'sticky', bottom: 0, background: 'var(--surface)', borderTop: '1px solid var(--border)', borderRadius: '0 0 12px 12px', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, zIndex: 5 }}>
-          <span style={{ fontSize: 12, color: '#f39c12' }}>● {draftCount} unsaved change{draftCount === 1 ? '' : 's'}</span>
+          <span style={{ fontSize: 12, color: 'var(--c-fg-f39c12)' }}>● {draftCount} unsaved change{draftCount === 1 ? '' : 's'}</span>
           <div style={{ flex: 1 }} />
           <button className="btn btn-secondary" onClick={cancelDraft} disabled={saving}>Cancel</button>
           <button className="btn btn-primary" onClick={applyDraft} disabled={saving}>{saving ? 'Applying…' : 'Apply'}</button>

@@ -152,8 +152,8 @@ export default function OwedWeeklyPage() {
           {/* KPI cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
             <Kpi label="Total Due This Friday" value={fmt(report.due_this_week.total.owed)} sub={`${report.due_this_week.total.count.toLocaleString()} devices`} color="var(--accent)" />
-            <Kpi label="Sold Phones" value={fmt(report.due_this_week.sold.owed)} sub={`${report.due_this_week.sold.count.toLocaleString()} sold — billed this week`} color="#059669" />
-            <Kpi label="Aged > 60 Days (Never Sold)" value={fmt(report.due_this_week.aging.owed)} sub={`${report.due_this_week.aging.count.toLocaleString()} devices past due date`} color="#d97706" />
+            <Kpi label="Sold Phones" value={fmt(report.due_this_week.sold.owed)} sub={`${report.due_this_week.sold.count.toLocaleString()} sold — billed this week`} color="var(--c-fg-059669)" />
+            <Kpi label="Aged > 60 Days (Never Sold)" value={fmt(report.due_this_week.aging.owed)} sub={`${report.due_this_week.aging.count.toLocaleString()} devices past due date`} color="var(--c-fg-d97706)" />
           </div>
 
           {/* By store */}
@@ -178,9 +178,9 @@ export default function OwedWeeklyPage() {
                       <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 500 }}>{s.store}</td>
                       <td style={{ padding: '9px 14px', fontSize: 12, color: 'var(--text2)' }}>{s.market || '—'}</td>
                       <td style={{ padding: '9px 14px', fontSize: 13 }}>{s.sold_count}</td>
-                      <td style={{ padding: '9px 14px', fontSize: 13, color: '#059669' }}>{fmt(s.sold_owed)}</td>
+                      <td style={{ padding: '9px 14px', fontSize: 13, color: 'var(--c-fg-059669)' }}>{fmt(s.sold_owed)}</td>
                       <td style={{ padding: '9px 14px', fontSize: 13 }}>{s.aging_count}</td>
-                      <td style={{ padding: '9px 14px', fontSize: 13, color: '#d97706' }}>{fmt(s.aging_owed)}</td>
+                      <td style={{ padding: '9px 14px', fontSize: 13, color: 'var(--c-fg-d97706)' }}>{fmt(s.aging_owed)}</td>
                       <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 700 }}>{fmt(s.total_owed)}</td>
                     </tr>
                   ))}
@@ -211,8 +211,8 @@ export default function OwedWeeklyPage() {
                       style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)', cursor: 'pointer' }}>
                     <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 500 }}>{pretty(u.thursday)}</td>
                     <td style={{ padding: '9px 14px', fontSize: 13 }}>{u.count.toLocaleString()}</td>
-                    <td style={{ padding: '9px 14px', fontSize: 13, color: '#059669' }}>{fmt(u.sold_owed)}</td>
-                    <td style={{ padding: '9px 14px', fontSize: 13, color: '#d97706' }}>{fmt(u.aging_owed)}</td>
+                    <td style={{ padding: '9px 14px', fontSize: 13, color: 'var(--c-fg-059669)' }}>{fmt(u.sold_owed)}</td>
+                    <td style={{ padding: '9px 14px', fontSize: 13, color: 'var(--c-fg-d97706)' }}>{fmt(u.aging_owed)}</td>
                     <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 700 }}>{fmt(u.total_owed)}</td>
                   </tr>
                 ))}

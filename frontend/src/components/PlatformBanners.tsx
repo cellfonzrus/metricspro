@@ -38,10 +38,10 @@ import { canDeclareMonthFocus } from '@/lib/rbac'
 import { countdown, type EntryBanner } from '@/lib/operator'
 
 const SEV: Record<string, { bg: string; fg: string; icon: string }> = {
-  info: { bg: '#1e3a8a', fg: '#dbeafe', icon: 'ℹ️' },
-  maintenance: { bg: '#78350f', fg: '#fef3c7', icon: '🔧' },
-  degraded: { bg: '#7c2d12', fg: '#ffedd5', icon: '⚠️' },
-  outage: { bg: '#7f1d1d', fg: '#fee2e2', icon: '🚨' },
+  info: { bg: 'var(--c-bg-1e3a8a)', fg: 'var(--c-fg-dbeafe)', icon: 'ℹ️' },
+  maintenance: { bg: 'var(--c-bg-78350f)', fg: 'var(--c-fg-fef3c7)', icon: '🔧' },
+  degraded: { bg: 'var(--c-bg-7c2d12)', fg: 'var(--c-fg-ffedd5)', icon: '⚠️' },
+  outage: { bg: 'var(--c-bg-7f1d1d)', fg: 'var(--c-fg-fee2e2)', icon: '🚨' },
 }
 
 export default function PlatformBanners() {
@@ -136,7 +136,7 @@ function OperatorEntryBanner() {
   }
 
   return (
-    <div style={{ background: '#78350f', color: '#fef3c7', padding: '8px 16px', display: 'flex',
+    <div style={{ background: 'var(--c-bg-78350f)', color: 'var(--c-fg-fef3c7)', padding: '8px 16px', display: 'flex',
       alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 13,
       borderBottom: '1px solid rgba(0,0,0,0.25)' }}>
       <span aria-hidden>🛰️</span>
@@ -147,7 +147,7 @@ function OperatorEntryBanner() {
       <span style={{ opacity: 0.85 }}>Acting as <b>{entry.actor_email}</b>. This is not “view as employee”.</span>
       <span style={{ flex: 1 }} />
       <span style={{ opacity: 0.9, fontVariantNumeric: 'tabular-nums' }}>ends in {countdown(left)}</span>
-      <button onClick={leave} style={{ background: '#fef3c7', color: '#78350f', border: 'none',
+      <button onClick={leave} style={{ background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-78350f)', border: 'none',
         borderRadius: 7, padding: '5px 12px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
         Leave company
       </button>

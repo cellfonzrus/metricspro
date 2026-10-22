@@ -127,7 +127,7 @@ export default function GoogleReviewsConfigPage() {
         Pulls each store&apos;s Google rating from its address via Google Places. Google&apos;s API returns only a
         curated subset of reviews (typically ~5) — not the full history.
       </p>
-      {readOnly && <div style={{ ...inp, background: '#fff7e6', marginBottom: 12 }}>You can view this page but don&apos;t have permission to save changes here — ask an admin.</div>}
+      {readOnly && <div style={{ ...inp, background: 'var(--c-bg-fff7e6)', marginBottom: 12 }}>You can view this page but don&apos;t have permission to save changes here — ask an admin.</div>}
       {msg && <div style={{ marginBottom: 12, fontSize: 13.5 }}>{msg}</div>}
 
       <div className="card" style={{ marginBottom: 16 }}>

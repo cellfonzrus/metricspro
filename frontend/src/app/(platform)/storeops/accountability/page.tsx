@@ -144,8 +144,8 @@ export default function AccountabilityPage() {
                         <td style={{ padding: '5px 12px 5px 0', fontWeight: 500 }}>{(r.incidents || []).length ? (open ? '▾ ' : '▸ ') : ''}{r.employee}</td>
                         <td style={{ padding: '5px 12px 5px 0', textAlign: 'right' }}>{r.total_shifts}</td>
                         <td style={{ padding: '5px 12px 5px 0', textAlign: 'right' }}>{r.late}</td>
-                        <td style={{ padding: '5px 12px 5px 0', textAlign: 'right', color: r.late_rate >= (th.late_rate_flag ?? 0.25) ? '#b45309' : 'var(--text2)' }}>{Math.round(r.late_rate * 100)}%</td>
-                        <td style={{ padding: '5px 12px 5px 0', textAlign: 'right', color: r.no_show >= (th.no_show_flag ?? 2) ? '#dc2626' : 'var(--text2)' }}>{r.no_show}</td>
+                        <td style={{ padding: '5px 12px 5px 0', textAlign: 'right', color: r.late_rate >= (th.late_rate_flag ?? 0.25) ? 'var(--c-fg-b45309)' : 'var(--text2)' }}>{Math.round(r.late_rate * 100)}%</td>
+                        <td style={{ padding: '5px 12px 5px 0', textAlign: 'right', color: r.no_show >= (th.no_show_flag ?? 2) ? 'var(--c-fg-dc2626)' : 'var(--text2)' }}>{r.no_show}</td>
                         <td style={{ padding: '5px 12px 5px 0', textAlign: 'right' }}>{r.left_early}</td>
                         <td style={{ padding: '5px 12px 5px 0', textAlign: 'right', color: 'var(--text3)' }}>{r.excused}</td>
                         <td style={{ padding: '5px 12px 5px 0', textAlign: 'right' }}>
@@ -161,7 +161,7 @@ export default function AccountabilityPage() {
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                                   {lateInc.map((x: any, j: number) => (
                                     <span key={j} style={{ fontSize: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px' }}>
-                                      <b>{x.work_date}</b> · in {x.actual_clock_in_local || fmtTime(x.actual_clock_in)} <span style={{ color: '#b45309' }}>({x.minutes_late}m late)</span>{x.store_code ? ` · ${x.store_code}` : ''}
+                                      <b>{x.work_date}</b> · in {x.actual_clock_in_local || fmtTime(x.actual_clock_in)} <span style={{ color: 'var(--c-fg-b45309)' }}>({x.minutes_late}m late)</span>{x.store_code ? ` · ${x.store_code}` : ''}
                                     </span>
                                   ))}
                                 </div>
@@ -173,7 +173,7 @@ export default function AccountabilityPage() {
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                                   {earlyInc.map((x: any, j: number) => (
                                     <span key={j} style={{ fontSize: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px' }}>
-                                      <b>{x.work_date}</b> · out {x.actual_clock_out_local || fmtTime(x.actual_clock_out)} <span style={{ color: '#b45309' }}>({x.minutes_early}m early)</span>{x.store_code ? ` · ${x.store_code}` : ''}
+                                      <b>{x.work_date}</b> · out {x.actual_clock_out_local || fmtTime(x.actual_clock_out)} <span style={{ color: 'var(--c-fg-b45309)' }}>({x.minutes_early}m early)</span>{x.store_code ? ` · ${x.store_code}` : ''}
                                     </span>
                                   ))}
                                 </div>
@@ -237,7 +237,7 @@ function LatenessAlertConfig() {
   return (
     <div className="card" style={{ padding: 14, marginBottom: 12, borderLeft: '3px solid var(--accent)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <div style={{ fontWeight: 700, fontSize: 14 }}>📧 Automatic morning lateness alerts {cfg.enabled ? <span className="badge" style={{ fontSize: 10, background: '#16794a', color: '#fff' }}>ON</span> : <span className="badge" style={{ fontSize: 10 }}>off</span>}</div>
+        <div style={{ fontWeight: 700, fontSize: 14 }}>📧 Automatic morning lateness alerts {cfg.enabled ? <span className="badge" style={{ fontSize: 10, background: 'var(--c-bg-16794a)', color: 'var(--c-fg-ffffff)' }}>ON</span> : <span className="badge" style={{ fontSize: 10 }}>off</span>}</div>
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setOpen(o => !o)}>{open ? 'Hide' : 'Configure'}</button>
       </div>
       {open && (
@@ -258,7 +258,7 @@ function LatenessAlertConfig() {
             <button className="btn" style={{ fontSize: 12 }} disabled={!!busy} onClick={() => preview(true)}>{busy === 'send' ? '…' : '📤 Send now'}</button>
           </div>
           {cfg.last_run && <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 8 }}>Last run: {cfg.last_detail || cfg.last_run}</div>}
-          {!cfg.available && <div style={{ fontSize: 11.5, color: '#b45309', marginTop: 8 }}>⚠️ <SetupNotice lead="Saving is disabled for now." detail="433" /></div>}
+          {!cfg.available && <div style={{ fontSize: 11.5, color: 'var(--c-fg-b45309)', marginTop: 8 }}>⚠️ <SetupNotice lead="Saving is disabled for now." detail="433" /></div>}
           {msg && <div style={{ fontSize: 12.5, marginTop: 8 }}>{msg}</div>}
         </div>
       )}

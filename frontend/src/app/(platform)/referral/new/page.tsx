@@ -49,7 +49,7 @@ export default function NewReferralPage() {
       </div>
 
       {cfg && !cfg.qr_signing_configured && (
-        <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 14, fontSize: 13 }}>
+        <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', marginBottom: 14, fontSize: 13 }}>
           ⚠️ QR signing is not configured on this server yet — the referral saves, but no scannable QR can
           be minted until a download secret is set. Contact your administrator.
         </div>
@@ -80,7 +80,7 @@ export default function NewReferralPage() {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {PRODUCTS.map(p => (
               <button key={p} type="button" onClick={() => toggle(p)}
-                      style={{ ...btn, borderRadius: 999, ...(products.includes(p) ? { background: '#2563eb', color: '#fff', borderColor: '#2563eb' } : {}) }}>
+                      style={{ ...btn, borderRadius: 999, ...(products.includes(p) ? { background: 'var(--c-bg-2563eb)', color: 'var(--c-fg-ffffff)', borderColor: 'var(--c-bg-2563eb)' } : {}) }}>
                 {products.includes(p) ? '✓ ' : ''}{p}
               </button>
             ))}
@@ -93,7 +93,7 @@ export default function NewReferralPage() {
         </div>
       </div>
 
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginTop: 12 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginTop: 12 }}>{msg}</div>}
 
       <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
         <button onClick={save} disabled={saving || (!f.referrer_phone.trim() && !f.referrer_email.trim())} style={btnPrimary}>

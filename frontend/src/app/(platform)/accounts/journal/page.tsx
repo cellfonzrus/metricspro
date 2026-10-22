@@ -254,13 +254,13 @@ export default function JournalPage() {
           </table>
         </div>
       )}
-      {/* Server echo (PR #179): nothing is ever silently dropped — rejected rows show WHY, resolved
+      {/* Server echo (PR var(--c-fg-117799)): nothing is ever silently dropped — rejected rows show WHY, resolved
           rows confirm which company each entry attributed to. */}
       {rejected.length > 0 && (
-        <div className="card" style={{ padding: 12, marginTop: 14, background: '#fef2f2', border: '1px solid #fecaca' }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: '#991b1b', marginBottom: 6 }}>⚠ {rejected.length} entr{rejected.length === 1 ? 'y was' : 'ies were'} NOT saved</div>
+        <div className="card" style={{ padding: 12, marginTop: 14, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)' }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--c-fg-991b1b)', marginBottom: 6 }}>⚠ {rejected.length} entr{rejected.length === 1 ? 'y was' : 'ies were'} NOT saved</div>
           {rejected.map((r: any, i: number) => (
-            <div key={i} style={{ fontSize: 12.5, color: '#991b1b' }}>· <b>{r.account_line}</b> — {r.reason}</div>
+            <div key={i} style={{ fontSize: 12.5, color: 'var(--c-fg-991b1b)' }}>· <b>{r.account_line}</b> — {r.reason}</div>
           ))}
         </div>
       )}

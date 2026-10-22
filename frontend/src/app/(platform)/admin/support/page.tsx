@@ -18,7 +18,7 @@ type Case = {
 function Pill({ label, color }: { label?: string | null; color?: string }) {
   if (!label) return null
   return <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap',
-    background: (color || '#888') + '22', color: color || '#555', border: `1px solid ${(color || '#888')}55` }}>{label}</span>
+    background: (color || 'var(--c-bg-888888)') + '22', color: color || 'var(--c-fg-555555)', border: `1px solid ${(color || 'var(--c-bg-888888)')}55` }}>{label}</span>
 }
 const PRIORITY_COLOR: Record<string, string> = { urgent: '#ef4444', high: '#f97316', normal: '#3b82f6', low: '#6b7280' }
 const STATUS_COLOR: Record<string, string> = { new: '#3b82f6', in_progress: '#f59e0b', waiting_user: '#6b7280', resolved: '#22c55e', closed: '#475569' }
@@ -27,9 +27,9 @@ function slaBadge(due: string | null) {
   if (!due) return null
   const ms = new Date(due).getTime() - Date.now()
   if (Number.isNaN(ms)) return null
-  if (ms < 0) return { label: 'SLA overdue', color: '#dc2626' }
-  if (ms < 8 * 3600 * 1000) return { label: 'SLA due soon', color: '#d97706' }
-  return { label: 'On track', color: '#16a34a' }
+  if (ms < 0) return { label: 'SLA overdue', color: 'var(--c-fg-dc2626)' }
+  if (ms < 8 * 3600 * 1000) return { label: 'SLA due soon', color: 'var(--c-fg-d97706)' }
+  return { label: 'On track', color: 'var(--c-fg-16a34a)' }
 }
 
 export default function SupportConsole() {
@@ -85,7 +85,7 @@ export default function SupportConsole() {
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🎧 Support Console</h1>
         <span style={{ fontSize: 13, color: 'var(--text3)' }}>Cross-tenant queue · {visible.length} case{visible.length === 1 ? '' : 's'}
-          {overdue > 0 && <span style={{ color: '#dc2626', fontWeight: 600 }}> · {overdue} overdue</span>}</span>
+          {overdue > 0 && <span style={{ color: 'var(--c-fg-dc2626)', fontWeight: 600 }}> · {overdue} overdue</span>}</span>
         <span style={{ flex: 1 }} />
         <Link href="/admin/support/docs" className="btn btn-sm">📚 Help Docs</Link>
       </div>
@@ -107,7 +107,7 @@ export default function SupportConsole() {
         <ReportExportBar title="Support Console" filename="support_console" columns={cols} rows={exportRows} />
       </div>
 
-      {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 12, marginBottom: 12 }}>{err}</div>}
+      {err && <div className="card" style={{ borderColor: 'var(--c-bg-c0392b)', color: 'var(--c-fg-c0392b)', padding: 12, marginBottom: 12 }}>{err}</div>}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? <div style={{ padding: 16, color: 'var(--text3)' }}>Loading…</div>
           : visible.length === 0 ? <div style={{ padding: 16, color: 'var(--text3)' }}>No cases match.</div>

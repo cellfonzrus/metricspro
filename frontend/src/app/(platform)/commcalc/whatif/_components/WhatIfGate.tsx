@@ -63,7 +63,7 @@ export function useWhatIfAccess(): { allowed: Record<string, boolean>; ready: bo
 /** What a caller without the grant sees INSTEAD of the report (no data, no filters, no exports). */
 export function RestrictedWhatIf({ title, grantKey }: { title: string; grantKey: string }) {
   return (
-    <div className="card" style={{ padding: 24, marginTop: 16, borderLeft: '3px solid #dc2626', maxWidth: 660 }}>
+    <div className="card" style={{ padding: 24, marginTop: 16, borderLeft: '3px solid var(--c-bg-dc2626)', maxWidth: 660 }}>
       <div style={{ fontWeight: 700, marginBottom: 6 }}>🔒 Restricted</div>
       <p style={{ color: 'var(--text2)', fontSize: 13, margin: 0 }}>
         <b>{title}</b> is restricted — ask an admin to grant it on your role.

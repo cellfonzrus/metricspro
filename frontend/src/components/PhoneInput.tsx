@@ -89,7 +89,7 @@ export default function PhoneInput({
   }
 
   const sel: React.CSSProperties = {
-    padding: '7px 8px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, background: 'var(--bg1, #fff)',
+    padding: '7px 8px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, background: 'var(--bg1, var(--c-bg-ffffff))',
   }
   const inp: React.CSSProperties = {
     padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, flex: 1, minWidth: 120,

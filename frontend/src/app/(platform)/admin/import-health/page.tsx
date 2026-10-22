@@ -40,9 +40,9 @@ type Attention = {
 }
 
 const STATE: Record<string, { label: string; color: string; bg: string }> = {
-  ok: { label: 'OK', color: '#166534', bg: '#f0fdf4' },
-  overdue: { label: 'OVERDUE', color: '#b91c1c', bg: '#fef2f2' },
-  never: { label: 'NEVER RUN', color: '#b45309', bg: '#fffbeb' },
+  ok: { label: 'OK', color: 'var(--c-fg-166534)', bg: 'var(--c-bg-f0fdf4)' },
+  overdue: { label: 'OVERDUE', color: 'var(--c-fg-b91c1c)', bg: 'var(--c-bg-fef2f2)' },
+  never: { label: 'NEVER RUN', color: 'var(--c-fg-b45309)', bg: 'var(--c-bg-fffbeb)' },
 }
 const SRC: Record<string, string> = {
   email_sweep: 'Email sweep', ftp: 'FTP', pull: 'Portal pull',
@@ -125,10 +125,10 @@ export default function ImportHealthPage() {
         snooze it while you sort it out.
       </p>
 
-      {err && <div className="card" style={{ background: '#fef2f2', color: '#b91c1c', padding: 12, marginBottom: 12, fontSize: 13 }}>{err}</div>}
-      {msg && <div className="card" style={{ background: '#f0fdf4', color: '#166534', padding: 12, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
+      {err && <div className="card" style={{ background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-b91c1c)', padding: 12, marginBottom: 12, fontSize: 13 }}>{err}</div>}
+      {msg && <div className="card" style={{ background: 'var(--c-bg-f0fdf4)', color: 'var(--c-fg-166534)', padding: 12, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
       {health && health.ready === false && (
-        <div className="card" style={{ background: '#fffbeb', color: '#92400e', padding: 12, marginBottom: 12, fontSize: 13 }}>
+        <div className="card" style={{ background: 'var(--c-bg-fffbeb)', color: 'var(--c-fg-92400e)', padding: 12, marginBottom: 12, fontSize: 13 }}>
           {health.hint || <SetupNotice lead="Import health is not set up yet." detail="717" />}
         </div>
       )}
@@ -155,7 +155,7 @@ export default function ImportHealthPage() {
             )}
           </div>
           {(att.items || []).length === 0
-            ? <div style={{ fontSize: 13, color: '#166534', marginTop: 8 }}>✅ Nothing needs attention right now.</div>
+            ? <div style={{ fontSize: 13, color: 'var(--c-fg-166534)', marginTop: 8 }}>✅ Nothing needs attention right now.</div>
             : (
               <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
                 {/* every item renders here regardless of its group (this list is flat, not bucketed);
@@ -241,7 +241,7 @@ export default function ImportHealthPage() {
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
                     {when(f.last_success)}
                     {f.channel_stale && f.last_success && (
-                      <div style={{ color: '#b45309', fontSize: 11 }}>channel stale — data arrived another way</div>
+                      <div style={{ color: 'var(--c-fg-b45309)', fontSize: 11 }}>channel stale — data arrived another way</div>
                     )}
                   </td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
@@ -284,7 +284,7 @@ export default function ImportHealthPage() {
         </p>
       )}
       {att?.provider_errors?.length ? (
-        <p style={{ fontSize: 12, color: '#b45309', marginTop: 10 }}>
+        <p style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginTop: 10 }}>
           Some checks could not run: {att.provider_errors.map(p => p.key).join(', ')}.
         </p>
       ) : null}

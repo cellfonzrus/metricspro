@@ -176,7 +176,7 @@ export default function CashConfigPage() {
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{r.whatsapp || '—'}</td>
                   <td style={{ padding: '6px 8px', fontSize: 12 }}>{[r.via_email && 'email', r.via_whatsapp && 'WhatsApp'].filter(Boolean).join(' + ') || '—'}</td>
                   <td style={{ padding: '6px 8px' }}>{r.include_dm ? '✓' : ''}</td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right' }}><button className="btn btn-secondary" style={{ fontSize: 12, padding: '2px 8px', color: '#dc2626' }} onClick={() => delRecipient(r.id)}>✕</button></td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right' }}><button className="btn btn-secondary" style={{ fontSize: 12, padding: '2px 8px', color: 'var(--c-fg-dc2626)' }} onClick={() => delRecipient(r.id)}>✕</button></td>
                 </tr>
               ))}
             </tbody>
@@ -204,7 +204,7 @@ export default function CashConfigPage() {
         {depCfg && (
           <>
             {depCfg.anthropic_configured === false && (
-              <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8 }}>
+              <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginBottom: 8 }}>
                 ⚠️ OCR is not configured on this server (no API key) — deposits still save; managers confirm the amount manually.
               </div>
             )}
@@ -266,7 +266,7 @@ export default function CashConfigPage() {
           The list below is every reason this system knows about <i>plus</i> every reason that has actually
           occurred — pick from it, you can&apos;t type a new one here.
         </p>
-        {cbForbidden && <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8 }}>🔒 Editing these amounts is limited to company-wide leadership.</div>}
+        {cbForbidden && <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginBottom: 8 }}>🔒 Editing these amounts is limited to company-wide leadership.</div>}
         {cbPolicy.length === 0 ? (
           <div style={{ fontSize: 12, color: 'var(--text3)' }}>Loading…</div>
         ) : (

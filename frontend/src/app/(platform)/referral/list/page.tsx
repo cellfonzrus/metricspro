@@ -55,7 +55,7 @@ export default function ReferralsListPage() {
         </label>
       </div>
 
-      {msg && <div style={{ ...panel, borderColor: '#f39c12', color: 'var(--text2)', marginBottom: 12, fontSize: 13 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', color: 'var(--text2)', marginBottom: 12, fontSize: 13 }}>{msg}</div>}
 
       <div style={{ ...panel, padding: 0, overflowX: 'auto' }}>
         <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 13 }}>

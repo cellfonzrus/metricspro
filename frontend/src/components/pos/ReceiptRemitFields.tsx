@@ -126,7 +126,7 @@ export default function ReceiptRemitFields({ stores, rows, onSettingsChanged }: 
           )}
         </div>
 
-        {error && <div style={{ fontSize: 12, color: '#dc2626', marginTop: 10 }}>{error}</div>}
+        {error && <div style={{ fontSize: 12, color: 'var(--c-fg-dc2626)', marginTop: 10 }}>{error}</div>}
         {saved && <div style={{ fontSize: 12, color: 'var(--accent2)', marginTop: 10 }}>{saved}</div>}
       </div>
     </div>

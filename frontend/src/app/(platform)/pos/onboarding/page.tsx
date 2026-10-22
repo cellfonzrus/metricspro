@@ -118,12 +118,12 @@ export default function PosOnboardingPage() {
       </div>
 
       {err && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b',
+        <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', color: 'var(--c-fg-991b1b)',
           borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 13 }}>{err}</div>
       )}
 
       {status?.registry_source === 'shipped' && (
-        <div style={{ background: '#f8fafc', border: '1px solid var(--border)', color: 'var(--text2)',
+        <div style={{ background: 'var(--c-bg-f8fafc)', border: '1px solid var(--border)', color: 'var(--text2)',
           borderRadius: 10, padding: '9px 14px', marginBottom: 14, fontSize: 12.5 }}>
           Showing the standard checklist. Customising these steps for your company is not available yet.
           <SetupNotice detail="733" />
@@ -144,7 +144,7 @@ export default function PosOnboardingPage() {
         </div>
         <div style={{ height: 8, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}>
           <div style={{ height: '100%', width: `${pct}%`, borderRadius: 99,
-            background: status?.complete ? '#16a34a' : '#2563eb', transition: 'width .3s' }} />
+            background: status?.complete ? 'var(--c-bg-16a34a)' : 'var(--c-bg-2563eb)', transition: 'width .3s' }} />
         </div>
         {status?.complete && (
           <div style={{ marginTop: 12 }}>
@@ -169,7 +169,7 @@ export default function PosOnboardingPage() {
                     style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%',
                       textAlign: 'left', padding: '7px 8px', border: 'none', borderRadius: 8,
                       cursor: 'pointer', fontSize: 13,
-                      background: on ? 'var(--bg2, #eef2ff)' : 'transparent',
+                      background: on ? 'var(--bg2, var(--c-bg-eef2ff))' : 'transparent',
                       color: t.complete ? 'var(--text3)' : 'var(--text)',
                       fontWeight: on ? 700 : 500 }}>
                     <span style={{ width: 18, textAlign: 'center', flexShrink: 0 }}>
@@ -179,7 +179,7 @@ export default function PosOnboardingPage() {
                       {t.title}
                     </span>
                     {t.is_required && !t.complete && (
-                      <span style={{ fontSize: 10, fontWeight: 800, color: '#b45309' }}>REQ</span>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--c-fg-b45309)' }}>REQ</span>
                     )}
                   </button>
                 )
@@ -211,13 +211,13 @@ function StepPanel({ task, onChanged, onSetState, busy }: {
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6 }}>
         <div style={{ fontSize: 18, fontWeight: 800 }}>{task.title}</div>
         {task.is_required
-          ? <span style={{ fontSize: 11, fontWeight: 800, color: '#b45309', background: '#fffbeb',
-              border: '1px solid #fde68a', padding: '2px 7px', borderRadius: 99 }}>REQUIRED</span>
+          ? <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--c-fg-b45309)', background: 'var(--c-bg-fffbeb)',
+              border: '1px solid var(--c-bg-fde68a)', padding: '2px 7px', borderRadius: 99 }}>REQUIRED</span>
           : <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', background: 'var(--bg)',
               border: '1px solid var(--border)', padding: '2px 7px', borderRadius: 99 }}>OPTIONAL</span>}
         {task.complete && (
-          <span style={{ fontSize: 11, fontWeight: 800, color: '#166534', background: '#f0fdf4',
-            border: '1px solid #bbf7d0', padding: '2px 7px', borderRadius: 99 }}>DONE</span>
+          <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--c-fg-166534)', background: 'var(--c-bg-f0fdf4)',
+            border: '1px solid var(--c-bg-bbf7d0)', padding: '2px 7px', borderRadius: 99 }}>DONE</span>
         )}
       </div>
 
@@ -238,7 +238,7 @@ function StepPanel({ task, onChanged, onSetState, busy }: {
       </div>
 
       {task.blocked_by.length > 0 && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e',
+        <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', color: 'var(--c-fg-92400e)',
           borderRadius: 8, padding: '9px 12px', marginBottom: 14, fontSize: 13 }}>
           Finish <b>{task.blocked_by.join(', ')}</b> first — this step needs it.
         </div>
@@ -331,7 +331,7 @@ function TemplateBlock({ templateKey }: { templateKey: string }) {
         </button>
       </div>
       {note && <div style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 8 }}>{note}</div>}
-      {err && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 8 }}>{err}</div>}
+      {err && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)', marginTop: 8 }}>{err}</div>}
       {source === 'snapshot' && (
         <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>
           Columns are from this release&apos;s built-in copy of the table definition — the live
@@ -403,7 +403,7 @@ function ImportFromExisting({ source, onChanged }: { source: string; onChanged: 
   }
 
   return (
-    <div style={{ border: '1px solid #bfdbfe', background: '#eff6ff', borderRadius: 10,
+    <div style={{ border: '1px solid var(--c-bg-bfdbfe)', background: 'var(--c-bg-eff6ff)', borderRadius: 10,
       padding: 14, marginBottom: 14 }}>
       <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 4 }}>
         ⚡ {preview?.title || 'Bring this over from MetricsPro'}
@@ -428,7 +428,7 @@ function ImportFromExisting({ source, onChanged }: { source: string; onChanged: 
         </div>
       )}
 
-      {err && <div style={{ fontSize: 12.5, color: '#b91c1c', marginBottom: 8 }}>{err}</div>}
+      {err && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)', marginBottom: 8 }}>{err}</div>}
 
       {/* WHICH SOURCES the "bring over" reads is per-company config the person confirms here (owner
           2026-09-22). The card lists the sources from the payload — nothing in this file names a table. */}
@@ -448,13 +448,13 @@ function ImportFromExisting({ source, onChanged }: { source: string; onChanged: 
           {preview.count > 0 && preview.matched_products != null && (
             <div style={{ marginTop: 4, color: 'var(--text2)' }}>
               {preview.matched_products} of {preview.count} match a product in your catalog
-              {preview.unmatched_note ? <> — <span style={{ color: '#b45309' }}>{preview.unmatched_note}</span></> : ''}
+              {preview.unmatched_note ? <> — <span style={{ color: 'var(--c-fg-b45309)' }}>{preview.unmatched_note}</span></> : ''}
             </div>
           )}
-          {preview.unresolved_note && <div style={{ marginTop: 4, color: '#b45309' }}>{preview.unresolved_note}</div>}
+          {preview.unresolved_note && <div style={{ marginTop: 4, color: 'var(--c-fg-b45309)' }}>{preview.unresolved_note}</div>}
           {preview.count === 0 && preview.empty_reason && (
-            <div style={{ marginTop: 8, background: '#fffbeb', border: '1px solid #fde68a',
-              borderRadius: 8, padding: '8px 10px', color: '#78350f' }}>
+            <div style={{ marginTop: 8, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)',
+              borderRadius: 8, padding: '8px 10px', color: 'var(--c-fg-78350f)' }}>
               <div>{preview.empty_reason}</div>
               {preview.empty_next && (
                 <div style={{ marginTop: 6, fontWeight: 600 }}>{preview.empty_next}</div>
@@ -479,11 +479,11 @@ function ImportFromExisting({ source, onChanged }: { source: string; onChanged: 
       )}
 
       {result && (
-        <div style={{ fontSize: 13, background: '#f0fdf4', border: '1px solid #bbf7d0',
-          color: '#166534', borderRadius: 8, padding: '8px 12px', marginBottom: 10 }}>
+        <div style={{ fontSize: 13, background: 'var(--c-bg-f0fdf4)', border: '1px solid var(--c-bg-bbf7d0)',
+          color: 'var(--c-fg-166534)', borderRadius: 8, padding: '8px 12px', marginBottom: 10 }}>
           Created <b>{result.created}</b>, skipped {result.skipped} that already existed.
           {result.errors?.length > 0 && (
-            <div style={{ color: '#991b1b', marginTop: 4 }}>{result.errors.join(' · ')}</div>
+            <div style={{ color: 'var(--c-fg-991b1b)', marginTop: 4 }}>{result.errors.join(' · ')}</div>
           )}
         </div>
       )}
@@ -593,13 +593,13 @@ function PlanSourcesCard({ source, preview, onSaved }: { source: string; preview
                   </div>
                 )}
                 {sug && sug.too_broad.length > 0 && (
-                  <div style={{ fontSize: 11.5, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '4px 8px' }}>
+                  <div style={{ fontSize: 11.5, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 6, padding: '4px 8px' }}>
                     Too broad to be a plan word — not proposed: {sug.too_broad.map(c => `"${c.token}" (${Math.round(c.ratio * 100)}% of all lines)`).join(', ')}.
                     A word that names nearly every line is a heading, not a plan.
                   </div>
                 )}
                 {s.refusal_note && (
-                  <div style={{ fontSize: 11.5, color: '#991b1b', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, padding: '4px 8px' }}>
+                  <div style={{ fontSize: 11.5, color: 'var(--c-fg-991b1b)', background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', borderRadius: 6, padding: '4px 8px' }}>
                     {s.refusal_note}
                   </div>
                 )}
@@ -609,7 +609,7 @@ function PlanSourcesCard({ source, preview, onSaved }: { source: string; preview
         )
       })}
       {refusal && (
-        <div style={{ marginTop: 8, fontSize: 12.5, color: '#991b1b', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, padding: '6px 10px' }}>
+        <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--c-fg-991b1b)', background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', borderRadius: 6, padding: '6px 10px' }}>
           <div>{refusal.message}</div>
           {refusal.keys.map(k => (
             <label key={k} style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, cursor: 'pointer' }}>
@@ -620,7 +620,7 @@ function PlanSourcesCard({ source, preview, onSaved }: { source: string; preview
           ))}
         </div>
       )}
-      {err && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 6 }}>{err}</div>}
+      {err && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)', marginTop: 6 }}>{err}</div>}
       <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
         <button className="btn" onClick={save} disabled={busy || (!dirty.length && !attested.length)}>
           {busy ? 'Saving…' : 'Save & re-check'}
@@ -704,12 +704,12 @@ function CatalogBuilder({ task, onChanged }: { task: Task; onChanged: () => void
 
   const have = sug?.have
   return (
-    <div style={{ border: '1px solid #bfdbfe', background: '#eff6ff', borderRadius: 10, padding: 14, marginBottom: 14 }}>
+    <div style={{ border: '1px solid var(--c-bg-bfdbfe)', background: 'var(--c-bg-eff6ff)', borderRadius: 10, padding: 14, marginBottom: 14 }}>
       <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>
         🧩 Build your catalog — pick a ready-made set, or add your own
       </div>
 
-      {err && <div style={{ fontSize: 12.5, color: '#b91c1c', marginBottom: 8 }}>{err}</div>}
+      {err && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)', marginBottom: 8 }}>{err}</div>}
 
       {/* what already exists */}
       {have && (
@@ -807,7 +807,7 @@ function ManualCatalogAdd({ have, onChanged }: { have?: { departments: Dept[]; c
   return (
     <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
       <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Or add your own</div>
-      {err && <div style={{ fontSize: 12, color: '#b91c1c', marginBottom: 6 }}>{err}</div>}
+      {err && <div style={{ fontSize: 12, color: 'var(--c-fg-b91c1c)', marginBottom: 6 }}>{err}</div>}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
         <input style={{ ...inp, width: 200 }} placeholder="New department (e.g. Phones)"
           value={dept} onChange={e => setDept(e.target.value)}
@@ -891,9 +891,9 @@ function ProductBuilder({ sug, err, onChanged, reload }: {
   const catsFor = catId ? cats : cats.filter(c => !deptId || c.department_id === deptId)
 
   return (
-    <div style={{ border: '1px solid #bfdbfe', background: '#eff6ff', borderRadius: 10, padding: 14, marginBottom: 14 }}>
+    <div style={{ border: '1px solid var(--c-bg-bfdbfe)', background: 'var(--c-bg-eff6ff)', borderRadius: 10, padding: 14, marginBottom: 14 }}>
       <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>🧩 Add your products</div>
-      {(err || localErr) && <div style={{ fontSize: 12.5, color: '#b91c1c', marginBottom: 8 }}>{err || localErr}</div>}
+      {(err || localErr) && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)', marginBottom: 8 }}>{err || localErr}</div>}
 
       {devices.length > 0 ? (
         <div style={{ marginBottom: 12 }}>

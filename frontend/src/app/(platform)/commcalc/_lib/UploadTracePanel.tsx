@@ -15,10 +15,10 @@ import { SetupNotice } from '@/lib/setupNotice'
 import { sourceLabel } from '@/lib/sourceLabels'
 
 const tones: Record<string, { bg: string; fg: string; label: string }> = {
-  ok:      { bg: '#dcfce7', fg: '#166534', label: 'ok' },
-  partial: { bg: '#fef9c3', fg: '#854d0e', label: 'partial' },
-  skipped: { bg: '#fef3c7', fg: '#92400e', label: 'skipped' },
-  error:   { bg: '#fee2e2', fg: '#991b1b', label: 'error' },
+  ok:      { bg: 'var(--c-bg-dcfce7)', fg: 'var(--c-fg-166534)', label: 'ok' },
+  partial: { bg: 'var(--c-bg-fef9c3)', fg: 'var(--c-fg-854d0e)', label: 'partial' },
+  skipped: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', label: 'skipped' },
+  error:   { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)', label: 'error' },
 }
 
 function orgParam(): string {
@@ -64,7 +64,7 @@ export function UploadTracePanel({ period, uploadType, onClose }:
           {period && <span style={{ fontSize: 12, color: 'var(--text3)' }}>period: {period}</span>}
         </div>
         {data && data.ok === false && (
-          <div className="card" style={{ padding: 12, background: '#fef3c7', color: '#92400e', fontSize: 13, marginBottom: 10 }}>
+          <div className="card" style={{ padding: 12, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)', fontSize: 13, marginBottom: 10 }}>
             {data.hint || <SetupNotice lead="Upload trace is not available yet." detail="202" />}
           </div>
         )}

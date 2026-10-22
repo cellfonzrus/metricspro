@@ -234,7 +234,7 @@ export default function AccessoryCostAuditPage() {
               subtitle="the exact list to fix in the POS, with the cost each line implies"
               filename={`accessory-cost-items-${period}`.replace(/\s+/g, '-')}
               columns={ITEM_COLS} rows={data.items || []} totals compact stickyHeader
-              rowStyle={(r: any) => ((r.flags || []).length ? { background: '#fffbeb' } : undefined)} />
+              rowStyle={(r: any) => ((r.flags || []).length ? { background: 'var(--c-bg-fffbeb)' } : undefined)} />
           </div>
 
           {/* ── every flagged line ─────────────────────────────────────────────────────── */}

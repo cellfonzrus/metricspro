@@ -263,8 +263,8 @@ export default function BorrowedMoneyPage() {
                       <td style={td}>{p.lender_store}</td>
                       <td style={td}>{p.market || '—'}</td>
                       <td style={{ ...td, textAlign: 'right' }}>{fmt(p.borrowed)}</td>
-                      <td style={{ ...td, textAlign: 'right', color: '#059669' }}>{fmt(p.repaid)}</td>
-                      <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: '#dc2626' }}>{fmt(p.outstanding)}</td>
+                      <td style={{ ...td, textAlign: 'right', color: 'var(--c-fg-059669)' }}>{fmt(p.repaid)}</td>
+                      <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: 'var(--c-fg-dc2626)' }}>{fmt(p.outstanding)}</td>
                       <td style={{ ...td, textAlign: 'right' }}>{p.loans}</td>
                     </tr>
                   ))}
@@ -288,7 +288,7 @@ export default function BorrowedMoneyPage() {
                       <td style={{ ...td, fontWeight: 600 }}>{r.store}</td>
                       <td style={{ ...td, textAlign: 'right' }}>{fmt(r.owes)}</td>
                       <td style={{ ...td, textAlign: 'right' }}>{fmt(r.owed)}</td>
-                      <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: r.net >= 0 ? '#059669' : '#dc2626' }}>{r.net >= 0 ? '+' : ''}{fmt(r.net)}</td>
+                      <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: r.net >= 0 ? 'var(--c-fg-059669)' : 'var(--c-fg-dc2626)' }}>{r.net >= 0 ? '+' : ''}{fmt(r.net)}</td>
                     </tr>
                   ))}
                   {byStore.length === 0 && <tr><td colSpan={4} style={{ ...td, textAlign: 'center', color: 'var(--text3)' }}>No borrowings yet.</td></tr>}
@@ -313,17 +313,17 @@ export default function BorrowedMoneyPage() {
                         <td style={{ ...td, fontWeight: 600 }}>{l.borrower_store}</td>
                         <td style={td}>{l.lender_store}</td>
                         <td style={{ ...td, textAlign: 'right' }}>{fmt(l.amount)}</td>
-                        <td style={{ ...td, textAlign: 'right', color: '#059669' }}>{fmt(l.repaid)}</td>
-                        <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: l.outstanding > 0.005 ? '#dc2626' : '#059669' }}>{fmt(l.outstanding)}</td>
+                        <td style={{ ...td, textAlign: 'right', color: 'var(--c-fg-059669)' }}>{fmt(l.repaid)}</td>
+                        <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: l.outstanding > 0.005 ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)' }}>{fmt(l.outstanding)}</td>
                         <td style={td}>{l.settled ? <span className="badge badge-green">Settled</span> : <span className="badge badge-blue">Open</span>}</td>
                         <td style={{ ...td, whiteSpace: 'nowrap' }}>
                           <button className="btn" style={{ fontSize: 12, padding: '3px 8px' }} onClick={() => setExpanded(expanded === l.id ? null : l.id)}>{expanded === l.id ? '▾' : '▸'} Payments</button>{' '}
-                          <button className="btn" style={{ fontSize: 12, padding: '3px 8px', color: '#dc2626' }} onClick={() => delLoan(l)}>🗑</button>
+                          <button className="btn" style={{ fontSize: 12, padding: '3px 8px', color: 'var(--c-fg-dc2626)' }} onClick={() => delLoan(l)}>🗑</button>
                         </td>
                       </tr>
                       {expanded === l.id && (
                         <tr>
-                          <td colSpan={8} style={{ padding: '10px 14px', background: '#f8fafc', borderBottom: '1px solid var(--border)' }}>
+                          <td colSpan={8} style={{ padding: '10px 14px', background: 'var(--c-bg-f8fafc)', borderBottom: '1px solid var(--border)' }}>
                             {l.note && <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6 }}>📝 {l.note}</div>}
                             {l.payments.length > 0 ? (
                               <table style={{ borderCollapse: 'collapse', marginBottom: 8 }}>
@@ -331,9 +331,9 @@ export default function BorrowedMoneyPage() {
                                   {l.payments.map(p => (
                                     <tr key={p.id}>
                                       <td style={{ padding: '3px 12px 3px 0', fontSize: 13 }}>{p.paid_date}</td>
-                                      <td style={{ padding: '3px 12px', fontSize: 13, fontWeight: 600, color: '#059669' }}>{fmt(p.amount)}</td>
+                                      <td style={{ padding: '3px 12px', fontSize: 13, fontWeight: 600, color: 'var(--c-fg-059669)' }}>{fmt(p.amount)}</td>
                                       <td style={{ padding: '3px 12px', fontSize: 12, color: 'var(--text2)' }}>{p.note || ''}</td>
-                                      <td style={{ padding: '3px 0' }}><button className="btn" style={{ fontSize: 11, padding: '2px 6px', color: '#dc2626' }} onClick={() => delPayment(p)}>remove</button></td>
+                                      <td style={{ padding: '3px 0' }}><button className="btn" style={{ fontSize: 11, padding: '2px 6px', color: 'var(--c-fg-dc2626)' }} onClick={() => delPayment(p)}>remove</button></td>
                                     </tr>
                                   ))}
                                 </tbody>

@@ -123,7 +123,7 @@ export default function TenantsAdmin() {
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>🏢 Companies (Tenants)</h1>
         <a href="/admin/billing" className="btn btn-sm">💳 Billing &amp; Plans →</a>
       </div>
-      <div className="card" style={{ padding: 12, marginBottom: 14, background: mtOn ? '#fffbeb' : 'var(--surface)', borderColor: mtOn ? '#fde68a' : 'var(--border)' }}>
+      <div className="card" style={{ padding: 12, marginBottom: 14, background: mtOn ? 'var(--c-bg-fffbeb)' : 'var(--surface)', borderColor: mtOn ? 'var(--c-bg-fde68a)' : 'var(--border)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <b style={{ fontSize: 14 }}>Multi-tenant mode (this browser):</b>
           <button className={`btn btn-sm ${mtOn ? 'btn-primary' : ''}`}
@@ -139,7 +139,7 @@ export default function TenantsAdmin() {
         Onboard a company onto MetricsPro: this creates its own org, seeds its roles + modules, and provisions its first admin login.
         That admin then manages their own staff in <ScreenLink to="roles_access" />.
       </p>
-      {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 12, marginBottom: 12 }}>{err}</div>}
+      {err && <div className="card" style={{ borderColor: 'var(--c-bg-c0392b)', color: 'var(--c-fg-c0392b)', padding: 12, marginBottom: 12 }}>{err}</div>}
 
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 10 }}>➕ Add a company</div>
@@ -157,8 +157,8 @@ export default function TenantsAdmin() {
           <button className="btn btn-primary" disabled={busy} onClick={addTenant}>{busy ? 'Creating…' : 'Create'}</button>
         </div>
         {created && (
-          <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 14 }}>
-            ✅ Created <b>{created.name}</b>. Admin login: <b>{created.admin_email}</b> · temp password: <code style={{ background: '#fff', padding: '2px 6px', borderRadius: 4 }}>{created.temp_password}</code>
+          <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: 'var(--c-bg-f0fdf4)', border: '1px solid var(--c-bg-bbf7d0)', fontSize: 14 }}>
+            ✅ Created <b>{created.name}</b>. Admin login: <b>{created.admin_email}</b> · temp password: <code style={{ background: 'var(--c-bg-ffffff)', padding: '2px 6px', borderRadius: 4 }}>{created.temp_password}</code>
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Hand this to the company admin — they reset it on first login. {created.auth_error ? `(login note: ${created.auth_error})` : ''}</div>
           </div>
         )}
@@ -176,19 +176,19 @@ export default function TenantsAdmin() {
           <button className="btn btn-primary" disabled={rpBusy} onClick={resetPassword}>{rpBusy ? 'Resetting…' : 'Reset password'}</button>
         </div>
         {reset && (
-          <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 14 }}>
-            ✅ Password reset for <b>{reset.email}</b> · temp password: <code style={{ background: '#fff', padding: '2px 6px', borderRadius: 4 }}>{reset.temp_password}</code>
+          <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: 'var(--c-bg-f0fdf4)', border: '1px solid var(--c-bg-bbf7d0)', fontSize: 14 }}>
+            ✅ Password reset for <b>{reset.email}</b> · temp password: <code style={{ background: 'var(--c-bg-ffffff)', padding: '2px 6px', borderRadius: 4 }}>{reset.temp_password}</code>
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Hand this to the user — they&apos;ll be prompted to set a new password on next login.</div>
           </div>
         )}
       </div>
 
-      <div className="card" style={{ padding: 16, marginBottom: 16, borderColor: '#fca5a5' }}>
+      <div className="card" style={{ padding: 16, marginBottom: 16, borderColor: 'var(--c-bg-fca5a5)' }}>
         <div style={{ fontWeight: 700, marginBottom: 4 }}>🛡️ Platform super-admins</div>
         <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
           These logins <b>bypass tenant isolation</b> and can see every tenant&apos;s data — keep the list to your internal operators only.
           A new email gets a login created (temp password shown once); an existing email is just elevated (its password is left unchanged).
-          A row flagged <b style={{ color: '#c0392b' }}>in red</b> holds platform access with a non-admin role — almost always a mistake to fix.
+          A row flagged <b style={{ color: 'var(--c-fg-c0392b)' }}>in red</b> holds platform access with a non-admin role — almost always a mistake to fix.
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
           <input style={{ ...inp, width: 240 }} placeholder="Email *" value={sa.email} onChange={e => setSa(v => ({ ...v, email: e.target.value }))} />
@@ -197,9 +197,9 @@ export default function TenantsAdmin() {
           <button className="btn btn-primary" disabled={saBusy} onClick={addSuper}>{saBusy ? 'Saving…' : 'Add / elevate'}</button>
         </div>
         {saCreated && (
-          <div style={{ marginBottom: 10, padding: 12, borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 14 }}>
+          <div style={{ marginBottom: 10, padding: 12, borderRadius: 8, background: 'var(--c-bg-f0fdf4)', border: '1px solid var(--c-bg-bbf7d0)', fontSize: 14 }}>
             ✅ {saCreated.elevated ? 'Elevated' : 'Created'} <b>{saCreated.email}</b>
-            {saCreated.temp_password && <> · temp password: <code style={{ background: '#fff', padding: '2px 6px', borderRadius: 4 }}>{saCreated.temp_password}</code></>}
+            {saCreated.temp_password && <> · temp password: <code style={{ background: 'var(--c-bg-ffffff)', padding: '2px 6px', borderRadius: 4 }}>{saCreated.temp_password}</code></>}
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>{saCreated.temp_password ? "Hand this to them — they'll set a new password on first login." : 'Existing login elevated; their password is unchanged.'}</div>
           </div>
         )}
@@ -210,8 +210,8 @@ export default function TenantsAdmin() {
               return (
                 <div key={s.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '9px 12px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
                   <span style={{ fontWeight: 600, flex: 1, minWidth: 180 }}>{s.email}{s.full_name ? <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {s.full_name}</span> : null}</span>
-                  <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 999, background: odd ? '#fef2f2' : 'var(--surface)', color: odd ? '#c0392b' : 'var(--text3)', border: `1px solid ${odd ? '#fca5a5' : 'var(--border)'}` }}>{s.role || '—'}{odd ? ' ⚠' : ''}</span>
-                  {!s.is_active && <span style={{ fontSize: 12, color: '#b45309' }}>inactive</span>}
+                  <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 999, background: odd ? 'var(--c-bg-fef2f2)' : 'var(--surface)', color: odd ? 'var(--c-fg-c0392b)' : 'var(--text3)', border: `1px solid ${odd ? 'var(--c-bg-fca5a5)' : 'var(--border)'}` }}>{s.role || '—'}{odd ? ' ⚠' : ''}</span>
+                  {!s.is_active && <span style={{ fontSize: 12, color: 'var(--c-fg-b45309)' }}>inactive</span>}
                   <button className="btn btn-sm" onClick={() => revokeSuper(s.email)}>Revoke</button>
                 </div>
               )
@@ -223,7 +223,7 @@ export default function TenantsAdmin() {
         {tenants.length === 0 ? <div style={{ padding: 20, color: 'var(--text3)' }}>No companies yet.</div>
           : tenants.map(t => (
             <div key={t.org_id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '11px 14px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
-              <span style={{ fontWeight: 600, flex: 1, minWidth: 160 }}>{t.name}{!t.is_active && <span style={{ color: '#b45309', fontSize: 12 }}> · inactive</span>}</span>
+              <span style={{ fontWeight: 600, flex: 1, minWidth: 160 }}>{t.name}{!t.is_active && <span style={{ color: 'var(--c-fg-b45309)', fontSize: 12 }}> · inactive</span>}</span>
               <span style={{ fontSize: 12, color: 'var(--text3)' }}>{t.users} user{t.users === 1 ? '' : 's'} · {t.logins} login{t.logins === 1 ? '' : 's'}</span>
               <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text3)' }}>{t.org_id.slice(0, 8)}…</span>
               <button className="btn btn-sm" onClick={() => rename(t)}>Rename</button>
@@ -236,7 +236,7 @@ export default function TenantsAdmin() {
       </div>
 
       {taPick && (
-        <div className="card" style={{ padding: 16, marginTop: 14, borderColor: '#fde68a', background: '#fffbeb' }}>
+        <div className="card" style={{ padding: 16, marginTop: 14, borderColor: 'var(--c-bg-fde68a)', background: 'var(--c-bg-fffbeb)' }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>{taPick.tenant} has more than one admin login — pick which to reset:</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {(taPick.admins || []).map(a => (
@@ -249,8 +249,8 @@ export default function TenantsAdmin() {
         </div>
       )}
       {taReset?.ok && (
-        <div className="card" style={{ marginTop: 14, padding: 12, borderRadius: 8, background: '#f0fdf4', borderColor: '#bbf7d0', fontSize: 14 }}>
-          ✅ Admin login reset for <b>{taReset.tenant}</b> ({taReset.email}) · temp password: <code style={{ background: '#fff', padding: '2px 6px', borderRadius: 4 }}>{taReset.temp_password}</code>
+        <div className="card" style={{ marginTop: 14, padding: 12, borderRadius: 8, background: 'var(--c-bg-f0fdf4)', borderColor: 'var(--c-bg-bbf7d0)', fontSize: 14 }}>
+          ✅ Admin login reset for <b>{taReset.tenant}</b> ({taReset.email}) · temp password: <code style={{ background: 'var(--c-bg-ffffff)', padding: '2px 6px', borderRadius: 4 }}>{taReset.temp_password}</code>
           <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>Hand this to the company admin who requested it — they&apos;ll be prompted to set a new password on next login.</div>
         </div>
       )}

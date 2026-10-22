@@ -10,7 +10,7 @@ const enc = encodeURIComponent
 function Badge({ label, color }: { label?: string; color?: string }) {
   if (!label) return null
   return <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10,
-    background: (color || '#888') + '22', color: color || '#555', border: `1px solid ${(color || '#888')}55` }}>{label}</span>
+    background: (color || 'var(--c-bg-888888)') + '22', color: color || 'var(--c-fg-555555)', border: `1px solid ${(color || 'var(--c-bg-888888)')}55` }}>{label}</span>
 }
 
 export default function TicketDetail() {
@@ -83,7 +83,7 @@ export default function TicketDetail() {
     catch { setErr('Could not open attachment') }
   }
 
-  if (err && !data) return <div style={{ padding: 24, color: '#c0392b' }}>{err} · <Link href="/helpdesk" style={{ color: '#2563eb' }}>Back</Link></div>
+  if (err && !data) return <div style={{ padding: 24, color: 'var(--c-fg-c0392b)' }}>{err} · <Link href="/helpdesk" style={{ color: 'var(--c-fg-2563eb)' }}>Back</Link></div>
   if (!data) return <div style={{ padding: 24, color: 'var(--text3)' }}>Loading…</div>
   const t = data.ticket
   const cf = t.custom_fields || {}
@@ -96,13 +96,13 @@ export default function TicketDetail() {
 
   return (
     <div style={{ padding: 24, maxWidth: 860 }}>
-      <Link href="/helpdesk" style={{ color: '#2563eb', fontSize: 13 }}>← Helpdesk</Link>
+      <Link href="/helpdesk" style={{ color: 'var(--c-fg-2563eb)', fontSize: 13 }}>← Helpdesk</Link>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '8px 0 2px' }}>
         <span style={{ fontFamily: 'monospace', color: 'var(--text3)' }}>{t.display_number}</span>
         <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{t.subject}</h1>
         <Badge label={t.status?.label} color={t.status?.color} />
         <Badge label={t.priority?.label} color={t.priority?.color} />
-        {data.support_case && <Badge label={`🎧 Escalated to tech support · ${data.support_case.status}`} color="#7c3aed" />}
+        {data.support_case && <Badge label={`🎧 Escalated to tech support · ${data.support_case.status}`} color="var(--c-fg-7c3aed)" />}
         {isAgent && !data.support_case && (
           <button className="btn btn-sm" disabled={busy} onClick={escalate} style={{ marginLeft: 'auto' }}
             title="Send this ticket to the house tech-support team">🎧 Escalate to tech support</button>
@@ -112,7 +112,7 @@ export default function TicketDetail() {
         Raised by {t.requester_name || t.requester_email || '—'} · {String(t.created_at).slice(0, 16).replace('T', ' ')}
         {t.store_code ? ` · ${t.store_code}` : ''}{t.category?.name ? ` · ${t.category.name}` : ''}
       </div>
-      {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 10, marginBottom: 12 }}>{err}</div>}
+      {err && <div className="card" style={{ borderColor: 'var(--c-bg-c0392b)', color: 'var(--c-fg-c0392b)', padding: 10, marginBottom: 12 }}>{err}</div>}
 
       {isAgent && cfg && (
         <div className="card" style={{ padding: 12, display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
@@ -148,10 +148,10 @@ export default function TicketDetail() {
         {(data.comments || []).length === 0 && <div style={{ color: 'var(--text3)', fontSize: 13 }}>No replies yet.</div>}
         {(data.comments || []).map((c: any) => (
           <div key={c.id} style={{ padding: '8px 10px', borderRadius: 8, marginBottom: 6,
-            background: c.is_internal ? '#fffbeb' : 'var(--bg2)', border: c.is_internal ? '1px solid #fde68a' : '1px solid var(--border)' }}>
+            background: c.is_internal ? 'var(--c-bg-fffbeb)' : 'var(--bg2)', border: c.is_internal ? '1px solid var(--c-bg-fde68a)' : '1px solid var(--border)' }}>
             <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 2 }}>
               {c.author_name || c.author || '—'} · {String(c.created_at).slice(0, 16).replace('T', ' ')}
-              {c.is_internal && <span style={{ color: '#b45309', marginLeft: 6 }}>internal note</span>}</div>
+              {c.is_internal && <span style={{ color: 'var(--c-fg-b45309)', marginLeft: 6 }}>internal note</span>}</div>
             <div style={{ fontSize: 14, whiteSpace: 'pre-wrap' }}>{c.body}</div>
           </div>
         ))}

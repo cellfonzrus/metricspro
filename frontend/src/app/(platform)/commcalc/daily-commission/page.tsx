@@ -474,7 +474,7 @@ export default function DailyCommissionPage() {
         <>
           {/* ── cycle banner + settle advisory (ledger Q19) ──────────────────────────────── */}
           <div className="card" style={{
-            marginBottom: 14, borderLeft: `4px solid ${acc.settlement_advisory?.due ? 'var(--amber, #b45309)' : 'var(--border)'}`,
+            marginBottom: 14, borderLeft: `4px solid ${acc.settlement_advisory?.due ? 'var(--amber, var(--c-bg-b45309))' : 'var(--border)'}`,
             display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap',
           }}>
             <div style={{ fontSize: 13, lineHeight: 1.6 }}>
@@ -535,7 +535,7 @@ export default function DailyCommissionPage() {
                 filename={`commission-settlement-${to}`}
                 columns={SETTLE_COLS} rows={shownSettle} totals compact stickyHeader
                 rowStyle={(r: any) => (r.status === 'settled' ? undefined
-                  : r.carry_over < 0 ? { background: '#fef2f2' } : { background: '#fffbeb' })}
+                  : r.carry_over < 0 ? { background: 'var(--c-bg-fef2f2)' } : { background: 'var(--c-bg-fffbeb)' })}
               />
               <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6, lineHeight: 1.6 }}>
                 {settle?.note}
@@ -575,12 +575,12 @@ export default function DailyCommissionPage() {
               filename={`daily-commission-by-rep-${to}`}
               columns={EMP_COLS} rows={shownEmps} totals compact stickyHeader
               onRowClick={(r: any) => setDrill({ ...r, __lines: true })}
-              rowStyle={(r: any) => (r.over_advanced ? { background: '#fef2f2' } : undefined)}
+              rowStyle={(r: any) => (r.over_advanced ? { background: 'var(--c-bg-fef2f2)' } : undefined)}
             />
           </div>
 
           {drill?.__lines && (
-            <div className="card" style={{ marginBottom: 14, borderLeft: '4px solid var(--blue, #2563eb)' }}>
+            <div className="card" style={{ marginBottom: 14, borderLeft: '4px solid var(--blue, var(--c-bg-2563eb))' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ fontWeight: 700 }}>{drill.name} — how “due now” is built</div>
                 <button className="btn btn-secondary" onClick={() => setDrill(null)}>Close</button>
@@ -635,12 +635,12 @@ export default function DailyCommissionPage() {
               filename={`daily-commission-days-${from}-${to}`}
               columns={DAY_COLS} rows={shownDays} totals compact stickyHeader
               onRowClick={(r: any) => setDrill(r)}
-              rowStyle={(r: any) => (Number(r.tier_amount) ? { background: '#f0f9ff' } : undefined)}
+              rowStyle={(r: any) => (Number(r.tier_amount) ? { background: 'var(--c-bg-f0f9ff)' } : undefined)}
             />
           </div>
 
           {drill && !drill.__lines && (
-            <div className="card" style={{ marginBottom: 14, borderLeft: '4px solid var(--blue, #2563eb)' }}>
+            <div className="card" style={{ marginBottom: 14, borderLeft: '4px solid var(--blue, var(--c-bg-2563eb))' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ fontWeight: 700 }}>{drill.name} — {drill.work_date} — {fmt(drill.total_amount)}</div>
                 <button className="btn btn-secondary" onClick={() => setDrill(null)}>Close</button>
@@ -652,7 +652,7 @@ export default function DailyCommissionPage() {
                 <div style={{ fontSize: 12.5, marginTop: 8, lineHeight: 1.7, background: 'var(--surface2)', padding: 10, borderRadius: 8 }}>
                   {drill.components.mtd.explain}
                   {drill.components.mtd.no_daily_weights && (
-                    <div style={{ color: 'var(--amber, #b45309)', marginTop: 6 }}>
+                    <div style={{ color: 'var(--amber, var(--c-fg-b45309))', marginTop: 6 }}>
                       Heads-up: no accrued day carries this rep&apos;s weight yet, so the whole month-to-date
                       figure is sitting on this one row. Recompute the month&apos;s days to spread it.
                     </div>
@@ -663,7 +663,7 @@ export default function DailyCommissionPage() {
                 <div style={{ fontSize: 12.5, marginTop: 8, lineHeight: 1.7, background: 'var(--surface2)', padding: 10, borderRadius: 8 }}>
                   {drill.components.tier.explain}
                   {drill.components.tier.partial_month_warning && (
-                    <div style={{ color: 'var(--amber, #b45309)', marginTop: 6 }}>
+                    <div style={{ color: 'var(--amber, var(--c-fg-b45309))', marginTop: 6 }}>
                       Heads-up: only {drill.components.tier.days_accrued} day(s) of that month were accrued
                       daily, so most of this true-up is simply the part of the month the daily accrual
                       wasn&apos;t running for — not a bonus.

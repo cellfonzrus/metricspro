@@ -203,7 +203,7 @@ export default function UploadWizardPage() {
           {!kinds.loaded ? (
             <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>Reading which report kinds this company may upload…</div>
           ) : kinds.error ? (
-            <div style={{ color: '#991b1b', fontSize: 12, marginTop: 4 }}>⚠️ The report-kind registry could not be read ({kinds.error}) — the steps are withheld rather than guessed.</div>
+            <div style={{ color: 'var(--c-fg-991b1b)', fontSize: 12, marginTop: 4 }}>⚠️ The report-kind registry could not be read ({kinds.error}) — the steps are withheld rather than guessed.</div>
           ) : (
             <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
               Offered for {kinds.declaration?.pos?.length ? <>POS <b>{kinds.declaration.pos.join(' / ')}</b></> : 'no declared POS'} · {kinds.declaration?.carriers?.length ? <>carrier <b>{kinds.declaration.carriers.join(' / ')}</b></> : 'no declared carrier'}
@@ -218,7 +218,7 @@ export default function UploadWizardPage() {
       {setupDocs.length > 0 && (
         <section style={{ marginBottom: 22 }}>
           {setup?.gate.active ? (
-            <div className="card" style={{ padding: 16, marginBottom: 12, border: '1px solid #93c5fd', background: '#eff6ff' }}>
+            <div className="card" style={{ padding: 16, marginBottom: 12, border: '1px solid var(--c-bg-93c5fd)', background: 'var(--c-bg-eff6ff)' }}>
               <div style={{ fontSize: 16, fontWeight: 700 }}>👋 Welcome{setup.company ? `, ${setup.company}` : ''} — let&apos;s get your data in</div>
               <div style={{ fontSize: 13.5, color: 'var(--text2)', marginTop: 4, lineHeight: 1.5 }}>
                 Upload the {setupDocs.filter(d => d.required).length} documents below for your carrier. Each one says exactly where to
@@ -238,20 +238,20 @@ export default function UploadWizardPage() {
               const st = stepForDoc(d)
               const m = setupMsg[d.key] || (st ? msg[st.id] : '')
               return (
-                <div key={d.key} className="card" style={{ padding: 14, display: 'grid', gap: 8, borderLeft: `4px solid ${d.uploaded ? '#16a34a' : d.skipped ? '#9ca3af' : '#f59e0b'}` }}>
+                <div key={d.key} className="card" style={{ padding: 14, display: 'grid', gap: 8, borderLeft: `4px solid ${d.uploaded ? 'var(--c-bg-16a34a)' : d.skipped ? 'var(--c-bg-9ca3af)' : 'var(--c-bg-f59e0b)'}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                     <div style={{ fontWeight: 700, fontSize: 15 }}>
                       {d.label}
-                      {d.required && <span style={{ marginLeft: 8, fontSize: 11, color: '#1d4ed8', background: '#dbeafe', padding: '2px 7px', borderRadius: 10 }}>required</span>}
+                      {d.required && <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--c-fg-1d4ed8)', background: 'var(--c-bg-dbeafe)', padding: '2px 7px', borderRadius: 10 }}>required</span>}
                     </div>
-                    <div style={{ fontSize: 12, color: d.uploaded ? '#15803d' : 'var(--text3)', whiteSpace: 'nowrap' }}>
+                    <div style={{ fontSize: 12, color: d.uploaded ? 'var(--c-fg-15803d)' : 'var(--text3)', whiteSpace: 'nowrap' }}>
                       {d.uploaded ? `✓ last uploaded ${String(d.last_uploaded_at).slice(0, 10)}` : d.skipped ? `put off until ${String(d.skipped_until).slice(0, 10)}` : 'not uploaded yet'}
                     </div>
                   </div>
                   {d.what_in_it && <div style={{ fontSize: 12.5, color: 'var(--text2)' }}>{d.what_in_it}</div>}
                   <div style={{ fontSize: 13, background: 'var(--surface2)', borderRadius: 8, padding: '8px 10px' }}>
                     <b>Where to get it:</b> {d.download_steps || d.source_hint || 'from your system'}
-                    {d.download_url && <> {' '}<a href={d.download_url} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>Open the portal ↗</a></>}
+                    {d.download_url && <> {' '}<a href={d.download_url} target="_blank" rel="noreferrer" style={{ color: 'var(--c-fg-2563eb)' }}>Open the portal ↗</a></>}
                   </div>
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                     {st ? (
@@ -278,13 +278,13 @@ export default function UploadWizardPage() {
                     {!d.uploaded && (d.skipped
                       ? <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => saveDoc(d, { skip: false })}>Undo put off</button>
                       : <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => saveDoc(d, { skip: true })}>I don&apos;t have this yet</button>)}
-                    {m && <span style={{ fontSize: 12, color: m.startsWith('Error') ? '#b91c1c' : m.startsWith('⚠') ? '#b45309' : '#15803d' }}>{m}</span>}
+                    {m && <span style={{ fontSize: 12, color: m.startsWith('Error') ? 'var(--c-fg-b91c1c)' : m.startsWith('⚠') ? 'var(--c-fg-b45309)' : 'var(--c-fg-15803d)' }}>{m}</span>}
                   </div>
                   {d.automation.proven && d.automation.setup_link && (
-                    <div style={{ fontSize: 12.5, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '8px 10px' }}>
+                    <div style={{ fontSize: 12.5, background: 'var(--c-bg-f0fdf4)', border: '1px solid var(--c-bg-bbf7d0)', borderRadius: 8, padding: '8px 10px' }}>
                       ⚡ <b>Want this to update automatically?</b> This report has been pulled automatically {d.automation.runs} times in the
                       last {d.automation.window_days} days. {d.automation.how === 'portal' ? 'Add your portal login' : 'Set up automatic forwarding'} and
-                      you won&apos;t need to upload it by hand: <Link href={d.automation.setup_link} style={{ color: '#15803d', fontWeight: 600 }}>set it up →</Link>
+                      you won&apos;t need to upload it by hand: <Link href={d.automation.setup_link} style={{ color: 'var(--c-fg-15803d)', fontWeight: 600 }}>set it up →</Link>
                     </div>
                   )}
                 </div>
@@ -311,19 +311,19 @@ export default function UploadWizardPage() {
                   <div style={{ fontWeight: 700, fontSize: 15 }}>
                     <span style={{ marginRight: 6 }}>{s.icon}</span>{s.label}
                     {s.auto
-                      ? <span style={{ marginLeft: 8, fontSize: 11, color: '#15803d', background: '#f0fdf4', padding: '2px 7px', borderRadius: 10 }}>auto-sweeps</span>
-                      : <span style={{ marginLeft: 8, fontSize: 11, color: '#b45309', background: '#fffbeb', padding: '2px 7px', borderRadius: 10 }}>manual upload</span>}
+                      ? <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--c-fg-15803d)', background: 'var(--c-bg-f0fdf4)', padding: '2px 7px', borderRadius: 10 }}>auto-sweeps</span>
+                      : <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--c-fg-b45309)', background: 'var(--c-bg-fffbeb)', padding: '2px 7px', borderRadius: 10 }}>manual upload</span>}
                     {s.provenance && <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text3)' }}>{s.provenance}</span>}
                   </div>
                   <div style={{ fontSize: 13, color: 'var(--text)', marginTop: 4 }}><strong>Report:</strong> {s.report}</div>
                   <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>
-                    <strong>From:</strong> {s.url ? <a href={s.url} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>{s.source} ↗</a> : s.source}
+                    <strong>From:</strong> {s.url ? <a href={s.url} target="_blank" rel="noreferrer" style={{ color: 'var(--c-fg-2563eb)' }}>{s.source} ↗</a> : s.source}
                   </div>
                   {s.note && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 4, fontStyle: 'italic' }}>{s.note}</div>}
                   {/* WHERE THIS UPLOAD SHOWS UP — the registry row's consumers, linked (owner 2026-09-20). */}
                   <ShowsIn info={kinds.showsIn(s.id)} loaded={kinds.loaded} compact />
                 </div>
-                <div style={{ textAlign: 'right', fontSize: 12, color: last ? '#15803d' : 'var(--text3)', whiteSpace: 'nowrap' }}>
+                <div style={{ textAlign: 'right', fontSize: 12, color: last ? 'var(--c-fg-15803d)' : 'var(--text3)', whiteSpace: 'nowrap' }}>
                   {last ? `✓ loaded ${String(last.uploaded_at).slice(0, 10)}` : (s.ft ? 'not loaded for this period' : '')}
                 </div>
               </div>
@@ -336,7 +336,7 @@ export default function UploadWizardPage() {
                   <input type="file" hidden disabled={busy === s.id}
                     onChange={e => { const f = e.target.files?.[0]; if (f) upload(s, f); e.currentTarget.value = '' }} />
                 </label>
-                {m && <span style={{ fontSize: 12, color: m.startsWith('Error') ? '#b91c1c' : m.startsWith('⚠') ? '#b45309' : '#15803d' }}>{m}</span>}
+                {m && <span style={{ fontSize: 12, color: m.startsWith('Error') ? 'var(--c-fg-b91c1c)' : m.startsWith('⚠') ? 'var(--c-fg-b45309)' : 'var(--c-fg-15803d)' }}>{m}</span>}
               </div>
             </div>
           )

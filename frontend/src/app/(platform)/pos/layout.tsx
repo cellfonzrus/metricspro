@@ -89,8 +89,8 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
       {outstanding > 0 && !onWizard && (
-        <div style={{ background: '#fffbeb', borderBottom: '1px solid #fde68a', padding: '9px 24px',
-          display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, color: '#92400e' }}>
+        <div style={{ background: 'var(--c-bg-fffbeb)', borderBottom: '1px solid var(--c-bg-fde68a)', padding: '9px 24px',
+          display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, color: 'var(--c-fg-92400e)' }}>
           <span style={{ fontWeight: 700 }}>🛠️ POS setup incomplete:</span>
           <span>
             {outstanding} required step{outstanding === 1 ? '' : 's'} left before you can ring a sale
@@ -100,8 +100,8 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
             <span style={{ fontWeight: 700 }}>You are on the page for one of them.</span>
           )}
           {mayConfigure && (
-            <Link href="/pos/onboarding" style={{ marginLeft: 'auto', fontWeight: 700, color: '#92400e',
-              border: '1px solid #fbbf24', borderRadius: 8, padding: '5px 12px',
+            <Link href="/pos/onboarding" style={{ marginLeft: 'auto', fontWeight: 700, color: 'var(--c-fg-92400e)',
+              border: '1px solid var(--c-bg-fbbf24)', borderRadius: 8, padding: '5px 12px',
               textDecoration: 'none', whiteSpace: 'nowrap' }}>
               {taskTarget ? '← Back to setup' : 'Finish setup →'}
             </Link>

@@ -59,7 +59,7 @@ function ActionPlanBox({ storeCode, plan, onChanged }: { storeCode: string; plan
       .then(() => onChanged()).catch((e: any) => setMsg('❌ ' + (e?.message || e))).finally(() => setBusy(false))
   }, [plan.id, onChanged])
 
-  const box: React.CSSProperties = { marginTop: 10, padding: 10, borderRadius: 8, background: '#fff7e6', border: '1px solid #fde68a' }
+  const box: React.CSSProperties = { marginTop: 10, padding: 10, borderRadius: 8, background: 'var(--c-bg-fff7e6)', border: '1px solid var(--c-bg-fde68a)' }
 
   if (plan.status === 'required') {
     return (
@@ -69,7 +69,7 @@ function ActionPlanBox({ storeCode, plan, onChanged }: { storeCode: string; plan
           style={{ width: '100%', fontSize: 13, padding: 8, borderRadius: 6, border: '1px solid var(--border)', resize: 'vertical' }} />
         <div style={{ marginTop: 6, display: 'flex', gap: 8, alignItems: 'center' }}>
           <button className="btn" disabled={busy} onClick={submit} style={{ fontSize: 12.5 }}>{busy ? 'Submitting…' : 'Submit plan'}</button>
-          {msg && <span style={{ fontSize: 12, color: '#b91c1c' }}>{msg}</span>}
+          {msg && <span style={{ fontSize: 12, color: 'var(--c-fg-b91c1c)' }}>{msg}</span>}
         </div>
       </div>
     )
@@ -86,7 +86,7 @@ function ActionPlanBox({ storeCode, plan, onChanged }: { storeCode: string; plan
         {alreadyMarked
           ? <div style={{ fontSize: 12.5, color: 'var(--text2)' }}>✅ Marked done — awaiting manager confirmation</div>
           : <button className="btn" disabled={busy} onClick={markDone} style={{ fontSize: 12.5 }}>{busy ? 'Saving…' : 'Mark as done'}</button>}
-        {msg && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>{msg}</div>}
+        {msg && <div style={{ fontSize: 12, color: 'var(--c-fg-b91c1c)', marginTop: 4 }}>{msg}</div>}
       </div>
     )
   }
@@ -104,7 +104,7 @@ function ActionPlanChip({ plan }: { plan: ActionPlan }) {
     : null
   if (!label) return null
   return (
-    <span style={{ background: '#fff7e6', color: '#92400e', borderRadius: 6, padding: '2px 8px', fontSize: 10.5, fontWeight: 700 }}>
+    <span style={{ background: 'var(--c-bg-fff7e6)', color: 'var(--c-fg-92400e)', borderRadius: 6, padding: '2px 8px', fontSize: 10.5, fontWeight: 700 }}>
       📝 {label}
     </span>
   )
@@ -114,8 +114,8 @@ function CompactStoreRow({ s }: { s: StoreCard }) {
   const [showReviews, setShowReviews] = useState(false)
   const above = s.status === 'above'
   const known = s.status !== 'unknown'
-  const fg = !known ? '#475569' : above ? '#166534' : '#b91c1c'
-  const bg = !known ? '#f1f5f9' : above ? '#e7f6ec' : '#fdeaea'
+  const fg = !known ? 'var(--c-fg-475569)' : above ? 'var(--c-fg-166534)' : 'var(--c-fg-b91c1c)'
+  const bg = !known ? 'var(--c-bg-f1f5f9)' : above ? 'var(--c-bg-e7f6ec)' : 'var(--c-bg-fdeaea)'
   return (
     <div style={{ borderRadius: 8, border: `1px solid ${fg}22`, padding: '8px 10px', background: bg }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
@@ -123,7 +123,7 @@ function CompactStoreRow({ s }: { s: StoreCard }) {
           <div style={{ fontWeight: 700, fontSize: 12.5, color: fg }}>{s.store_code}{s.market ? ` · ${s.market}` : ''}</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ color: '#d97706', fontSize: 12 }}>{stars(s.rating ?? undefined)}</span>
+          <span style={{ color: 'var(--c-fg-d97706)', fontSize: 12 }}>{stars(s.rating ?? undefined)}</span>
           <span style={{ fontWeight: 800, fontSize: 13, color: fg }}>{s.rating != null ? Number(s.rating).toFixed(1) : '—'}</span>
           {s.reviews_needed != null && s.reviews_needed > 0 && (
             <span title={`${s.reviews_needed} more 5-star reviews to reach ${Number(s.target).toFixed(1)}`}
@@ -138,7 +138,7 @@ function CompactStoreRow({ s }: { s: StoreCard }) {
         <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>target {Number(s.target).toFixed(1)} · {s.review_count ?? '—'} reviews</span>
         {s.action_plan && <ActionPlanChip plan={s.action_plan} />}
         {s.reviews.length > 0 && (
-          <button onClick={() => setShowReviews(v => !v)} style={{ fontSize: 10.5, color: 'var(--accent,#2563eb)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+          <button onClick={() => setShowReviews(v => !v)} style={{ fontSize: 10.5, color: 'var(--accent,var(--c-fg-2563eb))', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
             {showReviews ? 'Hide reviews' : `Show ${s.reviews.length} review${s.reviews.length > 1 ? 's' : ''}`}
           </button>
         )}
@@ -148,9 +148,9 @@ function CompactStoreRow({ s }: { s: StoreCard }) {
           {s.reviews.slice(0, 5).map(r => (
             <div key={r.id} style={{ padding: '4px 0', borderTop: '1px solid var(--border)', fontSize: 11.5 }}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ color: '#d97706' }}>{stars(r.rating)}</span>
+                <span style={{ color: 'var(--c-fg-d97706)' }}>{stars(r.rating)}</span>
                 <span style={{ color: 'var(--text2)', fontSize: 10.5 }}>{r.author_name || 'Google user'}{r.relative_time ? ` · ${r.relative_time}` : ''}</span>
-                {r.possible_mention && <span style={{ background: '#e0e7ff', color: '#3730a3', borderRadius: 6, padding: '1px 5px', fontSize: 9.5, fontWeight: 700 }}>possible mention</span>}
+                {r.possible_mention && <span style={{ background: 'var(--c-bg-e0e7ff)', color: 'var(--c-fg-3730a3)', borderRadius: 6, padding: '1px 5px', fontSize: 9.5, fontWeight: 700 }}>possible mention</span>}
               </div>
               {r.review_text && <div style={{ marginTop: 2 }}>{r.review_text}</div>}
             </div>
@@ -203,8 +203,8 @@ export default function GoogleReviewsCard({ token, employeeId, compact, compactT
         {stores.map(s => {
           const above = s.status === 'above'
           const known = s.status !== 'unknown'
-          const bg = !known ? '#f1f5f9' : above ? '#e7f6ec' : '#fdeaea'
-          const fg = !known ? '#475569' : above ? '#166534' : '#b91c1c'
+          const bg = !known ? 'var(--c-bg-f1f5f9)' : above ? 'var(--c-bg-e7f6ec)' : 'var(--c-bg-fdeaea)'
+          const fg = !known ? 'var(--c-fg-475569)' : above ? 'var(--c-fg-166534)' : 'var(--c-fg-b91c1c)'
           return (
             <div key={s.store_code} style={{ borderRadius: 10, border: `1px solid ${fg}22`, overflow: 'hidden' }}>
               <div style={{ background: bg, padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
@@ -229,10 +229,10 @@ export default function GoogleReviewsCard({ token, employeeId, compact, compactT
                 {s.reviews.slice(0, 5).map(r => (
                   <div key={r.id} style={{ padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 12.5 }}>
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <span style={{ color: '#d97706' }}>{stars(r.rating)}</span>
+                      <span style={{ color: 'var(--c-fg-d97706)' }}>{stars(r.rating)}</span>
                       <span style={{ color: 'var(--text2)', fontSize: 11 }}>{r.author_name || 'Google user'}{r.relative_time ? ` · ${r.relative_time}` : ''}</span>
                       {r.possible_mention && (
-                        <span style={{ background: '#e0e7ff', color: '#3730a3', borderRadius: 6, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>
+                        <span style={{ background: 'var(--c-bg-e0e7ff)', color: 'var(--c-fg-3730a3)', borderRadius: 6, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>
                           possible mention of you
                         </span>
                       )}

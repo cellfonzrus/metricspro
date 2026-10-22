@@ -217,10 +217,10 @@ export default function CommissionDiscrepancyHub() {
         </div>
       </div>
 
-      {err && <div style={{ background: '#fef2f2', color: '#991b1b', padding: 12, borderRadius: 8, margin: '12px 0', fontSize: 13.5 }}>{err}</div>}
-      {msg && <div style={{ background: '#f0fdf4', color: '#166534', padding: 10, borderRadius: 8, margin: '12px 0', fontSize: 13 }}>{msg}</div>}
+      {err && <div style={{ background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-991b1b)', padding: 12, borderRadius: 8, margin: '12px 0', fontSize: 13.5 }}>{err}</div>}
+      {msg && <div style={{ background: 'var(--c-bg-f0fdf4)', color: 'var(--c-fg-166534)', padding: 10, borderRadius: 8, margin: '12px 0', fontSize: 13 }}>{msg}</div>}
       {data && !data.appeals_ready && (
-        <div style={{ background: '#fffbeb', color: '#92400e', padding: 12, borderRadius: 8, margin: '12px 0', fontSize: 13 }}>
+        <div style={{ background: 'var(--c-bg-fffbeb)', color: 'var(--c-fg-92400e)', padding: 12, borderRadius: 8, margin: '12px 0', fontSize: 13 }}>
           <SetupNotice lead="Appeal tracking is not available yet. The not-received report still works below." detail="947_commission_discrepancy_hub.sql" />
         </div>
       )}
@@ -307,7 +307,7 @@ export default function CommissionDiscrepancyHub() {
                     <td style={{ padding: '7px 10px' }}>{r.device_model}<div style={{ color: 'var(--text3)', fontSize: 11 }}>{r.imei || r.mdn}</div></td>
                     <td style={{ padding: '7px 10px', textAlign: 'right' }}>{fmt(r.expected_amount)}</td>
                     <td style={{ padding: '7px 10px', textAlign: 'right' }}>{fmt(r.received_amount)}</td>
-                    <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, color: r.gap > 0 ? '#dc2626' : 'inherit' }}>{fmt(r.gap)}</td>
+                    <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, color: r.gap > 0 ? 'var(--c-fg-dc2626)' : 'inherit' }}>{fmt(r.gap)}</td>
                     <td style={{ padding: '7px 10px', maxWidth: 240 }}>
                       <span title={r.rule_reason || r.notes || ''}>{(r.rule_reason || r.notes || '—').slice(0, 80)}</span>
                     </td>

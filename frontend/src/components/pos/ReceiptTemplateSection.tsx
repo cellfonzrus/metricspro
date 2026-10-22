@@ -65,7 +65,7 @@ function toForm(t: ReceiptTemplate): ReceiptForm {
 
 const input: React.CSSProperties = { padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', color: 'var(--text)', outline: 'none' }
 const label: React.CSSProperties = { fontSize: 12, color: 'var(--text2)', marginBottom: 3, display: 'block' }
-const errorBox: React.CSSProperties = { margin: '12px 16px', border: '1px solid #dc2626', color: '#dc2626', borderRadius: 8, padding: '10px 14px', fontSize: 12 }
+const errorBox: React.CSSProperties = { margin: '12px 16px', border: '1px solid var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }
 
 export default function ReceiptTemplateSection() {
   const [template, setTemplate] = useState<ReceiptTemplate | null>(null)
@@ -185,8 +185,8 @@ export default function ReceiptTemplateSection() {
           <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>The org&apos;s default receipt format — tune the settings until the preview matches your printer</div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {saving && <span style={{ fontSize: 12, color: '#f39c12' }}>saving…</span>}
-          {!saving && savedAt && <span style={{ fontSize: 12, color: '#16a34a' }}>saved {savedAt}</span>}
+          {saving && <span style={{ fontSize: 12, color: 'var(--c-fg-f39c12)' }}>saving…</span>}
+          {!saving && savedAt && <span style={{ fontSize: 12, color: 'var(--c-fg-16a34a)' }}>saved {savedAt}</span>}
           {dirty && <button className="btn btn-secondary" onClick={cancelEdits} disabled={saving}>Cancel</button>}
           <button className="btn btn-primary" onClick={saveTemplate} disabled={saving || !dirty || !form}>{saving ? 'Saving…' : 'Save Template'}</button>
         </div>
@@ -286,7 +286,7 @@ export default function ReceiptTemplateSection() {
                 style={{
                   width: form.layout === 'thermal' ? (form.paper_width_mm === 58 ? 236 : 316) : 640,
                   height: form.layout === 'thermal' ? 520 : 700,
-                  background: '#fdfdf8', border: 'none', borderRadius: 4,
+                  background: 'var(--c-bg-fdfdf8)', border: 'none', borderRadius: 4,
                   boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
                 }} />
             ) : (

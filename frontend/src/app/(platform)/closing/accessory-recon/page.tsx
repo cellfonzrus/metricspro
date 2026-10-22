@@ -83,14 +83,14 @@ export default function AccessoryReconPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : data?.error ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {data.error}</div>
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
             <Stat label="Declared (all stores)" value={fmt(t.declared)} />
-            <Stat label="Actual (sales)" value={fmt(t.actual)} color="#16a34a" />
-            <Stat label="Net variance" value={fmt((t.declared || 0) - (t.actual || 0))} color={Math.abs((t.declared || 0) - (t.actual || 0)) > 1 ? '#dc2626' : '#059669'} />
-            <Stat label="Stores flagged" value={`${t.flagged || 0} / ${t.stores || 0}`} color={t.flagged ? '#dc2626' : '#059669'} />
+            <Stat label="Actual (sales)" value={fmt(t.actual)} color="var(--c-fg-16a34a)" />
+            <Stat label="Net variance" value={fmt((t.declared || 0) - (t.actual || 0))} color={Math.abs((t.declared || 0) - (t.actual || 0)) > 1 ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'} />
+            <Stat label="Stores flagged" value={`${t.flagged || 0} / ${t.stores || 0}`} color={t.flagged ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'} />
           </div>
 
           <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
@@ -121,14 +121,14 @@ export default function AccessoryReconPage() {
                   {rows.map(r => (
                     <Fragment key={r.store_code}>
                       <tr onClick={() => setOpen(o => ({ ...o, [r.store_code]: !o[r.store_code] }))}
-                        style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: r.flag ? '#fffafa' : undefined }}>
+                        style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: r.flag ? 'var(--c-bg-fffafa)' : undefined }}>
                         <td style={{ padding: '9px 14px', fontSize: 13, fontWeight: 600 }}>{r.reps?.length ? (open[r.store_code] ? '▾ ' : '▸ ') : ''}{r.store_address}</td>
                         <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13 }}>{fmt(r.declared)}</td>
                         <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13 }}>{fmt(r.actual)}</td>
-                        <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, fontWeight: 700, color: r.flag ? '#dc2626' : 'var(--text1)' }}>{r.variance >= 0 ? '+' : ''}{fmt(r.variance)}</td>
+                        <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, fontWeight: 700, color: r.flag ? 'var(--c-fg-dc2626)' : 'var(--text1)' }}>{r.variance >= 0 ? '+' : ''}{fmt(r.variance)}</td>
                         <td style={{ padding: '9px 14px', textAlign: 'center', fontSize: 12 }}>
-                          {r.flag ? <span style={{ background: '#fee2e2', color: '#b91c1c', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>{r.direction === 'over' ? 'OVER‑declared' : 'UNDER‑declared'}</span>
-                            : <span style={{ color: '#059669' }}>✓ OK</span>}
+                          {r.flag ? <span style={{ background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-b91c1c)', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>{r.direction === 'over' ? 'OVER‑declared' : 'UNDER‑declared'}</span>
+                            : <span style={{ color: 'var(--c-fg-059669)' }}>✓ OK</span>}
                         </td>
                       </tr>
                       {open[r.store_code] && (r.reps || []).map((rep: any, i: number) => (

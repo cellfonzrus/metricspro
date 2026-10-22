@@ -66,7 +66,7 @@ const input: React.CSSProperties = { padding: '7px 10px', borderRadius: 7, borde
 const label: React.CSSProperties = { fontSize: 12, color: 'var(--text2)', marginBottom: 3, display: 'block' }
 const th: React.CSSProperties = { textAlign: 'left', padding: '8px 14px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '8px 14px', fontSize: 13, borderBottom: '1px solid var(--border)' }
-const errorBox: React.CSSProperties = { margin: '12px 16px', border: '1px solid #dc2626', color: '#dc2626', borderRadius: 8, padding: '10px 14px', fontSize: 12 }
+const errorBox: React.CSSProperties = { margin: '12px 16px', border: '1px solid var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }
 
 /** A tax code's reach, from BOTH scope columns. store_code wins; then market; else org-wide. */
 export function scopeOf(tc: { store_code?: string | null; market?: string | null }):
@@ -283,7 +283,7 @@ export default function TaxCodesSection({ stores, rows, onSettingsChanged }: Pro
 
       {/* ── COVERAGE: stated before anything else ─────────────────────────────────────────────── */}
       {!loading && uncovered.length > 0 && (
-        <div style={{ margin: '12px 16px', border: '1px solid #dc2626', background: '#fef2f2', borderRadius: 8, padding: '11px 14px', fontSize: 13, color: '#991b1b' }}>
+        <div style={{ margin: '12px 16px', border: '1px solid var(--c-bg-dc2626)', background: 'var(--c-bg-fef2f2)', borderRadius: 8, padding: '11px 14px', fontSize: 13, color: 'var(--c-fg-991b1b)' }}>
           <b>{uncovered.length} of {grid.length} store{grid.length === 1 ? '' : 's'} has no sales-tax rate.</b>{' '}
           A taxable sale there charges <b>$0 tax</b>, and that is not recoverable once the customer has
           left. Stores affected: {uncovered.slice(0, 6).map(s => s.store_code).join(', ')}
@@ -299,7 +299,7 @@ export default function TaxCodesSection({ stores, rows, onSettingsChanged }: Pro
         </div>
       )}
       {!loading && grid.length > 0 && uncovered.length === 0 && (
-        <div style={{ margin: '12px 16px', border: '1px solid #86efac', background: '#f0fdf4', borderRadius: 8, padding: '9px 14px', fontSize: 12.5, color: '#166534' }}>
+        <div style={{ margin: '12px 16px', border: '1px solid var(--c-bg-86efac)', background: 'var(--c-bg-f0fdf4)', borderRadius: 8, padding: '9px 14px', fontSize: 12.5, color: 'var(--c-fg-166534)' }}>
           ✅ All {grid.length} stores have a rate that applies.
         </div>
       )}
@@ -308,8 +308,8 @@ export default function TaxCodesSection({ stores, rows, onSettingsChanged }: Pro
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 8, textTransform: 'uppercase' }}>
           Discounted sales — what gets taxed
-          {ruleSaving && <span style={{ color: '#f39c12', fontWeight: 400, marginLeft: 10, textTransform: 'none' }}>saving…</span>}
-          {!ruleSaving && ruleSavedAt && <span style={{ color: '#16a34a', fontWeight: 400, marginLeft: 10, textTransform: 'none' }}>saved {ruleSavedAt}</span>}
+          {ruleSaving && <span style={{ color: 'var(--c-fg-f39c12)', fontWeight: 400, marginLeft: 10, textTransform: 'none' }}>saving…</span>}
+          {!ruleSaving && ruleSavedAt && <span style={{ color: 'var(--c-fg-16a34a)', fontWeight: 400, marginLeft: 10, textTransform: 'none' }}>saved {ruleSavedAt}</span>}
         </div>
         {([
           { value: 'pre_discount' as TaxRule, label: 'Tax on price BEFORE discount', hint: 'Tax is computed on the original price, then the discount is applied.' },
@@ -371,7 +371,7 @@ export default function TaxCodesSection({ stores, rows, onSettingsChanged }: Pro
               <div style={{ minWidth: 300 }}>
                 <label style={label}>
                   Stores — tick as many as share this rate
-                  {taxForm.id && <span style={{ color: '#b45309' }}> (editing one row: only the first tick is kept)</span>}
+                  {taxForm.id && <span style={{ color: 'var(--c-fg-b45309)' }}> (editing one row: only the first tick is kept)</span>}
                 </label>
                 <div style={{ display: 'flex', gap: 8, marginBottom: 5 }}>
                   <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }}
@@ -501,13 +501,13 @@ export default function TaxCodesSection({ stores, rows, onSettingsChanged }: Pro
                 return (
                   <tr key={tc.id} style={{ opacity: tc.is_active ? 1 : 0.5 }}>
                     <td style={{ ...td, fontWeight: 600 }}>{tc.name}</td>
-                    <td style={{ ...td, color: '#16a34a', fontWeight: 700 }}>{pct(tc.rate)}</td>
+                    <td style={{ ...td, color: 'var(--c-fg-16a34a)', fontWeight: 700 }}>{pct(tc.rate)}</td>
                     <td style={td}>
-                      {s.kind === 'org' && <span style={{ color: '#f39c12' }}>Every store (company default)</span>}
+                      {s.kind === 'org' && <span style={{ color: 'var(--c-fg-f39c12)' }}>Every store (company default)</span>}
                       {s.kind === 'market' && <span>Market · <b>{s.value}</b></span>}
                       {s.kind === 'stores' && <span>{storeName(s.value) || s.value}</span>}
                     </td>
-                    <td style={td}><span style={{ color: tc.is_active ? '#16a34a' : '#dc2626', fontWeight: 600 }}>{tc.is_active ? 'Active' : 'Inactive'}</span></td>
+                    <td style={td}><span style={{ color: tc.is_active ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)', fontWeight: 600 }}>{tc.is_active ? 'Active' : 'Inactive'}</span></td>
                     <td style={td}>
                       <div style={{ display: 'flex', gap: 6 }}>
                         <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }}
@@ -520,7 +520,7 @@ export default function TaxCodesSection({ stores, rows, onSettingsChanged }: Pro
                               is_active: tc.is_active,
                             })
                           }}>Edit</button>
-                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', color: tc.is_active ? '#dc2626' : '#16a34a' }}
+                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', color: tc.is_active ? 'var(--c-fg-dc2626)' : 'var(--c-fg-16a34a)' }}
                           onClick={() => toggleTaxCode(tc)}>{tc.is_active ? 'Deactivate' : 'Reactivate'}</button>
                       </div>
                     </td>

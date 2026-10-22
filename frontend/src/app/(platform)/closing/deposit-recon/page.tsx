@@ -226,8 +226,8 @@ export default function DepositReconPage() {
         </select>
         <input style={{ ...inp, width: 110 }} inputMode="decimal" placeholder="Amount $" value={dep.amount} onChange={e => setDep(d => ({ ...d, amount: e.target.value }))} />
         <input style={{ ...inp, width: 130 }} placeholder="Deposited by" value={dep.employee_name} onChange={e => setDep(d => ({ ...d, employee_name: e.target.value }))} />
-        <button className="btn" disabled={depBusy} onClick={() => saveDeposit()} style={{ background: 'var(--accent)', color: '#fff' }}>{depBusy ? 'Saving…' : 'Save'}</button>
-        {depMsg && <span style={{ fontSize: 12, color: depMsg.startsWith('❌') ? '#b91c1c' : 'var(--text2)' }}>{depMsg}</span>}
+        <button className="btn" disabled={depBusy} onClick={() => saveDeposit()} style={{ background: 'var(--accent)', color: 'var(--c-fg-ffffff)' }}>{depBusy ? 'Saving…' : 'Save'}</button>
+        {depMsg && <span style={{ fontSize: 12, color: depMsg.startsWith('❌') ? 'var(--c-fg-b91c1c)' : 'var(--text2)' }}>{depMsg}</span>}
       </div>
 
       <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
@@ -262,14 +262,14 @@ export default function DepositReconPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginBottom: 16 }}>
         <Stat label="Rows" value={String(filtered.length)} />
-        <Stat label="Short" value={String(shortCount)} color={shortCount ? '#dc2626' : '#059669'} />
-        <Stat label="Over" value={String(overCount)} color={overCount ? '#b45309' : '#059669'} />
+        <Stat label="Short" value={String(shortCount)} color={shortCount ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'} />
+        <Stat label="Over" value={String(overCount)} color={overCount ? 'var(--c-fg-b45309)' : 'var(--c-fg-059669)'} />
       </div>
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : err ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {err}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {err}</div>
       ) : (
         <>
           <ReportShell title="Cash Deposit Reconciliation" subtitle={`${dateFrom} → ${dateTo}`}
@@ -288,8 +288,8 @@ export default function DepositReconPage() {
                     {d.short_reason ? ` — reason: ${d.short_reason}` : ''}
                     {d.capture && (d.has_slip
                       ? <> · <a href={d.slip_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>slip</a></>
-                      : <span style={{ color: '#dc2626', fontWeight: 600 }}> · ⚠ no deposit slip on file</span>)}
-                    {d.flagged ? <span style={{ color: '#b45309' }}> · amount flagged</span> : null}
+                      : <span style={{ color: 'var(--c-fg-dc2626)', fontWeight: 600 }}> · ⚠ no deposit slip on file</span>)}
+                    {d.flagged ? <span style={{ color: 'var(--c-fg-b45309)' }}> · amount flagged</span> : null}
                   </div>
                 ))}
               </div>
@@ -321,7 +321,7 @@ export default function DepositReconPage() {
               <input style={{ ...inp, width: 110 }} inputMode="decimal" placeholder="More $ now?" value={supplementalAmt}
                 onChange={e => setSupplementalAmt(e.target.value)} />
               <button className="btn" disabled={depBusy || !supplementalAmt} onClick={saveSupplemental}
-                style={{ background: 'var(--accent)', color: '#fff' }}>I&apos;ll deposit more now</button>
+                style={{ background: 'var(--accent)', color: 'var(--c-fg-ffffff)' }}>I&apos;ll deposit more now</button>
               <button className="btn btn-secondary" onClick={async () => { await saveShortReason(true); }}>Save reason — will deposit more later</button>
               <button className="btn btn-secondary" onClick={async () => { await saveShortReason(false); }}>Save reason — that&apos;s final</button>
             </div>
@@ -371,9 +371,9 @@ function CashShortByDm({ rows, summary }: { rows: any[]; summary: any }) {
         <span style={{ fontSize: 13, fontWeight: 700 }}>{summary.dms_short ? '⚠' : '✓'} Cash short by DM</span>
         <span style={{ fontSize: 12, color: 'var(--text2)' }}>
           {summary.dms_short
-            ? <><b style={{ color: '#dc2626' }}>{fmt(Math.abs(summary.short_amount || 0))}</b> short across {summary.short_rows} envelope{summary.short_rows === 1 ? '' : 's'} · {summary.dms_short} of {summary.dms} DM{summary.dms === 1 ? '' : 's'}</>
+            ? <><b style={{ color: 'var(--c-fg-dc2626)' }}>{fmt(Math.abs(summary.short_amount || 0))}</b> short across {summary.short_rows} envelope{summary.short_rows === 1 ? '' : 's'} · {summary.dms_short} of {summary.dms} DM{summary.dms === 1 ? '' : 's'}</>
             : <>No short pickups counted in this range.</>}
-          {summary.over_rows ? <span style={{ color: '#b45309' }}> · {summary.over_rows} over (+{fmt(summary.over_amount || 0)})</span> : null}
+          {summary.over_rows ? <span style={{ color: 'var(--c-fg-b45309)' }}> · {summary.over_rows} over (+{fmt(summary.over_amount || 0)})</span> : null}
           {summary.uncounted_rows ? <span style={{ color: 'var(--text3)' }}> · {summary.uncounted_rows} envelope{summary.uncounted_rows === 1 ? '' : 's'} collected sealed (not counted — neither short nor over)</span> : null}
         </span>
         <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>{open ? '▾ hide' : '▸ show'}</span>
@@ -401,10 +401,10 @@ function CashShortByDm({ rows, summary }: { rows: any[]; summary: any }) {
                     <Fragment key={r.dm}>
                       <tr style={{ background: r.is_short ? 'rgba(220,38,38,0.06)' : undefined }}>
                         <td style={{ ...cellS, fontWeight: 600 }}>{r.dm}</td>
-                        <td style={{ ...cellS, textAlign: 'right', color: r.is_short ? '#dc2626' : 'var(--text3)', fontWeight: r.is_short ? 700 : 400 }}>
+                        <td style={{ ...cellS, textAlign: 'right', color: r.is_short ? 'var(--c-fg-dc2626)' : 'var(--text3)', fontWeight: r.is_short ? 700 : 400 }}>
                           {r.short_rows ? fmt(Math.abs(r.short_amount)) : '—'}</td>
                         <td style={{ ...cellS, textAlign: 'right' }}>{r.short_rows || '—'}</td>
-                        <td style={{ ...cellS, textAlign: 'right', color: r.over_rows ? '#b45309' : 'var(--text3)' }}>{r.over_rows ? `+${fmt(r.over_amount)}` : '—'}</td>
+                        <td style={{ ...cellS, textAlign: 'right', color: r.over_rows ? 'var(--c-fg-b45309)' : 'var(--text3)' }}>{r.over_rows ? `+${fmt(r.over_amount)}` : '—'}</td>
                         <td style={{ ...cellS, textAlign: 'right' }}>{r.counted_rows}</td>
                         <td style={{ ...cellS, textAlign: 'right', color: 'var(--text3)' }}>{r.uncounted_rows}</td>
                         <td style={{ ...cellS, textAlign: 'right' }}>{fmt(r.declared_total)}</td>
@@ -419,7 +419,7 @@ function CashShortByDm({ rows, summary }: { rows: any[]; summary: any }) {
                             {s.kind === 'billpay' ? <span style={{ color: 'var(--text3)' }}> (bill-pay)</span> : null}
                             {s.envelope_opened ? <span style={{ color: 'var(--text3)' }}> · 📂 opened</span> : null}
                           </td>
-                          <td style={{ ...cellS, textAlign: 'right', fontSize: 11.5, color: '#dc2626', fontWeight: 700 }} colSpan={2}>{fmt(s.variance)}</td>
+                          <td style={{ ...cellS, textAlign: 'right', fontSize: 11.5, color: 'var(--c-fg-dc2626)', fontWeight: 700 }} colSpan={2}>{fmt(s.variance)}</td>
                           <td style={{ ...cellS, textAlign: 'right', fontSize: 11.5, color: 'var(--text3)' }} colSpan={4}>
                             declared {fmt(s.declared)} · counted {fmt(s.actual)}
                           </td>
@@ -547,10 +547,10 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
   }
 
   function dayStatus(r: any) {
-    if (r.green) return <span style={{ color: '#059669', fontWeight: 700 }}>✅ accounted</span>
+    if (r.green) return <span style={{ color: 'var(--c-fg-059669)', fontWeight: 700 }}>✅ accounted</span>
     const bits: React.ReactNode[] = []
-    if (r.missing_slip_rows) bits.push(<span key="s" style={{ color: '#dc2626', fontWeight: 600 }}>⚠ {r.missing_slip_rows} deposit(s) missing the slip</span>)
-    if (r.unconfirmed_rows) bits.push(<span key="c" style={{ color: '#b45309', fontWeight: 600 }}>🤝 awaiting mgmt confirmation</span>)
+    if (r.missing_slip_rows) bits.push(<span key="s" style={{ color: 'var(--c-fg-dc2626)', fontWeight: 600 }}>⚠ {r.missing_slip_rows} deposit(s) missing the slip</span>)
+    if (r.unconfirmed_rows) bits.push(<span key="c" style={{ color: 'var(--c-fg-b45309)', fontWeight: 600 }}>🤝 awaiting mgmt confirmation</span>)
     if (r.undisposed_rows) bits.push(<span key="u" style={{ color: 'var(--text2)' }}>{r.undisposed_rows} pickup(s) not yet deposited/handed</span>)
     if (!bits.length) bits.push(<span key="n" style={{ color: 'var(--text3)' }}>no picked-up envelopes</span>)
     return <span style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>{bits}</span>
@@ -569,8 +569,8 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
     if (!r.pickup_short_rows && !r.pickup_over_rows && !nc) return null
     return (
       <span>
-        {r.pickup_short_rows ? <span title={`DM-recorded count vs the envelope's expected figure: net ${fmt(r.pickup_variance_total)}`} style={{ color: '#dc2626', fontWeight: 700 }}> · ⚠ {r.pickup_short_rows} short pickup{r.pickup_short_rows === 1 ? '' : 's'} ({fmt(r.pickup_variance_total)})</span> : null}
-        {!r.pickup_short_rows && r.pickup_over_rows ? <span title={`DM-recorded count vs the envelope's expected figure: net ${fmt(r.pickup_variance_total)}`} style={{ color: '#b45309', fontWeight: 600 }}> · +{fmt(r.pickup_variance_total)} over</span> : null}
+        {r.pickup_short_rows ? <span title={`DM-recorded count vs the envelope's expected figure: net ${fmt(r.pickup_variance_total)}`} style={{ color: 'var(--c-fg-dc2626)', fontWeight: 700 }}> · ⚠ {r.pickup_short_rows} short pickup{r.pickup_short_rows === 1 ? '' : 's'} ({fmt(r.pickup_variance_total)})</span> : null}
+        {!r.pickup_short_rows && r.pickup_over_rows ? <span title={`DM-recorded count vs the envelope's expected figure: net ${fmt(r.pickup_variance_total)}`} style={{ color: 'var(--c-fg-b45309)', fontWeight: 600 }}> · +{fmt(r.pickup_variance_total)} over</span> : null}
         {nc ? <span title="Counted, but the expected figure counts a different cash than the envelope holds — so it cannot be scored short or over. Open the envelope to see why." style={{ color: 'var(--text3)', fontWeight: 600 }}> · {nc} not comparable</span> : null}
       </span>
     )
@@ -595,7 +595,7 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
             destroys evidence — and this figure can become a chargeback against the rep. */}
         {counted.map(e => (
           <span key={envKey(r, e) + ':c'} style={{ display: 'inline-flex', flexDirection: 'column', gap: 1 }}>
-            <span style={{ color: '#166534' }}>
+            <span style={{ color: 'var(--c-fg-166534)' }}>
               {fmt(e.actual_picked_amount)} counted
               {e.actual_counted_by ? <span style={{ color: 'var(--text3)' }}> · by {e.actual_counted_by}</span> : null}
               {e.employee_name ? <span style={{ color: 'var(--text3)' }}> · {e.employee_name}</span> : null}
@@ -615,7 +615,7 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
               </button>
             </span>
             {(e.corrections || 0) > 0 && (
-              <span style={{ fontSize: 10.5, color: '#b45309' }}
+              <span style={{ fontSize: 10.5, color: 'var(--c-fg-b45309)' }}
                 title={(e.correction_history || []).join('\n')}>
                 ✎ corrected {e.corrections} time{e.corrections === 1 ? '' : 's'}
               </span>
@@ -659,10 +659,10 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
         </div>
         {data && (
           <div style={{ fontSize: 12, color: 'var(--text2)' }}>
-            <b style={{ color: '#059669' }}>{s.green_days || 0}</b>/{s.store_days || 0} days green
-            {s.missing_slip_days ? <span style={{ color: '#dc2626' }}> · {s.missing_slip_days} missing slips</span> : null}
-            {s.awaiting_confirm_days ? <span style={{ color: '#b45309' }}> · {s.awaiting_confirm_days} awaiting confirm</span> : null}
-            {s.short_pickup_days ? <span style={{ color: '#dc2626' }}> · {s.short_pickup_days} short-pickup day{s.short_pickup_days === 1 ? '' : 's'}</span> : null}
+            <b style={{ color: 'var(--c-fg-059669)' }}>{s.green_days || 0}</b>/{s.store_days || 0} days green
+            {s.missing_slip_days ? <span style={{ color: 'var(--c-fg-dc2626)' }}> · {s.missing_slip_days} missing slips</span> : null}
+            {s.awaiting_confirm_days ? <span style={{ color: 'var(--c-fg-b45309)' }}> · {s.awaiting_confirm_days} awaiting confirm</span> : null}
+            {s.short_pickup_days ? <span style={{ color: 'var(--c-fg-dc2626)' }}> · {s.short_pickup_days} short-pickup day{s.short_pickup_days === 1 ? '' : 's'}</span> : null}
           </div>
         )}
       </div>
@@ -696,9 +696,9 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
                     <td style={bcell}>
                       {r.deposited_rows
                         ? <span>{fmt(r.deposited_total)}{r.missing_slip_rows
-                            ? <span style={{ color: '#dc2626', fontWeight: 600 }}> · ⚠ {r.missing_slip_rows} no slip</span>
-                            : <span style={{ color: '#166534' }}> · slips ✓</span>}
-                            {r.flagged_rows ? <span style={{ color: '#b45309' }}> · {r.flagged_rows} flagged</span> : null}</span>
+                            ? <span style={{ color: 'var(--c-fg-dc2626)', fontWeight: 600 }}> · ⚠ {r.missing_slip_rows} no slip</span>
+                            : <span style={{ color: 'var(--c-fg-166534)' }}> · slips ✓</span>}
+                            {r.flagged_rows ? <span style={{ color: 'var(--c-fg-b45309)' }}> · {r.flagged_rows} flagged</span> : null}</span>
                         : <span style={{ color: 'var(--text3)' }}>—</span>}
                     </td>
                     <td style={bcell}>
@@ -720,8 +720,8 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
                                disabled={busy || !r.handed_rows || !data?.can_confirm}
                                onChange={ev => confirmDay(r, ev.target.checked)} />
                         {r.mgmt_confirmed
-                          ? <span style={{ color: '#166534' }}>by {r.mgmt_confirmed_by || 'management'}{r.mgmt_confirmed_at ? ` · ${new Date(r.mgmt_confirmed_at).toLocaleString()}` : ''}</span>
-                          : <span style={{ color: r.handed_rows ? '#b45309' : 'var(--text3)' }}>{r.handed_rows ? 'pending' : '—'}</span>}
+                          ? <span style={{ color: 'var(--c-fg-166534)' }}>by {r.mgmt_confirmed_by || 'management'}{r.mgmt_confirmed_at ? ` · ${new Date(r.mgmt_confirmed_at).toLocaleString()}` : ''}</span>
+                          : <span style={{ color: r.handed_rows ? 'var(--c-fg-b45309)' : 'var(--text3)' }}>{r.handed_rows ? 'pending' : '—'}</span>}
                       </label>
                     </td>
                     <td style={bcell}>{dayStatus(r)}</td>
@@ -777,7 +777,7 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
               {openEnv.editing ? ' Changing this figure keeps the previous one on the record, with your name against the change.' : ''}
             </p>
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-              <button className="btn" style={{ background: 'var(--accent)', color: '#fff' }}
+              <button className="btn" style={{ background: 'var(--accent)', color: 'var(--c-fg-ffffff)' }}
                 disabled={!!busyKey || String(openEnv.amount).trim() === ''} onClick={saveOpenCount}>
                 {busyKey ? 'Saving…' : (openEnv.editing ? 'Save the correction' : 'Record the count')}
               </button>
@@ -810,7 +810,7 @@ function AccountabilityBoard({ dateFrom, dateTo, markets, stores }: {
               ))}
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-              <button className="btn" style={{ background: 'var(--accent)', color: '#fff' }} disabled={!!busyKey}
+              <button className="btn" style={{ background: 'var(--accent)', color: 'var(--c-fg-ffffff)' }} disabled={!!busyKey}
                 onClick={async () => { const m = handModal; setHandModal(null); await markHanded(m.row, m.amounts) }}>
                 {busyKey ? 'Saving…' : 'Mark handed over'}
               </button>

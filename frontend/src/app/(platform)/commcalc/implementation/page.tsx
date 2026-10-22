@@ -92,11 +92,11 @@ export default function ImplementationWizard() {
         <div style={{ display: 'grid', gap: 8 }}>
           {Object.entries(outputs).map(([name, o]: any) => (
             <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8,
-              background: o.ready ? '#f0fdf4' : 'var(--surface2)', border: `1px solid ${o.ready ? '#bbf7d0' : 'var(--border)'}` }}>
+              background: o.ready ? 'var(--c-bg-f0fdf4)' : 'var(--surface2)', border: `1px solid ${o.ready ? 'var(--c-bg-bbf7d0)' : 'var(--border)'}` }}>
               <span style={{ fontWeight: 600, minWidth: 170 }}>{name}</span>
               {o.ready
-                ? <span style={{ color: '#15803d', fontSize: 13, fontWeight: 600 }}>✅ Ready</span>
-                : <span style={{ color: '#b45309', fontSize: 13 }}>Needs: {o.missing.map((m: string) => labelFor(m)).join(', ')}</span>}
+                ? <span style={{ color: 'var(--c-fg-15803d)', fontSize: 13, fontWeight: 600 }}>✅ Ready</span>
+                : <span style={{ color: 'var(--c-fg-b45309)', fontSize: 13 }}>Needs: {o.missing.map((m: string) => labelFor(m)).join(', ')}</span>}
               <span style={{ flex: 1 }} />
               <span style={{ fontSize: 11, color: 'var(--text3)' }}>from: {o.needs.map((m: string) => labelFor(m)).join(' + ')}</span>
             </div>
@@ -110,8 +110,8 @@ export default function ImplementationWizard() {
         <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 0 }}>Each report below feeds the outputs above. Expand one, upload a sample to auto-detect + Save the mappings, then set a period and Import the full file — the outputs above compute from it.</p>
         {loading && reportKeys.length === 0 && <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div>}
         {!loading && loadErr && (
-          <div style={{ padding: 12, borderRadius: 8, background: '#fef2f2', border: '1px solid #fecaca', fontSize: 13 }}>
-            <b style={{ color: '#b91c1c' }}>❌ Could not load your reports.</b>
+          <div style={{ padding: 12, borderRadius: 8, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', fontSize: 13 }}>
+            <b style={{ color: 'var(--c-fg-b91c1c)' }}>❌ Could not load your reports.</b>
             <div style={{ marginTop: 4, color: 'var(--text2)' }}>{loadErr}</div>
             <div style={{ marginTop: 4, color: 'var(--text3)', fontSize: 12 }}>
               This is the page failing to reach the server — nothing is wrong with your data.
@@ -363,10 +363,10 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
           </span>
         )}
         {info?.ready
-          ? <span style={{ fontSize: 12, color: '#15803d', background: '#f0fdf4', padding: '2px 8px', borderRadius: 10 }}>✅ ready</span>
-          : <span style={{ fontSize: 12, color: '#b45309', background: '#fffbeb', padding: '2px 8px', borderRadius: 10 }}>{info?.required_mapped || 0}/{info?.required || 0} required mapped</span>}
+          ? <span style={{ fontSize: 12, color: 'var(--c-fg-15803d)', background: 'var(--c-bg-f0fdf4)', padding: '2px 8px', borderRadius: 10 }}>✅ ready</span>
+          : <span style={{ fontSize: 12, color: 'var(--c-fg-b45309)', background: 'var(--c-bg-fffbeb)', padding: '2px 8px', borderRadius: 10 }}>{info?.required_mapped || 0}/{info?.required || 0} required mapped</span>}
         <div style={{ flex: 1, maxWidth: 160, height: 6, background: 'var(--border)', borderRadius: 4, overflow: 'hidden' }}>
-          <div style={{ width: `${pct}%`, height: '100%', background: info?.ready ? '#22c55e' : '#f59e0b' }} />
+          <div style={{ width: `${pct}%`, height: '100%', background: info?.ready ? 'var(--c-bg-22c55e)' : 'var(--c-bg-f59e0b)' }} />
         </div>
       </div>
       {open && (
@@ -391,7 +391,7 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
                 : 'This report carries no date column, so it needs the period naming the file.'}
               value={period} onChange={e => setPeriod(e.target.value)} />
             <input ref={importRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) importFile(f); e.target.value = '' }} />
-            <button className="btn" style={{ fontSize: 13, background: '#16a34a', color: '#fff' }} disabled={importing || busy}
+            <button className="btn" style={{ fontSize: 13, background: 'var(--c-bg-16a34a)', color: 'var(--c-fg-ffffff)' }} disabled={importing || busy}
               onClick={() => importRef.current?.click()}
               title="Load the FULL file into the system using the saved mappings — the reports above then compute from it">
               {importing ? '⏳ Importing…' : '⬆️ Import file → load data'}
@@ -402,8 +402,8 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
           )}
           {rowMsg && (
             <div style={{ margin: '6px 0', padding: '8px 10px', borderRadius: 8, fontSize: 13, maxWidth: 620,
-              background: rowMsg.startsWith('❌') ? '#fef2f2' : rowMsg.startsWith('⚠️') ? '#fffbeb' : '#f0fdf4',
-              border: `1px solid ${rowMsg.startsWith('❌') ? '#fecaca' : rowMsg.startsWith('⚠️') ? '#fde68a' : '#bbf7d0'}` }}>
+              background: rowMsg.startsWith('❌') ? 'var(--c-bg-fef2f2)' : rowMsg.startsWith('⚠️') ? 'var(--c-bg-fffbeb)' : 'var(--c-bg-f0fdf4)',
+              border: `1px solid ${rowMsg.startsWith('❌') ? 'var(--c-bg-fecaca)' : rowMsg.startsWith('⚠️') ? 'var(--c-bg-fde68a)' : 'var(--c-bg-bbf7d0)'}` }}>
               {rowMsg}
             </div>
           )}
@@ -415,7 +415,7 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
                 <tbody>
                   {fields.map(f => (
                     <tr key={f.target_field}>
-                      <td style={cell}>{f.label}{f.required && <span style={{ color: '#b42318' }}> *</span>}</td>
+                      <td style={cell}>{f.label}{f.required && <span style={{ color: 'var(--c-fg-b42318)' }}> *</span>}</td>
                       {/* RULE THREE §3b: pick the detected column; allowCreate keeps manual entry pre-detect. */}
                       <td style={cell}>
                         <EntityPicker
@@ -437,8 +437,8 @@ function ReportMapper({ reportKey, info, carrierId, onSaved, setMsg }:
                                 ? 'Matched only because the column name contains the field name — the weakest kind of match. Check the values.'
                                 : `Matched on: ${basis[f.target_field]}`}
                                 style={{ marginRight: 6, padding: '1px 6px', borderRadius: 6, fontSize: 10.5, fontWeight: 700,
-                                  background: basis[f.target_field] === 'fuzzy' ? '#fffbeb' : 'var(--surface2)',
-                                  color: basis[f.target_field] === 'fuzzy' ? '#b45309' : 'var(--text3)' }}>
+                                  background: basis[f.target_field] === 'fuzzy' ? 'var(--c-bg-fffbeb)' : 'var(--surface2)',
+                                  color: basis[f.target_field] === 'fuzzy' ? 'var(--c-fg-b45309)' : 'var(--text3)' }}>
                                 {basis[f.target_field]}
                               </span>
                             )}

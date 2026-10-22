@@ -150,14 +150,14 @@ export default function AtuOpportunityPage() {
             {msg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</span>}
           </div>
           {data && !data.table_present && (
-            <div style={{ fontSize: 12, color: '#b45309', marginTop: 8 }}>
+            <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginTop: 8 }}>
               ⚠️ <SetupNotice lead="Showing built-in defaults; saving your own is not available yet." detail="295_atu_opportunity_config.sql" />
             </div>
           )}
         </div>
       )}
 
-      {data?.error && <div className="card" style={{ padding: 16, color: '#b45309' }}>⚠️ {data.error}</div>}
+      {data?.error && <div className="card" style={{ padding: 16, color: 'var(--c-fg-b45309)' }}>⚠️ {data.error}</div>}
 
       {s && (
         <>
@@ -182,7 +182,7 @@ export default function AtuOpportunityPage() {
             )}
             {/* Total-side caveat (recharges settle through VidaPay) — only under the Total lens. */}
             {isTotal && !s.totals_measurable?.total && (
-              <div style={{ marginTop: 8, color: '#b45309' }}>
+              <div style={{ marginTop: 8, color: 'var(--c-fg-b45309)' }}>
                 ⚠️ {s.totals_measurable?.total_note}
               </div>
             )}

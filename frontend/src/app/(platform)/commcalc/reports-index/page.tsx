@@ -86,7 +86,7 @@ export default function ReportsIndexPage() {
                   <span style={{ fontWeight: 700, fontSize: 13.5, flex: 1 }}>{r.label}</span>
                   {r._rd && (
                     <span style={{ fontSize: 10.5, fontWeight: 600, padding: '1px 7px', borderRadius: 999,
-                      background: r._rd.powered ? '#dcfce7' : '#fef9c3', color: r._rd.powered ? '#166534' : '#854d0e' }}>
+                      background: r._rd.powered ? 'var(--c-bg-dcfce7)' : 'var(--c-bg-fef9c3)', color: r._rd.powered ? 'var(--c-fg-166534)' : 'var(--c-fg-854d0e)' }}>
                       {r._rd.powered ? 'Live' : 'Needs data'}
                     </span>
                   )}

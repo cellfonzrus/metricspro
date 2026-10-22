@@ -188,12 +188,12 @@ export default function MyTargetsPage() {
       ) : (
       <>
       {setupHint.length > 0 && (
-        <div style={{ background: 'var(--warning-bg, #fff7ed)', border: '1px solid var(--warning, #f59e0b)', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12.5, color: 'var(--text2)' }}>
+        <div style={{ background: 'var(--warning-bg, var(--c-bg-fff7ed))', border: '1px solid var(--warning, var(--c-bg-f59e0b))', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12.5, color: 'var(--text2)' }}>
           {setupHint.map((h, i) => <div key={i}>⚙️ <LinkedText text={h} /></div>)}
         </div>
       )}
 
-      <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '8px 14px', marginBottom: 18, fontSize: 12, color: '#92400e' }}>
+      <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 10, padding: '8px 14px', marginBottom: 18, fontSize: 12, color: 'var(--c-fg-92400e)' }}>
         ⓘ Until logins are enabled, pick your store and name below. This view will be locked to you automatically once sign-in is live.
       </div>
 
@@ -266,13 +266,13 @@ export default function MyTargetsPage() {
                 {[['You', detail.conversion.rep], ['Store', detail.conversion.store]].map(([label, c]: any) => (
                   <div key={label}>
                     <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
-                    <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1.1, color: c.rate >= c.target ? 'var(--green)' : '#dc2626' }}>{c.rate}%</div>
+                    <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1.1, color: c.rate >= c.target ? 'var(--green)' : 'var(--c-fg-dc2626)' }}>{c.rate}%</div>
                     <div style={{ fontSize: 11, color: 'var(--text3)' }}>{c.boxes} boxes / {c.billpays} bill-pays</div>
                   </div>
                 ))}
               </div>
               {detail.conversion.rep.below_store && (
-                <div style={{ marginTop: 12, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#b91c1c' }}>
+                <div style={{ marginTop: 12, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: 'var(--c-fg-b91c1c)' }}>
                   ⚠️ Your conversion ({detail.conversion.rep.rate}%) is below the store ({detail.conversion.store.rate}%). Convert more bill-pay/walk-in customers into box sales to pull it up.
                 </div>
               )}

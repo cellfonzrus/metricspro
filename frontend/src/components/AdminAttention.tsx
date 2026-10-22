@@ -86,9 +86,9 @@ type Payload = {
 }
 
 const SEV: Record<string, { color: string; bg: string; icon: string }> = {
-  error: { color: '#b91c1c', bg: '#fef2f2', icon: '⛔' },
-  warning: { color: '#b45309', bg: '#fffbeb', icon: '⚠️' },
-  info: { color: '#1d4ed8', bg: '#eff6ff', icon: 'ℹ️' },
+  error: { color: 'var(--c-fg-b91c1c)', bg: 'var(--c-bg-fef2f2)', icon: '⛔' },
+  warning: { color: 'var(--c-fg-b45309)', bg: 'var(--c-bg-fffbeb)', icon: '⚠️' },
+  info: { color: 'var(--c-fg-1d4ed8)', bg: 'var(--c-bg-eff6ff)', icon: 'ℹ️' },
 }
 const GROUP_LABEL: Record<string, string> = {
   import: 'Imports overdue or never run',
@@ -227,8 +227,8 @@ export default function AdminAttention() {
         <button onClick={() => { setTab('warnings'); setOpen(true) }} title="Items needing an administrator's attention"
           style={{
             fontSize: 13, fontWeight: 700, cursor: 'pointer',
-            color: c.error ? '#b91c1c' : '#b45309', background: c.error ? '#fef2f2' : '#fffbeb',
-            border: `1px solid ${c.error ? '#fecaca' : '#fde68a'}`, borderRadius: 8, padding: '5px 10px',
+            color: c.error ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-b45309)', background: c.error ? 'var(--c-bg-fef2f2)' : 'var(--c-bg-fffbeb)',
+            border: `1px solid ${c.error ? 'var(--c-bg-fecaca)' : 'var(--c-bg-fde68a)'}`, borderRadius: 8, padding: '5px 10px',
           }}>
           {c.error ? '⛔' : '⚠️'} {c.total} needs attention
         </button>
@@ -237,8 +237,8 @@ export default function AdminAttention() {
         <button onClick={() => { openTab(wn.unseen_counts.new_feature ? 'new_feature' : 'improvement'); setOpen(true) }}
           title="New features and improvements you haven't looked at yet"
           style={{
-            fontSize: 13, fontWeight: 700, cursor: 'pointer', color: '#1d4ed8', background: '#eff6ff',
-            border: '1px solid #bfdbfe', borderRadius: 8, padding: '5px 10px', marginLeft: 6,
+            fontSize: 13, fontWeight: 700, cursor: 'pointer', color: 'var(--c-fg-1d4ed8)', background: 'var(--c-bg-eff6ff)',
+            border: '1px solid var(--c-bg-bfdbfe)', borderRadius: 8, padding: '5px 10px', marginLeft: 6,
           }}>
           ✨ {unseenTotal} new
         </button>
@@ -251,7 +251,7 @@ export default function AdminAttention() {
             display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '6vh 16px',
           }}>
           <div onClick={e => e.stopPropagation()} className="card"
-            style={{ background: 'white', maxWidth: 760, width: '100%', maxHeight: '84vh', overflowY: 'auto',
+            style={{ background: 'var(--c-bg-ffffff)', maxWidth: 760, width: '100%', maxHeight: '84vh', overflowY: 'auto',
               borderRadius: 14, boxShadow: '0 20px 60px rgba(0,0,0,0.25)', padding: 0 }}>
             <div style={{ padding: '18px 22px 12px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -309,17 +309,17 @@ export default function AdminAttention() {
                     Nothing logged here yet.
                   </div>
                 ) : notesFor(tab).map(n => (
-                  <div key={n.slug} style={{ border: '1px solid var(--border)', borderLeft: '4px solid #2563eb',
-                    background: '#f8fbff', borderRadius: 10, padding: '10px 12px', marginBottom: 8 }}>
+                  <div key={n.slug} style={{ border: '1px solid var(--border)', borderLeft: '4px solid var(--c-bg-2563eb)',
+                    background: 'var(--c-bg-f8fbff)', borderRadius: 10, padding: '10px 12px', marginBottom: 8 }}>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
                       <div style={{ fontSize: 13.5, fontWeight: 700 }}>{n.title}</div>
                       {n.status === 'in_progress' && (
-                        <span className="badge" style={{ fontSize: 10.5, background: '#fffbeb', color: '#b45309' }}>
+                        <span className="badge" style={{ fontSize: 10.5, background: 'var(--c-bg-fffbeb)', color: 'var(--c-fg-b45309)' }}>
                           Coming shortly
                         </span>
                       )}
                       {(n.released_at > (seen || '')) && (
-                        <span className="badge" style={{ fontSize: 10.5, background: '#eff6ff', color: '#1d4ed8' }}>New</span>
+                        <span className="badge" style={{ fontSize: 10.5, background: 'var(--c-bg-eff6ff)', color: 'var(--c-fg-1d4ed8)' }}>New</span>
                       )}
                       <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>{n.released_at}</span>
                     </div>
@@ -361,7 +361,7 @@ export default function AdminAttention() {
                         {safeHref(it.deep_link) && (
                           <Link href={safeHref(it.deep_link, '#')} onClick={() => setOpen(false)}
                             style={{ alignSelf: 'center', whiteSpace: 'nowrap', fontSize: 12.5, fontWeight: 700,
-                              textDecoration: 'none', color: 'white', background: s.color,
+                              textDecoration: 'none', color: 'var(--c-fg-ffffff)', background: s.color,
                               borderRadius: 8, padding: '6px 11px' }}>
                             {it.deep_link_label || 'Fix'} →
                           </Link>

@@ -123,8 +123,8 @@ export default function SupplyComparePage() {
       <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 12px' }}>
         {vendors.map(v => `${v.name}: prices from ${fmtDate(v.catalog_seen_at)}`).join(' · ') || 'No vendor prices yet — read them on the Vendors page.'}
       </p>
-      {note && <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 12, fontSize: 13 }}>{note}</div>}
-      {favNote && <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 12, fontSize: 13 }}>{favNote}</div>}
+      {note && <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', marginBottom: 12, fontSize: 13 }}>{note}</div>}
+      {favNote && <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', marginBottom: 12, fontSize: 13 }}>{favNote}</div>}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <select style={{ ...input, maxWidth: 220 }} value={vendor} onChange={e => changeVendor(e.target.value)} aria-label="Supplier">
           <option value="">All suppliers</option>
@@ -155,14 +155,14 @@ export default function SupplyComparePage() {
               <tr key={i}>
                 <td style={cell}>
                   <button title={r.favorite ? 'Remove from favourites' : 'Add to favourites'} disabled={!!favNote}
-                          style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 18, color: r.favorite ? '#f59e0b' : 'var(--text2)' }}
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 18, color: r.favorite ? 'var(--c-fg-f59e0b)' : 'var(--text2)' }}
                           onClick={() => toggleStar(r, i)}>{r.favorite ? '★' : '☆'}</button>
                 </td>
                 <td style={cell}>
                   <div>{r.product}</div>
                   <div style={{ fontSize: 11, color: 'var(--text2)' }}>{r.match}{r.basis === 'per unit' ? ' · compared per unit' : ''}</div>
-                  {r.note && <div style={{ fontSize: 11, color: '#b45309' }}>{r.note}</div>}
-                  {r.favorite && r.reorder_qty ? <div style={{ fontSize: 11, color: '#b45309' }}>Reorder quantity: {r.reorder_qty}</div> : null}
+                  {r.note && <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>{r.note}</div>}
+                  {r.favorite && r.reorder_qty ? <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>Reorder quantity: {r.reorder_qty}</div> : null}
                 </td>
                 {vendors.map(v => {
                   const o = r.offers[v.id]
@@ -172,9 +172,9 @@ export default function SupplyComparePage() {
                     <td key={v.id} style={{ ...cell, background: r.best_vendor === v.id ? 'rgba(22,163,74,.08)' : undefined }}>
                       <div style={{ fontWeight: r.best_vendor === v.id ? 700 : 400 }}>{fmtMoney(o.price)}{o.pack_qty ? ` / ${o.pack_qty}` : ' each'}</div>
                       {o.pack_qty ? <div style={{ fontSize: 11, color: 'var(--text2)' }}>{fmtMoney(o.unit_price)} each</div> : null}
-                      {rules && <div style={{ fontSize: 11, color: '#2563eb' }}>Order {rules}</div>}
+                      {rules && <div style={{ fontSize: 11, color: 'var(--c-fg-2563eb)' }}>Order {rules}</div>}
                       {o.sku && <div style={{ fontSize: 10, color: 'var(--text2)' }}>#{o.sku}</div>}
-                      <div style={{ fontSize: 11, color: AVAIL_COLOR[o.availability] || '#6b7280' }}>
+                      <div style={{ fontSize: 11, color: AVAIL_COLOR[o.availability] || 'var(--c-fg-6b7280)' }}>
                         {AVAIL_LABEL[o.availability] || o.availability}{o.stock_qty != null ? ` (${o.stock_qty})` : ''}
                       </div>
                       {o.url && <a href={o.url} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>open</a>}

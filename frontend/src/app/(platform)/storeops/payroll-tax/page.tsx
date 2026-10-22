@@ -175,16 +175,16 @@ export default function PayrollTaxPage() {
               <tr key={l.employee_id}>
                 <td style={cell}>{l.name}<div style={{ fontSize: 10, color: 'var(--text3)' }}>
                   {l.store || ''}
-                  {l.basis === 'scheduled' && <span title="No clock punches this range — estimated from the entered schedule instead." style={{ marginLeft: 6, padding: '0 5px', borderRadius: 999, background: '#fef3c7', color: '#92400e', fontWeight: 600 }}>scheduled est.</span>}
+                  {l.basis === 'scheduled' && <span title="No clock punches this range — estimated from the entered schedule instead." style={{ marginLeft: 6, padding: '0 5px', borderRadius: 999, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)', fontWeight: 600 }}>scheduled est.</span>}
                 </div></td>
-                <td style={cell}>{l.pay.regular_hours}{l.pay.ot_hours > 0 && <span style={{ color: '#b45309' }}> +{l.pay.ot_hours} OT</span>}</td>
+                <td style={cell}>{l.pay.regular_hours}{l.pay.ot_hours > 0 && <span style={{ color: 'var(--c-fg-b45309)' }}> +{l.pay.ot_hours} OT</span>}</td>
                 <td style={cell}>{$(l.pay_rate)}</td>
                 <td style={{ ...cell, fontWeight: 600 }}>{$(l.pay.gross)}</td>
                 <td style={cell}>{$(l.pay.fica_ss)}</td>
                 <td style={cell}>{$(l.pay.fica_medicare)}</td>
                 <td style={cell}>{$(l.pay.federal)}</td>
                 <td style={cell}>{$(l.pay.state)}{l.pay.disability > 0 && <div style={{ fontSize: 10, color: 'var(--text3)' }}>+{$(l.pay.disability)} dis</div>}</td>
-                <td style={{ ...cell, fontWeight: 700, color: '#16794a' }}>{$(l.pay.net)}</td>
+                <td style={{ ...cell, fontWeight: 700, color: 'var(--c-fg-16794a)' }}>{$(l.pay.net)}</td>
                 <td style={{ ...cell, fontSize: 11, color: 'var(--text3)' }}>{l.settings.filing_status[0]} · {l.settings.state}{l.settings.skipped ? ' · flat' : ''}</td>
                 <td style={cell}>
                   <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setEdit(l.employee_id)}>W-4</button>{' '}
@@ -232,13 +232,13 @@ function W4Modal({ line, onClose, onSave }: { line: any; onClose: () => void; on
 function SlipModal({ line, start, end, onClose }: { line: any; start: string; end: string; onClose: () => void }) {
   const p = line.pay
   const Row = ({ k, v, bold }: { k: string; v: string; bold?: boolean }) => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontWeight: bold ? 700 : 400, borderTop: bold ? '1px solid #ccc' : 'none' }}><span>{k}</span><span>{v}</span></div>
+    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontWeight: bold ? 700 : 400, borderTop: bold ? '1px solid var(--c-bg-cccccc)' : 'none' }}><span>{k}</span><span>{v}</span></div>
   )
   return (
     <Overlay onClose={onClose}>
       <div id="slip" style={{ fontSize: 13 }}>
         <h3 style={{ margin: '0 0 2px' }}>Pay Slip — {line.name}</h3>
-        <div style={{ color: '#666', fontSize: 12, marginBottom: 10 }}>{start} → {end} · {line.store || ''}</div>
+        <div style={{ color: 'var(--c-fg-666666)', fontSize: 12, marginBottom: 10 }}>{start} → {end} · {line.store || ''}</div>
         <Row k={`Regular (${p.regular_hours}h @ ${$(line.pay_rate)})`} v={$(p.regular_hours * line.pay_rate)} />
         {p.ot_hours > 0 && <Row k={`Overtime (${p.ot_hours}h @ 1.5×)`} v={$(p.ot_hours * line.pay_rate * 1.5)} />}
         <Row k="Gross pay" v={$(p.gross)} bold />
@@ -249,7 +249,7 @@ function SlipModal({ line, start, end, onClose }: { line: any; start: string; en
         {p.disability > 0 && <Row k="NY Disability" v={'-' + $(p.disability)} />}
         <Row k="Total deductions" v={'-' + $(p.deductions)} bold />
         <Row k="Net pay" v={$(p.net)} bold />
-        <div style={{ marginTop: 10, fontSize: 11, color: '#999' }}>Employer FICA match: {$(p.employer_fica)}. Estimate (flat-rate withholding).</div>
+        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--c-fg-999999)' }}>Employer FICA match: {$(p.employer_fica)}. Estimate (flat-rate withholding).</div>
       </div>
       <div style={{ marginTop: 14, display: 'flex', gap: 8 }}>
         <button className="btn btn-primary" onClick={() => window.print()}>🖨 Print</button>

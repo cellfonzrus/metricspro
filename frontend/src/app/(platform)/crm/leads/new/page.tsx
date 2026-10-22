@@ -78,7 +78,7 @@ export default function NewLeadPage() {
       </div>
 
       {dupes.length > 0 && (
-        <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 14 }}>
+        <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', marginBottom: 14 }}>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>⚠️ We already have this number</div>
           {dupes.map(d => (
             <div key={d.id} style={{ fontSize: 13, marginBottom: 3 }}>
@@ -139,7 +139,7 @@ export default function NewLeadPage() {
         </div>
       </div>
 
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginTop: 12 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginTop: 12 }}>{msg}</div>}
 
       <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
         <button onClick={save} disabled={saving || (!f.phone.trim() && !f.email.trim())} style={btnPrimary}>

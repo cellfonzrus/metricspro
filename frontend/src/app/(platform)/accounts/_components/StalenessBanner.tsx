@@ -44,9 +44,9 @@ export function StalenessBanner({ period, computed, computedAt, newestIngestAt, 
   }
 
   return (
-    <div className="card" style={{ padding: 12, marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-      <span style={{ fontSize: 13, color: '#92400e', flex: 1, minWidth: 220 }}>⏱ {label}</span>
-      {err && <span style={{ fontSize: 12, color: '#b91c1c' }}>{err}</span>}
+    <div className="card" style={{ padding: 12, marginBottom: 16, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 13, color: 'var(--c-fg-92400e)', flex: 1, minWidth: 220 }}>⏱ {label}</span>
+      {err && <span style={{ fontSize: 12, color: 'var(--c-fg-b91c1c)' }}>{err}</span>}
       <button className="btn btn-primary" onClick={recompute} disabled={busy} style={{ fontSize: 13 }}>
         {busy ? '⏳ Recomputing…' : '↻ Recompute'}
       </button>

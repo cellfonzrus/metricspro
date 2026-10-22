@@ -93,7 +93,7 @@ export default function ProductivityPage() {
           {loading ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
           ) : err ? (
-            <div className="card" style={{ padding: 16, borderLeft: '3px solid #b42318', color: '#b42318', fontSize: 13 }}>Could not load: {err}</div>
+            <div className="card" style={{ padding: 16, borderLeft: '3px solid var(--c-bg-b42318)', color: 'var(--c-fg-b42318)', fontSize: 13 }}>Could not load: {err}</div>
           ) : tab === 'productivity' ? (
             <ProductivityView data={data} period={period} hasFilter={hasFilter} clearFilters={clearFilters} />
           ) : tab === 'ranking' ? (
@@ -325,7 +325,7 @@ function ConfigPanel() {
       standard_type: src.value_type, weight: 1, count_in_stack_ranker: true, count_in_review: false, enabled: true })
   }
 
-  if (!cfg) return <div className="card" style={{ padding: 16 }}>{msg ? <span style={{ color: '#b42318' }}>{msg}</span> : 'Loading…'}</div>
+  if (!cfg) return <div className="card" style={{ padding: 16 }}>{msg ? <span style={{ color: 'var(--c-fg-b42318)' }}>{msg}</span> : 'Loading…'}</div>
   const patch = (ik: string, field: string, val: any) =>
     setCfg((c: any) => ({ ...c, items: c.items.map((it: any) => it.item_key === ik ? { ...it, [field]: val } : it) }))
 
@@ -343,7 +343,7 @@ function ConfigPanel() {
         <b> standard</b> to measure against, and a <b>weight</b>. Toggle whether it counts in the ranker, the review,
         or both. Editing here does <b>not</b> change commission pay.
       </p>
-      {msg && <div style={{ fontSize: 12, color: '#b42318', marginBottom: 8 }}>{msg}</div>}
+      {msg && <div style={{ fontSize: 12, color: 'var(--c-fg-b42318)', marginBottom: 8 }}>{msg}</div>}
       <div className="table-wrapper" style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>

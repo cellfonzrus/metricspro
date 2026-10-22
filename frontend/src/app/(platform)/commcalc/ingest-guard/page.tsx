@@ -131,7 +131,7 @@ export default function IngestGuardPage() {
         </p>
       </div>
 
-      <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '12px 16px', marginBottom: 18, fontSize: 13, color: '#1e40af' }}>
+      <div style={{ background: 'var(--c-bg-eff6ff)', border: '1px solid var(--c-bg-bfdbfe)', borderRadius: 10, padding: '12px 16px', marginBottom: 18, fontSize: 13, color: 'var(--c-fg-1e40af)' }}>
         💡 Every time a sales file is imported, we look at the store name on each line and check it against
         your own store list. If a store turns up that you&apos;ve never had, it gets listed below so you can
         say whether it&apos;s yours. This is what stops another company&apos;s sales — and their commission —
@@ -142,7 +142,7 @@ export default function IngestGuardPage() {
       </div>
 
       {cfg.ready === false && (
-        <div style={{ background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 10, padding: '10px 16px', marginBottom: 16, fontSize: 13, color: '#92400e' }}>
+        <div style={{ background: 'var(--c-bg-fef3c7)', border: '1px solid var(--c-bg-fcd34d)', borderRadius: 10, padding: '10px 16px', marginBottom: 16, fontSize: 13, color: 'var(--c-fg-92400e)' }}>
           ⚠️ <SetupNotice detail="280" />
           Imports are working normally in the meantime; nothing is being held back.
           {cfg.hint ? <div style={{ marginTop: 4, fontSize: 11, opacity: .8 }}>{cfg.hint}</div> : null}
@@ -248,7 +248,7 @@ export default function IngestGuardPage() {
                   <td style={td}>{money(it.amount_seen)}</td>
                   <td style={td}>
                     {it.rows_withheld > 0
-                      ? <span style={{ color: '#b91c1c', fontWeight: 600 }}>{it.rows_withheld}</span>
+                      ? <span style={{ color: 'var(--c-fg-b91c1c)', fontWeight: 600 }}>{it.rows_withheld}</span>
                       : <span style={{ color: 'var(--text3)' }}>none — imported</span>}
                   </td>
                   <td style={td}>

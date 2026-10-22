@@ -72,7 +72,7 @@ export default function VisionLiveWall() {
         how long. Sessions end automatically after {config?.stream_max_minutes ?? 30} minutes.
       </div>
 
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginBottom: 14 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginBottom: 14 }}>{msg}</div>}
 
       {Object.keys(byStore).length === 0 && (
         <div style={{ ...panel, color: 'var(--text2)' }}>
@@ -262,28 +262,28 @@ function CameraTile({ camera }: { camera: Camera }) {
 
   return (
     <div style={{ ...panel, padding: 0, overflow: 'hidden' }}>
-      <div style={{ position: 'relative', background: '#000', aspectRatio: '16 / 9' }}>
+      <div style={{ position: 'relative', background: 'var(--c-bg-000000)', aspectRatio: '16 / 9' }}>
         <video ref={videoRef} autoPlay playsInline muted
           style={{ width: '100%', height: '100%', objectFit: 'contain', display: state === 'live' ? 'block' : 'none' }} />
         {state !== 'live' && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center', gap: 10, color: '#9ca3af', padding: 16, textAlign: 'center' }}>
+            alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--c-fg-9ca3af)', padding: 16, textAlign: 'center' }}>
             {state === 'connecting'
               ? <div style={{ fontSize: 13 }}>Connecting…</div>
               : <button style={btnPrimary} onClick={start}>▶ Watch live</button>}
             {(note || error) && (
-              <div style={{ fontSize: 12, color: '#f87171', maxWidth: 320 }}>{note || error}</div>
+              <div style={{ fontSize: 12, color: 'var(--c-fg-f87171)', maxWidth: 320 }}>{note || error}</div>
             )}
             {/* Where it stopped. Shown even when nothing threw — a run that ends with no error at
                 all still tells us which step it died on, which is the thing we could never see. */}
-            {phase && <div style={{ fontSize: 11, color: '#9ca3af' }}>stopped at: {phase}</div>}
+            {phase && <div style={{ fontSize: 11, color: 'var(--c-fg-9ca3af)' }}>stopped at: {phase}</div>}
           </div>
         )}
         {state === 'live' && (
           <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', gap: 6, alignItems: 'center',
             background: 'rgba(0,0,0,.6)', padding: '3px 8px', borderRadius: 6 }}>
-            <span style={{ width: 7, height: 7, borderRadius: 7, background: '#dc2626' }} />
-            <span style={{ fontSize: 11, color: '#fff', fontWeight: 600, letterSpacing: '.5px' }}>LIVE</span>
+            <span style={{ width: 7, height: 7, borderRadius: 7, background: 'var(--c-bg-dc2626)' }} />
+            <span style={{ fontSize: 11, color: 'var(--c-fg-ffffff)', fontWeight: 600, letterSpacing: '.5px' }}>LIVE</span>
           </div>
         )}
       </div>

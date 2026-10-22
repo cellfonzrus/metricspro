@@ -139,7 +139,7 @@ export default function SalesDerivePage() {
         )}
       </div>
 
-      {err && <div className="card" style={{ ...card, color: '#b42318' }}>❌ {err}</div>}
+      {err && <div className="card" style={{ ...card, color: 'var(--c-fg-b42318)' }}>❌ {err}</div>}
       {msg && <div className="card" style={{ ...card, fontSize: 13 }}>{msg}</div>}
 
       {/* ── the gap for the selected period ──────────────────────────────────────────────────── */}
@@ -155,7 +155,7 @@ export default function SalesDerivePage() {
               <Tile label="In basis, not in feed" value={status.missing_in_daily.toLocaleString()} />
             </div>
             {!status.has_feed && dailyFeed.applies === 'not_defined' && (
-              <div role="status" style={{ fontSize: 12.5, color: '#1e40af', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '9px 12px', marginBottom: 10 }}>
+              <div role="status" style={{ fontSize: 12.5, color: 'var(--c-fg-1e40af)', background: 'var(--c-bg-eff6ff)', border: '1px solid var(--c-bg-bfdbfe)', borderRadius: 8, padding: '9px 12px', marginBottom: 10 }}>
                 {notApplicableCopy({ pos, posDeclared, feedNoun: 'daily feed', kindNoun: 'daily-feed', purpose: 'derive the monthly basis from' })}
               </div>
             )}
@@ -166,12 +166,12 @@ export default function SalesDerivePage() {
               </div>
             )}
             {status.has_feed && !behind && (
-              <div style={{ fontSize: 13, color: '#16794a' }}>
+              <div style={{ fontSize: 13, color: 'var(--c-fg-16794a)' }}>
                 ✅ Every transaction the feed delivered for {period} is in the monthly basis.
               </div>
             )}
             {status.has_feed && behind && (
-              <div style={{ fontSize: 13, color: '#b42318' }}>
+              <div style={{ fontSize: 13, color: 'var(--c-fg-b42318)' }}>
                 ⚠️ {gap.toLocaleString()} transaction(s) reached the daily feed and never reached the basis.
                 {status.is_closed_month
                   ? ' This month is closed, so those sales are missing from every report for it and would not be paid by a recompute.'
@@ -185,12 +185,12 @@ export default function SalesDerivePage() {
               </div>
             )}
             {status.capped && (
-              <div style={{ marginTop: 6, fontSize: 12, color: '#b45309' }}>
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--c-fg-b45309)' }}>
                 Note: this period exceeded the scan cap, so the counts above are a lower bound.
               </div>
             )}
             {!status.auto_derive_enabled && (
-              <div style={{ marginTop: 6, fontSize: 12, color: '#b45309' }}>
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--c-fg-b45309)' }}>
                 Automatic derivation is switched OFF for this tenant (<ScreenLink to="connectors">Connectors → Sales Transactions</ScreenLink> is set to manual),
                 so nothing will build this basis on its own.
               </div>
@@ -226,7 +226,7 @@ export default function SalesDerivePage() {
             <Tile label="Transactions after" value={(preview.result_trans ?? 0).toLocaleString()} />
           </div>
           {preview.skipped && (
-            <div style={{ marginTop: 10, fontSize: 13, color: '#b45309' }}>Skipped — {preview.skipped}</div>
+            <div style={{ marginTop: 10, fontSize: 13, color: 'var(--c-fg-b45309)' }}>Skipped — {preview.skipped}</div>
           )}
         </div>
       )}

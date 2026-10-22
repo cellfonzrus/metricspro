@@ -196,10 +196,10 @@ export default function PosProductsPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {msg && <span style={{ fontSize: 13, color: '#dc2626' }}>{msg}</span>}
+          {msg && <span style={{ fontSize: 13, color: 'var(--c-fg-dc2626)' }}>{msg}</span>}
           <button className="btn btn-primary" onClick={openNew}>+ New</button>
           {selected && <button className="btn btn-secondary" onClick={openEdit}>View/Edit</button>}
-          {selected && <button className="btn btn-secondary" style={{ color: '#dc2626' }} onClick={deactivateSelected}>Deactivate</button>}
+          {selected && <button className="btn btn-secondary" style={{ color: 'var(--c-fg-dc2626)' }} onClick={deactivateSelected}>Deactivate</button>}
           <button className="btn btn-secondary" onClick={() => setShowDeptCat(true)}>Depts / Categories</button>
         </div>
       </div>
@@ -334,7 +334,7 @@ export default function PosProductsPage() {
               <b style={{ fontSize: 14 }}>Departments, Categories &amp; System Categories</b>
               <button onClick={() => setShowDeptCat(false)} style={{ background: 'none', border: 'none', color: 'var(--text2)', fontSize: 20, cursor: 'pointer' }}>×</button>
             </div>
-            {msg && <div style={{ margin: '12px 20px 0', fontSize: 12, color: '#dc2626' }}>{msg}</div>}
+            {msg && <div style={{ margin: '12px 20px 0', fontSize: 12, color: 'var(--c-fg-dc2626)' }}>{msg}</div>}
             <div style={{ padding: 20, overflowY: 'auto', flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <div style={panel}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 10, textTransform: 'uppercase' }}>Departments</div>

@@ -55,36 +55,36 @@ export default function PasswordPage() {
   const liveErrs = pw ? policyErrors(pw, passwordPolicy) : []
   return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%)', padding: 20 }}>
-      <div style={{ width: '100%', maxWidth: 400, background: 'white', borderRadius: 14,
+      background: 'linear-gradient(135deg, var(--c-bg-1e3a5f) 0%, var(--c-bg-0f172a) 100%)', padding: 20 }}>
+      <div style={{ width: '100%', maxWidth: 400, background: 'var(--c-bg-ffffff)', borderRadius: 14,
         padding: '32px 30px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
-        <div style={{ fontSize: 19, fontWeight: 800, color: '#1e3a5f' }}>
+        <div style={{ fontSize: 19, fontWeight: 800, color: 'var(--c-fg-1e3a5f)' }}>
           {forced ? 'Set your password' : 'Change password'}
         </div>
-        <div style={{ fontSize: 13, color: '#64748b', margin: '4px 0 18px' }}>
+        <div style={{ fontSize: 13, color: 'var(--c-fg-64748b)', margin: '4px 0 18px' }}>
           {forced ? 'Choose a new password to finish setting up your account.' : `Signed in as ${user?.email || ''}`}
         </div>
         <form onSubmit={submit}>
           <label style={lab}>New password</label>
           <input type="password" value={pw} onChange={e => setPw(e.target.value)} required autoFocus style={inp} />
           {liveErrs.length > 0 && (
-            <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 12, color: '#b45309' }}>
+            <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 12, color: 'var(--c-fg-b45309)' }}>
               {liveErrs.map((x, i) => <li key={i}>{x}</li>)}
             </ul>
           )}
           <label style={{ ...lab, marginTop: 14 }}>Confirm new password</label>
           <input type="password" value={pw2} onChange={e => setPw2(e.target.value)} required style={inp} />
-          {err && <div style={{ color: '#dc2626', fontSize: 13, marginTop: 12 }}>{err}</div>}
-          {msg && <div style={{ color: '#059669', fontSize: 13, marginTop: 12 }}>{msg}</div>}
+          {err && <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 13, marginTop: 12 }}>{err}</div>}
+          {msg && <div style={{ color: 'var(--c-fg-059669)', fontSize: 13, marginTop: 12 }}>{msg}</div>}
           <button type="submit" disabled={busy} style={{
             width: '100%', marginTop: 18, padding: '11px 0', borderRadius: 9, border: 'none',
-            background: '#1e3a5f', color: 'white', fontSize: 15, fontWeight: 600,
+            background: 'var(--c-bg-1e3a5f)', color: 'var(--c-fg-ffffff)', fontSize: 15, fontWeight: 600,
             cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.7 : 1 }}>
             {busy ? 'Saving…' : 'Save password'}
           </button>
         </form>
         <button onClick={() => signOut().then(() => router.replace('/login'))}
-          style={{ marginTop: 14, background: 'none', border: 'none', color: '#64748b', fontSize: 13, cursor: 'pointer' }}>
+          style={{ marginTop: 14, background: 'none', border: 'none', color: 'var(--c-fg-64748b)', fontSize: 13, cursor: 'pointer' }}>
           Sign out
         </button>
       </div>
@@ -92,8 +92,8 @@ export default function PasswordPage() {
   )
 }
 
-const lab: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: '#475569', display: 'block' }
+const lab: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--c-fg-475569)', display: 'block' }
 const inp: React.CSSProperties = {
   width: '100%', marginTop: 5, padding: '10px 12px', borderRadius: 9,
-  border: '1px solid #cbd5e1', fontSize: 14, boxSizing: 'border-box',
+  border: '1px solid var(--c-bg-cbd5e1)', fontSize: 14, boxSizing: 'border-box',
 }

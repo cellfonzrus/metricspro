@@ -437,9 +437,9 @@ export default function StoreOpsAdminPage() {
                     </td>
                     <td style={cell}>
                       <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }} disabled={!!rowBusy[key]} onClick={() => saveEmp(e)}>💾</button>
-                      <button className="btn" style={{ fontSize: 12, padding: '4px 10px', marginLeft: 6, color: '#b91c1c' }} onClick={() => delEmp(e)}>🗑️</button>
-                      {dirty && !rowMsg[key] && <span style={{ fontSize: 11, color: '#b45309', marginLeft: 6 }}>● unsaved</span>}
-                      {rowMsg[key] && <span style={{ fontSize: 11, marginLeft: 6, color: rowMsg[key].startsWith('✗') ? '#b91c1c' : '#166534' }}>{rowMsg[key]}</span>}
+                      <button className="btn" style={{ fontSize: 12, padding: '4px 10px', marginLeft: 6, color: 'var(--c-fg-b91c1c)' }} onClick={() => delEmp(e)}>🗑️</button>
+                      {dirty && !rowMsg[key] && <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)', marginLeft: 6 }}>● unsaved</span>}
+                      {rowMsg[key] && <span style={{ fontSize: 11, marginLeft: 6, color: rowMsg[key].startsWith('✗') ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-166534)' }}>{rowMsg[key]}</span>}
                     </td>
                   </tr>
                   )
@@ -513,8 +513,8 @@ export default function StoreOpsAdminPage() {
                     </td>
                     <td style={cell}>
                       <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }} disabled={!!rowBusy[key]} onClick={() => saveStore(s)}>💾</button>
-                      {dirty && !rowMsg[key] && <span style={{ fontSize: 11, color: '#b45309', marginLeft: 6 }}>● unsaved</span>}
-                      {rowMsg[key] && <span style={{ fontSize: 11, marginLeft: 6, color: rowMsg[key].startsWith('✗') ? '#b91c1c' : '#166534' }}>{rowMsg[key]}</span>}
+                      {dirty && !rowMsg[key] && <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)', marginLeft: 6 }}>● unsaved</span>}
+                      {rowMsg[key] && <span style={{ fontSize: 11, marginLeft: 6, color: rowMsg[key].startsWith('✗') ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-166534)' }}>{rowMsg[key]}</span>}
                     </td>
                   </tr>
                   )

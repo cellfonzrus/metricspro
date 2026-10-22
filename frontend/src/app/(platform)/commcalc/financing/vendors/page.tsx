@@ -217,7 +217,7 @@ export default function FinancingVendorsPage() {
       </div>
 
       {d && !d.ready && (
-        <div className="card" style={{ ...card, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
+        <div className="card" style={{ ...card, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', color: 'var(--c-fg-92400e)' }}>
           ⚠️ {d.note}
         </div>
       )}
@@ -330,7 +330,7 @@ export default function FinancingVendorsPage() {
                   <code>{m.match_field}</code> {m.match_op} <b>“{m.match_value}”</b>
                   {m.id && <button className="btn" style={{ fontSize: 11, marginLeft: 8, padding: '1px 8px' }}
                     onClick={() => removeRule(m.id)}>remove</button>}
-                  {m.field_warning && <div style={{ color: '#b45309', fontSize: 11.5 }}>⚠️ {m.field_warning}</div>}
+                  {m.field_warning && <div style={{ color: 'var(--c-fg-b45309)', fontSize: 11.5 }}>⚠️ {m.field_warning}</div>}
                 </div>
               ))}
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>

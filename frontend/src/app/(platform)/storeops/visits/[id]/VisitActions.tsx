@@ -8,9 +8,9 @@ import { api, apiUpload, localToday } from '@/lib/client'
 
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const SEV: Record<string, { bg: string; fg: string; label: string }> = {
-  critical: { bg: '#fde7e7', fg: '#b42318', label: 'Critical' },
-  warning: { bg: '#fef3e2', fg: '#b45309', label: 'Warning' },
-  good: { bg: '#e6f7ec', fg: '#16794a', label: 'Good' },
+  critical: { bg: 'var(--c-bg-fde7e7)', fg: 'var(--c-fg-b42318)', label: 'Critical' },
+  warning: { bg: 'var(--c-bg-fef3e2)', fg: 'var(--c-fg-b45309)', label: 'Warning' },
+  good: { bg: 'var(--c-bg-e6f7ec)', fg: 'var(--c-fg-16794a)', label: 'Good' },
 }
 
 type Item = { item_key: string; rep: string | null; severity: string; metric: string; title: string; detail: string }
@@ -208,7 +208,7 @@ export default function VisitActions({ visitId, storeCode, period, dmName }:
           <div style={{ flex: '1 1 220px' }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>Sales rep</div>
             {signoff.plan_rep_signed
-              ? <div style={{ fontSize: 13, color: 'var(--green, #16794a)' }}>✅ {signoff.plan_rep_signed_by} · {new Date(signoff.plan_rep_signed_at).toLocaleString()}</div>
+              ? <div style={{ fontSize: 13, color: 'var(--green, var(--c-fg-16794a))' }}>✅ {signoff.plan_rep_signed_by} · {new Date(signoff.plan_rep_signed_at).toLocaleString()}</div>
               : <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   <input style={{ ...sel, flex: '1 1 120px' }} placeholder="Rep name" value={repName} onChange={e => setRepName(e.target.value)} />
                   <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={!!busy} onClick={() => doSignoff('rep')}>✍️ Rep sign off</button>
@@ -217,7 +217,7 @@ export default function VisitActions({ visitId, storeCode, period, dmName }:
           <div style={{ flex: '1 1 220px' }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 6 }}>District manager</div>
             {signoff.plan_dm_signed
-              ? <div style={{ fontSize: 13, color: 'var(--green, #16794a)' }}>✅ {signoff.plan_dm_signed_by} · {new Date(signoff.plan_dm_signed_at).toLocaleString()}</div>
+              ? <div style={{ fontSize: 13, color: 'var(--green, var(--c-fg-16794a))' }}>✅ {signoff.plan_dm_signed_by} · {new Date(signoff.plan_dm_signed_at).toLocaleString()}</div>
               : <button className="btn btn-secondary" style={{ fontSize: 13 }} disabled={!!busy} onClick={() => doSignoff('dm')}>✍️ DM sign off{dmName ? ` (${dmName})` : ''}</button>}
           </div>
         </div>

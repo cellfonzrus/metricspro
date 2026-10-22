@@ -133,7 +133,7 @@ export default function SupplyOrdersPage() {
         One purchase order per vendor. Open an order to place it at the vendor and capture the confirmation.
         {cartRef && <> Showing the cart you just placed — <button style={{ ...btn, padding: '2px 8px' }} onClick={() => setCartRef('')}>show all</button></>}
       </p>
-      {note && <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 12, fontSize: 13 }}>{note}</div>}
+      {note && <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', marginBottom: 12, fontSize: 13 }}>{note}</div>}
       <section style={{ ...panel, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead><tr><th style={th}>PO</th><th style={th}>Vendor</th><th style={th}>Status</th><th style={th}>Our total</th>
@@ -143,7 +143,7 @@ export default function SupplyOrdersPage() {
               <tr key={r.id} onClick={() => open(r.id)} style={{ cursor: 'pointer', background: h?.id === r.id ? 'rgba(37,99,235,.06)' : undefined }}>
                 <td style={cell}>{r.po_number}</td>
                 <td style={cell}>{r.vendor_name_snapshot}</td>
-                <td style={cell}><span style={{ color: PO_STATUS_COLOR[r.status] || '#6b7280', fontWeight: 600 }}>{r.status}</span></td>
+                <td style={cell}><span style={{ color: PO_STATUS_COLOR[r.status] || 'var(--c-fg-6b7280)', fontWeight: 600 }}>{r.status}</span></td>
                 <td style={cell}>{fmtMoney(r.total)}{r.shipping_estimate ? <span style={{ fontSize: 11, color: 'var(--text2)' }}> (incl. {fmtMoney(r.shipping_estimate)} ship)</span> : null}</td>
                 <td style={cell}>{r.vendor_order_total != null ? fmtMoney(r.vendor_order_total) : '—'}</td>
                 <td style={cell}>{r.vendor_order_ref || '—'}</td>
@@ -165,13 +165,13 @@ export default function SupplyOrdersPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 8 }}>
             <thead><tr><th style={th}>#</th><th style={th}>Item</th><th style={th}>SKU</th><th style={th}>Qty (packs)</th><th style={th}>Unit</th><th style={th}>Line</th></tr></thead>
             <tbody>{sel?.lines.map(l => (
-              <tr key={l.id}><td style={cell}>{l.line_no}</td><td style={cell}>{l.device_model}{l.notes && <div style={{ fontSize: 11, color: '#b45309' }}>{l.notes}</div>}</td>
+              <tr key={l.id}><td style={cell}>{l.line_no}</td><td style={cell}>{l.device_model}{l.notes && <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>{l.notes}</div>}</td>
                 <td style={cell}>{l.sku || '—'}</td><td style={cell}>{l.qty_ordered}</td><td style={cell}>{fmtMoney(l.unit_cost)}</td><td style={cell}>{fmtMoney(l.extended_cost)}</td></tr>
             ))}</tbody>
           </table>
           <div style={{ fontSize: 13, marginTop: 8 }}>
             Items {fmtMoney(h.subtotal)} · shipping estimate {fmtMoney(h.shipping_estimate)} · <strong>total {fmtMoney(h.total)}</strong>
-            {h.supply_meta?.to_free_shipping != null && <span style={{ color: '#2563eb' }}> · {fmtMoney(h.supply_meta?.to_free_shipping)} short of free shipping</span>}
+            {h.supply_meta?.to_free_shipping != null && <span style={{ color: 'var(--c-fg-2563eb)' }}> · {fmtMoney(h.supply_meta?.to_free_shipping)} short of free shipping</span>}
           </div>
 
           {['draft', 'submitted'].includes(h.status) && (
@@ -189,13 +189,13 @@ export default function SupplyOrdersPage() {
               <strong style={{ fontSize: 13 }}>Vendor cart (captured {fmtDate(ev.captured_at)})</strong>
               <div style={{ fontSize: 13 }}>{ev.status}</div>
               <div style={{ fontSize: 13 }}>Vendor&apos;s total: <strong>{ev.vendor_cart_total != null ? fmtMoney(ev.vendor_cart_total) : 'not found on the page'}</strong> vs our estimate {fmtMoney(h.total)}</div>
-              {(ev.lines_failed || []).map(f => <div key={f.line_no} style={{ fontSize: 12, color: '#dc2626' }}>Line {f.line_no} not added: {f.error}</div>)}
+              {(ev.lines_failed || []).map(f => <div key={f.line_no} style={{ fontSize: 12, color: 'var(--c-fg-dc2626)' }}>Line {f.line_no} not added: {f.error}</div>)}
               {/* eslint-disable-next-line @next/next/no-img-element -- a base64 screenshot captured by the vendor window, shown as a data: URL; next/image cannot optimise data URLs */}
               {ev.shot && <img alt="Vendor cart as captured" src={`data:image/jpeg;base64,${ev.shot}`} style={{ maxWidth: 480, width: '100%', marginTop: 6, border: '1px solid var(--border)' }} />}
             </div>
           )}
           {conf && (
-            <div style={{ border: '1px solid #16a34a', borderRadius: 8, padding: 10, marginTop: 12 }}>
+            <div style={{ border: '1px solid var(--c-bg-16a34a)', borderRadius: 8, padding: 10, marginTop: 12 }}>
               <strong style={{ fontSize: 13 }}>Confirmation ({conf.method}) — {fmtDate(conf.captured_at)}{conf.captured_by ? ` · ${conf.captured_by}` : ''}</strong>
               <div style={{ fontSize: 13 }}>Order #: <strong>{conf.order_ref || h.vendor_order_ref || 'not captured'}</strong>
                 {conf.total != null && <> · total {fmtMoney(conf.total)}</>}{conf.note && <> · {conf.note}</>}</div>

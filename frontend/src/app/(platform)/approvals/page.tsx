@@ -29,11 +29,11 @@ function scheduleLinkFor(x: Approval): string {
 }
 
 const badge: Record<string, { t: string; c: string; b: string }> = {
-  pending: { t: 'Pending', c: '#92400e', b: '#fef3c7' },
-  approved: { t: 'Approved', c: '#166534', b: '#dcfce7' },
-  denied: { t: 'Denied', c: '#991b1b', b: '#fee2e2' },
-  cancelled: { t: 'Cancelled', c: '#374151', b: '#e5e7eb' },
-  expired: { t: 'Expired', c: '#374151', b: '#e5e7eb' },
+  pending: { t: 'Pending', c: 'var(--c-fg-92400e)', b: 'var(--c-bg-fef3c7)' },
+  approved: { t: 'Approved', c: 'var(--c-fg-166534)', b: 'var(--c-bg-dcfce7)' },
+  denied: { t: 'Denied', c: 'var(--c-fg-991b1b)', b: 'var(--c-bg-fee2e2)' },
+  cancelled: { t: 'Cancelled', c: 'var(--c-fg-374151)', b: 'var(--c-bg-e5e7eb)' },
+  expired: { t: 'Expired', c: 'var(--c-fg-374151)', b: 'var(--c-bg-e5e7eb)' },
 }
 const prioColor: Record<string, string> = { urgent: '#dc2626', high: '#d97706', normal: 'var(--text3)' }
 
@@ -104,7 +104,7 @@ export default function ApprovalsPage() {
           same neutral line decision feedback uses. It carries the server's words verbatim, so the
           reference id in a masked 500 ("Reference: 881ae411") survives into a screenshot. */}
       {panel.kind === 'error' && (
-        <div role="alert" style={{ margin: '8px 0 0', border: '1px solid #dc2626', color: '#dc2626', borderRadius: 8, padding: '10px 14px', fontSize: 13, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div role="alert" style={{ margin: '8px 0 0', border: '1px solid var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', borderRadius: 8, padding: '10px 14px', fontSize: 13, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ flex: 1, minWidth: 220 }}>⚠️ {loadError}</span>
           <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 10px' }} onClick={load}>Retry</button>
         </div>
@@ -115,7 +115,7 @@ export default function ApprovalsPage() {
           {tab === 'pending' ? 'Waiting on you' : 'Recent decisions'} {panel.showCount && rows.length > 0 && <span style={{ color: 'var(--text3)' }}>· {rows.length}</span>}
         </div>
         {panel.kind === 'error' ? (
-          <div style={{ fontSize: 13, color: '#dc2626' }}>{panel.message}</div>
+          <div style={{ fontSize: 13, color: 'var(--c-fg-dc2626)' }}>{panel.message}</div>
         ) : panel.kind === 'loading' ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><div className="spinner" /></div>
         ) : panel.kind === 'empty' ? (
@@ -150,7 +150,7 @@ export default function ApprovalsPage() {
                     ) : (
                     <td style={{ padding: '8px 9px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button className="btn btn-primary" disabled={busy === x.id} style={{ fontSize: 12, padding: '3px 10px' }} onClick={() => decide(x, 'approve')}>✓ Approve</button>{' '}
-                      <button className="btn btn-secondary" disabled={busy === x.id} style={{ fontSize: 12, padding: '3px 10px', color: '#dc2626' }} onClick={() => decide(x, 'deny')}>✕ Deny</button>
+                      <button className="btn btn-secondary" disabled={busy === x.id} style={{ fontSize: 12, padding: '3px 10px', color: 'var(--c-fg-dc2626)' }} onClick={() => decide(x, 'deny')}>✕ Deny</button>
                     </td>
                     )
                   ) : (

@@ -144,22 +144,22 @@ export const money = (n: number | null | undefined) => (n === null || n === unde
 export const num = (n: number | null | undefined) => (n === null || n === undefined ? '—' : (n || 0).toLocaleString('en-US'))
 export const inp: React.CSSProperties = { padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', color: 'var(--text)' }
 export const btn: React.CSSProperties = { ...inp, cursor: 'pointer', fontWeight: 600 }
-export const primary: React.CSSProperties = { ...btn, background: 'var(--accent,#2563eb)', color: '#fff', border: 'none', padding: '9px 18px' }
+export const primary: React.CSSProperties = { ...btn, background: 'var(--accent,var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', border: 'none', padding: '9px 18px' }
 export const ghost: React.CSSProperties = { ...btn, background: 'transparent' }
 export const card: React.CSSProperties = { border: '1px solid var(--border)', borderRadius: 12, padding: 16, background: 'var(--surface)' }
 export const note: React.CSSProperties = { color: 'var(--text2)', fontSize: 13 }
 export const mono: React.CSSProperties = { fontVariantNumeric: 'tabular-nums', textAlign: 'right' }
 export const LAMP: Record<string, { bg: string; label: string }> = {
-  not_started: { bg: 'var(--text3,#9ca3af)', label: 'not started' },
-  in_progress: { bg: '#f59e0b', label: 'in progress' },
-  needs_input: { bg: '#ef4444', label: 'needs input' },
-  verified: { bg: '#16a34a', label: 'verified' },
+  not_started: { bg: 'var(--text3,var(--c-bg-9ca3af))', label: 'not started' },
+  in_progress: { bg: 'var(--c-bg-f59e0b)', label: 'in progress' },
+  needs_input: { bg: 'var(--c-bg-ef4444)', label: 'needs input' },
+  verified: { bg: 'var(--c-bg-16a34a)', label: 'verified' },
 }
 const PROV_STYLE: Record<string, React.CSSProperties> = {
-  'from your file': { background: 'rgba(37,99,235,.12)', color: '#1d4ed8' },
-  'your earlier choice': { background: 'rgba(22,163,74,.12)', color: '#15803d' },
-  'house default': { background: 'rgba(147,51,234,.12)', color: '#7e22ce' },
-  guess: { background: 'rgba(245,158,11,.15)', color: '#b45309' },
+  'from your file': { background: 'rgba(37,99,235,.12)', color: 'var(--c-fg-1d4ed8)' },
+  'your earlier choice': { background: 'rgba(22,163,74,.12)', color: 'var(--c-fg-15803d)' },
+  'house default': { background: 'rgba(147,51,234,.12)', color: 'var(--c-fg-7e22ce)' },
+  guess: { background: 'rgba(245,158,11,.15)', color: 'var(--c-fg-b45309)' },
 }
 
 // ── AUTO-SAVE (owner 2026-09-20: "as you keep assigning the buckets it should auto save and give an
@@ -222,10 +222,10 @@ export function useAutoSave(persistNow: (patch: Record<string, unknown>, keepali
 
 export function SaveIndicator({ status, stateReady, migration }: { status: SaveStatus; stateReady: boolean; migration?: string }) {
   const hhmm = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '')
-  if (!stateReady) return <span style={{ ...note, fontSize: 12, color: '#ef4444' }}><SetupNotice lead="Not saved." detail={migration || '1007_onboarding_intake_state.sql'} /></span>
+  if (!stateReady) return <span style={{ ...note, fontSize: 12, color: 'var(--c-fg-ef4444)' }}><SetupNotice lead="Not saved." detail={migration || '1007_onboarding_intake_state.sql'} /></span>
   if (status.state === 'saving') return <span style={{ ...note, fontSize: 12 }}>Saving…</span>
-  if (status.state === 'error') return <span style={{ ...note, fontSize: 12, color: '#ef4444' }}>Not saved — {status.reason}</span>
-  if (status.state === 'saved') return <span style={{ ...note, fontSize: 12, color: '#15803d' }}>Saved ✓ {hhmm(status.at)}{status.pending ? ' · changes pending…' : ''}</span>
+  if (status.state === 'error') return <span style={{ ...note, fontSize: 12, color: 'var(--c-fg-ef4444)' }}>Not saved — {status.reason}</span>
+  if (status.state === 'saved') return <span style={{ ...note, fontSize: 12, color: 'var(--c-fg-15803d)' }}>Saved ✓ {hhmm(status.at)}{status.pending ? ' · changes pending…' : ''}</span>
   return <span style={{ ...note, fontSize: 12 }}>{status.pending ? 'Unsaved changes…' : 'Auto-save on'}</span>
 }
 
@@ -302,7 +302,7 @@ export function ColumnsTable({ columns, headers, columnMap, setColumnMap }: {
         const samples = cur === c.column ? c.samples : []
         return (
           <tr key={c.target_field} style={{ borderTop: '1px solid var(--border)' }}>
-            <td style={{ padding: '6px 4px' }}>{c.label}{c.required && <span style={{ color: '#ef4444' }}> *</span>}<div style={{ ...note, fontSize: 11 }}>{c.target_field} · {c.transform}</div></td>
+            <td style={{ padding: '6px 4px' }}>{c.label}{c.required && <span style={{ color: 'var(--c-fg-ef4444)' }}> *</span>}<div style={{ ...note, fontSize: 11 }}>{c.target_field} · {c.transform}</div></td>
             <td style={{ padding: '6px 4px' }}>
               <select value={cur} onChange={e => setColumnMap(m => { const n = { ...m }; if (e.target.value) n[c.target_field] = e.target.value; else delete n[c.target_field]; return n })} style={{ ...inp, minWidth: 180 }}>
                 <option value="">— not in this file —</option>
@@ -343,7 +343,7 @@ export function StoreResolver({ stores, reps, storeList, employees, decisions, s
   const unresolved = stores.filter(s => s.status !== 'resolved').length
   return (
     <div>
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>{identityKind === 'merchant_id' ? 'Merchant / account ids in this file' : 'Store strings in this file'} · {stores.length} distinct {unresolved ? <span style={{ color: '#ef4444' }}>· {unresolved} unresolved</span> : <span style={{ color: '#16a34a' }}>· all resolved</span>}</div>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>{identityKind === 'merchant_id' ? 'Merchant / account ids in this file' : 'Store strings in this file'} · {stores.length} distinct {unresolved ? <span style={{ color: 'var(--c-fg-ef4444)' }}>· {unresolved} unresolved</span> : <span style={{ color: 'var(--c-fg-16a34a)' }}>· all resolved</span>}</div>
       {identityKind === 'merchant_id' && <div style={{ ...note, marginBottom: 6 }}>Each id is the processor&apos;s own name for one of your stores. An assignment is saved to the per-store merchant-id map every feed resolves through — the scheduled pull will use it too.</div>}
       {stores.length === 0 && <div style={note}>No store column is mapped, or every store cell is blank.</div>}
       <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse', marginBottom: 14 }}>
@@ -355,7 +355,7 @@ export function StoreResolver({ stores, reps, storeList, employees, decisions, s
             <tr key={s.value} style={{ borderTop: '1px solid var(--border)', background: s.status !== 'resolved' ? 'rgba(239,68,68,.06)' : 'transparent' }}>
               <td style={{ padding: '6px 4px', fontWeight: 600 }}>{s.value}{s.label ? <span style={{ ...note, fontWeight: 400 }}> · {s.label}</span> : null}</td>
               <td style={mono}>{num(s.count)}</td><td style={mono}>{money(s.sum_raw)}</td>
-              <td style={{ padding: '6px 4px' }}>{s.resolved_code ? <>{s.resolved_code} <span style={{ ...note, fontSize: 11 }}>by {s.how}</span></> : s.lands_as ? <>{s.lands_as} <span style={{ ...note, fontSize: 11 }}>(your decision)</span></> : s.action === 'not_ours' && s.reason ? <span style={note}>not yours — rows excluded</span> : s.action === 'company_level' ? <span style={note}>company-level</span> : <span style={{ color: '#ef4444' }}>unknown</span>}</td>
+              <td style={{ padding: '6px 4px' }}>{s.resolved_code ? <>{s.resolved_code} <span style={{ ...note, fontSize: 11 }}>by {s.how}</span></> : s.lands_as ? <>{s.lands_as} <span style={{ ...note, fontSize: 11 }}>(your decision)</span></> : s.action === 'not_ours' && s.reason ? <span style={note}>not yours — rows excluded</span> : s.action === 'company_level' ? <span style={note}>company-level</span> : <span style={{ color: 'var(--c-fg-ef4444)' }}>unknown</span>}</td>
               <td style={{ padding: '6px 4px' }}>
                 <select value={act} onChange={e => { const v = e.target.value; if (v === 'auto' || v === '') setStore(s.value, null); else setStore(s.value, { action: v as StoreDecision['action'] }) }} style={{ ...inp, padding: '4px 6px', fontSize: 12 }}>
                   {s.resolved_code ? <option value="auto">keep: {s.resolved_code}</option> : <option value="">— decide —</option>}
@@ -389,7 +389,7 @@ export function StoreResolver({ stores, reps, storeList, employees, decisions, s
             return (
               <tr key={r.value} style={{ borderTop: '1px solid var(--border)' }}>
                 <td style={{ padding: '6px 4px', fontWeight: 600 }}>{r.value}</td><td style={mono}>{num(r.count)}</td><td style={mono}>{money(r.sum_raw)}</td>
-                <td style={{ padding: '6px 4px' }}>{r.resolved_name ? <>{r.resolved_name} <span style={{ ...note, fontSize: 11 }}>by {r.how}</span></> : d?.canonical ? <>{d.canonical} <span style={{ ...note, fontSize: 11 }}>(your decision)</span></> : <span style={{ color: '#b45309' }}>not on the roster</span>}</td>
+                <td style={{ padding: '6px 4px' }}>{r.resolved_name ? <>{r.resolved_name} <span style={{ ...note, fontSize: 11 }}>by {r.how}</span></> : d?.canonical ? <>{d.canonical} <span style={{ ...note, fontSize: 11 }}>(your decision)</span></> : <span style={{ color: 'var(--c-fg-b45309)' }}>not on the roster</span>}</td>
                 <td style={{ padding: '6px 4px' }}>
                   <select value={d?.action || (r.resolved_name ? 'auto' : '')} onChange={e => { const v = e.target.value; if (v === 'auto' || v === '') setRep(r.value, null); else setRep(r.value, { action: v as RepDecision['action'] }) }} style={{ ...inp, padding: '4px 6px', fontSize: 12 }}>
                     {r.resolved_name ? <option value="auto">keep: {r.resolved_name}</option> : <option value="">— decide —</option>}
@@ -418,7 +418,7 @@ export function Dropzone({ file, filename, onFiles, dragOver, setDragOver, hint 
   return (
     <div onDragOver={e => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)}
       onDrop={e => { e.preventDefault(); setDragOver(false); onFiles(e.dataTransfer.files) }}
-      style={{ border: `2px dashed ${dragOver ? 'var(--accent,#2563eb)' : 'var(--border)'}`, borderRadius: 12, padding: 28, textAlign: 'center', background: dragOver ? 'rgba(37,99,235,.06)' : 'transparent' }}>
+      style={{ border: `2px dashed ${dragOver ? 'var(--accent,var(--c-bg-2563eb))' : 'var(--border)'}`, borderRadius: 12, padding: 28, textAlign: 'center', background: dragOver ? 'rgba(37,99,235,.06)' : 'transparent' }}>
       <div style={{ fontWeight: 600, marginBottom: 6 }}>{file ? file.name : filename ? `${filename} (kept — drop again only to replace it)` : hint}</div>
       <div style={{ ...note, marginBottom: 10 }}>.xlsx, .xls or .csv — every sheet is read</div>
       <input type="file" accept=".xlsx,.xls,.csv" onChange={e => onFiles(e.target.files)} />
@@ -461,12 +461,12 @@ export function KindDetectZone({ visible, onPick, fallbackKey }: {
   return (
     <div onDragOver={e => { e.preventDefault(); setOver(true) }} onDragLeave={() => setOver(false)}
       onDrop={e => { e.preventDefault(); setOver(false); detect(e.dataTransfer.files) }}
-      style={{ border: `2px dashed ${over ? 'var(--accent,#2563eb)' : 'var(--border)'}`, borderRadius: 12, padding: 16, marginBottom: 12, background: over ? 'rgba(37,99,235,.06)' : 'transparent' }}>
+      style={{ border: `2px dashed ${over ? 'var(--accent,var(--c-bg-2563eb))' : 'var(--border)'}`, borderRadius: 12, padding: 16, marginBottom: 12, background: over ? 'rgba(37,99,235,.06)' : 'transparent' }}>
       <div style={{ fontWeight: 600 }}>Not sure which report you have? Drop any report here</div>
       <div style={{ ...note, marginBottom: 8 }}>We read only the column names and say what it looks like — you confirm. Nothing is imported or stored from this drop.</div>
       <input type="file" accept=".xlsx,.xls,.csv" onChange={e => detect(e.target.files)} disabled={busy} />
       {busy && <div style={{ ...note, marginTop: 6 }}>Reading the column names…</div>}
-      {err && <div style={{ ...note, color: '#ef4444', marginTop: 6 }}>{err}</div>}
+      {err && <div style={{ ...note, color: 'var(--c-fg-ef4444)', marginTop: 6 }}>{err}</div>}
       {res && !busy && (
         <div style={{ marginTop: 10 }}>
           {res.mode === 'confirm' && cands[0] && (

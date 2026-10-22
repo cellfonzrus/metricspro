@@ -49,7 +49,7 @@ export default function ReferralSettingsPage() {
         {ro ? 'Read-only — you need the referral settings permission to change these.' : 'Tune the reward and the anti-fraud guards. Changes apply to new referrals.'}
       </div>
       {!cfg.qr_signing_configured && (
-        <div style={{ ...panel, borderColor: '#f39c12', marginBottom: 14, fontSize: 13 }}>
+        <div style={{ ...panel, borderColor: 'var(--c-bg-f39c12)', marginBottom: 14, fontSize: 13 }}>
           ⚠️ No QR signing secret is configured on the server, so scannable QRs can&apos;t be minted yet.
         </div>
       )}
@@ -94,7 +94,7 @@ export default function ReferralSettingsPage() {
         </label>
       </div>
 
-      {msg && <div style={{ ...panel, borderColor: msg.includes('✓') ? '#16a34a' : '#dc2626', color: msg.includes('✓') ? '#16a34a' : '#dc2626', marginBottom: 12 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: msg.includes('✓') ? 'var(--c-bg-16a34a)' : 'var(--c-bg-dc2626)', color: msg.includes('✓') ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)', marginBottom: 12 }}>{msg}</div>}
       {!ro && <button onClick={save} disabled={saving} style={btnPrimary}>{saving ? 'Saving…' : 'Save settings'}</button>}
     </div>
   )

@@ -28,7 +28,7 @@ export default function HelpdeskDashboard() {
   }, [filt])
   useEffect(() => { load() }, [load])
 
-  if (err) return <div style={{ padding: 24, color: '#c0392b' }}>{err}</div>
+  if (err) return <div style={{ padding: 24, color: 'var(--c-fg-c0392b)' }}>{err}</div>
 
   return (
     <div style={{ padding: 24, maxWidth: 900 }}>
@@ -42,8 +42,8 @@ export default function HelpdeskDashboard() {
       <>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <Tile label="Total tickets" value={d.total} />
-        <Tile label="Open" value={d.open} color="#f59e0b" />
-        <Tile label="Resolved/Closed" value={d.by_stage?.done ?? 0} color="#22c55e" />
+        <Tile label="Open" value={d.open} color="var(--c-fg-f59e0b)" />
+        <Tile label="Resolved/Closed" value={d.by_stage?.done ?? 0} color="var(--c-fg-22c55e)" />
         <Tile label="Avg resolution (hrs)" value={d.avg_resolution_hours ?? '—'} />
       </div>
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>

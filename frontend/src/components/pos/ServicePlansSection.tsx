@@ -50,7 +50,7 @@ const input: React.CSSProperties = { padding: '7px 10px', borderRadius: 7, borde
 const label: React.CSSProperties = { fontSize: 12, color: 'var(--text2)', marginBottom: 3, display: 'block' }
 const th: React.CSSProperties = { textAlign: 'left', padding: '8px 14px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '8px 14px', fontSize: 13, borderBottom: '1px solid var(--border)' }
-const errorBox: React.CSSProperties = { margin: '12px 16px', border: '1px solid #dc2626', color: '#dc2626', borderRadius: 8, padding: '10px 14px', fontSize: 12 }
+const errorBox: React.CSSProperties = { margin: '12px 16px', border: '1px solid var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }
 
 export default function ServicePlansSection() {
   const [plans, setPlans] = useState<ServicePlan[]>([])
@@ -235,13 +235,13 @@ export default function ServicePlansSection() {
                       {p.plan_description && <div style={{ fontSize: 12, color: 'var(--text2)', fontWeight: 400 }}>{p.plan_description}</div>}
                     </td>
                     <td style={{ ...td, color: 'var(--text2)' }}>{p.plan_code || '—'}</td>
-                    <td style={{ ...td, color: '#16a34a', fontWeight: 700 }}>{p.monthly_fee === null || p.monthly_fee === undefined ? '—' : `$${Number(p.monthly_fee).toFixed(2)}/mo`}</td>
+                    <td style={{ ...td, color: 'var(--c-fg-16a34a)', fontWeight: 700 }}>{p.monthly_fee === null || p.monthly_fee === undefined ? '—' : `$${Number(p.monthly_fee).toFixed(2)}/mo`}</td>
                     <td style={{ ...td, color: 'var(--text2)' }}>{[p.contract_type, p.contract_terms].filter(Boolean).join(' · ') || '—'}</td>
-                    <td style={td}><span style={{ color: active ? '#16a34a' : '#dc2626', fontWeight: 600 }}>{active ? 'Active' : 'Inactive'}</span></td>
+                    <td style={td}><span style={{ color: active ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)', fontWeight: 600 }}>{active ? 'Active' : 'Inactive'}</span></td>
                     <td style={td}>
                       <div style={{ display: 'flex', gap: 6 }}>
                         <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => openEdit(p)}>Edit</button>
-                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', color: active ? '#dc2626' : '#16a34a' }}
+                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', color: active ? 'var(--c-fg-dc2626)' : 'var(--c-fg-16a34a)' }}
                           onClick={() => togglePlan(p)}>{active ? 'Deactivate' : 'Reactivate'}</button>
                       </div>
                     </td>

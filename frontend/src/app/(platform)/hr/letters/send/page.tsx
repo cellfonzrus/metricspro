@@ -13,7 +13,7 @@ type Template = { template_key: string; category: string; escalation_tier: numbe
 const box: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', color: 'var(--text1)', width: '100%' }
 const label: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 4 }
 const btn: React.CSSProperties = { padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text1)', cursor: 'pointer', fontSize: 13 }
-const primaryBtn: React.CSSProperties = { ...btn, background: 'var(--accent)', color: '#fff', border: 'none' }
+const primaryBtn: React.CSSProperties = { ...btn, background: 'var(--accent)', color: 'var(--c-fg-ffffff)', border: 'none' }
 
 export default function SendLetterPage() {
   const [emps, setEmps] = useState<any[]>([])
@@ -132,8 +132,8 @@ export default function SendLetterPage() {
         Pick an employee and a template — every field below is filled in from real system data (you can
         edit anything before sending). The date of the incident can be system-derived or set manually.
       </p>
-      {err && <div style={{ color: '#c0392b', fontSize: 13, margin: '8px 0' }}>{err}</div>}
-      {msg && <div style={{ color: '#1e8e3e', fontSize: 13, margin: '8px 0' }}>{msg}</div>}
+      {err && <div style={{ color: 'var(--c-fg-c0392b)', fontSize: 13, margin: '8px 0' }}>{err}</div>}
+      {msg && <div style={{ color: 'var(--c-fg-1e8e3e)', fontSize: 13, margin: '8px 0' }}>{msg}</div>}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 14 }}>
         <div>
@@ -173,7 +173,7 @@ export default function SendLetterPage() {
       </div>
 
       {notes.length > 0 && (
-        <div style={{ background: '#fff8e1', border: '1px solid #f0d896', borderRadius: 8, padding: 10, fontSize: 12, marginBottom: 14 }}>
+        <div style={{ background: 'var(--c-bg-fff8e1)', border: '1px solid var(--c-bg-f0d896)', borderRadius: 8, padding: 10, fontSize: 12, marginBottom: 14 }}>
           {notes.map((n, i) => <div key={i}>ℹ️ {n}</div>)}
         </div>
       )}

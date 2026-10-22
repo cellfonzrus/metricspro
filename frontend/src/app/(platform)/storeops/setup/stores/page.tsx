@@ -457,7 +457,7 @@ export default function StoreSetupPage() {
                 <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text2)' }}>{bfProg}</div>
               )}
               {bfErr && (
-                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--danger, #c00)' }}>{bfErr}</div>
+                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--danger, var(--c-fg-cc0000))' }}>{bfErr}</div>
               )}
               {bfRes && (
                 <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text2)' }}>
@@ -484,7 +484,7 @@ export default function StoreSetupPage() {
                     </div>
                   )}
                   {(bfRes.failed || []).length > 0 && (
-                    <div style={{ marginTop: 4, color: 'var(--danger, #c00)' }}>
+                    <div style={{ marginTop: 4, color: 'var(--danger, var(--c-fg-cc0000))' }}>
                       Could not be done: {(bfRes.failed || []).map((f: any) => f.date).join(', ')}
                     </div>
                   )}
@@ -589,8 +589,8 @@ export default function StoreSetupPage() {
                         onClick={() => setLeaseOpen(o => ({ ...o, [key]: !o[key] }))}>
                         🏢 Lease {leaseOpen[key] ? '▴' : '▾'}
                       </button>
-                      {dirty && !rowMsg[key] && <span style={{ fontSize: 11, color: '#b45309', marginLeft: 6 }}>● unsaved</span>}
-                      {rowMsg[key] && <span style={{ fontSize: 11, marginLeft: 6, color: rowMsg[key].startsWith('✗') ? '#b91c1c' : '#166534' }}>{rowMsg[key]}</span>}
+                      {dirty && !rowMsg[key] && <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)', marginLeft: 6 }}>● unsaved</span>}
+                      {rowMsg[key] && <span style={{ fontSize: 11, marginLeft: 6, color: rowMsg[key].startsWith('✗') ? 'var(--c-fg-b91c1c)' : 'var(--c-fg-166534)' }}>{rowMsg[key]}</span>}
                     </td>
                   </tr>
                   {leaseOpen[key] && (

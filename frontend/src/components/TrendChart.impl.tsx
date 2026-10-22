@@ -27,7 +27,7 @@ export default function TrendChartImpl({
           <XAxis dataKey={xKey} tick={{ fontSize: 11 }} stroke="var(--text3)" />
           <YAxis yAxisId="left" tick={{ fontSize: 11 }} stroke="var(--text3)"
             tickFormatter={(v: number) => leftMoney ? usd0(v) : num0(v)} />
-          {hasRight && <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} stroke="#94a3b8"
+          {hasRight && <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} stroke="var(--c-fg-94a3b8)"
             tickFormatter={(v: number) => rightMoney ? usd0(v) : num0(v)} />}
           <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} labelStyle={{ fontSize: 12 }}
             formatter={(v: any, n: any, p: any) => [moneyByKey[p?.dataKey] ? fmt(Number(v)) : Number(v).toLocaleString(), n]} />

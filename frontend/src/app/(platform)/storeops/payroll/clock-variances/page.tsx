@@ -56,7 +56,7 @@ type Board = {
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 const card: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 12 }
 const btn: React.CSSProperties = { padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12.5, cursor: 'pointer', fontWeight: 600 }
-const btnP: React.CSSProperties = { ...btn, background: 'var(--accent)', color: '#fff', border: 'none' }
+const btnP: React.CSSProperties = { ...btn, background: 'var(--accent)', color: 'var(--c-fg-ffffff)', border: 'none' }
 const th: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', fontSize: 11.5, fontWeight: 700, color: 'var(--text2)', whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '8px 10px', fontSize: 12.5, borderTop: '1px solid var(--border)', verticalAlign: 'top' }
 const h = (n?: number | null) => n == null ? '—' : Number(n).toFixed(2)
@@ -158,7 +158,7 @@ export default function ClockVariancesPage() {
   if (err && !d) return (
     <div style={{ padding: 24 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700 }}>⏱ Clock variances</h1>
-      <div style={{ ...card, borderColor: '#f87171', color: '#b42318' }}>{err}</div>
+      <div style={{ ...card, borderColor: 'var(--c-bg-f87171)', color: 'var(--c-fg-b42318)' }}>{err}</div>
     </div>
   )
 
@@ -183,8 +183,8 @@ export default function ClockVariancesPage() {
       {/* A board that could not READ its own tables must say so. Silence here would look identical
           to a clean week. */}
       {!!d?.blockers?.length && (
-        <div style={{ ...card, borderColor: '#f59e0b', background: 'rgba(245,158,11,0.08)' }}>
-          <strong style={{ color: '#b45309' }}>Part of this board could not be read.</strong>
+        <div style={{ ...card, borderColor: 'var(--c-bg-f59e0b)', background: 'rgba(245,158,11,0.08)' }}>
+          <strong style={{ color: 'var(--c-fg-b45309)' }}>Part of this board could not be read.</strong>
           <ul style={{ margin: '6px 0 0 18px', fontSize: 12.5, color: 'var(--text2)' }}>
             {/* A feed's PLAIN name through the one home (`lib/sourceLabels.ts`, index §19.38) — a
                 manager reads "the clock in / clock out report", never a table name, and the API
@@ -198,7 +198,7 @@ export default function ClockVariancesPage() {
         <div style={{ ...card, display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 12.5 }}>
           <div>
             <div style={{ color: 'var(--text3)', fontSize: 11, fontWeight: 700 }}>STILL BLOCKING</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: (d.blocking_count || 0) > 0 ? '#b42318' : '#15803d' }}>
+            <div style={{ fontSize: 20, fontWeight: 700, color: (d.blocking_count || 0) > 0 ? 'var(--c-fg-b42318)' : 'var(--c-fg-15803d)' }}>
               {d.blocking_count || 0}
             </div>
           </div>
@@ -244,8 +244,8 @@ export default function ClockVariancesPage() {
           columns={cols} rows={rows} />
       </div>
 
-      {msg && <div style={{ ...card, borderColor: '#86efac', color: '#15803d' }}>{msg}</div>}
-      {err && <div style={{ ...card, borderColor: '#f87171', color: '#b42318' }}>{err}</div>}
+      {msg && <div style={{ ...card, borderColor: 'var(--c-bg-86efac)', color: 'var(--c-fg-15803d)' }}>{msg}</div>}
+      {err && <div style={{ ...card, borderColor: 'var(--c-bg-f87171)', color: 'var(--c-fg-b42318)' }}>{err}</div>}
 
       {/* A STORE WITH NOTHING WRONG APPEARS SAYING SO. A board that lists only problems cannot tell
           "clean" from "not looked at". */}
@@ -255,7 +255,7 @@ export default function ClockVariancesPage() {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {Object.entries(d.all_clear).map(([code, clear]) => (
               <span key={code} style={{ borderRadius: 999, padding: '3px 10px', fontWeight: 600,
-                background: clear ? '#dcfce7' : '#fee2e2', color: clear ? '#15803d' : '#b42318' }}>
+                background: clear ? 'var(--c-bg-dcfce7)' : 'var(--c-bg-fee2e2)', color: clear ? 'var(--c-fg-15803d)' : 'var(--c-fg-b42318)' }}>
                 {code} {clear ? '✓ all clear' : `· ${d.by_store?.[code]?.blocking ?? 0} blocking`}
               </span>
             ))}
@@ -282,7 +282,7 @@ export default function ClockVariancesPage() {
                   <td style={td}>
                     {r.employee_name || r.employee_raw || '—'}
                     {/* The login we could not bind to a person is a FIRST-CLASS row, never a guess. */}
-                    {!r.employee_id && <div style={{ fontSize: 11, color: '#b45309' }}>not linked to anybody yet</div>}
+                    {!r.employee_id && <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>not linked to anybody yet</div>}
                   </td>
                   <td style={td}>{r.date || '—'}</td>
                   <td style={td}>
@@ -291,7 +291,7 @@ export default function ClockVariancesPage() {
                       {d?.kinds?.[r.kind || ''] || r.reason}
                     </div>
                     {!!r.auto_closed_punches && (
-                      <div style={{ fontSize: 11, color: '#b45309' }}>
+                      <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>
                         {r.auto_closed_punches} punch(es) the kiosk closed by itself — not evidence of a clock-out
                       </div>
                     )}
@@ -304,7 +304,7 @@ export default function ClockVariancesPage() {
                     <div style={{ fontSize: 11, color: 'var(--text3)', maxWidth: 320 }}>{r.our_basis_reason}</div>
                   </td>
                   <td style={td}>
-                    {r.resolved ? <span style={{ color: '#15803d', fontWeight: 600 }}>✓ settled</span> : (
+                    {r.resolved ? <span style={{ color: 'var(--c-fg-15803d)', fontWeight: 600 }}>✓ settled</span> : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 260 }}>
                         <select value={e.resolution} onChange={ev => setEdit(k, { resolution: ev.target.value })}
                           style={{ padding: '4px 6px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }}>
@@ -319,7 +319,7 @@ export default function ClockVariancesPage() {
                         )}
                         <input placeholder="Reason (required)" value={e.reason}
                           onChange={ev => setEdit(k, { reason: ev.target.value })}
-                          style={{ padding: '4px 6px', borderRadius: 6, border: `1px solid ${needsReason ? '#f59e0b' : 'var(--border)'}`, fontSize: 12, background: 'var(--surface)' }} />
+                          style={{ padding: '4px 6px', borderRadius: 6, border: `1px solid ${needsReason ? 'var(--c-bg-f59e0b)' : 'var(--border)'}`, fontSize: 12, background: 'var(--surface)' }} />
                         <button style={{ ...btnP, opacity: needsReason || busy === k ? 0.5 : 1 }}
                           disabled={needsReason || busy === k} onClick={() => resolve(r)}
                           title={needsReason

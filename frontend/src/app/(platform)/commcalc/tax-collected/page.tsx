@@ -169,17 +169,17 @@ export default function TaxCollectedPage() {
       {firstLoad && loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : data?.error ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {data.error}</div>
       ) : (
         <>
-          {data?.note && <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 13, color: '#92400e', background: '#fffbeb', borderLeft: '3px solid #f59e0b' }}>⚠️ {data.note}</div>}
+          {data?.note && <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 13, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fffbeb)', borderLeft: '3px solid var(--c-bg-f59e0b)' }}>⚠️ {data.note}</div>}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12, marginBottom: 16 }}>
             <Stat label="Total tax collected" value={fmt(tax)} color="var(--accent)" />
             <Stat label="Total sales (all)" value={fmt(revenue)} />
-            <Stat label="Taxable sales" value={fmt(taxable)} color="#16a34a" />
+            <Stat label="Taxable sales" value={fmt(taxable)} color="var(--c-fg-16a34a)" />
             <Stat label="Non-taxable sales" value={fmt(untaxed)} color="var(--text2)" />
-            <Stat label="Effective tax rate" value={`${effRate.toFixed(2)}%`} color="#16a34a" />
+            <Stat label="Effective tax rate" value={`${effRate.toFixed(2)}%`} color="var(--c-fg-16a34a)" />
           </div>
           <div style={{ fontSize: 12, color: 'var(--text3)', margin: '-6px 0 16px' }}>
             Rate is tax ÷ <strong>taxable</strong> sales. Taxable + non-taxable = total sales; a line counts
@@ -244,7 +244,7 @@ export default function TaxCollectedPage() {
                           <td style={{ padding: '9px 14px', fontSize: 13, color: 'var(--text2)' }}>{r.market || '—'}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, fontWeight: 700 }}>{fmt(r.tax)}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13 }}>{fmt(r.revenue)}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, color: '#16a34a' }}>{fmt(r.taxable_revenue)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, color: 'var(--c-fg-16a34a)' }}>{fmt(r.taxable_revenue)}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, color: 'var(--text2)' }}>{fmt(r.untaxed_revenue)}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, color: 'var(--text2)' }}>{r.effective_rate}%</td>
                         </tr>

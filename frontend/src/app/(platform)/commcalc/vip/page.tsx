@@ -360,9 +360,9 @@ export default function VipInvoicesPage() {
   const t = summary?.totals
   const tiles = t ? [
     { label: 'Invoices', val: t.invoices.toLocaleString(), color: 'var(--accent)' },
-    { label: 'Subtotal', val: fmt(t.sub_total), color: '#0369a1' },
-    { label: 'Fees (all types)', val: fmt(t.fees_total), color: '#d97706' },
-    { label: 'Grand Total', val: fmt(t.grand_total), color: '#059669' },
+    { label: 'Subtotal', val: fmt(t.sub_total), color: 'var(--c-fg-0369a1)' },
+    { label: 'Fees (all types)', val: fmt(t.fees_total), color: 'var(--c-fg-d97706)' },
+    { label: 'Grand Total', val: fmt(t.grand_total), color: 'var(--c-fg-059669)' },
   ] : []
 
   // Invoice list: add a per-row fees total, free-text search, and click-to-sort.
@@ -410,7 +410,7 @@ export default function VipInvoicesPage() {
               onChange={e => { const f = e.target.files?.[0]; if (f) handleImport(f) }} />
           </label>
         )}
-        {importMsg && <div style={{ fontSize: 12, color: importMsg.startsWith('✅') ? '#16a34a' : '#dc2626', width: '100%' }}>{importMsg}</div>}
+        {importMsg && <div style={{ fontSize: 12, color: importMsg.startsWith('✅') ? 'var(--c-fg-16a34a)' : 'var(--c-fg-dc2626)', width: '100%' }}>{importMsg}</div>}
       </div>
 
       {/* Filters — the shared core set (date range + market -> store cascade), with this module's own
@@ -445,7 +445,7 @@ export default function VipInvoicesPage() {
           Those invoices are excluded (never guessed into a market), and the fix is a store_aliases row
           in the org vocabulary — which every report reads, so one row fixes all of them at once. */}
       {summary && (summary.unresolved?.invoices || 0) > 0 && (
-        <div className="card" style={{ marginBottom: 20, borderLeft: '3px solid #d97706', fontSize: 13 }}>
+        <div className="card" style={{ marginBottom: 20, borderLeft: '3px solid var(--c-bg-d97706)', fontSize: 13 }}>
           <strong>{summary.unresolved!.invoices.toLocaleString()} invoices</strong> ({fmt(summary.unresolved!.grand_total)})
           are excluded because this filter could not match the distributor&apos;s spelling of their store:{' '}
           {summary.unresolved!.locations.join(', ')}. They are reachable by picking that spelling in the
@@ -546,7 +546,7 @@ export default function VipInvoicesPage() {
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.location || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text2)' }}>{r.status || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right' }}>{fmt(r.sub_total)}</td>
-                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: r._fees ? '#d97706' : 'var(--text3)' }}>{fmt(r._fees)}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: r._fees ? 'var(--c-fg-d97706)' : 'var(--text3)' }}>{fmt(r._fees)}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 600 }}>{fmt(r.grand_total)}</td>
                     </tr>
                   ))}

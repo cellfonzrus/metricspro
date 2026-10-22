@@ -39,10 +39,10 @@ const TYPE_COLOR: Record<string, string> = {
 function TypeBadge({ type, excused }: { type: string; excused?: boolean }) {
   return (
     <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-      <span className="badge" style={{ fontSize: 11, background: TYPE_COLOR[type] || '#6b7280', color: '#fff' }}>
+      <span className="badge" style={{ fontSize: 11, background: TYPE_COLOR[type] || 'var(--c-bg-6b7280)', color: 'var(--c-fg-ffffff)' }}>
         {TYPE_LABEL[type] || type}
       </span>
-      {excused && <span className="badge" style={{ fontSize: 11, background: '#16794a', color: '#fff' }} title="Approved time off covers this date">EXCUSED</span>}
+      {excused && <span className="badge" style={{ fontSize: 11, background: 'var(--c-bg-16794a)', color: 'var(--c-fg-ffffff)' }} title="Approved time off covers this date">EXCUSED</span>}
     </span>
   )
 }
@@ -191,7 +191,7 @@ export default function AttendanceExceptionsPage() {
       )}
 
       {limitHit && (
-        <div className="card" style={{ marginBottom: 12, padding: '8px 12px', fontSize: 12, color: '#92400e', background: '#fef3c7' }}>
+        <div className="card" style={{ marginBottom: 12, padding: '8px 12px', fontSize: 12, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)' }}>
           ⚠️ This date range has a very large number of shifts/punches — the list below may be
           incomplete. Narrow the date range for a complete picture.
         </div>
@@ -231,11 +231,11 @@ export default function AttendanceExceptionsPage() {
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        <span className="badge" style={{ fontSize: 12, background: '#dc2626', color: '#fff' }}>{counts.no_show || 0} no show</span>
-        <span className="badge" style={{ fontSize: 12, background: '#b45309', color: '#fff' }}>{counts.covered_by_other || 0} covered by other</span>
-        <span className="badge" style={{ fontSize: 12, background: '#7c3aed', color: '#fff' }}>{counts.unscheduled || 0} unscheduled</span>
-        <span className="badge" style={{ fontSize: 12, background: '#d97706', color: '#fff' }}>{(counts.late || 0) + (counts.late_and_left_early || 0)} late</span>
-        <span className="badge" style={{ fontSize: 12, background: '#d97706', color: '#fff' }}>{(counts.left_early || 0) + (counts.late_and_left_early || 0)} left early</span>
+        <span className="badge" style={{ fontSize: 12, background: 'var(--c-bg-dc2626)', color: 'var(--c-fg-ffffff)' }}>{counts.no_show || 0} no show</span>
+        <span className="badge" style={{ fontSize: 12, background: 'var(--c-bg-b45309)', color: 'var(--c-fg-ffffff)' }}>{counts.covered_by_other || 0} covered by other</span>
+        <span className="badge" style={{ fontSize: 12, background: 'var(--c-bg-7c3aed)', color: 'var(--c-fg-ffffff)' }}>{counts.unscheduled || 0} unscheduled</span>
+        <span className="badge" style={{ fontSize: 12, background: 'var(--c-bg-d97706)', color: 'var(--c-fg-ffffff)' }}>{(counts.late || 0) + (counts.late_and_left_early || 0)} late</span>
+        <span className="badge" style={{ fontSize: 12, background: 'var(--c-bg-d97706)', color: 'var(--c-fg-ffffff)' }}>{(counts.left_early || 0) + (counts.late_and_left_early || 0)} left early</span>
         {excusedCount > 0 && <span className="badge" style={{ fontSize: 12 }}>{excusedCount} excused (approved time off)</span>}
         <span style={{ flex: 1 }} />
         <ReportExportBar title="Attendance Exceptions" subtitle={`${filt.period} → ${filt.periodTo}`} filename={`attendance-exceptions-${filt.period}_${filt.periodTo}`} columns={cols} rows={visibleRows} />
@@ -264,8 +264,8 @@ export default function AttendanceExceptionsPage() {
                 <td style={cell}>{r.shift_start ? `${r.shift_start} – ${r.shift_end}` : '—'}</td>
                 <td style={cell}>
                   {actualText(r)}
-                  {(r.minutes_late > 0) && <div style={{ fontSize: 11, color: '#b45309' }}>{r.minutes_late} min late</div>}
-                  {(r.minutes_early > 0) && <div style={{ fontSize: 11, color: '#b45309' }}>{r.minutes_early} min early</div>}
+                  {(r.minutes_late > 0) && <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>{r.minutes_late} min late</div>}
+                  {(r.minutes_early > 0) && <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>{r.minutes_early} min early</div>}
                 </td>
               </tr>
             ))}

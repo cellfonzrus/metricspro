@@ -69,7 +69,7 @@ const isGateError = (m: string) => /imei_rebates/i.test(m) || /restricted/i.test
 function LockNote() {
   return (
     <div className="card" style={{ padding: 18, marginTop: 14, fontSize: 13, lineHeight: 1.7,
-      background: 'var(--surface2, #f8fafc)', border: '1px solid var(--border)' }}>
+      background: 'var(--surface2, var(--c-bg-f8fafc))', border: '1px solid var(--border)' }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🔒 This report is restricted</div>
       Ask an admin to grant <b>“IMEI rebate reconciliation”</b> on your role
       (<ScreenLink to="roles_access">Roles &amp; Access</ScreenLink> → your role → sensitive data grants). This report has <b>no default access</b>:
@@ -279,7 +279,7 @@ export default function ImeiRebatesPage() {
           </div>
           <button onClick={() => quick('none')} style={{ ...tile, textAlign: 'left', cursor: 'pointer',
             background: status.includes('none') ? 'var(--surface2)' : 'transparent',
-            borderColor: t.no_rebate.count ? '#fca5a5' : 'var(--border)' }}>
+            borderColor: t.no_rebate.count ? 'var(--c-bg-fca5a5)' : 'var(--border)' }}>
             <div style={tileCap}>⛔ No rebate</div>
             <div style={{ fontSize: 22, fontWeight: 800, color: t.no_rebate.count ? STATUS_TINT.none : undefined }}>{t.no_rebate.count}</div>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>
@@ -289,7 +289,7 @@ export default function ImeiRebatesPage() {
           </button>
           <button onClick={() => quick('partial')} style={{ ...tile, textAlign: 'left', cursor: 'pointer',
             background: status.includes('partial') ? 'var(--surface2)' : 'transparent',
-            borderColor: t.partial.count ? '#fcd34d' : 'var(--border)' }}>
+            borderColor: t.partial.count ? 'var(--c-bg-fcd34d)' : 'var(--border)' }}>
             <div style={tileCap}>⚠️ Partial / mismatch</div>
             <div style={{ fontSize: 22, fontWeight: 800, color: t.partial.count ? STATUS_TINT.partial : undefined }}>{t.partial.count}</div>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>{gated ? '—' : `${fmt(t.partial.amount)} net`}</div>
@@ -324,19 +324,19 @@ export default function ImeiRebatesPage() {
             <div><b>Market coverage.</b> {d.unmapped_market_rows} of {d.unfiltered_rows} row(s) have no
               market and are grouped under <b>{d.no_market_label}</b> — pick that bucket to see them, or
               map their store / processor account at{' '}
-              <a href="/commcalc/store-match" style={{ color: 'var(--accent,#2563eb)' }}>Store Matching</a>
+              <a href="/commcalc/store-match" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Store Matching</a>
               {' '}and they will filter by market with no other change.
             </div>
           )}
         </div>
 
         {d.note && (
-          <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13, background: '#fffbeb', border: '1px solid #fde68a' }}>
+          <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)' }}>
             ⚠️ {d.note}
           </div>
         )}
         {d.truncated && (
-          <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8 }}>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginBottom: 8 }}>
             Showing the first {rows.length} of {d.total_rows} matching activations — the tiles above still
             describe all {d.total_rows}. Narrow the filters to see the rest.
           </div>
@@ -391,7 +391,7 @@ export default function ImeiRebatesPage() {
                   </tbody>
                 </table>
                 {d.orphan_truncated && (
-                  <div style={{ padding: '8px 14px', fontSize: 12, color: '#b45309' }}>
+                  <div style={{ padding: '8px 14px', fontSize: 12, color: 'var(--c-fg-b45309)' }}>
                     Only the first 1,000 are listed.
                   </div>
                 )}

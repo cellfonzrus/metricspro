@@ -89,11 +89,11 @@ export default function SoldTallyPage() {
           show={{ period: true, stores: true, markets: true, reps: false }} periodMode="range"
           optionsUrl="/api/v1/core/filter-options" />
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-          <div style={{ ...tile, borderColor: '#16a34a' }}>
+          <div style={{ ...tile, borderColor: 'var(--c-bg-16a34a)' }}>
             <div style={{ fontSize: 12, color: 'var(--text2)' }}>Sold — commission received</div>
             <div style={{ fontSize: 24, fontWeight: 700 }}>{tileCounts.sold_with_commission}</div>
           </div>
-          <div style={{ ...tile, borderColor: '#d97706' }}>
+          <div style={{ ...tile, borderColor: 'var(--c-bg-d97706)' }}>
             <div style={{ fontSize: 12, color: 'var(--text2)' }}>Sold — commission NOT confirmed</div>
             <div style={{ fontSize: 24, fontWeight: 700 }}>{tileCounts.sold_no_commission}</div>
           </div>

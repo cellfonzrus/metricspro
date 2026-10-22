@@ -185,7 +185,7 @@ export default function RegisterDrawer({ activeStore, storeName, cfg, session, o
     const v = Number(closeResult.variance ?? 0)
     const html = `<!doctype html><html><head><title>Cash Pickup Slip — Drawer #${closeResult.register_number}</title><style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      body { font-family: 'Courier New', monospace; font-size: 12px; color: #000; width: 300px; padding: 12px; }
+      body { font-family: 'Courier New', monospace; font-size: 12px; color: var(--c-fg-000000); width: 300px; padding: 12px; }
       .center { text-align: center; }
       .title { font-size: 14px; font-weight: bold; }
       .pre { white-space: pre-wrap; }
@@ -248,13 +248,13 @@ export default function RegisterDrawer({ activeStore, storeName, cfg, session, o
         />
       </span>
       {session ? (
-        <button onClick={startClose} style={{ background: 'var(--red)', border: 'none', color: 'white', borderRadius: 6, padding: '5px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        <button onClick={startClose} style={{ background: 'var(--red)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 6, padding: '5px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
           Close Drawer
         </button>
       ) : (
         <button onClick={startOpen} disabled={!activeStore}
           title={activeStore ? undefined : 'Pick a store in the store selector first'}
-          style={{ background: 'var(--green)', border: 'none', color: 'white', borderRadius: 6, padding: '5px 10px', fontSize: 11, fontWeight: 600, cursor: activeStore ? 'pointer' : 'not-allowed', opacity: activeStore ? 1 : 0.5, whiteSpace: 'nowrap' }}>
+          style={{ background: 'var(--green)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 6, padding: '5px 10px', fontSize: 11, fontWeight: 600, cursor: activeStore ? 'pointer' : 'not-allowed', opacity: activeStore ? 1 : 0.5, whiteSpace: 'nowrap' }}>
           Open Drawer
         </button>
       )}
@@ -284,7 +284,7 @@ export default function RegisterDrawer({ activeStore, storeName, cfg, session, o
             <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="btn btn-secondary" onClick={() => setShowOpen(false)}>Cancel</button>
               <button onClick={confirmOpen} disabled={busy}
-                style={{ background: 'var(--green)', border: 'none', color: 'white', borderRadius: 7, padding: '10px 24px', fontSize: 14, fontWeight: 700, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.7 : 1 }}>
+                style={{ background: 'var(--green)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 7, padding: '10px 24px', fontSize: 14, fontWeight: 700, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.7 : 1 }}>
                 {busy ? 'Opening…' : `✅ Open with $${(denomRequired ? denominationTotal(openCounts) : parseFloat(openFloat || '0') || 0).toFixed(2)}`}
               </button>
             </div>
@@ -332,7 +332,7 @@ export default function RegisterDrawer({ activeStore, storeName, cfg, session, o
                     🖨 Print pickup slip
                   </button>
                 )}
-                <button onClick={finishClose} style={{ width: '100%', background: 'var(--green)', border: 'none', color: 'white', borderRadius: 8, padding: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                <button onClick={finishClose} style={{ width: '100%', background: 'var(--green)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 8, padding: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
                   Done
                 </button>
               </div>
@@ -358,7 +358,7 @@ export default function RegisterDrawer({ activeStore, storeName, cfg, session, o
                 <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                   <button className="btn btn-secondary" onClick={() => setShowClose(false)}>Cancel</button>
                   <button onClick={confirmClose} disabled={busy}
-                    style={{ background: 'var(--red)', border: 'none', color: 'white', borderRadius: 7, padding: '10px 24px', fontSize: 14, fontWeight: 700, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.7 : 1 }}>
+                    style={{ background: 'var(--red)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 7, padding: '10px 24px', fontSize: 14, fontWeight: 700, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.7 : 1 }}>
                     {busy ? 'Closing…' : `Close with $${(denomRequired ? denominationTotal(closeCounts) : parseFloat(closeCounted || '0') || 0).toFixed(2)}`}
                   </button>
                 </div>

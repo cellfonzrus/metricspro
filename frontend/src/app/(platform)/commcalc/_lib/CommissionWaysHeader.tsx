@@ -20,7 +20,7 @@ import { COMMISSION_WAYS, COMMISSION_WAYS_HEADER, EXEC_MTD_FLAT, optionHeading, 
 
 const numStyle: CSSProperties = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%',
-  background: 'var(--accent, #2563eb)', color: '#fff', fontWeight: 700, fontSize: 12, flexShrink: 0,
+  background: 'var(--accent, var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', fontWeight: 700, fontSize: 12, flexShrink: 0,
 }
 
 function isScreenKey(k: string | undefined | null): k is ScreenKey {
@@ -75,7 +75,7 @@ export default function CommissionWaysHeader({ selectedBasis, planName, anchors,
   const current = planName ? wayForBasis(selectedBasis) : null
   const hrefOf = (w: CommissionWay) => anchors?.[w.key] ?? `#${w.anchor}`
   return (
-    <div className="card" data-testid="commission-ways-header" style={{ padding: 16, marginBottom: 14, borderLeft: '4px solid var(--accent, #2563eb)', ...style }}>
+    <div className="card" data-testid="commission-ways-header" style={{ padding: 16, marginBottom: 14, borderLeft: '4px solid var(--accent, var(--c-bg-2563eb))', ...style }}>
       <div style={{ fontWeight: 700, fontSize: compact ? 14 : 16, marginBottom: 8 }}>{COMMISSION_WAYS_HEADER}</div>
       <ol data-testid="commission-ways" style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: compact ? 6 : 10 }}>
         {COMMISSION_WAYS.map(w => (

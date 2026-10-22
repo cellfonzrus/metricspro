@@ -158,7 +158,7 @@ export default function ColumnMappingPage() {
                 <tr key={tf}>
                   <td style={cell}>
                     <span style={{ fontWeight: 600 }}>{r.label || tf}</span>
-                    {r.required && <span style={{ color: '#b42318', marginLeft: 4 }}>*</span>}
+                    {r.required && <span style={{ color: 'var(--c-fg-b42318)', marginLeft: 4 }}>*</span>}
                     <div style={{ fontSize: 10, color: 'var(--text3)' }}>{tf}</div>
                   </td>
                   <td style={cell}>

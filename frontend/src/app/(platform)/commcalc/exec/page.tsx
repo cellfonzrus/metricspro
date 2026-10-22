@@ -114,10 +114,10 @@ export default function ExecOverviewPage() {
                       <td style={tdL}>{s.market || '—'}</td>
                       <td style={td}>{s.reps}</td>
                       <td style={td}>{fmt(s.paid)}</td>
-                      <td style={{ ...td, color: s.at_risk > 0 ? '#b45309' : 'var(--text3)' }}>{s.at_risk > 0 ? fmt(s.at_risk) : '—'}</td>
-                      <td style={{ ...td, color: s.chargebacks > 0 ? '#b42318' : 'var(--text3)' }}>{s.chargebacks > 0 ? fmt(s.chargebacks) : '—'}</td>
-                      <td style={{ ...td, color: s.flags > 0 ? '#b42318' : 'var(--text3)' }}>{s.flags || '—'}</td>
-                      <td style={{ ...td, fontWeight: 700, color: s.on_table > 0 ? '#b42318' : 'var(--text3)' }}>{fmt(s.on_table)}</td>
+                      <td style={{ ...td, color: s.at_risk > 0 ? 'var(--c-fg-b45309)' : 'var(--text3)' }}>{s.at_risk > 0 ? fmt(s.at_risk) : '—'}</td>
+                      <td style={{ ...td, color: s.chargebacks > 0 ? 'var(--c-fg-b42318)' : 'var(--text3)' }}>{s.chargebacks > 0 ? fmt(s.chargebacks) : '—'}</td>
+                      <td style={{ ...td, color: s.flags > 0 ? 'var(--c-fg-b42318)' : 'var(--text3)' }}>{s.flags || '—'}</td>
+                      <td style={{ ...td, fontWeight: 700, color: s.on_table > 0 ? 'var(--c-fg-b42318)' : 'var(--text3)' }}>{fmt(s.on_table)}</td>
                     </tr>
                   ))}
                 </tbody>

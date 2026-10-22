@@ -201,7 +201,7 @@ export default function SalesComparisonPage() {
         <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, display: 'flex', gap: 6, alignItems: 'center' }}>
           {c.label}
           {c.financing && c.detection_status && c.detection_status !== 'configured' &&
-            <span title="Financing detection is not fully mapped — see the Financing report settings" style={{ color: '#b45309' }}>⚠︎</span>}
+            <span title="Financing detection is not fully mapped — see the Financing report settings" style={{ color: 'var(--c-fg-b45309)' }}>⚠︎</span>}
         </div>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
           <div style={{ fontSize: 22, fontWeight: 700 }}>{bigVal}</div>
@@ -288,7 +288,7 @@ export default function SalesComparisonPage() {
         </div>}
 
       {data?.error &&
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-991b1b)', fontSize: 13 }}>
           <b>❌ Sales Comparison could not be built.</b> {data.error}
         </div>}
 

@@ -65,14 +65,14 @@ function Card({ title, note, children }: { title: string; note?: React.ReactNode
 }
 
 function Flags({ flags }: { flags: Flag[] }) {
-  if (!flags?.length) return <div style={{ color: '#15803d', fontSize: 13 }}>Every check passed — the sections add up, the STR is gross sales − exclusions + commissions, and each fee matches the rule.</div>
+  if (!flags?.length) return <div style={{ color: 'var(--c-fg-15803d)', fontSize: 13 }}>Every check passed — the sections add up, the STR is gross sales − exclusions + commissions, and each fee matches the rule.</div>
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
       <thead><tr><th style={th}>Check</th><th style={th}>What differs</th><th style={thr}>By the rule</th><th style={thr}>On the report</th><th style={thr}>Difference</th></tr></thead>
       <tbody>{flags.map((f, i) => (
         <tr key={i}><td style={td}><code style={{ fontSize: 11 }}>{f.code}</code></td><td style={td}>{f.message}</td>
           <td style={tdr}>{money(f.expected)}</td><td style={tdr}>{money(f.reported)}</td>
-          <td style={{ ...tdr, color: f.diff ? '#b91c1c' : undefined }}>{f.diff == null ? '—' : fmt(f.diff)}</td></tr>
+          <td style={{ ...tdr, color: f.diff ? 'var(--c-fg-b91c1c)' : undefined }}>{f.diff == null ? '—' : fmt(f.diff)}</td></tr>
       ))}</tbody>
     </table>
   )
@@ -92,7 +92,7 @@ function Lines({ lines }: { lines: RoyaltyLine[] }) {
           <thead><tr><th style={th}>Line</th><th style={thr}>Amount</th><th style={thr}>Adjustment</th><th style={thr}>Adjusted</th><th style={th}>Reason</th></tr></thead>
           <tbody>{bySec[s].map(l => (
             <tr key={l.section + l.line_key} style={l.role && l.role !== 'line' ? { fontWeight: 600 } : undefined}>
-              <td style={td}>{l.label}{String(l.line_key || '').startsWith('unknown_') && <span style={{ color: '#b45309' }}> (not in the line vocabulary)</span>}</td>
+              <td style={td}>{l.label}{String(l.line_key || '').startsWith('unknown_') && <span style={{ color: 'var(--c-fg-b45309)' }}> (not in the line vocabulary)</span>}</td>
               <td style={tdr}>{money(l.amount)}</td><td style={tdr}>{money(l.adjustment)}</td><td style={tdr}>{money(l.adjusted_amount)}</td>
               <td style={td}>{l.reason || ''}</td></tr>
           ))}</tbody>
@@ -111,7 +111,7 @@ function Coverage({ cov }: { cov: PlCoverage | null | undefined }) {
     <div style={{ fontSize: 13 }}>
       <div style={{ marginBottom: 6 }}><b>Books to the P&L:</b> {booked.length ? booked.map(([k, v]) => `${k} ${fmt(Number(v))}`).join(' · ') : 'nothing'}</div>
       {excl.length > 0 && <div style={{ marginBottom: 6 }}><b>Books nothing, on purpose:</b>{excl.map(([k, e]) => <div key={k} style={{ color: 'var(--text2)' }}>{e.label} ({SECTION_LABEL[e.section] || e.section}) {fmt(e.amount)} — {e.reason}</div>)}</div>}
-      {unm.length > 0 && <div style={{ color: '#b91c1c' }}><b>Unmapped — books nothing until a P&L line is chosen under Line setup:</b>{unm.map(([k, u]) => <div key={k}>{u.label} {fmt(u.amount)} — {u.why}</div>)}</div>}
+      {unm.length > 0 && <div style={{ color: 'var(--c-fg-b91c1c)' }}><b>Unmapped — books nothing until a P&L line is chosen under Line setup:</b>{unm.map(([k, u]) => <div key={k}>{u.label} {fmt(u.amount)} — {u.why}</div>)}</div>}
     </div>
   )
 }
@@ -137,8 +137,8 @@ export default function RoyaltyReportPage() {
         One report per center per month. The figures are stored exactly as the report prints them; anything the fee rule or the report&apos;s own totals disagree with is flagged, never changed.
       </div>
       <ShowsIn info={kinds.showsIn('royalty_report')} loaded={kinds.loaded} />
-      {err && <div style={{ color: '#b91c1c', margin: '8px 0' }}>{err}</div>}
-      {(cfg?.problems?.length ?? 0) > 0 && cfg?.problems && <div style={{ color: '#b45309', margin: '8px 0' }}>Line setup needs attention: {cfg.problems.join(' · ')}</div>}
+      {err && <div style={{ color: 'var(--c-fg-b91c1c)', margin: '8px 0' }}>{err}</div>}
+      {(cfg?.problems?.length ?? 0) > 0 && cfg?.problems && <div style={{ color: 'var(--c-fg-b45309)', margin: '8px 0' }}>Line setup needs attention: {cfg.problems.join(' · ')}</div>}
       <div style={{ display: 'flex', gap: 6, margin: '10px 0 14px', flexWrap: 'wrap' }}>
         {(['reports', 'import', 'batch', 'manual', 'setup'] as Tab[]).map(t => (
           <button key={t} className={tab === t ? 'btn btn-primary' : 'btn'} onClick={() => setTab(t)}>
@@ -165,9 +165,9 @@ function ReportsTab({ reports, open, sel, onDeleted }: { reports: ReportSummary[
             <thead><tr><th style={th}>Period</th><th style={th}>Center</th><th style={th}>Store</th><th style={thr}>Gross sales</th><th style={thr}>STR</th><th style={thr}>Total due</th><th style={th}>Checks</th><th style={th}></th></tr></thead>
             <tbody>{reports.map(x => (
               <tr key={x.id}><td style={td}>{x.period}</td><td style={td}>{x.center_code}</td>
-                <td style={td}>{x.store_ref || <span style={{ color: '#b45309' }}>no store — books company-wide</span>}</td>
+                <td style={td}>{x.store_ref || <span style={{ color: 'var(--c-fg-b45309)' }}>no store — books company-wide</span>}</td>
                 <td style={tdr}>{money(x.total_gross_sales)}</td><td style={tdr}>{money(x.total_adjusted_str ?? x.total_str)}</td><td style={tdr}>{money(x.total_due)}</td>
-                <td style={td}>{x.status === 'flagged' ? <span style={{ color: '#b91c1c' }}>flagged</span> : <span style={{ color: '#15803d' }}>ok</span>}</td>
+                <td style={td}>{x.status === 'flagged' ? <span style={{ color: 'var(--c-fg-b91c1c)' }}>flagged</span> : <span style={{ color: 'var(--c-fg-15803d)' }}>ok</span>}</td>
                 <td style={td}><button className="btn" onClick={() => open(x.id)}>Open</button></td></tr>
             ))}</tbody>
           </table>
@@ -233,7 +233,7 @@ function ImportTab({ onSaved }: { onSaved: () => void }) {
             onSaved()
           })}>Save</button>
         </div>
-        {err && <div style={{ color: '#b91c1c' }}>{err}</div>}
+        {err && <div style={{ color: 'var(--c-fg-b91c1c)' }}>{err}</div>}
       </div>
       {preview && (
         <div style={{ marginTop: 12 }}>
@@ -283,7 +283,7 @@ function ManualTab({ cfg, onSaved }: { cfg: RoyaltyConfig; onSaved: () => void }
         ))}</tbody>
       </table>
       <button className="btn btn-primary" style={{ marginTop: 10 }} onClick={save}>Save</button>
-      {err && <div style={{ color: '#b91c1c', marginTop: 8 }}>{err}</div>}
+      {err && <div style={{ color: 'var(--c-fg-b91c1c)', marginTop: 8 }}>{err}</div>}
       {res && <div style={{ marginTop: 10 }}><Flags flags={res.validation?.flags || []} /></div>}
     </Card>
   )
@@ -316,7 +316,7 @@ function SetupTab({ cfg, reload }: { cfg: RoyaltyConfig; reload: () => void }) {
         </div>
       </Card>
       <Card title="Line vocabulary" note="Each line the report prints: the names it goes by, the P&L line it books to (or why it books nothing), each fee's rate and the ONE fee that takes the rounding remainder, and the daily-report categories a sales line is reconciled against. A change here is your company's own row; the default is untouched.">
-        {err && <div style={{ color: '#b91c1c', marginBottom: 8 }}>{err}</div>}
+        {err && <div style={{ color: 'var(--c-fg-b91c1c)', marginBottom: 8 }}>{err}</div>}
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr><th style={th}>Section</th><th style={th}>Line</th><th style={th}>Books to</th><th style={th}>Why it books nothing</th><th style={th}>Rate</th><th style={th}>Remainder</th><th style={th}>Daily categories</th></tr></thead>
           <tbody>{(cfg.lines || []).filter(l => l.role === 'line').map(l => (
@@ -365,8 +365,8 @@ const shortMonth = (p: string) => { const [m, y] = p.split(' '); return `${(m ||
 function CoverageStrip({ cov, inUpload }: { cov: CoverageInfo | null; inUpload: Set<string> }) {
   if (!cov) return <div style={{ fontSize: 13, color: 'var(--text2)' }}>Loading which months are on file…</div>
   const nC = cov.centers.length
-  const tone = (m: CoverageMonth) => m.on_file.length === 0 ? { bg: 'var(--surface2, #f3f4f6)', fg: 'var(--text2)', word: 'missing' }
-    : m.missing.length === 0 ? { bg: '#dcfce7', fg: '#15803d', word: 'on file' } : { bg: '#fef3c7', fg: '#b45309', word: 'partly on file' }
+  const tone = (m: CoverageMonth) => m.on_file.length === 0 ? { bg: 'var(--surface2, var(--c-bg-f3f4f6))', fg: 'var(--text2)', word: 'missing' }
+    : m.missing.length === 0 ? { bg: 'var(--c-bg-dcfce7)', fg: 'var(--c-fg-15803d)', word: 'on file' } : { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-b45309)', word: 'partly on file' }
   const have = cov.months.filter(m => m.on_file.length > 0 && m.missing.length === 0).length
   return (
     <div>
@@ -381,7 +381,7 @@ function CoverageStrip({ cov, inUpload }: { cov: CoverageInfo | null; inUpload: 
             + (m.on_file.length && m.missing.length ? ` · missing ${m.missing.join(', ')}` : '') + (inUpload.has(m.period) ? ' · in this upload' : '')
           return (
             <div key={m.period} title={tip} style={{ minWidth: 64, padding: '5px 6px', borderRadius: 6, background: t.bg, color: t.fg, fontSize: 11.5,
-              textAlign: 'center', border: inUpload.has(m.period) ? '2px solid var(--accent, #2563eb)' : '1px solid var(--border)' }}>
+              textAlign: 'center', border: inUpload.has(m.period) ? '2px solid var(--accent, var(--c-bg-2563eb))' : '1px solid var(--border)' }}>
               <div style={{ fontWeight: 600 }}>{shortMonth(m.period)}</div>
               <div>{t.word}</div>
             </div>
@@ -445,7 +445,7 @@ function BatchTab({ onSaved }: { onSaved: () => void }) {
       <Card title="Upload several months at once" note={`Pick or drop the monthly royalty reports (PDF, saved HTML or text) — several months and several centers at once, up to ${cov ? cov.lookback_months : '…'} months back. Each report's center and month are read from its own header. Nothing is saved until you press Import selected.`}>
         <div onDragOver={e => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)}
           onDrop={e => { e.preventDefault(); setDrag(false); add(e.dataTransfer.files) }}
-          style={{ border: `2px dashed ${drag ? 'var(--accent, #2563eb)' : 'var(--border)'}`, borderRadius: 10, padding: 18, textAlign: 'center', fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>
+          style={{ border: `2px dashed ${drag ? 'var(--accent, var(--c-bg-2563eb))' : 'var(--border)'}`, borderRadius: 10, padding: 18, textAlign: 'center', fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>
           Drag the report files here, or{' '}
           <label className="btn" style={{ cursor: busy ? 'default' : 'pointer' }}>
             choose files
@@ -454,7 +454,7 @@ function BatchTab({ onSaved }: { onSaved: () => void }) {
           </label>
           {files.length > 0 && <div style={{ marginTop: 6 }}>{files.length} file(s) picked{busy ? ' — reading…' : ''}</div>}
         </div>
-        {err && <div style={{ color: '#b91c1c', marginBottom: 8 }}>{err}</div>}
+        {err && <div style={{ color: 'var(--c-fg-b91c1c)', marginBottom: 8 }}>{err}</div>}
         {rows.length > 0 && (
           <>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -465,15 +465,15 @@ function BatchTab({ onSaved }: { onSaved: () => void }) {
                 <th style={th}>New / replace</th><th style={th}>Why it cannot be imported</th><th style={th}></th>
               </tr></thead>
               <tbody>{rows.map(r => (
-                <tr key={r.index} style={r.ready ? undefined : { background: '#fef2f2' }}>
+                <tr key={r.index} style={r.ready ? undefined : { background: 'var(--c-bg-fef2f2)' }}>
                   <td style={td}><input type="checkbox" aria-label={`Import ${r.file_name}`} checked={checked.has(r.index)} disabled={!r.ready} onChange={() => toggle(r.index)} /></td>
                   <td style={td}>{r.file_name}</td>
-                  <td style={td}>{r.period || <span style={{ color: '#b91c1c' }}>not read{r.period_label ? ` (“${r.period_label}”)` : ''}</span>}</td>
-                  <td style={td}>{r.center || <span style={{ color: '#b91c1c' }}>not read</span>}</td>
+                  <td style={td}>{r.period || <span style={{ color: 'var(--c-fg-b91c1c)' }}>not read{r.period_label ? ` (“${r.period_label}”)` : ''}</span>}</td>
+                  <td style={td}>{r.center || <span style={{ color: 'var(--c-fg-b91c1c)' }}>not read</span>}</td>
                   <td style={tdr}>{money(r.total_due)}</td>
-                  <td style={td}>{r.error ? '—' : r.flags?.length ? <span style={{ color: '#b45309' }} title={r.flags.map(f => f.message).join('\n')}>{r.flags.length} flag(s) — saved as printed</span> : <span style={{ color: '#15803d' }}>ok</span>}</td>
-                  <td style={td}>{!r.ready ? '—' : r.replace ? <span style={{ color: '#b45309' }}>will REPLACE the report on file{r.existing?.total_due != null ? ` (total due ${money(r.existing.total_due)})` : ''}</span> : 'new'}</td>
-                  <td style={{ ...td, color: '#b91c1c' }}>{r.refusals.join(' · ')}</td>
+                  <td style={td}>{r.error ? '—' : r.flags?.length ? <span style={{ color: 'var(--c-fg-b45309)' }} title={r.flags.map(f => f.message).join('\n')}>{r.flags.length} flag(s) — saved as printed</span> : <span style={{ color: 'var(--c-fg-15803d)' }}>ok</span>}</td>
+                  <td style={td}>{!r.ready ? '—' : r.replace ? <span style={{ color: 'var(--c-fg-b45309)' }}>will REPLACE the report on file{r.existing?.total_due != null ? ` (total due ${money(r.existing.total_due)})` : ''}</span> : 'new'}</td>
+                  <td style={{ ...td, color: 'var(--c-fg-b91c1c)' }}>{r.refusals.join(' · ')}</td>
                   <td style={td}><button className="btn" disabled={busy} onClick={() => remove(r.index)}>Remove</button></td>
                 </tr>
               ))}</tbody>
@@ -492,9 +492,9 @@ function BatchTab({ onSaved }: { onSaved: () => void }) {
             <tbody>{result.results.map(r => (
               <tr key={r.index}>
                 <td style={td}>{r.file_name}</td>
-                <td style={td}>{r.ok ? <span style={{ color: '#15803d' }}>imported{r.replaced ? ' (replaced the report on file)' : ''}</span> : <span style={{ color: '#b91c1c' }}>NOT imported</span>}</td>
+                <td style={td}>{r.ok ? <span style={{ color: 'var(--c-fg-15803d)' }}>imported{r.replaced ? ' (replaced the report on file)' : ''}</span> : <span style={{ color: 'var(--c-fg-b91c1c)' }}>NOT imported</span>}</td>
                 <td style={td}>{r.period || '—'}</td><td style={td}>{r.center_code || '—'}</td><td style={tdr}>{money(r.total_due)}</td>
-                <td style={td}>{r.ok ? [r.flags ? `${r.flags} flag(s) — open it under Reports` : '', r.store_note || ''].filter(Boolean).join(' · ') : <span style={{ color: '#b91c1c' }}>{r.error}</span>}</td>
+                <td style={td}>{r.ok ? [r.flags ? `${r.flags} flag(s) — open it under Reports` : '', r.store_note || ''].filter(Boolean).join(' · ') : <span style={{ color: 'var(--c-fg-b91c1c)' }}>{r.error}</span>}</td>
               </tr>
             ))}</tbody>
           </table>

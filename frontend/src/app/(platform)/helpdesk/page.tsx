@@ -21,7 +21,7 @@ type Ticket = {
 function Badge({ label, color }: { label?: string; color?: string }) {
   if (!label) return null
   return <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap',
-    background: (color || '#888') + '22', color: color || '#555', border: `1px solid ${(color || '#888')}55` }}>{label}</span>
+    background: (color || 'var(--c-bg-888888)') + '22', color: color || 'var(--c-fg-555555)', border: `1px solid ${(color || 'var(--c-bg-888888)')}55` }}>{label}</span>
 }
 
 export default function HelpdeskInbox() {
@@ -123,20 +123,20 @@ export default function HelpdeskInbox() {
         right={<><span style={{ flex: 1 }} /><ReportExportBar title="Helpdesk tickets" filename="helpdesk_tickets" columns={exportCols} rows={visibleTickets} /></>}
       />
 
-      {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 12, marginBottom: 12 }}>{err}</div>}
+      {err && <div className="card" style={{ borderColor: 'var(--c-bg-c0392b)', color: 'var(--c-fg-c0392b)', padding: 12, marginBottom: 12 }}>{err}</div>}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? <div style={{ padding: 30, color: 'var(--text3)' }}>Loading…</div>
-          : visibleTickets.length === 0 ? <div style={{ padding: 30, color: 'var(--text3)' }}>No tickets. <Link href="/helpdesk/new" style={{ color: '#2563eb' }}>Raise one →</Link></div>
+          : visibleTickets.length === 0 ? <div style={{ padding: 30, color: 'var(--text3)' }}>No tickets. <Link href="/helpdesk/new" style={{ color: 'var(--c-fg-2563eb)' }}>Raise one →</Link></div>
           : visibleTickets.map(t => (
             <div key={t.id} onClick={() => router.push(`/helpdesk/${t.id}`)}
               style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 14px', cursor: 'pointer',
                 borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
               <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text3)', width: 78 }}>{t.display_number}</span>
               <span style={{ fontWeight: 600, flex: 1, minWidth: 200 }}>{t.subject}</span>
-              <Badge label={t.category?.name || undefined} color="#64748b" />
+              <Badge label={t.category?.name || undefined} color="var(--c-fg-64748b)" />
               <Badge label={t.priority?.label} color={t.priority?.color} />
               <Badge label={t.status?.label} color={t.status?.color} />
-              {t.escalated && <Badge label="🎧 Escalated" color="#7c3aed" />}
+              {t.escalated && <Badge label="🎧 Escalated" color="var(--c-fg-7c3aed)" />}
               {isAgent && <span style={{ fontSize: 12, color: 'var(--text3)', width: 130, textAlign: 'right' }}>
                 {t.assignee ? `→ ${t.assignee}` : (t.requester_name || t.requester_email || '')}</span>}
               <span style={{ fontSize: 12, color: 'var(--text3)', width: 86, textAlign: 'right' }}>{String(t.created_at).slice(0, 10)}</span>

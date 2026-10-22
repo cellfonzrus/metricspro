@@ -61,7 +61,7 @@ const isGateError = (m: string) => /ma_handset_cogs/i.test(m) || /restricted/i.t
 function LockNote() {
   return (
     <div className="card" style={{ padding: 18, marginTop: 14, fontSize: 13, lineHeight: 1.7,
-      background: 'var(--surface2, #f8fafc)', border: '1px solid var(--border)' }}>
+      background: 'var(--surface2, var(--c-bg-f8fafc))', border: '1px solid var(--border)' }}>
       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>🔒 This report is restricted</div>
       Ask an admin to grant <b>“Marketplace handset COGS report”</b> on your role
       (<ScreenLink to="roles_access">Roles &amp; Access</ScreenLink> → your role → sensitive data grants). This report has <b>no default access</b>:
@@ -284,7 +284,7 @@ export default function MaHandsetCogsPage() {
           </div>
           <button onClick={() => setOpenOnly(v => !v)} style={{ ...tile, textAlign: 'left', cursor: 'pointer',
             background: openOnly ? 'var(--surface2)' : 'transparent',
-            borderColor: t.open.lines ? '#fcd34d' : 'var(--border)' }}>
+            borderColor: t.open.lines ? 'var(--c-bg-fcd34d)' : 'var(--border)' }}>
             <div style={tileCap}>{STATE_ICON.open} Open orders</div>
             <div style={{ fontSize: 22, fontWeight: 800, color: t.open.lines ? STATE_TINT.open : undefined }}>{n0(t.open.lines)}</div>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>
@@ -298,7 +298,7 @@ export default function MaHandsetCogsPage() {
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>{n0(t.products)} products · {n0(t.ship_tos)} ship-to</div>
           </div>
           {t.cancelled.lines > 0 && (
-            <div style={{ ...tile, borderColor: '#fca5a5' }}>
+            <div style={{ ...tile, borderColor: 'var(--c-bg-fca5a5)' }}>
               <div style={tileCap}>{STATE_ICON.cancelled} Cancelled</div>
               <div style={{ fontSize: 22, fontWeight: 800, color: STATE_TINT.cancelled }}>{n0(t.cancelled.lines)}</div>
               <div style={{ fontSize: 12, color: 'var(--text3)' }}>{fmt(t.cancelled.amount)} · not counted as cost</div>
@@ -316,14 +316,14 @@ export default function MaHandsetCogsPage() {
             <div><b>Market coverage.</b> {d.unmapped_market_rows} of {d.unfiltered_rows} line(s) have no
               market and are grouped under <b>{d.no_market_label}</b> — pick that bucket to see them, or
               map the ship-to store at{' '}
-              <a href="/commcalc/store-match" style={{ color: 'var(--accent,#2563eb)' }}>Store Matching</a>
+              <a href="/commcalc/store-match" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Store Matching</a>
               {' '}and they will filter by market with no other change.
             </div>
           )}
         </div>
 
         {d.note && (
-          <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13, background: '#fffbeb', border: '1px solid #fde68a' }}>
+          <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)' }}>
             ⚠️ {d.note}
           </div>
         )}
@@ -344,7 +344,7 @@ export default function MaHandsetCogsPage() {
                 <div style={{ padding: '8px 14px', fontSize: 12, color: 'var(--text3)', lineHeight: 1.6 }}>
                   These are the named targets of the existing upload mapping for{' '}
                   <b>MA - Marketplace Handset Fulfillment Orders</b>. Change them at{' '}
-                  <a href="/commcalc/ma-upload" style={{ color: 'var(--accent,#2563eb)' }}>MA upload → map columns</a>.
+                  <a href="/commcalc/ma-upload" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>MA upload → map columns</a>.
                   The right-hand column is the equivalent field in the <b>Asset Lending</b> file, so one
                   handset cost is described the same way in both places. Nothing here writes to the asset
                   ledger.
@@ -363,8 +363,8 @@ export default function MaHandsetCogsPage() {
                         <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{f.col}</td>
                         <td style={td}>
                           {f.mapped
-                            ? <span style={{ color: '#15803d' }}>✓ {f.source_header}</span>
-                            : <span style={{ color: '#b45309' }}>not mapped</span>}
+                            ? <span style={{ color: 'var(--c-fg-15803d)' }}>✓ {f.source_header}</span>
+                            : <span style={{ color: 'var(--c-fg-b45309)' }}>not mapped</span>}
                         </td>
                         <td style={{ ...td, fontSize: 12, color: 'var(--text2)' }}>
                           {f.asset_label ? <b>{f.asset_label}</b> : <span style={{ color: 'var(--text3)' }}>—</span>}
@@ -419,7 +419,7 @@ export default function MaHandsetCogsPage() {
         )}
 
         {d.truncated && (
-          <div style={{ fontSize: 12, color: '#b45309', marginBottom: 8 }}>
+          <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginBottom: 8 }}>
             Showing the first {rows.length} of {d.total_rows} matching order lines — the tiles and the
             rollup above still describe all {d.total_rows}. Narrow the filters to see the rest.
           </div>

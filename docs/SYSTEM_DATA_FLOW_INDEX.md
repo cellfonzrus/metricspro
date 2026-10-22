@@ -123,6 +123,7 @@ Primary code homes:
 | CORE-11 | **A column that draws its own cell is drawn** | "It did not let me enter. Which component actually puts a report's cell on the screen, do both of them honour a column that draws its own, and what else was silently blank because one of them did not?" |
 | CORE-12 | **A write may not shut the door on its own author** | "I made myself market manager under Vzone and cannot get admin privileges anymore under ss. Which writes can take away the access that just made them, and is there a screen left that could undo one?" |
 | CORE-13 | **A migration grants what it creates** | "Supabase says that from 30 October a new table in `public` no longer gets Data API access automatically. Does that break this app, which migrations would break, and what stops the next migration shipping a table the application cannot read?" |
+| CORE-15 | **The dark theme** | "The workspace is black with white lettering. Where does \"what does this colour become on the dark theme\" live, how does a colour spelled inside an inline style reach it, and what proves nothing pale is left glowing on black?" |
 | CORE-14 | **One palette, dereferenced** | "Make the colours of the side menu alternate between the logo colours so each item stands out. Where does a colour used by the chrome live, how many places spell it, and what proves a row stays readable once it is coloured?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
@@ -25929,6 +25930,7 @@ status word rather than a blank that reads as nil.
 | CORE-12 | core |
 | CORE-13 | core |
 | CORE-14 | core |
+| CORE-15 | core |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -30230,6 +30232,81 @@ forgotten.
 
 Files: `frontend/src/app/globals.css`, `frontend/src/app/(platform)/layout.tsx`,
 `frontend/prove_nav_accents.mjs` (**new**), `.github/workflows/carrier-vocab-guard.yml`.
+
+## §CORE-15. THE DARK THEME — one home for what a colour BECOMES (owner ask 2026-10-21)
+
+Owner, shown a rendered mock-up of the workspace on black: *"convert to black looks very impressive"*.
+
+### §CORE-15.1 DUPLICATE CHECK (build gate)
+
+Searched the index and the frontend for an existing theme mechanism before building. There is one, and
+it is **extended rather than duplicated**: `components/RunbookDoc.tsx` already switches on
+`:root[data-theme="dark"]`, so that attribute is the app's switch here too — no second mechanism, no
+second attribute, no `prefers-color-scheme` fork competing with it. The chrome tokens at the top of
+`globals.css` (§CORE-01) are likewise **redefined**, not joined by a parallel dark set; the nav accent
+palette (§CORE-14) is untouched.
+
+### §CORE-15.2 THE CLASS, NOT THE INSTANCE
+
+The instance is "the page background is white". The class is that **a colour the app paints is not
+always reachable from a stylesheet**: 377 page files carry ~5,200 colour LITERALS inside inline
+`style={{…}}` props, and an inline style beats every rule short of `!important`. A dark theme that only
+restates the chrome tokens therefore leaves pale alert tints, status inks and hairlines glowing on
+black — each one a separate little patch waiting to be made, which is the patchwork the house forbids.
+
+So **the literal itself becomes a dereference**. `frontend/theme_palette.mjs` is the ONE home for *what
+does this colour become on the dark theme*:
+
+- Each `(role, colour)` pair is a token, `--c-bg-<hex>` / `--c-fg-<hex>`, declared in `:root` **as its
+  own literal** — which is why the light theme is byte-identical **by construction**, not by eye — and
+  redefined under `:root[data-theme="dark"]` as the derivation.
+- **The role is part of the fact, not a property of the value.** `#fff` is a white panel 20 times and
+  the white LETTERING on a coloured button 92 times; the dark theme must darken the first and leave the
+  second alone. The role is read from the CSS property at the call site against two DECLARED lists.
+  Guessing it from lightness was measured first and rejected: on the 4,275 sites that do name their
+  property it gets the fills right only 70% of the time.
+- **The token list is derived from the callers**, not hand-kept: the generator takes the union of the
+  literals still spelled and the tokens the pages read, so it is idempotent and a colour nobody uses
+  any more leaves the stylesheet on the next run.
+- The derivation keeps the **hue** and mirrors the **lightness band**, because what a pale tint and a
+  dark ink are FOR swaps when the page goes black. A fill above L 0.60 was built to carry dark text and
+  comes down to carry light text; a colour already dark is left alone, so `#000` stays `#000` rather
+  than inverting to near-white.
+- `frontend/src/lib/theme.ts` is the ONE home for the switch: the attribute, the storage key, the two
+  themes, the default (**dark**, as asked) and the pre-paint script. Nothing else in the app spells
+  `data-theme` or the storage key, so the script, the toggle and the lock cannot disagree. The theme is
+  applied **before the first paint** — left to an effect it would paint white and then repaint.
+- `ThemeToggle` in the rail is the way back to the light app, remembered per person.
+
+### §CORE-15.3 LOCKED SO IT CANNOT UN-WIRE
+
+`frontend/prove_theme_tokens.mjs`, CI job **Dark theme lock**, 33 checks: the stylesheet is exactly
+what the generator produces (a hand edit fails the build); no literal remains on a property whose role
+is declared; every token a page reads is defined for **both** themes and every defined token is read;
+every lettering colour clears WCAG AA against the page AND against a card; every fill the derivation
+moved can carry white lettering and every fill it left alone was already dark; only `lib/theme.ts`
+spells the switch; plus negative controls, including the one the type checker caught — `c.lamp !==
+'green'` is a STATUS, so a colour KEYWORD is converted only directly after a property colon.
+
+### §CORE-15.4 WHAT IS NOT DONE HERE
+
+**833 colour literals in 173 files sit on a property that names no role** — local map keys such as
+`status:`, `accent:`, `tone:`, `COLORS:`, where the colour's job is decided where the map is consumed.
+They are NOT converted, because a role this code guessed would be a role nobody could check. They are
+**pinned** in `frontend/theme_ambiguous_pin.txt` and the pin may only shrink. **169 of them are pale
+enough to read as a light patch on black**, in 72 files; 18 of those are RunbookDoc's own `--rb-*`
+declarations, which already carry a dark variant of their own. That is the measured remainder, stated
+rather than hidden, and the next pass at it is a shrink of the pin.
+
+The **operator console** keeps its own palette, as in §CORE-14.4. The **rail** keeps its navy on both
+themes: it was the one surface already dark, and restating it would both cost the edge that separates
+the menu from the page and restate the accent contrast §CORE-14 measured against that gradient.
+
+Files: `frontend/theme_palette.mjs` (**new**), `frontend/prove_theme_tokens.mjs` (**new**),
+`frontend/theme_ambiguous_pin.txt` (**new**), `frontend/src/lib/theme.ts` (**new**),
+`frontend/src/components/ThemeToggle.tsx` (**new**), `frontend/src/app/globals.css`,
+`frontend/src/app/layout.tsx`, `frontend/src/app/(platform)/layout.tsx`, 371 page/component files
+(mechanical dereference), `.github/workflows/carrier-vocab-guard.yml`.
 
 ## §COMMCALC-11. AN INVISIBLE HUMAN CHECK IS STILL A CHECK (owner report 2026-10-15)
 

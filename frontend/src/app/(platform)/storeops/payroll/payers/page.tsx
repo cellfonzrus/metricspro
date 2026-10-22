@@ -20,7 +20,7 @@ type Payer = {
 
 const card: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }
 const btn: React.CSSProperties = { padding: '7px 13px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 13, cursor: 'pointer', fontWeight: 600 }
-const btnP: React.CSSProperties = { ...btn, background: 'var(--accent)', color: '#fff', border: 'none' }
+const btnP: React.CSSProperties = { ...btn, background: 'var(--accent)', color: 'var(--c-fg-ffffff)', border: 'none' }
 const inp: React.CSSProperties = { padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', color: 'var(--text1)' }
 
 const KINDS: [Payer['kind'], string, string][] = [
@@ -108,11 +108,11 @@ export default function PayrollPayersPage() {
         pay. Set one as the default — it pre-fills every employee nobody has routed anywhere else.
       </p>
 
-      {!ready && <div style={{ ...card, background: '#fff7ed', borderColor: '#fdba74', color: '#9a3412', marginBottom: 12 }}>{note}</div>}
-      {err && <div style={{ ...card, background: '#fef2f2', borderColor: '#fca5a5', color: '#991b1b', marginBottom: 12, fontSize: 13 }}>{err}</div>}
-      {msg && <div style={{ ...card, background: '#ecfdf5', borderColor: '#a7f3d0', color: '#065f46', marginBottom: 12, fontSize: 13 }}>{msg}</div>}
+      {!ready && <div style={{ ...card, background: 'var(--c-bg-fff7ed)', borderColor: 'var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', marginBottom: 12 }}>{note}</div>}
+      {err && <div style={{ ...card, background: 'var(--c-bg-fef2f2)', borderColor: 'var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)', marginBottom: 12, fontSize: 13 }}>{err}</div>}
+      {msg && <div style={{ ...card, background: 'var(--c-bg-ecfdf5)', borderColor: 'var(--c-bg-a7f3d0)', color: 'var(--c-fg-065f46)', marginBottom: 12, fontSize: 13 }}>{msg}</div>}
       {ready && !defaultPayer && payers.length > 0 && (
-        <div style={{ ...card, background: '#fff7ed', borderColor: '#fdba74', color: '#9a3412', marginBottom: 12, fontSize: 13 }}>
+        <div style={{ ...card, background: 'var(--c-bg-fff7ed)', borderColor: 'var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', marginBottom: 12, fontSize: 13 }}>
           No default payer yet — employees whose store isn&apos;t routed will have nowhere to go at send time.
         </div>
       )}
@@ -159,7 +159,7 @@ export default function PayrollPayersPage() {
                 <td style={{ fontSize: 12.5 }}>
                   {p.kind === 'dm' && !p.dm_employee_id
                     ? <span style={{ color: 'var(--text2)' }}>each store&apos;s own DM</span>
-                    : (p.email || <span style={{ color: '#b45309' }}>no email</span>)}
+                    : (p.email || <span style={{ color: 'var(--c-fg-b45309)' }}>no email</span>)}
                 </td>
                 <td>
                   {p.is_default
@@ -171,7 +171,7 @@ export default function PayrollPayersPage() {
                   <input type="checkbox" checked={p.is_active !== false} disabled={busy}
                     onChange={e => patch(p.id, { is_active: e.target.checked }, 'Updated.')} />
                 </td>
-                <td><button style={{ ...btn, padding: '3px 9px', fontSize: 12, color: '#dc2626' }}
+                <td><button style={{ ...btn, padding: '3px 9px', fontSize: 12, color: 'var(--c-fg-dc2626)' }}
                   disabled={busy} onClick={() => remove(p)}>Remove</button></td>
               </tr>
             ))}

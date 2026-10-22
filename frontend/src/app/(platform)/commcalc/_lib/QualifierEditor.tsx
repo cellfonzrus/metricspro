@@ -118,7 +118,7 @@ export default function QualifierEditor(
           nothing on screen saying why. Said here, where the choice is made. */}
       {on && String(rule.qualifier_match_field || d.match_field) !== d.match_field
           && !String(rule.qualifier_match_value || '').trim() && (
-        <div style={{ fontSize: 11, color: '#b45309', maxWidth: 260 }}>
+        <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)', maxWidth: 260 }}>
           Enter a value. This field is not the accessory flag, so with nothing to match, every sale
           measures zero, falls short, and pays the lesser rate.
         </div>
@@ -135,7 +135,7 @@ export default function QualifierEditor(
       </label>
 
       {on && !flatRule && (
-        <div style={{ fontSize: 11, color: '#b45309', maxWidth: 260 }}>
+        <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)', maxWidth: 260 }}>
           This rule pays a percentage, so a lesser flat rate cannot be substituted. The engine reports
           the pairing instead of changing the pay.
         </div>

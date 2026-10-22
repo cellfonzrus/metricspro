@@ -173,13 +173,13 @@ export default function CommissionLedgerPage() {
       <thead><tr style={{ color: 'var(--text3)', textAlign: 'left' }}><th style={{ padding: '3px 8px' }}>Stored under</th><th style={{ padding: '3px 8px' }}>Period spelling</th><th style={{ padding: '3px 8px' }}>Source</th><th style={{ padding: '3px 8px', textAlign: 'right' }}>Rows</th><th style={{ padding: '3px 8px', textAlign: 'right' }}>Net</th><th style={{ padding: '3px 8px' }}>Landed</th><th /></tr></thead>
       <tbody>{rows.map((l, i) => (
         <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-          <td style={{ padding: '3px 8px', fontFamily: 'monospace' }}>{l.source_report}{l.legacy_key && <span style={{ color: '#b45309' }}> · older key</span>}</td>
-          <td style={{ padding: '3px 8px' }}>{l.period}{l.orphan_period && <span style={{ color: '#b45309' }}> · spelling no report reads</span>}</td>
+          <td style={{ padding: '3px 8px', fontFamily: 'monospace' }}>{l.source_report}{l.legacy_key && <span style={{ color: 'var(--c-fg-b45309)' }}> · older key</span>}</td>
+          <td style={{ padding: '3px 8px' }}>{l.period}{l.orphan_period && <span style={{ color: 'var(--c-fg-b45309)' }}> · spelling no report reads</span>}</td>
           <td style={{ padding: '3px 8px' }}>{l.origin}</td>
           <td style={{ padding: '3px 8px', textAlign: 'right' }}>{l.rows.toLocaleString('en-US')}</td>
           <td style={{ padding: '3px 8px', textAlign: 'right' }}>{money(l.payout_total)}</td>
           <td style={{ padding: '3px 8px', color: 'var(--text3)' }}>{l.landed_at ? String(l.landed_at).slice(0, 16).replace('T', ' ') : '—'}</td>
-          <td style={{ padding: '3px 8px' }}><button style={{ ...inp, cursor: 'pointer', color: '#b91c1c', fontWeight: 600 }} disabled={busy} onClick={() => retireLanding(l)}>Retire this landing</button></td>
+          <td style={{ padding: '3px 8px' }}><button style={{ ...inp, cursor: 'pointer', color: 'var(--c-fg-b91c1c)', fontWeight: 600 }} disabled={busy} onClick={() => retireLanding(l)}>Retire this landing</button></td>
         </tr>))}</tbody>
     </table>
   )
@@ -287,11 +287,11 @@ export default function CommissionLedgerPage() {
         <span style={{ fontSize: 13, color: 'var(--text2)' }}>
           1. Pick your carrier → 2. Upload the file → 3. Check the preview → 4. Import.
         </span>
-        <a href="/commcalc/commission-ledger/setup" style={{ marginLeft: 'auto', padding: '7px 14px', borderRadius: 8, background: 'var(--accent,#2563eb)', color: '#fff', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>🧭 Open setup wizard</a>
+        <a href="/commcalc/commission-ledger/setup" style={{ marginLeft: 'auto', padding: '7px 14px', borderRadius: 8, background: 'var(--accent,var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>🧭 Open setup wizard</a>
       </div>
       <p style={{ color: 'var(--text3)', fontSize: 12, marginBottom: 10 }}>
         Already set up? Pick a template + period below and import directly. Adjust the rules on{' '}
-        <a href="/commcalc/commission-category-map" style={{ color: 'var(--accent,#2563eb)' }}>Commission Category Map →</a>
+        <a href="/commcalc/commission-category-map" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Commission Category Map →</a>
       </p>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
@@ -352,13 +352,13 @@ export default function CommissionLedgerPage() {
             ) : null}
           </div>
           {provPeriod?.overlap && (
-            <div style={{ marginTop: 6, color: '#9a3412' }}>
+            <div style={{ marginTop: 6, color: 'var(--c-fg-9a3412)' }}>
               ⚠️ Two sources populated this period — two landings of one statement, so the tiles below <b>refuse to add them</b>.
               Use the source filter above to read one at a time, or retire the one you do not want.
             </div>
           )}
           {orphanPeriods.length > 0 && (
-            <div style={{ marginTop: 6, color: '#9a3412' }}>
+            <div style={{ marginTop: 6, color: 'var(--c-fg-9a3412)' }}>
               ⚠️ {orphanPeriods.length} period(s) of this template are stored under a spelling no report reads
               ({orphanPeriods.map(p => `'${p.period}' → ${p.canonical}, ${p.lines.toLocaleString('en-US')} rows`).join('; ')}) —
               they count nowhere and should be retired or re-imported under the month name.
@@ -366,7 +366,7 @@ export default function CommissionLedgerPage() {
             </div>
           )}
           {provPeriod?.stale && (
-            <div style={{ marginTop: 6, color: '#9a3412' }}>
+            <div style={{ marginTop: 6, color: 'var(--c-fg-9a3412)' }}>
               ⚠️ The raw MA feed has data for this period that has <b>never been synced</b> into the ledger —
               &ldquo;Refresh from MA data&rdquo; brings it in.
             </div>
@@ -382,7 +382,7 @@ export default function CommissionLedgerPage() {
 
       {/* ── REFRESH PREVIEW: what a sync WOULD write. Nothing is saved until Apply is clicked. ── */}
       {prev && (
-        <div style={{ border: '1px solid var(--accent,#2563eb)', borderRadius: 10, padding: 14, marginBottom: 14, background: 'var(--surface)' }}>
+        <div style={{ border: '1px solid var(--accent,var(--c-bg-2563eb))', borderRadius: 10, padding: 14, marginBottom: 14, background: 'var(--surface)' }}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
             <b style={{ fontSize: 14 }}>
               {prev.saved != null ? `✅ Refreshed ${prev.saved.toLocaleString()} line(s) from MA data` : `Preview — ${prev.would_write.toLocaleString()} line(s) would be written`}
@@ -394,8 +394,8 @@ export default function CommissionLedgerPage() {
             {prev.saved == null && (
               <button onClick={applySync} disabled={applying || !prev.would_write || !prev.ready}
                 style={{ ...inp, cursor: prev.would_write && prev.ready ? 'pointer' : 'not-allowed', fontWeight: 700,
-                  background: prev.would_write && prev.ready ? 'var(--accent,#2563eb)' : 'var(--surface)',
-                  color: prev.would_write && prev.ready ? '#fff' : 'var(--text3)' }}>
+                  background: prev.would_write && prev.ready ? 'var(--accent,var(--c-bg-2563eb))' : 'var(--surface)',
+                  color: prev.would_write && prev.ready ? 'var(--c-fg-ffffff)' : 'var(--text3)' }}>
                 {applying ? 'Writing…' : `Apply — replace the MA-synced rows for ${period}`}
               </button>
             )}
@@ -403,7 +403,7 @@ export default function CommissionLedgerPage() {
           </div>
 
           {prev.overlap_note && (
-            <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 8 }}>
+            <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 8 }}>
               {prev.overlap_note}
             </div>
           )}
@@ -431,7 +431,7 @@ export default function CommissionLedgerPage() {
             {prev.guard.excluded_ceiling ? ` · ⛔ ${prev.guard.excluded_ceiling.toLocaleString()} line(s) over the sanity ceiling (${money(prev.guard.excluded_ceiling_total)}) EXCLUDED` : ''}
           </div>
           {prev.guard.excluded_ceiling > 0 && (
-            <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 8 }}>
+            <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 8 }}>
               <b>Excluded as implausible</b> (an ID-like value read as dollars is the failure this catches):{' '}
               {prev.guard.excluded_examples.slice(0, 5).map((x, i) => (
                 <span key={i}>{i ? ' · ' : ''}{sourceLabel(x.source_table)} › {x.column} = {money(x.amount)}{x.label ? ` (${x.label})` : ''}</span>
@@ -439,15 +439,15 @@ export default function CommissionLedgerPage() {
             </div>
           )}
           {prev.guard.refused?.length > 0 && prev.guard.refused.map((r, i) => (
-            <div key={i} style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 8 }}>
+            <div key={i} style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 8 }}>
               ⛔ {sourceLabel(r.source_table)}: {r.reason}
             </div>
           ))}
           {prev.unmapped?.length > 0 && (
-            <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 8 }}>
+            <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 12, marginBottom: 8 }}>
               ⚠️ {prev.unmapped.length} label(s) match no rule and would land in <b>Other</b>:{' '}
               {prev.unmapped.slice(0, 8).map((u: any, i: number) => <span key={i}>{i ? ' · ' : ''}<b>{u.product_name || '(blank)'}</b> {money(u.payout_total)}</span>)}
-              {' — '}<a href={`/commcalc/commission-category-map?source_report=${encodeURIComponent(src)}`} style={{ color: '#9a3412', textDecoration: 'underline' }}>add a rule on the Category Map</a> and preview again.
+              {' — '}<a href={`/commcalc/commission-category-map?source_report=${encodeURIComponent(src)}`} style={{ color: 'var(--c-fg-9a3412)', textDecoration: 'underline' }}>add a rule on the Category Map</a> and preview again.
             </div>
           )}
 
@@ -468,21 +468,21 @@ export default function CommissionLedgerPage() {
                   <div style={{ color: 'var(--text3)' }}>synthesized per component: {s.synthesized_fields.join(', ')}</div>
                 )}
                 {s.unresolved_fields.map(u => (
-                  <div key={u.target_field} style={{ color: '#9a3412' }}>{u.label} — no column here (header &ldquo;{u.header}&rdquo; absent) → left empty</div>
+                  <div key={u.target_field} style={{ color: 'var(--c-fg-9a3412)' }}>{u.label} — no column here (header &ldquo;{u.header}&rdquo; absent) → left empty</div>
                 ))}
                 {s.components?.length > 0 && (
                   <div style={{ marginTop: 4 }}>
                     components: {s.components.map(c => `${c.label}${c.payment_month ? ` (M${c.payment_month})` : ''}`).join(' · ')}
                   </div>
                 )}
-                {s.read.truncated && <div style={{ color: '#9a3412' }}>⚠️ read was capped at 100,000 rows</div>}
-                {s.read.error && <div style={{ color: '#9a3412' }}>read error: {s.read.error}</div>}
+                {s.read.truncated && <div style={{ color: 'var(--c-fg-9a3412)' }}>⚠️ read was capped at 100,000 rows</div>}
+                {s.read.error && <div style={{ color: 'var(--c-fg-9a3412)' }}>read error: {s.read.error}</div>}
               </div>
             </details>
           ))}
           {prev.warnings?.length > 0 && (
             <details style={{ fontSize: 12, marginTop: 6 }}>
-              <summary style={{ cursor: 'pointer', color: '#9a3412' }}>{prev.warnings.length} note(s) about this refresh</summary>
+              <summary style={{ cursor: 'pointer', color: 'var(--c-fg-9a3412)' }}>{prev.warnings.length} note(s) about this refresh</summary>
               <ul style={{ margin: '6px 0 0 18px' }}>{prev.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
             </details>
           )}
@@ -492,8 +492,8 @@ export default function CommissionLedgerPage() {
       {!summ || summ.line_count === 0 ? (
         <div style={{ color: 'var(--text3)', fontSize: 13 }}>No ledger data for this template/period yet — import a file above.</div>
       ) : summ.refused ? (
-        <div style={{ background: 'rgba(239,68,68,.06)', border: '1px solid #ef4444', borderRadius: 10, padding: '12px 14px', fontSize: 13 }}>
-          <div style={{ fontWeight: 700, color: '#b91c1c', marginBottom: 4 }}>⚠️ {summ.landing_conflict}</div>
+        <div style={{ background: 'rgba(239,68,68,.06)', border: '1px solid var(--c-bg-ef4444)', borderRadius: 10, padding: '12px 14px', fontSize: 13 }}>
+          <div style={{ fontWeight: 700, color: 'var(--c-fg-b91c1c)', marginBottom: 4 }}>⚠️ {summ.landing_conflict}</div>
           <div style={{ color: 'var(--text2)', marginBottom: 6 }}>{summ.refusal_basis}</div>
           {(summ.landing_conflicts || []).map(g => (
             <div key={g.key + g.period} style={{ marginTop: 8 }}>
@@ -505,7 +505,7 @@ export default function CommissionLedgerPage() {
       ) : (
         <>
           {summ.other_count > 0 && (
-            <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
+            <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
               ⚠️ {summ.other_count} payout line(s) totaling {money(summ.other_total)} are <b>unmapped</b> — add a rule on the Category Map so they land in a bucket.
             </div>
           )}
@@ -527,8 +527,8 @@ export default function CommissionLedgerPage() {
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
             {CATS.map(c => (
               <div key={c} style={{ ...tile, cursor: 'pointer', borderColor: kindOf(c) === 'deduction' ? 'rgba(239,68,68,.35)' : 'var(--border)' }} onClick={() => openDrill(c)} title="Click to drill">
-                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>{labels[c] || c}{kindOf(c) === 'deduction' ? <span style={{ color: '#b91c1c' }}> · deduction</span> : ''}</div>
-                <div style={{ fontSize: 20, fontWeight: 700, color: kindOf(c) === 'deduction' && (summ.categories[c]?.total || 0) < 0 ? '#b91c1c' : 'inherit' }}>{money(summ.categories[c]?.total || 0)}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>{labels[c] || c}{kindOf(c) === 'deduction' ? <span style={{ color: 'var(--c-fg-b91c1c)' }}> · deduction</span> : ''}</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: kindOf(c) === 'deduction' && (summ.categories[c]?.total || 0) < 0 ? 'var(--c-fg-b91c1c)' : 'inherit' }}>{money(summ.categories[c]?.total || 0)}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>{summ.categories[c]?.count || 0} lines</div>
               </div>
             ))}
@@ -539,17 +539,17 @@ export default function CommissionLedgerPage() {
               <div style={{ fontSize: 11, color: 'var(--text3)' }}>{summ.line_count} lines · {money(summ.charge_total)} bill/act. payments</div>
             </div>
             {!!summ.unlisted_count && (
-              <div style={{ ...tile, borderColor: '#f59e0b' }} title="Lines filed under a bucket key the registry no longer lists — still counted in the net, never dropped">
-                <div style={{ fontSize: 11, color: '#b45309', textTransform: 'uppercase', marginBottom: 4 }}>Bucket no longer listed</div>
+              <div style={{ ...tile, borderColor: 'var(--c-bg-f59e0b)' }} title="Lines filed under a bucket key the registry no longer lists — still counted in the net, never dropped">
+                <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)', textTransform: 'uppercase', marginBottom: 4 }}>Bucket no longer listed</div>
                 <div style={{ fontSize: 20, fontWeight: 700 }}>{money(summ.unlisted_total || 0)}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>{summ.unlisted_count} lines · {Object.keys(summ.unlisted_keys || {}).join(', ')}</div>
               </div>
             )}
           </div>
           {summ.bucket_ready === false && (
-            <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
+            <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
               The bucket registry (migration <code>{summ.bucket_migration}</code>) is not applied: the buckets shown are the built-in defaults. Define your own on{' '}
-              <a href="/commcalc/commission-category-map" style={{ color: '#9a3412', fontWeight: 700 }}>Category → Bucket Map</a> once it runs.
+              <a href="/commcalc/commission-category-map" style={{ color: 'var(--c-fg-9a3412)', fontWeight: 700 }}>Category → Bucket Map</a> once it runs.
             </div>
           )}
           {/* WHERE THIS LEDGER SHOWS UP ON THE P&L, and which source books it (mig 1013) — the one panel */}
@@ -565,10 +565,10 @@ export default function CommissionLedgerPage() {
                 <b style={{ fontSize: 13 }}>🧩 Commission received over M1-M12</b>
                 <span style={{ fontSize: 12, color: 'var(--text3)' }}>{summ.leg_basis}</span>
                 <div style={{ flex: 1 }} />
-                <a href="/commcalc/commission-category-map" style={{ fontSize: 12, color: 'var(--accent,#2563eb)' }}>Set a label&apos;s leg →</a>
+                <a href="/commcalc/commission-category-map" style={{ fontSize: 12, color: 'var(--accent,var(--c-fg-2563eb))' }}>Set a label&apos;s leg →</a>
               </div>
               {summ.leg_identity_ok === false && (
-                <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '6px 10px', fontSize: 12, marginBottom: 8 }}>
+                <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '6px 10px', fontSize: 12, marginBottom: 8 }}>
                   The legs below do not add back to the category totals — treat the split as unreliable and report it.
                 </div>
               )}
@@ -607,12 +607,12 @@ export default function CommissionLedgerPage() {
                 </tbody>
               </table>
               {(summ.leg_unmapped_total || 0) > 0 && (
-                <div style={{ fontSize: 12, color: '#9a3412', marginTop: 8, lineHeight: 1.6 }}>
+                <div style={{ fontSize: 12, color: 'var(--c-fg-9a3412)', marginTop: 8, lineHeight: 1.6 }}>
                   <b>{money(summ.leg_unmapped_total || 0)}</b> could not be attributed to a leg — its source never
                   states a month-of-life. Top labels:{' '}
                   {(summ.leg_unmapped || []).slice(0, 6).map((u, i) => <span key={u.label}>{i ? ' · ' : ''}<b>{u.label}</b> {money(u.amount)}</span>)}
                   {'. '}Give them a leg on{' '}
-                  <a href="/commcalc/commission-category-map" style={{ color: 'var(--accent,#2563eb)' }}>Category → Bucket Map</a>.
+                  <a href="/commcalc/commission-category-map" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Category → Bucket Map</a>.
                 </div>
               )}
             </div>
@@ -675,7 +675,7 @@ export default function CommissionLedgerPage() {
             <>
               <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
                 Each rep&apos;s canonical-ledger payout, with what the live calc actually pays them
-                (<a href={`/commcalc/commissions/${encodeURIComponent(period)}`} style={{ color: 'var(--accent,#2563eb)' }}>rep commissions</a>) alongside.
+                (<a href={`/commcalc/commissions/${encodeURIComponent(period)}`} style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>rep commissions</a>) alongside.
                 {' '}{byRep.matched_count}/{byRep.rep_count} reps matched to a live payout{period ? '' : ' — enter a period to join the live payout'}.
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>

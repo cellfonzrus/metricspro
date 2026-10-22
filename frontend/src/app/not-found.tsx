@@ -16,23 +16,23 @@ export default function NotFound() {
   return (
     <main style={{
       minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: 24, fontFamily: 'var(--font-inter), system-ui, sans-serif', background: '#f8fafc',
+      padding: 24, fontFamily: 'var(--font-inter), system-ui, sans-serif', background: 'var(--c-bg-f8fafc)',
     }}>
       <div style={{
-        maxWidth: 460, width: '100%', background: '#fff', border: '1px solid #e2e8f0',
+        maxWidth: 460, width: '100%', background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e2e8f0)',
         borderRadius: 12, padding: '32px 28px', textAlign: 'center',
       }}>
-        <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: 1, color: '#94a3b8' }}>404</div>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: '8px 0 10px', color: '#0f172a' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: 1, color: 'var(--c-fg-94a3b8)' }}>404</div>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: '8px 0 10px', color: 'var(--c-fg-0f172a)' }}>
           That page isn’t here
         </h1>
-        <p style={{ fontSize: 14, lineHeight: 1.6, color: '#475569', margin: '0 0 22px' }}>
+        <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--c-fg-475569)', margin: '0 0 22px' }}>
           The address may be mistyped, or the screen may have moved. If you followed a link from
           inside MetricsPro, that link is the thing that’s wrong — worth telling an admin so it gets
           fixed rather than worked around.
         </p>
         <Link href="/" style={{
-          display: 'inline-block', background: '#0f172a', color: '#fff', textDecoration: 'none',
+          display: 'inline-block', background: 'var(--c-bg-0f172a)', color: 'var(--c-fg-ffffff)', textDecoration: 'none',
           padding: '10px 20px', borderRadius: 8, fontSize: 14, fontWeight: 600,
         }}>
           Go to my dashboard

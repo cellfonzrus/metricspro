@@ -176,7 +176,7 @@ export default function OnInventoryByStorePage() {
 
       {/* Stale data banner */}
       {isStale && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: '#991b1b' }}>
+        <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: 'var(--c-fg-991b1b)' }}>
           ⚠️ <strong>Data is {staleDays} days old</strong> (as of {data?.data_as_of}). Aging is measured from today, so the buckets may shift until you upload a current Asset_Lending.xlsx.
         </div>
       )}
@@ -226,10 +226,10 @@ export default function OnInventoryByStorePage() {
               shown on Inventory Aging, same money-column choice (owed_to_vip), labeled explicitly. */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 24 }}>
             {[
-              { label: 'Total Phones Outstanding', val: data.totals.total_phones_outstanding.toLocaleString(), sub: `${data.totals.store_count} stores`, color: '#2563eb' },
-              { label: `Total Amount (${data.totals.total_amount_column})`, val: fmt(data.totals.total_amount), sub: 'unsold exposure', color: '#d97706' },
-              { label: '45–60 WARN Owed', val: fmt(data.totals.warn_owed), sub: 'sell before day 60', color: '#d97706' },
-              { label: '>60 MISSED Owed', val: fmt(data.totals.missed_owed), sub: 'past due — billed unsold', color: '#dc2626' },
+              { label: 'Total Phones Outstanding', val: data.totals.total_phones_outstanding.toLocaleString(), sub: `${data.totals.store_count} stores`, color: 'var(--c-fg-2563eb)' },
+              { label: `Total Amount (${data.totals.total_amount_column})`, val: fmt(data.totals.total_amount), sub: 'unsold exposure', color: 'var(--c-fg-d97706)' },
+              { label: '45–60 WARN Owed', val: fmt(data.totals.warn_owed), sub: 'sell before day 60', color: 'var(--c-fg-d97706)' },
+              { label: '>60 MISSED Owed', val: fmt(data.totals.missed_owed), sub: 'past due — billed unsold', color: 'var(--c-fg-dc2626)' },
             ].map(c => (
               <div key={c.label} className="card" style={{ padding: '18px 22px', borderTop: `3px solid ${c.color}` }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{c.label}</div>
@@ -275,10 +275,10 @@ export default function OnInventoryByStorePage() {
                       <td style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text2)' }}>{r.market || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right' }}>{r.count.toLocaleString()}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', fontWeight: 700 }}>{fmt(r.owed)}</td>
-                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: '#059669' }}>{r.under45_count} <span style={{ color: 'var(--text3)' }}>· {fmt(r.under45_owed)}</span></td>
-                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: '#d97706', fontWeight: r.warn_count ? 600 : 400 }}>{r.warn_count} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>· {fmt(r.warn_owed)}</span></td>
-                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: '#dc2626', fontWeight: r.missed_count ? 600 : 400 }}>{r.missed_count} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>· {fmt(r.missed_owed)}</span></td>
-                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: '#6b7280' }}>{r.unknown_age_count} <span style={{ color: 'var(--text3)' }}>· {fmt(r.unknown_age_owed)}</span></td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-059669)' }}>{r.under45_count} <span style={{ color: 'var(--text3)' }}>· {fmt(r.under45_owed)}</span></td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-d97706)', fontWeight: r.warn_count ? 600 : 400 }}>{r.warn_count} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>· {fmt(r.warn_owed)}</span></td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-dc2626)', fontWeight: r.missed_count ? 600 : 400 }}>{r.missed_count} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>· {fmt(r.missed_owed)}</span></td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-6b7280)' }}>{r.unknown_age_count} <span style={{ color: 'var(--text3)' }}>· {fmt(r.unknown_age_owed)}</span></td>
                       <td style={{ padding: '8px 12px', fontSize: 12, textAlign: 'right', color: 'var(--text3)' }}>{r.zero_count}</td>
                     </tr>
                   ))}
@@ -290,9 +290,9 @@ export default function OnInventoryByStorePage() {
                     <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right' }}>{data.totals.total_phones_outstanding.toLocaleString()}</td>
                     <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right' }}>{fmt(data.totals.total_amount)}</td>
                     <td />
-                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: '#d97706' }}>{fmt(data.totals.warn_owed)}</td>
-                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: '#dc2626' }}>{fmt(data.totals.missed_owed)}</td>
-                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: '#6b7280' }}>{fmt(data.totals.unknown_age_owed)}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-d97706)' }}>{fmt(data.totals.warn_owed)}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-dc2626)' }}>{fmt(data.totals.missed_owed)}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-6b7280)' }}>{fmt(data.totals.unknown_age_owed)}</td>
                     <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: 'var(--text3)' }}>{data.totals.zero_count}</td>
                   </tr>
                 </tfoot>

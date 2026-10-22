@@ -90,7 +90,7 @@ export function UnassignedRow({ u, people, onLinked, onExclude, busy }: {
 
   return (
     <>
-      <tr style={{ background: art.suspect ? 'var(--surface2, #fafafa)' : undefined }}>
+      <tr style={{ background: art.suspect ? 'var(--surface2, var(--c-bg-fafafa))' : undefined }}>
         <td style={td}>
           <button onClick={() => setOpen(o => !o)} title="why is this rep uncovered?"
             style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 12, padding: 0, marginRight: 6 }}>
@@ -100,7 +100,7 @@ export function UnassignedRow({ u, people, onLinked, onExclude, busy }: {
           {art.suspect && <span style={pill('#fef3c7', '#92400e')} title={(art.reasons || []).join('; ')}>likely not a person</span>}
         </td>
         <td style={td}>{u.store || <span style={{ color: 'var(--text3)' }}>—</span>}</td>
-        <td style={td}>{u.market || <span style={{ color: '#b45309' }} title={sb.message}>blank</span>}</td>
+        <td style={td}>{u.market || <span style={{ color: 'var(--c-fg-b45309)' }} title={sb.message}>blank</span>}</td>
         <td style={td}>{u.role || '—'}</td>
         <td style={td}>{u.transactions}</td>
         <td style={td}>{u.lines}</td>
@@ -109,7 +109,7 @@ export function UnassignedRow({ u, people, onLinked, onExclude, busy }: {
       </tr>
       {open && (
         <tr>
-          <td style={{ ...td, background: 'var(--surface2, #fafafa)' }} colSpan={8}>
+          <td style={{ ...td, background: 'var(--surface2, var(--c-bg-fafafa))' }} colSpan={8}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 2px 8px' }}>
 
               {/* 1 — NAME BRIDGE */}
@@ -182,7 +182,7 @@ export function UnassignedRow({ u, people, onLinked, onExclude, busy }: {
 
               {/* 4 — ALIAS PREVIEW (what flipping Store resolution would fix) */}
               {d.alias_preview && (
-                <div style={{ background: d.alias_preview.would_attach ? '#ecfdf5' : 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 8px' }}>
+                <div style={{ background: d.alias_preview.would_attach ? 'var(--c-bg-ecfdf5)' : 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '6px 8px' }}>
                   <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 2 }}>
                     4 · With “Store resolution = alias” {d.alias_preview.would_attach ? <span style={pill('#dcfce7', '#166534')}>a plan would attach</span> : <span style={pill('#f1f5f9', '#475569')}>still nothing</span>}
                   </div>
@@ -302,7 +302,7 @@ export function UnmatchedExplorer({ period }: { period: string }) {
         <button className="btn btn-secondary" disabled={busy || !period} onClick={load}>{busy ? '…' : `Load ${period}`}</button>
         {data && <><ExportButtons payload={payload} /><SendReportButton exportPayload={payload} compact /></>}
       </div>
-      {err && <div style={{ fontSize: 12.5, color: '#b91c1c', marginBottom: 8 }}>❌ {err}</div>}
+      {err && <div style={{ fontSize: 12.5, color: 'var(--c-fg-b91c1c)', marginBottom: 8 }}>❌ {err}</div>}
       {!data && !err && <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>Read-only. Nothing is written and no calculation is triggered.</div>}
       {data && (<>
         {/* RULE FIVE standardized filter bar — core set (period is the panel's period) + product facets */}
@@ -368,7 +368,7 @@ export function UnmatchedExplorer({ period }: { period: string }) {
                 <td style={td}>{g.label}</td>
                 <td style={td}>{g.lines}</td>
                 <td style={td}>{g.rep_unassigned_lines || ''}</td>
-                <td style={{ ...td, color: (g.no_rule_matched_lines || 0) ? '#b45309' : undefined }}>{g.no_rule_matched_lines || ''}</td>
+                <td style={{ ...td, color: (g.no_rule_matched_lines || 0) ? 'var(--c-fg-b45309)' : undefined }}>{g.no_rule_matched_lines || ''}</td>
                 <td style={td}>{g.reps}</td>
                 <td style={td}>{fmt(g.ext_price)}</td>
                 <td style={td}>{fmt(g.gp)}</td>
@@ -395,7 +395,7 @@ export function UnmatchedExplorer({ period }: { period: string }) {
             {showLines ? 'Hide' : 'Show'} line detail ({Math.min(data.line_total || 0, data.line_cap || 0)} of {data.line_total || 0})
           </button>
           {data.truncated && (
-            <span style={{ fontSize: 11.5, color: '#b45309', marginLeft: 8 }}>
+            <span style={{ fontSize: 11.5, color: 'var(--c-fg-b45309)', marginLeft: 8 }}>
               showing the first {data.line_cap} of {data.line_total} lines — narrow the filters or raise “Line rows”. (Group totals above cover ALL {data.line_total}.)
             </span>
           )}
@@ -460,7 +460,7 @@ export function StoreBridgePanel({ stores }: { stores: any }) {
     <div style={{ marginBottom: 12 }}>
       <button onClick={() => setOpen(o => !o)} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, fontWeight: 700, fontSize: 13 }}>
         {open ? '▾' : '▸'} Store → market: {stores.distinct} POS store string{stores.distinct === 1 ? '' : 's'},{' '}
-        <span style={{ color: bad.length ? '#b91c1c' : undefined }}>{stores.unresolved} without a market</span>
+        <span style={{ color: bad.length ? 'var(--c-fg-b91c1c)' : undefined }}>{stores.unresolved} without a market</span>
         {stores.would_resolve_with_alias ? ` · ${stores.would_resolve_with_alias} would resolve with alias resolution` : ''}
       </button>
       <div style={{ fontSize: 11.5, color: 'var(--text2)', margin: '2px 0 4px' }}>
@@ -521,7 +521,7 @@ export function ExcludedSellers({ cov, onChange, busy }: { cov: any; onChange: (
             </div>
           ))}
           {cov?.excluded_config?.ready === false && (
-            <div style={{ fontSize: 11.5, color: '#b45309', marginTop: 4 }}>
+            <div style={{ fontSize: 11.5, color: 'var(--c-fg-b45309)', marginTop: 4 }}>
               ⚠️ <SetupNotice lead="This list cannot be saved yet." detail="248_commission_coverage_excluded_sellers.sql" />
             </div>
           )}

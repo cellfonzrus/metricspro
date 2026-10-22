@@ -189,7 +189,7 @@ function Unavailable({ ctx, err }: { ctx: Ctx | null; err: string }) {
   const msg = err || ctx?.reason ||
     'Your pay plan could not be resolved, so there is nothing to simulate yet.'
   return (
-    <div style={{ borderLeft: '3px solid #d97706', background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
+    <div style={{ borderLeft: '3px solid var(--c-bg-d97706)', background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 3 }}>
         {ctx?.needs_rep ? 'Pick an employee' : 'Not available yet'}
       </div>
@@ -493,7 +493,7 @@ export default function PaySimulator({ period, compact = false }: { period: stri
       )}
 
       {(sim?.warnings || []).length > 0 && (
-        <ul style={{ margin: '10px 0 0', paddingLeft: 16, fontSize: 11, color: '#b45309' }}>
+        <ul style={{ margin: '10px 0 0', paddingLeft: 16, fontSize: 11, color: 'var(--c-fg-b45309)' }}>
           {(sim?.warnings || []).map((w: any, i: number) => <li key={i}>{w.message}</li>)}
         </ul>
       )}

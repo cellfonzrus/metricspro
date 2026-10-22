@@ -112,16 +112,16 @@ export default function MaCommissionPage() {
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           What the payment processor (VidaPay / Total Access) owes you — activations with rebates &amp; month 1–6
           spiffs from <b>MA Commission Details</b>, plus airtime margin from <b>MA Daily Tx</b>. Positive = money you
-          receive. Upload the reports on <a href="/commcalc/upload" style={{ color: 'var(--accent,#2563eb)' }}>Data Imports</a> (no
+          receive. Upload the reports on <a href="/commcalc/upload" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Data Imports</a> (no
           period needed) or auto-import them with a mailbox rule.
           {canImeiRebates && <>
-            {' '}Need it <b>per handset</b>? <a href="/commcalc/imei-rebates" style={{ color: 'var(--accent,#2563eb)' }}>IMEI
+            {' '}Need it <b>per handset</b>? <a href="/commcalc/imei-rebates" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>IMEI
             Rebate Reconciliation</a> breaks the same data down to one row per activated IMEI — and shows the
             activations with <i>no</i> rebate against them.
           </>}
           {' '}The MA Daily Tx <code>product_name</code> column mixes commissions, spiffs, residuals, customer
           bill payments and device sales in one field —{' '}
-          <a href="/commcalc/ma-product-class" style={{ color: 'var(--accent,#2563eb)' }}>classify each product name</a>{' '}
+          <a href="/commcalc/ma-product-class" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>classify each product name</a>{' '}
           to see what kind of money each line actually is.
         </p>
       </div>
@@ -139,13 +139,13 @@ export default function MaCommissionPage() {
           storeOptions={storeOpts} repOptions={repOpts} storeLabel="Accounts…" repLabel="Reps…" />
       )}
       {msg && <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
-      {d && d.ready === false && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {d.note}</div>}
+      {d && d.ready === false && <div className="card" style={{ padding: 14, marginBottom: 14, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', fontSize: 13 }}>⚠️ {d.note}</div>}
       {d?.ready && d.note && <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13, color: 'var(--text2)' }}>{d.note}</div>}
 
       {d?.ready && !d.note && <>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
           <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Total payable</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: '#059669' }}>{fmt(d.total_payable)}</div></div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--c-fg-059669)' }}>{fmt(d.total_payable)}</div></div>
           <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Activations</div>
             <div style={{ fontSize: 22, fontWeight: 800 }}>{d.activations.total}</div>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>{d.activations.new} new · {d.activations.add} add · {d.activations.byop} BYOP</div></div>
@@ -156,7 +156,7 @@ export default function MaCommissionPage() {
           <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Airtime margin</div>
             {repFilterActive ? (<>
               <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text3)' }}>—</div>
-              <div style={{ fontSize: 12, color: '#b45309' }}>airtime = all reps — not narrowed by rep. Clear the rep filter to see it.</div>
+              <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)' }}>airtime = all reps — not narrowed by rep. Clear the rep filter to see it.</div>
             </>) : (<>
               <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(d.airtime.margin)}</div>
               <div style={{ fontSize: 12, color: 'var(--text3)' }}>{d.airtime.orders} top-ups · {fmt(d.airtime.retail)} retail</div>
@@ -175,7 +175,7 @@ export default function MaCommissionPage() {
               number that was already active. {d.legs.basis}
             </div>
             {d.legs.identity_ok === false && (
-              <div style={{ fontSize: 12, color: 'var(--red,#b91c1c)', fontWeight: 600, marginBottom: 6 }}>
+              <div style={{ fontSize: 12, color: 'var(--red,var(--c-fg-b91c1c))', fontWeight: 600, marginBottom: 6 }}>
                 ⚠ The legs do not add back to total payable — treat this split as unreliable and report it.
               </div>
             )}
@@ -189,8 +189,8 @@ export default function MaCommissionPage() {
                   </div>
                 ))}
               <div style={{ alignSelf: 'center', fontSize: 12, color: 'var(--text3)', maxWidth: 300 }}>
-                Same split, same rules, on <a href="/commcalc/gp" style={{ color: 'var(--accent,#2563eb)' }}>Gross Profit</a>{' '}
-                and <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,#2563eb)' }}>Commission Ledger</a>.
+                Same split, same rules, on <a href="/commcalc/gp" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Gross Profit</a>{' '}
+                and <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Commission Ledger</a>.
               </div>
             </div>
           </div>
@@ -214,7 +214,7 @@ export default function MaCommissionPage() {
         <div className="card" style={{ padding: 0, marginBottom: 14 }}>
           <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>By store ({byStoreRows.length})</div>
           {repFilterActive && (
-            <div style={{ padding: '8px 14px', fontSize: 12, color: '#92400e', background: '#fffbeb', borderBottom: '1px solid #fde68a' }}>
+            <div style={{ padding: '8px 14px', fontSize: 12, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fffbeb)', borderBottom: '1px solid var(--c-bg-fde68a)' }}>
               Rep filter active — <b>Total payable</b> is rep commission only. Airtime margin has no rep dimension (all reps), so it is excluded here; stores the selected rep never touched are hidden.
             </div>
           )}

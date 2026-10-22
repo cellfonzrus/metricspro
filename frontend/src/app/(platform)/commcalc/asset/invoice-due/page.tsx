@@ -72,7 +72,7 @@ function isGateError(m: string) { return /asset_invoice_due/i.test(m) || /restri
 
 function LockNote() {
   return (
-    <div className="card" style={{ padding: 16, background: '#fef3c7', border: '1px solid #fcd34d' }}>
+    <div className="card" style={{ padding: 16, background: 'var(--c-bg-fef3c7)', border: '1px solid var(--c-bg-fcd34d)' }}>
       🔒 <b>Restricted.</b> The Upcoming Invoice Payment Due report shows invoice totals and
       commission figures — ask an admin to grant <b>&quot;asset_invoice_due&quot;</b> on your role.
     </div>
@@ -91,8 +91,8 @@ function DueBadge({ due, status }: { due: string | null; status: string | null }
   if (s === 'paid in full' || s === 'voided') return <span style={{ color: 'var(--text3)' }}>{status}</span>
   const n = daysUntil(due)
   if (n === null) return <span>{status || '—'}</span>
-  if (n < 0) return <span style={{ color: '#b91c1c', fontWeight: 700 }}>Overdue {Math.abs(n)}d</span>
-  if (n <= 7) return <span style={{ color: '#b45309', fontWeight: 700 }}>Due in {n}d</span>
+  if (n < 0) return <span style={{ color: 'var(--c-fg-b91c1c)', fontWeight: 700 }}>Overdue {Math.abs(n)}d</span>
+  if (n <= 7) return <span style={{ color: 'var(--c-fg-b45309)', fontWeight: 700 }}>Due in {n}d</span>
   return <span style={{ color: 'var(--text2)' }}>Due in {n}d</span>
 }
 
@@ -237,7 +237,7 @@ export default function InvoiceDuePage() {
         <button className="btn" style={{ marginLeft: 'auto' }} onClick={syncFlags}>🔔 Sync attention flags</button>
       </div>
       {syncMsg && <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 12 }}>{syncMsg}</div>}
-      {errMsg && <div className="card" style={{ padding: 14, marginBottom: 16, color: '#b45309', background: '#fffbeb', border: '1px solid #fcd34d' }}>{errMsg}</div>}
+      {errMsg && <div className="card" style={{ padding: 14, marginBottom: 16, color: 'var(--c-fg-b45309)', background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fcd34d)' }}>{errMsg}</div>}
 
       {t && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
@@ -296,7 +296,7 @@ export default function InvoiceDuePage() {
                                       <td style={td}>{d.serial || '—'}</td>
                                       <td style={td}>{d.imei || '—'}</td>
                                       <td style={td}>{d.product_name || '—'}</td>
-                                      <td style={td}>{d.matched ? (d.store || '—') : <span style={{ color: '#b91c1c' }}>no asset match</span>}</td>
+                                      <td style={td}>{d.matched ? (d.store || '—') : <span style={{ color: 'var(--c-fg-b91c1c)' }}>no asset match</span>}</td>
                                       <td style={td}>{d.sold ? `✅ ${d10(d.date_sold)}` : '—'}</td>
                                       <td style={td}>{d.reimbursed ? `✅ ${fmt(d.reimbursement || 0)} on ${d10(d.reimbursement_date)}` : '—'}</td>
                                       <td style={td}>{fmt(d.commission_m1)}</td>

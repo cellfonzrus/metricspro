@@ -338,9 +338,9 @@ export default function BillPayPickupPage() {
                             ? <span style={{ color: 'var(--text3)', fontStyle: 'italic', fontSize: 12 }}>not recorded</span>
                             : <span style={{ fontWeight: 600 }}>
                                 {fmt(e.actual_picked_amount)}
-                                {e.pickup_variance_status === 'short' && <span style={{ color: '#dc2626', fontWeight: 700 }}> ⚠ {fmt(e.pickup_variance)} short</span>}
-                                {e.pickup_variance_status === 'over' && <span style={{ color: '#b45309', fontWeight: 700 }}> +{fmt(e.pickup_variance)} over</span>}
-                                {e.pickup_variance_status === 'match' && <span style={{ color: '#166534' }}> ✓</span>}
+                                {e.pickup_variance_status === 'short' && <span style={{ color: 'var(--c-fg-dc2626)', fontWeight: 700 }}> ⚠ {fmt(e.pickup_variance)} short</span>}
+                                {e.pickup_variance_status === 'over' && <span style={{ color: 'var(--c-fg-b45309)', fontWeight: 700 }}> +{fmt(e.pickup_variance)} over</span>}
+                                {e.pickup_variance_status === 'match' && <span style={{ color: 'var(--c-fg-166534)' }}> ✓</span>}
                                 {/* COUNTED BUT NOT SCOREABLE — shown, never silent (owner question
                                     2026-10-10). The expected figure nets bill-payment cash by the
                                     POS while the envelope was netted by the rep's own declared
@@ -358,11 +358,11 @@ export default function BillPayPickupPage() {
                                 onChange={ev => setActuals(m => ({ ...m, [k]: ev.target.value }))}
                                 title="Actual bill-pay cash physically taken from this envelope (optional)" />
                               {v != null && v !== 0 && (
-                                <span style={{ fontSize: 11, fontWeight: 700, color: v < 0 ? '#dc2626' : '#b45309' }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: v < 0 ? 'var(--c-fg-dc2626)' : 'var(--c-fg-b45309)' }}>
                                   {v < 0 ? `${fmt(v)} short` : `+${fmt(v)} over`}
                                 </span>
                               )}
-                              {v === 0 && <span style={{ fontSize: 11, color: '#166534' }}>✓</span>}
+                              {v === 0 && <span style={{ fontSize: 11, color: 'var(--c-fg-166534)' }}>✓</span>}
                             </span>
                           )
                         })() : <span style={{ color: 'var(--text3)' }}>—</span>}
@@ -381,7 +381,7 @@ export default function BillPayPickupPage() {
                           title={e.pos_status === 'no_pos_data' ? 'No processor bill-payment feed resolved for this range'
                             : `Store-day declared (cash + card) ${fmt(e.pos_declared_day)} vs POS ${fmt(e.pos_billpay)} (Δ ${fmt(e.pos_delta)})`}>
                         {e.pos_billpay == null ? <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>no POS data</span>
-                          : <>{fmt(e.pos_billpay)}{e.pos_status === 'mismatch' ? ' ⚠' : e.pos_status === 'ok' ? <span style={{ color: '#166534' }}> ✓</span> : null}</>}
+                          : <>{fmt(e.pos_billpay)}{e.pos_status === 'mismatch' ? ' ⚠' : e.pos_status === 'ok' ? <span style={{ color: 'var(--c-fg-166534)' }}> ✓</span> : null}</>}
                       </td>
                       <td style={cell}><EnvelopeViewLink row={e} label="📷 view" /></td>
                       <td style={cell}>
@@ -393,8 +393,8 @@ export default function BillPayPickupPage() {
                         {done && (e.disposition
                           ? <span style={{ fontSize: 12 }}>
                               {e.disposition === 'deposited' ? '🏦 Deposited' : '🤝 To mgmt'}
-                              {e.deposit_flagged && <span style={{ color: '#dc2626', fontWeight: 700 }}> · ⚠ {fmt(e.deposit_amount)} vs {fmt(e.cash)}</span>}
-                              {e.deposit_matched && <span style={{ color: '#166534' }}> · ✓ matched</span>}
+                              {e.deposit_flagged && <span style={{ color: 'var(--c-fg-dc2626)', fontWeight: 700 }}> · ⚠ {fmt(e.deposit_amount)} vs {fmt(e.cash)}</span>}
+                              {e.deposit_matched && <span style={{ color: 'var(--c-fg-166534)' }}> · ✓ matched</span>}
                               {e.deposit_url && <> · <a href={e.deposit_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>slip</a></>}
                             </span>
                           : <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>

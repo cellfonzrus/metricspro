@@ -73,7 +73,7 @@ export default function ComplianceDashboardPage() {
         A dash means that check could not run — it is never silently shown as zero.
       </p>
 
-      {sumErr && <div className="card" style={{ padding: 12, color: 'crimson', marginBottom: 12, fontSize: 13 }}>Summary unavailable: {sumErr}</div>}
+      {sumErr && <div className="card" style={{ padding: 12, color: 'var(--c-fg-dc143c)', marginBottom: 12, fontSize: 13 }}>Summary unavailable: {sumErr}</div>}
 
       {shownCats.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 10, marginBottom: 18 }}>

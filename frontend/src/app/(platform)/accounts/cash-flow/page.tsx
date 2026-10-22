@@ -91,7 +91,7 @@ function CFInner() {
         <div style={{ display: 'grid', gap: 16 }}>
           {/* tie-out banner: honest, never papered over */}
           <div className="card" style={{ padding: 12, fontSize: 13, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center',
-            background: st.tied ? '#f0fdf4' : '#fffbeb', border: `1px solid ${st.tied ? '#bbf7d0' : '#fde68a'}` }}>
+            background: st.tied ? 'var(--c-bg-f0fdf4)' : 'var(--c-bg-fffbeb)', border: `1px solid ${st.tied ? 'var(--c-bg-bbf7d0)' : 'var(--c-bg-fde68a)'}` }}>
             <span>{st.tied ? '✅ Ties out' : '⚠️ Tie-out gap'}</span>
             <span>Implied change: <b>{fmt(st.implied_cash_change)}</b></span>
             <span>Reported change (BS cash lines): <b>{fmt(st.cash_delta_reported)}</b></span>
@@ -105,7 +105,7 @@ function CFInner() {
                 {(st.sections || []).map((s: any) => (
                   <SectionRows key={s.type} s={s} />
                 ))}
-                <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2, #f1f5f9)' }}>
+                <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2, var(--c-bg-f1f5f9))' }}>
                   <td style={{ padding: '10px 16px', fontWeight: 700, fontSize: 14 }}>Implied change in cash</td>
                   <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 700, fontSize: 14 }}>{fmt(st.implied_cash_change)}</td>
                 </tr>
@@ -126,7 +126,7 @@ function CFInner() {
 function SectionRows({ s }: { s: any }) {
   return (
     <>
-      <tr style={{ background: 'var(--surface2, #f8fafc)' }}>
+      <tr style={{ background: 'var(--surface2, var(--c-bg-f8fafc))' }}>
         <td colSpan={2} style={{ padding: '8px 16px', fontWeight: 700, fontSize: 12, textTransform: 'uppercase', color: 'var(--text2)' }}>
           {SEC_ICON[s.type] || ''} {s.name}
         </td>

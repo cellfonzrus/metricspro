@@ -435,7 +435,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
         {/* WHAT DECIDES THE CARDS — said out loud (design §7). */}
         <div style={{ ...note, marginBottom: 10, fontSize: 12 }}>
           {!registry.loaded ? 'Reading which report kinds this company may upload…'
-            : registry.error ? <span style={{ color: '#ef4444' }}>⚠️ The report-kind registry could not be read ({registry.error}) — the cards are withheld rather than guessed.</span>
+            : registry.error ? <span style={{ color: 'var(--c-fg-ef4444)' }}>⚠️ The report-kind registry could not be read ({registry.error}) — the cards are withheld rather than guessed.</span>
             : <>Offered for {registry.declaration?.pos?.length ? <>POS <b>{registry.declaration.pos.join(' / ')}</b></> : 'no declared POS'} · {registry.declaration?.carriers?.length ? <>carrier <b>{registry.declaration.carriers.join(' / ')}</b></> : 'no declared carrier'}{!registry.ready && <> · house defaults (<SetupNotice detail={registry.payload?.migration} />)</>}{registry.withheld && <> · {registry.withheld}</>}</>}
         </div>
         <KindDetectZone visible={intakeCards} onPick={pickDetected} fallbackKey={intakeCards.find(c => c.landing === 'other')?.key} />
@@ -469,7 +469,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
             {instLines(c.landing).filter((_, idx, arr) => c.key === intakeCards.find(x => x.landing === c.landing)?.key || arr.length === 0)}
           </div>
         ))}
-        {registry.loaded && !registry.error && intakeCards.length === 0 && <div style={{ ...note, color: '#b45309' }}>No report kinds are offered for this company yet — declare its POS and carrier in Stage 1 (or ask the platform team to widen the set).</div>}
+        {registry.loaded && !registry.error && intakeCards.length === 0 && <div style={{ ...note, color: 'var(--c-fg-b45309)' }}>No report kinds are offered for this company yet — declare its POS and carrier in Stage 1 (or ask the platform team to widen the set).</div>}
       </div>
     )
   }
@@ -477,7 +477,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
   const title = `${cardLabel(reportKindOf, kind)} — ${kind === 'other' ? otherNameOf : sourceRef}${layout ? ` · ${layout.replace(/_/g, ' ')}` : ''}${kind === 'merchant_payments' && (a?.settlement_role || role) ? ` · ${a?.settlement_role || role}` : ''}`
   return (
     <div>
-      <div style={{ ...note, marginBottom: 12 }}><b>{title}</b>{filename ? ` · ${filename}` : ''}{kept?.stored && !file ? <span style={{ color: '#15803d' }}> · file kept — no need to drop it again</span> : !file && !kept?.stored && a ? <span style={{ color: '#b45309' }}> · file not kept — drop it again in 2.1 to re-check or commit</span> : null}
+      <div style={{ ...note, marginBottom: 12 }}><b>{title}</b>{filename ? ` · ${filename}` : ''}{kept?.stored && !file ? <span style={{ color: 'var(--c-fg-15803d)' }}> · file kept — no need to drop it again</span> : !file && !kept?.stored && a ? <span style={{ color: 'var(--c-fg-b45309)' }}> · file not kept — drop it again in 2.1 to re-check or commit</span> : null}
         <button style={{ ...ghost, padding: '2px 8px', fontSize: 12, marginLeft: 8 }} onClick={() => setStep('2.0')}>← checklist</button></div>
 
       {step === '2.1' && (
@@ -512,7 +512,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
         <div style={card}>
           <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>2.2 — Sheet, header row, footer</h2>
           <p style={{ ...note, marginBottom: 12 }}>{a.matrix ? 'What the destination\'s own parser read from the file — there is nothing to map by hand.' : 'What we found in the file. Override anything that is wrong and re-read.'}</p>
-          {a.detect.xlsx_repair && <div style={{ ...card, borderColor: '#f59e0b', background: 'rgba(245,158,11,.08)', fontSize: 13, marginBottom: 10 }}><b>This workbook needed a repair to be read</b> ({a.detect.xlsx_repair.action}): its string table was mis-named or missing. Every row was read; the repair is on the record.</div>}
+          {a.detect.xlsx_repair && <div style={{ ...card, borderColor: 'var(--c-bg-f59e0b)', background: 'rgba(245,158,11,.08)', fontSize: 13, marginBottom: 10 }}><b>This workbook needed a repair to be read</b> ({a.detect.xlsx_repair.action}): its string table was mis-named or missing. Every row was read; the repair is on the record.</div>}
           {a.matrix ? (
             <div style={{ ...card, background: 'var(--bg,transparent)', marginBottom: 12, fontSize: 13 }}>
               <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse', marginBottom: 8 }}>
@@ -520,8 +520,8 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                 <tbody>{a.detect.sheets.map(s2 => <tr key={s2.name} style={{ borderTop: '1px solid var(--border)' }}><td>{s2.name}</td><td style={mono}>{num(s2.data_rows)}</td><td>{s2.role}</td></tr>)}</tbody>
               </table>
               <div><b>Total row:</b> {a.detect.footer.detected ? <>found — value <b>{money(a.detect.footer.file_total_raw)}</b></> : 'not found'} · {a.detect.footer.basis}</div>
-              {kind === 'x_report' && n?.parser && <div style={{ ...note, marginTop: 6 }}>Tender rows matched {num(n.parser.tender_rows_matched)} · skipped {num(n.parser.tender_rows_skipped)}{n.parser.unmatched_labels?.length ? <span style={{ color: '#ef4444' }}> · not recognised: {n.parser.unmatched_labels.join(', ')} — map them under Closing → Tender Config</span> : null}{n.parser.canon_matched_labels?.length ? <> · placed by the recon&apos;s own vocabulary: {n.parser.canon_matched_labels.join(', ')}</> : null}</div>}
-              {kind === 'merchant_payments' && n?.warnings?.length ? <div style={{ ...note, marginTop: 6, color: '#b45309' }}>{n.warnings.join(' · ')}</div> : null}
+              {kind === 'x_report' && n?.parser && <div style={{ ...note, marginTop: 6 }}>Tender rows matched {num(n.parser.tender_rows_matched)} · skipped {num(n.parser.tender_rows_skipped)}{n.parser.unmatched_labels?.length ? <span style={{ color: 'var(--c-fg-ef4444)' }}> · not recognised: {n.parser.unmatched_labels.join(', ')} — map them under Closing → Tender Config</span> : null}{n.parser.canon_matched_labels?.length ? <> · placed by the recon&apos;s own vocabulary: {n.parser.canon_matched_labels.join(', ')}</> : null}</div>}
+              {kind === 'merchant_payments' && n?.warnings?.length ? <div style={{ ...note, marginTop: 6, color: 'var(--c-fg-b45309)' }}>{n.warnings.join(' · ')}</div> : null}
             </div>
           ) : (
             <DetectPanel d={a.detect} sheet={sheet} setSheet={setSheet} headerRow={headerRow} setHeaderRow={setHeaderRow} footerMode={footerMode} setFooterMode={setFooterMode} />
@@ -569,7 +569,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
             <button style={btn} disabled={busy || (!file && !canUseKept)} onClick={() => analyze({ keepStep: true, dec: decisions })}>Re-check with these decisions</button>
             <button style={primary} disabled={busy || unresolved.length > 0} title={unresolved.length ? `${unresolved.length} store string(s) unresolved` : ''}
               onClick={() => { persist('2.5', { identity: decisions }); analyze({ keepStep: true, dec: decisions }).finally(() => setStep('2.5')) }}>Our numbers →</button>
-            {unresolved.length > 0 && <span style={{ ...note, color: '#ef4444' }}>{unresolved.length} unresolved: {unresolved.slice(0, 4).join(', ')}{unresolved.length > 4 ? ' …' : ''} — re-check after deciding</span>}
+            {unresolved.length > 0 && <span style={{ ...note, color: 'var(--c-fg-ef4444)' }}>{unresolved.length} unresolved: {unresolved.slice(0, 4).join(', ')}{unresolved.length > 4 ? ' …' : ''} — re-check after deciding</span>}
             {saveUi}
           </div>
         </div>
@@ -581,7 +581,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
           <p style={{ ...note, marginBottom: 12 }}>{a.verify.basis}.</p>
           {kind === 'other' && (
             <div>
-              <div style={{ ...card, borderColor: '#f59e0b', background: 'rgba(245,158,11,.08)', marginBottom: 10, fontSize: 13 }}>
+              <div style={{ ...card, borderColor: 'var(--c-bg-f59e0b)', background: 'rgba(245,158,11,.08)', marginBottom: 10, fontSize: 13 }}>
                 <b>No destination yet.</b> The platform has no table for &quot;{otherNameOf}&quot;. Confirming records it as <b>received</b> — {num(n.rows)} rows, {n.headers?.length} columns, the money columns below, and the kept file — and shows it that way in Stage 4. It is never written into another table and never dropped.
               </div>
               <div style={{ ...note, marginBottom: 6 }}>Columns: {n.headers?.join(' · ')}</div>
@@ -595,7 +595,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Distinct transactions</td><td style={mono}>{num(n.distinct_txns)}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Σ amount</td><td style={{ ...mono, fontWeight: 700 }}>{money(n.sum_amount)}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Σ gross profit</td><td style={mono}>{money(n.sum_gp)}</td></tr>
-                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Date span</td><td style={mono}>{n.date_span?.from || '—'} → {n.date_span?.to || '—'}{n.date_span?.undated_rows ? <span style={{ color: '#ef4444' }}> · {n.date_span.undated_rows} rows without a date</span> : null}</td></tr>
+                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Date span</td><td style={mono}>{n.date_span?.from || '—'} → {n.date_span?.to || '—'}{n.date_span?.undated_rows ? <span style={{ color: 'var(--c-fg-ef4444)' }}> · {n.date_span.undated_rows} rows without a date</span> : null}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Voided / refund rows</td><td style={mono}>{num(n.voided_rows)}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px', verticalAlign: 'top' }}>Per store</td><td style={{ ...note, textAlign: 'right' }}>{(n.per_store || []).slice(0, 12).map(s => `${s.value}: ${num(s.count)} · ${money(s.sum)}`).join(' | ')}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px', verticalAlign: 'top' }}>Per rep</td><td style={{ ...note, textAlign: 'right' }}>{(n.per_rep || []).slice(0, 12).map(s => `${s.value}: ${num(s.count)} · ${money(s.sum)}`).join(' | ')}</td></tr>
@@ -617,14 +617,14 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Σ gross profit</td><td style={mono}>{money(n.sum_gp)}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Σ tax (invoice-level)</td><td style={mono}>{money(n.sum_tax)}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Tender columns (declared at 2.5b)</td><td style={{ ...note, textAlign: 'right' }}>{n.tenders?.words}</td></tr>
-                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Date span</td><td style={mono}>{n.date_span?.from || '—'} → {n.date_span?.to || '—'}{n.date_span?.undated_rows ? <span style={{ color: '#ef4444' }}> · {n.date_span.undated_rows} rows without a date</span> : null}</td></tr>
+                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Date span</td><td style={mono}>{n.date_span?.from || '—'} → {n.date_span?.to || '—'}{n.date_span?.undated_rows ? <span style={{ color: 'var(--c-fg-ef4444)' }}> · {n.date_span.undated_rows} rows without a date</span> : null}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px', verticalAlign: 'top' }}>Per store</td><td style={{ ...note, textAlign: 'right' }}>{(n.per_store || []).slice(0, 12).map(s => `${s.value}: ${num(s.count)} · ${money(s.sum)}`).join(' | ')}</td></tr>
               </tbody>
             </table>
           )}
           {kind === 'x_report' && n && (
             <div style={{ marginBottom: 12 }}>
-              <div style={{ ...note, marginBottom: 6 }}>Close date: <b>{n.close_date || <span style={{ color: '#ef4444' }}>unknown — enter it</span>}</b>{n.date_source ? ` (${n.date_source})` : ''} · stores {num(n.stores)} · tender rows {num(n.rows)} · tenders seen: {(n.tenders_seen || []).join(', ')}</div>
+              <div style={{ ...note, marginBottom: 6 }}>Close date: <b>{n.close_date || <span style={{ color: 'var(--c-fg-ef4444)' }}>unknown — enter it</span>}</b>{n.date_source ? ` (${n.date_source})` : ''} · stores {num(n.stores)} · tender rows {num(n.rows)} · tenders seen: {(n.tenders_seen || []).join(', ')}</div>
               {!n.close_date && <label style={{ fontSize: 13, display: 'block', margin: '6px 0 10px' }}>The file name carries no date — the day this X-report is for: <input type="date" value={asOf} onChange={e => setAsOf(e.target.value)} style={{ ...inp, marginLeft: 8, padding: '4px 6px' }} /> <button style={{ ...btn, marginLeft: 8 }} disabled={busy || (!file && !canUseKept)} onClick={() => analyze({ keepStep: true })}>Re-read</button></label>}
               <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
                 <thead><tr style={{ color: 'var(--text2)' }}><th align="left">Store (sheet)</th><th align="left">Date</th><th align="right">Cash</th><th align="right">Card</th><th align="right">Other</th><th align="right">Total</th><th align="right">Sheet&apos;s total</th><th align="right">Diff</th></tr></thead>
@@ -635,10 +635,10 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
           )}
           {kind === 'merchant_payments' && n && (
             <div style={{ marginBottom: 12 }}>
-              <div style={{ ...note, marginBottom: 6 }}>Role <b>{n.settlement_role}</b> ({n.role_source}) · {n.grain} · merchants {(n.merchants || []).length} · days {(n.dates || []).length}{n.unmapped_merchants?.length ? <span style={{ color: '#ef4444' }}> · unmapped: {n.unmapped_merchants.join(', ')}</span> : null}{typeof n.overlap_with_other_sources === 'number' && n.overlap_with_other_sources > 0 ? <span style={{ color: '#ef4444' }}> · {n.overlap_with_other_sources} merchant-day(s) already landed by the scheduled pull</span> : null}</div>
+              <div style={{ ...note, marginBottom: 6 }}>Role <b>{n.settlement_role}</b> ({n.role_source}) · {n.grain} · merchants {(n.merchants || []).length} · days {(n.dates || []).length}{n.unmapped_merchants?.length ? <span style={{ color: 'var(--c-fg-ef4444)' }}> · unmapped: {n.unmapped_merchants.join(', ')}</span> : null}{typeof n.overlap_with_other_sources === 'number' && n.overlap_with_other_sources > 0 ? <span style={{ color: 'var(--c-fg-ef4444)' }}> · {n.overlap_with_other_sources} merchant-day(s) already landed by the scheduled pull</span> : null}</div>
               <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
                 <thead><tr style={{ color: 'var(--text2)' }}><th align="left">Merchant id</th><th align="left">Store</th><th align="left">Business day</th><th align="right">Gross</th><th align="right">Refunds</th><th align="right">Net</th><th align="right">Fees</th><th align="right">Txns</th></tr></thead>
-                <tbody>{(n.per_merchant_day || []).map(r => <tr key={`${r.merchant_id}|${r.date}`} style={{ borderTop: '1px solid var(--border)' }}><td>{r.merchant_id}{r.store_label ? <span style={note}> · {r.store_label}</span> : null}</td><td>{r.store_code || <span style={{ color: '#ef4444' }}>unmapped</span>}</td><td>{r.date}</td><td style={mono}>{money(r.gross)}</td><td style={mono}>{money(r.refunds)}</td><td style={{ ...mono, fontWeight: 700 }}>{money(r.net)}</td><td style={mono}>{money(r.fees)}</td><td style={mono}>{num(r.count)}</td></tr>)}
+                <tbody>{(n.per_merchant_day || []).map(r => <tr key={`${r.merchant_id}|${r.date}`} style={{ borderTop: '1px solid var(--border)' }}><td>{r.merchant_id}{r.store_label ? <span style={note}> · {r.store_label}</span> : null}</td><td>{r.store_code || <span style={{ color: 'var(--c-fg-ef4444)' }}>unmapped</span>}</td><td>{r.date}</td><td style={mono}>{money(r.gross)}</td><td style={mono}>{money(r.refunds)}</td><td style={{ ...mono, fontWeight: 700 }}>{money(r.net)}</td><td style={mono}>{money(r.fees)}</td><td style={mono}>{num(r.count)}</td></tr>)}
                   <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}><td colSpan={3}>Σ ours</td><td style={mono}>{money(n.sum_gross)}</td><td style={mono}>{money(n.sum_refunds)}</td><td style={mono}>{money(n.sum_net)}</td><td style={mono}>{money(n.sum_fees)}</td><td style={mono}>{num(n.txn_count)}</td></tr>
                   {n.file_totals && <tr style={{ color: 'var(--text2)' }}><td colSpan={3}>File&apos;s TOTAL row</td><td style={mono}>{money(n.file_totals.gross)}</td><td /><td style={mono}>{money(n.file_totals.net)}</td><td style={mono}>{money(n.file_totals.fees)}</td><td style={mono}>{num(n.file_totals.count)}</td></tr>}
                   {n.difference && <tr style={{ fontWeight: 700, color: (n.difference.gross === 0 && n.difference.net === 0 && n.difference.fees === 0 && n.difference.count === 0) ? '#16a34a' : '#ef4444' }}><td colSpan={3}>Difference</td><td style={mono}>{money(n.difference.gross)}</td><td /><td style={mono}>{money(n.difference.net)}</td><td style={mono}>{money(n.difference.fees)}</td><td style={mono}>{num(n.difference.count)}</td></tr>}</tbody>
@@ -655,7 +655,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                   <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Rows your bill-payment rule counts / does not (order type + product tokens — metric source of truth, product list)</td><td style={mono}>{num(n.billpay_rows)} / {num(n.non_billpay_rows)}</td></tr>
                   <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Σ bill payments (what the coverage recon will read) · count</td><td style={{ ...mono, fontWeight: 700 }}>{money(n.sum_amount)} · {num(n.count)}</td></tr>
                   <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Date span</td><td style={mono}>{n.date_span?.from || '—'} → {n.date_span?.to || '—'}</td></tr>
-                  <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Feed this lands in</td><td style={{ textAlign: 'right' }}><b>{sourceLabel(a.target_table)}</b>{n.feed?.processor ? <span style={note}> · your recon reads &quot;{n.feed.processor}&quot;</span> : n.feed?.note ? <span style={{ ...note, color: '#b45309' }}> · {n.feed.note}</span> : null}</td></tr>
+                  <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Feed this lands in</td><td style={{ textAlign: 'right' }}><b>{sourceLabel(a.target_table)}</b>{n.feed?.processor ? <span style={note}> · your recon reads &quot;{n.feed.processor}&quot;</span> : n.feed?.note ? <span style={{ ...note, color: 'var(--c-fg-b45309)' }}> · {n.feed.note}</span> : null}</td></tr>
                 </tbody>
               </table>
               <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
@@ -670,7 +670,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Rows in file / usable / footer / to land</td><td style={mono}>{num(a.verify.rows_in_file)} / {num(a.verify.rows_usable)} / {a.verify.footer_rows} / <b>{num(a.verify.rows_to_land)}</b></td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Units</td><td style={mono}>{num(n.units)}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Σ cost</td><td style={{ ...mono, fontWeight: 700 }}>{money(n.sum_cost)}</td></tr>
-                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Units with a device key (IMEI / serial) / without (ordered, not yet received — reported, not landed)</td><td style={mono}>{num(n.rows_with_device_key)} / <span style={{ color: n.rows_without_device_key ? '#b45309' : 'inherit' }}>{num(n.rows_without_device_key)}</span></td></tr>
+                <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>Units with a device key (IMEI / serial) / without (ordered, not yet received — reported, not landed)</td><td style={mono}>{num(n.rows_with_device_key)} / <span style={{ color: n.rows_without_device_key ? 'var(--c-fg-b45309)' : 'inherit' }}>{num(n.rows_without_device_key)}</span></td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px', verticalAlign: 'top' }}>Per store (units · Σ cost)</td><td style={{ ...note, textAlign: 'right' }}>{((n.per_store || []) as InvNumbers['per_store']).slice(0, 12).map(s => `${s.value}: ${num(s.units)} · ${money(s.sum)}`).join(' | ')}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '5px 4px' }}>As of (the date this listing was taken)</td><td style={{ textAlign: 'right' }}><input type="date" value={asOf} onChange={e => setAsOf(e.target.value)} style={{ ...inp, padding: '4px 6px' }} /></td></tr>
               </tbody>
@@ -681,13 +681,13 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
               <tbody>
                 <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}><td style={{ padding: '6px 4px' }}>Our total</td><td style={mono}>{money(tie.our_total)}</td></tr>
                 <tr><td style={{ padding: '4px 4px' }}>File&apos;s own total ({tie.file_total_source === 'footer' ? `footer row${a.detect.footer.rows.length ? ` ${a.detect.footer.rows.map(r => r.row).join(', ')}` : ''}` : tie.file_total_source === 'typed' ? 'typed by you' : 'none'})</td><td style={mono}>{money(tie.file_total)}</td></tr>
-                <tr style={{ fontWeight: 700, color: tie.match ? '#16a34a' : '#ef4444' }}><td style={{ padding: '4px 4px' }}>Difference</td><td style={mono}>{tie.difference === null ? 'nothing to compare' : money(tie.difference)}</td></tr>
+                <tr style={{ fontWeight: 700, color: tie.match ? 'var(--c-fg-16a34a)' : 'var(--c-fg-ef4444)' }}><td style={{ padding: '4px 4px' }}>Difference</td><td style={mono}>{tie.difference === null ? 'nothing to compare' : money(tie.difference)}</td></tr>
               </tbody>
             </table>
           )}
           {!!a.verify.ignored_money_columns.length && kind !== 'other' && <div style={{ ...note, marginBottom: 6 }}>Ignored money columns (recorded): {a.verify.ignored_money_columns.map(m => `"${m.header}" Σ ${money(m.sum)}`).join(' · ')}</div>}
           {!!Object.keys(a.verify.excluded || {}).length && <div style={{ ...note, marginBottom: 6 }}>Excluded as not yours: {Object.entries(a.verify.excluded).map(([k, v]) => `${k} (${v})`).join(' · ')}</div>}
-          {!!a.verify.refusals.length && <div style={{ ...card, borderColor: '#ef4444', background: 'rgba(239,68,68,.06)', fontSize: 13, marginBottom: 10 }}><b>Before this can be confirmed:</b><ul style={{ margin: '4px 0 0 18px' }}>{a.verify.refusals.map((r, i) => <li key={i}>{r}</li>)}</ul></div>}
+          {!!a.verify.refusals.length && <div style={{ ...card, borderColor: 'var(--c-bg-ef4444)', background: 'rgba(239,68,68,.06)', fontSize: 13, marginBottom: 10 }}><b>Before this can be confirmed:</b><ul style={{ margin: '4px 0 0 18px' }}>{a.verify.refusals.map((r, i) => <li key={i}>{r}</li>)}</ul></div>}
           {kind !== 'other' && !a.detect.footer.detected && (
             <label style={{ fontSize: 13, display: 'block', margin: '10px 0' }}>The file states no total — type the export&apos;s total (recorded as &quot;typed&quot;):
               <input value={typedTotal} onChange={e => setTypedTotal(e.target.value)} placeholder="e.g. 4196.10" style={{ ...inp, marginLeft: 8, width: 160 }} />
@@ -758,9 +758,9 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
           </>}
           {commitRes && (
             <div>
-              <div style={{ ...card, borderColor: commitRes.ok && commitRes.verified !== false ? '#16a34a' : commitRes.recorded ? '#f59e0b' : '#ef4444', background: commitRes.ok && commitRes.verified !== false ? 'rgba(22,163,74,.06)' : commitRes.recorded ? 'rgba(245,158,11,.08)' : 'rgba(239,68,68,.06)', marginBottom: 12 }}>
+              <div style={{ ...card, borderColor: commitRes.ok && commitRes.verified !== false ? 'var(--c-bg-16a34a)' : commitRes.recorded ? 'var(--c-bg-f59e0b)' : 'var(--c-bg-ef4444)', background: commitRes.ok && commitRes.verified !== false ? 'rgba(22,163,74,.06)' : commitRes.recorded ? 'rgba(245,158,11,.08)' : 'rgba(239,68,68,.06)', marginBottom: 12 }}>
                 <div style={{ fontWeight: 700, fontSize: 15 }}>{commitRes.ok && commitRes.verified !== false ? 'Saved and verified' : commitRes.recorded ? 'Recorded as received — no destination yet' : commitRes.ok ? 'Rows landed, but NOT verified' : 'Saved, but NOT verified'} — {title}</div>
-                {(!commitRes.ok || commitRes.verified === false) && <ul style={{ margin: '6px 0 0 18px', color: commitRes.recorded ? '#b45309' : '#ef4444', fontSize: 13 }}>{commitRes.problems.map((p2, i) => <li key={i}>{p2}</li>)}</ul>}
+                {(!commitRes.ok || commitRes.verified === false) && <ul style={{ margin: '6px 0 0 18px', color: commitRes.recorded ? 'var(--c-fg-b45309)' : 'var(--c-fg-ef4444)', fontSize: 13 }}>{commitRes.problems.map((p2, i) => <li key={i}>{p2}</li>)}</ul>}
                 {commitRes.ok && commitRes.verified === false && commitRes.activation_gate?.blocked && (
                   <div style={{ marginTop: 6 }}><button style={{ ...primary, fontSize: 12, padding: '4px 10px' }} onClick={() => setStep('2.5a')}>Map what counts as an activation (2.5a)</button></div>
                 )}
@@ -776,7 +776,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                   <tbody>
                     <tr style={{ borderTop: '2px solid var(--border)', fontWeight: 700 }}><td style={{ padding: '5px 4px' }}>Our total (re-read)</td><td style={mono}>{money(commitRes.verified_numbers.tie.our_total)}</td></tr>
                     <tr><td style={{ padding: '5px 4px' }}>File&apos;s own total</td><td style={mono}>{money(commitRes.verified_numbers.tie.file_total)}</td></tr>
-                    <tr style={{ fontWeight: 700, color: commitRes.verified_numbers.tie.match ? '#16a34a' : '#ef4444' }}><td style={{ padding: '5px 4px' }}>Difference</td><td style={mono}>{money(commitRes.verified_numbers.tie.difference)}</td></tr>
+                    <tr style={{ fontWeight: 700, color: commitRes.verified_numbers.tie.match ? 'var(--c-fg-16a34a)' : 'var(--c-fg-ef4444)' }}><td style={{ padding: '5px 4px' }}>Difference</td><td style={mono}>{money(commitRes.verified_numbers.tie.difference)}</td></tr>
                   </tbody>
                 </table>
               )}
@@ -786,7 +786,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                 <div style={{ ...card, background: 'var(--bg,transparent)', fontSize: 13, marginBottom: 10 }}>
                   <b>Activation types in the landed rows:</b>{' '}
                   {commitRes.activation_gate.open
-                    ? (commitRes.activation_gate.attested ? <>none — attested by {commitRes.activation_gate.attested.by || '?'}: &quot;{commitRes.activation_gate.attested.reason}&quot;</> : <span style={{ color: '#ef4444' }}>none could be told apart — {commitRes.activation_gate.reason}</span>)
+                    ? (commitRes.activation_gate.attested ? <>none — attested by {commitRes.activation_gate.attested.by || '?'}: &quot;{commitRes.activation_gate.attested.reason}&quot;</> : <span style={{ color: 'var(--c-fg-ef4444)' }}>none could be told apart — {commitRes.activation_gate.reason}</span>)
                     : <>{String((commitRes.verified_numbers as Record<string, unknown>).activation_classes ? ((commitRes.verified_numbers as { activation_classes: { activation_type_transactions: number } }).activation_classes.activation_type_transactions) : '')} activation-type invoices counted — the Sales Report and Executive MTD split them by type.</>}
                 </div>
               )}
@@ -797,7 +797,7 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                         {(commitRes.verified_numbers.tender_recon.rows || []).filter(r2 => r2.xreport && r2.verdict !== 'matches the X-report').slice(0, 8).map(r2 => <div key={`${r2.store}|${r2.date}`} style={{ ...note, fontSize: 12 }}>{r2.store} {r2.date}: {r2.verdict}</div>)}
                         {commitRes.verified_numbers.tender_basis && <div style={{ ...note, fontSize: 12, marginTop: 4 }}>Cash Collected and the cash / card recon read <b>{commitRes.verified_numbers.tender_basis.label}</b> ({commitRes.verified_numbers.tender_basis.source}). <a href={commitRes.verified_numbers.tender_recon.report || '/closing/tender-recon-3way'}>open the tender recon</a></div>}
                         {(n as unknown as TenderNumbers | undefined)?.tax?.sum !== undefined && <div style={{ ...note, fontSize: 12 }}>Σ tax (invoice-level) {money((commitRes.verified_numbers.numbers as unknown as TenderNumbers)?.tax?.sum ?? null)} — a tie-out; the Tax Collected report does not read invoice-level tax yet.</div>}</>
-                    : <span style={{ color: '#b45309' }}>{commitRes.verified_numbers.tender_recon.error}</span>}
+                    : <span style={{ color: 'var(--c-fg-b45309)' }}>{commitRes.verified_numbers.tender_recon.error}</span>}
                 </div>
               )}
               {commitRes.verified_numbers.shows_in && <ShowsIn info={commitRes.verified_numbers.shows_in} lead="These rows now show in" />}
@@ -806,14 +806,14 @@ export function Stage2Flow({ state, who, reloadState, instanceKey, setInstanceKe
                 <div style={{ ...card, background: 'var(--bg,transparent)', fontSize: 13, marginBottom: 10 }}>
                   <b>Bill payments extracted from this export:</b> {commitRes.verified_numbers.billpay_extract.basis
                     ? <>{num(commitRes.verified_numbers.billpay_extract.lines)} line(s), {money(commitRes.verified_numbers.billpay_extract.sum)} — {commitRes.verified_numbers.billpay_extract.feed_present ? `the carrier's own bill-pay report is present for these days; difference ${money(commitRes.verified_numbers.billpay_extract.difference)}` : 'no carrier bill-pay report for these days, so this IS the bill-payments figure'} · <a href={commitRes.verified_numbers.billpay_extract.report || '/commcalc/bill-payments'}>open the Bill Payments report</a></>
-                    : <span style={{ color: '#b45309' }}>{commitRes.verified_numbers.billpay_extract.error}</span>}
+                    : <span style={{ color: 'var(--c-fg-b45309)' }}>{commitRes.verified_numbers.billpay_extract.error}</span>}
                 </div>
               )}
               {commitRes.verified_numbers.sold_check && (
                 <div style={{ ...card, background: 'var(--bg,transparent)', fontSize: 13, marginBottom: 10 }}>
                   <b>Auto-check against sales and activations:</b> {commitRes.verified_numbers.sold_check.basis
-                    ? <><span style={{ color: commitRes.verified_numbers.sold_check.activated_not_rung_out ? '#b45309' : 'inherit' }}>{num(commitRes.verified_numbers.sold_check.activated_not_rung_out)} unit(s) activated but still on hand</span> · {num(commitRes.verified_numbers.sold_check.sold_not_cleared)} sold but still on hand{commitRes.verified_numbers.sold_check.activations_unpairable ? <> · {num(commitRes.verified_numbers.sold_check.activations_unpairable)} activation(s) could not be paired to a unit (listed, not guessed)</> : null}{!commitRes.verified_numbers.sold_check.activations_present && <> · no activation report loaded — checked against sales only</>} · <a href={commitRes.verified_numbers.sold_check.report || '/commcalc/inventory-sold-recon'}>open Inventory vs Sold</a></>
-                    : <span style={{ color: '#b45309' }}>{commitRes.verified_numbers.sold_check.error}</span>}
+                    ? <><span style={{ color: commitRes.verified_numbers.sold_check.activated_not_rung_out ? 'var(--c-fg-b45309)' : 'inherit' }}>{num(commitRes.verified_numbers.sold_check.activated_not_rung_out)} unit(s) activated but still on hand</span> · {num(commitRes.verified_numbers.sold_check.sold_not_cleared)} sold but still on hand{commitRes.verified_numbers.sold_check.activations_unpairable ? <> · {num(commitRes.verified_numbers.sold_check.activations_unpairable)} activation(s) could not be paired to a unit (listed, not guessed)</> : null}{!commitRes.verified_numbers.sold_check.activations_present && <> · no activation report loaded — checked against sales only</>} · <a href={commitRes.verified_numbers.sold_check.report || '/commcalc/inventory-sold-recon'}>open Inventory vs Sold</a></>
+                    : <span style={{ color: 'var(--c-fg-b45309)' }}>{commitRes.verified_numbers.sold_check.error}</span>}
                 </div>
               )}
               <div style={{ display: 'flex', gap: 8 }}>

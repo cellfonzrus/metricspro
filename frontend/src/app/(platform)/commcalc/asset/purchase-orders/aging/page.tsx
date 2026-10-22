@@ -104,7 +104,7 @@ export default function UnsoldAgingPage() {
           optionsUrl="/api/v1/core/filter-options" />
 
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-          <div style={{ ...tile, borderColor: '#dc2626' }}>
+          <div style={{ ...tile, borderColor: 'var(--c-bg-dc2626)' }}>
             <div style={{ fontSize: 12, color: 'var(--text2)' }}>Flagged (&gt; {threshold} days)</div>
             <div style={{ fontSize: 24, fontWeight: 700 }}>{flagged}</div>
           </div>

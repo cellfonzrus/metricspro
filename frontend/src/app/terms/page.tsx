@@ -8,14 +8,14 @@ export const metadata: Metadata = {
 const UPDATED = 'September 4, 2026'
 
 export default function TermsOfServicePage() {
-  const h2: React.CSSProperties = { fontSize: 19, fontWeight: 700, margin: '28px 0 8px', color: '#0f172a' }
+  const h2: React.CSSProperties = { fontSize: 19, fontWeight: 700, margin: '28px 0 8px', color: 'var(--c-fg-0f172a)' }
   const p: React.CSSProperties = { margin: '0 0 12px', lineHeight: 1.6 }
   const li: React.CSSProperties = { margin: '0 0 6px', lineHeight: 1.55 }
   return (
-    <main style={{ maxWidth: 820, margin: '0 auto', padding: '48px 24px 80px', color: '#1f2937',
+    <main style={{ maxWidth: 820, margin: '0 auto', padding: '48px 24px 80px', color: 'var(--c-fg-1f2937)',
       fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif', fontSize: 15 }}>
-      <h1 style={{ fontSize: 30, fontWeight: 800, margin: '0 0 4px', color: '#0f172a' }}>Terms of Service</h1>
-      <p style={{ color: '#64748b', margin: '0 0 24px', fontSize: 14 }}>Last updated: {UPDATED}</p>
+      <h1 style={{ fontSize: 30, fontWeight: 800, margin: '0 0 4px', color: 'var(--c-fg-0f172a)' }}>Terms of Service</h1>
+      <p style={{ color: 'var(--c-fg-64748b)', margin: '0 0 24px', fontSize: 14 }}>Last updated: {UPDATED}</p>
 
       <p style={p}>
         These Terms of Service (&ldquo;Terms&rdquo;) govern access to and use of the <strong>MetricsPro</strong>{' '}
@@ -94,7 +94,7 @@ export default function TermsOfServicePage() {
       <h2 style={h2}>9. Contact</h2>
       <p style={p}>
         Questions about these Terms can be directed to <strong>IT Solutions of LI Inc</strong> at{' '}
-        <a href="mailto:sanjot@cellfonzrus.com" style={{ color: '#2563eb' }}>sanjot@cellfonzrus.com</a>.
+        <a href="mailto:sanjot@cellfonzrus.com" style={{ color: 'var(--c-fg-2563eb)' }}>sanjot@cellfonzrus.com</a>.
       </p>
     </main>
   )

@@ -76,7 +76,7 @@ export default function AccessLogPage() {
           <input type="checkbox" checked={anonOnly} onChange={e => setAnonOnly(e.target.checked)} /> Anonymous only
         </label>
         <button className="btn" disabled={loading} onClick={load}>{loading ? '…' : 'Refresh'}</button>
-        <button className="btn" onClick={revokeAllSessions} style={{ marginLeft: 'auto', color: '#dc2626' }} title="Incident containment: sign out all active sessions">Revoke all sessions</button>
+        <button className="btn" onClick={revokeAllSessions} style={{ marginLeft: 'auto', color: 'var(--c-fg-dc2626)' }} title="Incident containment: sign out all active sessions">Revoke all sessions</button>
       </div>
 
       {msg && <div style={{ fontSize: 12.5, color: 'var(--text2)', background: 'var(--surface2)', borderRadius: 8, padding: '8px 12px', marginBottom: 12 }}>{msg}</div>}
@@ -89,7 +89,7 @@ export default function AccessLogPage() {
               <span key={b.ip} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface2)', borderRadius: 6, padding: '3px 8px', fontSize: 12 }}>
                 <span style={{ fontFamily: 'monospace' }}>{b.ip}</span>
                 {b.expires_at && <span style={{ color: 'var(--text3)', fontSize: 10 }}>until {String(b.expires_at).replace('T', ' ').slice(0, 16)}</span>}
-                <button onClick={() => unblockIp(b.ip)} style={{ border: 'none', background: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 12 }} title="Unblock">✕</button>
+                <button onClick={() => unblockIp(b.ip)} style={{ border: 'none', background: 'none', color: 'var(--c-fg-dc2626)', cursor: 'pointer', fontSize: 12 }} title="Unblock">✕</button>
               </span>
             ))}
           </div>
@@ -107,10 +107,10 @@ export default function AccessLogPage() {
                     <td style={{ padding: '4px 12px 4px 0', fontWeight: 600, fontFamily: 'monospace' }}>
                       {r.key}
                       {group === 'ip' && r.key && r.key !== '(no-ip)' && (
-                        <button onClick={() => blockIp(r.key)} style={{ marginLeft: 8, border: '1px solid var(--border)', background: 'var(--surface2)', borderRadius: 5, padding: '1px 6px', fontSize: 10.5, color: '#dc2626', cursor: 'pointer' }} title="Block this IP">Block</button>
+                        <button onClick={() => blockIp(r.key)} style={{ marginLeft: 8, border: '1px solid var(--border)', background: 'var(--surface2)', borderRadius: 5, padding: '1px 6px', fontSize: 10.5, color: 'var(--c-fg-dc2626)', cursor: 'pointer' }} title="Block this IP">Block</button>
                       )}
                     </td>
-                    <td style={{ padding: '4px 12px 4px 0', fontWeight: 700, color: r.requests > 500 ? '#dc2626' : 'var(--text)' }}>{r.requests}</td>
+                    <td style={{ padding: '4px 12px 4px 0', fontWeight: 700, color: r.requests > 500 ? 'var(--c-fg-dc2626)' : 'var(--text)' }}>{r.requests}</td>
                     <td style={{ padding: '4px 12px 4px 0' }}>{r.distinct_paths}</td>
                     <td style={{ padding: '4px 12px 4px 0' }}>{r.anonymous ? <span className="badge badge-amber" style={{ fontSize: 10 }}>anon</span> : ''}</td>
                     <td style={{ padding: '4px 12px 4px 0', color: 'var(--text3)' }}>{String(r.first || '').replace('T', ' ').slice(0, 16)}</td>
@@ -129,13 +129,13 @@ export default function AccessLogPage() {
                 {rows.map((r, i) => (
                   <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={{ padding: '3px 12px 3px 0', color: 'var(--text3)', whiteSpace: 'nowrap' }}>{String(r.created_at || '').replace('T', ' ').slice(0, 19)}</td>
-                    <td style={{ padding: '3px 12px 3px 0' }}>{r.anonymous ? <span style={{ color: '#b45309' }}>anon</span> : (r.actor_email || r.actor_role || r.actor_auth_id || '—')}</td>
+                    <td style={{ padding: '3px 12px 3px 0' }}>{r.anonymous ? <span style={{ color: 'var(--c-fg-b45309)' }}>anon</span> : (r.actor_email || r.actor_role || r.actor_auth_id || '—')}</td>
                     <td style={{ padding: '3px 12px 3px 0' }}>{r.method}</td>
                     <td style={{ padding: '3px 12px 3px 0', fontFamily: 'monospace', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.path}</td>
-                    <td style={{ padding: '3px 12px 3px 0', color: r.status >= 400 ? '#dc2626' : 'var(--text2)' }}>{r.status}</td>
+                    <td style={{ padding: '3px 12px 3px 0', color: r.status >= 400 ? 'var(--c-fg-dc2626)' : 'var(--text2)' }}>{r.status}</td>
                     <td style={{ padding: '3px 12px 3px 0', fontFamily: 'monospace' }}>
                       {r.ip}
-                      {r.ip && <button onClick={() => blockIp(r.ip)} style={{ marginLeft: 6, border: '1px solid var(--border)', background: 'var(--surface2)', borderRadius: 5, padding: '0 5px', fontSize: 10, color: '#dc2626', cursor: 'pointer' }} title="Block this IP">Block</button>}
+                      {r.ip && <button onClick={() => blockIp(r.ip)} style={{ marginLeft: 6, border: '1px solid var(--border)', background: 'var(--surface2)', borderRadius: 5, padding: '0 5px', fontSize: 10, color: 'var(--c-fg-dc2626)', cursor: 'pointer' }} title="Block this IP">Block</button>}
                     </td>
                     <td style={{ padding: '3px 12px 3px 0' }}>{gmap(r.gps_lat, r.gps_lng)}</td>
                   </tr>

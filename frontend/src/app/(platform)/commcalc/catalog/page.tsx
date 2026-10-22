@@ -116,16 +116,16 @@ export default function CatalogCategoriesPage() {
       </div>
 
       {!enabled && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fde047', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#92400e', margin: '12px 0' }}>
+        <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde047)', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: 'var(--c-fg-92400e)', margin: '12px 0' }}>
           Catalog-driven accessory classification is <b>OFF</b>. Turn it on in <a href="/commcalc/sales-report" style={{ color: 'var(--accent)' }}>Sales Report → ⚙️ Classification settings</a> for these categories to affect accessory sales/pay. You can still recategorize here.
         </div>
       )}
       {!canEdit && (
-        <div style={{ background: '#fef9c3', border: '1px solid #fde047', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#92400e', margin: '12px 0' }}>
+        <div style={{ background: 'var(--c-bg-fef9c3)', border: '1px solid var(--c-bg-fde047)', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: 'var(--c-fg-92400e)', margin: '12px 0' }}>
           🔒 Read-only — editing requires the <b>Classification settings</b> permission.
         </div>
       )}
-      {hint && <div style={{ background: '#fee2e2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#991b1b', margin: '12px 0' }}>{hint}</div>}
+      {hint && <div style={{ background: 'var(--c-bg-fee2e2)', border: '1px solid var(--c-bg-fecaca)', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: 'var(--c-fg-991b1b)', margin: '12px 0' }}>{hint}</div>}
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '14px 0' }}>
         <input style={{ ...sel, width: 240 }} placeholder="Search product / SKU / UPC / department…" value={search} onChange={e => setSearch(e.target.value)} />
@@ -136,7 +136,7 @@ export default function CatalogCategoriesPage() {
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}>
           <input type="checkbox" checked={onlyOv} onChange={e => setOnlyOv(e.target.checked)} /> Only recategorized
         </label>
-        <span style={{ fontSize: 12, color: msg.startsWith('❌') ? '#dc2626' : 'var(--text3)' }}>{msg || (search.trim() !== searchQ ? 'typing…' : '')}</span>
+        <span style={{ fontSize: 12, color: msg.startsWith('❌') ? 'var(--c-fg-dc2626)' : 'var(--text3)' }}>{msg || (search.trim() !== searchQ ? 'typing…' : '')}</span>
       </div>
 
       {loading ? <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>Loading…</div> : (
@@ -176,7 +176,7 @@ export default function CatalogCategoriesPage() {
                         {opts.map(c => <option key={c} value={c}>{c}{c.toLowerCase() === (r.file_category || '').trim().toLowerCase() ? ' (file)' : ''}</option>)}
                         <option value="__new__">➕ Create new…</option>
                       </select>
-                      {r.overridden && <span style={{ marginLeft: 6, fontSize: 10, color: '#2563eb', fontWeight: 700 }} title={`file: ${r.file_category || '—'}`}>overridden</span>}
+                      {r.overridden && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-fg-2563eb)', fontWeight: 700 }} title={`file: ${r.file_category || '—'}`}>overridden</span>}
                       <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
                         <input style={{ ...sel, fontSize: 11, padding: '2px 6px', width: 120 }} placeholder="new category…" disabled={!canEdit}
                           value={newCat[k] || ''} onChange={e => setNewCat(s => ({ ...s, [k]: e.target.value }))}

@@ -65,7 +65,7 @@ const STATUS_COLORS: Record<string, string> = {
 function statusPill(status: string) {
   return (
     <span style={{
-      background: STATUS_COLORS[status] ? STATUS_COLORS[status] + '20' : '#f3f4f6',
+      background: STATUS_COLORS[status] ? STATUS_COLORS[status] + '20' : 'var(--c-bg-f3f4f6)',
       color: STATUS_COLORS[status] || 'var(--text2)',
       borderRadius: 6, padding: '2px 8px', fontSize: 12, fontWeight: 600
     }}>{status}</span>
@@ -343,10 +343,10 @@ export default function AssetPage() {
           {/* Top stat cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16, marginBottom: 24 }}>
             <StatCard label="Distributor Fees Collected" value={fmt(summary.total_fees)} sub={`${summary.total_rows.toLocaleString()} devices`} color="var(--accent)" />
-            <StatCard label="Open Balance Owed" value={fmt(summary.total_open_balance)} sub="still owed to Distributor" color="#dc2626" />
-            <StatCard label="Total Reimbursed" value={fmt(summary.total_reimbursed)} sub="Carrier → Distributor credited" color="#059669" />
+            <StatCard label="Open Balance Owed" value={fmt(summary.total_open_balance)} sub="still owed to Distributor" color="var(--c-fg-dc2626)" />
+            <StatCard label="Total Reimbursed" value={fmt(summary.total_reimbursed)} sub="Carrier → Distributor credited" color="var(--c-fg-059669)" />
             <StatCard label="All-Time Owed" value={fmt(summary.total_owed_alltime)} sub="gross financed" />
-            <StatCard label="On Inventory" value={fmt(summary.on_inventory)} sub="not yet sold" color="#d97706" />
+            <StatCard label="On Inventory" value={fmt(summary.on_inventory)} sub="not yet sold" color="var(--c-fg-d97706)" />
           </div>
 
           {/* By Status + By Category side by side */}
@@ -372,7 +372,7 @@ export default function AssetPage() {
                     <tr key={status} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
                       <td style={{ padding: '10px 14px' }}>{statusPill(status)}</td>
                       <td style={{ padding: '10px 14px', fontSize: 13 }}>{d.count.toLocaleString()}</td>
-                      <td style={{ padding: '10px 14px', fontSize: 13, fontWeight: 600, color: d.owed > 0 ? '#dc2626' : 'var(--text2)' }}>{fmt(d.owed)}</td>
+                      <td style={{ padding: '10px 14px', fontSize: 13, fontWeight: 600, color: d.owed > 0 ? 'var(--c-fg-dc2626)' : 'var(--text2)' }}>{fmt(d.owed)}</td>
                       <td style={{ padding: '10px 14px', fontSize: 13 }}>{fmt(d.fees)}</td>
                     </tr>
                   ))}
@@ -411,7 +411,7 @@ export default function AssetPage() {
                             {cat || '—'}
                           </td>
                           <td style={{ padding: '10px 14px', fontSize: 13 }}>{d.count.toLocaleString()}</td>
-                          <td style={{ padding: '10px 14px', fontSize: 13, fontWeight: 600, color: d.owed > 0 ? '#dc2626' : 'var(--text2)' }}>{fmt(d.owed)}</td>
+                          <td style={{ padding: '10px 14px', fontSize: 13, fontWeight: 600, color: d.owed > 0 ? 'var(--c-fg-dc2626)' : 'var(--text2)' }}>{fmt(d.owed)}</td>
                           <td style={{ padding: '10px 14px', fontSize: 13 }}>{fmt(d.fees)}</td>
                         </tr>
                       )
@@ -452,8 +452,8 @@ export default function AssetPage() {
                         <tr key={status} style={{ borderTop: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
                           <td style={{ padding: '8px 14px' }}>{statusPill(status)}</td>
                           <td style={{ padding: '8px 14px', fontSize: 13 }}>{s.count.toLocaleString()}</td>
-                          <td style={{ padding: '8px 14px', fontSize: 13, fontWeight: 600, color: s.owed > 0 ? '#dc2626' : 'var(--text2)' }}>{fmt(s.owed)}</td>
-                          <td style={{ padding: '8px 14px', fontSize: 13, color: '#059669' }}>{fmt(s.reimbursed)}</td>
+                          <td style={{ padding: '8px 14px', fontSize: 13, fontWeight: 600, color: s.owed > 0 ? 'var(--c-fg-dc2626)' : 'var(--text2)' }}>{fmt(s.owed)}</td>
+                          <td style={{ padding: '8px 14px', fontSize: 13, color: 'var(--c-fg-059669)' }}>{fmt(s.reimbursed)}</td>
                           <td style={{ padding: '8px 14px', fontSize: 13 }}>{fmt(s.fees)}</td>
                         </tr>
                       ))}
@@ -483,13 +483,13 @@ export default function AssetPage() {
                             <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.contract_type || '—'}</td>
                             <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.status ? statusPill(r.status) : '—'}</td>
                             <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.date_sold ? String(r.date_sold).slice(0,10) : '—'}</td>
-                            <td style={{ padding: '8px 12px', fontSize: 12, fontWeight: 600, color: (r.owed_to_vip || 0) > 0 ? '#dc2626' : 'var(--text2)' }}>{fmt(r.owed_to_vip || 0)}</td>
-                            <td style={{ padding: '8px 12px', fontSize: 12, color: '#059669' }}>{fmt(r.reimbursement || 0)}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12, fontWeight: 600, color: (r.owed_to_vip || 0) > 0 ? 'var(--c-fg-dc2626)' : 'var(--text2)' }}>{fmt(r.owed_to_vip || 0)}</td>
+                            <td style={{ padding: '8px 12px', fontSize: 12, color: 'var(--c-fg-059669)' }}>{fmt(r.reimbursement || 0)}</td>
                             {(() => {
                               const under = r.selling_price != null && (r.owed_to_vip || 0) - (r.reimbursement || 0) - (r.selling_price || 0) > 0.01
                               return (
                                 <td title={under ? `Undercharge: cost ${fmt(r.owed_to_vip||0)} > reimbursed ${fmt(r.reimbursement||0)} + selling ${fmt(r.selling_price||0)}` : ''}
-                                    style={{ padding: '8px 12px', fontSize: 12, fontWeight: under ? 700 : 400, color: under ? '#dc2626' : 'var(--text1)' }}>
+                                    style={{ padding: '8px 12px', fontSize: 12, fontWeight: under ? 700 : 400, color: under ? 'var(--c-fg-dc2626)' : 'var(--text1)' }}>
                                   {r.selling_price == null ? '—' : fmt(r.selling_price)}{under ? ' ⚠️' : ''}
                                 </td>
                               )
@@ -516,10 +516,10 @@ export default function AssetPage() {
           )}
 
           {/* Recon callout (2026-07-28: built — was "coming next") */}
-          <div style={{ background: '#fefce8', border: '1px solid #fde047', borderRadius: 10, padding: '14px 18px', fontSize: 13, color: '#92400e' }}>
+          <div style={{ background: 'var(--c-bg-fefce8)', border: '1px solid var(--c-bg-fde047)', borderRadius: 10, padding: '14px 18px', fontSize: 13, color: 'var(--c-fg-92400e)' }}>
             <strong>🔍 3-Way Rebate Reconciliation:</strong> cross-matches On-Inventory devices against the Distributor
             rebate on each ledger row and the ePay commission history per IMEI, to flag missing-phone candidates,
-            conflicting evidence, and true unsold stock. <a href="/commcalc/asset/oninv-3way-recon" style={{ color: '#92400e', fontWeight: 700 }}>Open the report →</a>
+            conflicting evidence, and true unsold stock. <a href="/commcalc/asset/oninv-3way-recon" style={{ color: 'var(--c-fg-92400e)', fontWeight: 700 }}>Open the report →</a>
           </div>
         </>
       )}

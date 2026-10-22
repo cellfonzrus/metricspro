@@ -19,7 +19,7 @@ export default function DeviceHistoryPage() {
         Look up any customer device by IMEI or phone number — see whether we sold it, when it activated,
         how long it&apos;s been active, and (for admins) the commission &amp; rebate we&apos;ve received on it.
         {canImeiRebates && <>
-          {' '}Looking for a whole month at once? <a href="/commcalc/imei-rebates" style={{ color: 'var(--accent, #2563eb)' }}>
+          {' '}Looking for a whole month at once? <a href="/commcalc/imei-rebates" style={{ color: 'var(--accent, var(--c-fg-2563eb))' }}>
           IMEI Rebate Reconciliation</a> lists every IMEI activated in a period and the rebate against it —
           including the ones with none. (It reads the same activation sources as this lookup.)
         </>}

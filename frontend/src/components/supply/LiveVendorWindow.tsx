@@ -85,7 +85,7 @@ export default function LiveVendorWindow({ sid, title, onClose, children }: {
     <section style={{ ...panel, marginTop: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
         <strong style={{ fontSize: 14 }}>{title}</strong>
-        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: color, color: '#fff' }}>{phase}</span>
+        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: color, color: 'var(--c-fg-ffffff)' }}>{phase}</span>
         <span style={{ flex: 1 }} />
         <button style={btn} onClick={close}>Close window</button>
       </div>
@@ -98,14 +98,14 @@ export default function LiveVendorWindow({ sid, title, onClose, children }: {
         </div>
       )}
       <div ref={view} tabIndex={0} onKeyDown={key} onWheel={wheel}
-           style={{ outline: 'none', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', background: '#111', minHeight: 120 }}>
+           style={{ outline: 'none', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', background: 'var(--c-bg-111111)', minHeight: 120 }}>
         {state.shot
           // eslint-disable-next-line @next/next/no-img-element -- live CDP screencast frame streamed as a data: URL; next/image cannot optimise data URLs
           ? <img alt="Live vendor window — click and type here" src={state.shot.startsWith('data:') ? state.shot : `data:image/jpeg;base64,${state.shot}`}
                  style={{ width: '100%', display: 'block', cursor: 'pointer' }}
                  onClick={e => { view.current?.focus(); send({ type: 'click', ...xy(e) }) }}
                  onDoubleClick={e => send({ type: 'dblclick', ...xy(e) })} />
-          : <div style={{ color: '#aaa', padding: 30, fontSize: 13 }}>Waiting for the first frame…</div>}
+          : <div style={{ color: 'var(--c-fg-aaaaaa)', padding: 30, fontSize: 13 }}>Waiting for the first frame…</div>}
       </div>
       <p style={{ fontSize: 11, color: 'var(--text2)', marginTop: 6 }}>
         This is the vendor&apos;s real site. Click and type on the picture to use it — nothing is ordered unless you (or

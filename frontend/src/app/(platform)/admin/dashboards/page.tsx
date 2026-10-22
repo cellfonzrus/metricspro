@@ -304,7 +304,7 @@ export default function DashboardDesignerPage() {
           </span>
         )}
         {/* friendly403() names Roles & Access — a named destination is a link (owner 2026-09-08). */}
-        {err && <span style={{ fontSize: 12, color: '#dc2626', flexBasis: '100%' }}><LinkedText text={err} /></span>}
+        {err && <span style={{ fontSize: 12, color: 'var(--c-fg-dc2626)', flexBasis: '100%' }}><LinkedText text={err} /></span>}
       </div>
 
       {loading ? (

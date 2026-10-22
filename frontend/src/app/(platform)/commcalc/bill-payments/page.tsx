@@ -81,7 +81,7 @@ export default function BillPaymentsPage() {
 
       {loading && <div style={{ fontSize: 13, color: 'var(--text3)' }}>Loading…</div>}
       {!!err && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 10, padding: 14, fontSize: 13, color: '#991b1b' }}>
+        <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', borderRadius: 10, padding: 14, fontSize: 13, color: 'var(--c-fg-991b1b)' }}>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>❌ {err}</div>
           <div style={{ marginBottom: 10 }}>The page could not reach the server — this does <b>not</b> mean there are no bill payments.</div>
           <button className="btn btn-secondary" onClick={() => { setLoading(true); setErr(''); setTick(x => x + 1) }}>Retry</button>
@@ -97,7 +97,7 @@ export default function BillPaymentsPage() {
         </div>
 
         {/* THE BASIS — what was scanned, by which rule, from where */}
-        <div style={{ background: 'var(--card,#fff)', border: '1px solid var(--border)', borderRadius: 10, padding: 12, fontSize: 12.5, marginBottom: 14, lineHeight: 1.6 }}>
+        <div style={{ background: 'var(--card,var(--c-bg-ffffff))', border: '1px solid var(--border)', borderRadius: 10, padding: 12, fontSize: 12.5, marginBottom: 14, lineHeight: 1.6 }}>
           <div><b>Rule:</b> your <code>bill_payment</code> definition ({data.rule.source || 'built-in'}) — {Object.entries(data.rule.rules || {}).map(([k, v]) => `${k}: ${(v || []).join(', ')}`).join(' · ') || 'no tokens'}. {data.rule.note}.</div>
           <div><b>Scanned:</b> {num(b.sales_rows)} sales rows for {data.period}{data.store ? ` · store ${data.store}` : ''} — {num(b.rows_scanned)} countable (voided / returns / no rep skipped: {num(b.rows_skipped)}), {num(b.rows_unmatched)} not bill payments.</div>
           <div><b>Carrier side:</b> {b.feed_present ? <>the processor bill-pay feed read by the coverage recon&apos;s own reader ({b.feed_reader}).</> : <>no processor bill-pay feed carries this period{b.feed_processor ? ` (processor ${b.feed_processor})` : ' — no bill-pay processor is configured'}; the extraction above IS the bill-payments figure. Upload the carrier&apos;s bill-payment report on the onboarding intake to compare.</>}</div>
@@ -105,7 +105,7 @@ export default function BillPaymentsPage() {
         </div>
 
         {data.token_coverage.unmatched_tokens.length > 0 && (
-          <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: 12, fontSize: 12.5, color: '#92400e', marginBottom: 14 }}>
+          <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 10, padding: 12, fontSize: 12.5, color: 'var(--c-fg-92400e)', marginBottom: 14 }}>
             <b>Tokens in your definition that matched nothing this period:</b> {data.token_coverage.unmatched_tokens.map(u => `${u.by} "${u.token}"`).join(', ')}.
             A definition describing nobody&apos;s data is how a bill-payment column reads a quiet zero — check the spelling against the department / category values that do occur.
           </div>
@@ -154,7 +154,7 @@ export default function BillPaymentsPage() {
                     <td style={td}>{l.trans_date}</td><td style={td}>{l.store}</td><td style={{ ...td, fontFamily: 'ui-monospace, monospace' }}>{l.trans_id}</td><td style={td}>{l.salesperson}</td>
                     <td style={td}>{l.department}</td><td style={td}>{l.category}</td><td style={td}>{l.product_desc}</td><td style={td}>{l.tender_type || '—'}</td>
                     <td style={{ ...td, textAlign: 'right' }}>{money(l.amount)}</td>
-                    <td style={td}><span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999, background: 'rgba(37,99,235,.12)', color: '#1d4ed8' }}>{l.matched_by}: {l.matched_token}</span></td>
+                    <td style={td}><span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999, background: 'rgba(37,99,235,.12)', color: 'var(--c-fg-1d4ed8)' }}>{l.matched_by}: {l.matched_token}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -191,9 +191,9 @@ const STATUS: Record<string, string> = {
 }
 
 function Tile({ label, value, tone }: { label: string; value: string; tone: 'ok' | 'warn' | 'info' }) {
-  const c = tone === 'warn' ? { bg: '#fffbeb', bd: '#fde68a', fg: '#92400e' }
-          : tone === 'info' ? { bg: '#eff6ff', bd: '#bfdbfe', fg: '#1e40af' }
-          : { bg: 'var(--card, #fff)', bd: 'var(--border)', fg: 'var(--text2)' }
+  const c = tone === 'warn' ? { bg: 'var(--c-bg-fffbeb)', bd: 'var(--c-bg-fde68a)', fg: 'var(--c-fg-92400e)' }
+          : tone === 'info' ? { bg: 'var(--c-bg-eff6ff)', bd: 'var(--c-bg-bfdbfe)', fg: 'var(--c-fg-1e40af)' }
+          : { bg: 'var(--card, var(--c-bg-ffffff))', bd: 'var(--border)', fg: 'var(--text2)' }
   return (
     <div style={{ background: c.bg, border: `1px solid ${c.bd}`, borderRadius: 10, padding: '12px 14px' }}>
       <div style={{ fontSize: 11.5, color: c.fg, opacity: 0.85 }}>{label}</div>

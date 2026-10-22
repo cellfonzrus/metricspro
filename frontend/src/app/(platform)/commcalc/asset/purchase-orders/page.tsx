@@ -218,7 +218,7 @@ export default function PurchaseOrdersHubPage() {
 
       {msg && <div style={{ ...card, background: 'var(--surface2)', fontSize: 13 }}>{msg}</div>}
       {lastCreated && (
-        <div style={{ ...card, borderColor: '#16a34a' }}>
+        <div style={{ ...card, borderColor: 'var(--c-bg-16a34a)' }}>
           ✅ <strong>{lastCreated.po_number}</strong> created.{' '}
           <Link href={`/commcalc/asset/purchase-orders/${lastCreated.id}`}>View / submit it →</Link>
         </div>
@@ -293,7 +293,7 @@ export default function PurchaseOrdersHubPage() {
                       onChange={e => setCost(r.key, parseFloat(e.target.value) || 0)} /></td>
                   <td style={{ ...td, textAlign: 'right' }}>{fmt(r.qty * r.unit_cost)}</td>
                   <td style={td}>{r.source === 'forecast' ? 'Recommended' : 'Manual'}</td>
-                  <td style={td}><button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 7px', color: '#dc2626' }} onClick={() => removeRow(r.key)}>✕</button></td>
+                  <td style={td}><button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 7px', color: 'var(--c-fg-dc2626)' }} onClick={() => removeRow(r.key)}>✕</button></td>
                 </tr>
               ))}
               {rows.length === 0 && !recLoading && (

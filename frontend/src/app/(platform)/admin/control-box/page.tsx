@@ -49,11 +49,11 @@ type FixBundle = { check_key: string; label: string; task: string; note: string;
 // Grey for "not watched" is deliberate: it must not read as a pass, and it must not read as an alarm
 // either. An operator should be able to tell at a glance which lamps are claims and which are gaps.
 const LAMP: Record<Lamp, { dot: string; label: string; color: string; bg: string; border: string }> = {
-  green:       { dot: '#16a34a', label: 'OK',            color: '#166534', bg: '#f0fdf4', border: '#bbf7d0' },
-  amber:       { dot: '#f59e0b', label: 'ATTENTION',     color: '#92400e', bg: '#fffbeb', border: '#fde68a' },
-  unknown:     { dot: '#7c3aed', label: 'NOT MEASURED',  color: '#5b21b6', bg: '#f5f3ff', border: '#ddd6fe' },
-  red:         { dot: '#dc2626', label: 'FAILING',       color: '#b91c1c', bg: '#fef2f2', border: '#fecaca' },
-  unmonitored: { dot: '#9ca3af', label: 'NOT MONITORED', color: '#4b5563', bg: '#f9fafb', border: '#e5e7eb' },
+  green:       { dot: '#16a34a', label: 'OK',            color: 'var(--c-fg-166534)', bg: 'var(--c-bg-f0fdf4)', border: 'var(--c-bg-bbf7d0)' },
+  amber:       { dot: '#f59e0b', label: 'ATTENTION',     color: 'var(--c-fg-92400e)', bg: 'var(--c-bg-fffbeb)', border: 'var(--c-bg-fde68a)' },
+  unknown:     { dot: '#7c3aed', label: 'NOT MEASURED',  color: 'var(--c-fg-5b21b6)', bg: 'var(--c-bg-f5f3ff)', border: 'var(--c-bg-ddd6fe)' },
+  red:         { dot: '#dc2626', label: 'FAILING',       color: 'var(--c-fg-b91c1c)', bg: 'var(--c-bg-fef2f2)', border: 'var(--c-bg-fecaca)' },
+  unmonitored: { dot: '#9ca3af', label: 'NOT MONITORED', color: 'var(--c-fg-4b5563)', bg: 'var(--c-bg-f9fafb)', border: 'var(--c-bg-e5e7eb)' },
 }
 const ORDER: Lamp[] = ['red', 'unknown', 'amber', 'unmonitored', 'green']
 
@@ -150,8 +150,8 @@ export default function ControlBoxPage() {
         <strong> not monitored</strong> — they are shown so a gap in coverage is never mistaken for health.
       </p>
 
-      {err && <div className="card" style={{ background: '#fef2f2', color: '#b91c1c', padding: 12, marginBottom: 12, fontSize: 13 }}>{err}</div>}
-      {msg && <div className="card" style={{ background: '#f0fdf4', color: '#166534', padding: 12, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
+      {err && <div className="card" style={{ background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-b91c1c)', padding: 12, marginBottom: 12, fontSize: 13 }}>{err}</div>}
+      {msg && <div className="card" style={{ background: 'var(--c-bg-f0fdf4)', color: 'var(--c-fg-166534)', padding: 12, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
 
       {board && (
         <>
@@ -284,13 +284,13 @@ export default function ControlBoxPage() {
 
                         {ai[c.key]?.text && (
                           <div className="card" style={{ marginTop: 8, padding: 10, fontSize: 12.5,
-                                                         background: '#f5f3ff', color: '#4c1d95' }}>
+                                                         background: 'var(--c-bg-f5f3ff)', color: 'var(--c-fg-4c1d95)' }}>
                             <strong>AI triage (commentary only — the lamp was decided without it):</strong>
                             <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{ai[c.key].text}</div>
                           </div>
                         )}
                         {ai[c.key]?.error && (
-                          <div style={{ marginTop: 8, fontSize: 12.5, color: '#92400e' }}>
+                          <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--c-fg-92400e)' }}>
                             AI triage unavailable: {ai[c.key].error}. The board is unaffected — every
                             lamp is computed without it.
                           </div>

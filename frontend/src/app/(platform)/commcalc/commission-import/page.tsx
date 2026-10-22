@@ -202,7 +202,7 @@ export default function CommissionImportWizard() {
                       {(samples[h] || []).join(', ') || '—'}
                     </td>
                     <td style={td}>
-                      <select style={{ ...sel, minWidth: 230, borderColor: mapping[h] && mapping[h] !== IGNORE ? 'var(--accent, #2563eb)' : 'var(--border)' }}
+                      <select style={{ ...sel, minWidth: 230, borderColor: mapping[h] && mapping[h] !== IGNORE ? 'var(--accent, var(--c-bg-2563eb))' : 'var(--border)' }}
                         value={mapping[h] || ''} onChange={e => setMapping({ ...mapping, [h]: e.target.value })}>
                         <option value="">— choose —</option>
                         <option value={IGNORE}>🚫 Ignore this column</option>

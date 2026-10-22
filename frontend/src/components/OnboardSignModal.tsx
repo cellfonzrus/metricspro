@@ -13,8 +13,8 @@ export type SignableTask = {
   missing_fields?: string[] | null; returned_reason?: string | null
 }
 
-const inp: React.CSSProperties = { padding: '9px 11px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 14, width: '100%', boxSizing: 'border-box', background: '#fff', color: '#0f172a' }
-const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: '#334155', display: 'block', margin: '0 0 4px' }
+const inp: React.CSSProperties = { padding: '9px 11px', borderRadius: 8, border: '1px solid var(--c-bg-cbd5e1)', fontSize: 14, width: '100%', boxSizing: 'border-box', background: 'var(--c-bg-ffffff)', color: 'var(--c-fg-0f172a)' }
+const lbl: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: 'var(--c-fg-334155)', display: 'block', margin: '0 0 4px' }
 
 export default function OnboardSignModal({ task, onCancel, onSubmit }: {
   task: SignableTask
@@ -76,12 +76,12 @@ export default function OnboardSignModal({ task, onCancel, onSubmit }: {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 12 }} onClick={onCancel}>
-      <div style={{ background: '#fff', borderRadius: 14, padding: 20, width: 560, maxWidth: '96vw', maxHeight: '92vh', overflow: 'auto', color: '#0f172a' }} onClick={e => e.stopPropagation()}>
+      <div style={{ background: 'var(--c-bg-ffffff)', borderRadius: 14, padding: 20, width: 560, maxWidth: '96vw', maxHeight: '92vh', overflow: 'auto', color: 'var(--c-fg-0f172a)' }} onClick={e => e.stopPropagation()}>
         <h3 style={{ fontSize: 17, fontWeight: 800, margin: '0 0 2px' }}>✍️ {task.label}</h3>
-        <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 12px' }}>Fill in the details below and sign — no printing needed. Prefer paper? Close this and use the download + upload buttons instead.</p>
+        <p style={{ fontSize: 13, color: 'var(--c-fg-64748b)', margin: '0 0 12px' }}>Fill in the details below and sign — no printing needed. Prefer paper? Close this and use the download + upload buttons instead.</p>
 
         {(task.missing_fields?.length || task.returned_reason) && (
-          <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: '#991b1b', marginBottom: 12 }}>
+          <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: 'var(--c-fg-991b1b)', marginBottom: 12 }}>
             ↩ Returned for corrections{task.missing_fields?.length ? <> — missing: <b>{task.missing_fields.join(', ')}</b></> : ''}
             {task.returned_reason && <div style={{ fontSize: 12, marginTop: 2 }}>{task.returned_reason}</div>}
           </div>
@@ -93,7 +93,7 @@ export default function OnboardSignModal({ task, onCancel, onSubmit }: {
               const k = f.key || f.label || ''
               return (
                 <div key={k}>
-                  <label style={lbl}>{f.label || f.key}{f.required !== false && <span style={{ color: '#ef4444' }}> *</span>}</label>
+                  <label style={lbl}>{f.label || f.key}{f.required !== false && <span style={{ color: 'var(--c-fg-ef4444)' }}> *</span>}</label>
                   <input style={inp} value={vals[k] || ''} onChange={e => setVals(v => ({ ...v, [k]: e.target.value }))} />
                 </div>
               )
@@ -105,9 +105,9 @@ export default function OnboardSignModal({ task, onCancel, onSubmit }: {
           <div style={{ marginBottom: 12 }}>
             <label style={lbl}>Draw your signature *</label>
             <canvas ref={canvasRef} width={520} height={150}
-              style={{ width: '100%', height: 150, border: '1.5px dashed #94a3b8', borderRadius: 10, touchAction: 'none', background: '#fff', cursor: 'crosshair' }}
+              style={{ width: '100%', height: 150, border: '1.5px dashed var(--c-bg-94a3b8)', borderRadius: 10, touchAction: 'none', background: 'var(--c-bg-ffffff)', cursor: 'crosshair' }}
               onPointerDown={down} onPointerMove={move} onPointerUp={() => { drawing.current = false }} onPointerLeave={() => { drawing.current = false }} />
-            <button onClick={clear} style={{ marginTop: 4, fontSize: 12, color: '#64748b', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Clear and sign again</button>
+            <button onClick={clear} style={{ marginTop: 4, fontSize: 12, color: 'var(--c-fg-64748b)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Clear and sign again</button>
           </div>
         )}
 
@@ -116,13 +116,13 @@ export default function OnboardSignModal({ task, onCancel, onSubmit }: {
           <input style={inp} value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Jane Q. Public" />
         </div>
 
-        <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+        <p style={{ fontSize: 12, color: 'var(--c-fg-64748b)', margin: '0 0 12px' }}>
           By signing, I certify that the information I provided is true, correct, and complete, and I intend this electronic signature to be as valid as my handwritten signature.
         </p>
-        {err && <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: '#991b1b', marginBottom: 10 }}>{err}</div>}
+        {err && <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', borderRadius: 8, padding: '8px 10px', fontSize: 13, color: 'var(--c-fg-991b1b)', marginBottom: 10 }}>{err}</div>}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button onClick={onCancel} style={{ padding: '9px 14px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', fontSize: 14, cursor: 'pointer', color: '#334155' }}>Cancel</button>
-          <button onClick={submit} disabled={busy} style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: '#059669', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: busy ? 0.6 : 1 }}>{busy ? 'Submitting…' : 'Sign & submit'}</button>
+          <button onClick={onCancel} style={{ padding: '9px 14px', borderRadius: 8, border: '1px solid var(--c-bg-cbd5e1)', background: 'var(--c-bg-ffffff)', fontSize: 14, cursor: 'pointer', color: 'var(--c-fg-334155)' }}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: 'var(--c-bg-059669)', color: 'var(--c-fg-ffffff)', fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: busy ? 0.6 : 1 }}>{busy ? 'Submitting…' : 'Sign & submit'}</button>
         </div>
       </div>
     </div>

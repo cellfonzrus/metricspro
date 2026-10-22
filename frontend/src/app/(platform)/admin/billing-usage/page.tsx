@@ -53,8 +53,8 @@ const money = (v: number | null | undefined, cur = 'USD') =>
   v === null || v === undefined ? '—' : `${cur === 'USD' ? '$' : ''}${Number(v).toFixed(2)}`
 const num = (v: number | null | undefined) => (v === null || v === undefined ? '—' : Number(v).toLocaleString())
 
-const AMBER = { bg: '#fffbeb', color: '#92400e', border: '#fde68a' }
-const GREEN = { bg: '#f0fdf4', color: '#166534', border: '#bbf7d0' }
+const AMBER = { bg: 'var(--c-bg-fffbeb)', color: 'var(--c-fg-92400e)', border: 'var(--c-bg-fde68a)' }
+const GREEN = { bg: 'var(--c-bg-f0fdf4)', color: 'var(--c-fg-166534)', border: 'var(--c-bg-bbf7d0)' }
 
 function Badge({ ok, okText, badText }: { ok: boolean; okText: string; badText: string }) {
   const s = ok ? GREEN : AMBER
@@ -140,8 +140,8 @@ export default function BillingUsagePage() {
         <TabBtn id="statement" label="Statement" />
       </div>
 
-      {err && <div className="card" style={{ background: '#fef2f2', color: '#b91c1c', padding: 12, marginBottom: 12, fontSize: 13 }}>{err}</div>}
-      {msg && <div className="card" style={{ background: '#f0fdf4', color: '#166534', padding: 12, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
+      {err && <div className="card" style={{ background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-b91c1c)', padding: 12, marginBottom: 12, fontSize: 13 }}>{err}</div>}
+      {msg && <div className="card" style={{ background: 'var(--c-bg-f0fdf4)', color: 'var(--c-fg-166534)', padding: 12, marginBottom: 12, fontSize: 13 }}>{msg}</div>}
 
       {/* ── ALL TENANTS ─────────────────────────────────────────────────────────────────────── */}
       {tab === 'overview' && ov && (
@@ -183,7 +183,7 @@ export default function BillingUsagePage() {
                     <td style={{ padding: '8px 10px', textAlign: 'right' }}>{money(t.ai_billable_usd)}</td>
                     <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{money(t.total_usd)}</td>
                     <td style={{ padding: '8px 10px' }}>
-                      {t.error ? <span style={{ color: '#b91c1c', fontSize: 12 }}>{t.error}</span>
+                      {t.error ? <span style={{ color: 'var(--c-fg-b91c1c)', fontSize: 12 }}>{t.error}</span>
                         : <Badge ok={!!t.complete} okText="priced" badText={`${t.unpriced_lines} unpriced`} />}
                     </td>
                     <td style={{ padding: '8px 10px' }}>

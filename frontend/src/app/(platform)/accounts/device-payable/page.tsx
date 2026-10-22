@@ -177,7 +177,7 @@ export default function DevicePayablePage() {
       </div>
 
       {/* ── WHAT THIS ANSWERS, AND WHY IT IS NOT THE OTHER PAYABLE ──────────────────────────── */}
-      <div className="card" style={{ padding: '10px 14px', marginBottom: 14, borderLeft: '3px solid var(--accent, #6b7cff)' }}>
+      <div className="card" style={{ padding: '10px 14px', marginBottom: 14, borderLeft: '3px solid var(--accent, var(--c-bg-6b7cff))' }}>
         <div style={{ fontSize: 13 }}>
           <strong>This is a BACKDATED payable.</strong> It stands on the date you pick and asks, unit by unit:
           had this device been paid for yet? Each serialised unit carries two dates — the day it was
@@ -210,7 +210,7 @@ export default function DevicePayablePage() {
         storeLabel="Stores…" marketLabel="Markets…" />
 
       {loading && <div className="card" style={{ padding: 14 }}>Loading…</div>}
-      {err && <div className="card" style={{ padding: 14, color: 'var(--danger, #c33)' }}>Could not load: {err}</div>}
+      {err && <div className="card" style={{ padding: 14, color: 'var(--danger, var(--c-fg-cc3333))' }}>Could not load: {err}</div>}
 
       {/* ── NOT MEASURED: the reason and the window, never a figure ─────────────────────────── */}
       {data && !loading && !measured && (

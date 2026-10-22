@@ -291,7 +291,7 @@ export default function CommissionExplainPage() {
 
       {/* DEVICE STORY (IMEI search) */}
       {dev && (
-        <div className="card" style={{ marginBottom: 16, borderLeft: '4px solid #7c3aed' }}>
+        <div className="card" style={{ marginBottom: 16, borderLeft: '4px solid var(--c-bg-7c3aed)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ fontWeight: 700 }}>📟 Device story · IMEI {dev.imei}</div>
             <button className="btn btn-secondary" style={{ padding: '2px 10px' }} onClick={() => setDev(null)}>✕</button>
@@ -375,7 +375,7 @@ export default function CommissionExplainPage() {
                   <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8 }}>
                     {mm.totals.paid} paid · {mm.totals.withheld} held · {fmt(mm.totals.amount)} paid this period.
                     {mm.devices.some((d: any) => d.held_but_ma_paid) && (
-                      <span style={{ color: '#b45309', marginLeft: 8 }}>
+                      <span style={{ color: 'var(--c-fg-b45309)', marginLeft: 8 }}>
                         ⚠ Some devices are HELD in-app while the MA file shows them paid — see the MA cross-reference per device.
                       </span>)}
                   </div>
@@ -392,7 +392,7 @@ export default function CommissionExplainPage() {
                 <div style={{ fontSize: 13, color: 'var(--text3)' }}>No sale-triggered installments for this rep in {period}.</div>
               )}
               {mmStatus.state === 'off_with_money' && mmStatus.note && (
-                <div style={{ fontSize: 12, color: '#b45309', marginTop: 8 }}>⚠ {mmStatus.note}</div>
+                <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)', marginTop: 8 }}>⚠ {mmStatus.note}</div>
               )}
             </div>
             )}
@@ -431,18 +431,18 @@ export default function CommissionExplainPage() {
 function DataQualityBanner({ dq }: { dq: any }) {
   if (!dq || (!dq.suspect_lines && !(dq.rate_issues || []).length)) return null
   return (
-    <div style={{ border: '1px solid #f59e0b', background: '#fffbeb', borderRadius: 8, padding: 10, marginBottom: 10 }}>
-      <div style={{ fontWeight: 700, fontSize: 13, color: '#92400e', marginBottom: 4 }}>
+    <div style={{ border: '1px solid var(--c-bg-f59e0b)', background: 'var(--c-bg-fffbeb)', borderRadius: 8, padding: 10, marginBottom: 10 }}>
+      <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--c-fg-92400e)', marginBottom: 4 }}>
         ⚠ Check the inputs, not the maths — this is a source-data finding. Nothing below was changed.
       </div>
       {(dq.rate_issues || []).map((r: any, i: number) => (
-        <div key={`r${i}`} style={{ fontSize: 12.5, color: '#92400e', marginBottom: 4 }}>
+        <div key={`r${i}`} style={{ fontSize: 12.5, color: 'var(--c-fg-92400e)', marginBottom: 4 }}>
           <b>Rule “{r.label || r.rule_id}”</b> pays <b>{r.payout_kind}</b> at a stored rate of <b>{r.pct}</b>.
           {' '}{(r.labels || []).join(' ')}
         </div>
       ))}
       {dq.suspect_lines > 0 && (
-        <div style={{ fontSize: 12.5, color: '#92400e' }}>
+        <div style={{ fontSize: 12.5, color: 'var(--c-fg-92400e)' }}>
           <b>{dq.suspect_lines}</b> of <b>{dq.checked_lines}</b> matched lines have an unusable cost:
           <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
             {(dq.by_flag || []).map((f: any, i: number) => (
@@ -458,7 +458,7 @@ function DataQualityBanner({ dq }: { dq: any }) {
           </div>
         </div>
       )}
-      <div style={{ fontSize: 11, color: '#92400e', marginTop: 6, opacity: 0.85 }}>{dq.note}</div>
+      <div style={{ fontSize: 11, color: 'var(--c-fg-92400e)', marginTop: 6, opacity: 0.85 }}>{dq.note}</div>
     </div>
   )
 }
@@ -477,18 +477,18 @@ function PayGateBanner({ rows }: { rows: any[] }) {
     byReason[k].n += 1; byReason[k].amt += Number(r.would_have_paid || 0)
   }
   return (
-    <div style={{ border: '1px solid #93c5fd', background: '#eff6ff', borderRadius: 8, padding: 10, margin: '8px 0' }}>
-      <div style={{ fontWeight: 700, fontSize: 13, color: '#1e3a8a', marginBottom: 4 }}>
+    <div style={{ border: '1px solid var(--c-bg-93c5fd)', background: 'var(--c-bg-eff6ff)', borderRadius: 8, padding: 10, margin: '8px 0' }}>
+      <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--c-fg-1e3a8a)', marginBottom: 4 }}>
         🧾 Pay gate — {supp.length} matched line{supp.length === 1 ? '' : 's'} did not pay
         {guarded.length > 0 ? `, ${guarded.length} paid on a guarded basis` : ''}
       </div>
-      <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 12.5, color: '#1e3a8a' }}>
+      <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 12.5, color: 'var(--c-fg-1e3a8a)' }}>
         {Object.entries(byReason).map(([k, v]) => (
           <li key={k}><b>{v.n}</b> line{v.n === 1 ? '' : 's'} ({fmt(v.amt)} not paid) — {k}</li>
         ))}
         {guarded.length > 0 && <li><b>{guarded.length}</b> line(s) had an unusable GP, so the rate was paid on the price instead — see “Why not”.</li>}
       </ul>
-      <div style={{ fontSize: 11, color: '#1e3a8a', marginTop: 6, opacity: 0.85 }}>
+      <div style={{ fontSize: 11, color: 'var(--c-fg-1e3a8a)', marginTop: 6, opacity: 0.85 }}>
         Nothing is hidden: every one of these lines is still listed below with the money it would have paid.
       </div>
     </div>
@@ -648,7 +648,7 @@ function DeviceCard({ d }: { d: any }) {
           {d.device_category ? ` · ${d.device_category}` : ''}
           {d.contract_type ? ` · ${d.contract_type}` : ''}{d.sale_period ? ` · sold ${d.sale_period}` : ''}
         </div>
-        {d.held_but_ma_paid && <span className="badge" style={{ background: '#fef3c7', color: '#92400e' }}>MA paid · in-app held</span>}
+        {d.held_but_ma_paid && <span className="badge" style={{ background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)' }}>MA paid · in-app held</span>}
       </div>
       <table style={{ width: '100%', fontSize: 12, marginTop: 6 }}>
         <thead><tr style={{ background: 'var(--surface2)' }}>
@@ -668,7 +668,7 @@ function DeviceCard({ d }: { d: any }) {
               <td style={{ padding: '3px 6px' }}>{i.mi_ref ? `${i.mi_ref.subscriber_status || 'found'}` : 'none'}</td>
               <td style={{ padding: '3px 6px', color: 'var(--text3)' }}>
                 {i.hold_detail}
-                {i.zero_note ? <div style={{ color: '#b45309', marginTop: 2 }}>⚠ {i.zero_note}</div> : null}
+                {i.zero_note ? <div style={{ color: 'var(--c-fg-b45309)', marginTop: 2 }}>⚠ {i.zero_note}</div> : null}
               </td>
             </tr>
           ))}
@@ -682,7 +682,7 @@ function DeviceCard({ d }: { d: any }) {
 function MaTable({ rows }: { rows: any[] }) {
   return (
     <div style={{ marginTop: 8 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: '#6d28d9', marginBottom: 3 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-fg-6d28d9)', marginBottom: 3 }}>
         MA-file reference ({rows.length} row{rows.length === 1 ? '' : 's'}) — amounts sign-normalized to “paid to dealer”
       </div>
       <table style={{ width: '100%', fontSize: 11 }}>
@@ -717,7 +717,7 @@ function DeviceStory({ dev }: { dev: any }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
       {dev.held_but_ma_paid || (dev.ma_says_paid && (dev.installments || []).some((i: any) => i.status !== 'paid'))
-        ? <div style={{ fontSize: 12, color: '#b45309' }}>⚠ In-app installments are HELD while the MA file shows this device paid.</div> : null}
+        ? <div style={{ fontSize: 12, color: 'var(--c-fg-b45309)' }}>⚠ In-app installments are HELD while the MA file shows this device paid.</div> : null}
       <div>
         <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Sale line(s)</div>
         <table style={{ width: '100%', fontSize: 12 }}>

@@ -77,11 +77,11 @@ const td: React.CSSProperties = { padding: '6px 8px', fontSize: 13, borderBottom
 
 function Badge({ kind }: { kind: 'unmapped' | 'proposed' | 'confirmed' | 'rule' | 'excluded' }) {
   const s: Record<string, React.CSSProperties> = {
-    unmapped: { background: '#f8fafc', color: '#475569', border: '1px solid #e2e8f0' },
-    proposed: { background: '#fff7ed', color: '#9a3412', border: '1px solid #fdba74' },
-    confirmed: { background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0' },
-    rule: { background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' },
-    excluded: { background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca' },
+    unmapped: { background: 'var(--c-bg-f8fafc)', color: 'var(--c-fg-475569)', border: '1px solid var(--c-bg-e2e8f0)' },
+    proposed: { background: 'var(--c-bg-fff7ed)', color: 'var(--c-fg-9a3412)', border: '1px solid var(--c-bg-fdba74)' },
+    confirmed: { background: 'var(--c-bg-f0fdf4)', color: 'var(--c-fg-15803d)', border: '1px solid var(--c-bg-bbf7d0)' },
+    rule: { background: 'var(--c-bg-eff6ff)', color: 'var(--c-fg-1d4ed8)', border: '1px solid var(--c-bg-bfdbfe)' },
+    excluded: { background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-b91c1c)', border: '1px solid var(--c-bg-fecaca)' },
   }
   const label = kind === 'unmapped' ? 'NOT MAPPED' : kind === 'proposed' ? 'PROPOSED — not confirmed'
     : kind === 'confirmed' ? 'CONFIRMED' : kind === 'rule' ? 'BY FIELD RULE' : 'EXCLUDED'

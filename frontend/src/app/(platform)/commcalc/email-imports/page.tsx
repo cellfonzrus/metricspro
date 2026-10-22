@@ -649,10 +649,10 @@ export default function EmailImportsPage() {
   function authBadge(s: any) {
     const st = s.auth_status || 'unconfigured'
     const map: Record<string, { t: string; c: string; b: string }> = {
-      authenticated: { t: '✅ Connected', c: '#166534', b: '#dcfce7' },
-      authenticating: { t: '⏳ Logging in…', c: '#1e40af', b: '#dbeafe' },
-      needs_2fa: { t: '🔒 Needs 2FA', c: '#9a3412', b: '#ffedd5' },
-      error: { t: '⚠️ Login error', c: '#991b1b', b: '#fee2e2' },
+      authenticated: { t: '✅ Connected', c: 'var(--c-fg-166534)', b: 'var(--c-bg-dcfce7)' },
+      authenticating: { t: '⏳ Logging in…', c: 'var(--c-fg-1e40af)', b: 'var(--c-bg-dbeafe)' },
+      needs_2fa: { t: '🔒 Needs 2FA', c: 'var(--c-fg-9a3412)', b: 'var(--c-bg-ffedd5)' },
+      error: { t: '⚠️ Login error', c: 'var(--c-fg-991b1b)', b: 'var(--c-bg-fee2e2)' },
       unconfigured: { t: '○ Not connected', c: 'var(--text3)', b: 'var(--surface2)' },
     }
     const m = map[st] || map.unconfigured
@@ -666,7 +666,7 @@ export default function EmailImportsPage() {
       const rp = s.route_policy
       return (
         <span>
-          <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: '#3f3f46', background: '#e4e4e7' }}>🚫 Login switched off</span>
+          <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: 'var(--c-fg-3f3f46)', background: 'var(--c-bg-e4e4e7)' }}>🚫 Login switched off</span>
           <div style={{ marginTop: 4, padding: '4px 7px', borderRadius: 6, maxWidth: 260, whiteSpace: 'normal', background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text2)' }}>
             <div style={{ fontWeight: 700, fontSize: 11 }}>{s.session_health?.headline || 'Automatic portal login is switched off for this connector.'}</div>
             <div style={{ fontSize: 10, marginTop: 2, fontWeight: 400 }}>{s.session_health?.detail || rp?.reason}</div>
@@ -693,15 +693,15 @@ export default function EmailImportsPage() {
             reasons about clock skew; absent pre-migration and nothing renders. */}
         {s.session_health && ['expiring_soon', 'expired', 'needs_login', 'never_linked'].includes(s.session_health.state) && (
           <div style={{ marginTop: 4, padding: '4px 7px', borderRadius: 6, maxWidth: 260, whiteSpace: 'normal',
-            background: s.session_health.needs_human ? '#fef3c7' : 'var(--surface2)',
-            border: `1px solid ${s.session_health.needs_human ? '#fcd34d' : 'var(--border)'}`,
-            color: s.session_health.needs_human ? '#92400e' : 'var(--text2)' }}>
+            background: s.session_health.needs_human ? 'var(--c-bg-fef3c7)' : 'var(--surface2)',
+            border: `1px solid ${s.session_health.needs_human ? 'var(--c-bg-fcd34d)' : 'var(--border)'}`,
+            color: s.session_health.needs_human ? 'var(--c-fg-92400e)' : 'var(--text2)' }}>
             <div style={{ fontWeight: 700, fontSize: 11 }}>{s.session_health.needs_human ? '🔑 ' : '⏳ '}{s.session_health.headline}</div>
             <div style={{ fontSize: 10, marginTop: 2, fontWeight: 400 }}>{s.session_health.detail}</div>
           </div>
         )}
         {s.blocked && (
-          <div style={{ marginTop: 4, padding: '4px 7px', borderRadius: 6, background: '#fee2e2', border: '1px solid #fecaca', color: '#991b1b', maxWidth: 260, whiteSpace: 'normal' }}>
+          <div style={{ marginTop: 4, padding: '4px 7px', borderRadius: 6, background: 'var(--c-bg-fee2e2)', border: '1px solid var(--c-bg-fecaca)', color: 'var(--c-fg-991b1b)', maxWidth: 260, whiteSpace: 'normal' }}>
             <div style={{ fontWeight: 700, fontSize: 11 }}>⛔ Portal temporarily blocked us — next automatic attempt {blockTime(s.blocked_until)}</div>
             {s.block_reason && <div style={{ fontSize: 10, marginTop: 2, fontWeight: 400 }}>{s.block_reason}</div>}
             <div style={{ fontSize: 10, marginTop: 2, fontWeight: 400 }}>Don&apos;t retry — another attempt usually extends the block. Nothing is lost; it imports on the next automatic attempt.</div>
@@ -741,7 +741,7 @@ export default function EmailImportsPage() {
           ) : kinds.loaded && (
             <span style={{ fontSize: 11, color: 'var(--text3)' }} title={kinds.standard?.note || (kinds.declaration?.reasons || []).join('; ')}>{declaredPos ? `no filename standard defined for ${posWord} yet` : 'declare your POS to get its filename standard'}</span>
           )}
-          {cfg.account && cfg.account !== 'default' && <button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={delMailbox}>Delete this mailbox</button>}
+          {cfg.account && cfg.account !== 'default' && <button className="btn btn-secondary" style={{ fontSize: 12, color: 'var(--c-fg-dc2626)' }} onClick={delMailbox}>Delete this mailbox</button>}
           <span style={{ fontSize: 11, color: 'var(--text3)' }}>key: <code>{cfg.account || 'default'}</code></span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
@@ -754,13 +754,13 @@ export default function EmailImportsPage() {
             </select>
             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>Pick a provider to auto-fill the server + port — then just enter the email + password below.</div>
             {PROVIDERS[providerOf(cfg.imap_host)]?.hint && (
-              <div style={{ fontSize: 11, color: '#b45309', marginTop: 3 }}>💡 {PROVIDERS[providerOf(cfg.imap_host)].hint}</div>
+              <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)', marginTop: 3 }}>💡 {PROVIDERS[providerOf(cfg.imap_host)].hint}</div>
             )}
           </div>
           <div><label style={lbl}>IMAP host</label><input style={{ ...sel, width: '100%' }} placeholder="imap.example.com" value={cfg.imap_host || ''} onChange={e => set({ imap_host: e.target.value })} /></div>
           <div><label style={lbl}>Port</label><input style={{ ...sel, width: '100%' }} value={cfg.imap_port || 993} onChange={e => set({ imap_port: Number(e.target.value) || 993 })} /></div>
           <div><label style={lbl}>Username</label><input id="imap_user" name="imap_user" autoComplete="off" style={{ ...sel, width: '100%' }} placeholder="the inbox email address" value={cfg.username || ''} onChange={e => set({ username: e.target.value })} /></div>
-          <div><label style={lbl}>Password {cfg.has_password && <span style={{ color: '#16794a' }}>✓ saved</span>}</label><input id="imap_pass" name="imap_pass" type="password" autoComplete="new-password" style={{ ...sel, width: '100%' }} placeholder={cfg.has_password ? 'saved — leave blank to keep' : 'mailbox password'} value={pwd} onChange={e => setPwd(e.target.value)} />
+          <div><label style={lbl}>Password {cfg.has_password && <span style={{ color: 'var(--c-fg-16794a)' }}>✓ saved</span>}</label><input id="imap_pass" name="imap_pass" type="password" autoComplete="new-password" style={{ ...sel, width: '100%' }} placeholder={cfg.has_password ? 'saved — leave blank to keep' : 'mailbox password'} value={pwd} onChange={e => setPwd(e.target.value)} />
             {cfg.has_password && !pwd && <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2 }}>The password stays saved — this field is blank for security, not because it was lost.</div>}</div>
           <div><label style={lbl}>Mailbox</label><input style={{ ...sel, width: '100%' }} placeholder="INBOX" value={cfg.mailbox || ''} onChange={e => set({ mailbox: e.target.value })} /></div>
           <div><label style={lbl}>From filter (optional)</label><input style={{ ...sel, width: '100%' }} placeholder="vendor.com" value={cfg.from_filter || ''} onChange={e => set({ from_filter: e.target.value })} /></div>
@@ -815,7 +815,7 @@ export default function EmailImportsPage() {
                   {/* where a file routed here SHOWS UP — the registry row's consumers (owner 2026-09-20) */}
                   {p.upload_type && <ShowsIn info={kinds.showsIn(p.upload_type)} loaded={kinds.loaded} compact lead="Shows in" style={{ margin: '4px 0 0' }} />}</td>
                 <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder="optional" value={p.note || ''} onChange={e => setPat(i, { note: e.target.value })} /></td>
-                <td style={cell}><button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={() => delPat(i)}>✕</button></td>
+                <td style={cell}><button className="btn btn-secondary" style={{ fontSize: 12, color: 'var(--c-fg-dc2626)' }} onClick={() => delPat(i)}>✕</button></td>
               </tr>
             ))}
           </tbody>
@@ -870,7 +870,7 @@ export default function EmailImportsPage() {
                   <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => openMapper(c)}>🔗 Map to report</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => openViewer(c)}>👁 View data</button>{' '}
-                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => delCustomSheet(c.report_key, c.label)}>✕</button>
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: 'var(--c-fg-dc2626)' }} onClick={() => delCustomSheet(c.report_key, c.label)}>✕</button>
                   </td>
                 </tr>
               ))}
@@ -905,7 +905,7 @@ export default function EmailImportsPage() {
                         <div key={j} style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                           <span>{a.name}</span>
                           {a.matches
-                            ? <span className="badge" style={{ background: '#16794a', color: '#fff', fontSize: 11 }}>→ {a.matches}</span>
+                            ? <span className="badge" style={{ background: 'var(--c-bg-16794a)', color: 'var(--c-fg-ffffff)', fontSize: 11 }}>→ {a.matches}</span>
                             : <>
                                 <span style={{ color: 'var(--text3)' }}>no pattern</span>
                                 <button disabled={busy === 'save'} onClick={() => addRuleFor(a.name)} className="btn btn-secondary" style={{ fontSize: 10, padding: '1px 7px' }}>＋ Add rule</button>
@@ -925,12 +925,12 @@ export default function EmailImportsPage() {
         <div className="card" style={{ padding: 16, marginBottom: 14 }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>🩺 Ingest health — last {health.window_days} days</div>
           <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>
-            Per-day sales-feed coverage for this mailbox. <b style={{ color: '#16794a' }}>ingested</b> = priced rows landed ·{' '}
-            <b style={{ color: '#b45309' }}>zero-priced</b> = rows landed but every Ext Price is $0 (a degraded/price-less export) ·{' '}
-            <b style={{ color: '#dc2626' }}>missing</b> = no file delivered/ingested that day (the {posWord} didn’t send it, or the guard refused it).
+            Per-day sales-feed coverage for this mailbox. <b style={{ color: 'var(--c-fg-16794a)' }}>ingested</b> = priced rows landed ·{' '}
+            <b style={{ color: 'var(--c-fg-b45309)' }}>zero-priced</b> = rows landed but every Ext Price is $0 (a degraded/price-less export) ·{' '}
+            <b style={{ color: 'var(--c-fg-dc2626)' }}>missing</b> = no file delivered/ingested that day (the {posWord} didn’t send it, or the guard refused it).
           </p>
           {health.cross_org_warning && (
-            <div style={{ padding: 10, marginBottom: 10, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, fontSize: 12.5 }}>
+            <div style={{ padding: 10, marginBottom: 10, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', borderRadius: 8, fontSize: 12.5 }}>
               ⚠️ <b>Misfile risk:</b> this mailbox address is also configured under another tenant
               {health.cross_org_conflicts?.some((c: any) => c.enabled) ? ' and ENABLED there' : ''} — both tenants would ingest the same emails. Keep it enabled under only ONE tenant.
             </div>
@@ -954,7 +954,7 @@ export default function EmailImportsPage() {
             })}
           </div>
           {(health.days || []).every((d: any) => d.state === 'missing') && (
-            <div style={{ marginTop: 8, fontSize: 12, color: '#b45309' }}>
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--c-fg-b45309)' }}>
               No sales ingested for any day in the window. Check: mailbox Enabled, the connection works (use <b>Test connection</b> — a saved password is kept even though the field shows blank), a sales rule (e.g. <code>{examplePattern}</code>), and that the {posWord} is actually delivering the report to this address.
             </div>
           )}
@@ -1000,7 +1000,7 @@ export default function EmailImportsPage() {
           Until a processor&apos;s portal scraper is wired, its reports still import automatically via the mailbox rules
           above or the Data Imports page.
         </p>
-        {!srcReady && <div style={{ padding: 10, marginBottom: 10, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>⚠️ <SetupNotice detail="083_total_processor_sources.sql" /></div>}
+        {!srcReady && <div style={{ padding: 10, marginBottom: 10, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 8, fontSize: 13 }}>⚠️ <SetupNotice detail="083_total_processor_sources.sql" /></div>}
         {srcMsg && <div style={{ fontSize: 13, marginBottom: 8 }}>{srcMsg}</div>}
 
         {sources.length > 0 && (
@@ -1009,11 +1009,11 @@ export default function EmailImportsPage() {
             <tbody>
               {sources.map((s: any) => (
                 <tr key={s.id} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
-                  <td style={{ padding: '6px 8px', fontWeight: 600 }}>{s.label || '—'}{!s.enabled && <span style={{ fontSize: 11, color: '#b45309' }}> (off)</span>}</td>
+                  <td style={{ padding: '6px 8px', fontWeight: 600 }}>{s.label || '—'}{!s.enabled && <span style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}> (off)</span>}</td>
                   <td style={{ padding: '6px 8px' }}>{s.processor}
                     {/* connector_scope (mig 1014): a stored login for a connector that does not apply to this
                         tenant's declared POS / carrier is kept, and SAYS so — never hidden, never judged. */}
-                    {s.connector_scope && s.connector_scope.applies === false && <div style={{ fontSize: 11, color: '#b45309' }}>not applicable to this tenant — {s.connector_scope.why}</div>}
+                    {s.connector_scope && s.connector_scope.applies === false && <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)' }}>not applicable to this tenant — {s.connector_scope.why}</div>}
                   </td>
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{distributors.find((d: any) => d.id === s.distributor_id)?.name || '—'}</td>
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{carriers.find((c: any) => c.id === s.carrier_id)?.name || '—'}</td>
@@ -1041,14 +1041,14 @@ export default function EmailImportsPage() {
                     ) : (<>
                     {/* the live-login button: a PORTAL connector the registry offers this tenant, or the declared POS's own login */}
                     {((connectors.byKey(s.processor)?.kind || '') === 'portal' || (!!declaredPos && posSquash(s.processor) === posSquash(declaredPos))) && (
-                      <><button className="btn btn-secondary" title="Watchable LIVE login: one browser stays open from login through the 2FA code — the code is sent ONCE (no re-send). Best for portals that send a single-use code." style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626', fontWeight: 700 }} onClick={() => startLive(s)}>🔴 Live login</button>{' '}</>
+                      <><button className="btn btn-secondary" title="Watchable LIVE login: one browser stays open from login through the 2FA code — the code is sent ONCE (no re-send). Best for portals that send a single-use code." style={{ fontSize: 12, padding: '3px 9px', color: 'var(--c-fg-dc2626)', fontWeight: 700 }} onClick={() => startLive(s)}>🔴 Live login</button>{' '}</>
                     )}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} disabled={authBusy === s.id} onClick={() => startLogin(s)}>{authBusy === s.id ? '…' : (s.auth_status === 'authenticated' ? '🔁 Re-auth' : '🔐 Log in')}</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => runSource(s)}>▶ Pull now</button>{' '}
                     </>)}
                     <button className="btn btn-secondary" title="See the page the headless login browser last saw (2FA screen / bot-wall / error)" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => openShot(s)}>📷</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setSrcDraft({ ...s, password: '' })}>Edit</button>{' '}
-                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => delSource(s)}>✕</button>
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: 'var(--c-fg-dc2626)' }} onClick={() => delSource(s)}>✕</button>
                   </td>
                 </tr>
               ))}
@@ -1110,8 +1110,8 @@ export default function EmailImportsPage() {
             </div>
             {proxyTest && (
               <div style={{ margin: '0 0 8px', padding: '8px 10px', borderRadius: 8, fontSize: 12.5,
-                background: proxyTest.proxy?.ok ? (proxyTest.routed_through_proxy && proxyTest.is_us ? '#ecfdf5' : '#fffbeb') : '#fef2f2',
-                border: `1px solid ${proxyTest.proxy?.ok ? (proxyTest.routed_through_proxy && proxyTest.is_us ? '#a7f3d0' : '#fde68a') : '#fecaca'}` }}>
+                background: proxyTest.proxy?.ok ? (proxyTest.routed_through_proxy && proxyTest.is_us ? 'var(--c-bg-ecfdf5)' : 'var(--c-bg-fffbeb)') : 'var(--c-bg-fef2f2)',
+                border: `1px solid ${proxyTest.proxy?.ok ? (proxyTest.routed_through_proxy && proxyTest.is_us ? 'var(--c-bg-a7f3d0)' : 'var(--c-bg-fde68a)') : 'var(--c-bg-fecaca)'}` }}>
                 <div style={{ fontWeight: 600 }}>{proxyTest.summary}</div>
                 {proxyTest.proxy?.ok && (
                   <div style={{ color: 'var(--text2)', marginTop: 3 }}>
@@ -1219,7 +1219,7 @@ export default function EmailImportsPage() {
               the backend — captured rows flow into that report automatically, no developer needed.
             </div>
             {!mapData ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Reading the report header…</div>
-              : mapData.error ? <div style={{ color: '#dc2626', fontSize: 13 }}>❌ {mapData.error}</div>
+              : mapData.error ? <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 13 }}>❌ {mapData.error}</div>
               : (
                 <div>
                   {/* detected header */}
@@ -1267,7 +1267,7 @@ export default function EmailImportsPage() {
                           const sampleVal = src ? String(((mapData.sample || [])[0] || {})[src] ?? '') : ''
                           return (
                             <tr key={f.target_field} style={{ borderTop: '1px solid var(--border)' }}>
-                              <td style={{ padding: '4px 8px' }}>{f.label}{f.required ? <span style={{ color: '#dc2626' }}> *</span> : ''} <span style={{ color: 'var(--text3)' }}>({f.target_field})</span></td>
+                              <td style={{ padding: '4px 8px' }}>{f.label}{f.required ? <span style={{ color: 'var(--c-fg-dc2626)' }}> *</span> : ''} <span style={{ color: 'var(--text3)' }}>({f.target_field})</span></td>
                               <td style={{ padding: '4px 8px' }}>
                                 <select value={src} onChange={e => mapSetSource(f.target_field, e.target.value)} style={{ ...sel, minWidth: 200 }}>
                                   <option value="">— none —</option>
@@ -1287,7 +1287,7 @@ export default function EmailImportsPage() {
                     <button className="btn btn-primary" disabled={mapBusy === 'save'} onClick={saveMapping} style={{ fontSize: 13 }}>
                       {mapBusy === 'save' ? 'Saving…' : (mapData._sel ? 'Save mapping & wire it' : 'Save (capture only)')}
                     </button>
-                    <span style={{ fontSize: 11, color: 'var(--text3)' }}>Required fields marked <span style={{ color: '#dc2626' }}>*</span>. Unmapped fields stay empty.</span>
+                    <span style={{ fontSize: 11, color: 'var(--text3)' }}>Required fields marked <span style={{ color: 'var(--c-fg-dc2626)' }}>*</span>. Unmapped fields stay empty.</span>
                   </div>
                 </div>
               )}
@@ -1305,7 +1305,7 @@ export default function EmailImportsPage() {
               <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setViewer(null)}>Close</button>
             </div>
             {!viewData ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div>
-              : viewData.error ? <div style={{ color: '#dc2626', fontSize: 13 }}>❌ {viewData.error}</div>
+              : viewData.error ? <div style={{ color: 'var(--c-fg-dc2626)', fontSize: 13 }}>❌ {viewData.error}</div>
               : (viewData.rows || []).length === 0 ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>No data captured yet for this sheet. Add a matching filename pattern above and run the sweep.</div>
               : (
                 <div style={{ overflowX: 'auto' }}>
@@ -1367,15 +1367,15 @@ export default function EmailImportsPage() {
         const showCode = ph === 'awaiting_code' || (ph === 'error' && liveState?.shot) || ph === 'verifying'
         const done = ph === 'authenticated'
         const badge: Record<string, { t: string; c: string; b: string }> = {
-          starting: { t: '⏳ Starting…', c: '#1e40af', b: '#dbeafe' },
-          login: { t: '⏳ Signing in…', c: '#1e40af', b: '#dbeafe' },
-          human_action: { t: '🧑 Your turn — solve the check', c: '#9a3412', b: '#ffedd5' },
-          awaiting_code: { t: '🔒 Enter the code', c: '#9a3412', b: '#ffedd5' },
-          verifying: { t: '⏳ Verifying…', c: '#1e40af', b: '#dbeafe' },
-          action_needed: { t: '👆 Click Next in the view', c: '#9a3412', b: '#ffedd5' },
-          authenticated: { t: '✅ Signed in', c: '#166534', b: '#dcfce7' },
-          pulling: { t: '⏳ Pulling reports…', c: '#1e40af', b: '#dbeafe' },
-          error: { t: '⚠️ Error', c: '#991b1b', b: '#fee2e2' },
+          starting: { t: '⏳ Starting…', c: 'var(--c-fg-1e40af)', b: 'var(--c-bg-dbeafe)' },
+          login: { t: '⏳ Signing in…', c: 'var(--c-fg-1e40af)', b: 'var(--c-bg-dbeafe)' },
+          human_action: { t: '🧑 Your turn — solve the check', c: 'var(--c-fg-9a3412)', b: 'var(--c-bg-ffedd5)' },
+          awaiting_code: { t: '🔒 Enter the code', c: 'var(--c-fg-9a3412)', b: 'var(--c-bg-ffedd5)' },
+          verifying: { t: '⏳ Verifying…', c: 'var(--c-fg-1e40af)', b: 'var(--c-bg-dbeafe)' },
+          action_needed: { t: '👆 Click Next in the view', c: 'var(--c-fg-9a3412)', b: 'var(--c-bg-ffedd5)' },
+          authenticated: { t: '✅ Signed in', c: 'var(--c-fg-166534)', b: 'var(--c-bg-dcfce7)' },
+          pulling: { t: '⏳ Pulling reports…', c: 'var(--c-fg-1e40af)', b: 'var(--c-bg-dbeafe)' },
+          error: { t: '⚠️ Error', c: 'var(--c-fg-991b1b)', b: 'var(--c-bg-fee2e2)' },
           cancelled: { t: '○ Cancelled', c: 'var(--text3)', b: 'var(--surface2)' },
           idle: { t: '○ Idle', c: 'var(--text3)', b: 'var(--surface2)' },
         }
@@ -1391,11 +1391,11 @@ export default function EmailImportsPage() {
               </div>
               <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 10px' }}>{liveState?.message || 'Starting…'}</p>
               {ph === 'human_action' ? (
-                <div style={{ fontSize: 12.5, color: '#9a3412', margin: '0 0 6px', fontWeight: 700, padding: '8px 10px', borderRadius: 8, background: '#fff7ed', border: '1px solid #fdba74' }}>
+                <div style={{ fontSize: 12.5, color: 'var(--c-fg-9a3412)', margin: '0 0 6px', fontWeight: 700, padding: '8px 10px', borderRadius: 8, background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)' }}>
                   🧑 Human check detected. <b>Solve the “I’m not a robot” box directly in the live view below</b>, then click the portal’s <b>Sign in</b> button. You’re driving this login now — clicks, typing and scrolling all go straight to the live browser.
                 </div>
               ) : !done && liveState?.shot && (
-                <div style={{ fontSize: 11.5, color: '#9a3412', margin: '0 0 6px', fontWeight: 600 }}>
+                <div style={{ fontSize: 11.5, color: 'var(--c-fg-9a3412)', margin: '0 0 6px', fontWeight: 600 }}>
                   👆 Click, type and scroll directly on the screen below to drive the live browser (click once to focus it, then type — e.g. press the portal’s <b>Next</b>/<b>Sign in</b> button).
                 </div>
               )}
@@ -1406,13 +1406,13 @@ export default function EmailImportsPage() {
                 onWheel={done ? undefined : wheelLive}
                 onFocus={() => setLiveFocused(true)}
                 onBlur={() => setLiveFocused(false)}
-                style={{ position: 'relative', minHeight: 220, background: 'var(--surface2)', borderRadius: 8, border: `2px solid ${(!done && liveFocused) ? '#f97316' : 'var(--border)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12, outline: 'none' }}>
+                style={{ position: 'relative', minHeight: 220, background: 'var(--surface2)', borderRadius: 8, border: `2px solid ${(!done && liveFocused) ? 'var(--c-bg-f97316)' : 'var(--border)'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12, outline: 'none' }}>
                 {liveState?.shot
                   // eslint-disable-next-line @next/next/no-img-element
                   ? <img src={liveState.shot} alt="Live login screen" draggable={false} onClick={done ? undefined : clickLive} onDoubleClick={done ? undefined : dblClickLive} style={{ maxWidth: '100%', borderRadius: 6, cursor: done ? 'default' : 'crosshair', userSelect: 'none' }} />
                   : <div style={{ color: 'var(--text3)', fontSize: 13, padding: 30 }}>Opening the portal in a live browser… the screen appears here in a moment.</div>}
                 {!done && liveState?.shot && (
-                  <div style={{ position: 'absolute', top: 6, right: 8, fontSize: 10.5, fontWeight: 600, padding: '1px 7px', borderRadius: 999, color: liveFocused ? '#9a3412' : 'var(--text3)', background: liveFocused ? '#ffedd5' : 'var(--surface)', border: '1px solid var(--border)' }}>
+                  <div style={{ position: 'absolute', top: 6, right: 8, fontSize: 10.5, fontWeight: 600, padding: '1px 7px', borderRadius: 999, color: liveFocused ? 'var(--c-fg-9a3412)' : 'var(--text3)', background: liveFocused ? 'var(--c-bg-ffedd5)' : 'var(--surface)', border: '1px solid var(--border)' }}>
                     {liveFocused ? '⌨ typing here' : 'click to type here'}
                   </div>)}
               </div>
@@ -1424,7 +1424,7 @@ export default function EmailImportsPage() {
                 const green = p.ran && p.delivered
                 const amber = p.ran && p.delivered === false
                 return (
-                  <div style={{ padding: '10px 12px', borderRadius: 8, background: amber ? '#fff7ed' : '#dcfce7', color: amber ? '#9a3412' : '#166534', fontSize: 13, border: amber ? '1px solid #fdba74' : undefined }}>
+                  <div style={{ padding: '10px 12px', borderRadius: 8, background: amber ? 'var(--c-bg-fff7ed)' : 'var(--c-bg-dcfce7)', color: amber ? 'var(--c-fg-9a3412)' : 'var(--c-fg-166534)', fontSize: 13, border: amber ? '1px solid var(--c-bg-fdba74)' : undefined }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                       <span style={{ fontWeight: 700 }}>
                         {green ? `✅ Signed in and imported ${p.rows ?? ''} row(s).`
@@ -1471,11 +1471,11 @@ export default function EmailImportsPage() {
                   </div>
                 </div>
               ) : ph === 'action_needed' ? (
-                <div style={{ padding: '10px 12px', borderRadius: 8, background: '#ffedd5', color: '#9a3412', fontSize: 13 }}>
+                <div style={{ padding: '10px 12px', borderRadius: 8, background: 'var(--c-bg-ffedd5)', color: 'var(--c-fg-9a3412)', fontSize: 13 }}>
                   ✅ Your code was accepted — just <b>click the blue Next button</b> on the screen above to finish trusting this device. (The click is sent straight to the live browser.)
                 </div>
               ) : ph === 'human_action' ? (
-                <div style={{ padding: '10px 12px', borderRadius: 8, background: '#ffedd5', color: '#9a3412', fontSize: 13 }}>
+                <div style={{ padding: '10px 12px', borderRadius: 8, background: 'var(--c-bg-ffedd5)', color: 'var(--c-fg-9a3412)', fontSize: 13 }}>
                   🧑 <b>Solve the “I’m not a robot” check in the live view above</b>, then click the portal’s <b>Sign in</b> button. Everything you click, type or scroll goes straight to the live browser — take your time, nothing is auto-submitted past the check.
                 </div>
               ) : (
@@ -1502,9 +1502,9 @@ export default function EmailImportsPage() {
                 <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setPullDiag(null)}>Close</button>
               </div>
               {pullDiag.loading ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div> : (<>
-                {pullDiag.note && <div style={{ padding: 10, marginBottom: 10, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>{pullDiag.note}</div>}
+                {pullDiag.note && <div style={{ padding: 10, marginBottom: 10, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', borderRadius: 8, fontSize: 13 }}>{pullDiag.note}</div>}
                 {d && (
-                  <div style={{ padding: '10px 12px', borderRadius: 8, marginBottom: 12, fontSize: 13, background: d.delivered ? '#dcfce7' : '#fff7ed', color: d.delivered ? '#166534' : '#9a3412', border: d.delivered ? undefined : '1px solid #fdba74' }}>
+                  <div style={{ padding: '10px 12px', borderRadius: 8, marginBottom: 12, fontSize: 13, background: d.delivered ? 'var(--c-bg-dcfce7)' : 'var(--c-bg-fff7ed)', color: d.delivered ? 'var(--c-fg-166534)' : 'var(--c-fg-9a3412)', border: d.delivered ? undefined : '1px solid #fdba74' }}>
                     <b>{d.delivered ? `✅ Imported ${d.rows_ingested ?? 0} row(s).` : '⚠️ This pull imported nothing.'}</b>
                     <div style={{ marginTop: 4, whiteSpace: 'normal' }}>{d.status}</div>
                     {d.reports_page_reachable === false && <div style={{ marginTop: 4 }}>The portal&apos;s <b>Reports page was not reachable</b> from the page this login landed on — see the menu links below.</div>}
@@ -1537,7 +1537,7 @@ export default function EmailImportsPage() {
                           <td style={{ padding: '6px 8px' }}>{r.rows_ingested ?? 0}</td>
                           <td style={{ padding: '6px 8px', color: tone, whiteSpace: 'normal' }}>
                             {r.rows_ingested ? `imported ${r.months_covered?.length || 0} month(s)` : (r.outcome || r.error || (r.ok ? 'ran, returned no rows' : 'failed'))}
-                            {r.calibration && !r.rows_ingested && <span style={{ color: '#b45309' }}> · params not calibrated yet</span>}
+                            {r.calibration && !r.rows_ingested && <span style={{ color: 'var(--c-fg-b45309)' }}> · params not calibrated yet</span>}
                             {r.name_match?.tier && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>name matched the portal’s <b>{r.name_match.tier}</b> spelling <code>{r.name_match.matched}</code> (invisible characters normalised)</div>}
                             {md?.wanted?.repr && (
                               <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3, fontFamily: 'ui-monospace, monospace' }}>
@@ -1545,7 +1545,7 @@ export default function EmailImportsPage() {
                                 {md.nearest_offered?.repr && <> · closest offered {md.nearest_offered.repr}{md.nearest_offered.odd_chars?.length ? ` [${md.nearest_offered.odd_chars.join(', ')}]` : ''}{typeof md.similarity === 'number' ? ` · ${Math.round(md.similarity * 100)}% alike` : ''}</>}
                               </div>
                             )}
-                            {r.options_changed && <div style={{ fontSize: 11, color: '#b45309', marginTop: 3 }}>⚠ the portal’s report list CHANGED between the start of the pull and this report’s turn — the page state moved, the name may be fine.</div>}
+                            {r.options_changed && <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)', marginTop: 3 }}>⚠ the portal’s report list CHANGED between the start of the pull and this report’s turn — the page state moved, the name may be fine.</div>}
                           </td>
                         </tr>
                       )})}

@@ -62,14 +62,14 @@ export default function AgingRebatePage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : data?.error ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {data.error}</div>
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
             <Stat label="Aging devices with rebate" value={`${data.count || 0}`} color="var(--accent)" />
-            <Stat label="Rebate received (total)" value={fmt(t.rebate)} color="#16a34a" />
-            <Stat label="Owed-to-distributor (in aging)" value={fmt(t.owed)} color="#d97706" />
-            <Stat label="Rebate, NO sale (investigate)" value={`${t.unmatched || 0}`} color={t.unmatched ? '#dc2626' : '#059669'} />
+            <Stat label="Rebate received (total)" value={fmt(t.rebate)} color="var(--c-fg-16a34a)" />
+            <Stat label="Owed-to-distributor (in aging)" value={fmt(t.owed)} color="var(--c-fg-d97706)" />
+            <Stat label="Rebate, NO sale (investigate)" value={`${t.unmatched || 0}`} color={t.unmatched ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'} />
           </div>
 
           <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
@@ -93,20 +93,20 @@ export default function AgingRebatePage() {
                 </tr></thead>
                 <tbody>
                   {rows.map((r, i) => (
-                    <tr key={(r.esn_imei || '') + i} style={{ borderTop: '1px solid var(--border)', background: r.unmatched ? '#fff1f2' : (i % 2 ? 'var(--surface2)' : undefined) }}>
+                    <tr key={(r.esn_imei || '') + i} style={{ borderTop: '1px solid var(--border)', background: r.unmatched ? 'var(--c-bg-fff1f2)' : (i % 2 ? 'var(--surface2)' : undefined) }}>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.store || '—'}{r.market ? ` · ${r.market}` : ''}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.device_model || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 11, fontFamily: 'monospace' }}>{r.esn_imei || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.acquired_date || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{fmt(r.owed_to_vip)}</td>
-                      <td style={{ padding: '8px 12px', fontSize: 12, fontWeight: 600, color: '#16a34a' }}>{fmt(r.rebate)}</td>
+                      <td style={{ padding: '8px 12px', fontSize: 12, fontWeight: 600, color: 'var(--c-fg-16a34a)' }}>{fmt(r.rebate)}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.rebate_date || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>{r.sale_found ? '✓' : '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>{r.sale_date || '—'}</td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>
                         {r.unmatched
-                          ? <span style={{ background: '#fee2e2', color: '#b91c1c', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>REBATE, NO SALE</span>
-                          : <span style={{ color: '#059669' }}>Sold — remove</span>}
+                          ? <span style={{ background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-b91c1c)', borderRadius: 5, padding: '1px 8px', fontWeight: 600 }}>REBATE, NO SALE</span>
+                          : <span style={{ color: 'var(--c-fg-059669)' }}>Sold — remove</span>}
                       </td>
                     </tr>
                   ))}

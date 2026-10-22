@@ -126,7 +126,7 @@ export default function VisionBusyHoursPage() {
 
       {/* THE CAVEAT SITS ABOVE THE DATA, not under it. Someone who reads only the chart must not
           come away believing they have a customer count. */}
-      <div style={{ ...panel, borderLeft: '3px solid #b45309', marginBottom: 16, fontSize: 13 }}>
+      <div style={{ ...panel, borderLeft: '3px solid var(--c-bg-b45309)', marginBottom: 16, fontSize: 13 }}>
         <b>This is activity, not a customer count.</b> The cameras report that a person was seen —
         never which direction they were walking. Someone leaving looks the same as someone arriving,
         and staff are counted alongside customers. Use it to see <i>when</i> the store is busy, and
@@ -141,7 +141,7 @@ export default function VisionBusyHoursPage() {
           query by hand and found a lens facing the pavement carrying 96% of its store, a quarter of
           it after midnight. Now it says so where the numbers are read. */}
       {(data?.dominant?.length || 0) > 0 && (
-        <div style={{ ...panel, borderLeft: '3px solid #b45309', marginBottom: 16, fontSize: 13 }}>
+        <div style={{ ...panel, borderLeft: '3px solid var(--c-bg-b45309)', marginBottom: 16, fontSize: 13 }}>
           <b>One camera is carrying {data!.dominant.length === 1 ? 'a store' : 'some stores'}.</b>
           {data!.dominant.map(d => (
             <div key={d.store_code} style={{ marginTop: 6, color: 'var(--text2)' }}>
@@ -153,7 +153,7 @@ export default function VisionBusyHoursPage() {
         </div>
       )}
 
-      {err && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', fontSize: 13, marginBottom: 16 }}>{err}</div>}
+      {err && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', fontSize: 13, marginBottom: 16 }}>{err}</div>}
 
       {loading ? (
         <div style={{ color: 'var(--text2)' }}>Loading…</div>

@@ -123,7 +123,7 @@ export default function StaffingHeatmapPage() {
           <div style={{ display: 'flex', gap: 16, marginTop: 10, fontSize: 11.5, color: 'var(--text3)', flexWrap: 'wrap' }}>
             <span>Timezone: <b>{data.timezone}</b></span>
             <span>Capacity: <b>{data.capacity}</b> txns/employee-hr</span>
-            {active.kind === 'div' && <span><span style={{ color: '#dc2626' }}>■</span> understaffed vs demand · <span style={{ color: '#16a34a' }}>■</span> overstaffed</span>}
+            {active.kind === 'div' && <span><span style={{ color: 'var(--c-fg-dc2626)' }}>■</span> understaffed vs demand · <span style={{ color: 'var(--c-fg-16a34a)' }}>■</span> overstaffed</span>}
           </div>
         </div>
       )}

@@ -120,15 +120,15 @@ export default function VisitCoachingPanel({ employeeId, employeeName, storeCode
               const hasTarget = (m.target ?? 0) > 0
               const met = hasTarget && (m.achieved ?? 0) >= (m.target ?? 0)
               return (
-                <div key={m.cat || i} style={{ background: met ? '#e6f7ec' : 'var(--surface2)', borderRadius: 8, padding: '8px 10px', border: '1px solid var(--border)' }}>
+                <div key={m.cat || i} style={{ background: met ? 'var(--c-bg-e6f7ec)' : 'var(--surface2)', borderRadius: 8, padding: '8px 10px', border: '1px solid var(--border)' }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase' }}>{m.label || m.cat}</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: met ? '#16794a' : 'var(--text)' }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: met ? 'var(--c-fg-16794a)' : 'var(--text)' }}>
                     {fmtMetric(m.achieved, m.unit)}
                     <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)' }}> / {fmtMetric(m.target, m.unit)}</span>
                   </div>
                   {(m.need ?? 0) > 0
-                    ? <div style={{ fontSize: 11, fontWeight: 600, color: '#b45309' }}>{fmtMetric(m.need, m.unit)} to go</div>
-                    : hasTarget ? <div style={{ fontSize: 11, fontWeight: 600, color: '#16794a' }}>✓ target met</div> : null}
+                    ? <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-b45309)' }}>{fmtMetric(m.need, m.unit)} to go</div>
+                    : hasTarget ? <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-fg-16794a)' }}>✓ target met</div> : null}
                 </div>
               )
             })}
@@ -164,13 +164,13 @@ export default function VisitCoachingPanel({ employeeId, employeeName, storeCode
                 <div>💸 <b>{fmt(coach!.at_risk || 0)}</b> at risk — short on <b>{(coach!.short_kpis || []).join(', ') || '—'}</b>
                   {coach!.need_for_full ? <> · hit <b>{coach!.need_for_full}</b> more KPI(s) for full payout</> : null}.</div>
               ) : (
-                <div style={{ color: 'var(--green, #16794a)' }}>✅ Full tier — all KPIs on target.</div>
+                <div style={{ color: 'var(--green, var(--c-fg-16794a))' }}>✅ Full tier — all KPIs on target.</div>
               )}
               {(coach!.chargeback_deducted || 0) > 0 && (
-                <div style={{ color: '#b42318' }}>🔻 {fmt(coach!.chargeback_deducted || 0)} chargebacks deducted ({coach!.chargeback_count || 0}).</div>
+                <div style={{ color: 'var(--c-fg-b42318)' }}>🔻 {fmt(coach!.chargeback_deducted || 0)} chargebacks deducted ({coach!.chargeback_count || 0}).</div>
               )}
               {(coach!.money_on_table || 0) > 0 && (
-                <div style={{ color: 'var(--text2)' }}>On the table this period: <b style={{ color: '#b42318' }}>{fmt(coach!.money_on_table || 0)}</b></div>
+                <div style={{ color: 'var(--text2)' }}>On the table this period: <b style={{ color: 'var(--c-fg-b42318)' }}>{fmt(coach!.money_on_table || 0)}</b></div>
               )}
               {(coach!.coaching_notes || []).length > 0 && (
                 <ul style={{ margin: '4px 0 0', paddingLeft: 16, color: 'var(--text3)', fontSize: 12 }}>

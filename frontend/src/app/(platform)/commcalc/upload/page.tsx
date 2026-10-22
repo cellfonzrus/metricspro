@@ -326,7 +326,7 @@ export default function UploadPage() {
                         {off ? `📨 Use ${c.route_policy.remedy_label || 'the supported route'}` : '⚙️ Configure'}
                       </a>
                     </div>
-                    {autoMsg[s.id] && <div style={{ fontSize: 11, color: autoMsg[s.id].startsWith('❌') ? '#b91c1c' : 'var(--text2)', marginTop: 6 }}>{autoMsg[s.id]}</div>}
+                    {autoMsg[s.id] && <div style={{ fontSize: 11, color: autoMsg[s.id].startsWith('❌') ? 'var(--c-fg-b91c1c)' : 'var(--text2)', marginTop: 6 }}>{autoMsg[s.id]}</div>}
                   </td>
                 </tr>
               )
@@ -370,7 +370,7 @@ export default function UploadPage() {
       {!kinds.loaded ? (
         <div style={{ color: 'var(--text3)', fontSize: 12, margin: '0 0 12px' }}>Reading which report kinds this company may upload…</div>
       ) : kinds.error ? (
-        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#991b1b', margin: '0 0 12px' }}>
+        <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: 'var(--c-fg-991b1b)', margin: '0 0 12px' }}>
           ⚠️ The report-kind registry could not be read ({kinds.error}) — the upload tiles are withheld rather than guessed. Reload, or ask the platform team.
         </div>
       ) : (
@@ -383,7 +383,7 @@ export default function UploadPage() {
       {/* If an ingest journal is missing (mig 202 / 007 not run on this deployment) the "Last upload"
           lines below are INCOMPLETE — say so rather than letting a tile read as "never uploaded". */}
       {lastHint && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#92400e', margin: '0 0 12px' }}>
+        <div style={{ background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fcd34d)', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: 'var(--c-fg-92400e)', margin: '0 0 12px' }}>
           ⚠️ Last-upload history is incomplete on this deployment — {lastHint}
         </div>
       )}
@@ -405,8 +405,8 @@ export default function UploadPage() {
                 <div style={{ flex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontWeight: 600, fontSize: 14 }}>{kinds.labelFor(id, label)}</span>
-                    {required && <span style={{ fontSize: 10, background: '#fee2e2', color: '#dc2626', padding: '1px 6px', borderRadius: 999, fontWeight: 600 }}>Required</span>}
-                    {prior && <span style={{ fontSize: 10, background: '#dcfce7', color: '#15803d', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>✓ Uploaded</span>}
+                    {required && <span style={{ fontSize: 10, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-dc2626)', padding: '1px 6px', borderRadius: 999, fontWeight: 600 }}>Required</span>}
+                    {prior && <span style={{ fontSize: 10, background: 'var(--c-bg-dcfce7)', color: 'var(--c-fg-15803d)', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>✓ Uploaded</span>}
                   </div>
                   <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 6px' }}>{desc}</div>
                   {/* What THIS report's upload does to stored data — mirrors the backend's write path. */}
@@ -505,7 +505,7 @@ export default function UploadPage() {
                 <div style={{ flex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontWeight: 600, fontSize: 14 }}>{rep.label}</span>
-                    {(landed?.rows || 0) > 0 && <span style={{ fontSize: 10, background: '#dcfce7', color: '#15803d', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{Number(landed.rows).toLocaleString()} rows</span>}
+                    {(landed?.rows || 0) > 0 && <span style={{ fontSize: 10, background: 'var(--c-bg-dcfce7)', color: 'var(--c-fg-15803d)', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{Number(landed.rows).toLocaleString()} rows</span>}
                     <span style={{ fontSize: 10, color: 'var(--text3)' }}>{rep.provenance_text}</span>
                   </div>
                   <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 6px' }}>{rep.what_in_it}{rep.source_hint ? ` — ${rep.source_hint}` : ''}</div>

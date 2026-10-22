@@ -20,11 +20,11 @@ export const dailyFeedLabel = (pos: string) => `Daily ${pos} feed`
 
 export function salesReconTabs(pos: string) {
   return [
-    { key: 'missing_in_monthly', label: 'Missing in Monthly', color: '#dc2626',
+    { key: 'missing_in_monthly', label: 'Missing in Monthly', color: 'var(--c-fg-dc2626)',
       blurb: `In the daily ${pos} feed but NOT in the authoritative monthly file — a real revenue / commission leak, or a same-day void. Investigate first.` },
-    { key: 'amount_mismatch', label: 'Amount Mismatch', color: '#d97706',
+    { key: 'amount_mismatch', label: 'Amount Mismatch', color: 'var(--c-fg-d97706)',
       blurb: 'Same transaction in both, but the totals differ (price change, partial line, or a tender/return delta).' },
-    { key: 'missing_in_daily', label: 'Missing in Daily', color: '#2563eb',
+    { key: 'missing_in_daily', label: 'Missing in Daily', color: 'var(--c-fg-2563eb)',
       blurb: 'In the monthly file but the daily feed never captured it — usually a feed-coverage gap (feed down that day), lower severity.' },
   ]
 }

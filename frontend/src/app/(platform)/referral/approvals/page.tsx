@@ -30,7 +30,7 @@ export default function ApprovalsPage() {
         Referrals whose line is activated and awaiting your sign-off. Open one to set the amount + payout
         date and approve — you can&apos;t approve a referral you created yourself.
       </div>
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', marginBottom: 12 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-dc2626)', marginBottom: 12 }}>{msg}</div>}
 
       <Queue title="⏳ Awaiting approval" rows={pending} empty="Nothing waiting on approval." />
       <Queue title="💸 Approved · awaiting payout" rows={payouts} empty="Nothing approved-but-unpaid." />

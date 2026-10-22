@@ -114,7 +114,7 @@ function StorePicker({ stores, markets, value, onChange, exclude, label }: {
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-          <div style={{ position: 'absolute', zIndex: 41, top: '108%', left: 0, width: 300, maxHeight: 360, overflow: 'auto', background: 'white', border: '1px solid var(--border)', borderRadius: 9, boxShadow: '0 8px 28px rgba(0,0,0,.16)', padding: 9 }}>
+          <div style={{ position: 'absolute', zIndex: 41, top: '108%', left: 0, width: 300, maxHeight: 360, overflow: 'auto', background: 'var(--c-bg-ffffff)', border: '1px solid var(--border)', borderRadius: 9, boxShadow: '0 8px 28px rgba(0,0,0,.16)', padding: 9 }}>
             <input autoFocus style={{ ...inp, width: '100%', marginBottom: 7 }} placeholder="Filter stores…" value={q} onChange={e => setQ(e.target.value)} />
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: markets.length ? 5 : 7 }}>
               <button className="btn" style={chip} onClick={() => add(filt.map(s => s.store_code))}>Select all{q ? ' (filtered)' : ''}</button>
@@ -158,7 +158,7 @@ function MonthPicker({ months, value, onChange, label }: {
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-          <div style={{ position: 'absolute', zIndex: 41, top: '108%', left: 0, width: 240, maxHeight: 340, overflow: 'auto', background: 'white', border: '1px solid var(--border)', borderRadius: 9, boxShadow: '0 8px 28px rgba(0,0,0,.16)', padding: 9 }}>
+          <div style={{ position: 'absolute', zIndex: 41, top: '108%', left: 0, width: 240, maxHeight: 340, overflow: 'auto', background: 'var(--c-bg-ffffff)', border: '1px solid var(--border)', borderRadius: 9, boxShadow: '0 8px 28px rgba(0,0,0,.16)', padding: 9 }}>
             <input autoFocus style={{ ...inp, width: '100%', marginBottom: 7 }} placeholder="Filter months…" value={q} onChange={e => setQ(e.target.value)} />
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 7 }}>
               <button className="btn" style={chip} onClick={() => onChange(Array.from(new Set([...value, ...filt])))}>Select all{q ? ' (filtered)' : ''}</button>
@@ -197,7 +197,7 @@ function ExpensePicker({ cats, isLocked, value, onChange }: {
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-          <div style={{ position: 'absolute', zIndex: 41, top: '108%', left: 0, width: 260, maxHeight: 360, overflow: 'auto', background: 'white', border: '1px solid var(--border)', borderRadius: 9, boxShadow: '0 8px 28px rgba(0,0,0,.16)', padding: 9 }}>
+          <div style={{ position: 'absolute', zIndex: 41, top: '108%', left: 0, width: 260, maxHeight: 360, overflow: 'auto', background: 'var(--c-bg-ffffff)', border: '1px solid var(--border)', borderRadius: 9, boxShadow: '0 8px 28px rgba(0,0,0,.16)', padding: 9 }}>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 7 }}>
               <button className="btn" style={chip} onClick={() => onChange(open_cats.map(c => c.name))}>Select all</button>
               <button className="btn" style={chip} onClick={() => onChange([])} disabled={!value.length}>Clear</button>
@@ -635,7 +635,7 @@ export default function ExpensesPage() {
 
       {/* COPY ONE COLUMN → MANY. Opened by the ⧉ button on a store column header. */}
       {copySource && (
-        <div className="card" style={{ padding: 12, marginBottom: 16, background: '#eff6ff', borderLeft: '4px solid var(--accent)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="card" style={{ padding: 12, marginBottom: 16, background: 'var(--c-bg-eff6ff)', borderLeft: '4px solid var(--accent)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13 }}>⧉ Copy <b>{copySource}</b>{(() => { const a = stores.find(s => s.store_code === copySource)?.address; return a ? ` (${a.slice(0, 22)})` : '' })()}&apos;s whole column to:</span>
           <StorePicker stores={stores} markets={markets} value={copyTargets} onChange={setCopyTargets} exclude={copySource} label="Paste to stores…" />
           <button className="btn btn-primary" onClick={applyCopy} disabled={applyBusy || !copyTargets.length}>
@@ -647,7 +647,7 @@ export default function ExpensesPage() {
 
       {/* MULTI-STORE COMMON EXPENSE — same expense + amount to many stores in one submit. */}
       {commonOpen && (
-        <div className="card" style={{ padding: 12, marginBottom: 16, background: '#f0fdf4', borderLeft: '4px solid #16a34a', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="card" style={{ padding: 12, marginBottom: 16, background: 'var(--c-bg-f0fdf4)', borderLeft: '4px solid var(--c-bg-16a34a)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>🏢 Common expense →</span>
           <input style={{ ...inp, width: 170 }} list="exp-cats" placeholder="Expense (pick or new)" value={common.name}
             onChange={e => { const nm = e.target.value; const ex = cats.find(c => c.name.toLowerCase() === nm.toLowerCase()); setCommon(v => ({ ...v, name: nm, type: ex?.type || v.type })) }} />
@@ -664,7 +664,7 @@ export default function ExpensesPage() {
 
       {/* APPLY A SOURCE MONTH ACROSS TARGET MONTHS — everything except commission & salary. */}
       {monthsOpen && (
-        <div className="card" style={{ padding: 12, marginBottom: 16, background: '#fef9f0', borderLeft: '4px solid #f59e0b', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="card" style={{ padding: 12, marginBottom: 16, background: 'var(--c-bg-fef9f0)', borderLeft: '4px solid var(--c-bg-f59e0b)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>📅 Apply expenses →</span>
           <label style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 5 }}>From
             <select style={inp} value={applySource || period} onChange={e => setApplySource(e.target.value)}>
@@ -687,24 +687,24 @@ export default function ExpensesPage() {
       {expTrendData.length > 1 && !loading && (
         <div className="card" style={{ padding: '12px 12px 6px', marginBottom: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, paddingLeft: 6 }}>📉 Total expenses — last {expTrendData.length} months{market ? ` · ${market}` : ' · all stores'}</div>
-          <TrendChart data={expTrendData} height={210} series={[{ key: 'total', name: 'Total expenses', color: '#dc2626', money: true }]} />
+          <TrendChart data={expTrendData} height={210} series={[{ key: 'total', name: 'Total expenses', color: 'var(--c-fg-dc2626)', money: true }]} />
         </div>
       )}
 
       {carriedFrom && !loading && (
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#eef6ff', borderLeft: '4px solid var(--accent)', fontSize: 13 }}>
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: 'var(--c-bg-eef6ff)', borderLeft: '4px solid var(--accent)', fontSize: 13 }}>
           📋 <b>Carried forward from {carriedFrom}</b> — no expenses entered for {period} yet, so last month&apos;s are pre-filled below.
           Review and <b>Save All</b> to keep them for {period} (they&apos;ll carry to next month too).
         </div>
       )}
       {salaryFrom && !loading && (
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#f0fdf4', borderLeft: '4px solid #16a34a', fontSize: 13 }}>
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: 'var(--c-bg-f0fdf4)', borderLeft: '4px solid var(--c-bg-16a34a)', fontSize: 13 }}>
           💵 <b>Employee Salaries auto-filled from worked hours</b> for {period} (actual hours where clocked, otherwise scheduled, × each employee&apos;s pay rate).
           Edit any store&apos;s figure to override, or hit <b>↻ Salaries from hours</b> to re-pull. Nothing is saved until you <b>Save All</b>.
         </div>
       )}
       {commissionFrom && !loading && (
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: '#fef9f0', borderLeft: '4px solid #f59e0b', fontSize: 13 }}>
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, background: 'var(--c-bg-fef9f0)', borderLeft: '4px solid var(--c-bg-f59e0b)', fontSize: 13 }}>
           🧮 <b>Employee Commission auto-filled from calculated commissions</b> for {period} (calculated rep commission total payout, summed per store).
           Edit to override or hit <b>↻ Commission from calc</b> to re-pull. Save All to keep.
         </div>
@@ -715,7 +715,7 @@ export default function ExpensesPage() {
       ) : visStores.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>No stores match. (Add stores in StoreOps Admin.)</div>
       ) : (
-        <div style={{ overflowX: 'auto', background: 'white', border: '1px solid var(--border)', borderRadius: 12 }}>
+        <div style={{ overflowX: 'auto', background: 'var(--c-bg-ffffff)', border: '1px solid var(--border)', borderRadius: 12 }}>
           {cw.dirty && <div style={{ padding: '4px 10px', fontSize: 11, color: 'var(--text3)' }}><button className="btn" style={{ padding: '2px 8px', fontSize: 11 }} onClick={cw.resetAll}>↺ Reset column widths</button> <span>drag a column edge to resize · double-click to auto-fit</span></div>}
           <table style={{ borderCollapse: 'collapse', tableLayout: 'auto' }}>
             <colgroup>
@@ -725,9 +725,9 @@ export default function ExpensesPage() {
             </colgroup>
             <thead>
               <tr style={{ background: 'var(--accent)' }}>
-                <th style={{ padding: '10px 16px', color: 'white', fontSize: 12, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--accent)', whiteSpace: 'nowrap' }}>Expense<ResizeHandle onDown={e => cw.start('expense', e)} onReset={() => cw.reset('expense')} /></th>
+                <th style={{ padding: '10px 16px', color: 'var(--c-fg-ffffff)', fontSize: 12, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--accent)', whiteSpace: 'nowrap' }}>Expense<ResizeHandle onDown={e => cw.start('expense', e)} onReset={() => cw.reset('expense')} /></th>
                 {visStores.map(s => (
-                  <th key={s.store_code} style={{ padding: '8px 10px', color: 'white', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative', background: 'var(--accent)' }}>
+                  <th key={s.store_code} style={{ padding: '8px 10px', color: 'var(--c-fg-ffffff)', fontSize: 11, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative', background: 'var(--accent)' }}>
                     <div style={{ fontWeight: 700 }}>{s.store_code}</div>
                     <div style={{ fontWeight: 400, opacity: 0.7, fontSize: 10 }}>{(s.address || '').substring(0, 18)}</div>
                     <button onClick={() => { setCopySource(cur => cur === s.store_code ? '' : s.store_code); setCommonOpen(false); setCopyTargets([]) }}
@@ -736,27 +736,27 @@ export default function ExpensesPage() {
                     <ResizeHandle onDown={e => cw.start(s.store_code, e)} onReset={() => cw.reset(s.store_code)} />
                   </th>
                 ))}
-                <th style={{ padding: '10px 14px', color: 'white', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative', background: 'var(--accent)' }}>Total<ResizeHandle onDown={e => cw.start('total', e)} onReset={() => cw.reset('total')} /></th>
+                <th style={{ padding: '10px 14px', color: 'var(--c-fg-ffffff)', fontSize: 12, textAlign: 'right', whiteSpace: 'nowrap', position: 'relative', background: 'var(--accent)' }}>Total<ResizeHandle onDown={e => cw.start('total', e)} onReset={() => cw.reset('total')} /></th>
               </tr>
             </thead>
             <tbody>
               {cats.map((cat, ci) => {
                 const rowTotal = visStores.reduce((s, st) => s + getVal(st.store_code, cat.name), 0)
                 return (
-                  <tr key={cat.name} style={{ background: ci % 2 ? '#fafbfc' : 'white' }}>
-                    <td style={{ padding: '6px 16px', fontSize: 13, fontWeight: 500, position: 'sticky', left: 0, background: ci % 2 ? '#fafbfc' : 'white', borderBottom: '1px solid var(--border)' }}>
+                  <tr key={cat.name} style={{ background: ci % 2 ? 'var(--c-bg-fafbfc)' : 'white' }}>
+                    <td style={{ padding: '6px 16px', fontSize: 13, fontWeight: 500, position: 'sticky', left: 0, background: ci % 2 ? 'var(--c-bg-fafbfc)' : 'white', borderBottom: '1px solid var(--border)' }}>
                       {cat.name}
                       <span style={{ marginLeft: 6, fontSize: 10, color: cat.type === 'Fixed' ? '#2563eb' : '#16a34a', background: cat.type === 'Fixed' ? '#dbeafe' : '#dcfce7', padding: '1px 5px', borderRadius: 999 }}>{cat.type}</span>
                       {isSystemCat(cat.name) && (
                         <span title="Auto-computed by the payroll run and inserted here — read-only. Edit it in the payroll run, not on this page."
-                          style={{ marginLeft: 6, fontSize: 10, color: '#7c3aed', background: '#f3e8ff', padding: '1px 6px', borderRadius: 999, whiteSpace: 'nowrap' }}>🔒 auto — from payroll</span>
+                          style={{ marginLeft: 6, fontSize: 10, color: 'var(--c-fg-7c3aed)', background: 'var(--c-bg-f3e8ff)', padding: '1px 6px', borderRadius: 999, whiteSpace: 'nowrap' }}>🔒 auto — from payroll</span>
                       )}
                     </td>
                     {visStores.map(s => (
                       <td key={s.store_code} style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
                         {isSystemCat(cat.name) ? (
                           <div title="Auto-computed by payroll — read-only here"
-                            style={{ width: '100%', boxSizing: 'border-box', padding: '4px 6px', fontSize: 13, textAlign: 'right', color: 'var(--text2)', background: '#faf5ff', border: '1px dashed #e9d5ff', borderRadius: 4 }}>
+                            style={{ width: '100%', boxSizing: 'border-box', padding: '4px 6px', fontSize: 13, textAlign: 'right', color: 'var(--text2)', background: 'var(--c-bg-faf5ff)', border: '1px dashed var(--c-bg-e9d5ff)', borderRadius: 4 }}>
                             {getVal(s.store_code, cat.name) ? fmt(getVal(s.store_code, cat.name)) : '—'}
                           </div>
                         ) : (
@@ -775,9 +775,9 @@ export default function ExpensesPage() {
             </tbody>
             <tfoot>
               <tr style={{ background: 'var(--accent)', fontWeight: 700 }}>
-                <td style={{ padding: '10px 16px', color: 'white', fontSize: 13, position: 'sticky', left: 0, background: 'var(--accent)' }}>Total</td>
-                {visStores.map(s => <td key={s.store_code} style={{ padding: '10px 10px', textAlign: 'right', color: 'white', fontSize: 13, background: 'var(--accent)' }}>{fmt(storeTotal(s.store_code))}</td>)}
-                <td style={{ padding: '10px 14px', textAlign: 'right', color: 'white', fontSize: 13, background: 'var(--accent)' }}>{fmt(grand)}</td>
+                <td style={{ padding: '10px 16px', color: 'var(--c-fg-ffffff)', fontSize: 13, position: 'sticky', left: 0, background: 'var(--accent)' }}>Total</td>
+                {visStores.map(s => <td key={s.store_code} style={{ padding: '10px 10px', textAlign: 'right', color: 'var(--c-fg-ffffff)', fontSize: 13, background: 'var(--accent)' }}>{fmt(storeTotal(s.store_code))}</td>)}
+                <td style={{ padding: '10px 14px', textAlign: 'right', color: 'var(--c-fg-ffffff)', fontSize: 13, background: 'var(--accent)' }}>{fmt(grand)}</td>
               </tr>
             </tfoot>
           </table>

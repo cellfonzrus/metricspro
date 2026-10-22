@@ -226,7 +226,7 @@ export default function TenderConfigPage() {
       {/* Step 2 — detect */}
       <StepHead n={2} title="Find your POS tender values" sub={`Upload a sample Sales Transaction report or a sample X-Report (auto-detected by shape, or pick which leg it is), or pull the distinct Tender Types from data you've already ingested. Both reports come from ${pos}.`} />
       {xReport.applies === 'not_defined' && (
-        <div role="status" style={{ fontSize: 12.5, color: '#1e40af', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 12px', margin: '6px 0 10px' }}>
+        <div role="status" style={{ fontSize: 12.5, color: 'var(--c-fg-1e40af)', background: 'var(--c-bg-eff6ff)', border: '1px solid var(--c-bg-bfdbfe)', borderRadius: 8, padding: '8px 12px', margin: '6px 0 10px' }}>
           {notApplicableCopy({ pos, posDeclared, feedNoun: 'cash register / X-report', purpose: 'detect X-report tender values from' })}
         </div>
       )}

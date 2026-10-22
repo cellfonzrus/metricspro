@@ -507,9 +507,9 @@ export default function GPReportPage() {
           departments currently landing in the 'Other' bucket — how many lines + $ — with a link to map
           them into the right GP bucket. Fed by the /gp response's unmapped_departments. */}
       {!loading && (data.unmapped_departments?.length > 0) && (
-        <div className="card" style={{ padding: '12px 14px', marginBottom: 20, border: '1px solid #fde047', background: '#fffbeb' }}>
+        <div className="card" style={{ padding: '12px 14px', marginBottom: 20, border: '1px solid var(--c-bg-fde047)', background: 'var(--c-bg-fffbeb)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-fg-92400e)' }}>
               🗂️ &ldquo;Other&rdquo; GP breakdown — {data.unmapped_departments.length} department(s) are unclassified
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -517,7 +517,7 @@ export default function GPReportPage() {
               <button className="btn btn-secondary" style={{ fontSize: 12, padding: '2px 10px' }} onClick={() => setShowComp(s => !s)}>{showComp ? 'Hide' : 'Show'} detail</button>
             </div>
           </div>
-          <div style={{ fontSize: 11, color: '#92400e', marginTop: 4 }}>
+          <div style={{ fontSize: 11, color: 'var(--c-fg-92400e)', marginTop: 4 }}>
             These departments&apos; sales roll into the single &ldquo;Other&rdquo; column. Assign each to Accessory / Device / Plan (or exclude) on the GP Category Map so the report details them properly.
           </div>
           {/* ⑦ (Gate-1 follow-up 2026-07-25): this breakdown counts only COUNTABLE sale lines — the same
@@ -525,7 +525,7 @@ export default function GPReportPage() {
               to the Sales Report instead of quietly including voided + returned lines. What was skipped is
               stated here rather than hidden; the GP money columns above still count every line. */}
           {(data.bucket_composition_excluded?.total?.lines > 0) && (
-            <div style={{ fontSize: 11, color: '#92400e', marginTop: 4, opacity: 0.9 }}>
+            <div style={{ fontSize: 11, color: 'var(--c-fg-92400e)', marginTop: 4, opacity: 0.9 }}>
               Counts exclude {data.bucket_composition_excluded.total.lines} non-countable line(s) —{' '}
               {data.bucket_composition_excluded.voided?.lines || 0} voided ·{' '}
               {data.bucket_composition_excluded.return?.lines || 0} return ·{' '}
@@ -634,7 +634,7 @@ export default function GPReportPage() {
             </table>
           </div>
           {monthKeys.includes(unknownKey) && (
-            <div style={{ fontSize: 11, color: '#b45309', marginTop: 8, lineHeight: 1.5 }}>
+            <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)', marginTop: 8, lineHeight: 1.5 }}>
               The <b>{monthLabels[unknownKey]}</b> column is money whose product label states no month-of-life. It is
               shown as itself — never folded into M1, never dropped.{' '}
               <a href="/commcalc/commission-legs" style={{ fontWeight: 600, color: 'var(--accent)' }}>Map those labels →</a>
@@ -690,7 +690,7 @@ export default function GPReportPage() {
                     <td style={{ padding: '4px 8px', color: 'var(--text3)', fontSize: 11 }}>{legSourceHow[l.key] || '—'}</td>
                     <td style={{ padding: '4px 8px', textAlign: 'right' }}>{fmt(l.m1)}</td>
                     <td style={{ padding: '4px 8px', textAlign: 'right' }}>{fmt(l.m2)}</td>
-                    <td style={{ padding: '4px 8px', textAlign: 'right', color: l.un ? '#b45309' : 'var(--text3)' }}>{l.un ? fmt(l.un) : '—'}</td>
+                    <td style={{ padding: '4px 8px', textAlign: 'right', color: l.un ? 'var(--c-fg-b45309)' : 'var(--text3)' }}>{l.un ? fmt(l.un) : '—'}</td>
                     <td style={{ padding: '4px 8px', textAlign: 'right', fontWeight: 700 }}>{fmt(l.tot)}</td>
                     <td style={{ padding: '4px 8px', textAlign: 'right', color: 'var(--text3)' }}>
                       {l.tot ? `${Math.round(l.m2 / l.tot * 1000) / 10}%` : '—'}
@@ -701,7 +701,7 @@ export default function GPReportPage() {
             </table>
           </div>
           {(totals.comm_unsplit || 0) !== 0 && (commUnsplitFields.length ? (
-            <div style={{ fontSize: 11, color: '#b45309', marginTop: 8, lineHeight: 1.5 }}>
+            <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)', marginTop: 8, lineHeight: 1.5 }}>
               {fmt(totals.comm_unsplit)} of Commission sits outside both legs: it is{' '}
               {commUnsplitFields.map(f => f.replace(/_/g, ' ')).join(', ')} on the master-agent export
               {commUnsplitWhy ? ` — ${commUnsplitWhy}` : ''}. It is still counted in the Commission total on the
@@ -709,7 +709,7 @@ export default function GPReportPage() {
               as Commissions Paid</b>. Nothing was guessed and nothing was dropped.
             </div>
           ) : (
-            <div style={{ fontSize: 11, color: '#b45309', marginTop: 8, lineHeight: 1.5 }}>
+            <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)', marginTop: 8, lineHeight: 1.5 }}>
               {fmt(totals.comm_unsplit)} of Commission could not be attributed to a leg — those carrier labels never
               state a month-of-life. Nothing was guessed. Assign them on{' '}
               <a href="/commcalc/commission-legs" style={{ fontWeight: 600, color: 'var(--accent)' }}>Commission received over M1-M12</a>{' '}
@@ -752,12 +752,12 @@ export default function GPReportPage() {
           </div>
           <div style={{ fontSize: 11, color: 'var(--text3)', padding: '2px 6px 6px', lineHeight: 1.5 }}>{legTrend.basis}</div>
           {(legTrend.notes || []).map((n: string) => (
-            <div key={n} style={{ fontSize: 11, color: '#b45309', padding: '0 6px 4px' }}>⚠ {n}</div>
+            <div key={n} style={{ fontSize: 11, color: 'var(--c-fg-b45309)', padding: '0 6px 4px' }}>⚠ {n}</div>
           ))}
           <TrendChart data={legTrendData} height={220}
-            series={[{ key: 'm1', name: '1st month', color: '#16a34a', money: true },
-                     { key: 'm2_12', name: 'M2–M12', color: '#2e75b6', money: true },
-                     ...((legTrend.company || []).some((c: any) => c.unsplit) ? [{ key: 'unsplit', name: 'Unsplit', color: '#f59e0b', money: true, dashed: true }] : [])]} />
+            series={[{ key: 'm1', name: '1st month', color: 'var(--c-fg-16a34a)', money: true },
+                     { key: 'm2_12', name: 'M2–M12', color: 'var(--c-fg-2e75b6)', money: true },
+                     ...((legTrend.company || []).some((c: any) => c.unsplit) ? [{ key: 'unsplit', name: 'Unsplit', color: 'var(--c-fg-f59e0b)', money: true, dashed: true }] : [])]} />
           {legLadder && (
             <div className="table-wrapper" style={{ marginTop: 6 }}>
               <div style={{ fontSize: 11, color: 'var(--text3)', padding: '0 6px 6px', lineHeight: 1.5 }}>
@@ -784,7 +784,7 @@ export default function GPReportPage() {
                         </td>
                       ))}
                       {legTrend.has_unknown_leg && (
-                        <td style={{ padding: '3px 8px', textAlign: 'right', color: '#b45309' }}>{c.ladder?.unknown ? fmt(c.ladder.unknown) : '·'}</td>
+                        <td style={{ padding: '3px 8px', textAlign: 'right', color: 'var(--c-fg-b45309)' }}>{c.ladder?.unknown ? fmt(c.ladder.unknown) : '·'}</td>
                       )}
                       <td style={{ padding: '3px 8px', textAlign: 'right', fontWeight: 700 }}>{fmt(c.total)}</td>
                       <td style={{ padding: '3px 8px', textAlign: 'right' }}>{c.total ? `${c.m2_12_pct}%` : '—'}</td>
@@ -811,14 +811,14 @@ export default function GPReportPage() {
                     {legStoreTrend.store_basis}
                   </div>
                   {legStoreTrend.partial_months.length > 0 && (
-                    <div style={{ fontSize: 11, color: '#b45309', padding: '0 6px 4px' }}>
+                    <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)', padding: '0 6px 4px' }}>
                       ⚠ {legStoreTrend.partial_months.map(shortPeriod).join(', ')} {legStoreTrend.partial_months.length > 1 ? 'have' : 'has'} not
                       finished collecting. {legStoreTrend.partial_months.length > 1 ? 'They are' : 'It is'} shown but excluded from every Δ —
                       a part-month compared against full ones reads as a collapse at every store at once.
                     </div>
                   )}
                   {!legStoreTrend.all_ties && (
-                    <div style={{ fontSize: 11, color: '#b45309', padding: '0 6px 4px' }}>
+                    <div style={{ fontSize: 11, color: 'var(--c-fg-b45309)', padding: '0 6px 4px' }}>
                       ⚠ Some money reached the company figure that the store axis could not place:
                       {' '}{legStoreTrend.months.filter(m => !legStoreTrend.ties[m]?.ok)
                         .map(m => `${shortPeriod(m)} ${fmt(legStoreTrend.ties[m]?.gap || 0)}`).join(' · ')}.
@@ -826,7 +826,7 @@ export default function GPReportPage() {
                     </div>
                   )}
                   {(legStoreTrend.notes || []).map(n => (
-                    <div key={n} style={{ fontSize: 11, color: '#b45309', padding: '0 6px 4px' }}>⚠ {n}</div>
+                    <div key={n} style={{ fontSize: 11, color: 'var(--c-fg-b45309)', padding: '0 6px 4px' }}>⚠ {n}</div>
                   ))}
                   <div className="table-wrapper">
                     <table style={{ borderCollapse: 'collapse', width: '100%' }}>
@@ -853,7 +853,7 @@ export default function GPReportPage() {
                             <Fragment key={key}>
                               <tr style={{ fontSize: 12, borderTop: '1px solid var(--border)', cursor: 'pointer',
                                 background: open ? 'var(--bg2)' : undefined,
-                                color: s.unattributed ? '#b45309' : undefined }}
+                                color: s.unattributed ? 'var(--c-fg-b45309)' : undefined }}
                                 onClick={() => setLegStoreOpen(open ? null : key)}>
                                 <td style={{ padding: '3px 8px' }}>
                                   {open ? '▾ ' : '▸ '}{s.store}
@@ -876,7 +876,7 @@ export default function GPReportPage() {
                                 </td>
                                 <td style={{ padding: '3px 8px', fontSize: 11 }}>
                                   {s.worst_rung
-                                    ? <span style={{ color: '#dc2626' }}>
+                                    ? <span style={{ color: 'var(--c-fg-dc2626)' }}>
                                         <b>{legStoreTrend.ladder_labels[s.worst_rung.key] || s.worst_rung.label}</b>
                                         {' '}{fmt(s.worst_rung.from)} → {fmt(s.worst_rung.to)}
                                         {s.worst_rung.delta_pct == null ? '' : ` (${s.worst_rung.delta_pct}%)`}
@@ -907,7 +907,7 @@ export default function GPReportPage() {
                                               return (
                                                 <td key={m} style={{ padding: '2px 8px', textAlign: 'right',
                                                   opacity: legStoreTrend.partial_months.includes(m) ? 0.6 : 1,
-                                                  color: v ? (v < 0 ? '#b45309' : 'inherit') : 'var(--text3)' }}>
+                                                  color: v ? (v < 0 ? 'var(--c-fg-b45309)' : 'inherit') : 'var(--text3)' }}>
                                                   {v ? fmt(v) : '·'}
                                                 </td>
                                               )
@@ -931,11 +931,11 @@ export default function GPReportPage() {
                             </td>
                           ))}
                           <td style={{ padding: '3px 8px', textAlign: 'right',
-                            color: (legStoreTrend.totals.delta || 0) < 0 ? '#dc2626' : '#16a34a' }}>
+                            color: (legStoreTrend.totals.delta || 0) < 0 ? 'var(--c-fg-dc2626)' : 'var(--c-fg-16a34a)' }}>
                             {legStoreTrend.totals.delta == null ? '—'
                               : `${fmt(legStoreTrend.totals.delta)}${legStoreTrend.totals.delta_pct == null ? '' : ` (${legStoreTrend.totals.delta_pct}%)`}`}
                           </td>
-                          <td style={{ padding: '3px 8px', fontSize: 11, color: '#dc2626' }}>
+                          <td style={{ padding: '3px 8px', fontSize: 11, color: 'var(--c-fg-dc2626)' }}>
                             {legStoreTrend.totals.worst_rung
                               ? `${legStoreTrend.ladder_labels[legStoreTrend.totals.worst_rung.key] || legStoreTrend.totals.worst_rung.label} ${fmt(legStoreTrend.totals.worst_rung.delta)}`
                               : ''}
@@ -962,10 +962,10 @@ export default function GPReportPage() {
         <div className="card" style={{ padding: '12px 12px 6px', marginBottom: 20 }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, paddingLeft: 6 }}>
             📈 Net profit &amp; revenue — last {gpTrendData.length} months{selMarkets.length ? ` · ${selMarkets.join(', ')}` : ' · all stores'}
-            {gpTrend?.pending_months?.length ? <span style={{ fontWeight: 400, color: '#f59e0b' }}> · {gpTrend.pending_months.length} month(s) computing (reload)</span> : ''}
+            {gpTrend?.pending_months?.length ? <span style={{ fontWeight: 400, color: 'var(--c-fg-f59e0b)' }}> · {gpTrend.pending_months.length} month(s) computing (reload)</span> : ''}
           </div>
           <TrendChart data={gpTrendData} height={220}
-            series={[{ key: 'net_profit', name: 'Net profit', color: '#16a34a', money: true }, { key: 'total_rev', name: 'Revenue', color: '#2e75b6', money: true, dashed: true }]} />
+            series={[{ key: 'net_profit', name: 'Net profit', color: 'var(--c-fg-16a34a)', money: true }, { key: 'total_rev', name: 'Revenue', color: 'var(--c-fg-2e75b6)', money: true, dashed: true }]} />
         </div>
       )}
 
@@ -1005,7 +1005,7 @@ export default function GPReportPage() {
       {view === 'store' && loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : view === 'store' && (
-        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 320px)', background: 'white', border: '1px solid var(--border)', borderRadius: 12 }}>
+        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 320px)', background: 'var(--c-bg-ffffff)', border: '1px solid var(--border)', borderRadius: 12 }}>
           {cw.dirty && <div style={{ padding: '4px 10px', fontSize: 11, color: 'var(--text3)' }}><button className="btn" style={{ padding: '2px 8px', fontSize: 11 }} onClick={cw.resetAll}>↺ Reset column widths</button> <span>drag a column edge to resize · double-click to auto-fit</span></div>}
           <table style={{ borderCollapse: 'collapse', tableLayout: 'auto' }}>
             <colgroup>
@@ -1014,12 +1014,12 @@ export default function GPReportPage() {
             </colgroup>
             <thead>
               <tr>
-                <th style={{ padding: '12px 14px', color: 'white', fontSize: 12, fontWeight: 700, letterSpacing: '0.03em', textAlign: 'left', position: 'sticky', left: 0, top: 0, zIndex: 3, background: '#1e3a5f', whiteSpace: 'nowrap' }}>
+                <th style={{ padding: '12px 14px', color: 'var(--c-fg-ffffff)', fontSize: 12, fontWeight: 700, letterSpacing: '0.03em', textAlign: 'left', position: 'sticky', left: 0, top: 0, zIndex: 3, background: 'var(--c-bg-1e3a5f)', whiteSpace: 'nowrap' }}>
                   STORE<ResizeHandle onDown={e => cw.start('store', e)} onReset={() => cw.reset('store')} />
                 </th>
                 {COLS.map(c => (
-                  <th key={c.key} style={{ padding: '12px 10px', color: 'white', fontSize: 12, fontWeight: 700, letterSpacing: '0.03em', textAlign: 'right',
-                    position: 'sticky', top: 0, zIndex: 2, background: '#1e3a5f', whiteSpace: 'nowrap',
+                  <th key={c.key} style={{ padding: '12px 10px', color: 'var(--c-fg-ffffff)', fontSize: 12, fontWeight: 700, letterSpacing: '0.03em', textAlign: 'right',
+                    position: 'sticky', top: 0, zIndex: 2, background: 'var(--c-bg-1e3a5f)', whiteSpace: 'nowrap',
                     borderLeft: ['comm', 'total_rev', 'rep_pay', 'net_profit'].includes(c.key) ? '2px solid rgba(255,255,255,0.25)' : undefined }}>
                     {c.label}<ResizeHandle onDown={e => cw.start(c.key, e)} onReset={() => cw.reset(c.key)} />
                   </th>
@@ -1028,10 +1028,10 @@ export default function GPReportPage() {
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={i} style={{ background: i % 2 === 1 ? '#fafbfc' : 'white' }}>
-                  <td style={{ padding: '8px 14px', fontWeight: 500, fontSize: 12, position: 'sticky', left: 0, background: i % 2 === 1 ? '#fafbfc' : 'white', borderBottom: '1px solid var(--border)' }}>
+                <tr key={i} style={{ background: i % 2 === 1 ? 'var(--c-bg-fafbfc)' : 'white' }}>
+                  <td style={{ padding: '8px 14px', fontWeight: 500, fontSize: 12, position: 'sticky', left: 0, background: i % 2 === 1 ? 'var(--c-bg-fafbfc)' : 'white', borderBottom: '1px solid var(--border)' }}>
                     <div>{r.store?.substring(0, 30)}</div>
-                    <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 999, background: '#dbeafe', color: '#1e40af', fontWeight: 600 }}>
+                    <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 999, background: 'var(--c-bg-dbeafe)', color: 'var(--c-fg-1e40af)', fontWeight: 600 }}>
                       {r.market || '—'}
                     </span>
                   </td>
@@ -1046,13 +1046,13 @@ export default function GPReportPage() {
             </tbody>
             {rows.length > 0 && (
               <tfoot>
-                <tr style={{ background: '#1e3a5f', fontWeight: 700 }}>
-                  <td style={{ padding: '10px 14px', color: 'white', fontSize: 12, position: 'sticky', left: 0, background: '#1e3a5f' }}>
+                <tr style={{ background: 'var(--c-bg-1e3a5f)', fontWeight: 700 }}>
+                  <td style={{ padding: '10px 14px', color: 'var(--c-fg-ffffff)', fontSize: 12, position: 'sticky', left: 0, background: 'var(--c-bg-1e3a5f)' }}>
                     TOTAL ({rows.length} stores)
                   </td>
                   {COLS.map(c => {
                     const val = (totals as any)[c.key] || 0
-                    const color = c.highlight ? (val >= 0 ? '#86efac' : '#fca5a5') : c.red ? '#fca5a5' : 'white'
+                    const color = c.highlight ? (val >= 0 ? 'var(--c-fg-86efac)' : 'var(--c-fg-fca5a5)') : c.red ? 'var(--c-fg-fca5a5)' : 'white'
                     return (
                       <td key={c.key} style={{ padding: '10px 10px', textAlign: 'right', color, fontSize: 12,
                         borderLeft: ['comm', 'total_rev', 'rep_pay', 'net_profit'].includes(c.key) ? '2px solid rgba(255,255,255,0.2)' : undefined }}>

@@ -57,7 +57,7 @@ function extLooksAllowed(name: string, formats?: string[]): boolean {
   const lower = name.toLowerCase()
   return allow.some(e => lower.endsWith(e))
 }
-const btnP: React.CSSProperties = { ...btn, background: 'var(--accent,#2563eb)', color: '#fff', border: 'none', fontWeight: 600 }
+const btnP: React.CSSProperties = { ...btn, background: 'var(--accent,var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', border: 'none', fontWeight: 600 }
 
 export default function EmployeeOnboardingPage() {
   const { employeeId } = useParams<{ employeeId: string }>()
@@ -218,7 +218,7 @@ export default function EmployeeOnboardingPage() {
 
   return (
     <div style={{ padding: 24, maxWidth: 880 }}>
-      <a href="/hr/people" style={{ fontSize: 12, color: 'var(--accent,#2563eb)' }}>← HR · People</a>
+      <a href="/hr/people" style={{ fontSize: 12, color: 'var(--accent,var(--c-fg-2563eb))' }}>← HR · People</a>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 2px' }}>🧩 Onboarding — {d?.employee_name || employeeId}</h1>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, margin: '8px 0' }}>{msg}</div>}
 
@@ -227,7 +227,7 @@ export default function EmployeeOnboardingPage() {
           off/empty for this tenant or this employee has no resolvable store yet (pre-provision). */}
       <GoogleReviewsCard employeeId={String(employeeId)} compact compactTitle="⭐ Google Reviews" />
 
-      {d && !d.ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 14px', fontSize: 13, margin: '10px 0' }}>
+      {d && !d.ready && <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '10px 14px', fontSize: 13, margin: '10px 0' }}>
         <SetupNotice lead="Onboarding is not switched on yet." detail="073_hr_onboarding.sql" />
       </div>}
 
@@ -235,7 +235,7 @@ export default function EmployeeOnboardingPage() {
         {/* migration 401 (item 4): persistent work-auth notice — shown at the top so it's visible on
             every visit to this hire's checklist, not just tucked into one task row */}
         {(d.work_auth_pending || []).length > 0 && (
-          <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 8, padding: '10px 14px', fontSize: 13, margin: '8px 0' }}>
+          <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '10px 14px', fontSize: 13, margin: '8px 0' }}>
             ⛔ {d.work_auth_notice || 'Work-authorization documents are still outstanding — payroll will be delayed until they are submitted.'}
             {' '}Outstanding: <b>{(d.work_auth_pending || []).join(', ')}</b>
           </div>
@@ -244,7 +244,7 @@ export default function EmployeeOnboardingPage() {
         {/* progress */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0 4px' }}>
           <div style={{ flex: 1, height: 8, background: 'var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-            <div style={{ width: `${pct}%`, height: '100%', background: '#059669' }} />
+            <div style={{ width: `${pct}%`, height: '100%', background: 'var(--c-bg-059669)' }} />
           </div>
           <span style={{ fontSize: 12, color: 'var(--text2)' }}>{d.progress?.done}/{d.progress?.total} complete</span>
         </div>
@@ -257,19 +257,19 @@ export default function EmployeeOnboardingPage() {
         <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' }}>Workflow</span>
-            <span style={{ fontSize: 12, fontWeight: 700, padding: '3px 10px', borderRadius: 20, color: '#fff', background: WF_COLOR[d.workflow_status || 'invited'] || '#64748b' }}>{d.workflow_label || d.workflow_status || 'Invited'}</span>
+            <span style={{ fontSize: 12, fontWeight: 700, padding: '3px 10px', borderRadius: 20, color: 'var(--c-fg-ffffff)', background: WF_COLOR[d.workflow_status || 'invited'] || 'var(--c-bg-64748b)' }}>{d.workflow_label || d.workflow_status || 'Invited'}</span>
             {d.invite_method && <span style={{ fontSize: 11, color: 'var(--text3)' }}>invited via {d.invite_method === 'login' ? 'portal login' : 'link'}</span>}
             <div style={{ flex: 1 }} />
             {(d.workflow_status !== 'provisioned' && d.workflow_status !== 'active')
-              ? <button style={{ ...btnP, background: '#059669' }} onClick={() => setProv({ role_name: '', override: false, reason: '', override_compliance: false, compliance_reason: '' })}>🚀 Provision login</button>
-              : <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>✓ Login provisioned</span>}
+              ? <button style={{ ...btnP, background: 'var(--c-bg-059669)' }} onClick={() => setProv({ role_name: '', override: false, reason: '', override_compliance: false, compliance_reason: '' })}>🚀 Provision login</button>
+              : <span style={{ fontSize: 12, color: 'var(--c-fg-059669)', fontWeight: 600 }}>✓ Login provisioned</span>}
           </div>
           {/* stepper */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
             {(d.workflow_statuses || []).map(s => {
               const active = s.key === d.workflow_status
               return <button key={s.key} onClick={() => advance(s.key)} title="Move the workflow to this step (out-of-order = recorded as an override)"
-                style={{ ...btn, fontSize: 11, background: active ? WF_COLOR[s.key] : 'var(--surface)', color: active ? '#fff' : 'var(--text2)', border: active ? 'none' : '1px solid var(--border)' }}>{s.label}</button>
+                style={{ ...btn, fontSize: 11, background: active ? WF_COLOR[s.key] : 'var(--surface)', color: active ? 'var(--c-fg-ffffff)' : 'var(--text2)', border: active ? 'none' : '1px solid var(--border)' }}>{s.label}</button>
             })}
           </div>
           {prov && (
@@ -283,8 +283,8 @@ export default function EmployeeOnboardingPage() {
               </div>
               {prov.override && <input style={{ ...inp, marginTop: 8, width: '100%' }} placeholder="Reason for overriding (recorded in the audit trail)" value={prov.reason} onChange={e => setProv(p => p && { ...p, reason: e.target.value })} />}
               {(d.work_auth_pending || []).length > 0 || d.needs_work_state ? (
-                <div style={{ marginTop: 8, padding: 8, background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8 }}>
-                  <label style={{ fontSize: 12, display: 'flex', gap: 5, alignItems: 'center', color: '#991b1b', fontWeight: 600 }}>
+                <div style={{ marginTop: 8, padding: 8, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', borderRadius: 8 }}>
+                  <label style={{ fontSize: 12, display: 'flex', gap: 5, alignItems: 'center', color: 'var(--c-fg-991b1b)', fontWeight: 600 }}>
                     <input type="checkbox" checked={prov.override_compliance} onChange={e => setProv(p => p && { ...p, override_compliance: e.target.checked })} />
                     ⛔ Compliance override (work-authorization / state) — a hard floor, separately audited from the docs override above
                   </label>
@@ -292,13 +292,13 @@ export default function EmployeeOnboardingPage() {
                 </div>
               ) : null}
               <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-                <button style={{ ...btnP, background: '#059669' }} onClick={doProvision}>Provision & email credentials</button>
+                <button style={{ ...btnP, background: 'var(--c-bg-059669)' }} onClick={doProvision}>Provision & email credentials</button>
                 <button style={btn} onClick={() => setProv(null)}>Cancel</button>
               </div>
               <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>Creates the login, assigns the role, emails a temp password, and marks the hire Provisioned.</div>
             </div>
           )}
-          {inviteRes?.temp_password && <div style={{ marginTop: 10, fontSize: 12, background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', borderRadius: 8, padding: '8px 10px' }}>
+          {inviteRes?.temp_password && <div style={{ marginTop: 10, fontSize: 12, background: 'var(--c-bg-ecfdf5)', border: '1px solid var(--c-bg-a7f3d0)', color: 'var(--c-fg-065f46)', borderRadius: 8, padding: '8px 10px' }}>
             Temp password for <b>{inviteRes.email}</b>: <code>{inviteRes.temp_password}</code>{inviteRes.emailed ? ' (emailed)' : ' — hand it over manually'}
           </div>}
         </div>
@@ -320,7 +320,7 @@ export default function EmployeeOnboardingPage() {
           if (!d.intake_submitted && !hasSensitive && visibleValues.length === 0) return null
           return (
           <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Captured information {d.intake_submitted ? <span style={{ color: '#059669' }}>· submitted</span> : <span style={{ color: '#9a3412' }}>· not yet marked submitted (partial — verify with the employee)</span>}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Captured information {d.intake_submitted ? <span style={{ color: 'var(--c-fg-059669)' }}>· submitted</span> : <span style={{ color: 'var(--c-fg-9a3412)' }}>· not yet marked submitted (partial — verify with the employee)</span>}</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 8 }}>
               {visibleValues.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>No non-sensitive fields captured yet.</div>}
               {visibleValues.map(f => (
@@ -333,7 +333,7 @@ export default function EmployeeOnboardingPage() {
                 whether any bank field was actually captured (post-fix, an unsigned DD section is
                 withheld entirely — see hr/router.py _apply_intake's dd_disclaimer_pending). */}
             {ddConfigured && d.intake_submitted && (
-              <div style={{ marginTop: 8, fontSize: 12, fontWeight: d.dd_disclaimer_signed ? 400 : 700, color: d.dd_disclaimer_signed ? '#059669' : '#9a3412' }}>
+              <div style={{ marginTop: 8, fontSize: 12, fontWeight: d.dd_disclaimer_signed ? 400 : 700, color: d.dd_disclaimer_signed ? 'var(--c-fg-059669)' : 'var(--c-fg-9a3412)' }}>
                 {d.dd_disclaimer_signed
                   ? '✓ Direct-deposit disclaimer initialed by the employee (see History below for the timestamp).'
                   : '⚠️ Bank details not yet provided or initialed — direct deposit is still outstanding for this hire.'}
@@ -349,7 +349,7 @@ export default function EmployeeOnboardingPage() {
                   </div>
                 ) : (
                   <div>
-                    <div style={{ fontSize: 12, color: '#92400e', marginBottom: 6 }}>🔓 Revealed — this view was recorded in the audit log.{revealMsg && <> {revealMsg}</>}</div>
+                    <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)', marginBottom: 6 }}>🔓 Revealed — this view was recorded in the audit log.{revealMsg && <> {revealMsg}</>}</div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 8 }}>
                       {Object.entries(revealed).map(([k, v]) => (
                         <div key={k} style={{ fontSize: 12 }}><span style={{ color: 'var(--text3)' }}>{v.label}: </span><b style={{ fontFamily: 'monospace' }}>{v.value}</b></div>
@@ -371,18 +371,18 @@ export default function EmployeeOnboardingPage() {
             <EntityPicker options={US_STATES} value={d.work_state || null} width={160}
               onChange={v => { if (v && v !== (d.work_state || '')) setState(v) }} placeholder="Work state…" clearable={false} />
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>Sets which state withholding form appears.</div>
-            {d.needs_work_state && <div style={{ fontSize: 12, color: '#9a3412', marginTop: 4 }}>⚠️ Set the work state to show the state tax form.</div>}
+            {d.needs_work_state && <div style={{ fontSize: 12, color: 'var(--c-fg-9a3412)', marginTop: 4 }}>⚠️ Set the work state to show the state tax form.</div>}
           </div>
 
           <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, flex: 1, minWidth: 280 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 8 }}>Pre-start QR access</div>
             {qr ? (
               <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                <div style={{ background: '#fff', padding: 8, borderRadius: 8 }}><QRCodeSVG value={qr.url} size={104} /></div>
+                <div style={{ background: 'var(--c-bg-ffffff)', padding: 8, borderRadius: 8 }}><QRCodeSVG value={qr.url} size={104} /></div>
                 <div style={{ fontSize: 12 }}>
                   <div style={{ color: 'var(--text2)', marginBottom: 4 }}>Employee scans this — no login needed. They&apos;ll confirm their date of birth to continue.</div>
                   <button style={{ ...btn, marginRight: 6 }} onClick={() => navigator.clipboard?.writeText(qr.url).then(() => flash('Link copied'))}>Copy link</button>
-                  <button style={{ ...btn, color: '#b91c1c' }} onClick={revokeToken}>Revoke</button>
+                  <button style={{ ...btn, color: 'var(--c-fg-b91c1c)' }} onClick={revokeToken}>Revoke</button>
                   {qr.expires && <div style={{ color: 'var(--text3)', marginTop: 4 }}>Expires {String(qr.expires).slice(0, 10)}</div>}
                 </div>
               </div>
@@ -450,35 +450,35 @@ export default function EmployeeOnboardingPage() {
               {isOpen && c.tasks.map(t => (
                 <div key={t.id} style={{ padding: '10px 16px', borderTop: '1px solid var(--border)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20, color: '#fff', background: ST_COLOR[t.status] }}>{ST_LABEL[t.status]}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20, color: 'var(--c-fg-ffffff)', background: ST_COLOR[t.status] }}>{ST_LABEL[t.status]}</span>
                     <span style={{ fontSize: 13, fontWeight: 600 }}>{t.label}</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, color: '#fff', background: ROLE_COLOR[t.owner_role] || '#64748b' }}>{ROLE_LABELS[t.owner_role] || t.owner_role}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, color: 'var(--c-fg-ffffff)', background: ROLE_COLOR[t.owner_role] || 'var(--c-bg-64748b)' }}>{ROLE_LABELS[t.owner_role] || t.owner_role}</span>
                     {t.applies_state && <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: 'var(--border)', color: 'var(--text2)' }}>{t.applies_state}</span>}
                     {t.is_mandatory === false && <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 20, background: 'var(--border)', color: 'var(--text3)' }}>optional</span>}
-                    {t.work_auth && <span title="Blocks provisioning/active until complete (item 4)" style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b' }}>⛔ work-auth</span>}
+                    {t.work_auth && <span title="Blocks provisioning/active until complete (item 4)" style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)' }}>⛔ work-auth</span>}
                   </div>
                   {t.description && <div style={{ fontSize: 12, color: 'var(--text3)', margin: '3px 0' }}>{t.description}</div>}
                   {t.status === 'returned' && (
-                    <div style={{ margin: '4px 0', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '6px 10px', fontSize: 12, color: '#991b1b' }}>
+                    <div style={{ margin: '4px 0', background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', borderRadius: 8, padding: '6px 10px', fontSize: 12, color: 'var(--c-fg-991b1b)' }}>
                       ↩ Returned{t.returned_by ? ` by ${t.returned_by}` : ''}{(t.missing_fields || []).length > 0 && <> — missing: <b>{(t.missing_fields || []).join(', ')}</b></>}
                       {t.returned_reason && <div style={{ marginTop: 2 }}>{t.returned_reason}</div>}
                     </div>
                   )}
                   {t.status === 'submitted' && t.validation && !t.validation.online && (
-                    <div style={{ margin: '4px 0', fontSize: 12, color: t.validation.checkable ? '#92400e' : 'var(--text3)' }}>
+                    <div style={{ margin: '4px 0', fontSize: 12, color: t.validation.checkable ? 'var(--c-fg-92400e)' : 'var(--text3)' }}>
                       {t.validation.checkable
                         ? `🔎 Auto-check: ${t.validation.filled}/${t.validation.fields} fields filled${(t.validation.empty || []).length ? ` · ${(t.validation.empty || []).length} empty` : ''}${t.validation.signed === null ? ' · signature not machine-checkable' : t.validation.signed ? ' · signed ✓' : ''}`
                         : '🔎 Not machine-checkable (scan/photo) — review the signature by eye.'}
                     </div>
                   )}
                   {t.signed_at && (
-                    <div style={{ margin: '4px 0', fontSize: 12, color: '#059669' }}>✍️ Signed online {String(t.signed_at).slice(0, 10)}{t.signed_name ? ` as “${t.signed_name}”` : ''}
+                    <div style={{ margin: '4px 0', fontSize: 12, color: 'var(--c-fg-059669)' }}>✍️ Signed online {String(t.signed_at).slice(0, 10)}{t.signed_name ? ` as “${t.signed_name}”` : ''}
                       {t.form_data && Object.keys(t.form_data).length > 0 && <span style={{ color: 'var(--text2)' }}> — {Object.entries(t.form_data).map(([k, v]) => `${k}: ${v}`).join(' · ')}</span>}
                     </div>
                   )}
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
-                    {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ ...btn, color: 'var(--accent,#2563eb)', textDecoration: 'none' }}>🔗 {t.doc_label || 'Open form'}</a>}
-                    {t.sample_url && <a href={t.sample_url} target="_blank" rel="noreferrer" style={{ ...btn, color: 'var(--accent,#2563eb)', textDecoration: 'none' }} title="Compare this submission against a correctly completed example">👁 Completed sample</a>}
+                    {t.doc_url && <a href={t.doc_url} target="_blank" rel="noreferrer" style={{ ...btn, color: 'var(--accent,var(--c-fg-2563eb))', textDecoration: 'none' }}>🔗 {t.doc_label || 'Open form'}</a>}
+                    {t.sample_url && <a href={t.sample_url} target="_blank" rel="noreferrer" style={{ ...btn, color: 'var(--accent,var(--c-fg-2563eb))', textDecoration: 'none' }} title="Compare this submission against a correctly completed example">👁 Completed sample</a>}
                     {/* migration 402: a pre-402 row (or one that's never had documents[] populated) falls
                         back to the old single-file view button — never a regression for untouched data.
                         BUG FIX 2026-07-15 (owner report, luxelink): this used to gate the fallback button
@@ -495,8 +495,8 @@ export default function EmployeeOnboardingPage() {
                       : (!t.has_document && <span style={{ fontSize: 12, color: 'var(--text3)' }}>{t.requires_upload ? 'no document yet' : ''}</span>)}
                     {t.has_signature && <button style={btn} onClick={() => viewSignature(t)}>✍️ View signature</button>}
                     <label style={{ ...btn }}>{t.has_document ? '+ Add file' : '⬆ Upload'}<input type="file" accept={acceptAttr(d?.tenant_config?.upload_allowed_formats)} style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadDoc(t, f); e.currentTarget.value = '' }} /></label>
-                    {t.status !== 'verified' && <button style={{ ...btn, color: '#059669' }} onClick={() => setStatus(t, 'verified')}>✓ Verify</button>}
-                    {(t.status === 'submitted' || t.status === 'verified') && <button style={{ ...btn, color: '#dc2626' }} onClick={() => returnTask(t)}>↩ Return for fixes</button>}
+                    {t.status !== 'verified' && <button style={{ ...btn, color: 'var(--c-fg-059669)' }} onClick={() => setStatus(t, 'verified')}>✓ Verify</button>}
+                    {(t.status === 'submitted' || t.status === 'verified') && <button style={{ ...btn, color: 'var(--c-fg-dc2626)' }} onClick={() => returnTask(t)}>↩ Return for fixes</button>}
                     {t.status !== 'na' && <button style={btn} onClick={() => setStatus(t, 'na')}>N/A</button>}
                     {(t.status === 'verified' || t.status === 'na') && <button style={btn} onClick={() => setStatus(t, 'pending')}>↺ Reset</button>}
                     {t.verified_by && t.status === 'verified' && <span style={{ fontSize: 11, color: 'var(--text3)' }}>by {t.verified_by}{t.verified_at ? ` · ${String(t.verified_at).slice(0, 10)}` : ''}</span>}
@@ -510,9 +510,9 @@ export default function EmployeeOnboardingPage() {
                     <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
                       {(t.documents || []).map(f => (
                         <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                          <button onClick={() => viewDocumentFile(t, f)} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent,#2563eb)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}>📄 {f.name}</button>
+                          <button onClick={() => viewDocumentFile(t, f)} style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent,var(--c-fg-2563eb))', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}>📄 {f.name}</button>
                           <span style={{ fontSize: 10, color: 'var(--text3)' }}>{f.uploaded_role === 'admin' ? 'HR' : f.uploaded_role === 'recovered' ? 'recovered' : 'employee'}{f.uploaded_at ? ` · ${String(f.uploaded_at).slice(0, 10)}` : ''}</span>
-                          <button onClick={() => deleteDocumentFile(t, f)} title="Remove this file" style={{ background: 'none', border: 'none', padding: 0, color: '#dc2626', cursor: 'pointer', fontSize: 12 }}>✕ remove</button>
+                          <button onClick={() => deleteDocumentFile(t, f)} title="Remove this file" style={{ background: 'none', border: 'none', padding: 0, color: 'var(--c-fg-dc2626)', cursor: 'pointer', fontSize: 12 }}>✕ remove</button>
                         </div>
                       ))}
                     </div>
@@ -532,7 +532,7 @@ export default function EmployeeOnboardingPage() {
                 <span style={{ color: 'var(--text3)', minWidth: 128 }}>{String(e.created_at || '').replace('T', ' ').slice(0, 16)}</span>
                 <b>{(e.event_type || '').replace(/_/g, ' ')}</b>
                 {e.from_status && <span style={{ color: 'var(--text3)' }}>{e.from_status} → {e.to_status}</span>}
-                {e.is_override && <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 10, background: '#fef3c7', color: '#92400e' }}>OVERRIDE</span>}
+                {e.is_override && <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 10, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)' }}>OVERRIDE</span>}
                 {e.actor && <span style={{ color: 'var(--text3)' }}>by {e.actor}</span>}
                 {e.reason && <span style={{ color: 'var(--text2)' }}>— {e.reason}</span>}
               </div>
@@ -586,7 +586,7 @@ function OrphanRow({ orphan, tasks, onReattach }: { orphan: { path: string; name
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, flexWrap: 'wrap' }}>
       {orphan.url
-        ? <a href={orphan.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent,#2563eb)' }}>📄 {orphan.name}</a>
+        ? <a href={orphan.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>📄 {orphan.name}</a>
         : <span>📄 {orphan.name}</span>}
       <span style={{ fontSize: 10, color: 'var(--text3)' }}>{orphan.last_modified ? String(orphan.last_modified).slice(0, 10) : ''}</span>
       <select style={inp} value={taskId} onChange={e => setTaskId(e.target.value)}>

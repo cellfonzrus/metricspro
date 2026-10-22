@@ -180,7 +180,7 @@ export default function CompTrendPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : view === 'rep' ? (
         repData?.error ? (
-          <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {repData.error}</div>
+          <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {repData.error}</div>
         ) : repData?.note ? (
           <div className="card" style={{ padding: 16, color: 'var(--text2)' }}>{repData.note}</div>
         ) : (
@@ -226,7 +226,7 @@ export default function CompTrendPage() {
           </div>
         )
       ) : data?.error ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {data.error}</div>
       ) : data?.note ? (
         <div className="card" style={{ padding: 16, color: 'var(--text2)' }}>{data.note}</div>
       ) : (
@@ -260,13 +260,13 @@ export default function CompTrendPage() {
                       style={{ borderTop: '1px solid var(--border)', cursor: 'pointer', background: monthFilter === r.period ? 'var(--surface2,#eef2ff)' : undefined }}>
                     <td style={{ padding: '7px 12px', fontSize: 13, fontWeight: 600 }}>{r.period}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{fmt(r.total_comp ?? r.residual)}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: '#16794a' }}>{fmt(r.components?.COMMISSION || 0)}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: '#b45309' }}>{fmt(r.components?.SPIFF || 0)}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: '#7c3aed' }}>{fmt(r.components?.REIMBURSEMENT || 0)}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: '#15803d' }}>{fmt(r.residual_mi_atu || 0)}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: 'var(--c-fg-16794a)' }}>{fmt(r.components?.COMMISSION || 0)}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: 'var(--c-fg-b45309)' }}>{fmt(r.components?.SPIFF || 0)}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: 'var(--c-fg-7c3aed)' }}>{fmt(r.components?.REIMBURSEMENT || 0)}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: 'var(--c-fg-15803d)' }}>{fmt(r.residual_mi_atu || 0)}</td>
                     <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13 }}>{r.accounts}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: (r.delta_vs_prev ?? 0) < 0 ? '#b91c1c' : ((r.delta_vs_prev ?? 0) > 0 ? '#15803d' : 'var(--text3)') }}>{r.delta_vs_prev == null ? '—' : fmt(r.delta_vs_prev)}</td>
-                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: (r.pct_vs_prev ?? 0) < 0 ? '#b91c1c' : 'var(--text3)' }}>{r.pct_vs_prev == null ? '—' : `${r.pct_vs_prev}%`}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: (r.delta_vs_prev ?? 0) < 0 ? 'var(--c-fg-b91c1c)' : ((r.delta_vs_prev ?? 0) > 0 ? 'var(--c-fg-15803d)' : 'var(--text3)') }}>{r.delta_vs_prev == null ? '—' : fmt(r.delta_vs_prev)}</td>
+                    <td style={{ padding: '7px 12px', textAlign: 'right', fontSize: 13, color: (r.pct_vs_prev ?? 0) < 0 ? 'var(--c-fg-b91c1c)' : 'var(--text3)' }}>{r.pct_vs_prev == null ? '—' : `${r.pct_vs_prev}%`}</td>
                   </tr>
                 ))}
                 {totals.length === 0 && <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No comp data.</td></tr>}
@@ -291,13 +291,13 @@ export default function CompTrendPage() {
               </tr></thead>
               <tbody>
                 {dips.map((d: any, i: number) => (
-                  <tr key={i} style={{ borderTop: '1px solid var(--border)', background: d.vanished ? '#fff7ed' : '#fffafa' }}>
+                  <tr key={i} style={{ borderTop: '1px solid var(--border)', background: d.vanished ? 'var(--c-bg-fff7ed)' : 'var(--c-bg-fffafa)' }}>
                     <td style={{ padding: '6px 12px', fontSize: 12, fontWeight: 600 }}>{d.period}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{d.account_id || '—'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{d.business_name || d.store || '—'}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right' }}>{fmt(d.prev_residual)}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: d.residual === 0 ? '#b91c1c' : undefined }}>{fmt(d.residual)}</td>
-                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: '#b91c1c', fontWeight: 600 }}>{fmt(d.delta)}</td>
+                    <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-b91c1c)', fontWeight: 600 }}>{fmt(d.delta)}</td>
                     <td style={{ padding: '6px 12px', fontSize: 12, textAlign: 'right' }}>{d.pct}%</td>
                     <td style={{ padding: '6px 12px', fontSize: 12 }}>{d.reason}</td>
                   </tr>

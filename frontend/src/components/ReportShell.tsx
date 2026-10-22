@@ -398,7 +398,7 @@ export function ReportShell({ title, subtitle, notice, noticeTone, filename, col
         {/* Add custom filter */}
         <button className="btn btn-secondary" style={{ fontSize: 12, padding: '5px 9px' }}
           onClick={() => setCustom(f => [...f, { field: key(cols[0]), op: 'contains', value: '' }])}>＋ Filter</button>
-        {activeCount > 0 && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '5px 9px', color: '#dc2626' }} onClick={clearAll}>Clear ({activeCount})</button>}
+        {activeCount > 0 && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '5px 9px', color: 'var(--c-fg-dc2626)' }} onClick={clearAll}>Clear ({activeCount})</button>}
         <div style={{ flex: 1 }} />
         {right}
         <ExportButtons payload={buildPayload} compact />
@@ -420,7 +420,7 @@ export function ReportShell({ title, subtitle, notice, noticeTone, filename, col
               </select>
               <input style={{ ...sel, minWidth: 140 }} placeholder="value" value={f.value}
                 onChange={e => setCustom(cs => cs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} />
-              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px', color: '#dc2626' }} onClick={() => setCustom(cs => cs.filter((_, j) => j !== i))}>✕</button>
+              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px', color: 'var(--c-fg-dc2626)' }} onClick={() => setCustom(cs => cs.filter((_, j) => j !== i))}>✕</button>
             </div>
           ))}
         </div>

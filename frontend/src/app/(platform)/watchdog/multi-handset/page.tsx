@@ -77,7 +77,7 @@ const caseCell = (c: Case, field: string): string | number | null => {
 
 const th: React.CSSProperties = { padding: '6px 8px' }
 const thRight: React.CSSProperties = { padding: '6px 8px', textAlign: 'right' }
-const td: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border, #e5e7eb)' }
+const td: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border, var(--c-bg-e5e7eb))' }
 const tdRight: React.CSSProperties = { ...td, textAlign: 'right' }
 
 // A measured zero and an unmeasured signal must never render the same.
@@ -176,7 +176,7 @@ export default function MultiHandsetDrillDownPage() {
     <div>
       <PageIntro
         title="Several handsets to one buyer"
-        right={<Link href="/watchdog" style={{ fontSize: 13, color: 'var(--blue, #2563eb)' }}>
+        right={<Link href="/watchdog" style={{ fontSize: 13, color: 'var(--blue, var(--c-fg-2563eb))' }}>
           ← Management Watchdog
         </Link>}
         help={
@@ -190,7 +190,7 @@ export default function MultiHandsetDrillDownPage() {
       />
 
       {err && (
-        <div style={{ border: '1px solid var(--red, #dc2626)', borderRadius: 8, padding: '10px 12px',
+        <div style={{ border: '1px solid var(--red, var(--c-bg-dc2626))', borderRadius: 8, padding: '10px 12px',
                       marginBottom: 14, fontSize: 13, color: 'var(--text2)' }}>
           The drill-down could not be loaded: {err}
         </div>
@@ -300,7 +300,7 @@ export default function MultiHandsetDrillDownPage() {
                           <td style={tdRight}>
                             {c.receipt_count}
                             {c.split_across_receipts && (
-                              <span style={{ color: '#d97706' }} title="split over more than one receipt"> ✱</span>
+                              <span style={{ color: 'var(--c-fg-d97706)' }} title="split over more than one receipt"> ✱</span>
                             )}
                           </td>
                           <td style={tdRight}>{c.all_zero_dollars ? '$0.00' : fmt(c.dollars)}</td>
@@ -315,7 +315,7 @@ export default function MultiHandsetDrillDownPage() {
                         </tr>
                         {isOpen && (
                           <tr key={`${k}-d`}>
-                            <td style={{ ...td, background: 'var(--surface-2, #f9fafb)' }} colSpan={10}>
+                            <td style={{ ...td, background: 'var(--surface-2, var(--c-bg-f9fafb))' }} colSpan={10}>
                               <p style={{ margin: '0 0 8px', fontSize: 13 }}>{c.description}</p>
                               <p style={{ margin: '0 0 10px', fontSize: 12.5,
                                           color: 'var(--text2)' }}>{c.coaching_note}</p>

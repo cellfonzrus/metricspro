@@ -32,9 +32,9 @@ function gapColor(behind: boolean | undefined): string {
 }
 
 const SEV_STYLE: Record<string, { bg: string; fg: string; icon: string }> = {
-  cannot_answer: { bg: '#e0e7ff', fg: '#3730a3', icon: '◻︎' },
-  understated: { bg: '#fef3c7', fg: '#92400e', icon: '⚠︎' },
-  partial: { bg: '#fef3c7', fg: '#92400e', icon: '⚠︎' },
+  cannot_answer: { bg: 'var(--c-bg-e0e7ff)', fg: 'var(--c-fg-3730a3)', icon: '◻︎' },
+  understated: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚠︎' },
+  partial: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚠︎' },
 }
 
 export default function PeerComparisonPage() {
@@ -109,7 +109,7 @@ export default function PeerComparisonPage() {
         ? <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 4 }}>
             Best <b>{b.boxes_best}</b> boxes · median <b>{b.boxes_median}</b> · leader <b>{b.leader}</b>
           </div>
-        : <div style={{ fontSize: 11, color: '#92400e', marginTop: 4 }}>{b.note}</div>}
+        : <div style={{ fontSize: 11, color: 'var(--c-fg-92400e)', marginTop: 4 }}>{b.note}</div>}
     </div>
   )
 
@@ -147,7 +147,7 @@ export default function PeerComparisonPage() {
       </div>
 
       {data?.error &&
-        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: '#fee2e2', color: '#991b1b', fontSize: 13 }}>
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 14, background: 'var(--c-bg-fee2e2)', color: 'var(--c-fg-991b1b)', fontSize: 13 }}>
           <b>❌ Peer Sales Comparison could not be built.</b> {data.error}
         </div>}
 

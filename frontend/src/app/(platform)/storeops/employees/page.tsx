@@ -214,7 +214,7 @@ export default function EmployeesPage() {
                       <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                         <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 8px' }} disabled={saving === e.id} onClick={() => saveEmp(e)} title="Save">{saving === e.id ? '…' : '💾'}</button>
                         {e.is_active && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px' }} onClick={() => deactivateEmp(e)} title="Deactivate + revoke login">🚫</button>}
-                        <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px', color: '#dc2626' }} onClick={() => deleteEmp(e)} title="Delete employee (removes login too)">🗑</button>
+                        <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px', color: 'var(--c-fg-dc2626)' }} onClick={() => deleteEmp(e)} title="Delete employee (removes login too)">🗑</button>
                         <select style={{ ...sel, width: 80 }} value="" title="Merge this duplicate INTO another employee" onChange={ev => { mergeEmp(e, ev.target.value); ev.target.value = '' }}>
                           <option value="">merge→</option>
                           {employees.filter(o => o.id !== e.id).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}

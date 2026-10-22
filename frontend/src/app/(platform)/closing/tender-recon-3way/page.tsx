@@ -234,44 +234,44 @@ export default function TenderRecon3WayPage() {
           {flat.length > 0 && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
         </div>
       </div>
-      {xrMsg && <div style={{ fontSize: 12, marginBottom: 10, color: xrMsg.startsWith('❌') ? '#b91c1c' : 'var(--text2)' }}>{xrMsg}</div>}
+      {xrMsg && <div style={{ fontSize: 12, marginBottom: 10, color: xrMsg.startsWith('❌') ? 'var(--c-fg-b91c1c)' : 'var(--text2)' }}>{xrMsg}</div>}
 
       {!loading && !data?.error && xReportEver === false && (
-        <div className="card" style={{ padding: '14px 16px', marginBottom: 14, border: '1px solid #f59e0b', background: '#fffbeb' }}>
-          <div style={{ fontWeight: 700, fontSize: 14, color: '#92400e', marginBottom: 4 }}>
+        <div className="card" style={{ padding: '14px 16px', marginBottom: 14, border: '1px solid var(--c-bg-f59e0b)', background: 'var(--c-bg-fffbeb)' }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--c-fg-92400e)', marginBottom: 4 }}>
             ⚠ No POS X-Report has EVER been imported for this tenant
           </div>
-          <div style={{ fontSize: 13, color: '#78350f', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 13, color: 'var(--c-fg-78350f)', lineHeight: 1.5 }}>
             The <strong>POS X-report</strong> column below will read $0 for every store/tender until this is set up —
             it isn&apos;t a bug in the recon, there&apos;s simply no X-report data in the system yet. Two things to do:
           </div>
-          <ol style={{ fontSize: 13, color: '#78350f', margin: '6px 0 0', paddingLeft: 18, lineHeight: 1.6 }}>
+          <ol style={{ fontSize: 13, color: 'var(--c-fg-78350f)', margin: '6px 0 0', paddingLeft: 18, lineHeight: 1.6 }}>
             <li>
-              <strong>Prove the pipe today:</strong> click <a href="#xr-upload-btn" onClick={e => { e.preventDefault(); document.getElementById('xr-upload-btn')?.click() }} style={{ color: '#92400e', fontWeight: 600 }}>⬆ Upload X‑Report</a> above
-              with today&apos;s report file (or upload it from <a href="/commcalc/upload" style={{ color: '#92400e', fontWeight: 600 }}>Data Imports</a>, type &quot;X Report (POS tenders)&quot;).
+              <strong>Prove the pipe today:</strong> click <a href="#xr-upload-btn" onClick={e => { e.preventDefault(); document.getElementById('xr-upload-btn')?.click() }} style={{ color: 'var(--c-fg-92400e)', fontWeight: 600 }}>⬆ Upload X‑Report</a> above
+              with today&apos;s report file (or upload it from <a href="/commcalc/upload" style={{ color: 'var(--c-fg-92400e)', fontWeight: 600 }}>Data Imports</a>, type &quot;X Report (POS tenders)&quot;).
             </li>
             <li>
-              <strong>Set up automatic daily import:</strong> under <a href="/commcalc/email-imports" style={{ color: '#92400e', fontWeight: 600 }}>Email Imports</a>,
+              <strong>Set up automatic daily import:</strong> under <a href="/commcalc/email-imports" style={{ color: 'var(--c-fg-92400e)', fontWeight: 600 }}>Email Imports</a>,
               confirm the mailbox has a <code>*X-Report*</code> → <code>x_report</code> rule (this is a default rule on a freshly configured mailbox,
               so if it&apos;s missing it may have been edited out), AND confirm with the POS vendor that the X-Report is actually
               <em> scheduled</em> to be emailed to that inbox daily — that&apos;s a separate step from the mailbox rule itself.
             </li>
           </ol>
-          <div style={{ fontSize: 12, color: '#92400e', marginTop: 6 }}>
-            See <a href="/closing/readiness" style={{ color: '#92400e', fontWeight: 600 }}>Closing → Readiness</a> for the full per-tenant setup check.
+          <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)', marginTop: 6 }}>
+            See <a href="/closing/readiness" style={{ color: 'var(--c-fg-92400e)', fontWeight: 600 }}>Closing → Readiness</a> for the full per-tenant setup check.
           </div>
         </div>
       )}
       {!loading && !data?.error && xReportEver && (summary.unmappedX > 0 || summary.unmappedS > 0) && (
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, border: '1px solid #f59e0b', background: '#fffbeb', fontSize: 13, color: '#78350f' }}>
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 14, border: '1px solid var(--c-bg-f59e0b)', background: 'var(--c-bg-fffbeb)', fontSize: 13, color: 'var(--c-fg-78350f)' }}>
           {summary.unmappedX > 0 && <>⚠ {fmt(summary.unmappedX)} of the selected range&apos;s X-report tenders used a raw label this tenant&apos;s mapping doesn&apos;t recognize. </>}
           {summary.unmappedS > 0 && <>⚠ {fmt(summary.unmappedS)} of the selected range&apos;s sales-transaction tenders used a raw label this tenant&apos;s mapping doesn&apos;t recognize. </>}
-          See the ⚠ per-store note below. Map it on <a href="/closing/tender-config" style={{ color: '#92400e', fontWeight: 600 }}>Tender Setup</a> so
+          See the ⚠ per-store note below. Map it on <a href="/closing/tender-config" style={{ color: 'var(--c-fg-92400e)', fontWeight: 600 }}>Tender Setup</a> so
           it&apos;s bucketed instead of sitting outside the table.
         </div>
       )}
       {data?.range_capped && (
-        <div className="card" style={{ padding: '8px 14px', marginBottom: 14, border: '1px solid #f59e0b', background: '#fffbeb', fontSize: 12, color: '#78350f' }}>
+        <div className="card" style={{ padding: '8px 14px', marginBottom: 14, border: '1px solid var(--c-bg-f59e0b)', background: 'var(--c-bg-fffbeb)', fontSize: 12, color: 'var(--c-fg-78350f)' }}>
           ⚠ The selected range spans {data.dates_total} days — showing the most recent {days.length} (this report replays real per-day report legs, so it&apos;s bounded). Narrow the date range to see earlier days.
         </div>
       )}
@@ -308,7 +308,7 @@ export default function TenderRecon3WayPage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : data?.error ? (
-        <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {data.error}</div>
+        <div className="card" style={{ padding: 16, color: 'var(--c-fg-b91c1c)' }}>Error: {data.error}</div>
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           {/* Selection totals — ADDENDUM (owner 2026-08-03). Reflects the FULL filtered selection
@@ -330,7 +330,7 @@ export default function TenderRecon3WayPage() {
               <Tile label="Store-days w/ a mismatch" value={`${summary.mismatchDays} / ${summary.total}`} accent={summary.mismatchDays > 0 ? '#b91c1c' : '#15803d'} />
             </div>
             {(summary.netCX === 0 || Math.abs(summary.netCX) <= 1) && summary.grossCX > 1 && (
-              <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 8, fontWeight: 600 }}>
+              <div style={{ fontSize: 12, color: 'var(--c-fg-b91c1c)', marginTop: 8, fontWeight: 600 }}>
                 ⚠ The net closing↔X-report variance looks clean, but the gross (absolute) figure above is {fmt(summary.grossCX)} —
                 offsetting over/under days are netting out. Check the mismatched store-days below.
               </div>
@@ -358,19 +358,19 @@ export default function TenderRecon3WayPage() {
                         <> · bank deposit {fmt(s.bank_deposit.deposited)}
                           {s.bank_deposit.declared != null && <> vs {s.bank_deposit.match_target.replace('_', ' ')} {fmt(s.bank_deposit.declared)}</>}
                           {s.bank_deposit.flag
-                            ? <span style={{ color: '#b91c1c', fontWeight: 700 }}> ⚠ {s.bank_deposit.var! >= 0 ? '+' : ''}{fmt(s.bank_deposit.var)}</span>
-                            : <span style={{ color: '#15803d' }}> ✓</span>}
-                          {s.bank_deposit.any_mismatch_flag && <span style={{ color: '#b91c1c' }}> · OCR flagged</span>}
+                            ? <span style={{ color: 'var(--c-fg-b91c1c)', fontWeight: 700 }}> ⚠ {s.bank_deposit.var! >= 0 ? '+' : ''}{fmt(s.bank_deposit.var)}</span>
+                            : <span style={{ color: 'var(--c-fg-15803d)' }}> ✓</span>}
+                          {s.bank_deposit.any_mismatch_flag && <span style={{ color: 'var(--c-fg-b91c1c)' }}> · OCR flagged</span>}
                         </>
                       )}
                       {!s.bank_deposit?.has_deposit && <span> · bank deposit — not recorded</span>}
                       {(s.x_report_unmapped?.amount || 0) > 0 && (
-                        <span style={{ color: '#b91c1c', fontWeight: 700 }} title={`Raw label(s): ${(s.x_report_unmapped?.raw_labels || []).join(', ')}`}>
+                        <span style={{ color: 'var(--c-fg-b91c1c)', fontWeight: 700 }} title={`Raw label(s): ${(s.x_report_unmapped?.raw_labels || []).join(', ')}`}>
                           {' '}· ⚠ {fmt(s.x_report_unmapped!.amount)} unmapped X-report
                         </span>
                       )}
                       {(s.sales_unmapped?.amount || 0) > 0 && (
-                        <span style={{ color: '#b91c1c', fontWeight: 700 }} title={`Raw label(s): ${(s.sales_unmapped?.raw_labels || []).join(', ')}`}>
+                        <span style={{ color: 'var(--c-fg-b91c1c)', fontWeight: 700 }} title={`Raw label(s): ${(s.sales_unmapped?.raw_labels || []).join(', ')}`}>
                           {' '}· ⚠ {fmt(s.sales_unmapped!.amount)} unmapped sales
                         </span>
                       )}
@@ -397,7 +397,7 @@ export default function TenderRecon3WayPage() {
                             </button>
                           </td>
                           <td style={{ padding: '7px 12px', textAlign: 'center', fontSize: 12 }}>
-                            {t.match ? <span style={{ color: '#15803d' }}>✓</span> : <span style={{ color: '#b91c1c', fontWeight: 700 }}>⚠</span>}
+                            {t.match ? <span style={{ color: 'var(--c-fg-15803d)' }}>✓</span> : <span style={{ color: 'var(--c-fg-b91c1c)', fontWeight: 700 }}>⚠</span>}
                           </td>
                         </tr>
                       ))}
@@ -427,8 +427,8 @@ function Tile({ label, value, sub, accent }: { label: string; value: any; sub?: 
 
 function Src({ label, ok }: { label: string; ok?: boolean }) {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, border: '1px solid var(--border)', background: ok ? '#e7f6ec' : 'var(--surface2)' }}>
-      <span style={{ color: ok ? '#15803d' : 'var(--text3)' }}>{ok ? '●' : '○'}</span>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, border: '1px solid var(--border)', background: ok ? 'var(--c-bg-e7f6ec)' : 'var(--surface2)' }}>
+      <span style={{ color: ok ? 'var(--c-fg-15803d)' : 'var(--text3)' }}>{ok ? '●' : '○'}</span>
       {label}{ok ? '' : ' — not loaded'}
     </span>
   )

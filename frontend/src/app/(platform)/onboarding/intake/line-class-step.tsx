@@ -131,7 +131,7 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
     return (
       <div style={card}>
         <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>2.5a — What counts as an activation</h2>
-        <p style={{ ...note, color: '#b45309' }}>{block.error}</p>
+        <p style={{ ...note, color: 'var(--c-fg-b45309)' }}>{block.error}</p>
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}><button style={ghost} onClick={onBack}>← Back</button><button style={primary} onClick={onNext}>Continue →</button></div>
       </div>
     )
@@ -154,7 +154,7 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
         Accept or edit, then save. Basis: {basis}.
       </p>
       {inForceRefused.length > 0 && (
-        <div style={{ ...card, borderColor: '#ef4444', background: 'rgba(239,68,68,.07)', marginBottom: 10, fontSize: 13 }}>
+        <div style={{ ...card, borderColor: 'var(--c-bg-ef4444)', background: 'rgba(239,68,68,.07)', marginBottom: 10, fontSize: 13 }}>
           <b>The activation rule saved for this company cannot be trusted</b> — {block.refusal_note}
           <div style={{ marginTop: 4 }}>
             {inForceRefused.map(b => <div key={attestKey(b.class, b.token)}>&quot;{b.token}&quot; under {b.class.replace(/_/g, ' ')}: {num(b.lines)} of {num(b.scanned || block.current.scanned)} lines ({pct(b.ratio)})</div>)}
@@ -163,7 +163,7 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
         </div>
       )}
       {block.gate_open && (
-        <div style={{ ...card, borderColor: '#f59e0b', background: 'rgba(245,158,11,.08)', marginBottom: 10, fontSize: 13 }}>
+        <div style={{ ...card, borderColor: 'var(--c-bg-f59e0b)', background: 'rgba(245,158,11,.08)', marginBottom: 10, fontSize: 13 }}>
           <b>With the rules in force, not one line could be told apart as an activation, upgrade, port-in or bring-your-own-device line</b>
           {' '}(columns read: {(block.current.fields || []).map(f => FIELD_LABEL[f] || f).join(', ')}). The Sales Report and Executive MTD would show 0 for every activation column.
           {block.suggest.proposal && anyActivation(block.suggest.preview)
@@ -213,7 +213,7 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
         </div>
       )}
       {refusal && (
-        <div style={{ ...card, borderColor: '#ef4444', background: 'rgba(239,68,68,.07)', marginBottom: 10, fontSize: 13 }}>
+        <div style={{ ...card, borderColor: 'var(--c-bg-ef4444)', background: 'rgba(239,68,68,.07)', marginBottom: 10, fontSize: 13 }}>
           <b>Not saved.</b> {refusal.message}
           <div style={{ marginTop: 6 }}>
             {refusal.refused.map(b => {
@@ -236,7 +236,7 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
       </div>
 
       <div style={{ fontSize: 13, fontWeight: 700, margin: '8px 0 4px' }}>Executive MTD line columns — phones, bill payments, protection, accessories, activation fee</div>
-      {block.metrics?.error && <div style={{ ...note, color: '#b45309' }}>{block.metrics.error}</div>}
+      {block.metrics?.error && <div style={{ ...note, color: 'var(--c-fg-b45309)' }}>{block.metrics.error}</div>}
       <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse', marginBottom: 12 }}>
         <thead><tr style={{ color: 'var(--text2)' }}><th align="left" style={{ width: 150 }}>Column</th><th align="right" style={{ width: 120 }}>Matches now</th><th align="left">Proposal from this file</th></tr></thead>
         <tbody>
@@ -252,7 +252,7 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
                       <input type="checkbox" checked={!!useMetric[m.bucket]} onChange={e => setUseMetric({ ...useMetric, [m.bucket]: e.target.checked })} style={{ marginRight: 5 }} />
                       use: {m.candidates.map(x => `"${x.token}" in ${FIELD_LABEL[x.field] || x.field} (${num(x.lines)})`).join(', ')} → would match <b>{num(m.preview || 0)}</b> lines
                     </label>
-                  ) : <span style={{ ...note, color: '#b45309' }}>no word in this file matched — this column will read 0 until a rule is set under Executive MTD → Metric definitions</span>}
+                  ) : <span style={{ ...note, color: 'var(--c-fg-b45309)' }}>no word in this file matched — this column will read 0 until a rule is set under Executive MTD → Metric definitions</span>}
               </td>
             </tr>
           ))}
@@ -267,12 +267,12 @@ export function LineClassStep({ instanceKey, who, analysis, canReanalyze, reanal
       )}
 
       {res && (
-        <div style={{ ...card, borderColor: res.verified || !res.landed ? '#16a34a' : '#ef4444', background: res.verified || !res.landed ? 'rgba(22,163,74,.06)' : 'rgba(239,68,68,.06)', marginBottom: 10, fontSize: 13 }}>
+        <div style={{ ...card, borderColor: res.verified || !res.landed ? 'var(--c-bg-16a34a)' : 'var(--c-bg-ef4444)', background: res.verified || !res.landed ? 'rgba(22,163,74,.06)' : 'rgba(239,68,68,.06)', marginBottom: 10, fontSize: 13 }}>
           <b>Saved.</b> Activation rules {res.written.activation_rules ? 'written' : 'unchanged'} · metric columns written: {res.written.metric_buckets.length ? res.written.metric_buckets.join(', ') : 'none'}
           {res.guard && <> · words checked over {res.guard.measured ? `${num(res.guard.rows)} ${res.guard.basis === 'frame' ? 'rows that would land' : 'landed rows'}` : `nothing (${res.guard.reason || 'no rows'})`}</>}
           {res.landed && res.block && <> · re-counted over {num(res.rows || 0)} landed rows: {res.block.current.activation_type_transactions} activation-type invoices
             ({block.classes.map(c => `${res.block!.current.classes[c.key]?.transactions ?? 0} ${c.label.toLowerCase()}`).join(', ')})</>}
-          {res.landed && <div style={{ marginTop: 4, fontWeight: 700, color: res.verified ? '#16a34a' : '#ef4444' }}>{res.verified ? 'This export is verified.' : `Not verified — ${res.activation_gate?.reason}`}</div>}
+          {res.landed && <div style={{ marginTop: 4, fontWeight: 700, color: res.verified ? 'var(--c-fg-16a34a)' : 'var(--c-fg-ef4444)' }}>{res.verified ? 'This export is verified.' : `Not verified — ${res.activation_gate?.reason}`}</div>}
           {res.state && !res.state.saved && <div style={note}>your place was not saved ({res.state.reason})</div>}
         </div>
       )}

@@ -90,7 +90,7 @@ export default function ImeiReconPage() {
       </div>
 
       {missing.length > 0 && (
-        <div role="status" style={{ fontSize: 12.5, color: '#1e40af', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '9px 12px', marginBottom: 10 }}>
+        <div role="status" style={{ fontSize: 12.5, color: 'var(--c-fg-1e40af)', background: 'var(--c-bg-eff6ff)', border: '1px solid var(--c-bg-bfdbfe)', borderRadius: 8, padding: '9px 12px', marginBottom: 10 }}>
           {notApplicableCopy({ pos, posDeclared, feedNoun: missing.join(' + ') + ' report', purpose: 'reconcile IMEIs from' })}
         </div>
       )}

@@ -128,9 +128,9 @@ export default function SecuritySettingsPage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>🛡️ Security Settings</h1>
       <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 16px' }}>
         Per-company password rules, two-factor authentication, and admin-assigned passwords.
-        {!canEdit && <strong style={{ color: '#b45309' }}> You have read-only access — ask an admin to make changes.</strong>}
+        {!canEdit && <strong style={{ color: 'var(--c-fg-b45309)' }}> You have read-only access — ask an admin to make changes.</strong>}
       </p>
-      {msg && <div style={{ margin: '0 0 14px', padding: 10, borderRadius: 8, background: '#f0f9ff', fontSize: 13 }}>{msg}</div>}
+      {msg && <div style={{ margin: '0 0 14px', padding: 10, borderRadius: 8, background: 'var(--c-bg-f0f9ff)', fontSize: 13 }}>{msg}</div>}
 
       {/* Password policy */}
       <div className="card" style={{ padding: 16, marginBottom: 16 }}>
@@ -232,7 +232,7 @@ export default function SecuritySettingsPage() {
             <button className="btn btn-primary" disabled={!enrollCode.trim()} onClick={verifyPhoneCode}>Verify</button>
           </div>
         )}
-        {enrollMsg && <div style={{ marginTop: 10, fontSize: 13, color: enrollMsg.includes('failed') || enrollMsg.includes('Could not') ? '#dc2626' : '#059669' }}>{enrollMsg}</div>}
+        {enrollMsg && <div style={{ marginTop: 10, fontSize: 13, color: enrollMsg.includes('failed') || enrollMsg.includes('Could not') ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)' }}>{enrollMsg}</div>}
       </div>
 
       {/* Admin-assigned password — the ONE home (index §CORE-08), rendered, never retyped. */}

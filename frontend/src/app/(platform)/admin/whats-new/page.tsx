@@ -197,7 +197,7 @@ export default function WhatsNewAdminPage() {
           </label>
           {data.is_super && (
             <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5, marginTop: 12,
-              padding: '8px 10px', borderRadius: 8, background: asPlatform ? '#eff6ff' : 'var(--bg2)' }}>
+              padding: '8px 10px', borderRadius: 8, background: asPlatform ? 'var(--c-bg-eff6ff)' : 'var(--bg2)' }}>
               <input type="checkbox" checked={asPlatform} onChange={e => setAsPlatform(e.target.checked)} />
               <span><b>Platform-wide</b> — every organisation&apos;s admins will see this. Leave it off to post
                 an update only your own organisation sees.</span>
@@ -265,7 +265,7 @@ export default function WhatsNewAdminPage() {
                       onClick={() => { setEditing({ ...n }); setAsPlatform(!!data.is_super && n.org_id === ORG_HOUSE); setMsg('') }}>
                       Edit
                     </button>
-                    <button className="btn btn-secondary" style={{ fontSize: 11.5, color: '#b42318' }}
+                    <button className="btn btn-secondary" style={{ fontSize: 11.5, color: 'var(--c-fg-b42318)' }}
                       disabled={busy} onClick={() => remove(n)}>Remove</button>
                   </span>
                 </div>

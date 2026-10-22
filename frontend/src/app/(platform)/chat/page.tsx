@@ -149,17 +149,17 @@ function CallPanel({ channelId, me }: { channelId: string; me: Me }) {
       {status !== 'idle' && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 300, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
-            <video ref={remoteRef} autoPlay playsInline style={{ width: 420, maxWidth: '80vw', background: '#000', borderRadius: 12 }} />
-            <video ref={localRef} autoPlay playsInline muted style={{ width: 180, background: '#000', borderRadius: 12 }} />
+            <video ref={remoteRef} autoPlay playsInline style={{ width: 420, maxWidth: '80vw', background: 'var(--c-bg-000000)', borderRadius: 12 }} />
+            <video ref={localRef} autoPlay playsInline muted style={{ width: 180, background: 'var(--c-bg-000000)', borderRadius: 12 }} />
           </div>
-          <div style={{ color: 'white', fontSize: 14 }}>
+          <div style={{ color: 'var(--c-fg-ffffff)', fontSize: 14 }}>
             {status === 'calling' && 'Calling…'}
             {status === 'ringing' && 'Incoming call'}
             {status === 'incall' && (video ? 'In call' : 'In call (audio)')}
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             {status === 'ringing' && <button className="btn btn-primary" onClick={accept}>Accept</button>}
-            <button className="btn" style={{ background: '#dc2626', color: 'white' }} onClick={hangup}>{status === 'ringing' ? 'Decline' : 'Hang up'}</button>
+            <button className="btn" style={{ background: 'var(--c-bg-dc2626)', color: 'var(--c-fg-ffffff)' }} onClick={hangup}>{status === 'ringing' ? 'Decline' : 'Hang up'}</button>
           </div>
         </div>
       )}
@@ -417,7 +417,7 @@ export default function ChatPage() {
       <div style={{ width: 280, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', background: 'var(--surface2)' }}>
         <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <b style={{ fontSize: 15 }}>💬 Chat
-            <span title={rtUp ? 'Live' : 'Reconnecting…'} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 999, marginLeft: 7, verticalAlign: 'middle', background: rtUp ? '#16a34a' : 'var(--text3)' }} /></b>
+            <span title={rtUp ? 'Live' : 'Reconnecting…'} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 999, marginLeft: 7, verticalAlign: 'middle', background: rtUp ? 'var(--c-bg-16a34a)' : 'var(--text3)' }} /></b>
           <div style={{ display: 'flex', gap: 6 }}>
             <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 8px' }} onClick={() => setShowNew('dm')}>+ DM</button>
             <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 8px' }} onClick={createChannel}>+ Ch</button>
@@ -450,7 +450,7 @@ export default function ChatPage() {
                 <div style={{ fontWeight: c.unread ? 700 : 500, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title(c)}</div>
                 {c.last_message && <div style={{ fontSize: 11, color: 'var(--text3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.last_message.preview}</div>}
               </div>
-              {c.unread > 0 && <span style={{ background: 'var(--accent)', color: 'white', borderRadius: 999, fontSize: 11, fontWeight: 700, padding: '1px 7px', height: 'fit-content' }}>{c.unread}</span>}
+              {c.unread > 0 && <span style={{ background: 'var(--accent)', color: 'var(--c-fg-ffffff)', borderRadius: 999, fontSize: 11, fontWeight: 700, padding: '1px 7px', height: 'fit-content' }}>{c.unread}</span>}
             </div>
           ))}
           </>)}
@@ -585,7 +585,7 @@ export default function ChatPage() {
             </div>
           </>
         )}
-        {msg && <div style={{ padding: '6px 16px', fontSize: 12, color: '#dc2626' }}>{msg}</div>}
+        {msg && <div style={{ padding: '6px 16px', fontSize: 12, color: 'var(--c-fg-dc2626)' }}>{msg}</div>}
       </div>
 
       {/* New DM picker */}
@@ -600,7 +600,7 @@ export default function ChatPage() {
                 <div key={p.employee_id} onClick={() => startDm(p)} style={{ padding: '9px 10px', cursor: 'pointer', borderRadius: 7, fontSize: 14 }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface2)')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>{p.name}</div>
               ))}
-              {dirFiltered.length === 0 && <div style={{ padding: 12, color: dirErr ? '#dc2626' : 'var(--text3)', fontSize: 13 }}>{dirErr ? `❌ ${dirErr}` : 'No one found.'}</div>}
+              {dirFiltered.length === 0 && <div style={{ padding: 12, color: dirErr ? 'var(--c-fg-dc2626)' : 'var(--text3)', fontSize: 13 }}>{dirErr ? `❌ ${dirErr}` : 'No one found.'}</div>}
             </div>
           </div>
         </div>
@@ -653,7 +653,7 @@ export default function ChatPage() {
                   <div style={{ fontSize: 11, color: 'var(--text3)', padding: '8px 8px 4px', fontWeight: 700 }}>ADD PEOPLE</div>
                   <input value={dirQuery} onChange={e => setDirQuery(e.target.value)} placeholder="Search people…"
                     style={{ width: '100%', boxSizing: 'border-box', margin: '0 0 6px', padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }} />
-                  {dirErr && <div style={{ padding: '4px 8px', fontSize: 12, color: '#dc2626' }}>❌ {dirErr}</div>}
+                  {dirErr && <div style={{ padding: '4px 8px', fontSize: 12, color: 'var(--c-fg-dc2626)' }}>❌ {dirErr}</div>}
                   {dirQuery && dir.filter(p => p.name.toLowerCase().includes(dirQuery.toLowerCase()) && !members.some(m => m.employee_id === p.employee_id)).slice(0, 8).map(p => (
                     <div key={p.employee_id} onClick={() => addMember(p)} style={{ padding: '7px 8px', cursor: 'pointer', fontSize: 14 }}
                       onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface2)')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>+ {p.name}</div>

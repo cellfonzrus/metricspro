@@ -29,8 +29,8 @@ const ROLE_LABELS: Record<string, string> = { employee: 'Employee', hr: 'HR', dm
 const ROLE_COLOR: Record<string, string> = { employee: '#2563eb', hr: '#7c3aed', dm: '#059669', market_manager: '#d97706' }
 const inp: React.CSSProperties = { padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', width: '100%' }
 const btn: React.CSSProperties = { padding: '7px 12px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, cursor: 'pointer', background: 'var(--surface)' }
-const btnP: React.CSSProperties = { ...btn, background: 'var(--accent,#2563eb)', color: '#fff', border: 'none', fontWeight: 600 }
-const chip = (role: string): React.CSSProperties => ({ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, color: '#fff', background: ROLE_COLOR[role] || '#64748b' })
+const btnP: React.CSSProperties = { ...btn, background: 'var(--accent,var(--c-bg-2563eb))', color: 'var(--c-fg-ffffff)', border: 'none', fontWeight: 600 }
+const chip = (role: string): React.CSSProperties => ({ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, color: 'var(--c-fg-ffffff)', background: ROLE_COLOR[role] || 'var(--c-bg-64748b)' })
 
 export default function OnboardingAdminPage() {
   const [tab, setTab] = useState<'docs' | 'done' | 'setup' | 'reconcile'>('docs')
@@ -169,11 +169,11 @@ export default function OnboardingAdminPage() {
       <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
         The template HR runs for every new hire. Group items into collapsible categories and assign each to whoever owns it
         (Employee, HR, the DM, or the Market Manager). Add a live form link — or 📎 upload a default template document (a blank W-4, a policy PDF, the handbook) that every new hire downloads from their onboarding portal.
-        Open a person&apos;s checklist from <a href="/hr/people" style={{ color: 'var(--accent,#2563eb)' }}>HR · People</a>, or browse every
-        uploaded/signed document across the roster in the <a href="/hr/compliance" style={{ color: 'var(--accent,#2563eb)' }}>Compliance Document Repository</a>.
+        Open a person&apos;s checklist from <a href="/hr/people" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>HR · People</a>, or browse every
+        uploaded/signed document across the roster in the <a href="/hr/compliance" style={{ color: 'var(--accent,var(--c-fg-2563eb))' }}>Compliance Document Repository</a>.
       </p>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>{msg}</div>}
-      {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>
+      {!ready && <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>
         <SetupNotice lead="The onboarding checklist is not switched on yet, so this page is empty." detail="073_hr_onboarding.sql" />
       </div>}
 
@@ -216,7 +216,7 @@ export default function OnboardingAdminPage() {
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
                 <button style={{ ...btn, fontSize: 11, padding: '4px 8px' }} onClick={() => setEditing({ category_id: c.id, owner_role: 'employee', requires_upload: true, sort_order: (c.tasks.length + 1) * 10 })}>＋ Item</button>
                 <button style={{ ...btn, fontSize: 11, padding: '4px 8px' }} onClick={() => renameCategory(c)}>Rename</button>
-                <button style={{ ...btn, fontSize: 11, padding: '4px 8px', color: '#b91c1c' }} onClick={() => deleteCategory(c)}>Delete</button>
+                <button style={{ ...btn, fontSize: 11, padding: '4px 8px', color: 'var(--c-fg-b91c1c)' }} onClick={() => deleteCategory(c)}>Delete</button>
               </div>
             </div>
             {isOpen && (
@@ -232,17 +232,17 @@ export default function OnboardingAdminPage() {
                         {t.requires_upload && <span style={{ fontSize: 11, color: 'var(--text3)' }}>⬆ upload</span>}
                         {t.is_fillable && <span style={{ fontSize: 11, color: 'var(--text3)' }}>✎ fillable</span>}
                         {t.is_mandatory === false && <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 20, background: 'var(--border)', color: 'var(--text3)' }}>optional</span>}
-                        {t.work_auth && <span title="Blocking: cannot advance to provisioned/active until complete" style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b' }}>⛔ work-auth</span>}
+                        {t.work_auth && <span title="Blocking: cannot advance to provisioned/active until complete" style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)' }}>⛔ work-auth</span>}
                       </div>
                       {t.description && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{t.description}</div>}
-                      {t.doc_url && <div><a href={t.doc_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--accent,#2563eb)' }}>🔗 {t.doc_label || 'Document link'}</a></div>}
+                      {t.doc_url && <div><a href={t.doc_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--accent,var(--c-fg-2563eb))' }}>🔗 {t.doc_label || 'Document link'}</a></div>}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
                         {t.template_name ? (
                           <>
-                            <button onClick={() => downloadTemplate(t)} style={{ fontSize: 12, color: 'var(--accent,#2563eb)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>📎 {t.template_name}</button>
+                            <button onClick={() => downloadTemplate(t)} style={{ fontSize: 12, color: 'var(--accent,var(--c-fg-2563eb))', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>📎 {t.template_name}</button>
                             <label style={{ fontSize: 11, color: 'var(--text3)', cursor: 'pointer', textDecoration: 'underline' }}>replace
                               <input type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadTemplate(t, f); e.currentTarget.value = '' }} /></label>
-                            <button onClick={() => removeTemplate(t)} style={{ fontSize: 11, color: '#b91c1c', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>remove</button>
+                            <button onClick={() => removeTemplate(t)} style={{ fontSize: 11, color: 'var(--c-fg-b91c1c)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>remove</button>
                           </>
                         ) : (
                           <label style={{ fontSize: 12, color: 'var(--text3)', cursor: 'pointer' }}>📎 Upload template document
@@ -253,10 +253,10 @@ export default function OnboardingAdminPage() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
                         {t.sample_name ? (
                           <>
-                            <button onClick={() => downloadSample(t)} style={{ fontSize: 12, color: 'var(--accent,#2563eb)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>👁 {t.sample_name}</button>
+                            <button onClick={() => downloadSample(t)} style={{ fontSize: 12, color: 'var(--accent,var(--c-fg-2563eb))', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>👁 {t.sample_name}</button>
                             <label style={{ fontSize: 11, color: 'var(--text3)', cursor: 'pointer', textDecoration: 'underline' }}>replace
                               <input type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadSample(t, f); e.currentTarget.value = '' }} /></label>
-                            <button onClick={() => removeSample(t)} style={{ fontSize: 11, color: '#b91c1c', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>remove</button>
+                            <button onClick={() => removeSample(t)} style={{ fontSize: 11, color: 'var(--c-fg-b91c1c)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>remove</button>
                           </>
                         ) : (
                           <label style={{ fontSize: 12, color: 'var(--text3)', cursor: 'pointer' }}>👁 Upload completed sample
@@ -266,7 +266,7 @@ export default function OnboardingAdminPage() {
                     </div>
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button style={{ ...btn, fontSize: 11, padding: '4px 8px' }} onClick={() => setEditing(t)}>Edit</button>
-                      <button style={{ ...btn, fontSize: 11, padding: '4px 8px', color: '#b91c1c' }} onClick={() => deleteTask(t)}>✕</button>
+                      <button style={{ ...btn, fontSize: 11, padding: '4px 8px', color: 'var(--c-fg-b91c1c)' }} onClick={() => deleteTask(t)}>✕</button>
                     </div>
                   </div>
                 ))}
@@ -298,7 +298,7 @@ export default function OnboardingAdminPage() {
                   <span style={{ fontSize: 11, color: 'var(--text3)', marginLeft: 8 }}>{f.field_type}{f.required ? ' · required' : ''}{f.propagate_to ? ` · → ${f.propagate_to}` : ''}{f.sensitive ? ' · 🔒 private' : ''}</span>
                 </div>
                 <button style={{ ...btn, fontSize: 11, padding: '4px 8px' }} onClick={() => setFedit({ ...f, options: (f.options || []) as any })}>Edit</button>
-                <button style={{ ...btn, fontSize: 11, padding: '4px 8px', color: '#b91c1c' }} onClick={() => deleteField(f)}>✕</button>
+                <button style={{ ...btn, fontSize: 11, padding: '4px 8px', color: 'var(--c-fg-b91c1c)' }} onClick={() => deleteField(f)}>✕</button>
               </div>
             ))}
           </div>
@@ -308,7 +308,7 @@ export default function OnboardingAdminPage() {
 
       {fedit && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }} onClick={() => setFedit(null)}>
-          <div style={{ background: 'var(--bg,#fff)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, width: 460, maxWidth: '92vw', maxHeight: '90vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+          <div style={{ background: 'var(--bg,var(--c-bg-ffffff))', border: '1px solid var(--border)', borderRadius: 12, padding: 20, width: 460, maxWidth: '92vw', maxHeight: '90vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
             <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>{fedit.id ? 'Edit field' : 'New field'}</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Label
@@ -342,7 +342,7 @@ export default function OnboardingAdminPage() {
 
       {editing && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }} onClick={() => setEditing(null)}>
-          <div style={{ background: 'var(--bg,#fff)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, width: 460, maxWidth: '92vw', maxHeight: '90vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+          <div style={{ background: 'var(--bg,var(--c-bg-ffffff))', border: '1px solid var(--border)', borderRadius: 12, padding: 20, width: 460, maxWidth: '92vw', maxHeight: '90vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
             <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>{editing.id ? 'Edit item' : 'New item'}</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Label
@@ -372,7 +372,7 @@ export default function OnboardingAdminPage() {
                 <label style={{ display: 'flex', gap: 6, alignItems: 'center' }} title="Uncheck to make this item optional — it stops counting toward checklist completion">
                   <input type="checkbox" checked={editing.is_mandatory !== false} onChange={e => upd({ is_mandatory: e.target.checked })} /> Mandatory
                 </label>
-                <label style={{ display: 'flex', gap: 6, alignItems: 'center', color: '#991b1b' }} title="Blocking: the hire cannot be provisioned/marked active while this is outstanding — server-enforced, not just a UI hint">
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', color: 'var(--c-fg-991b1b)' }} title="Blocking: the hire cannot be provisioned/marked active while this is outstanding — server-enforced, not just a UI hint">
                   <input type="checkbox" checked={!!editing.work_auth} onChange={e => upd({ work_auth: e.target.checked })} /> ⛔ Work-authorization (blocking)
                 </label>
               </div>
@@ -456,11 +456,11 @@ function DocumentsBoard() {
         forms to sign online or print &amp; upload). Incomplete returns are flagged here and bounced back automatically
         with the missing fields listed.
       </p>
-      {msg && <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>{msg}</div>}
-      {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}><SetupNotice lead="This board is not switched on yet." detail="073 + 082" /></div>}
-      {res && <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
+      {msg && <div style={{ background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>{msg}</div>}
+      {!ready && <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}><SetupNotice lead="This board is not switched on yet." detail="073 + 082" /></div>}
+      {res && <div style={{ background: 'var(--c-bg-ecfdf5)', border: '1px solid var(--c-bg-a7f3d0)', color: 'var(--c-fg-065f46)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
         Sent to {res.sent}/{res.total} · {res.emailed} emailed
-        {(res.results || []).filter((r: any) => !r.ok).map((r: any, i: number) => <div key={i} style={{ color: '#991b1b' }}>✕ {r.name || r.employee_id}: {r.error}</div>)}
+        {(res.results || []).filter((r: any) => !r.ok).map((r: any, i: number) => <div key={i} style={{ color: 'var(--c-fg-991b1b)' }}>✕ {r.name || r.employee_id}: {r.error}</div>)}
       </div>}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
@@ -486,31 +486,31 @@ function DocumentsBoard() {
             <div key={r.employee_id} style={{ display: 'grid', gridTemplateColumns: '34px 1.4fr 0.8fr 1fr 1.4fr 0.8fr', gap: 8, padding: '9px 12px', borderTop: '1px solid var(--border)', fontSize: 13, alignItems: 'center' }}>
               <input type="checkbox" checked={!!sel[r.employee_id]} onChange={e => setSel(s => ({ ...s, [r.employee_id]: e.target.checked }))} />
               <div>
-                <a href={`/hr/onboarding/${r.employee_id}`} style={{ fontWeight: 600, color: 'var(--accent,#2563eb)', textDecoration: 'none' }}>{r.name || r.employee_id}</a>
+                <a href={`/hr/onboarding/${r.employee_id}`} style={{ fontWeight: 600, color: 'var(--accent,var(--c-fg-2563eb))', textDecoration: 'none' }}>{r.name || r.employee_id}</a>
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>{r.employee_id}{r.email ? ` · ${r.email}` : ' · no email'}</div>
               </div>
               <div>
                 {r.sent
-                  ? <span style={{ fontSize: 12, color: '#059669' }}>✓ {fmt(r.docs_sent_at || r.invited_at)}</span>
-                  : <span style={{ fontSize: 12, fontWeight: 700, color: '#b91c1c' }}>not sent</span>}
+                  ? <span style={{ fontSize: 12, color: 'var(--c-fg-059669)' }}>✓ {fmt(r.docs_sent_at || r.invited_at)}</span>
+                  : <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-fg-b91c1c)' }}>not sent</span>}
               </div>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <div style={{ flex: 1, height: 6, background: 'var(--border)', borderRadius: 6, overflow: 'hidden', display: 'flex' }}>
-                    <div style={{ width: `${r.total ? (r.verified / r.total) * 100 : 0}%`, background: '#059669' }} />
-                    <div style={{ width: `${r.total ? (r.submitted / r.total) * 100 : 0}%`, background: '#d97706' }} />
-                    <div style={{ width: `${r.total ? (r.returned / r.total) * 100 : 0}%`, background: '#dc2626' }} />
+                    <div style={{ width: `${r.total ? (r.verified / r.total) * 100 : 0}%`, background: 'var(--c-bg-059669)' }} />
+                    <div style={{ width: `${r.total ? (r.submitted / r.total) * 100 : 0}%`, background: 'var(--c-bg-d97706)' }} />
+                    <div style={{ width: `${r.total ? (r.returned / r.total) * 100 : 0}%`, background: 'var(--c-bg-dc2626)' }} />
                   </div>
                   <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{back}/{r.total}</span>
                 </div>
-                {r.returned > 0 && <div style={{ fontSize: 11, color: '#dc2626', fontWeight: 600 }}>↩ {r.returned} returned for fixes</div>}
+                {r.returned > 0 && <div style={{ fontSize: 11, color: 'var(--c-fg-dc2626)', fontWeight: 600 }}>↩ {r.returned} returned for fixes</div>}
                 {!r.intake_submitted && <div style={{ fontSize: 11, color: 'var(--text3)' }}>info form not filled</div>}
               </div>
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                {(r.returned_labels || []).map((l: string) => <span key={`r${l}`} title="returned for fixes" style={{ fontSize: 11, padding: '1px 7px', borderRadius: 12, background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b' }}>↩ {l}</span>)}
+                {(r.returned_labels || []).map((l: string) => <span key={`r${l}`} title="returned for fixes" style={{ fontSize: 11, padding: '1px 7px', borderRadius: 12, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)' }}>↩ {l}</span>)}
                 {(r.pending_labels || []).slice(0, 3).map((l: string) => <span key={l} style={{ fontSize: 11, padding: '1px 7px', borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text2)' }}>{l}</span>)}
                 {(r.pending_labels || []).length > 3 && <span style={{ fontSize: 11, color: 'var(--text3)' }}>+{(r.pending_labels || []).length - 3} more</span>}
-                {r.total > 0 && r.pending === 0 && r.returned === 0 && <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>✓ everything back</span>}
+                {r.total > 0 && r.pending === 0 && r.returned === 0 && <span style={{ fontSize: 12, color: 'var(--c-fg-059669)', fontWeight: 600 }}>✓ everything back</span>}
               </div>
               <span style={{ fontSize: 12, color: 'var(--text3)' }}>{fmt(r.last_activity)}</span>
             </div>
@@ -593,9 +593,9 @@ function CompletedDocuments() {
         fully customizable below.
       </p>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>{msg}</div>}
-      {!ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}><SetupNotice lead="Onboarding tracking is not switched on yet." detail="073 + 082" /></div>}
-      {cfg.ready === false && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}><SetupNotice lead="Saving the accounting destination and tracking forwards is not available yet." detail="100_hr_accounting_forward.sql" /></div>}
-      {cfg.ready !== false && cfg.email_configured === false && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>Email delivery isn&apos;t configured for your company yet — forwarding will fail until it is. Contact support to enable it.</div>}
+      {!ready && <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}><SetupNotice lead="Onboarding tracking is not switched on yet." detail="073 + 082" /></div>}
+      {cfg.ready === false && <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}><SetupNotice lead="Saving the accounting destination and tracking forwards is not available yet." detail="100_hr_accounting_forward.sql" /></div>}
+      {cfg.ready !== false && cfg.email_configured === false && <div style={{ background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)', color: 'var(--c-fg-9a3412)', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>Email delivery isn&apos;t configured for your company yet — forwarding will fail until it is. Contact support to enable it.</div>}
 
       {/* Customizable forward destination */}
       <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14, marginBottom: 14, background: 'var(--surface)' }}>
@@ -639,10 +639,10 @@ function CompletedDocuments() {
                 <div style={{ fontWeight: 600 }}>{r.name || r.employee_id}</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>{r.employee_id}{r.email ? ' · ' + r.email : ''}</div>
               </div>
-              <div><a href={`/hr/onboarding/${r.employee_id}`} style={{ fontSize: 12, color: 'var(--accent,#2563eb)', textDecoration: 'none' }}>📄 Review packet</a></div>
+              <div><a href={`/hr/onboarding/${r.employee_id}`} style={{ fontSize: 12, color: 'var(--accent,var(--c-fg-2563eb))', textDecoration: 'none' }}>📄 Review packet</a></div>
               <div>
                 {approved
-                  ? <span style={{ fontSize: 12, color: '#059669', fontWeight: 600 }}>✓ Approved</span>
+                  ? <span style={{ fontSize: 12, color: 'var(--c-fg-059669)', fontWeight: 600 }}>✓ Approved</span>
                   : <button style={{ ...btn, fontSize: 12, padding: '4px 10px' }} disabled={busy === 'approve:' + r.employee_id} onClick={() => approve(r)}>{busy === 'approve:' + r.employee_id ? '…' : 'Approve'}</button>}
               </div>
               <div>
@@ -722,7 +722,7 @@ function ReconcilePanel() {
             <label style={{ fontSize: 12, display: 'flex', gap: 5, alignItems: 'center' }}>
               <input type="checkbox" checked={notifyOnApply} onChange={e => setNotifyOnApply(e.target.checked)} /> Email affected employees
             </label>
-            <button style={{ ...btn, color: '#fff', background: '#059669', border: 'none', fontWeight: 600, opacity: (meta.employees_affected || 0) > 0 ? 1 : 0.5 }}
+            <button style={{ ...btn, color: 'var(--c-fg-ffffff)', background: 'var(--c-bg-059669)', border: 'none', fontWeight: 600, opacity: (meta.employees_affected || 0) > 0 ? 1 : 0.5 }}
               disabled={busy || !(meta.employees_affected && meta.employees_affected > 0)} onClick={applyAndNotify}>
               ✅ Apply — reopen &amp; {notifyOnApply ? 'notify' : 'log'} ({meta.employees_affected || 0})
             </button>
@@ -740,13 +740,13 @@ function ReconcilePanel() {
           {report.map(r => (
             <div key={r.employee_id} style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 2fr 0.7fr', gap: 8, padding: '9px 12px', borderTop: '1px solid var(--border)', fontSize: 13, alignItems: 'flex-start' }}>
               <div>
-                <a href={`/hr/onboarding/${r.employee_id}`} style={{ fontWeight: 600, color: 'var(--accent,#2563eb)', textDecoration: 'none' }}>{r.employee_name || r.employee_id}</a>
+                <a href={`/hr/onboarding/${r.employee_id}`} style={{ fontWeight: 600, color: 'var(--accent,var(--c-fg-2563eb))', textDecoration: 'none' }}>{r.employee_name || r.employee_id}</a>
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>{r.employee_id}</div>
               </div>
               <span style={{ fontSize: 12, color: 'var(--text2)' }}>{r.workflow_status}</span>
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                {r.missing_mandatory.map(m => <span key={m.task_id} style={{ fontSize: 11, padding: '1px 7px', borderRadius: 12, background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b' }}>{m.label}</span>)}
-                {r.state_undetermined && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 12, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>work state not confirmed</span>}
+                {r.missing_mandatory.map(m => <span key={m.task_id} style={{ fontSize: 11, padding: '1px 7px', borderRadius: 12, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fca5a5)', color: 'var(--c-fg-991b1b)' }}>{m.label}</span>)}
+                {r.state_undetermined && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 12, background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', color: 'var(--c-fg-92400e)' }}>work state not confirmed</span>}
               </div>
               <span style={{ fontSize: 12 }}>{meta?.dry_run === false ? (r.notified ? '✓ emailed' : 'no email on file') : '—'}</span>
             </div>

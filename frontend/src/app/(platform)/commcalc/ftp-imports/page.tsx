@@ -83,7 +83,7 @@ export default function FtpImportsPage() {
           <div><label style={lbl}>Host</label><input style={{ ...sel, width: '100%' }} placeholder="boxNNNN.bluehost.com" value={cfg.host || ''} onChange={e => set({ host: e.target.value })} /></div>
           <div><label style={lbl}>Port</label><input style={{ ...sel, width: '100%' }} value={cfg.port || 21} onChange={e => set({ port: Number(e.target.value) || 21 })} /></div>
           <div><label style={lbl}>Username</label><input style={{ ...sel, width: '100%' }} placeholder="reports@yourdomain.com" value={cfg.username || ''} onChange={e => set({ username: e.target.value })} /></div>
-          <div><label style={lbl}>Password {cfg.has_password && <span style={{ color: '#16794a' }}>(set)</span>}</label><input type="password" style={{ ...sel, width: '100%' }} placeholder={cfg.has_password ? '•••• keep' : 'password'} value={pwd} onChange={e => setPwd(e.target.value)} /></div>
+          <div><label style={lbl}>Password {cfg.has_password && <span style={{ color: 'var(--c-fg-16794a)' }}>(set)</span>}</label><input type="password" style={{ ...sel, width: '100%' }} placeholder={cfg.has_password ? '•••• keep' : 'password'} value={pwd} onChange={e => setPwd(e.target.value)} /></div>
           <div><label style={lbl}>Remote folder</label><input style={{ ...sel, width: '100%' }} placeholder="/reports/" value={cfg.remote_dir || ''} onChange={e => set({ remote_dir: e.target.value })} /></div>
           <div><label style={lbl}>Security</label>
             <label style={{ fontSize: 12, display: 'block' }}><input type="checkbox" checked={!!cfg.use_tls} onChange={e => set({ use_tls: e.target.checked })} /> FTP_TLS</label>
@@ -119,7 +119,7 @@ export default function FtpImportsPage() {
                   {/* where a file routed here SHOWS UP — the registry row's consumers (owner 2026-09-20) */}
                   {p.upload_type && <ShowsIn info={kinds.showsIn(p.upload_type)} loaded={kinds.loaded} compact lead="Shows in" style={{ margin: '4px 0 0' }} />}</td>
                 <td style={cell}><input style={{ ...sel, width: '100%' }} placeholder="optional" value={p.note || ''} onChange={e => setPat(i, { note: e.target.value })} /></td>
-                <td style={cell}><button className="btn btn-secondary" style={{ fontSize: 12, color: '#dc2626' }} onClick={() => delPat(i)}>✕</button></td>
+                <td style={cell}><button className="btn btn-secondary" style={{ fontSize: 12, color: 'var(--c-fg-dc2626)' }} onClick={() => delPat(i)}>✕</button></td>
               </tr>
             ))}
           </tbody>
@@ -144,7 +144,7 @@ export default function FtpImportsPage() {
                 <tr key={f.name}>
                   <td style={cell}>{f.name}</td>
                   <td style={{ ...cell, color: 'var(--text3)', fontSize: 12 }}>{f.size ? `${(f.size / 1024).toFixed(0)} KB` : ''}</td>
-                  <td style={cell}>{f.matches ? <span className="badge" style={{ background: '#16794a', color: '#fff', fontSize: 11 }}>→ {f.matches}</span> : <span style={{ color: 'var(--text3)', fontSize: 12 }}>no pattern</span>}</td>
+                  <td style={cell}>{f.matches ? <span className="badge" style={{ background: 'var(--c-bg-16794a)', color: 'var(--c-fg-ffffff)', fontSize: 11 }}>→ {f.matches}</span> : <span style={{ color: 'var(--text3)', fontSize: 12 }}>no pattern</span>}</td>
                 </tr>
               ))}
             </tbody>

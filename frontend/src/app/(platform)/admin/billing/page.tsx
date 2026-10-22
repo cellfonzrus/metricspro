@@ -183,16 +183,16 @@ export default function BillingAdmin() {
           <div style={{ fontSize: 26, fontWeight: 800 }}>{fmt(pc.total_monthly)}</div>
           <div style={{ fontSize: 11, color: 'var(--text3)' }}>what all platforms cost</div>
         </div>
-        <div className="card" style={{ padding: 16, minWidth: 175, borderColor: '#c7d2fe' }}>
+        <div className="card" style={{ padding: 16, minWidth: 175, borderColor: 'var(--c-bg-c7d2fe)' }}>
           <div style={{ fontSize: 12, color: 'var(--text3)' }}>Break-even / tenant</div>
           <div style={{ fontSize: 26, fontWeight: 800 }}>{fmt(pc.cost_per_tenant)}</div>
           <div style={{ fontSize: 11, color: 'var(--text3)' }}>{pc.active_tenants} active · price above this</div>
         </div>
       </div>
 
-      {!ready && <div className="card" style={{ borderColor: '#f59e0b', color: '#b45309', padding: 12, marginBottom: 12 }}>
+      {!ready && <div className="card" style={{ borderColor: 'var(--c-bg-f59e0b)', color: 'var(--c-fg-b45309)', padding: 12, marginBottom: 12 }}>
         ⚠️ Migration <code>064_billing.sql</code> hasn’t been applied yet — plans/invoices can’t be saved. Run it in the Supabase SQL editor.</div>}
-      {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 12, marginBottom: 12 }}>{err}</div>}
+      {err && <div className="card" style={{ borderColor: 'var(--c-bg-c0392b)', color: 'var(--c-fg-c0392b)', padding: 12, marginBottom: 12 }}>{err}</div>}
 
       {/* Tenants + plans table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -207,7 +207,7 @@ export default function BillingAdmin() {
           : plans.map(row => (
             <div key={row.org_id} style={{ display: 'flex', alignItems: 'center', padding: '11px 14px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
               <span style={{ flex: 1.4, minWidth: 150, fontWeight: 600 }}>
-                {row.name}{!row.is_active_tenant && <span style={{ color: '#b45309', fontSize: 12 }}> · inactive</span>}
+                {row.name}{!row.is_active_tenant && <span style={{ color: 'var(--c-fg-b45309)', fontSize: 12 }}> · inactive</span>}
               </span>
               <span style={{ flex: 1, fontSize: 13 }}>
                 {row.plan
@@ -239,7 +239,7 @@ export default function BillingAdmin() {
           Live cost is pulled where the platform has a cost API (Anthropic first); the rest use a flat monthly figure.
           Total ÷ active tenants = your <b>break-even per tenant</b> — set plans above it for margin.
         </div>
-        {!pc.ready && <div style={{ color: '#b45309', fontSize: 13, marginBottom: 8 }}>⚠️ Run migration <code>090_platform_billing.sql</code> in Supabase to enable this.</div>}
+        {!pc.ready && <div style={{ color: 'var(--c-fg-b45309)', fontSize: 13, marginBottom: 8 }}>⚠️ Run migration <code>090_platform_billing.sql</code> in Supabase to enable this.</div>}
         {pcMsg && <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>{pcMsg}</div>}
         <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
           {pc.connectors.length === 0 ? <div style={{ padding: 12, color: 'var(--text3)', fontSize: 13 }}>No platforms yet — add Anthropic, Railway, Supabase, Vercel, Bluehost…</div>
@@ -249,8 +249,8 @@ export default function BillingAdmin() {
               return (
                 <div key={c.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '9px 12px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
                   <span style={{ fontWeight: 600, flex: 1, minWidth: 150 }}>{c.display_name || c.provider}
-                    {!c.is_enabled && <span style={{ color: '#b45309', fontSize: 12 }}> · off</span>}
-                    {live && <span style={{ fontSize: 11, color: '#16a34a', marginLeft: 6 }}>● live</span>}
+                    {!c.is_enabled && <span style={{ color: 'var(--c-fg-b45309)', fontSize: 12 }}> · off</span>}
+                    {live && <span style={{ fontSize: 11, color: 'var(--c-fg-16a34a)', marginLeft: 6 }}>● live</span>}
                   </span>
                   <span style={{ width: 100, textAlign: 'right', fontWeight: 700 }}>{c.last_cost != null ? fmt(c.last_cost) : '—'}</span>
                   <span style={{ width: 110, fontSize: 12, color: sc }} title={c.last_detail || ''}>{c.last_status || 'not synced'}</span>
@@ -319,7 +319,7 @@ export default function BillingAdmin() {
               {' '}→ would bill <b>{fmt((driverVal(plans.find(p => p.org_id === editing)!, draft.basis) ?? 1) * (draft.unit_price || 0))}</b> / {draft.cycle || 'monthly'}
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between' }}>
-              <button className="btn btn-sm" style={{ color: '#c0392b' }} onClick={() => deletePlan(editing)}>Delete plan</button>
+              <button className="btn btn-sm" style={{ color: 'var(--c-fg-c0392b)' }} onClick={() => deletePlan(editing)}>Delete plan</button>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn btn-sm" onClick={() => setEditing(null)}>Cancel</button>
                 <button className="btn btn-primary btn-sm" disabled={busy} onClick={savePlan}>{busy ? 'Saving…' : 'Save plan'}</button>
@@ -345,7 +345,7 @@ export default function BillingAdmin() {
               <div><label style={{ fontSize: 12, color: 'var(--text3)' }}>Due date</label><br />
                 <input type="date" style={inp} value={period.due_date} onChange={e => setPeriod(p => ({ ...p, due_date: e.target.value }))} /></div>
               <button className="btn btn-primary" disabled={busy || !invFor.plan} onClick={generate}>{busy ? '…' : 'Generate invoice'}</button>
-              {!invFor.plan && <span style={{ fontSize: 12, color: '#b45309' }}>Set a plan first.</span>}
+              {!invFor.plan && <span style={{ fontSize: 12, color: 'var(--c-fg-b45309)' }}>Set a plan first.</span>}
             </div>
             {invoices.length === 0 ? <div style={{ color: 'var(--text3)', padding: 8 }}>No invoices yet.</div>
               : <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
@@ -395,7 +395,7 @@ export default function BillingAdmin() {
               <input type="checkbox" checked={pcEdit.is_enabled ?? true} onChange={e => setPcEdit(d => ({ ...d!, is_enabled: e.target.checked }))} /> Count in the total
             </label>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              {pcEdit.id ? <button className="btn btn-sm" style={{ color: '#c0392b' }} onClick={() => deleteConnector(pcEdit.id)}>Delete</button> : <span />}
+              {pcEdit.id ? <button className="btn btn-sm" style={{ color: 'var(--c-fg-c0392b)' }} onClick={() => deleteConnector(pcEdit.id)}>Delete</button> : <span />}
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn btn-sm" onClick={() => setPcEdit(null)}>Cancel</button>
                 <button className="btn btn-primary btn-sm" disabled={pcBusy} onClick={saveConnector}>{pcBusy ? 'Saving…' : 'Save'}</button>

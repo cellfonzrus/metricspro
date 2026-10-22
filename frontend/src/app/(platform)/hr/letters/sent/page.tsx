@@ -44,7 +44,7 @@ export default function SentLettersPage() {
         Every letter ever sent, queued, approved, or rejected — auto-detected or manually sent — with the
         merge data used at send time. HR/admin only.
       </p>
-      {err && <div style={{ color: '#c0392b', fontSize: 13, margin: '8px 0' }}>{err}</div>}
+      {err && <div style={{ color: 'var(--c-fg-c0392b)', fontSize: 13, margin: '8px 0' }}>{err}</div>}
       {loading && <div style={{ fontSize: 13 }}>Loading…</div>}
       {!loading && (
         <ReportShell title="HR Letters — Sent Log" filename="hr-sent-letters" columns={columns} rows={rows} />

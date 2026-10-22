@@ -189,7 +189,7 @@ export default function VisionLinesPage() {
         in — if it says OUT, press flip.
       </p>
 
-      {msg && <div style={{ ...panel, borderColor: '#dc2626', color: '#f87171', marginBottom: 16 }}>{msg}</div>}
+      {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-f87171)', marginBottom: 16 }}>{msg}</div>}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: 18,
         alignItems: 'start' }}>
@@ -220,7 +220,7 @@ export default function VisionLinesPage() {
                 </div>
                 {/* The badge IS the point of the list: it names the doorways counting nobody. */}
                 <div style={{ fontSize: 11, marginTop: 4, fontWeight: 600,
-                  color: silent ? '#f59e0b' : has ? '#16a34a' : 'var(--text2)' }}>
+                  color: silent ? 'var(--c-fg-f59e0b)' : has ? 'var(--c-fg-16a34a)' : 'var(--text2)' }}>
                   {silent ? '⚠ counting nobody' : has ? '✓ line drawn' : 'not an entrance'}
                 </div>
               </button>
@@ -240,8 +240,8 @@ export default function VisionLinesPage() {
             <>
               {status && (
                 <div style={{ ...panel, marginBottom: 12, fontSize: 13,
-                  borderColor: cam.is_entrance ? '#f59e0b' : 'var(--border)',
-                  color: cam.is_entrance ? '#f59e0b' : 'var(--text2)' }}>
+                  borderColor: cam.is_entrance ? 'var(--c-bg-f59e0b)' : 'var(--border)',
+                  color: cam.is_entrance ? 'var(--c-fg-f59e0b)' : 'var(--text2)' }}>
                   {status}
                 </div>
               )}
@@ -256,7 +256,7 @@ export default function VisionLinesPage() {
                 // pinned at 16/9 and a 4:3 camera draws its line visibly away from the cursor —
                 // and stores it at the coordinate under the cursor, so the picture and the saved
                 // line disagree about where the doorway is.
-                style={{ position: 'relative', background: '#000',
+                style={{ position: 'relative', background: 'var(--c-bg-000000)',
                   aspectRatio: still ? `${still.width} / ${still.height}` : '16 / 9',
                   borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)',
                   cursor: still ? 'crosshair' : 'default', touchAction: 'none' }}>
@@ -270,7 +270,7 @@ export default function VisionLinesPage() {
                   : (
                     <div style={{ position: 'absolute', inset: 0, display: 'flex',
                       flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                      gap: 10, color: '#9ca3af', padding: 16, textAlign: 'center' }}>
+                      gap: 10, color: 'var(--c-fg-9ca3af)', padding: 16, textAlign: 'center' }}>
                       <button style={btnPrimary} onClick={grab} disabled={busy}>
                         {busy ? 'Taking a picture…' : '📷 Take a picture to draw on'}
                       </button>
@@ -288,24 +288,24 @@ export default function VisionLinesPage() {
                     style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
                       pointerEvents: 'none' }}>
                     <line x1={live.x1 * 100} y1={live.y1 * 100} x2={live.x2 * 100} y2={live.y2 * 100}
-                      stroke="#22d3ee" strokeWidth={0.8} vectorEffect="non-scaling-stroke" />
+                      stroke="var(--c-fg-22d3ee)" strokeWidth={0.8} vectorEffect="non-scaling-stroke" />
                     {arrow && (
                       <line x1={arrow.from.x * 100} y1={arrow.from.y * 100}
                         x2={arrow.to.x * 100} y2={arrow.to.y * 100}
-                        stroke="#16a34a" strokeWidth={0.8} vectorEffect="non-scaling-stroke" />
+                        stroke="var(--c-fg-16a34a)" strokeWidth={0.8} vectorEffect="non-scaling-stroke" />
                     )}
                   </svg>
                 )}
                 {arrow && still && (
                   <div style={{ position: 'absolute', left: pct(arrow.to.x), top: pct(arrow.to.y),
-                    transform: 'translate(-50%, -50%)', background: '#16a34a', color: '#fff',
+                    transform: 'translate(-50%, -50%)', background: 'var(--c-bg-16a34a)', color: 'var(--c-fg-ffffff)',
                     fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 5,
                     pointerEvents: 'none', whiteSpace: 'nowrap' }}>IN</div>
                 )}
                 {marker && still && (
                   <div style={{ position: 'absolute', left: pct(marker.x), top: pct(marker.y),
                     transform: 'translate(-50%, -50%)', width: 16, height: 16, borderRadius: 16,
-                    background: '#f59e0b', border: '2px solid #fff', pointerEvents: 'none' }} />
+                    background: 'var(--c-bg-f59e0b)', border: '2px solid var(--c-bg-ffffff)', pointerEvents: 'none' }} />
                 )}
               </div>
 
@@ -330,7 +330,7 @@ export default function VisionLinesPage() {
                   {/* One sentence for the state of the line, and it is either the reason the save
                       button is disabled or what the arrow means. Never both, never neither. */}
                   <div style={{ fontSize: 13, marginTop: 12,
-                    color: blocker ? '#f59e0b' : 'var(--text2)' }}>
+                    color: blocker ? 'var(--c-fg-f59e0b)' : 'var(--text2)' }}>
                     {blocker || sentence}
                   </div>
 
@@ -373,7 +373,7 @@ export default function VisionLinesPage() {
                   )}
 
                   {saved && (
-                    <div style={{ fontSize: 13, marginTop: 12, color: '#16a34a' }}>{saved}</div>
+                    <div style={{ fontSize: 13, marginTop: 12, color: 'var(--c-fg-16a34a)' }}>{saved}</div>
                   )}
                 </div>
               )}
