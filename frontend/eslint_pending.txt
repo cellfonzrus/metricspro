@@ -305,7 +305,7 @@
 3	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/onboarding/plan-sources-logic.ts
 10	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/products/page.tsx
 10	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/reports/page.tsx
-8	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/sales/page.tsx
+7	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/sales/page.tsx
 2	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/settings/page.tsx
 33	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/special-orders/manage/page.tsx
 5	@typescript-eslint/no-explicit-any	src/app/(platform)/pos/special-orders/page.tsx

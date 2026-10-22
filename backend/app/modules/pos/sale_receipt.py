@@ -258,6 +258,46 @@ def email_view(snapshot_v, brand, template_v, settings_text, customer=None, type
     }
 
 
+#: What a WhatsApp number must have before it is worth sending to — a country code and a subscriber
+#: number. Short of that the screen says so rather than Meta refusing it after the fact.
+WHATSAPP_MIN_DIGITS = 11
+
+
+def whatsapp_phone(customer=None, typed=None, *, digits=None) -> str:
+    """THE number a receipt sent over WhatsApp goes to: what the cashier typed, else the number on
+    the customer's record. Never guessed — the screen SHOWS this, so a blank here is a blank there.
+
+    `digits` is INJECTED (`notify/whatsapp_window.digits`) for the same reason `html` injects its
+    renderer: what counts as a phone number is WhatsApp's rule and it has one home, so this module
+    does not keep a second copy of it (§POS-09). Without it the raw value is returned untouched and
+    `whatsapp_view` reports the number as unusable rather than inventing a normalisation.
+    """
+    for candidate in (typed, (customer or {}).get("phone_primary")):
+        raw = str(candidate or "").strip()
+        if raw:
+            return digits(raw) if digits else raw
+    return ""
+
+
+def whatsapp_view(snapshot_v, brand, template_v, settings_text, customer=None, typed=None,
+                  tenant_name="", digits=None) -> dict:
+    """Everything the send screen must SHOW before a receipt goes out over WhatsApp — the number it
+    will go to (editable), whose it is, whether it can be sent at all, and the one line that rides
+    with the file. The caption IS the email subject (`subject`), because a receipt arriving by two
+    channels should announce itself the same way in both.
+    """
+    company = company_name(brand, tenant_name)
+    num = whatsapp_phone(customer, typed, digits=digits)
+    return {
+        "to": num,
+        "to_source": ("typed" if str(typed or "").strip() else ("customer" if num else "none")),
+        "valid": bool(digits) and num.isdigit() and len(num) >= WHATSAPP_MIN_DIGITS,
+        "from_name": company,
+        "caption": subject(company, (settings_text or {}).get("email_receipt_subject"),
+                           (snapshot_v or {}).get("transaction_id")),
+    }
+
+
 def company_name(brand, tenant_name="") -> str:
     """THE name a receipt and its email are FROM. The receipt-branding company name is the admin's own
     override and wins; otherwise it is the tenant's name as set up during onboarding

@@ -56,8 +56,16 @@ def _canvas(buf, size):
 
 def filename(transaction_id="", prefix="receipt") -> str:
     """What the attachment is called in the customer's inbox. A transaction number when the sale has
-    one, because a customer with two receipts from one shop needs to tell them apart."""
-    txn = "".join(ch for ch in str(transaction_id or "") if ch.isalnum())
+    one, because a customer with two receipts from one shop needs to tell them apart.
+
+    A SLUGIFIER, not an identity fold: anything that is not alphanumeric is SUBSTITUTED with `_`
+    rather than dropped, which is the house's spelling for an attachment name (see
+    `notify/report_registry`, `notify/finance_reports`). Dropping would let two different
+    transaction references collapse onto one file name, and a dropped fold is also the shape of the
+    accent-folding defect `harness_payroll_hours_basis_lock.py` §E guards against — nothing is ever
+    MATCHED on this value, so it must not look like a match key.
+    """
+    txn = "".join(ch if ch.isalnum() else "_" for ch in str(transaction_id or "")).strip("_")
     return f"{prefix}-{txn}.pdf" if txn else f"{prefix}.pdf"
 
 

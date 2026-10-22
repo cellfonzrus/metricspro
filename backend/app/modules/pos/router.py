@@ -2156,6 +2156,7 @@ from app.modules.pos import receipt_escpos as _escpos
 from app.modules.pos import receipt_remit as _remit
 from app.modules.pos import customer_bill_to as _bill_to
 from app.modules.pos import receipt_pdf_render as _rpdf_out
+from app.modules.notify import whatsapp_window as _wa_window
 from app.modules.core import tenant_identity as _tenant
 
 
@@ -2197,7 +2198,7 @@ def _declared_format(client, org_id: str) -> dict:
 
 def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
                     want_layout=None, want_paper=None, want_destination=None,
-                    want_remit=None, want_pdf=False) -> dict:
+                    want_remit=None, want_pdf=False, typed_phone=None) -> dict:
     """Everything a receipt needs, read once: the template, the effective POS config, the store
     block, the customer, the tenant's name and the declared format. One reader, so the printed copy
     and the emailed copy can never be built from different inputs.
@@ -2210,6 +2211,9 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
     `want_destination` is where this copy GOES (owner 2026-10-20, §POS-04): the operating system's
     print dialog, as every store has always had, or the till printer itself through the helper on the
     counter PC. A store's own setting is only the DEFAULT; both are offered on every print.
+
+    `typed_phone` is the number a cashier typed for a WhatsApp copy (owner 2026-10-21, §POS-09),
+    shown before anything is sent exactly as the email address is.
 
     `want_pdf` builds the receipt as a FILE as well (owner 2026-10-21, §POS-08) — the same two
     content homes, a third medium. Only a path that is going to ATTACH one asks for it, because a
@@ -2229,7 +2233,8 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
     if sale.get("customer_id"):
         try:
             crows = (client.schema("pos").table("customers")
-                     .select("id,first_name,last_name,company_name,email," + _bill_to.COLUMNS)
+                     .select("id,first_name,last_name,company_name,email,phone_primary,"
+                             + _bill_to.COLUMNS)
                      .eq("org_id", org_id).eq("id", sale["customer_id"]).limit(1).execute().data) or []
             customer = crows[0] if crows else {}
         except Exception:
@@ -2335,6 +2340,12 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
             if choice["destination"] == _sr.DEST_DIRECT else ""),
         "email": _sr.email_view(snap, brand, template, settings_text, customer=customer,
                                 typed=typed_email, tenant_name=tenant_name),
+        # The SAME question for the other channel (§POS-09), answered by the same one home: who
+        # would this receipt go to, whose number is it, and can it be sent at all. What counts as a
+        # phone number is WhatsApp's own rule, dereferenced — never a second normalisation here.
+        "whatsapp": _sr.whatsapp_view(snap, brand, template, settings_text, customer=customer,
+                                      typed=typed_phone, tenant_name=tenant_name,
+                                      digits=_wa_window.digits),
         "snapshot": snap,
         "tenant_name": tenant_name,
         "company_name": _sr.company_name(brand, tenant_name),
@@ -2487,6 +2498,64 @@ async def email_sale_receipt(sale_id: str, body: dict = None,
             "attached": bool(attachments), "attachment_name": bundle["pdf_filename"],
             "attachment_error": bundle["pdf_error"] or None,
             "message": msg}
+
+
+@router.post("/sales/{sale_id}/whatsapp-receipt")
+async def whatsapp_sale_receipt(sale_id: str, body: dict = None,
+                                authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Send this sale's receipt to the customer over WhatsApp (owner 2026-10-21, §POS-09).
+
+    THE SAME RECEIPT, a different channel. The file is the §POS-08 PDF — built from the same two
+    content homes the paper copy and the mail are built from — and the line that rides with it is the
+    same one the email subject carries, so a customer who gets both does not get two receipts.
+
+    `to` is the number the cashier SAW and could edit; blank falls back to the number on the
+    customer's record, and neither is invented. Delivery walks the channel's own ladder
+    (`whatsapp_meta.send_document_detailed`: the approved document template, else a free-form
+    document inside Meta's 24-hour window), because WHEN a business may send a file is Meta's rule
+    and it already has one home here.
+    """
+    body = body or {}
+    client = sb()
+    sale = _load_sale(client, org_id, sale_id)
+    try:
+        bundle = _receipt_bundle(client, org_id, sale, want_pdf=True,
+                                 typed_phone=body.get("to"),
+                                 want_layout=body.get("layout"),
+                                 want_paper=body.get("paper_width_mm"),
+                                 want_remit=body.get("remit"))
+    except _sr.ReceiptError as e:
+        raise HTTPException(400, str(e))
+    view = bundle["whatsapp"]
+    if not view["to"]:
+        raise HTTPException(400, "no phone number — type one, or add one to the customer's profile")
+    if not view["valid"]:
+        raise HTTPException(400, f"'{view['to']}' does not look like a phone number with its "
+                                 "country code")
+    from app.modules.notify.channels import whatsapp_meta as _wa
+    if not _wa.is_configured():
+        raise HTTPException(503, "sending receipts on WhatsApp isn't switched on for this platform "
+                                 "yet (no WhatsApp sender configured)")
+    # A receipt is worth nothing without the receipt: if the file could not be built, the customer is
+    # not sent a bare line claiming one is attached.
+    if not bundle["pdf_bytes"]:
+        raise HTTPException(503, "the receipt file could not be built, so there is nothing to send "
+                                 f"on WhatsApp{(' — ' + bundle['pdf_error']) if bundle['pdf_error'] else ''}")
+    try:
+        res = await _wa.send_document_detailed(view["to"], bundle["pdf_bytes"], "application/pdf",
+                                               bundle["pdf_filename"], view["caption"])
+    except Exception as e:
+        raise HTTPException(502, f"WhatsApp refused it: {str(e)[:200]}")
+    return {"sent": bool((res or {}).get("message_id")), "to": view["to"],
+            "from_name": view["from_name"], "caption": view["caption"],
+            "attachment_name": bundle["pdf_filename"],
+            "attached": bool((res or {}).get("attached")),
+            "route": (res or {}).get("route") or "",
+            "provider_message_id": (res or {}).get("message_id") or None,
+            "message": (f"Receipt sent to {view['to']} on WhatsApp."
+                        if (res or {}).get("attached")
+                        else f"WhatsApp would not carry the file to {view['to']} right now, so the "
+                             "message went without it — the customer can be emailed the PDF.")}
 
 
 @router.get("/register/drawer-cash")
