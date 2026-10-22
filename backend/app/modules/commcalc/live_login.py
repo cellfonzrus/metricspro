@@ -187,6 +187,8 @@ _SCREENCAST_MAX_H = 900
 _FRAME_PUMP_MS = 80            # CDP mode: pump the event loop this often so screencast frames dispatch (~12/s)
 _FALLBACK_PUMP_MS = 300        # no-CDP mode: tightened screenshot loop (~3.3/s vs the old ~0.67/s)
 _FRAME_GUARANTEE_S = 1.5       # even in CDP mode, force a screenshot if no frame advanced this long (never freeze)
+_INPUT_DRAIN_MAX = 32          # service at most this many queued human inputs per tick (bounded: the idle
+                               # check and the frame pump must still run even under a flood)
 _CLASSIFY_POLL_S = 1.2         # pre-auth: how often to re-DETECT state (captcha / auth / proxy) for the status
 
 _B2B_PROCESSORS = ("b2bsoft", "b2b")
@@ -657,6 +659,24 @@ class LiveLoginSession:
         except queue.Empty:
             return None
 
+    def _next_input(self):
+        """Pop the next HUMAN INPUT only (never a SUBMIT_CODE / RESEND / CANCEL / PULL), so the command
+        loop can drain a burst of clicks and keystrokes without reordering the other commands."""
+        try:
+            return self._hi_q.get_nowait()[1]
+        except queue.Empty:
+            return None
+
+    def operator_input_pending(self):
+        """THE one reader of "is the operator still acting" (§COMMCALC-25). Work that only makes sense
+        once they have STOPPED — settling the page, re-classifying for auth — is skipped while this is
+        true, because it would otherwise be charged to the latency of their next click. Never raises:
+        an unreadable queue reads as "not pending", which keeps the old always-settle behaviour."""
+        try:
+            return self._hi_q.qsize() > 0
+        except Exception:
+            return False
+
     def _next_cmd(self):
         """Pop the next command, HIGH-priority input first (so a click never waits behind a SUBMIT_CODE)."""
         try:
@@ -1114,6 +1134,19 @@ class LiveLoginSession:
             if idle > limit:
                 self._set(phase="cancelled", message="Live session closed after inactivity.")
                 return
+            # Service EVERY queued human input before the next frame tick (§COMMCALC-25). Servicing one
+            # per iteration charged each click a full `_pump` (80ms on CDP, 300ms without) plus the
+            # previous click's settle, so a burst drained at a few events a second and the window felt
+            # frozen. Bounded by `_INPUT_DRAIN_MAX` so the idle check and the pump still run.
+            drained = 0
+            while drained < _INPUT_DRAIN_MAX:
+                ev = self._next_input()
+                if ev is None:
+                    break
+                drained += 1
+                self._do_input(page, ctx, vp, ev)
+                if self.snapshot_phase() == "authenticated":
+                    return self._post_auth_loop(page, ctx, vp)   # a human click finished sign-in
             cmd = self._next_cmd()
             if cmd is None:
                 continue
@@ -1232,6 +1265,15 @@ class LiveLoginSession:
             if idle > _POST_AUTH_IDLE_SECONDS:
                 self._set(phase="cancelled", message="Live session closed after inactivity (post-login).")
                 return
+            # The same drain as pre-auth (§COMMCALC-25) — "take control" on an authenticated session is
+            # the same operator typing into the same single-threaded loop.
+            drained = 0
+            while drained < _INPUT_DRAIN_MAX:
+                ev = self._next_input()
+                if ev is None:
+                    break
+                drained += 1
+                self._do_input(page, ctx, vp, ev)
             cmd = self._next_cmd()
             if cmd is None:
                 continue
@@ -1354,6 +1396,14 @@ class LiveLoginSession:
         # Rapid burst of captures right after the click so the result appears fast (screencast covers the
         # gaps too, but these guarantee movement even if the stream is idle).
         self._capture(page)
+        # …but ONLY when the operator has stopped (§COMMCALC-25). The burst below costs ~750ms of waits
+        # plus a settle, and this loop is single-threaded, so running it with their next click already
+        # queued charges that click for the previous one's verification — which is the "it freezes, I
+        # have to press hard" the owner reported on 2026-10-22. The screencast keeps streaming either
+        # way, and `_preauth_detect` re-classifies every `_CLASSIFY_POLL_S` regardless, so nothing is
+        # lost: the LAST click of a burst has nothing pending behind it and still settles in full.
+        if self.operator_input_pending():
+            return
         for _ in range(3):
             try:
                 page.wait_for_timeout(250)

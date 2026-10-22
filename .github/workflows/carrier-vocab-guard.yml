@@ -270,6 +270,9 @@ on:
       # further down from §COMMCALC-10) and the callers are the two routers already named above,
       # so both re-run this job; app/main.py carries the forwarder the gate depends on.
       - "backend/harness_live_session_host.py"
+      # §COMMCALC-25 — the operator's input is serviced before the next frame tick. Third axis of the
+      # SAME home (live_login, named further down from §COMMCALC-10), so no new source path is needed.
+      - "backend/harness_live_input_latency.py"
       - "backend/app/main.py"
       - "backend/app/modules/commcalc/import_audit.py"
       - "backend/app/modules/commcalc/merchant_portals.py"
@@ -1059,6 +1062,9 @@ jobs:
       - name: Run the live-session-host lock (an endpoint that touches the session registry runs in the process that HAS it - index COMMCALC-24)
         working-directory: backend
         run: python3 harness_live_session_host.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the live-input-latency lock (the operator's clicks are drained before the next frame tick, and nothing waits on work that only matters once they stop - index COMMCALC-25)
+        working-directory: backend
+        run: python3 harness_live_input_latency.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the mapping-key lock (one derivation per statement type; no literal mapping key)
         working-directory: backend
         run: python3 harness_mapping_key_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

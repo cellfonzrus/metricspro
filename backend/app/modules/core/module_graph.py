@@ -1761,11 +1761,24 @@ FACTS: dict[str, dict] = {
                     'that matters is "does this touch _SESSIONS?", so the gate is RENAMED here: '
                     '`require_session_host` is THE gate, and `sessions_live_here` is the pure fact '
                     'for a reader that must degrade rather than proxy. Both dereference '
-                    '`app.core.service_role` — one reader of the role, not two.',
+                    '`app.core.service_role` — one reader of the role, not two. AND the third axis '
+                    '(§COMMCALC-25): HOW PROMPTLY the operator\'s input reaches the page. The loop '
+                    'is single-threaded — it streams frames, detects state and executes input on one '
+                    'thread — and it serviced ONE queued command per iteration behind a full `_pump` '
+                    '(80ms on CDP, 300ms without), while `_do_click` ended with a mandatory ~750ms '
+                    'burst plus `_wait_settle` plus a re-classification. So each click was charged '
+                    'for the previous click\'s VERIFICATION before being dequeued, the window felt '
+                    'frozen ("i hvae to press hard", 2026-10-22), and pressing again lengthened the '
+                    'queue. The rule: work that only makes sense once the operator has STOPPED never '
+                    'sits on the latency path of their next action. `operator_input_pending` is the '
+                    'ONE reader of "still acting" (pure; an unreadable queue reads as not pending, '
+                    'keeping the old always-settle path), `_next_input` drains human input WITHOUT '
+                    'reordering SUBMIT_CODE / RESEND / CANCEL / PULL, and BOTH loops drain, bounded '
+                    'by `_INPUT_DRAIN_MAX` so a flood never starves the idle check.',
         "homes": ('app/modules/commcalc/live_login.py',),
-        "index": ('COMMCALC-13', 'COMMCALC-24'),
+        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-25'),
         "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py',
-                  'harness_live_session_host.py'),
+                  'harness_live_session_host.py', 'harness_live_input_latency.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
         # import graph.
         "callers": {
