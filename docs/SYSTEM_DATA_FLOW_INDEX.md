@@ -25920,6 +25920,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-22 | commcalc |
 | COMMCALC-23 | commcalc |
 | COMMCALC-24 | commcalc |
+| COMMCALC-25 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
