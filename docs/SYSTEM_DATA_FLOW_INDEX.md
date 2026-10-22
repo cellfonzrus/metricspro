@@ -148,7 +148,7 @@ Primary code homes:
 | COMMCALC-21 | **A non-payment somebody chose is not a finding** | "The multi-month notice lists 115 home internet and 290 tablet activations as 'did not pay'. I excluded those on purpose. Which of these lines is a problem, which is my own setting being restated at me, and how does a surface know the difference instead of asserting one reason for all of them?" |
 | COMMCALC-22 | **A claim with no amount cannot be filed** | "Trace the 4 devices paid twice and the 200 sales that matched no commission — they should be part of the discrepancies to be filed with the carrier if we did not get paid." The discrepancy report already held them, and wrote $0.00 on every single one, so the hub's open-$ card summed to nothing. Which non-payments are claims against the carrier at all, which are facts about our own feed, and what is a claim worth? |
 | COMMCALC-24 | **A live session is read where it lives** | "I press Live login on the UPS portal and the panel says no live session is running, every time, for days. Which process holds a live browser session, which endpoints may answer a question about one, and what should a process that holds none say instead of 'nothing is running'?" |
-| COMMCALC-25 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks. What is the operator's click charged for before it runs, and what work has no business on the latency path of their next action? |
+| COMMCALC-25 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks, and the page sent one web request per character typed. What is the operator's keystroke charged for before it runs, and what work has no business on the latency path of their next action? |
 
 ---
 
@@ -32747,6 +32747,17 @@ scratch probe of the FRAME path, not a lock, and is untouched.
 - `_do_click` DEREFERENCES `operator_input_pending` and keeps no copy of the rule; the harness fails
   the build if any other method reads the queue depth for this decision.
 
+**The frontend half of the same question.** The backend can only service what reaches it, and
+`commcalc/email-imports/page.tsx` used to `await` ONE POST PER CHARACTER — a 12-character password
+was 12 sequential round trips, each crossing the §41 forwarder, before the first letter appeared
+("i cannot put the password , it is very slow", 2026-10-22). Keystrokes are now buffered in
+`pendingTextRef` and flushed as ONE `type` event on `LIVE_TYPE_FLUSH_MS` (70ms, one home in the
+page). Ordering is the invariant that makes batching safe: `flushText()` runs before ANY other event
+(named key, click, double-click, scroll), and every event goes out on ONE promise chain
+(`sendChainRef`), so a flushed password can never land behind the Enter that submits it. The
+`LiveInputEvent` union types both senders, which also pays off one entry of the lint register rather
+than adding to it.
+
 ### COMMCALC-25.3 The siblings, fixed here rather than excused
 
 - **`_post_auth_loop` has the identical defect** and is fixed in the same change: "take control" on
@@ -32759,12 +32770,14 @@ scratch probe of the FRAME path, not a lock, and is untouched.
 
 ### COMMCALC-25.4 Locked
 
-`backend/harness_live_input_latency.py` — **46 checks, DB-free, no browser**: one home + purity
+`backend/harness_live_input_latency.py` — **68 checks, DB-free, no browser**: one home + purity
 (§A), input-only draining (§B), THE LOCK that BOTH loops drain (§C), the bound and that the pump and
 idle check still run every iteration (§D), the behaviour on a fake page — burst skipped while input
 is queued, taken in full for the last click (§E), order-preserving and lossless draining (§F), and
-armed negative controls including the pre-change one-command-per-tick shape and a cap of 1 (§G).
-Wired into CI in the `carrier-vocab-guard` lock job.
+armed negative controls including the pre-change one-command-per-tick shape and a cap of 1 (§G), and
+the FRONTEND half — no awaited request per character, and every event on one ordered chain (§H).
+Wired into CI in the `carrier-vocab-guard` lock job, whose path filter names the live-view page as
+well as the harness.
 
 ### COMMCALC-25.5 Cross-references
 

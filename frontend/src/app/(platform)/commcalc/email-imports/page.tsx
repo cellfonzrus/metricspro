@@ -46,6 +46,18 @@ const PROVIDERS: Record<string, { label: string; imap_host: string; imap_port: n
   zoho:    { label: 'Zoho Mail', imap_host: 'imap.zoho.com', imap_port: 993, use_ssl: true },
   gmx:     { label: 'GMX', imap_host: 'imap.gmx.com', imap_port: 993, use_ssl: true },
 }
+// Every shape the live page accepts (§COMMCALC-25) — the backend's `_do_input` switch, in one type, so
+// the two senders below need no `any` between them.
+type LiveInputEvent =
+  | { type: 'click' | 'dblclick'; x: number; y: number }
+  | { type: 'type'; text: string }
+  | { type: 'key'; key: string }
+  | { type: 'scroll'; deltaY: number }
+
+// §COMMCALC-25 — how long a keystroke may wait to be batched with the next one. Short enough that a
+// pause in typing lands at once, long enough that a password is one round trip rather than a dozen.
+const LIVE_TYPE_FLUSH_MS = 70
+
 const providerOf = (host: string) =>
   Object.keys(PROVIDERS).find(k => PROVIDERS[k].imap_host && PROVIDERS[k].imap_host === (host || '')) || 'custom'
 
@@ -107,6 +119,12 @@ export default function EmailImportsPage() {
   const liveSeqRef = useRef(0)                           // last frame seq we've shown — sent as ?since= so we only fetch a NEW JPEG
   const liveViewRef = useRef<HTMLDivElement | null>(null) // the focusable live-view container (keyboard + wheel target)
   const wheelTsRef = useRef(0)                           // throttle stamp so a scroll gesture doesn't flood the input queue
+  // §COMMCALC-25 — typing used to be ONE awaited POST per character, so a 12-character password was 12
+  // sequential round trips (each crossing the §41 forwarder) before the first letter appeared. Keystrokes
+  // are buffered here and flushed as ONE `type` event; the chain keeps every event in the order typed.
+  const pendingTextRef = useRef('')                      // characters typed but not yet sent
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sendChainRef = useRef<Promise<void>>(Promise.resolve())
   const [customTypes, setCustomTypes] = useState<any[]>([])   // self-serve custom sheets (mig 099)
   const [newSheet, setNewSheet] = useState('')
   const [viewer, setViewer] = useState<any>(null)             // { report_key, label } while viewing data
@@ -585,11 +603,27 @@ export default function EmailImportsPage() {
   // ── Human-driven live view: forward raw input to the SAME live page (high-priority /input queue). ──
   // The first input pauses the backend's auto-drive for the rest of pre-auth (the human wins). All coords
   // are NORMALIZED (0..1 of the streamed image) — the backend multiplies by the live viewport (DPR-proof).
-  async function sendInput(ev: any) {
+  async function sendInput(ev: LiveInputEvent) {
     const id = live?.source?.id
     if (!id) return
     try { await api(`/api/v1/commcalc/data-sources/${id}/live-login/input`, { method: 'POST', body: JSON.stringify(ev) }) }
     catch { /* the frame poll shows the outcome */ }
+  }
+  // THE one ordered path to the live page (§COMMCALC-25). Every event goes through this chain, so a
+  // flushed password can never land behind the Enter that submits it, and the keyboard handler never
+  // blocks the UI on a round trip.
+  function enqueueSend(ev: LiveInputEvent) {
+    sendChainRef.current = sendChainRef.current.then(() => sendInput(ev)).catch(() => { /* frames show it */ })
+    return sendChainRef.current
+  }
+  // Send whatever has been typed but not yet forwarded. Called before ANY other event (click, named key,
+  // scroll, submit, close) so ordering is preserved, and on a short timer so a pause in typing lands.
+  function flushText() {
+    if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null }
+    const text = pendingTextRef.current
+    if (!text) return sendChainRef.current
+    pendingTextRef.current = ''
+    return enqueueSend({ type: 'type', text })
   }
   // Right after an input, pull a few quick frames so the result appears without waiting for the next tick.
   function nudgeFrames(delays = [140, 380, 800]) {
@@ -606,13 +640,15 @@ export default function EmailImportsPage() {
     if (!live?.source?.id) return
     liveViewRef.current?.focus()          // so subsequent typing/scroll lands in the live view
     const { x, y } = normXY(e)
-    await sendInput({ type: 'click', x, y }); nudgeFrames()
+    flushText()                           // anything typed goes first, in order (§COMMCALC-25)
+    await enqueueSend({ type: 'click', x, y }); nudgeFrames()
   }
   async function dblClickLive(e: React.MouseEvent<HTMLImageElement>) {
     if (!live?.source?.id) return
     liveViewRef.current?.focus()
     const { x, y } = normXY(e)
-    await sendInput({ type: 'dblclick', x, y }); nudgeFrames()
+    flushText()
+    await enqueueSend({ type: 'dblclick', x, y }); nudgeFrames()
   }
   // Keyboard: while the live view is focused, printable chars → type; named/combo keys → key press
   // (Enter/Backspace/Tab/Arrow*/Escape/Delete etc. map 1:1 to Playwright key names; modifiers form a combo).
@@ -622,11 +658,17 @@ export default function EmailImportsPage() {
     if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Dead', 'Process', 'Unidentified'].includes(k)) return
     e.preventDefault()
     if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      await sendInput({ type: 'type', text: k })
+      // Buffer and return — do NOT await a round trip per character (§COMMCALC-25). The timer flushes
+      // the moment typing pauses, and any other event flushes first, so order is never lost.
+      pendingTextRef.current += k
+      if (flushTimerRef.current) clearTimeout(flushTimerRef.current)
+      flushTimerRef.current = setTimeout(() => { flushText(); nudgeFrames([120, 340]) }, LIVE_TYPE_FLUSH_MS)
+      return
     } else {
+      flushText()                         // the typed text precedes the key that acts on it
       const mods = [e.ctrlKey && 'Control', e.altKey && 'Alt', e.metaKey && 'Meta'].filter(Boolean) as string[]
       const key = k.length === 1 ? k.toUpperCase() : k
-      await sendInput({ type: 'key', key: mods.length ? [...mods, key].join('+') : key })
+      await enqueueSend({ type: 'key', key: mods.length ? [...mods, key].join('+') : key })
     }
     nudgeFrames([120, 340])
   }
@@ -636,7 +678,8 @@ export default function EmailImportsPage() {
     const now = Date.now()
     if (now - wheelTsRef.current < 110) return
     wheelTsRef.current = now
-    sendInput({ type: 'scroll', deltaY: e.deltaY }); nudgeFrames([160, 420])
+    flushText()
+    enqueueSend({ type: 'scroll', deltaY: e.deltaY }); nudgeFrames([160, 420])
   }
   async function closeLive(cancel = true) {
     const id = live?.source?.id

@@ -271,8 +271,10 @@ on:
       # so both re-run this job; app/main.py carries the forwarder the gate depends on.
       - "backend/harness_live_session_host.py"
       # §COMMCALC-25 — the operator's input is serviced before the next frame tick. Third axis of the
-      # SAME home (live_login, named further down from §COMMCALC-10), so no new source path is needed.
+      # SAME home (live_login, named further down from §COMMCALC-10). Its §H reads the live-view page,
+      # which is the FRONTEND half of the same question, so that page is named here too.
       - "backend/harness_live_input_latency.py"
+      - "frontend/src/app/(platform)/commcalc/email-imports/page.tsx"
       - "backend/app/main.py"
       - "backend/app/modules/commcalc/import_audit.py"
       - "backend/app/modules/commcalc/merchant_portals.py"

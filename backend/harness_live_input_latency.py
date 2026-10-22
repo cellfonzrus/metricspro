@@ -32,6 +32,9 @@ WHAT THIS PROVES
       of a burst still settles in full, so auth is still concluded from a human's click.
   §F  draining is ORDER-PRESERVING and loses nothing — every event reaches the page, once, in order.
   §G  negative controls, including the pre-change single-service shape going RED.
+  §H  the FRONTEND half of the same question: the page batches keystrokes instead of awaiting one
+      request per character, and every event — typed text, clicks, named keys, scroll — goes out on
+      one ordered chain, so a flushed password can never land behind the Enter that submits it.
 
 No DB, no network, no browser. Run:  cd backend && python3 harness_live_input_latency.py
 """
@@ -321,6 +324,67 @@ for word in ("ups", "theupsstore", "pos_report", "frs."):
 
 # G4: the constant must not have been quietly set to 1 (which is the old behaviour wearing the new shape)
 ok(ll._INPUT_DRAIN_MAX > 1, "the cap is not 1 — that would restore the one-per-tick defect")
+
+# ── H. the FRONTEND half of the same question ───────────────────────────────────────────────────
+# The backend can only service what reaches it. The page used to `await` ONE POST PER CHARACTER, so a
+# 12-character password was 12 sequential round trips (each crossing the §41 forwarder) before the
+# first letter even appeared — the owner's "i cannot put the password , it is very slow". Same class,
+# same PR: a keystroke must not wait on a network round trip of its own.
+print("\n— H. the page batches keystrokes and keeps every event in order —")
+PAGE = os.path.join("..", "frontend", "src", "app", "(platform)", "commcalc", "email-imports",
+                    "page.tsx")
+ok(os.path.exists(PAGE), "the live-view page is where this harness expects it", PAGE)
+TSX = io.open(PAGE, encoding="utf-8").read() if os.path.exists(PAGE) else ""
+
+
+def _tsx_fn(name):
+    """A function's body out of the .tsx, by brace depth from its `function <name>(`."""
+    m = re.search(r"function %s\s*\(" % re.escape(name), TSX)
+    if not m:
+        return ""
+    i = TSX.index("{", m.end() - 1)
+    depth = 0
+    for j in range(i, len(TSX)):
+        if TSX[j] == "{":
+            depth += 1
+        elif TSX[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return TSX[m.start():j + 1]
+    return ""
+
+
+key_fn = _tsx_fn("keyLive")
+ok(key_fn != "", "keyLive is found")
+# THE defect, in one check: a printable character must NOT be awaited to the server on its own.
+ok(re.search(r"await\s+(sendInput|enqueueSend)\(\{\s*type:\s*'type',\s*text:\s*k\s*\}", key_fn) is None,
+   "a printable character is NOT sent as its own awaited request")
+ok("pendingTextRef" in key_fn, "printable characters are buffered")
+ok("LIVE_TYPE_FLUSH_MS" in key_fn, "and flushed on the one declared window")
+ok(re.search(r"const\s+LIVE_TYPE_FLUSH_MS\s*=\s*(\d+)", TSX) is not None,
+   "LIVE_TYPE_FLUSH_MS has one home in the page")
+_win = re.search(r"const\s+LIVE_TYPE_FLUSH_MS\s*=\s*(\d+)", TSX)
+_ms = int(_win.group(1)) if _win else -1
+ok(0 < _ms <= 250, "the flush window is short enough to feel instant (<= 250ms)", _ms)
+
+# Ordering: the buffered text must be flushed before ANY other event, or a password could land
+# behind the Enter that submits it.
+ok("flushText" in key_fn, "a named key (Enter, Tab, Backspace) flushes the typed text FIRST")
+for fn in ("clickLive", "dblClickLive", "wheelLive"):
+    body = _tsx_fn(fn)
+    ok(body != "", "%s is found" % fn)
+    ok("flushText()" in body, "%s flushes pending text before its own event" % fn)
+    ok("enqueueSend(" in body, "%s sends through the ordered chain" % fn)
+
+flush_fn = _tsx_fn("flushText")
+ok(flush_fn != "", "flushText is found")
+ok("pendingTextRef.current = ''" in flush_fn, "flushText clears the buffer it sent")
+ok("clearTimeout" in flush_fn, "flushText cancels the pending timer so nothing is sent twice")
+
+chain = _tsx_fn("enqueueSend")
+ok(chain != "", "enqueueSend is found")
+ok("sendChainRef" in chain and ".then(" in chain,
+   "events go out on ONE promise chain, so order is preserved across the network")
 
 print("\n%d passed, %d failed" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
