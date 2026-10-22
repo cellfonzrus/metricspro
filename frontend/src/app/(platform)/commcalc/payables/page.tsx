@@ -75,7 +75,9 @@ function PayablesPageBody() {
   // payables
   const [status, setStatus] = useState('')
   const [pRows, setPRows] = useState<any[]>([])
-  const [pMeta, setPMeta] = useState<any>({})
+  // The payables response's own meta, not its rows: `undated_excluded` is how many ledger rows the
+  // date window could not judge, which the screen SAYS rather than silently dropping (§COMMCALC-25).
+  const [pMeta, setPMeta] = useState<{ undated_excluded?: number }>({})
   const [drill, setDrill] = useState<any | null>(null)
   // owed-by-date
   const [oRows, setORows] = useState<any[]>([])
@@ -358,8 +360,8 @@ function PayablesPageBody() {
               {(['grid', 'list'] as const).map(v => (
                 <button key={v} onClick={() => setFView(v)}
                   style={{ padding: '7px 12px', border: 'none', fontSize: 13, cursor: 'pointer',
-                    background: fView === v ? 'var(--accent, #2563eb)' : 'var(--surface)',
-                    color: fView === v ? '#fff' : 'var(--text)', fontWeight: fView === v ? 600 : 400 }}>
+                    background: fView === v ? 'var(--accent, var(--c-bg-2563eb))' : 'var(--surface)',
+                    color: fView === v ? 'var(--c-fg-ffffff)' : 'var(--text)', fontWeight: fView === v ? 600 : 400 }}>
                   {v === 'grid' ? 'Grid' : 'List'}
                 </button>
               ))}
