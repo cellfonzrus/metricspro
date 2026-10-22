@@ -270,7 +270,7 @@ on:
       # further down from §COMMCALC-10) and the callers are the two routers already named above,
       # so both re-run this job; app/main.py carries the forwarder the gate depends on.
       - "backend/harness_live_session_host.py"
-      # §COMMCALC-26 — the operator's input is serviced before the next frame tick. Third axis of the
+      # §COMMCALC-27 — the operator's input is serviced before the next frame tick. Third axis of the
       # SAME home (live_login, named further down from §COMMCALC-10). Its §H reads the live-view page,
       # which is the FRONTEND half of the same question, so that page is named here too.
       - "backend/harness_live_input_latency.py"
@@ -983,6 +983,19 @@ on:
       - "frontend/scratchpad/prove_forecast_matrix.mjs"
       - "frontend/src/lib/forecast-matrix.ts"
       - "frontend/src/app/(platform)/commcalc/payables/page.tsx"
+      # index COMMCALC-27 — THE CARRIER'S OWN TERMS. Named individually for the same reason: the lock
+      # itself, the policy home, the two modules that shape and read the declared sources, and the
+      # four surfaces it holds to them (the asset router carries BOTH aging endpoints), so a change
+      # to any one re-runs the proof that none has re-grown a literal.
+      - "backend/harness_device_aging_policy.py"
+      - "backend/app/modules/commcalc/device_aging_policy.py"
+      - "backend/app/modules/payables/unsold_inventory.py"
+      - "backend/app/modules/payables/vendor_invoice.py"
+      - "backend/app/modules/payables/engine.py"
+      - "backend/app/modules/asset/router.py"
+      - "backend/app/modules/asset/invoice_due.py"
+      - "backend/app/modules/commcalc/device_history.py"
+      - "database/runbooks/payables_carrier_terms_2026-10-22.sql"
       # index §47.17 — the DM visit plan proof. Its harness sits at the backend ROOT and it parses the
       # seed out of migration 1050, so a change to EITHER must run the proof that guards them (same
       # §13e lesson as the three above).
@@ -1077,7 +1090,7 @@ jobs:
       - name: Run the live-session-host lock (an endpoint that touches the session registry runs in the process that HAS it - index COMMCALC-24)
         working-directory: backend
         run: python3 harness_live_session_host.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the live-input-latency lock (the operator's clicks are drained before the next frame tick, and nothing waits on work that only matters once they stop - index COMMCALC-26)
+      - name: Run the live-input-latency lock (the operator's clicks are drained before the next frame tick, and nothing waits on work that only matters once they stop - index COMMCALC-27)
         working-directory: backend
         run: python3 harness_live_input_latency.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the mapping-key lock (one derivation per statement type; no literal mapping key)
@@ -1934,6 +1947,14 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_payables_filter_scope.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # AND the carrier-TERMS lock, same job: it holds the same module's config spine, and it is what
+      # fails the build if any of the four surfaces re-grows a literal selling window or a private
+      # copy of the out-of-pocket test. It found a THIRD copy of the 45/60 ladder on the first run
+      # (/on-inventory-by-store), which is the whole argument for running it. DB-free. Index COMMCALC-27.
+      - name: Run the carrier-terms lock (the selling window, the net terms, the device cost source and the out-of-pocket verdict are DECLARED per carrier - Boost 60 and Total 12 out of one ladder, and no surface keeps a literal - index COMMCALC-27)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_device_aging_policy.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # AND the FRONTEND proof of the forecast grid, in the same job for the same reason: it locks
       # the same screen, and a wiring check nothing runs is not a gate. Node only, seconds.
       - uses: actions/setup-node@v4

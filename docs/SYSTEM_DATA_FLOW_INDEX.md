@@ -148,7 +148,7 @@ Primary code homes:
 | COMMCALC-21 | **A non-payment somebody chose is not a finding** | "The multi-month notice lists 115 home internet and 290 tablet activations as 'did not pay'. I excluded those on purpose. Which of these lines is a problem, which is my own setting being restated at me, and how does a surface know the difference instead of asserting one reason for all of them?" |
 | COMMCALC-22 | **A claim with no amount cannot be filed** | "Trace the 4 devices paid twice and the 200 sales that matched no commission — they should be part of the discrepancies to be filed with the carrier if we did not get paid." The discrepancy report already held them, and wrote $0.00 on every single one, so the hub's open-$ card summed to nothing. Which non-payments are claims against the carrier at all, which are facts about our own feed, and what is a claim worth? |
 | COMMCALC-24 | **A live session is read where it lives** | "I press Live login on the UPS portal and the panel says no live session is running, every time, for days. Which process holds a live browser session, which endpoints may answer a question about one, and what should a process that holds none say instead of 'nothing is running'?" |
-| COMMCALC-26 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks, and the page sent one web request per character typed. What is the operator's keystroke charged for before it runs, and what work has no business on the latency path of their next action? |
+| COMMCALC-27 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks, and the page sent one web request per character typed. What is the operator's keystroke charged for before it runs, and what work has no business on the latency path of their next action? |
 
 ---
 
@@ -25923,6 +25923,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-24 | commcalc |
 | COMMCALC-25 | commcalc |
 | COMMCALC-26 | commcalc |
+| COMMCALC-27 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -32804,7 +32805,116 @@ date, the other windowed payable surface).
 
 ---
 
-## §COMMCALC-26. THE OPERATOR'S INPUT IS SERVICED BEFORE THE NEXT FRAME TICK (owner report 2026-10-22)
+## §COMMCALC-26. A CARRIER'S TERMS ARE DECLARED, NOT WRITTEN IN CODE — the selling window, the net terms, the device cost source, and "out of pocket" (owner reports 2026-10-22)
+
+Three reports in one message, all on the same page as §COMMCALC-25:
+
+1. *"under Luxelink it is using Boost - it should not , also it should not say sell before 60 days as
+   that is boost requirement , total is sell before 12 days"*
+2. *"there is no data appearing for the phones which were purchased as per handset ordering and not
+   sold before 12 days to be apparing in the aging ... if the imei is not sold then the device has to
+   be paid out of pocket whch needs to be highlighted universally"*
+3. *"simlarly Upcoming Invoice Payment Due does not sow any data - some thing is not working ??"*
+
+### COMMCALC-26.1 ONE CLASS, FOUR SYMPTOMS
+
+A carrier's arrangement was hard-wired in four different ways:
+
+| the fact | where it lived | consequence |
+| --- | --- | --- |
+| the selling window | the literals `< 45 / 45-60 / > 60` in `asset/router.get_aging`, **again** in `asset/router.on_inventory_by_store`, and **again** in `commcalc/device_history.AGING_BUCKETS` (whose comment asked the next reader to "keep the edges in lock-step" — the admission) | one carrier's 60 days shown to every tenant |
+| which feed says "still unsold" | `asset_ledger` only | a tenant with 0 of those rows saw "this program doesn't apply to your account" |
+| which feed says what is due | `vip_invoices` only | same, on Upcoming Invoice Payment Due |
+| net payment terms | reachable ONLY via `payable_source_map.distributor_id` → `distributors.terms_days` | a map with no distributor link computed **no due date at all** |
+| a device's cost | had to be a column on the device's own row | the Total activation feed has none, so every device was unpriced |
+
+All five are now DECLARED columns on the existing config spine (`commcalc.payable_source_map`,
+mig **1091**). RULE TWO, and **no new registry** — the duplicate check is 26.2.
+
+### COMMCALC-26.2 MEASURED LIVE 2026-10-22 (why these are facts, not opinions)
+
+| | Cellfonz R Us (Boost) | Luxelink (Total) |
+| --- | --- | --- |
+| `asset_ledger` | 36,461 | **0** |
+| `vip_invoices` | 4,062 | **0** |
+| `raw_ma_fulfillment` (handset ordering) | 0 | 1,401 |
+| `device_payable_ledger` | 11,000 | **4,288** — every `owed` NULL, every `due_date` NULL |
+| `raw_ma_daily_tx` | 0 | 91,409 → **2,115 dated invoices, $2,049,592.50** |
+
+**House org, the aging ladder:** 1,755 unsold on-inventory devices, of which **890 carry $0 owed and
+were aged nowhere at all** — `buckets` only ever counted `owed > 0`, which is a billing-exposure read,
+not an age one.
+
+### COMMCALC-26.3 THE TWO JOINS THAT LOOK RIGHT AND ARE NOT
+
+This is the part worth not re-deriving. Pricing a Total device needs a join, and there were three
+candidates:
+
+| candidate | measured | verdict |
+| --- | --- | --- |
+| the existing `owed_link` (mig 620): `activation_order` → fulfillment `order_number` | **0 of 4,322** | no key, no join |
+| `activation_order` → `raw_ma_daily_tx.order_number`, which HAS a price and a real due date | **3,535 of 4,322 (81.8%)** — but its `retail_cost` equals the handset's fulfillment price in only **45 of 2,753** comparable rows (fulfillment **$529.00** vs feed **$195.00** on the same iPhone 13) | it is an ACTIVATION charge, not the device cost. Config alone would have understated the payable by ~⅔ while looking plausible |
+| `sku` → fulfillment `product_name` | **3,370 of 4,322 (78%)**; of the 952 misses, **903** are the distributor's own `Product Not Available` sku | the join that binds. Per-model, so it needs `owed_mode='unit_price_map'` rather than `owed_link` |
+
+**And the due date is NOT the 12 days.** The processor's own due dates run `tx_date + 1` (60,368 rows),
+`+2` (11,576), `+3` (12,924) — the activation charge's terms, not a handset invoice's. The 12 days is a
+SELLING deadline, so it is declared as one (`sell_within_days`) and `net_terms_days` is left UNSET for
+Total: the out-of-pocket verdict then falls back to the window and says so (`basis = 'window'`).
+Setting `net_terms_days = 12` would have invented a payment deadline no feed states.
+
+### COMMCALC-26.4 THE ONE HOMES
+
+| question | home |
+| --- | --- |
+| how long may a handset sit unsold, and when is it OUT OF POCKET | **`commcalc/device_aging_policy.py`** — PURE. `resolve_policy` (window + warn edge DERIVED from one declared fraction), `bucket`, `bucket_ladder`, `days_held`, `due_on`, `out_of_pocket` (three states: True / False / **None = not measured**, with its `basis` named — `due_date` beats `window`, and a SOLD device is never out of pocket) |
+| which devices are unsold, from whichever feed this carrier declares | **`payables/unsold_inventory.py`** — `load_policies`, `ledger_sourced_maps`, `fetch_unsold_from_ledger` (shapes the per-IMEI ledger into the aging report's own vocabulary), `stamp_aging` (THE universal flag, one computation feeding both the headline and every row) |
+| what the distributor's own feed says is due, at INVOICE grain | **`payables/vendor_invoice.py`** — `is_debt_line` (the debt test **shared** with the Daily Owed tab's date-grain read, so two grains cannot disagree about the same money), `group_invoices`, `summarize` |
+| what a handset cost | **`account/device_cogs.ma_unit_price_from_rows`** — already the P&L's price home. READ, never re-derived |
+| which days are in scope | **`commcalc/date_window.py`** (§COMMCALC-25) |
+
+**The warn edge is derived, which is what makes Boost safe:** `0.75 × 60 = 45`, so the house default
+ladder is byte-identical to the literals it replaces, while Total's 12 yields 9/12. Pinned by
+`harness_device_aging_policy.py` §A1.
+
+### COMMCALC-26.5 The siblings, fixed here rather than excused
+
+`/on-inventory-by-store` held a **third** copy of the ladder — found by the lock on its first run, not
+by reading — and now dereferences the same home. `age_buckets` ages EVERY unsold device (the 890
+house devices above), while `buckets` is left untouched so the `flagged_owed` figure other surfaces
+reconcile against does not move in this change; `buckets` is a strict subset of `age_buckets`, and the
+response says so. The aging report's empty-state card was Boost-shaped too (it keyed on
+`/asset/filter-options`, an asset-ledger derivative) and now requires the REPORT to be empty as well.
+Ledger-sourced rows carry no `market` column, so the market filter resolves them through §13a's
+store→market resolver rather than letting them all through.
+
+### COMMCALC-26.6 Locked so it cannot un-wire
+
+`backend/harness_device_aging_policy.py` (**73 checks**) — §A the derived ladder incl. the Boost
+equivalence · §B bucketing for both carriers · §C `due_on` (a due date is never invented from a
+window) · §D the verdict's three states and its basis precedence · §E `stamp_aging` · §F the invoice
+home incl. the (number, due date) key — grouping by number alone would render Luxelink's 2,536
+numberless lines as ONE $606,525.41 invoice due on 44 days at once · §G **the four surfaces keep no
+literal and no private copy** · §H negative controls proving the lock can go red. Runs in
+`carrier-vocab-guard.yml` job `vip-invoice-filter`.
+
+### COMMCALC-26.7 What is owner-gated
+
+Migration **1091** is additive and every column is NULL after it runs, which is byte-identical to
+today. The VALUES are a separate, approval-gated data step:
+`database/runbooks/payables_carrier_terms_2026-10-22.sql` (config rows only — no money moves, no
+rebuild), followed by one press of "Rebuild ledger".
+
+### COMMCALC-26.8 Cross-references
+
+Same class: §COMMCALC-25 (the filters on the same screens, and the window home this reads), RULE TWO
+(§3), §19.18 (a mechanism written and its callers left unwired is not a fix). Neighbours: §15 (module
+095 and `payable_source_map`), §23z (Device Payable as at a date — the other windowed payable surface,
+and the leading-edge lesson that a feed's own incompleteness is not a defect), §COMMCALC-03 (the
+handset price home this dereferences), §13a (the store→market resolver the ledger rows use).
+
+---
+
+## §COMMCALC-27. THE OPERATOR'S INPUT IS SERVICED BEFORE THE NEXT FRAME TICK (owner report 2026-10-22)
 
 Owner, on the UPS Team Portal live login, the day after §COMMCALC-24 made the window visible to him
 at all: *"it just freezes , it is not swift access, must easier it seems i hvae to press hard"*.
@@ -32820,7 +32930,7 @@ queue and made it worse. The general fact that was wrong is not "the UPS portal 
 **work which only makes sense once the operator has STOPPED was sitting on the latency path of their
 next action, and their input was waiting behind a frame tick.**
 
-### COMMCALC-26.1 Duplicate check (the build gate)
+### COMMCALC-27.1 Duplicate check (the build gate)
 
 Searched the index and the tree for an existing home for "how promptly does operator input reach the
 page": §COMMCALC-10 (`preloop_limit` / `inactivity_limit` — how long a phase may go WITHOUT
@@ -32831,7 +32941,7 @@ input servicing). No second mechanism answers this; `_preauth_loop` was the only
 EXTENDED here rather than joined by a sibling. `backend/scratchpad/live_login_lowlat_proof.py` is a
 scratch probe of the FRAME path, not a lock, and is untouched.
 
-### COMMCALC-26.2 One fact, one home, dereferenced
+### COMMCALC-27.2 One fact, one home, dereferenced
 
 - **`live_login.operator_input_pending()`** — THE one reader of "is the operator still acting".
   PURE and never raises: an unreadable queue reads as NOT pending, so the failure mode is the old
@@ -32854,7 +32964,7 @@ page). Ordering is the invariant that makes batching safe: `flushText()` runs be
 `LiveInputEvent` union types both senders, which also pays off one entry of the lint register rather
 than adding to it.
 
-### COMMCALC-26.3 The siblings, fixed here rather than excused
+### COMMCALC-27.3 The siblings, fixed here rather than excused
 
 - **`_post_auth_loop` has the identical defect** and is fixed in the same change: "take control" on
   an authenticated session is the same operator typing into the same single-threaded loop.
@@ -32864,7 +32974,7 @@ than adding to it.
 - **RULE TWO:** no portal, tenant or processor name appears anywhere on the latency path; the
   harness asserts their absence.
 
-### COMMCALC-26.4 Locked
+### COMMCALC-27.4 Locked
 
 `backend/harness_live_input_latency.py` — **68 checks, DB-free, no browser**: one home + purity
 (§A), input-only draining (§B), THE LOCK that BOTH loops drain (§C), the bound and that the pump and
@@ -32875,7 +32985,7 @@ the FRONTEND half — no awaited request per character, and every event on one o
 Wired into CI in the `carrier-vocab-guard` lock job, whose path filter names the live-view page as
 well as the harness.
 
-### COMMCALC-26.5 Cross-references
+### COMMCALC-27.5 Cross-references
 
 Same home, other axes: §COMMCALC-13 (what a finished session leaves on the row), §COMMCALC-24 (which
 process may answer about a session). Same class: §19.18 (a mechanism written and its callers left

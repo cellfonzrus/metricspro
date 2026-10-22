@@ -18,6 +18,10 @@ type Row = {
   device_model: string|null; category: string|null; status: string|null
   acquired_date: string|null; due_date: string|null; owed_to_vip: number|null
   selling_price: number|null; days_aged?: number
+  // Stamped server-side from the ONE verdict home (device_aging_policy) so the flag means the same
+  // thing here as on every other screen. `null` = NOT MEASURED, never "fine".
+  out_of_pocket?: boolean|null; out_of_pocket_basis?: string; days_overdue?: number|null
+  sell_within_days?: number; window_declared?: boolean
   vip_invoice_number: string|null; vip_invoice_date: string|null
   physically_missing?: boolean; investigation_remark?: string
 }
@@ -35,6 +39,18 @@ type Aging = {
   by_model: ByModel[]
   by_model_meta: { total_models: number; shown: number; omitted: number }
   bucket_basis: string
+  // Every unsold device, aged. `buckets` above is the owed>0 subset of this.
+  age_buckets?: Record<string, { count: number; owed: number }>
+  age_buckets_basis?: string
+  out_of_pocket?: { devices: number; out_of_pocket: number; out_of_pocket_amount: number; not_measured: number }
+  // The carrier's own declared selling window — what the deadline on screen must be derived from,
+  // instead of one carrier's 60 days printed over everybody's devices (owner 2026-10-22).
+  aging_policy?: {
+    house: { sell_within_days: number; warn_after_days: number; declared: boolean }
+    by_carrier: { carrier_id: string; label: string|null; unsold_source: string
+                  sell_within_days: number; warn_after_days: number; declared: boolean }[]
+  }
+  sources?: { asset_ledger: number; payable_ledger: number }
 }
 // Display-level variant merging (2026-07-28 owner-driven addition) — a "store" picker option can
 // represent MULTIPLE raw asset_ledger.store spelling variants ("116-36 Springfield Blvd" +
@@ -67,7 +83,7 @@ function RowTable({ rows, accent }: { rows: Row[]; accent: string }) {
       <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
         <thead>
           <tr style={{ background: 'var(--surface2)' }}>
-            {['Store','Market','Device','IMEI/ESN','Acquired','Days','Due Date','Owed','Selling','Distributor Invoice #','Invoice Date','Missing?','Investigation remark'].map(h => (
+            {['Store','Market','Device','IMEI/ESN','Acquired','Days','Due Date','Out of pocket','Owed','Selling','Distributor Invoice #','Invoice Date','Missing?','Investigation remark'].map(h => (
               <th key={h} style={{ textAlign:'left', padding:'8px 12px', fontSize:11, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', whiteSpace:'nowrap' }}>{h}</th>
             ))}
           </tr>
@@ -84,6 +100,21 @@ function RowTable({ rows, accent }: { rows: Row[]; accent: string }) {
               <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.acquired_date || '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, fontWeight:700, color: accent }}>{r.days_aged ?? '—'}</td>
               <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>{r.due_date || '—'}</td>
+              {/* THE UNIVERSAL FLAG, as the server computed it. Three states and three readings:
+                  true = you are funding this device yourself; false = not yet; null = NOT MEASURED,
+                  which is shown as such because a device with no date is not a device that is fine. */}
+              <td style={{ padding:'8px 12px', fontSize:12, whiteSpace:'nowrap' }}>
+                {r.out_of_pocket == null
+                  ? <span style={{ color:'var(--text3)' }} title="No due date and no purchase date — this cannot be judged">not measured</span>
+                  : r.out_of_pocket
+                    ? <span style={{ color:'var(--c-fg-991b1b)', fontWeight:700 }}
+                        title={r.out_of_pocket_basis === 'due_date'
+                          ? `Payment was due and the device is unsold${r.days_overdue ? ` — ${r.days_overdue} day(s) overdue` : ''}`
+                          : `Held past the carrier's ${r.sell_within_days ?? 60}-day selling window and still unsold`}>
+                        💸 yes{r.days_overdue ? ` (${r.days_overdue}d)` : ''}
+                      </span>
+                    : <span style={{ color:'var(--text3)' }}>no</span>}
+              </td>
               <td style={{ padding:'8px 12px', fontSize:12, fontWeight:600 }}>{fmt(r.owed_to_vip || 0)}</td>
               <td style={{ padding:'8px 12px', fontSize:12 }}>{r.selling_price==null ? '—' : fmt(r.selling_price)}</td>
               <td style={{ padding:'8px 12px', fontSize:11, fontFamily:'monospace' }}>{r.vip_invoice_number || '—'}</td>
@@ -161,6 +192,19 @@ export default function AgingPage() {
   // Has GET /asset/filter-options resolved yet? Gates the "no ledger data" empty state so it can't
   // flash for a tenant that DOES have data (see NoLedgerData.tsx header comment — luxelink-parity).
   const [filterOptionsLoaded, setFilterOptionsLoaded] = useState(false)
+  // THE DEADLINE ON SCREEN IS THE CARRIER'S OWN (owner 2026-10-22: "it should not say sell before 60
+  // days as that is boost requirement , total is sell before 12 days"). The server resolves each
+  // carrier's declared window and returns them; this picks the one to PRINT. One carrier -> its own
+  // numbers. Several, disagreeing -> the shortest, because that is the first deadline that can be
+  // missed, and the per-carrier list is stated beneath. Nothing declared -> the house default, which
+  // reads exactly as it always has (45-60, before day 60).
+  const pol = data?.aging_policy
+  const windows = [...new Set((pol?.by_carrier || []).map(c => c.sell_within_days))].sort((a, b) => a - b)
+  const windowLabel = windows.length === 1
+    ? { warn: pol!.by_carrier[0].warn_after_days, sell: windows[0], mixed: false }
+    : windows.length > 1
+      ? { warn: Math.min(...(pol!.by_carrier.map(c => c.warn_after_days))), sell: windows[0], mixed: true }
+      : { warn: pol?.house.warn_after_days ?? 45, sell: pol?.house.sell_within_days ?? 60, mixed: false }
 
   useEffect(() => {
     apiCached(`/api/v1/asset/filter-options?org_id=${ORG_ID}`, LOOKUP)
@@ -217,6 +261,12 @@ export default function AgingPage() {
       { header:'Acquired', get:r=> r.acquired_date ? String(r.acquired_date).slice(0,10) : '' },
       { header:'Days Aged', get:r=>r.days_aged, align:'right' },
       { header:'Due Date', get:r=> r.due_date ? String(r.due_date).slice(0,10) : '' },
+      // The flag the owner asked to see "universally" travels into the export too, with its BASIS,
+      // so a spreadsheet someone acts on says why a device is on the list.
+      { header:'Out of pocket', get:r=> r.out_of_pocket == null ? 'not measured' : (r.out_of_pocket ? 'YES' : 'no') },
+      { header:'Days overdue', get:r=> r.days_overdue ?? '', align:'right', agg:'none' },
+      { header:'Basis', get:r=> r.out_of_pocket_basis || '' },
+      { header:'Sell within (days)', get:r=> r.sell_within_days ?? '', align:'right', agg:'none' },
       { header:'Owed', get:r=>r.owed_to_vip, money:true },
       { header:'Selling Price', get:r=>r.selling_price, money:true },
       { header:'Distributor Invoice #', get:r=>r.vip_invoice_number },
@@ -233,9 +283,14 @@ export default function AgingPage() {
     }, {
       metric: 'Total Phones Outstanding', value: data.totals.total_phones_outstanding,
     }, {
-      metric: '45–60 Day WARN', value: `${data.buckets.warn.count} devices / ${fmt(data.buckets.warn.owed)}`,
+      // The edges come from the carrier's declared window, so a 12-day carrier's export does not
+      // claim a 45-60 band it was never held to.
+      metric: `${windowLabel.warn}–${windowLabel.sell} Day WARN`, value: `${data.buckets.warn.count} devices / ${fmt(data.buckets.warn.owed)}`,
     }, {
-      metric: 'Over 60 Day MISSED', value: `${data.buckets.missed.count} devices / ${fmt(data.buckets.missed.owed)}`,
+      metric: `Over ${windowLabel.sell} Day MISSED`, value: `${data.buckets.missed.count} devices / ${fmt(data.buckets.missed.owed)}`,
+    }, {
+      metric: 'Out of pocket (unsold + payable)',
+      value: data.out_of_pocket ? `${data.out_of_pocket.out_of_pocket} devices / ${fmt(data.out_of_pocket.out_of_pocket_amount)}` : 'not measured',
     }, {
       metric: 'Unknown Age (owed>0, no acquired date)', value: `${data.unknown_age.count} devices / ${fmt(data.unknown_age.owed)}`,
     }] : []
@@ -327,17 +382,42 @@ export default function AgingPage() {
 
       {loading ? (
         <div style={{ textAlign:'center', padding:60, color:'var(--text3)' }}>Loading…</div>
-      ) : filterOptionsLoaded && stores.length === 0 ? (
+      ) : filterOptionsLoaded && stores.length === 0 && !(data?.totals?.total_phones_outstanding) ? (
+        /* THE EMPTY-STATE GATE WAS ALSO BOOST-SHAPED (owner report 2026-10-22: "under Luxelink it is
+           using Boost - it should not"). `stores` comes from /asset/filter-options, which is derived
+           from the VIP asset-lending ledger, so a tenant on another carrier saw the "this program
+           does not apply to your account" card even when the report had just returned their devices
+           from the feed their own source map declares. The card now requires the REPORT to be empty
+           too, which is the only honest test for "there is nothing here". */
         <NoLedgerData title="Inventory Aging" />
       ) : !data ? (
         <div style={{ textAlign:'center', padding:60, color:'var(--text3)' }}>No data.</div>
       ) : (
         <>
-          {/* WARN alert */}
+          {/* OUT OF POCKET, HIGHLIGHTED (owner 2026-10-22: "if the imei is not sold then the device
+              has to be paid out of pocket whch needs to be highlighted universally"). One verdict,
+              computed server-side in the one home, so this headline and the per-row flag below it
+              can never disagree — and the devices no date could judge are stated separately rather
+              than counted as settled. */}
+          {!!data.out_of_pocket && data.out_of_pocket.out_of_pocket > 0 && (
+            <div style={{ background:'var(--c-bg-fef2f2)', border:'2px solid var(--c-bg-dc2626)', borderRadius:10, padding:'14px 18px', marginBottom:20 }}>
+              <div style={{ fontSize:15, fontWeight:700, color:'var(--c-fg-991b1b)' }}>
+                💸 {data.out_of_pocket.out_of_pocket} unsold device{data.out_of_pocket.out_of_pocket>1?'s':''} must be paid OUT OF POCKET — {fmt(data.out_of_pocket.out_of_pocket_amount)}
+              </div>
+              <div style={{ fontSize:13, color:'var(--c-fg-991b1b)', marginTop:4 }}>
+                These are past their payment due date (or past the carrier&apos;s selling window) and
+                still unsold, so the invoice is funded from your own cash rather than from the sale.
+                {data.out_of_pocket.not_measured > 0 && <> {data.out_of_pocket.not_measured} more carry no
+                date to judge by and are reported as unmeasured, not as settled.</>}
+              </div>
+            </div>
+          )}
+          {/* WARN alert — the window is the CARRIER'S declared number (mig 1091), never a literal.
+              With nothing declared the house default still reads "45–60 … before day 60". */}
           {data.buckets.warn.count > 0 && (
             <div style={{ background:'var(--c-bg-fffbeb)', border:'2px solid var(--c-bg-f59e0b)', borderRadius:10, padding:'14px 18px', marginBottom:20 }}>
               <div style={{ fontSize:15, fontWeight:700, color:'var(--c-fg-92400e)' }}>
-                🚨 {data.buckets.warn.count} device{data.buckets.warn.count>1?'s':''} in the 45–60 day window — sell before day 60
+                🚨 {data.buckets.warn.count} device{data.buckets.warn.count>1?'s':''} in the {windowLabel.warn}–{windowLabel.sell} day window — sell before day {windowLabel.sell}
               </div>
               <div style={{ fontSize:13, color:'var(--c-fg-92400e)', marginTop:4 }}>
                 {fmt(data.buckets.warn.owed)} at risk of being billed unsold. These have days left; act now.

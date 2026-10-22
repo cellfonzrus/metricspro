@@ -567,6 +567,13 @@ FACTS: dict[str, dict] = {
             # here rather than left to look like an unexplained edge.
             'app/modules/account/balance_sheet.py': ('FEE_CATEGORIES',),
             'app/modules/account/statement_engine.py': ('device_cogs',),
+            # COMMCALC-27 (2026-10-22) — THE PAYABLE LEDGER prices a handset the carrier's own row
+            # carries no amount for (`owed_mode='unit_price_map'`, mig 1091) through this home's pure
+            # core, so a Total device's cost on the payables screen is the SAME arithmetic the P&L
+            # costs it with. Measured that day: the two easier joins both fail — the activation order
+            # is absent from the fulfillment sheet (0 of 4,322) and the processor feed's price is an
+            # activation charge, not the device ($529.00 vs $195.00 on one iPhone 13).
+            'app/modules/payables/engine.py': ('_cogs',),
         },
     },
     'entitlement_month_coverage': {
@@ -1572,6 +1579,14 @@ FACTS: dict[str, dict] = {
             # retired: it paged without an ORDER BY, so a device whose payment row was never served
             # read as "no evidence" and bucketed the appeal as not_recoverable.
             'app/modules/recovery/engine.py': ('_feed_read',),
+            # §COMMCALC-27 — the three reads the declared-terms work added, wired to this home from
+            # the start rather than keeping a fourth private page loop: the unsold per-IMEI ledger
+            # (a device missed here reads as SOLD, which is the one thing the out-of-pocket verdict
+            # must never get wrong), the vendor feed the invoice-due report falls back to, and the
+            # model scan that builds the unit-price map (a model missed prices nothing).
+            'app/modules/payables/engine.py': ('_feed_read',),
+            'app/modules/payables/unsold_inventory.py': ('_feed_read',),
+            'app/modules/payables/vendor_invoice.py': ('_feed_read',),
         },
     },
     'payment_category_map': {
@@ -1769,7 +1784,7 @@ FACTS: dict[str, dict] = {
                     '`require_session_host` is THE gate, and `sessions_live_here` is the pure fact '
                     'for a reader that must degrade rather than proxy. Both dereference '
                     '`app.core.service_role` — one reader of the role, not two. AND the third axis '
-                    '(§COMMCALC-26): HOW PROMPTLY the operator\'s input reaches the page. The loop '
+                    '(§COMMCALC-27): HOW PROMPTLY the operator\'s input reaches the page. The loop '
                     'is single-threaded — it streams frames, detects state and executes input on one '
                     'thread — and it serviced ONE queued command per iteration behind a full `_pump` '
                     '(80ms on CDP, 300ms without), while `_do_click` ended with a mandatory ~750ms '
@@ -1783,7 +1798,7 @@ FACTS: dict[str, dict] = {
                     'reordering SUBMIT_CODE / RESEND / CANCEL / PULL, and BOTH loops drain, bounded '
                     'by `_INPUT_DRAIN_MAX` so a flood never starves the idle check.',
         "homes": ('app/modules/commcalc/live_login.py',),
-        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-26'),
+        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27'),
         "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py',
                   'harness_live_session_host.py', 'harness_live_input_latency.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real

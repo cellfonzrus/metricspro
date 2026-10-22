@@ -97,7 +97,23 @@ def load_phone_map(client, org_id):
     return out
 
 
-def _terms_days(client, org_id, distributor_id):
+def _terms_days(client, org_id, distributor_id, cfg=None):
+    """The carrier's net PAYMENT terms in days.
+
+    THE MAP'S OWN COLUMN IS READ FIRST (`net_terms_days`, mig 1091). Until then the only route to
+    terms was a `distributor_id` link into `distributors.terms_days`, so a carrier with no
+    distributor row — Luxelink's Total map — resolved None and `due_date_mode='net_terms'` produced
+    NULL on all 4,288 of its ledger rows (measured 2026-10-22, owner report "simlarly Upcoming
+    Invoice Payment Due does not sow any data"). The link stays as the fallback, so every map that
+    works today is byte-identical."""
+    declared = (cfg or {}).get("net_terms_days")
+    if declared is not None:
+        try:
+            n = int(declared)
+            if n >= 0:
+                return n
+        except (TypeError, ValueError):
+            pass
     if not distributor_id:
         return None
     try:
@@ -106,6 +122,57 @@ def _terms_days(client, org_id, distributor_id):
         return int(r[0]["terms_days"]) if r and r[0].get("terms_days") is not None else None
     except Exception:
         return None
+
+
+#: `owed_mode` values. 'field' is the default and is what every pre-mig-1091 map does.
+OWED_MODE_FIELD = "field"
+OWED_MODE_UNIT_PRICE = "unit_price_map"
+OWED_MODE_NONE = "none"
+
+
+def _unit_price_map(client, org_id, cfg):
+    """{model(lower) -> unit cost} when the map declares `owed_mode='unit_price_map'`, else {}.
+
+    THE PRICE LIST HAS ONE HOME AND THIS READS IT. `account/device_cogs.ma_unit_price_from_rows` is
+    what the P&L already costs Total handsets with — the weighted unit price off the distributor's
+    handset ordering sheet, licensed by the evidence of which skus handsets actually activate under
+    (`ma_device_product_names`). A second price derivation here would be the divergence the house
+    rules forbid, and it would disagree with the P&L about the same handset.
+
+    WHY NOT THE EXISTING `owed_link` (mig 620), the sibling that prices a device from a RELATED
+    report? Because it joins on a shared KEY, and there is none: measured 2026-10-22 on Luxelink,
+    **0 of 4,322** activation rows carry an `activation_order` that appears as a fulfillment
+    `order_number`. The join that does bind is the MODEL NAME — **3,370 of 4,322 (78%)** — which is
+    per-model, not per-row, so it needs this mode rather than that one. The remaining 952 are almost
+    all the distributor's own "Product Not Available" sku (903): genuinely unpriceable, left NULL and
+    reported as unpriced, never zeroed.
+
+    Fail-soft: any failure yields {} and the device stays unpriced, which the payables screen already
+    renders honestly as "no invoice has priced this device".
+    """
+    if str(cfg.get("owed_mode") or "").strip().lower() != OWED_MODE_UNIT_PRICE:
+        return {}
+    try:
+        from app.modules.account import device_cogs as _cogs
+        src = str(cfg.get("owed_price_table") or cfg.get("source_table") or "").strip()
+        model_field = str(cfg.get("owed_price_model_field") or cfg.get("model_field") or "").strip()
+        names = set()
+        if src and model_field:
+            from app.modules.core import feed_read as _feed_read
+            # The paging order is the one home's: an unordered paged read serves some rows twice
+            # and others never, and a model MISSED here is a handset that silently prices nothing
+            # (§19.48 / core/feed_read.py).
+            rows = [{"sku": r.get(model_field)} for r in _feed_read.read_all(
+                lambda: client.schema("commcalc").table(src).select(model_field)
+                .eq("org_id", org_id))]
+            names = _cogs.ma_device_product_names(rows)
+        # `names or None`: with no evidence the price home falls back to its own order-type
+        # allowlist, which is its documented behaviour for a caller that has no commission feed —
+        # never a reason to price nothing.
+        return _cogs.ma_unit_price_map(client, org_id, names or None)
+    except Exception as e:
+        print(f"WARN payables _unit_price_map failed (devices stay unpriced): {e}")
+        return {}
 
 
 def _reimb_types(client, org_id):
@@ -370,7 +437,7 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types):
     src_table = cfg["source_table"]
     imei_field = cfg["imei_field"]
     owed_field = cfg.get("owed_field")
-    terms = _terms_days(client, org_id, cfg.get("distributor_id"))
+    terms = _terms_days(client, org_id, cfg.get("distributor_id"), cfg)
     select_str = ",".join(_needed_cols(cfg))
 
     # delete this carrier's snapshot first (per-carrier scope — never touches other carriers)
@@ -385,6 +452,12 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types):
     if not cfg.get("store_field"):
         ma_resolve, _ = ma_store_resolution(client, org_id)
 
+    # THE DEVICE COST, where the carrier's own row does not carry one (mig 1091, owner 2026-10-22:
+    # "the due date in case of boost is as per the asset landing and total is the handset ordering
+    # report"). Built ONCE per carrier and only when the map asks for it, so a Boost-style config
+    # with an owed_field never reads the handset sheet at all (byte-identical).
+    price_map = _unit_price_map(client, org_id, cfg)
+
     status_counts, written, page = {}, 0, 0
     while True:
         q = (client.schema("commcalc").table(src_table).select(select_str)
@@ -395,6 +468,7 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types):
         if not chunk:
             break
         rows = _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, terms,
+                              price_map=price_map,
                               ma_resolve=ma_resolve)
         for i in range(0, len(rows), 500):
             client.schema("commcalc").table("device_payable_ledger").insert(rows[i:i + 500]).execute()
@@ -410,7 +484,7 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types):
 
 
 def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, terms,
-                   ma_resolve=None):
+                   ma_resolve=None, price_map=None):
     cid = cfg["carrier_id"]
     imei_field = cfg["imei_field"]
     owed_field = cfg.get("owed_field")
@@ -455,6 +529,16 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
             store = ma_resolve(imei, r.get("merchant_account_id"))
         owed = _f(r.get(owed_field)) if owed_field else None
         owed_source = "asset_ledger" if owed_field else "unconfigured"
+        # PRICED OFF THE HANDSET ORDERING SHEET, by MODEL, when the carrier's own row carries no
+        # amount (mig 1091). The sheet has no IMEI, so the model name is the only join there is —
+        # measured 78% of Luxelink's activation rows; the rest are the distributor's own
+        # "Product Not Available" sku and stay NULL rather than becoming a $0 that reads as settled.
+        if owed is None and price_map:
+            for key in (str(model_raw or "").strip().lower(), str(model or "").strip().lower()):
+                if key and key in price_map:
+                    owed = _f(price_map[key])
+                    owed_source = "unit_price_map"
+                    break
         # A configured owed_field always WINS; the link only fills a map that has none.
         link_date = None
         if owed is None and link_map:

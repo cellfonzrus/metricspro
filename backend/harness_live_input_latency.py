@@ -1,5 +1,5 @@
 """Proof harness: THE OPERATOR'S INPUT IS SERVICED BEFORE THE NEXT FRAME TICK
-(live_login, index §COMMCALC-26).
+(live_login, index §COMMCALC-27).
 
 OWNER REPORT 2026-10-22, on the UPS Team Portal live login, verbatim: *"it just freezes , it is not
 swift access, must easier it seems i hvae to press hard"*. He was right, and pressing harder was a

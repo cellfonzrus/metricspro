@@ -46,7 +46,7 @@ const PROVIDERS: Record<string, { label: string; imap_host: string; imap_port: n
   zoho:    { label: 'Zoho Mail', imap_host: 'imap.zoho.com', imap_port: 993, use_ssl: true },
   gmx:     { label: 'GMX', imap_host: 'imap.gmx.com', imap_port: 993, use_ssl: true },
 }
-// Every shape the live page accepts (§COMMCALC-26) — the backend's `_do_input` switch, in one type, so
+// Every shape the live page accepts (§COMMCALC-27) — the backend's `_do_input` switch, in one type, so
 // the two senders below need no `any` between them.
 type LiveInputEvent =
   | { type: 'click' | 'dblclick'; x: number; y: number }
@@ -54,7 +54,7 @@ type LiveInputEvent =
   | { type: 'key'; key: string }
   | { type: 'scroll'; deltaY: number }
 
-// §COMMCALC-26 — how long a keystroke may wait to be batched with the next one. Short enough that a
+// §COMMCALC-27 — how long a keystroke may wait to be batched with the next one. Short enough that a
 // pause in typing lands at once, long enough that a password is one round trip rather than a dozen.
 const LIVE_TYPE_FLUSH_MS = 70
 
@@ -119,7 +119,7 @@ export default function EmailImportsPage() {
   const liveSeqRef = useRef(0)                           // last frame seq we've shown — sent as ?since= so we only fetch a NEW JPEG
   const liveViewRef = useRef<HTMLDivElement | null>(null) // the focusable live-view container (keyboard + wheel target)
   const wheelTsRef = useRef(0)                           // throttle stamp so a scroll gesture doesn't flood the input queue
-  // §COMMCALC-26 — typing used to be ONE awaited POST per character, so a 12-character password was 12
+  // §COMMCALC-27 — typing used to be ONE awaited POST per character, so a 12-character password was 12
   // sequential round trips (each crossing the §41 forwarder) before the first letter appeared. Keystrokes
   // are buffered here and flushed as ONE `type` event; the chain keeps every event in the order typed.
   const pendingTextRef = useRef('')                      // characters typed but not yet sent
@@ -609,7 +609,7 @@ export default function EmailImportsPage() {
     try { await api(`/api/v1/commcalc/data-sources/${id}/live-login/input`, { method: 'POST', body: JSON.stringify(ev) }) }
     catch { /* the frame poll shows the outcome */ }
   }
-  // THE one ordered path to the live page (§COMMCALC-26). Every event goes through this chain, so a
+  // THE one ordered path to the live page (§COMMCALC-27). Every event goes through this chain, so a
   // flushed password can never land behind the Enter that submits it, and the keyboard handler never
   // blocks the UI on a round trip.
   function enqueueSend(ev: LiveInputEvent) {
@@ -640,7 +640,7 @@ export default function EmailImportsPage() {
     if (!live?.source?.id) return
     liveViewRef.current?.focus()          // so subsequent typing/scroll lands in the live view
     const { x, y } = normXY(e)
-    flushText()                           // anything typed goes first, in order (§COMMCALC-26)
+    flushText()                           // anything typed goes first, in order (§COMMCALC-27)
     await enqueueSend({ type: 'click', x, y }); nudgeFrames()
   }
   async function dblClickLive(e: React.MouseEvent<HTMLImageElement>) {
@@ -658,7 +658,7 @@ export default function EmailImportsPage() {
     if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Dead', 'Process', 'Unidentified'].includes(k)) return
     e.preventDefault()
     if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      // Buffer and return — do NOT await a round trip per character (§COMMCALC-26). The timer flushes
+      // Buffer and return — do NOT await a round trip per character (§COMMCALC-27). The timer flushes
       // the moment typing pauses, and any other event flushes first, so order is never lost.
       pendingTextRef.current += k
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current)
