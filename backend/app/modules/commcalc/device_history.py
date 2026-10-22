@@ -17,6 +17,7 @@ DISPLAY of already-recorded data only — there is no pay-path here. These funct
 supplies the DB rows and the payment_type->comp_type classifier (reused from
 discrepancy_engine.parse_payment_type)."""
 
+from app.modules.commcalc import device_aging_policy as _aging
 import re
 from datetime import date
 
@@ -208,26 +209,26 @@ def days_between(start, end):
     return (b - a).days
 
 
-# The SAME three buckets the asset Inventory Aging report uses. Keep the edges in lock-step.
-AGING_BUCKETS = (
-    ("under45", "Fresh", "< 45 days"),
-    ("warn", "Aging", "45–60 days"),
-    ("missed", "Overaged", "> 60 days"),
-)
+# The SAME three buckets the asset Inventory Aging report uses — and the edges are no longer written
+# here. "Keep the edges in lock-step" was the instruction this comment used to carry, which is the
+# admission that there were two copies of one carrier's contract; they are now DERIVED from the
+# carrier's declared selling window in the one home (`device_aging_policy`, mig 1091, §COMMCALC-26).
+# With no carrier policy passed, the house default yields < 45 / 45-60 / > 60 — byte-identical to the
+# literals this replaces.
+AGING_BUCKETS = _aging.bucket_ladder(_aging.resolve_policy())
 
 
-def aging_bucket(days):
-    """days -> {'key','label','range'} using the asset report's edges: <45 under45; 45..60 warn; >60
-    missed. None days -> None (unknown, not a fake bucket)."""
+def aging_bucket(days, policy=None):
+    """days -> {'key','label','range'}. None days -> None (unknown, not a fake bucket).
+
+    The LADDER is the carrier's, not this module's: pass the `payable_source_map` row's resolved
+    policy and a 12-day carrier buckets at 9/12 while Boost still buckets at 45/60. Omitted = the
+    house default, which is what every existing caller gets and is unchanged."""
     if days is None:
         return None
-    if days < 45:
-        key = "under45"
-    elif days <= 60:
-        key = "warn"
-    else:
-        key = "missed"
-    for k, label, rng in AGING_BUCKETS:
+    pol = policy or _aging.resolve_policy()
+    key = _aging.bucket(days, pol)
+    for k, label, rng in _aging.bucket_ladder(pol):
         if k == key:
             return {"key": k, "label": label, "range": rng}
     return None

@@ -567,6 +567,13 @@ FACTS: dict[str, dict] = {
             # here rather than left to look like an unexplained edge.
             'app/modules/account/balance_sheet.py': ('FEE_CATEGORIES',),
             'app/modules/account/statement_engine.py': ('device_cogs',),
+            # COMMCALC-26 (2026-10-22) — THE PAYABLE LEDGER prices a handset the carrier's own row
+            # carries no amount for (`owed_mode='unit_price_map'`, mig 1091) through this home's pure
+            # core, so a Total device's cost on the payables screen is the SAME arithmetic the P&L
+            # costs it with. Measured that day: the two easier joins both fail — the activation order
+            # is absent from the fulfillment sheet (0 of 4,322) and the processor feed's price is an
+            # activation charge, not the device ($529.00 vs $195.00 on one iPhone 13).
+            'app/modules/payables/engine.py': ('_cogs',),
         },
     },
     'entitlement_month_coverage': {

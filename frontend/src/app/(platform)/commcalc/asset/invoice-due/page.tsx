@@ -32,9 +32,17 @@ type InvoiceRow = {
   device_count: number; matched_count: number; unmatched_count: number
   sold_count: number; not_sold_count: number; reimbursed_count: number
   commission_earned_m1: number; net_due_estimate: number; net_due_estimate_note: string
+  // VENDOR-FEED PATH (owner report 2026-10-22). The processor's own feed carries invoice number,
+  // due date and amount but NO IMEI, so the per-device columns are null on that path — null, never
+  // 0, because "this path cannot answer" is not the same statement as "measured and none".
+  lines?: number; order_types?: string[]; product_sample?: string | null; numbered?: boolean
 }
 type ListResp = {
   available: boolean; note?: string; rows: InvoiceRow[]; total: number
+  // Which source answered. 'vendor_feed' = the processor's daily transaction feed, used when no VIP
+  // Workbook invoices exist for the account; its grain is order lines inside an invoice, not devices.
+  source?: string | null; grain?: string | null
+  unnumbered?: { invoices: number; amount: number }
   totals: {
     grand_total: number; commission_earned_m1: number; net_due_estimate: number
     invoice_count: number; device_count: number; sold_count: number
@@ -222,6 +230,17 @@ export default function InvoiceDuePage() {
         </div>
         {data?.available && <><ExportButtons payload={buildPayload} /><SendReportButton exportPayload={buildPayload} compact /></>}
       </div>
+
+      {/* WHERE THESE NUMBERS CAME FROM, when it is not the VIP Workbook. The report used to render an
+          empty table for an account with no Workbook invoices, while the processor's own feed held
+          2,115 dated invoices worth $2,049,592.50 (measured 2026-10-22). It now answers from that
+          feed and SAYS SO, including what the feed cannot tell us. */}
+      {data?.source === 'vendor_feed' && data?.note && (
+        <div className="card" style={{ padding: '12px 16px', marginBottom: 16, fontSize: 13,
+          color: 'var(--text2)', borderLeft: '4px solid var(--c-bg-2563eb)' }}>
+          ℹ️ {data.note}
+        </div>
+      )}
 
       <div className="card" style={{ padding: 14, marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)' }}>Filters:</span>

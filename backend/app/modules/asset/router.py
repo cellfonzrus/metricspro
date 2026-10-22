@@ -1614,18 +1614,63 @@ async def get_aging(
                 break
         return out
 
+    # ── WHICH FEED ANSWERS "STILL UNSOLD" IS DECLARED, NOT ASSUMED (owner report 2026-10-22:
+    #    "under Luxelink it is using Boost - it should not"). This report read `asset_ledger` and
+    #    nothing else — the Boost/VIP consignment snapshot — so a Total tenant (0 asset_ledger rows,
+    #    0 vip_invoices, 4,288 rows in the carrier-agnostic per-IMEI ledger) got an empty screen
+    #    explaining that the program does not apply to them. The source is now each carrier's own
+    #    `payable_source_map.unsold_source` (mig 1091), read through the ONE home for it
+    #    (payables/unsold_inventory) which also owns the shape — never a second derivation.
+    from app.modules.payables import unsold_inventory as _unsold
+    from app.modules.commcalc import device_aging_policy as _aging
+    policies, maps = _unsold.load_policies(client, org_id)
     rows = [r for r in fetch(lambda q: q) if _acq_in_period(r)]
+    ledger_maps = _unsold.ledger_sourced_maps(maps)
+    ledger_rows = []
+    if ledger_maps:
+        try:
+            ledger_rows = _unsold.fetch_unsold_from_ledger(
+                client, org_id, [m.get("carrier_id") for m in ledger_maps], date_from, date_to)
+            if store_list:
+                _want = {str(x).strip().lower() for x in store_list}
+                ledger_rows = [r for r in ledger_rows
+                               if str(r.get("store") or "").strip().lower() in _want]
+            # A ledger row has no `market` column, so the market filter cannot be a query predicate
+            # the way it is on asset_ledger. It is RESOLVED through the canonical store->market
+            # resolver (core.scope §13a) — the same home the payables screen stamps its market from
+            # — so a market selection narrows both sources identically instead of silently letting
+            # every ledger-sourced device through.
+            if market:
+                try:
+                    from app.core import scope as _cscope
+                    _resolve_mkt, _ = _cscope.store_market_resolver(client, org_id)
+                    _mw = str(market).strip().lower()
+                    _no_mkt = _mw == str(NO_MARKET_SENTINEL).strip().lower()
+                    def _in_market(r):
+                        mk = str(_resolve_mkt(r.get("store")) or "").strip().lower()
+                        return (not mk) if _no_mkt else (mk == _mw)
+                    ledger_rows = [r for r in ledger_rows if _in_market(r)]
+                    for r in ledger_rows:
+                        r["market"] = _resolve_mkt(r.get("store")) or None
+                except Exception as ex:
+                    print(f"WARN aging ledger market filter unresolved: {ex}")
+            ledger_rows = [r for r in ledger_rows if _acq_in_period(r)]
+        except Exception as ex:
+            print(f"WARN aging ledger source failed: {ex}")
+            ledger_rows = []
+    rows = rows + ledger_rows
     today = date.today()
 
+    # THE LADDER IS THE CARRIER'S (mig 1091). It used to be the literals `< 45 / 45-60 / > 60`,
+    # written here and again in commcalc/device_history, which is one carrier's contract shown to
+    # every tenant. With no declared window the house default yields 45/60 — byte-identical.
+    house_policy = _aging.resolve_policy()
+
+    def _policy(r):
+        return _unsold.policy_for(policies, r.get("carrier_id")) if r.get("carrier_id") else house_policy
+
     def days_aged(r):
-        a = r.get("acquired_date")
-        if not a:
-            return None
-        try:
-            y, m, d = map(int, str(a)[:10].split("-"))
-            return (today - date(y, m, d)).days
-        except Exception:
-            return None
+        return _aging.days_held(r.get("acquired_date"), today)
 
     buckets = {
         "under45": {"count": 0, "owed": 0.0, "rows": []},
@@ -1650,12 +1695,7 @@ async def get_aging(
             r["_bucket"] = "unknown_age"
             unknown_age_rows.append(r)
             continue
-        if d < 45:
-            b = "under45"
-        elif d <= 60:
-            b = "warn"
-        else:
-            b = "missed"
+        b = _aging.bucket(d, _policy(r))        # the carrier's declared edges, one comparison
         r["_bucket"] = b
         buckets[b]["count"] += 1
         buckets[b]["owed"] += owed
@@ -1698,6 +1738,32 @@ async def get_aging(
     # ambiguous to whoever reads it.
     all_rows = (buckets["under45"]["rows"] + buckets["warn"]["rows"] + buckets["missed"]["rows"]
                + zero_rows + unknown_age_rows)
+    # THE UNIVERSAL HIGHLIGHT (owner 2026-10-22: "if the imei is not sold then the device has to be
+    # paid out of pocket whch needs to be highlighted universally"). ONE verdict home, so the flag
+    # means the same thing here, on the payables screen and anywhere else a device is shown — and a
+    # device whose dates cannot answer is `null`, which the screen renders as unknown, never settled.
+    oop = _unsold.stamp_aging(all_rows, policies, today)
+    # ── AGE OVER EVERY UNSOLD DEVICE (owner 2026-10-22: "the aging report should show whatever is
+    #    not sold after purchasing with how many days they have been on the inventory").
+    #    `buckets` above counts only devices with owed > 0 — which is a BILLING-exposure read, and on
+    #    the house org that is 865 of 1,755 unsold on-inventory devices: the other 890 carry $0 owed
+    #    and were aged nowhere at all. Aging is about TIME, so this is the full population, derived
+    #    from the SAME stamp and the SAME ladder. `buckets` is deliberately left untouched so the
+    #    `flagged_owed` figure other surfaces reconcile against does not move in this change;
+    #    `buckets` is a strict SUBSET of this.
+    age_buckets = {k: {"count": 0, "owed": 0.0} for k, _l, _r in _aging.bucket_ladder(house_policy)}
+    age_buckets[_aging.BUCKET_UNKNOWN] = {"count": 0, "owed": 0.0}
+    for r in all_rows:
+        b = r.get("aging_bucket") or _aging.BUCKET_UNKNOWN
+        if b not in age_buckets:
+            age_buckets[b] = {"count": 0, "owed": 0.0}
+        age_buckets[b]["count"] += 1
+        try:
+            age_buckets[b]["owed"] += float(r.get("owed_to_vip") or 0)
+        except (TypeError, ValueError):
+            pass
+    for v in age_buckets.values():
+        v["owed"] = round(v["owed"], 2)
     total_amount = round(sum(float(r.get("owed_to_vip") or 0) for r in all_rows), 2)
     total_phones_outstanding = len(all_rows)
 
@@ -1736,13 +1802,33 @@ async def get_aging(
             "total_amount_column": "owed_to_vip",
             "total_phones_outstanding": total_phones_outstanding,
         },
+        # What the dealer must fund themselves, counted and priced, plus the rows no date could
+        # judge — surfaced rather than folded into either side.
+        "out_of_pocket": oop,
+        # Every unsold device, aged. `buckets` above is the owed>0 subset — see the comment there.
+        "age_buckets": age_buckets,
+        "age_buckets_basis": ("every unsold device, bucketed by days held on the carrier's own "
+                              "declared window. `buckets` counts only devices with owed > 0 "
+                              "(a billing-exposure read) and is a subset of this."),
+        # The window each carrier declared, so the screen can print the right deadline instead of
+        # one carrier's. `declared` False = the house default answered.
+        "aging_policy": {
+            "house": house_policy,
+            "by_carrier": [{"carrier_id": m.get("carrier_id"), "label": m.get("label"),
+                            "unsold_source": (m.get("unsold_source") or "source_table"),
+                            **_unsold.policy_for(policies, m.get("carrier_id"))} for m in maps],
+        },
+        "sources": {"asset_ledger": len(rows) - len(ledger_rows),
+                    "payable_ledger": len(ledger_rows)},
         "by_model": by_model_shown,
         "by_model_meta": {"total_models": by_model_total, "shown": len(by_model_shown),
                           "omitted": max(0, by_model_total - len(by_model_shown))},
         "bucket_basis": ("acquired_date / date range narrows which devices are INCLUDED; the "
-                         "aging bucket (<45 / 45-60 / >60 days) is always computed AS OF TODAY, "
-                         "not the filter range. Rows with owed_to_vip > 0 but no usable "
-                         "acquired_date land in 'unknown_age', not silently dropped."),
+                         "aging bucket is always computed AS OF TODAY, not the filter range, and "
+                         "its EDGES are the carrier's own declared selling window (mig 1091 "
+                         "payable_source_map.sell_within_days - Boost 60, Total 12), never a single "
+                         "hard-coded ladder. Rows with owed_to_vip > 0 but no usable acquired_date "
+                         "land in 'unknown_age', not silently dropped."),
         "filters": {"store": store or None, "market": market or None, "month": month, "year": year,
                     "date_from": date_from or None, "date_to": date_to or None},
     }
@@ -1974,15 +2060,12 @@ async def get_on_inventory_by_store(
             break
     rows = [r for r in rows if _acq_in_period(r)]
     today = date.today()
+    from app.modules.commcalc import device_aging_policy as _aging
+    from app.modules.payables import unsold_inventory as _unsold
+    policies, _maps = _unsold.load_policies(client, org_id)
 
     def days_aged(a):
-        if not a:
-            return None
-        try:
-            y, m, d = map(int, str(a)[:10].split("-"))
-            return (today - date(y, m, d)).days
-        except Exception:
-            return None
+        return _aging.days_held(a, today)
 
     def blank(s, mkt):
         return {"store": s, "market": mkt, "count": 0, "owed": 0.0,
@@ -2009,12 +2092,12 @@ async def get_on_inventory_by_store(
             row["unknown_age_count"] += 1
             row["unknown_age_owed"] += owed
             continue
-        if d < 45:
-            bk = "under45"
-        elif d <= 60:
-            bk = "warn"
-        else:
-            bk = "missed"
+        # THE THIRD COPY OF THE SAME LADDER (found 2026-10-22 by the lock that bans it, not by
+        # reading). /on-inventory-by-store bucketed with its own literals beside /aging's and
+        # device_history's, so a declared window would have reached two of the three and this one
+        # would have gone on showing Boost's 60 days to every tenant. It dereferences the one home
+        # too; with nothing declared the edges are 45/60, byte-identical to the literals above.
+        bk = _aging.bucket(d, _unsold.policy_for(policies, r.get("carrier_id")))
         row[f"{bk}_count"] += 1
         row[f"{bk}_owed"] += owed
 
