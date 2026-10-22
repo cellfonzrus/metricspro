@@ -739,6 +739,13 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/vidapay_sweep.py': ('_sid_fold',),
             'app/modules/storeops/clockin_evidence.py': ('_sid_fold',),
             'app/modules/storeops/clock_variance.py': ('_sid_fold',),
+            # §15 (2026-10-22) — THE STORE FILTER on Device Forecasting & Vendor Payables. Its store
+            # picker compared the roster's spelling against each row's own, so every store the feeds
+            # spell differently returned an empty report while the MARKET filter (which was already
+            # resolved) worked — measured live: 13 of 33 asset_ledger spellings and 15 of 37 ledger
+            # spellings matched no option at all. Rows and options are now both STAMPED with this
+            # home's key, and the comparison is made on that.
+            'app/modules/payables/router.py': ('_sid',),
         },
     },
     'carrier_dollar_component': {
@@ -1762,7 +1769,7 @@ FACTS: dict[str, dict] = {
                     '`require_session_host` is THE gate, and `sessions_live_here` is the pure fact '
                     'for a reader that must degrade rather than proxy. Both dereference '
                     '`app.core.service_role` — one reader of the role, not two. AND the third axis '
-                    '(§COMMCALC-25): HOW PROMPTLY the operator\'s input reaches the page. The loop '
+                    '(§COMMCALC-26): HOW PROMPTLY the operator\'s input reaches the page. The loop '
                     'is single-threaded — it streams frames, detects state and executes input on one '
                     'thread — and it serviced ONE queued command per iteration behind a full `_pump` '
                     '(80ms on CDP, 300ms without), while `_do_click` ended with a mandatory ~750ms '
@@ -1776,7 +1783,7 @@ FACTS: dict[str, dict] = {
                     'reordering SUBMIT_CODE / RESEND / CANCEL / PULL, and BOTH loops drain, bounded '
                     'by `_INPUT_DRAIN_MAX` so a flood never starves the idle check.',
         "homes": ('app/modules/commcalc/live_login.py',),
-        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-25'),
+        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-26'),
         "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py',
                   'harness_live_session_host.py', 'harness_live_input_latency.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real

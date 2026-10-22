@@ -668,7 +668,7 @@ class LiveLoginSession:
             return None
 
     def operator_input_pending(self):
-        """THE one reader of "is the operator still acting" (§COMMCALC-25). Work that only makes sense
+        """THE one reader of "is the operator still acting" (§COMMCALC-26). Work that only makes sense
         once they have STOPPED — settling the page, re-classifying for auth — is skipped while this is
         true, because it would otherwise be charged to the latency of their next click. Never raises:
         an unreadable queue reads as "not pending", which keeps the old always-settle behaviour."""
@@ -1134,7 +1134,7 @@ class LiveLoginSession:
             if idle > limit:
                 self._set(phase="cancelled", message="Live session closed after inactivity.")
                 return
-            # Service EVERY queued human input before the next frame tick (§COMMCALC-25). Servicing one
+            # Service EVERY queued human input before the next frame tick (§COMMCALC-26). Servicing one
             # per iteration charged each click a full `_pump` (80ms on CDP, 300ms without) plus the
             # previous click's settle, so a burst drained at a few events a second and the window felt
             # frozen. Bounded by `_INPUT_DRAIN_MAX` so the idle check and the pump still run.
@@ -1265,7 +1265,7 @@ class LiveLoginSession:
             if idle > _POST_AUTH_IDLE_SECONDS:
                 self._set(phase="cancelled", message="Live session closed after inactivity (post-login).")
                 return
-            # The same drain as pre-auth (§COMMCALC-25) — "take control" on an authenticated session is
+            # The same drain as pre-auth (§COMMCALC-26) — "take control" on an authenticated session is
             # the same operator typing into the same single-threaded loop.
             drained = 0
             while drained < _INPUT_DRAIN_MAX:
@@ -1396,7 +1396,7 @@ class LiveLoginSession:
         # Rapid burst of captures right after the click so the result appears fast (screencast covers the
         # gaps too, but these guarantee movement even if the stream is idle).
         self._capture(page)
-        # …but ONLY when the operator has stopped (§COMMCALC-25). The burst below costs ~750ms of waits
+        # …but ONLY when the operator has stopped (§COMMCALC-26). The burst below costs ~750ms of waits
         # plus a settle, and this loop is single-threaded, so running it with their next click already
         # queued charges that click for the previous one's verification — which is the "it freezes, I
         # have to press hard" the owner reported on 2026-10-22. The screencast keeps streaming either

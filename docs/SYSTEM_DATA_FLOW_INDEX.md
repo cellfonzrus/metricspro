@@ -148,7 +148,7 @@ Primary code homes:
 | COMMCALC-21 | **A non-payment somebody chose is not a finding** | "The multi-month notice lists 115 home internet and 290 tablet activations as 'did not pay'. I excluded those on purpose. Which of these lines is a problem, which is my own setting being restated at me, and how does a surface know the difference instead of asserting one reason for all of them?" |
 | COMMCALC-22 | **A claim with no amount cannot be filed** | "Trace the 4 devices paid twice and the 200 sales that matched no commission — they should be part of the discrepancies to be filed with the carrier if we did not get paid." The discrepancy report already held them, and wrote $0.00 on every single one, so the hub's open-$ card summed to nothing. Which non-payments are claims against the carrier at all, which are facts about our own feed, and what is a claim worth? |
 | COMMCALC-24 | **A live session is read where it lives** | "I press Live login on the UPS portal and the panel says no live session is running, every time, for days. Which process holds a live browser session, which endpoints may answer a question about one, and what should a process that holds none say instead of 'nothing is running'?" |
-| COMMCALC-25 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks, and the page sent one web request per character typed. What is the operator's keystroke charged for before it runs, and what work has no business on the latency path of their next action? |
+| COMMCALC-26 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks, and the page sent one web request per character typed. What is the operator's keystroke charged for before it runs, and what work has no business on the latency path of their next action? |
 
 ---
 
@@ -5918,7 +5918,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **IMEI rebates** | mig `216` (aging) | `imei_rebate_report.py`; `/imei-rebates` `26448` |
 | `raw_ma_commission` / `raw_ma_daily_tx` — **as a REPORTED INCOME figure** §4a | mig `083` (tables); mig `314`/`934` (config) | WRITTEN by the upload/sweep paths (§2). READ AS MONEY for a report by **`account/ma_store_pnl.py`** and `account/residual_subs.py` ONLY — `gp_carrier_income`, `ma_earned_month_ladder`, `ma_received_month_ladder`, `ma_sheet_component_total`, `ma_sheet_spiff_total`, `ma_commission_components`. `coa.build_inputs` (P&L), `router._compute_gp` (GP), `router.ma_commission_summary` + `_ma_summary_legs` and `commission_received.add_ma_rows` all DEREFERENCE those; none sums the components itself. Locked by `harness_ma_income_one_home_guard.py` |
 | **Vendor rebate history (earned, per line)** §27 | mig `1005` (`raw_vendor_rebate`) | `commcalc/vendor_rebate_feed.py` (PURE; `BOOKS_TO` = ()); `GET /commcalc/vendor-rebates`. Lands via `POST /commcalc/upload-mapped` (no new ingest route). **Books NOTHING** — earned ≠ collected, open owner decision. NOT `raw_ma_commission` (money reads it) and NOT `activation_rebate_ledger` (that one books). Proof `harness_vendor_rebate_landing.py` |
-| **Device Forecasting & Vendor Payables (module 095)** | `device_payable_ledger` + `payable_source_map` (mig `095_device_payables` — a NEW carrier is a config row: source_table/imei_field/store_field/owed_field/sold-match/reimbursement), `device_model_alias` (mig `096` — raw model → canonical + carrier, the forecast alignment) | `payables/engine.py` (`build_ledger` delete+insert per carrier; **`ma_store_resolution`/`resolve_ma_store` — Total/MA device→store attribution, 2026-09-04**: POS sale line → `inventory_aging_device` §11 device grain → mig-314 account index (`ma_store_pnl.load_store_index` + `coa.store_resolver` spelling collapse) → None, fills blanks only); `payables/router.py` `/api/v1/payables/*` — `/forecast` (phones-only velocity/on-hand/recommend, per carrier; Boost leg `raw_sales` device lines, Total leg `raw_ma_commission` + the attribution above), `/payables` (per-IMEI ledger read; read-time blank-store fill via the same attribution), `/filter-options` (canonical §13c roster+markets — the frontend bar's PLATFORM-WIDE gate source), `/owed-by-date` (ledger, else `raw_ma_daily_tx` vendor-feed fallback), `/due`, `/priority`, `/source-maps*`, `/phone-map*`, `/settings`, `POST /rebuild`. Frontend `commcalc/payables/page.tsx` (bar gated on roster ∪ rows — owner 2026-09-04 "need to be platform wide"). Proofs `harness_device_forecast_store_filter.py`, `harness_payables_market_filter.py` |
+| **Device Forecasting & Vendor Payables (module 095)** | `device_payable_ledger` + `payable_source_map` (mig `095_device_payables` — a NEW carrier is a config row: source_table/imei_field/store_field/owed_field/sold-match/reimbursement), `device_model_alias` (mig `096` — raw model → canonical + carrier, the forecast alignment) | `payables/engine.py` (`build_ledger` delete+insert per carrier; **`ma_store_resolution`/`resolve_ma_store` — Total/MA device→store attribution, 2026-09-04**: POS sale line → `inventory_aging_device` §11 device grain → mig-314 account index (`ma_store_pnl.load_store_index` + `coa.store_resolver` spelling collapse) → None, fills blanks only); `payables/router.py` `/api/v1/payables/*` — `/forecast` (phones-only velocity/on-hand/recommend, per carrier; Boost leg `raw_sales` device lines, Total leg `raw_ma_commission` + the attribution above), `/payables` (per-IMEI ledger read; read-time blank-store fill via the same attribution), `/filter-options` (canonical §13c roster+markets — the frontend bar's PLATFORM-WIDE gate source), `/owed-by-date` (ledger, else `raw_ma_daily_tx` vendor-feed fallback), `/due`, `/priority`, `/source-maps*`, `/phone-map*`, `/settings`, `POST /rebuild`. Frontend `commcalc/payables/page.tsx` (bar gated on roster ∪ rows — owner 2026-09-04 "need to be platform wide"). Proofs `harness_device_forecast_store_filter.py`, `harness_payables_market_filter.py`, **`harness_payables_filter_scope.py` (§COMMCALC-25 — the date window's one home + the store selection binding through `store_identity`)**. Frontend one-home `lib/forecast-matrix.ts` (the exportable store × model grid, proof `scratchpad/prove_forecast_matrix.mjs`) |
 | **ATU opportunity** | mig `295` | `atu_opportunity.py`; `/atu-opportunity` `28410` |
 | **Activation TYPE of a POS sale line — THE predicate (2026-09-21)** | `raw_sales` / `daily_sales_feed` lines (any column: `contract_type`, `category` path, `product_desc`, `department`, `trans_type`) × `accessory_config.activation_details_rules` (`fields` / `tokens` / `exact` / `auto_activation_tokens` / `hints` / `metric_hints` / `broad_attested` — extended mig-313 JSON, NO migration; house defaults = the retired classifiers; THE NO-LEAK RULE: house tokens fill an undeclared class only under the house field) | `commcalc/line_class.py` (PURE: `activation_class` / `classify_line` / `bucket_of` / `resolve_rules` (`house_fill`) / `count_classes` (+ `broad` / `refused`) / `gate_open` / `token_shares` / `broad_tokens` / `refused_tokens` / `rules_refused` / `refusal_sentence` / `norm_broad_ok` / `suggest_rules` / `suggest_metric_rules` / `merge_into_raw`); resolved ONCE by `router._line_rules_resolve` (the loader `_accessory_config_uncached` → `acfg['line_rules']`, and the 2.5a save's guard — no second resolution; + `_line_rules_of`, `_line_skip`); dereferenced by `calculator.calc_rep_commissions` (`cfg['line_class_rules']`, threaded by the calc endpoint + `payout_accrual`), `commission_engine._activation_buckets` / `_read_ct_classification_config`, `plan_options._resolved_bucket`, `router._sales_cell_agg` (Sales Report / Exec MTD / Daily Targets; the Port sub-split is the predicate's `'port'`), `_blank_ct_bucket_map` (the mig-224 transaction rescue SUPPLEMENTS it), `_classification_gaps`, `/sales-report/detail`, `whatif._byod_mdns` / `accessory_byod_correlation`, `sales_comparison.tally` (`line_rules`), `closing.router._b2b_counts_by_store` (+ the tender split) via `_line_rules`, `marketing/event_sales.org_classifier`; written ONLY by `PUT /accessory-config` (`activation_details_rules`, merged — the AD-basis keys beside it untouched) which the intake's `PUT /onboarding/intake/line-class` calls. Proof `harness_line_class.py` (47: predicate, the money pin, the suggestion engine over the measured vocabulary, the aggregation + pay path counting 39/25/23 by distinct invoice, §G the too-broad guard / no-leak / seed); lock `harness_line_class_lock.py` (29) |
 | **Activation-Details basis (b2b activation TYPE buckets)** | `raw_custom_import` (signature-detected sheet: `Serial#`+`Contract Type`); config `accessory_config.activation_details_rules` — mig `313_activation_details_bucket_rules` (per-org token rules; RULE TWO) | `activation_bucketing.py` (PURE: `activation_details_bucket`/`resolve_rules`/`BUCKET_RANK`/`TOTAL_ACTIVATION_EXCLUDED`) ← delegated to by `router._activation_details_bucket`; rules loaded per-org by `_activation_details_rules` (defensive, mig-214 posture); resolver `_cr_resolve_activation_details` (serial-dedup by rank); consumers `_ad_cells_full` → `_apply_activation_basis` (Exec MTD + Sales Report), `_ad_activation_buckets` (metric recon), `GET /activation-counts/{period}`; proof `harness_activation_bucketing.py`. HOUSE DEFAULTS (2026-09-01 approved fix): Edge = whole-word `edge` in CONTRACT TYPE only (`edge_name_tokens` opts device-name matching back in per org — the Motorola-Edge over-match trade-off); `BYOD Upgrade` = its own hidden bucket (excluded from Total Activation exactly like Upgrade, NOT shown in the Upgrade column; `upgrade_hidden_contract_tokens: []` restores one family) |
@@ -7435,9 +7435,9 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /device-history` | `17015` | §11 |
 | `GET /device-cost-recon` | `27338` | §11 |
 | `GET /account/residual-per-sub` | `account/router.py:~1042` → `account/residual_subs.compute` | §7a Residual per Subscriber; Boost stores via `residual_subs.canonical_salesforce_store_index` — THE same door→store home the P&L's residual books through (§7b), so this report and `mi_income` cannot place one door on two stores — per-tenant residual source (Boost `raw_mi` / MA `raw_ma_daily_tx` mig-309 union); MA stores via the mig-314 account→store index; §13c `market_options`; grant `residual_per_sub` OR `account_trends` |
-| `GET /payables/forecast` | `payables/router.py` `forecast` | §15 (module 095) |
-| `GET /payables/payables` | `payables/router.py` `list_payables` | §15 (module 095) |
-| `GET /payables/filter-options` | `payables/router.py` `payables_filter_options` (canonical §13c) | §15 (module 095) |
+| `GET /payables/forecast` | `payables/router.py` `forecast` (sales window via `commcalc/date_window.resolve_window`; `store_key` stamped) | §15 (module 095), §COMMCALC-25 |
+| `GET /payables/payables` | `payables/router.py` `list_payables` (`start`/`end` window `due_date`; `undated_excluded` reported) | §15 (module 095), §COMMCALC-25 |
+| `GET /payables/filter-options` | `payables/router.py` `payables_filter_options` (canonical §13c; every option carries `store_key`) | §15 (module 095), §COMMCALC-25 |
 | `POST /payables/rebuild` | `payables/router.py` → `engine.build_ledger` | §15 (module 095) |
 | `GET /plan-installments` | `10726` | §8 |
 | `GET /payout-schedule` | `11948` | §7 |
@@ -25922,6 +25922,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-23 | commcalc |
 | COMMCALC-24 | commcalc |
 | COMMCALC-25 | commcalc |
+| COMMCALC-26 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -32708,7 +32709,102 @@ vendor-ordering door onto the same sessions), §COMMCALC-07 (the UPS pull this l
 
 ---
 
-## §COMMCALC-25. THE OPERATOR'S INPUT IS SERVICED BEFORE THE NEXT FRAME TICK (owner report 2026-10-22)
+## §COMMCALC-25. THE FILTERS ON DEVICE FORECASTING & VENDOR PAYABLES — a date window with one home, and a store selection that binds through identity (owner reports 2026-10-22)
+
+Three reports, one evening, on the same screen (`/commcalc/payables`, §15 module 095):
+
+1. *"Device Forecasting & Vendor Payables should have all the regular filters with data range store etc"*
+2. *"the filter for market brings up te forcastoing but hte filter for store does not bring up anything"*
+3. *"the forcasting should summaroze in grid format to tbe exported to understand how many phones are
+   needed of a particular model per store"*
+
+### COMMCALC-25.1 DUPLICATE CHECK (the build gate) — what was REUSED, not rebuilt
+
+| Needed | Already existed | What this change did |
+| --- | --- | --- |
+| a shared report filter bar | `frontend/src/components/StandardFilterBar.tsx` (RULE FIVE §3d) | adopted its date RANGE (`periodMode="range"`); the screen already carried market + store. No new control was written |
+| "is this row inside the date range" | `commcalc/vip_invoice_filter.in_date_window` (§15v) — **and two more answers beside it** | PROMOTED to `commcalc/date_window.py` and the §15v copy now dereferences it. No sibling predicate was added |
+| "which store is this string" | `account/store_identity.build_store_resolver` via `coa.store_resolver` (§64) | dereferenced. This module states no spelling rule of its own |
+| store options, one per physical store | `core.scope.fold_store_spellings` / `org_store_options` (§13e) | kept — the fix is in what an option BINDS, not in the list |
+| store→market stamping | `core.scope.store_market_resolver` (§13a) | unchanged; it is the half that already worked, and the model for the fix |
+| the grid's figures | `/payables/forecast` rows | PIVOTED (`frontend/src/lib/forecast-matrix.ts`). No second derivation, no second fetch |
+
+### COMMCALC-25.2 THE CLASS — a window is one fact, and three surfaces each owned a copy
+
+`/payables/forecast` stated its window as a look-back NUMBER, `/owed-by-date` and its vendor-feed
+fallback as their own inline `gte`/`lte` pairs, and §15v as `in_date_window`. Four answers to "which
+days am I measuring" on two screens. `commcalc/date_window.py` is now the ONE home — `day` (validates
+a leading calendar day rather than truncating ten characters), `in_window` / `row_in_window`
+(**inclusive both ends, compared on DAYS, FAIL-CLOSED on a dateless row** — the convention
+`standard-filters.ts periodOk` already used on the client, so screen and server drop the same rows),
+`resolve_window` (a look-back and a date range are the SAME window with two front ends; `basis` and
+`days_measured` name which answered), `apply_window` (the server twin), `undated` (the count a
+windowed surface must REPORT).
+
+**An off-by-one fell out of stating it once.** The forecast scanned `today - lookback` — `lookback + 1`
+days — and divided the units by `lookback`, so every velocity read ~14% high at a 7-day window. The
+span the query scans and the divisor are now the same number (`harness_payables_filter_scope.py` §B4).
+
+### COMMCALC-25.3 THE STORE HALF — and why only it was broken
+
+The asymmetry IS the diagnosis. Every row is STAMPED `market = resolver(row.store)`, and that
+resolver accepts any spelling, so a market pick matches whatever the feed calls the store. The store
+half was compared as a **string**: the picker's label against `row.store`. MEASURED live 2026-10-22
+against the real resolver, house org:
+
+| source | spellings matching NO option | rows unreachable by any store pick | after |
+| --- | --- | --- | --- |
+| `commcalc.asset_ledger` | 13 of 33 | 10,801 | **0** |
+| `commcalc.device_payable_ledger` | 15 of 37 | 4,044 | **0** |
+| `commcalc.raw_sales` | 6 of 28 | 10,024 | **0** |
+
+§13e made that the NORMAL case rather than the exception: for a store spelled two ways the surviving
+option is, by construction, not the spelling the other half of the rows carry.
+
+**The fix is the class.** Rows AND options both carry `store_key` — `store_identity.store_key` over
+`coa.store_resolver` — and the comparison is made on that key, while `store` stays the display value.
+A new `store_aliases` row therefore teaches this filter, the P&L and the GP report in the same instant.
+
+### COMMCALC-25.4 The siblings, fixed here rather than excused
+
+`GET /payables/due` narrowed by store with the same string equality (so its DUE report was empty for
+the same stores) and `_owed_from_vendor_feed` carried its own window pair. Both are fixed in this
+change — the harness fails the build if either comparison returns.
+
+### COMMCALC-25.5 THE GRID (owner ask 3)
+
+`frontend/src/lib/forecast-matrix.ts` — PURE, framework-free. `buildForecastMatrix(rows, metric)`
+pivots the **already-filtered** rows into stores × models: one column per model ordered by total
+units, one row per store, the unassigned bucket LAST and never dropped. Four metrics (units to order
+/ projected demand / sold in window / on hand). `matrixExportRows` + `matrixExportColumns` feed
+`ReportExportBar`, so the spreadsheet is the screen (RULE FOUR). **A store is keyed on its identity,
+not its spelling** — two spellings of one physical store are ONE row whose orders ADD, instead of two
+rows that each look too small to act on.
+
+### COMMCALC-25.6 Locked so it cannot un-wire
+
+`backend/harness_payables_filter_scope.py` (**52 checks**) — §A the window semantics incl. the
+timestamp-on-the-end-day and fail-closed regressions · §B `resolve_window` incl. the off-by-one ·
+§C the store-identity regression (a raw-string comparison binds **1 of 4** live feed spellings; the
+key binds all four) · §D the router dereferences both homes and **no string-equality store
+comparison or private window pair survives** · §E §15v still reads the shared home and answers
+identically. `frontend/scratchpad/prove_forecast_matrix.mjs` (**36 checks**) — the pivot, the
+identity fold, what-you-see-is-what-exports, and §G the SCREEN's wiring. Both run in
+`carrier-vocab-guard.yml` job **`vip-invoice-filter`**, beside the §15v proof they now share a home
+with. No migration: nothing here is a schema change.
+
+### COMMCALC-25.7 Cross-references
+
+Same class: §64 / §70 (store identity — one home for "which store is this address"), §13e (one option
+per physical store, whose fold made this defect the normal case), §15v (the other reader of the window
+home), §19.18 (a registry written and its callers left unwired is not a fix). Neighbours: §15 (module
+095 itself), §13a (the store→market resolver — the half that already worked), §3d (RULE FIVE, the
+shared filter bar), §COMMCALC-03.20 (the bar's month-spelling one home), §23z (Device Payable as at a
+date, the other windowed payable surface).
+
+---
+
+## §COMMCALC-26. THE OPERATOR'S INPUT IS SERVICED BEFORE THE NEXT FRAME TICK (owner report 2026-10-22)
 
 Owner, on the UPS Team Portal live login, the day after §COMMCALC-24 made the window visible to him
 at all: *"it just freezes , it is not swift access, must easier it seems i hvae to press hard"*.
@@ -32724,7 +32820,7 @@ queue and made it worse. The general fact that was wrong is not "the UPS portal 
 **work which only makes sense once the operator has STOPPED was sitting on the latency path of their
 next action, and their input was waiting behind a frame tick.**
 
-### COMMCALC-25.1 Duplicate check (the build gate)
+### COMMCALC-26.1 Duplicate check (the build gate)
 
 Searched the index and the tree for an existing home for "how promptly does operator input reach the
 page": §COMMCALC-10 (`preloop_limit` / `inactivity_limit` — how long a phase may go WITHOUT
@@ -32735,7 +32831,7 @@ input servicing). No second mechanism answers this; `_preauth_loop` was the only
 EXTENDED here rather than joined by a sibling. `backend/scratchpad/live_login_lowlat_proof.py` is a
 scratch probe of the FRAME path, not a lock, and is untouched.
 
-### COMMCALC-25.2 One fact, one home, dereferenced
+### COMMCALC-26.2 One fact, one home, dereferenced
 
 - **`live_login.operator_input_pending()`** — THE one reader of "is the operator still acting".
   PURE and never raises: an unreadable queue reads as NOT pending, so the failure mode is the old
@@ -32758,7 +32854,7 @@ page). Ordering is the invariant that makes batching safe: `flushText()` runs be
 `LiveInputEvent` union types both senders, which also pays off one entry of the lint register rather
 than adding to it.
 
-### COMMCALC-25.3 The siblings, fixed here rather than excused
+### COMMCALC-26.3 The siblings, fixed here rather than excused
 
 - **`_post_auth_loop` has the identical defect** and is fixed in the same change: "take control" on
   an authenticated session is the same operator typing into the same single-threaded loop.
@@ -32768,7 +32864,7 @@ than adding to it.
 - **RULE TWO:** no portal, tenant or processor name appears anywhere on the latency path; the
   harness asserts their absence.
 
-### COMMCALC-25.4 Locked
+### COMMCALC-26.4 Locked
 
 `backend/harness_live_input_latency.py` — **68 checks, DB-free, no browser**: one home + purity
 (§A), input-only draining (§B), THE LOCK that BOTH loops drain (§C), the bound and that the pump and
@@ -32779,10 +32875,11 @@ the FRONTEND half — no awaited request per character, and every event on one o
 Wired into CI in the `carrier-vocab-guard` lock job, whose path filter names the live-view page as
 well as the harness.
 
-### COMMCALC-25.5 Cross-references
+### COMMCALC-26.5 Cross-references
 
 Same home, other axes: §COMMCALC-13 (what a finished session leaves on the row), §COMMCALC-24 (which
 process may answer about a session). Same class: §19.18 (a mechanism written and its callers left
 unwired). Neighbours: §COMMCALC-10 (the progress watchdog on the same session), §COMMCALC-11 (the
 human check these clicks are solving), §41 (the forwarder each event now crosses), §COMMCALC-07 (the
 UPS pull this login exists to feed).
+
