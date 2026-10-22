@@ -567,6 +567,13 @@ FACTS: dict[str, dict] = {
             # here rather than left to look like an unexplained edge.
             'app/modules/account/balance_sheet.py': ('FEE_CATEGORIES',),
             'app/modules/account/statement_engine.py': ('device_cogs',),
+            # COMMCALC-26 (2026-10-22) — THE PAYABLE LEDGER prices a handset the carrier's own row
+            # carries no amount for (`owed_mode='unit_price_map'`, mig 1091) through this home's pure
+            # core, so a Total device's cost on the payables screen is the SAME arithmetic the P&L
+            # costs it with. Measured that day: the two easier joins both fail — the activation order
+            # is absent from the fulfillment sheet (0 of 4,322) and the processor feed's price is an
+            # activation charge, not the device ($529.00 vs $195.00 on one iPhone 13).
+            'app/modules/payables/engine.py': ('_cogs',),
         },
     },
     'entitlement_month_coverage': {
@@ -1572,6 +1579,14 @@ FACTS: dict[str, dict] = {
             # retired: it paged without an ORDER BY, so a device whose payment row was never served
             # read as "no evidence" and bucketed the appeal as not_recoverable.
             'app/modules/recovery/engine.py': ('_feed_read',),
+            # §COMMCALC-26 — the three reads the declared-terms work added, wired to this home from
+            # the start rather than keeping a fourth private page loop: the unsold per-IMEI ledger
+            # (a device missed here reads as SOLD, which is the one thing the out-of-pocket verdict
+            # must never get wrong), the vendor feed the invoice-due report falls back to, and the
+            # model scan that builds the unit-price map (a model missed prices nothing).
+            'app/modules/payables/engine.py': ('_feed_read',),
+            'app/modules/payables/unsold_inventory.py': ('_feed_read',),
+            'app/modules/payables/vendor_invoice.py': ('_feed_read',),
         },
     },
     'payment_category_map': {

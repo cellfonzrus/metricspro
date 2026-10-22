@@ -396,8 +396,56 @@ def invoice_due_list(status: str = "", date_from: str = "", date_to: str = "", s
                                             "Has the VIP Wireless Workbook been uploaded? "
                                             "(migration 008 must also be applied.)", "rows": []}
     if not invoices:
-        return {"available": True, "rows": [], "total": 0,
-                "totals": {"grand_total": 0.0, "commission_earned_m1": 0.0, "net_due_estimate": 0.0}}
+        # ── THE VIP WORKBOOK IS ONE CARRIER'S ARTEFACT (owner report 2026-10-22: "simlarly Upcoming
+        #    Invoice Payment Due does not sow any data - some thing is not working ??"). Luxelink has
+        #    0 `vip_invoices` rows, so this report rendered an empty table for a tenant carrying
+        #    2,115 dated invoices worth $2,049,592.50 in the PROCESSOR's own feed — measured
+        #    2026-10-22. The PHASE-1 audit in this module's docstring is still right about the
+        #    handset ORDERING feed (no invoice number, no due date, no total, no IMEI); the feed it
+        #    did not reach is `raw_ma_daily_tx`, which carries all four of the invoice-level fields.
+        #    Grouping + the debt test are NOT written here — they are `payables/vendor_invoice`, the
+        #    one home the Daily Owed tab's date-grain read shares, so the two grains cannot disagree
+        #    about which rows are a debt.
+        from app.modules.payables import vendor_invoice as _vfeed
+        feed = _vfeed.group_invoices(
+            _vfeed.fetch_feed_rows(client, org_id, date_from, date_to), date_from, date_to)
+        if not feed:
+            return {"available": True, "rows": [], "total": 0, "source": None,
+                    "totals": {"grand_total": 0.0, "commission_earned_m1": 0.0,
+                               "net_due_estimate": 0.0}}
+        summary = _vfeed.summarize(feed)
+        page_feed = feed[offset:offset + limit]
+        return {
+            "available": True, "source": "vendor_feed", "grain": "invoice",
+            # The vendor-feed shape mapped onto THIS report's own column names, so one screen renders
+            # both carriers rather than a parallel page for the second one. The fields that cannot
+            # exist on this path are NULL, never 0 — there is no IMEI in this feed, so there is no
+            # per-device evidence and no commission offset to net against, and a 0 would read as
+            # "measured and none" instead of "this path cannot answer".
+            "rows": [{"invoice_number": e["invoice_label"], "due_date": e["due_date"],
+                      "grand_total": e["amount_due"], "status": None, "location": None,
+                      "market": None, "device_count": None, "sold_count": None,
+                      "reimbursed_count": None, "not_sold_count": None,
+                      "commission_earned_m1": None, "net_due_estimate": None,
+                      "lines": e["lines"], "order_types": e["order_types"],
+                      "product_sample": e["product_sample"], "numbered": e["numbered"]}
+                     for e in page_feed],
+            "total": summary["invoice_count"],
+            "totals": {"grand_total": summary["amount_due"], "commission_earned_m1": None,
+                       "net_due_estimate": None, "invoice_count": summary["invoice_count"],
+                       "device_count": None, "line_count": summary["line_count"]},
+            "unnumbered": {"invoices": summary["unnumbered_invoices"],
+                           "amount": summary["unnumbered_amount"]},
+            "note": ("Dated from the processor's own daily transaction feed (MA Daily Tx "
+                     "`merchant_invoice` + `due_date`), because no VIP Wireless Workbook invoices "
+                     "are loaded for this account. These are INVOICES of order lines, not devices: "
+                     "the feed carries no IMEI, so there is no per-device sold/reimbursed evidence "
+                     "and no commission offset on this path"
+                     + (f" · {summary['unnumbered_invoices']} group(s) worth "
+                        f"${summary['unnumbered_amount']:,.2f} carry no invoice number in the feed "
+                        f"and are grouped by the day they fall due"
+                        if summary["unnumbered_invoices"] else "") + "."),
+        }
 
     vip_ids = [i.get("vip_id") for i in invoices]
     devices_by_invoice = _fetch_devices_for_invoices(client, org_id, vip_ids)
@@ -433,6 +481,9 @@ def invoice_due_list(status: str = "", date_from: str = "", date_to: str = "", s
         "reimbursed_count": sum(r["reimbursed_count"] for r in rows),
     }
     return {"available": True, "rows": page_rows, "total": total, "offset": offset, "limit": limit,
+            # WHICH SOURCE ANSWERED, always named — the screen must never imply that a per-device
+            # rollup exists on a path that has no IMEI (see the vendor_feed branch above).
+            "source": "vip_invoices", "grain": "invoice_with_devices",
             "totals": totals,
             "market_bucket": NO_MARKET_SENTINEL,
             "basis_note": ("commission_earned_m1 = 1st-Month (M1) ePay commission only — spiff/BYOD/"
