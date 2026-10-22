@@ -52,8 +52,8 @@ export type ForecastMatrix = {
   empty: boolean
 }
 
-const norm = (v: any): string => (v == null ? '' : String(v)).trim()
-const num = (v: any): number => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+const norm = (v: unknown): string => (v == null ? '' : String(v)).trim()
+const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
 
 /** The label a store row is shown under. The canonical key is the identity; the first spelling seen is
  *  what a human recognises, so that is what is printed — the same split the filter options make. */
@@ -79,7 +79,7 @@ export function buildForecastMatrix(rows: ForecastRow[], metric: ForecastMetric 
     if (!model) continue                             // a row with no model names no column to order under
     const key = norm(r.store_key) || norm(r.store) || UNASSIGNED
     if (!storeMeta.has(key)) storeMeta.set(key, { key, label: norm(r.store) || UNASSIGNED })
-    const v = num((r as any)[metric])
+    const v = num(r[metric])
     cells.set(`${key}\u0000${model}`, (cells.get(`${key}\u0000${model}`) || 0) + v)
     storeTot.set(key, (storeTot.get(key) || 0) + v)
     modelTot.set(model, (modelTot.get(model) || 0) + v)
@@ -102,12 +102,24 @@ export function buildForecastMatrix(rows: ForecastRow[], metric: ForecastMetric 
   }
 }
 
+/** An export row: the store's label, the row total, and one unit count per model column. The model
+ *  properties are named by the model itself, so the type is the union of a label and the counts —
+ *  `__store` / `__total` are reserved and can never be a model name. */
+export type MatrixExportRow = { __store: string; __total: number } & Record<string, string | number>
+
+/** The export COLUMN shape, structurally the `ExportColumn` the exporter takes — declared here so
+ *  this file stays framework-free (and therefore provable) without importing that type. */
+export type MatrixExportColumn = {
+  header: string; field: string; role?: string
+  get: (r: MatrixExportRow) => string | number
+}
+
 /** PURE: the matrix as export ROWS — one object per store, a property per model, plus the row total.
  *  The export and the on-screen grid read the SAME pivot, so a column can never appear in one and
  *  not the other. Property names are the model names; `__store` / `__total` are reserved. */
-export function matrixExportRows(m: ForecastMatrix): Record<string, any>[] {
+export function matrixExportRows(m: ForecastMatrix): MatrixExportRow[] {
   return m.stores.map(s => {
-    const row: Record<string, any> = { __store: s.label, __total: m.storeTotal(s.key) }
+    const row: MatrixExportRow = { __store: s.label, __total: m.storeTotal(s.key) }
     for (const model of m.models) row[model] = m.cell(s.key, model)
     return row
   })
@@ -115,10 +127,10 @@ export function matrixExportRows(m: ForecastMatrix): Record<string, any>[] {
 
 /** PURE: the export COLUMN spec for `matrixExportRows` — Store, one per model, Total. Shaped as
  *  `ExportColumn`s without importing the type, so this file stays framework-free and provable. */
-export function matrixExportColumns(m: ForecastMatrix): { header: string; field: string; role?: string; get: (r: any) => any }[] {
+export function matrixExportColumns(m: ForecastMatrix): MatrixExportColumn[] {
   return [
-    { header: 'Store', field: 'store', role: 'store', get: (r: any) => r.__store },
-    ...m.models.map(model => ({ header: model, field: model, get: (r: any) => r[model] ?? 0 })),
-    { header: 'Total', field: '__total', get: (r: any) => r.__total },
+    { header: 'Store', field: 'store', role: 'store', get: r => r.__store },
+    ...m.models.map(model => ({ header: model, field: model, get: (r: MatrixExportRow) => r[model] ?? 0 })),
+    { header: 'Total', field: '__total', get: (r: MatrixExportRow) => r.__total },
   ]
 }
