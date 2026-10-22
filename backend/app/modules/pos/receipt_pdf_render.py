@@ -56,13 +56,8 @@ def _canvas(buf, size):
 
 def filename(transaction_id="", prefix="receipt") -> str:
     """What the attachment is called in the customer's inbox. A transaction number when the sale has
-    one, because a customer with two receipts from one shop needs to tell them apart.
-
-    The id is SLUGGED, not folded: a character that cannot go in a filename is SUBSTITUTED rather
-    than dropped, the same shape notify/report_registry.py and notify/finance_reports.py already use.
-    Dropping turned `TXN-10-2` into `TXN102`, which reads as a different number and is the exact
-    silent-identity-change the accent-fold lock (index §14y, check E4) exists to refuse."""
-    txn = "".join(ch if ch.isalnum() else "-" for ch in str(transaction_id or "")).strip("-")
+    one, because a customer with two receipts from one shop needs to tell them apart."""
+    txn = "".join(ch for ch in str(transaction_id or "") if ch.isalnum())
     return f"{prefix}-{txn}.pdf" if txn else f"{prefix}.pdf"
 
 

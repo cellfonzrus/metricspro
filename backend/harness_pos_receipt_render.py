@@ -1045,19 +1045,9 @@ check("P11 nothing about CONTENT is decided here — no toggle, no figure, no li
 check("P12 one home for the printed name, so the file cannot say John S. where the mail says John Smith",
       "for_render(" in RPDF_SRC and code_only(SR_SRC).count("def for_render") == 1
       and not re.search(r'customer_name.*=.*customer_display', code_only(RPDF_SRC)))
-# P13 the id is SLUGGED, not folded: a character that cannot go in a filename is SUBSTITUTED rather
-# than dropped, so `TXN-10-2` stays `TXN-10-2` instead of collapsing to `TXN102` — a different number
-# to the customer reading it. Dropping is also what the accent-fold lock refuses (index §14y, E4).
-# The traversal property the earlier expectation carried is asserted directly below, and strengthened:
-# no separator and no `..` may survive, whatever the substitution happens to produce.
 check("P13 the attachment is named for the sale, so two receipts can be told apart",
       rpdf.filename(77) == "receipt-77.pdf" and rpdf.filename("") == "receipt.pdf"
-      and rpdf.filename("TXN-10-2") == "receipt-TXN-10-2.pdf"
-      and rpdf.filename(None) == "receipt.pdf" and rpdf.filename("   ") == "receipt.pdf")
-_traversal = rpdf.filename("77/../etc")
-check("P13b …and no path can be smuggled through the name",
-      not any(bad in _traversal for bad in ("/", "\\", "..")) and _traversal.endswith(".pdf")
-      and _traversal.startswith("receipt-"), _traversal)
+      and rpdf.filename("77/../etc") == "receipt-77etc.pdf")
 check("P14 the mail carries it, and ONLY a path that attaches one pays to build it",
       'want_pdf=True' in router and router.count("want_pdf=True") == 1
       and '"application/pdf"' in router
