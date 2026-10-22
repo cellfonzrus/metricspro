@@ -965,6 +965,19 @@ on:
       # index §19.26 — the distributor-invoice filter lock (same reason as the two above: its
       # harness sits at the backend ROOT, outside the backend/app glob it guards)
       - "backend/harness_vip_invoice_filter.py"
+      # index §15 — DEVICE FORECASTING & VENDOR PAYABLES, the other reader of the one window home.
+      # Each file is named for the §13e reason the lines above are: the lock itself, the window home
+      # both screens dereference, the module whose router is held to it, the store-identity home the
+      # store filter binds through, and the frontend pivot + screen the grid proof reads. A change to
+      # any of them re-runs the proofs that none has un-wired.
+      - "backend/harness_payables_filter_scope.py"
+      - "backend/app/modules/commcalc/date_window.py"
+      - "backend/app/modules/commcalc/vip_invoice_filter.py"
+      - "backend/app/modules/payables/router.py"
+      - "backend/app/modules/account/store_identity.py"
+      - "frontend/scratchpad/prove_forecast_matrix.mjs"
+      - "frontend/src/lib/forecast-matrix.ts"
+      - "frontend/src/app/(platform)/commcalc/payables/page.tsx"
       # index §47.17 — the DM visit plan proof. Its harness sits at the backend ROOT and it parses the
       # seed out of migration 1050, so a change to EITHER must run the proof that guards them (same
       # §13e lesson as the three above).
@@ -1904,6 +1917,23 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_vip_invoice_filter.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # THE SAME JOB runs the Device Forecasting / Vendor Payables filter-scope lock, because it is
+      # the OTHER reader of the one window home this job already protects (§15v's `in_date_window`
+      # now dereferences `commcalc/date_window`). Two readers, one gate: a change that re-grows a
+      # private copy of the window rule, or that puts a string-equality store comparison back, fails
+      # here. Same dependencies, DB-free. Index §15.
+      - name: Run the payables filter-scope lock (one date-window home read by both screens; a store selection binds through the canonical store identity, never a spelling - the 2026-10-22 regression reproduced; index §15)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_payables_filter_scope.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # AND the FRONTEND proof of the forecast grid, in the same job for the same reason: it locks
+      # the same screen, and a wiring check nothing runs is not a gate. Node only, seconds.
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Run the forecast-grid proof (the exportable store x model grid is a PIVOT of the filtered rows - one physical store is one row whatever the feed calls it, and what you see is what exports)
+        working-directory: frontend
+        shell: bash
+        run: node scratchpad/prove_forecast_matrix.mjs | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE CLOSING-REFUSAL LOCK (index §29.11, owner bug report 2026-10-02 "we cannot see the daily closing which was
   # submitted"). A daily closing that is REFUSED used to store nothing at all — not even in commcalc.closing_attempt,
