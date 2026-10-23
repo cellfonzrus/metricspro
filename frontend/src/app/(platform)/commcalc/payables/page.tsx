@@ -7,6 +7,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { buildForecastMatrix, matrixExportColumns, matrixExportRows, FORECAST_METRICS, type ForecastMetric } from '@/lib/forecast-matrix'
+import { owedSourceLabel } from '@/lib/owed-source'
 import type { StoreOpt } from '@/lib/market-store-cascade'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 
@@ -78,6 +79,10 @@ function PayablesPageBody() {
   // The payables response's own meta, not its rows: `undated_excluded` is how many ledger rows the
   // date window could not judge, which the screen SAYS rather than silently dropping (§COMMCALC-25).
   const [pMeta, setPMeta] = useState<{ undated_excluded?: number }>({})
+  // The rebuild's own complaints: a table or column the carrier's SETUP declares that the build
+  // could not read. Silence here is what let a mis-declared cost source write 2,923 devices with no
+  // price that looked exactly like a carrier nobody had configured (§COMMCALC-28).
+  const [warns, setWarns] = useState<string[]>([])
   const [drill, setDrill] = useState<any | null>(null)
   // owed-by-date
   const [oRows, setORows] = useState<any[]>([])
@@ -143,11 +148,12 @@ function PayablesPageBody() {
     try {
       const r = await api(`/api/v1/payables/rebuild`, { method: 'POST' })
       const sc = r.status_counts || {}
+      setWarns(Array.isArray(r.warnings) ? r.warnings : [])
       setMsg(`Rebuilt ${r.written} devices across ${r.carriers} carrier(s): ` +
         Object.entries(sc).map(([k, v]) => `${v} ${k}`).join(', ') +
         (r.flags_written != null ? ` · ${r.flags_written} discrepancy flags` : ''))
       if (tab === 'payables') loadPayables(); else if (tab === 'forecast') loadForecast(); else loadOwed()
-    } catch (e: any) { setMsg('Rebuild error (it may still be completing server-side): ' + e.message) }
+    } catch (e: any) { setWarns([]); setMsg('Rebuild error (it may still be completing server-side): ' + e.message) }
     setBusy(false)
   }
 
@@ -343,6 +349,15 @@ function PayablesPageBody() {
         </div>
       )}
       {msg && <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, background: 'var(--surface)', border: '1px solid var(--border)', fontSize: 13 }}>{msg}</div>}
+      {warns.length > 0 && (
+        <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 8, background: 'var(--surface)', border: '1px solid var(--c-fg-d97706)', fontSize: 13 }}>
+          <b style={{ color: 'var(--c-fg-d97706)' }}>The rebuild finished, but part of the setup could not be read.</b>
+          <br />Devices covered by this read no amount, which is NOT the same as owing nothing.
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {warns.map((w, i) => <li key={i} style={{ marginTop: 2 }}>{w}</li>)}
+          </ul>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 8, margin: '18px 0 14px', flexWrap: 'wrap' }}>
         {(['payables', 'forecast', 'owed', 'map'] as Tab[]).map(t => (
@@ -648,7 +663,7 @@ function PayablesPageBody() {
             <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 14 }}>IMEI {drill.imei} · {drill.store} · {drill.status}{drill.sold ? ` · sold ${drill.sold_date || ''}` : ' · unsold'}</div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <tbody>
-                <tr><td style={td}>Owed to vendor</td><td style={{ ...td, textAlign: 'right' }}>{drill.owed == null ? `— (${drill.owed_source})` : fmt(drill.owed)}</td></tr>
+                <tr><td style={td}>Owed to vendor</td><td style={{ ...td, textAlign: 'right' }}>{drill.owed == null ? `— (${owedSourceLabel(drill.owed_source)})` : fmt(drill.owed)}</td></tr>
                 <tr><td style={td}>Primary rebate ({drill.primary_rebate?.source})</td><td style={{ ...td, textAlign: 'right', color: 'var(--c-fg-16a34a)' }}>{drill.primary_rebate?.amount ? '− ' + fmt(drill.primary_rebate.amount) : '—'}</td></tr>
                 {(drill.epay_crosscheck?.lines || []).map((l: any, i: number) => (
                   <tr key={i}><td style={td}>Processor: {l.type} ({l.date})</td><td style={{ ...td, textAlign: 'right', color: 'var(--muted)' }}>{fmt(l.amount)}</td></tr>

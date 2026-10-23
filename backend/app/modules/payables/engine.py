@@ -19,6 +19,7 @@ from app.modules.asset.router import (
     _norm_imei, _vip_invoice_map, _epay_payments_map, _classify_rma,
 )
 from app.modules.commcalc import flag_registry as _reg
+from app.modules.payables import declared_source as _ds
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 PAGE = 1000
@@ -130,7 +131,7 @@ OWED_MODE_UNIT_PRICE = "unit_price_map"
 OWED_MODE_NONE = "none"
 
 
-def _unit_price_map(client, org_id, cfg):
+def _unit_price_map(client, org_id, cfg, complaints=None):
     """{model(lower) -> unit cost} when the map declares `owed_mode='unit_price_map'`, else {}.
 
     THE PRICE LIST HAS ONE HOME AND THIS READS IT. `account/device_cogs.ma_unit_price_from_rows` is
@@ -147,32 +148,50 @@ def _unit_price_map(client, org_id, cfg):
     all the distributor's own "Product Not Available" sku (903): genuinely unpriceable, left NULL and
     reported as unpriced, never zeroed.
 
-    Fail-soft: any failure yields {} and the device stays unpriced, which the payables screen already
-    renders honestly as "no invoice has priced this device".
+    WHICH TABLE `owed_price_table` NAMES, stated here because naming it wrongly cost the owner a
+    rebuild (2026-10-23, §COMMCALC-28): the EVIDENCE feed — the one carrying the skus handsets
+    actually activate under, i.e. the commission feed. NOT the price list, which is always the
+    distributor's handset-ordering sheet and is deliberately not configurable (it is the one home
+    above). `raw_ma_fulfillment` has no `sku`, so declaring it here reads nothing.
+
+    Fail-soft, but NEVER SILENT (§COMMCALC-28). Two failures that used to look identical:
+      · the EVIDENCE read fails -> fall back to the price home's own order-type allowlist, which is
+        its documented no-evidence behaviour. The old code returned {} instead and threw away 73% of
+        the coverage it still had.
+      · the PRICE LIST read fails -> {} and the device stays unpriced, which the payables screen
+        renders honestly as "no invoice has priced this device".
+    Either way the failure is RECORDED on `complaints` and travels out with the rebuild result, so
+    "unpriced" can be told apart from "unconfigured".
     """
     if str(cfg.get("owed_mode") or "").strip().lower() != OWED_MODE_UNIT_PRICE:
         return {}
-    try:
-        from app.modules.account import device_cogs as _cogs
-        src = str(cfg.get("owed_price_table") or cfg.get("source_table") or "").strip()
-        model_field = str(cfg.get("owed_price_model_field") or cfg.get("model_field") or "").strip()
-        names = set()
-        if src and model_field:
-            from app.modules.core import feed_read as _feed_read
-            # The paging order is the one home's: an unordered paged read serves some rows twice
-            # and others never, and a model MISSED here is a handset that silently prices nothing
-            # (§19.48 / core/feed_read.py).
-            rows = [{"sku": r.get(model_field)} for r in _feed_read.read_all(
+    from app.modules.account import device_cogs as _cogs
+    from app.modules.core import feed_read as _feed_read
+    src = str(cfg.get("owed_price_table") or cfg.get("source_table") or "").strip()
+    model_field = str(cfg.get("owed_price_model_field") or cfg.get("model_field") or "").strip()
+    names = set()
+    if src and model_field:
+        # The paging order is the one home's: an unordered paged read serves some rows twice
+        # and others never, and a model MISSED here is a handset that silently prices nothing
+        # (§19.48 / core/feed_read.py).
+        rows = _ds.read_declared(
+            complaints, _ds.KIND_PRICE_EVIDENCE, src, model_field,
+            lambda: [{"sku": r.get(model_field)} for r in _feed_read.read_all(
                 lambda: client.schema("commcalc").table(src).select(model_field)
-                .eq("org_id", org_id))]
-            names = _cogs.ma_device_product_names(rows)
-        # `names or None`: with no evidence the price home falls back to its own order-type
-        # allowlist, which is its documented behaviour for a caller that has no commission feed —
-        # never a reason to price nothing.
-        return _cogs.ma_unit_price_map(client, org_id, names or None)
-    except Exception as e:
-        print(f"WARN payables _unit_price_map failed (devices stay unpriced): {e}")
-        return {}
+                .eq("org_id", org_id))],
+            [], cfg.get("label"))
+        names = _cogs.ma_device_product_names(rows)
+    # `names or None`: with no evidence the price home falls back to its own order-type
+    # allowlist, which is its documented behaviour for a caller that has no commission feed —
+    # never a reason to price nothing.
+    out = _ds.read_declared(complaints, _ds.KIND_PRICE_LIST, "", "",
+                            lambda: _cogs.ma_unit_price_map(client, org_id, names or None),
+                            {}, cfg.get("label"))
+    if not out and complaints is not None and not complaints:
+        # Read cleanly and still empty: the declaration is pointing somewhere that holds no prices.
+        complaints.record(_ds.KIND_PRICE_LIST, src, model_field,
+                          "the price list read cleanly but priced no model", cfg.get("label"))
+    return out
 
 
 def _reimb_types(client, org_id):
@@ -199,12 +218,12 @@ def _epay_reimb_amount(entries, reimb_types):
     return round(total, 2)
 
 
-def _sold_imei_set(client, org_id, table, imei_field, imeis):
+def _sold_imei_set(client, org_id, table, imei_field, imeis, complaints=None):
     """Which of these IMEIs appear in a sales/match table (=> sold). Chunked .in_() like _epay_map."""
-    return set(_sold_imei_store_map(client, org_id, table, imei_field, imeis))
+    return set(_sold_imei_store_map(client, org_id, table, imei_field, imeis, complaints))
 
 
-def _owed_link_map(client, org_id, link, keys):
+def _owed_link_map(client, org_id, link, keys, complaints=None):
     """{source key -> (amount, date)} from a RELATED report, per `payable_source_map.owed_link` (mig 620).
 
     The MA reports say what was ACTIVATED, never what was INVOICED, so a Total source map has no
@@ -215,7 +234,9 @@ def _owed_link_map(client, org_id, link, keys):
 
     Chunked .in_() like the other match helpers. Returns {} for a missing/incomplete link or an
     unreadable table — the caller then leaves owed as NULL, which is honest ("nobody has priced this
-    device") and is NOT the same as $0."""
+    device") and is NOT the same as $0. An UNREADABLE declared table is recorded on `complaints`
+    (§COMMCALC-28): "nobody priced it" is a sentence about the data, and must never be the sentence a
+    broken declaration produces."""
     if not isinstance(link, dict):
         return {}
     table = str(link.get("table") or "").strip()
@@ -235,6 +256,8 @@ def _owed_link_map(client, org_id, link, keys):
                      .eq("org_id", org_id).in_(ref_field, cand[j:j + 200]).execute().data) or []
         except Exception as e:
             print(f"WARN owed_link read failed ({table}.{ref_field}): {e}")
+            if complaints is not None:
+                complaints.record(_ds.KIND_OWED_LINK, table, ref_field, f"{type(e).__name__}: {e}")
             return {}
         for r in chunk:
             k = str(r.get(ref_field) or "").strip()
@@ -252,7 +275,7 @@ def _owed_link_map(client, org_id, link, keys):
     return out
 
 
-def _sold_imei_store_map(client, org_id, table, imei_field, imeis):
+def _sold_imei_store_map(client, org_id, table, imei_field, imeis, complaints=None):
     """{normalized imei -> the store that sold it} over a sales/match table. Chunked .in_() like
     _epay_map. Membership alone answers "sold?"; the STORE is what a source map with no `store_field`
     needs — a Total/MA row is booked against the DEALER account and carries no store of its own, so
@@ -260,7 +283,12 @@ def _sold_imei_store_map(client, org_id, table, imei_field, imeis):
     forecast's "which store is this order for") reads '—' for every Total device. Owner report
     2026-08-10: "Phone forecast should show which store the inventory is being ordered for".
     Measured coverage on the luxelink ledger: 1,081 of 1,118 IMEIs (97%) resolve. The rest stay None —
-    an unresolved device is never attached to an arbitrary store."""
+    an unresolved device is never attached to an arbitrary store.
+
+    THE LOUDEST SILENCE OF THE THREE (§COMMCALC-28): when BOTH reads fail, every device reads unsold
+    and storeless, so the out-of-pocket list is overstated and the store filter empties. Dropping the
+    `store` column is a known, benign fallback and is NOT a complaint; failing the key-only read too
+    is, and is recorded."""
     if not table or not imei_field:
         return {}
     candidates = set()
@@ -286,8 +314,11 @@ def _sold_imei_store_map(client, org_id, table, imei_field, imeis):
             try:
                 chunk = (client.schema("commcalc").table(table).select(imei_field)
                          .eq("org_id", org_id).in_(imei_field, cand[j:j + 200]).execute().data) or []
-            except Exception:
+            except Exception as e:
                 chunk = []
+                if complaints is not None:
+                    complaints.record(_ds.KIND_SOLD_MATCH, table, imei_field,
+                                      f"{type(e).__name__}: {e}")
         for r in chunk:
             k = _norm_imei(r.get(imei_field))
             st = (str(r.get("store") or "").strip() or None) if with_store else None
@@ -417,22 +448,31 @@ def build_ledger(client, org_id=ORG_ID, carrier_id=None):
     maps = _load_source_maps(client, org_id, carrier_id)
     result = {"carriers": 0, "written": 0, "status_counts": {}, "per_carrier": []}
     for cfg in maps:
+        # ONE collector per carrier: a declared table or column this build could not read is
+        # reported with the result rather than dying in a log line (§COMMCALC-28). It rides out
+        # under the message key `warnings`, so the §19.36 boundary decides what a non-admin sees.
+        complaints = _ds.Complaints(cfg.get("label") or cfg.get("carrier_id"))
         try:
-            n, sc = _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types)
+            n, sc = _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types,
+                                      complaints=complaints)
         except Exception as e:
             result["per_carrier"].append({"carrier_id": cfg.get("carrier_id"),
-                                          "label": cfg.get("label"), "error": str(e)[:200]})
+                                          "label": cfg.get("label"), "error": str(e)[:200],
+                                          "warnings": complaints.notes()})
+            _ds.merge(result, complaints)
             continue
         result["carriers"] += 1
         result["written"] += n
         for k, v in sc.items():
             result["status_counts"][k] = result["status_counts"].get(k, 0) + v
         result["per_carrier"].append({"carrier_id": cfg.get("carrier_id"),
-                                      "label": cfg.get("label"), "rows": n, "status_counts": sc})
+                                      "label": cfg.get("label"), "rows": n, "status_counts": sc,
+                                      "warnings": complaints.notes()})
+        _ds.merge(result, complaints)
     return result
 
 
-def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types):
+def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types, complaints=None):
     cid = cfg["carrier_id"]
     src_table = cfg["source_table"]
     imei_field = cfg["imei_field"]
@@ -451,12 +491,13 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types):
     ma_resolve = None
     if not cfg.get("store_field"):
         ma_resolve, _ = ma_store_resolution(client, org_id)
+    declared_cost = str(cfg.get("owed_mode") or "").strip().lower() == OWED_MODE_UNIT_PRICE
 
     # THE DEVICE COST, where the carrier's own row does not carry one (mig 1091, owner 2026-10-22:
     # "the due date in case of boost is as per the asset landing and total is the handset ordering
     # report"). Built ONCE per carrier and only when the map asks for it, so a Boost-style config
     # with an owed_field never reads the handset sheet at all (byte-identical).
-    price_map = _unit_price_map(client, org_id, cfg)
+    price_map = _unit_price_map(client, org_id, cfg, complaints)
 
     status_counts, written, page = {}, 0, 0
     while True:
@@ -469,7 +510,8 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types):
             break
         rows = _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, terms,
                               price_map=price_map,
-                              ma_resolve=ma_resolve)
+                              ma_resolve=ma_resolve, complaints=complaints,
+                              declared_cost=declared_cost)
         for i in range(0, len(rows), 500):
             client.schema("commcalc").table("device_payable_ledger").insert(rows[i:i + 500]).execute()
         for r in rows:
@@ -484,7 +526,7 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types):
 
 
 def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, terms,
-                   ma_resolve=None, price_map=None):
+                   ma_resolve=None, price_map=None, complaints=None, declared_cost=False):
     cid = cfg["carrier_id"]
     imei_field = cfg["imei_field"]
     owed_field = cfg.get("owed_field")
@@ -495,7 +537,7 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
     do_epay = bool(cfg.get("epay_crosscheck")) or cfg.get("reimbursement_source") == "epay"
     epay_map = _epay_payments_map(client, org_id, imeis) if do_epay else {}
     sold_store = (_sold_imei_store_map(client, org_id, cfg.get("sold_match_table"),
-                                       cfg.get("sold_match_imei_field"), imeis)
+                                       cfg.get("sold_match_imei_field"), imeis, complaints)
                   if cfg.get("sold_source") == "sales_match" else {})
     sold_set = set(sold_store)
 
@@ -504,7 +546,8 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
     owed_link = cfg.get("owed_link") if not owed_field else None
     link_key_field = str((owed_link or {}).get("key_field") or "").strip()
     link_map = (_owed_link_map(client, org_id, owed_link,
-                               [r.get(link_key_field) for r in chunk]) if link_key_field else {})
+                               [r.get(link_key_field) for r in chunk],
+                               complaints) if link_key_field else {})
     link_terms = None
     try:
         if owed_link and owed_link.get("terms_days") is not None:
@@ -528,7 +571,11 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
         if not store and ma_resolve is not None:
             store = ma_resolve(imei, r.get("merchant_account_id"))
         owed = _f(r.get(owed_field)) if owed_field else None
-        owed_source = "asset_ledger" if owed_field else "unconfigured"
+        # 'unconfigured' must keep meaning "this carrier declares no cost source". A carrier that
+        # DOES declare one and still priced nothing is a setup defect, and says so (§COMMCALC-28) —
+        # the 2026-10-23 rebuild wrote 2,923 devices that were indistinguishable from unconfigured.
+        owed_source = ("asset_ledger" if owed_field
+                       else _ds.owed_source_label(declared_cost, bool(price_map)))
         # PRICED OFF THE HANDSET ORDERING SHEET, by MODEL, when the carrier's own row carries no
         # amount (mig 1091). The sheet has no IMEI, so the model name is the only join there is —
         # measured 78% of Luxelink's activation rows; the rest are the distributor's own

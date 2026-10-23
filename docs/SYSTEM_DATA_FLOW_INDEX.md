@@ -25924,6 +25924,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-25 | commcalc |
 | COMMCALC-26 | commcalc |
 | COMMCALC-27 | commcalc |
+| COMMCALC-28 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -32993,3 +32994,111 @@ unwired). Neighbours: §COMMCALC-10 (the progress watchdog on the same session),
 human check these clicks are solving), §41 (the forwarder each event now crosses), §COMMCALC-07 (the
 UPS pull this login exists to feed).
 
+
+## §COMMCALC-28. A DECLARED SOURCE THAT CANNOT BE READ IS REPORTED — never read as "nothing was declared" (defect found in live data 2026-10-23)
+
+**Found in my own work, one day after shipping it.** The owner applied §COMMCALC-26's migration and
+carrier-terms runbook and pressed Rebuild ledger. The rebuild reported success. Read back against
+the live ledger: 4,322 Luxelink devices, 2,923 unsold, **0 priced**, every row
+`owed = NULL, owed_source = 'unconfigured'`, and the out-of-pocket exposure headlined **$0.00**. The
+true exposure was **$595,125.59** across 2,283 devices.
+
+**The immediate cause was one config value, and it was mine.** The runbook declared
+`payable_source_map.owed_price_table = 'raw_ma_fulfillment'`. That column does not name the price
+list — the price list is always the distributor's handset-ordering sheet and is deliberately NOT
+configurable (`account/device_cogs.ma_unit_price_map`, the one home §COMMCALC-26.4). It names the
+EVIDENCE feed: the table whose rows prove which product names are handsets at all, which is the
+commission feed `raw_ma_commission`, the one carrying a `sku` per activated line.
+`raw_ma_fulfillment` has no `sku`, so the read raised PostgREST `42703`.
+
+### COMMCALC-28.1 THE CLASS, NOT THE INSTANCE
+
+Correcting the value fixes the instance. The general fact that was wrong is this: **a reader that
+swallows a declared read's failure into an empty result makes a broken DECLARATION indistinguishable
+from an absent one.** "No invoice has priced this device" is a sentence about the DATA; the truth was
+a sentence about the SETUP, and nothing anywhere said so. Three readers in `payables/engine.py` had
+exactly that shape, and each one's silence is a different wrong answer:
+
+| declared read | what the silence says | what it costs |
+| --- | --- | --- |
+| the device-cost EVIDENCE feed (`owed_price_table`/`_model_field`) | "nobody invoiced this device" | every device unpriced — the 2026-10-23 defect |
+| `owed_link` (mig 620) | the same | every device the related report would have priced |
+| the sold-match feed (`sold_match_table`/`_imei_field`) | "this device is unsold and has no store" | the out-of-pocket list OVERSTATED, the store filter empty |
+
+A second, quieter copy of the same class sat in the summary: a device can be out of pocket and carry
+no cost, and the sum then understates the exposure **while looking like a total**. $0.00 was
+presented exactly as a real figure would have been.
+
+### COMMCALC-28.2 THE ONE HOME
+
+`backend/app/modules/payables/declared_source.py` — PURE, standard library only.
+
+- `Complaints(label)` — the declared reads that failed during one build. Append-only, never raises.
+- `read_declared(complaints, kind, table, field, read, empty, label)` — the fail-soft every caller
+  already had, with the failure KEPT. `read` is the only thing that touches a client, which is what
+  keeps the module provable with a lambda that raises.
+- `COST[kind]` — what the silence costs, stated once per kind so a new declared read cannot ship
+  wordless; the harness asserts every kind has one.
+- `owed_source_label(declared, have_prices)` → `price_source_unreadable` when a cost source was
+  declared and produced nothing, else `unconfigured`. **`unconfigured` keeps its old meaning**: this
+  carrier declares no cost source at all.
+- `merge(result, complaints)` — folds the notes into the build result under the key `warnings`.
+
+### COMMCALC-28.3 DEGRADE, DON'T DIE
+
+The old `_unit_price_map` held the evidence read and the price read inside ONE `try`, so an evidence
+failure returned `{}` and threw away the price home's documented no-evidence behaviour — its
+order-type allowlist, which still prices most handsets. Measured on the live feeds: with evidence
+**2,283 of 2,923 (78.1%)** unsold devices price; with the allowlist alone **2,143 (73.3%)**; with the
+old code **0**. The price read now sits OUTSIDE the evidence branch, and the harness proves that
+structurally (§D10) because it is the difference between 73% and nothing.
+
+### COMMCALC-28.4 WHO SEES WHAT — reusing the §19.36 boundary, not a second copy
+
+A complaint names the table and the column, because the person who must fix it is the platform admin
+reading the rebuild response. It travels under the MESSAGE KEY `warnings`, which
+`core/setup_notice.py` already owns: the super admin sees the technical text, everyone else gets the
+one `SETUP_NOTICE` sentence and the detail goes to the server log. No decision about customer-facing
+copy is re-made here.
+
+### COMMCALC-28.5 The siblings, fixed here rather than excused
+
+All three readers above take a `complaints` and record; `_sold_imei_set` passes it through. Dropping
+the optional `store` column remains a known benign fallback and is deliberately NOT a complaint —
+failing the key-only read too is. `unsold_inventory.stamp_aging` gained
+`out_of_pocket_unpriced` + `amount_incomplete`, the one boolean a screen reads before presenting the
+sum as a total — the verdict itself is unchanged and still comes from
+`commcalc/device_aging_policy.py` (§COMMCALC-26), because the defect was never in the verdict but in
+presenting an incomplete sum of it as a total. The payables screen renders the rebuild's warnings, and `lib/owed-source.ts` is the
+one home for the words — rendering the raw `owed_source` is what made the broken declaration read as
+an absent one.
+
+### COMMCALC-28.6 Locked so it cannot un-wire
+
+`backend/harness_payables_declared_source.py` — **42 passed, 0 failed**. §A the pure home, §B the two
+labels keep their distinct meanings, §C the exposure total cannot look complete when it is not
+(including the exact 2026-10-23 shape), §D the RATCHET: each of the four readers must accept a
+collector, the build must make one per carrier and pass it to each, the notes must reach the build
+RESULT and not just a log line, no literal `owed_source = "unconfigured"` may survive, and the price
+read must stay outside the evidence branch.
+
+### COMMCALC-28.7 What is owner-gated
+
+- `database/migrations/1092_payable_price_source_comments.sql` — COMMENTs only, no column, grant or
+  row touched, nothing to recompute. It names on the columns themselves which table
+  `owed_price_table` points at, because mig 1091 shipped them with no comment and the very first row
+  written against them got it wrong.
+- `/mnt/project-files/payables-carrier-terms/STEP_3_fix_price_source_2026-10-23.sql` — the one-Run
+  correction (`owed_price_table = 'raw_ma_commission'` on the two Total rows), then one more Rebuild
+  ledger press. Verified against the live feeds before it was handed over: 54 evidence skus, 36
+  priced models, 2,283 of 2,923 devices priced, $595,125.59. The 640 that stay NULL are 618 rows of
+  the distributor's own "Product Not Available" sku plus 22 models never bought on the sheet — NULL
+  on purpose, never a $0 that would read as settled.
+
+### COMMCALC-28.8 Cross-references
+
+Same home, other axes: §COMMCALC-26 (the declared terms this is the honesty half of), §COMMCALC-25
+(the filters on the same screen). Same class: §19.18 (a mechanism written and its callers left
+unwired), §66 (a last-resort placement read as evidence — the same mistake one layer up), §19.36 (the
+boundary reused here). Neighbours: §64 (store identity, which the same rebuild stamps), §19.48 (the
+complete paged read these three readers all cross).
