@@ -150,6 +150,7 @@ Primary code homes:
 | COMMCALC-24 | **A live session is read where it lives** | "I press Live login on the UPS portal and the panel says no live session is running, every time, for days. Which process holds a live browser session, which endpoints may answer a question about one, and what should a process that holds none say instead of 'nothing is running'?" |
 | COMMCALC-27 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks, and the page sent one web request per character typed. What is the operator's keystroke charged for before it runs, and what work has no business on the latency path of their next action? |
 | COMMCALC-28 | **A poll's cadence is a gap between responses, never a timer rate** | "It is very laggy" — said after the input fix had shipped and deployed. The live view asked for a new frame every 300ms on a fixed timer, across three hops that take longer than that, and fanned out three more requests per click. What happens to a poll whose request outlives its own interval, and whose connection budget is it spending? |
+| COMMCALC-29 | **A human who is watching is not idle** | His live session was not failing, it was being closed on him: "Live session closed after inactivity", eight minutes into a captcha he was working through. Only commands reset the activity clock; the frame and state polls never did. Which question is that clock actually answering, and which budget had no business being applied to a person who is demonstrably there? |
 
 ---
 
@@ -25926,6 +25927,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-26 | commcalc |
 | COMMCALC-27 | commcalc |
 | COMMCALC-28 | commcalc |
+| COMMCALC-29 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -33085,4 +33087,92 @@ Same home, other axes: §COMMCALC-27 (the input half of the same latency questio
 Same class: §COMMCALC-27 (work that only matters once the operator stopped, on the path of their next
 action). Neighbours: §41 (the three hops each poll crosses), §COMMCALC-10 (the progress watchdog on
 the same session), §COMMCALC-07 (the UPS pull this login exists to feed).
+
+---
+
+## §COMMCALC-29. A HUMAN WHO IS WATCHING IS NOT IDLE (owner evidence 2026-10-23)
+
+Not a report — a finding. The owner's 00:48 live-login session did not fail; the row read
+`auth_status: None`, *"Live session closed after inactivity."*, with `login_shot_at 00:48:45`. It was
+killed by its own idle budget at roughly 00:56, while he was working in it.
+
+### COMMCALC-29.1 THE CLASS, stated once so nobody re-derives it
+
+`_touch()` resets the activity clock, and it is called by operator COMMANDS only — `submit`,
+`resend`, `input_event`, `cancel`, `pull`. The `/live-login/state` and `/live-login/frame` polls never
+called it, by deliberate design: a poll is automatic, so letting it count as activity would let an
+abandoned browser tab hold a headless browser open forever.
+
+The error is not that polls were excluded. It is that **one fact was being used to answer two
+different questions**:
+
+- *Is anybody there?* — answered correctly by "has a surface asked about this session recently".
+- *Is the person there acting?* — answered correctly by `_touch()`.
+
+`_HUMAN_ACTION_IDLE_SECONDS` (8 minutes, against the ordinary 20) is **shortened on the assumption
+that nobody is acting**. Applied to a human who is demonstrably present — reading the page, or
+solving the captcha the phase is named for — that assumption is simply false, and the shortening
+closes the session out from under exactly the person it is waiting for.
+
+> **A budget shortened because we assume nobody is there must not apply while someone demonstrably
+> is. Watching is not acting — but it is being there.**
+
+### COMMCALC-29.2 ONE FACT, ONE HOME, DEREFERENCED
+
+- **`_note_viewer()`** records a sighting. It is called by the two methods that ANSWER a question
+  about a session — `state()` and `frame_since()` — so presence is recorded *wherever the question is
+  answered*, rather than at each endpoint that might forget to. It deliberately does **not** touch
+  `_last_activity`.
+- **`viewer_present()`** is THE one reader of "is a human watching this session right now". Pure,
+  never raises, and a session nobody has polled reads as NOT watched — so the failure mode is the
+  pre-fix budget, never a browser held open.
+- **`_VIEWER_PRESENT_SECONDS` (30)** is the one presence window. A client polls frames every ~300ms
+  (§COMMCALC-28), so 30 seconds of silence means the tab is gone.
+- **`inactivity_limit(phase, watched)`** remains the one budget reader. `watched` changes exactly one
+  thing: the shortened `human_action` budget does not apply, and the ordinary `_IDLE_CLOSE_SECONDS`
+  does instead.
+
+**Nothing gets a budget LONGER than one that already existed.** That is the load-bearing constraint,
+not a detail: a longer watched budget was written first and reverted, because `in_flight_stale_after_s`
+(§COMMCALC-13) derives the staleness window from the longest an operator may legitimately hold a
+session — and widening it past an hour would have made a killed worker's leftover `authenticating`
+row read as *live*, which is the one regression §COMMCALC-13 exists to prevent. `max_inactivity_limit()`
+is now the home that derivation dereferences, so a budget added later widens it instead of silently
+invalidating it.
+
+### COMMCALC-29.3 THE SIBLING, EXCUSED WITH ITS REASON
+
+`_post_auth_loop`'s `_POST_AUTH_IDLE_SECONDS` (15 minutes) is **not** a site of this defect, and is
+left unchanged rather than silently: it is the hold-open window for an already signed-in browser, not
+a budget shortened on the assumption nobody is acting, so no watching human is being cut short by it.
+The excuse is recorded at the call site too.
+
+### COMMCALC-29.4 DUPLICATE CHECK (the build gate) — what was REUSED, not rebuilt
+
+| question | existing home | this PR |
+| --- | --- | --- |
+| how long may a phase go without an operator input | `inactivity_limit` (§COMMCALC-10) | **EXTENDED with the `watched` argument — not joined by a sibling** |
+| how long may a phase make no progress | `preloop_limit` | **reused, untouched** |
+| how long may an in-flight row stand before it is a leftover | `in_flight_stale_after_s` (§COMMCALC-13) | **re-pointed at `max_inactivity_limit()` so it cannot be invalidated** |
+| has the operator acted | `_touch` / `_last_activity` | **reused, untouched — deliberately not conflated with presence** |
+| how promptly does input reach the page | §COMMCALC-27 | reused, untouched |
+| how often does the client ask for a frame | §COMMCALC-28 | reused, untouched — and it is what makes presence detectable at all |
+
+### COMMCALC-29.5 LOCKED
+
+`harness_live_login_progress.py` §J — 95 checks in the file now, DB-free and browser-free, in the
+same job that already ran it. It fails the build if the unwatched budgets move, if a watched phase
+ever asks for more than `max_inactivity_limit()`, if `_last_seen_at` gains a fourth site, if a
+sighting touches the activity clock, if `state` or `frame_since` stops recording one, or if the loop
+reads the raw flag instead of `viewer_present()`. `harness_terminal_status.py` §F now locks the whole
+derivation CHAIN — budget → `max_inactivity_limit` → the constants — rather than one constant's name,
+which is strictly stronger. Three armed controls assert the pre-change shapes read as broken.
+
+### COMMCALC-29.6 Cross-references
+
+Same home, other axes: §COMMCALC-27 (input on the latency path), §COMMCALC-28 (the frame poll, whose
+cadence is what makes presence observable), §COMMCALC-13 (what a finished session leaves on the row,
+and the staleness window this must not widen), §COMMCALC-24 (which process may answer at all).
+Neighbours: §COMMCALC-10 (the progress budgets this sits beside), §COMMCALC-11 (the human check the
+8-minute budget was named for), §COMMCALC-07 (the UPS pull this login exists to feed).
 

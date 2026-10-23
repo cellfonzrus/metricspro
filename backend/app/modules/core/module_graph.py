@@ -1809,9 +1809,24 @@ FACTS: dict[str, dict] = {
                     'poll\'s cadence is a GAP BETWEEN RESPONSES: `pollFrames` is the ONE issuer, '
                     '`frameBusyRef` the ONE reader of "a request is in flight", a mid-flight nudge '
                     'is remembered rather than sent in parallel, and the next request is armed in a '
-                    '`finally` from the moment the last one settled.',
+                    '`finally` from the moment the last one settled. AND the fifth axis '
+                    '(§COMMCALC-29): WHO IS THERE. `_touch` is called by operator COMMANDS only, '
+                    'never by the /state or /frame polls — deliberately, so an abandoned tab cannot '
+                    'hold a browser open — but that left one fact answering two questions, and the '
+                    '`human_action` budget, SHORTENED to 8 minutes on the assumption nobody is '
+                    'acting, was applied to an operator who was reading the page or solving the '
+                    'captcha the phase is named for. It closed the owner\'s 00:48 session at ~00:56 '
+                    'while he was in it (2026-10-23). `_note_viewer` records a sighting from the two '
+                    'methods that ANSWER about a session (`state`, `frame_since`), `viewer_present` '
+                    'is the ONE reader of "a human is there" (pure; never seen reads as NOT watched), '
+                    'and watching buys the ORDINARY budget, never a longer one — a longer one was '
+                    'written and reverted because `in_flight_stale_after_s` derives the staleness '
+                    'window from the longest an operator may hold a session, and widening it would '
+                    'have made a killed worker\'s leftover row read as LIVE. That derivation now '
+                    'dereferences `max_inactivity_limit`. Watching is not acting: `_note_viewer` '
+                    'never touches `_last_activity`.',
         "homes": ('app/modules/commcalc/live_login.py',),
-        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28'),
+        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28', 'COMMCALC-29'),
         "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py',
                   'harness_live_session_host.py', 'harness_live_input_latency.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
