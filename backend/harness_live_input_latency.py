@@ -32,6 +32,8 @@ WHAT THIS PROVES
       of a burst still settles in full, so auth is still concluded from a human's click.
   §F  draining is ORDER-PRESERVING and loses nothing — every event reaches the page, once, in order.
   §G  negative controls, including the pre-change single-service shape going RED.
+  §I  the frame poll is paced by its own RESPONSES, never by a fixed-rate timer, so a slow hop
+      slows the cadence instead of stacking requests that compete with the operator's input.
   §H  the FRONTEND half of the same question: the page batches keystrokes instead of awaiting one
       request per character, and every event — typed text, clicks, named keys, scroll — goes out on
       one ordered chain, so a flushed password can never land behind the Enter that submits it.
@@ -385,6 +387,79 @@ chain = _tsx_fn("enqueueSend")
 ok(chain != "", "enqueueSend is found")
 ok("sendChainRef" in chain and ".then(" in chain,
    "events go out on ONE promise chain, so order is preserved across the network")
+
+# ---------------------------------------------------------------------------------------------
+# §I  THE FRAME POLL IS PACED BY ITS OWN RESPONSES, NOT BY A TIMER (index §COMMCALC-28)
+#
+# Same class as §A-§H: work that only makes sense once the operator has stopped must not sit on the
+# latency path of their next action. A fixed-rate `setInterval` fires whether or not the last request
+# came back, so once a poll outlives its interval the polls overlap permanently — each one carrying a
+# stale `since`, so each is answered with a FULL frame of the same paint — and they hold the browser's
+# per-origin connection budget that the operator's own input needs.
+# ---------------------------------------------------------------------------------------------
+print("\n— I. the frame poll is paced by its responses, not by a timer —")
+
+# THE defect, in one check: no fixed-rate timer may drive the frame path.
+ok(re.search(r"setInterval\s*\(\s*(refreshFrame|pollFrames)", TSX) is None,
+   "no setInterval drives the frame poll")
+# Comments mention the shape on purpose; only CODE may not carry it.
+_tsx_code = "\n".join(l for l in TSX.split("\n") if not l.strip().startswith("//"))
+ok("setInterval" not in _tsx_code,
+   "the page declares no fixed-rate timer in code, so none can be added quietly")
+
+# ONE home for "a frame request is already in flight", and ONE issuer of the request.
+ok(TSX.count("frameBusyRef") >= 3, "frameBusyRef exists as the in-flight flag")
+_await_sites = re.findall(r"await\s+refreshFrame\s*\(", TSX)
+ok(len(_await_sites) == 1,
+   "refreshFrame is awaited in exactly ONE place (the scheduler), not called ad hoc", len(_await_sites))
+_direct = [m for m in re.finditer(r"(?<!await )(?<!const )\brefreshFrame\s*\(\s*\)", TSX)]
+ok(len(_direct) == 0,
+   "nothing calls refreshFrame() directly — every poll goes through the scheduler", len(_direct))
+
+# The scheduler itself: guarded, and it re-arms from the moment the last response SETTLED.
+_sched = re.search(r"const\s+pollFrames\s*=\s*useCallback\(async\s*\(\)\s*=>\s*\{(.*?)\n  \}, \[", TSX, re.S)
+ok(_sched is not None, "pollFrames is found")
+_body = _sched.group(1) if _sched else ""
+ok("if (frameBusyRef.current)" in _body,
+   "pollFrames returns early when a request is already in flight")
+ok("frameSoonRef.current = true" in _body,
+   "a poll that arrives mid-flight is REMEMBERED, not sent in parallel")
+ok("finally" in _body,
+   "the next poll is armed in a finally block, so a failed request cannot stop the loop")
+ok(_body.index("frameBusyRef.current = false") < _body.index("setTimeout"),
+   "the in-flight flag is cleared before the next poll is armed")
+ok("frameOpenRef.current" in _body,
+   "the loop stops once the modal closes rather than polling a closed view")
+
+# The nudge after an input asks the ONE scheduler to come back sooner; it never fans out timers.
+nudge = _tsx_fn("nudgeFrames")
+ok(nudge != "", "nudgeFrames is found")
+ok("frameSoonRef.current = true" in nudge, "a nudge sets the flag the scheduler reads")
+ok("for (" not in nudge and "forEach" not in nudge,
+   "a nudge no longer fans out one timer per delay")
+ok(re.search(r"nudgeFrames\(\s*\[", TSX) is None,
+   "no caller passes a list of delays any more")
+ok("pollFrames" in nudge, "a nudge goes through the one scheduler")
+
+# The two cadences have one home each, and a nudge is never slower than the idle gap.
+_gap = re.search(r"const\s+LIVE_FRAME_GAP_MS\s*=\s*(\d+)", TSX)
+_ndg = re.search(r"const\s+LIVE_FRAME_NUDGE_MS\s*=\s*(\d+)", TSX)
+ok(_gap is not None, "LIVE_FRAME_GAP_MS has one home in the page")
+ok(_ndg is not None, "LIVE_FRAME_NUDGE_MS has one home in the page")
+_g = int(_gap.group(1)) if _gap else -1
+_n = int(_ndg.group(1)) if _ndg else -1
+ok(0 < _n <= _g, "the post-input gap is no slower than the idle gap", "%s <= %s" % (_n, _g))
+ok(0 < _g <= 1000, "the idle gap still refreshes the view at least once a second", _g)
+
+# Armed controls: the pre-change shapes must FAIL these checks, or they are not checks.
+_pre_interval = "const iv = setInterval(refreshFrame, 300)\n    return () => clearInterval(iv)"
+ok(re.search(r"setInterval\s*\(\s*(refreshFrame|pollFrames)", _pre_interval) is not None,
+   "control: the pre-change setInterval shape is caught")
+_pre_nudge = "function nudgeFrames(delays = [140, 380, 800]) {\n  for (const d of delays) setTimeout(() => { refreshFrame() }, d)\n}"
+ok("for (" in _pre_nudge,
+   "control: the pre-change fan-out nudge is caught")
+ok(len([m for m in re.finditer(r"(?<!await )(?<!const )\brefreshFrame\s*\(\s*\)", _pre_nudge)]) > 0,
+   "control: a direct refreshFrame() call is caught")
 
 print("\n%d passed, %d failed" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
