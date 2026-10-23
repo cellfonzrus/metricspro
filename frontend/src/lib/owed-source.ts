@@ -2,7 +2,7 @@
 //
 // `owed_source` is stamped on every ledger row by the backend (payables/engine.py, the labels in
 // payables/declared_source.py). Two of its values look alike and mean opposite things, which is the
-// defect this file exists for (§COMMCALC-28): `unconfigured` means nobody told the platform where
+// defect this file exists for (§COMMCALC-29): `unconfigured` means nobody told the platform where
 // this carrier's device costs come from, while `price_source_unreadable` means somebody did and the
 // declaration is broken. Rendering the raw value made the second read as the first.
 export const OWED_SOURCE_LABEL: Record<string, string> = {

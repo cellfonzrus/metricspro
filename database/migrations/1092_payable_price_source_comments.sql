@@ -7,7 +7,7 @@
 --        two columns name the EVIDENCE feed — the one carrying the skus handsets actually activate
 --        under, i.e. the commission feed. `raw_ma_fulfillment` has no `sku`, so the read raised, the
 --        price map came back empty, and 2,923 unsold devices were written with no cost at all while
---        reading as though no cost source had ever been configured. Index §COMMCALC-28.
+--        reading as though no cost source had ever been configured. Index §COMMCALC-29.
 -- SAFE : comments only. No column, constraint, grant or row is touched, so there is nothing to
 --        recompute and no behaviour changes on applying it.
 -- REVERT: COMMENT ON COLUMN commcalc.payable_source_map.owed_price_table IS NULL;

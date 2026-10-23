@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """DB-FREE PROOF — a declared source that cannot be read is REPORTED, never read as "nothing was
-declared" (owner-facing defect 2026-10-23, index §COMMCALC-28).
+declared" (owner-facing defect 2026-10-23, index §COMMCALC-29).
 
 WHAT WENT WRONG, so the test says what it is defending. `commcalc.payable_source_map` declared
 Total's device-cost EVIDENCE feed as `raw_ma_fulfillment.sku`. That table has no `sku` column, so the

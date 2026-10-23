@@ -149,12 +149,12 @@ def _unit_price_map(client, org_id, cfg, complaints=None):
     reported as unpriced, never zeroed.
 
     WHICH TABLE `owed_price_table` NAMES, stated here because naming it wrongly cost the owner a
-    rebuild (2026-10-23, §COMMCALC-28): the EVIDENCE feed — the one carrying the skus handsets
+    rebuild (2026-10-23, §COMMCALC-29): the EVIDENCE feed — the one carrying the skus handsets
     actually activate under, i.e. the commission feed. NOT the price list, which is always the
     distributor's handset-ordering sheet and is deliberately not configurable (it is the one home
     above). `raw_ma_fulfillment` has no `sku`, so declaring it here reads nothing.
 
-    Fail-soft, but NEVER SILENT (§COMMCALC-28). Two failures that used to look identical:
+    Fail-soft, but NEVER SILENT (§COMMCALC-29). Two failures that used to look identical:
       · the EVIDENCE read fails -> fall back to the price home's own order-type allowlist, which is
         its documented no-evidence behaviour. The old code returned {} instead and threw away 73% of
         the coverage it still had.
@@ -235,7 +235,7 @@ def _owed_link_map(client, org_id, link, keys, complaints=None):
     Chunked .in_() like the other match helpers. Returns {} for a missing/incomplete link or an
     unreadable table — the caller then leaves owed as NULL, which is honest ("nobody has priced this
     device") and is NOT the same as $0. An UNREADABLE declared table is recorded on `complaints`
-    (§COMMCALC-28): "nobody priced it" is a sentence about the data, and must never be the sentence a
+    (§COMMCALC-29): "nobody priced it" is a sentence about the data, and must never be the sentence a
     broken declaration produces."""
     if not isinstance(link, dict):
         return {}
@@ -285,7 +285,7 @@ def _sold_imei_store_map(client, org_id, table, imei_field, imeis, complaints=No
     Measured coverage on the luxelink ledger: 1,081 of 1,118 IMEIs (97%) resolve. The rest stay None —
     an unresolved device is never attached to an arbitrary store.
 
-    THE LOUDEST SILENCE OF THE THREE (§COMMCALC-28): when BOTH reads fail, every device reads unsold
+    THE LOUDEST SILENCE OF THE THREE (§COMMCALC-29): when BOTH reads fail, every device reads unsold
     and storeless, so the out-of-pocket list is overstated and the store filter empties. Dropping the
     `store` column is a known, benign fallback and is NOT a complaint; failing the key-only read too
     is, and is recorded."""
@@ -449,7 +449,7 @@ def build_ledger(client, org_id=ORG_ID, carrier_id=None):
     result = {"carriers": 0, "written": 0, "status_counts": {}, "per_carrier": []}
     for cfg in maps:
         # ONE collector per carrier: a declared table or column this build could not read is
-        # reported with the result rather than dying in a log line (§COMMCALC-28). It rides out
+        # reported with the result rather than dying in a log line (§COMMCALC-29). It rides out
         # under the message key `warnings`, so the §19.36 boundary decides what a non-admin sees.
         complaints = _ds.Complaints(cfg.get("label") or cfg.get("carrier_id"))
         try:
@@ -572,7 +572,7 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
             store = ma_resolve(imei, r.get("merchant_account_id"))
         owed = _f(r.get(owed_field)) if owed_field else None
         # 'unconfigured' must keep meaning "this carrier declares no cost source". A carrier that
-        # DOES declare one and still priced nothing is a setup defect, and says so (§COMMCALC-28) —
+        # DOES declare one and still priced nothing is a setup defect, and says so (§COMMCALC-29) —
         # the 2026-10-23 rebuild wrote 2,923 devices that were indistinguishable from unconfigured.
         owed_source = ("asset_ledger" if owed_field
                        else _ds.owed_source_label(declared_cost, bool(price_map)))

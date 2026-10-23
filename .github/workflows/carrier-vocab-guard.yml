@@ -996,7 +996,7 @@ on:
       - "backend/app/modules/asset/invoice_due.py"
       - "backend/app/modules/commcalc/device_history.py"
       - "database/runbooks/payables_carrier_terms_2026-10-22.sql"
-      # index COMMCALC-28 — A DECLARED SOURCE THAT CANNOT BE READ IS REPORTED. Named individually for
+      # index COMMCALC-29 — A DECLARED SOURCE THAT CANNOT BE READ IS REPORTED. Named individually for
       # the same reason: the lock itself, the one home, and the frontend one-home for the words. The
       # three readers it ratchets (payables/engine.py, unsold_inventory.py) and the screen are already
       # named above, so a change to any of them re-runs this proof too.
@@ -1965,8 +1965,8 @@ jobs:
       # AND the HONESTY half of that config spine, same job: the terms lock proves the declared
       # numbers are read; this one proves a declaration that CANNOT be read is reported rather than
       # reading as "nothing was declared" - the 2026-10-23 defect where a mis-named evidence feed
-      # priced 0 of 2,923 devices and headlined $0.00 of real exposure. DB-free. Index COMMCALC-28.
-      - name: Run the declared-source lock (a config-named table or column the build cannot read is REPORTED with the rebuild, never swallowed into an empty result that reads as unconfigured - index COMMCALC-28)
+      # priced 0 of 2,923 devices and headlined $0.00 of real exposure. DB-free. Index COMMCALC-29.
+      - name: Run the declared-source lock (a config-named table or column the build cannot read is REPORTED with the rebuild, never swallowed into an empty result that reads as unconfigured - index COMMCALC-29)
         working-directory: backend
         shell: bash
         run: python3 harness_payables_declared_source.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

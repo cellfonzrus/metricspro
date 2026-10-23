@@ -149,6 +149,7 @@ Primary code homes:
 | COMMCALC-22 | **A claim with no amount cannot be filed** | "Trace the 4 devices paid twice and the 200 sales that matched no commission — they should be part of the discrepancies to be filed with the carrier if we did not get paid." The discrepancy report already held them, and wrote $0.00 on every single one, so the hub's open-$ card summed to nothing. Which non-payments are claims against the carrier at all, which are facts about our own feed, and what is a claim worth? |
 | COMMCALC-24 | **A live session is read where it lives** | "I press Live login on the UPS portal and the panel says no live session is running, every time, for days. Which process holds a live browser session, which endpoints may answer a question about one, and what should a process that holds none say instead of 'nothing is running'?" |
 | COMMCALC-27 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks, and the page sent one web request per character typed. What is the operator's keystroke charged for before it runs, and what work has no business on the latency path of their next action? |
+| COMMCALC-28 | **A poll's cadence is a gap between responses, never a timer rate** | "It is very laggy" — said after the input fix had shipped and deployed. The live view asked for a new frame every 300ms on a fixed timer, across three hops that take longer than that, and fanned out three more requests per click. What happens to a poll whose request outlives its own interval, and whose connection budget is it spending? |
 
 ---
 
@@ -25925,6 +25926,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-26 | commcalc |
 | COMMCALC-27 | commcalc |
 | COMMCALC-28 | commcalc |
+| COMMCALC-29 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -32994,8 +32996,99 @@ unwired). Neighbours: §COMMCALC-10 (the progress watchdog on the same session),
 human check these clicks are solving), §41 (the forwarder each event now crosses), §COMMCALC-07 (the
 UPS pull this login exists to feed).
 
+---
 
-## §COMMCALC-28. A DECLARED SOURCE THAT CANNOT BE READ IS REPORTED — never read as "nothing was declared" (defect found in live data 2026-10-23)
+## §COMMCALC-28. A POLL'S CADENCE IS A GAP BETWEEN RESPONSES, NEVER A TIMER RATE (owner report 2026-10-23)
+
+Owner, after §COMMCALC-27 shipped and deployed (PR #528, squash `b59b82a8`, production built
+2026-10-22 22:38 UTC): *"it is very laggy"*. The input half was genuinely fixed — this is a second,
+independent cause on the same screen, on the other side of the wire.
+
+### COMMCALC-28.1 THE CLASS, stated once so nobody re-derives it
+
+`setInterval(poll, 300)` fires every 300ms **whether or not the previous response has come back**. The
+live-view frame poll crosses three hops (browser → the page's own API route → the API host → the
+session host, §41), so its round trip routinely exceeds 300ms. Past that point the polls overlap and
+never recover: there is no back-pressure, the number in flight grows to `RTT / interval` and stays
+there. Two costs follow, and the second is the one the owner felt:
+
+1. **Every overlapping poll is answered with a full frame of the SAME paint.** `/live-login/frame`
+   returns a JPEG only when `_seq` has advanced past the caller's `since`. Overlapping requests all
+   carry the `since` that was current when they were issued, so N in-flight polls each ship the same
+   viewport-sized JPEG (quality 55, base64 in JSON — a third larger than the bytes).
+2. **They hold the browser's per-origin connection budget.** A browser allows ~6 concurrent
+   connections per origin over HTTP/1.1. Frame polls occupying them means the operator's own
+   keystroke POST waits in the queue behind pictures of the page they are typing into.
+
+> **A poll's cadence is the gap between its RESPONSES, not the rate of a timer. Work that only makes
+> sense once the operator has stopped must never hold the connection their next action needs.**
+
+This is the same rule as §COMMCALC-27, one layer out: there, the operator's click waited behind the
+previous click's verification; here, it waits behind the previous frames' downloads.
+
+### COMMCALC-28.2 DUPLICATE CHECK (the build gate) — what was REUSED, not rebuilt
+
+| question | existing home | this PR |
+| --- | --- | --- |
+| how promptly does the operator's input reach the page | `live_login.operator_input_pending` + the drained loops (§COMMCALC-27) | **reused, untouched** |
+| which process may answer about a session | `live_login.require_session_host` (§COMMCALC-24) | **reused, untouched** |
+| how often does the worker produce a frame | `_FRAME_PUMP_MS` / `_FALLBACK_PUMP_MS` / `_FRAME_GUARANTEE_S` (§COMMCALC-13) | **reused, untouched** — the worker's cadence is not the client's |
+| does this frame differ from the one the client has | `LiveLoginSession.frame_since(since)` | **reused, untouched** — the server was already correct; the client asked wrongly |
+| how often does the CLIENT ask for a frame | `setInterval(refreshFrame, 300)` + `nudgeFrames`'s three timers | **EXTENDED into one scheduler — §COMMCALC-28.3** |
+
+No second mechanism polls frames. `refreshFrame` was the only fetcher and remains the only fetcher;
+what changed is that exactly one caller may invoke it, and only when none is in flight. No endpoint,
+table, migration or backend behaviour changes here, and no money is touched.
+
+### COMMCALC-28.3 ONE FACT, ONE HOME, DEREFERENCED
+
+In `frontend/src/app/(platform)/commcalc/email-imports/page.tsx`:
+
+- **`pollFrames`** is THE one issuer of a frame request. It returns early when one is in flight, and
+  arms the next one in a `finally` — so a failed or slow response slows the cadence instead of being
+  skipped, and cannot stop the loop.
+- **`frameBusyRef`** is THE one reader of "a frame request is already in flight". Nothing else may
+  issue one; `refreshFrame` is awaited in exactly one place.
+- **`frameSoonRef`** records a nudge that arrived mid-flight, so it is honoured once that response
+  settles rather than becoming a second parallel request.
+- **`frameOpenRef`** stops the loop when the modal closes, so a closed view is never polled.
+- **`LIVE_FRAME_GAP_MS` (300)** and **`LIVE_FRAME_NUDGE_MS` (120)** are the two cadences, one home
+  each. The nudge may never be slower than the idle gap, and the idle gap may never exceed one
+  second — both asserted.
+
+`nudgeFrames` no longer takes a list of delays and no longer calls the poll itself: it sets the flag
+the one scheduler reads. A burst of clicks therefore adds no requests at all; it only brings the next
+one forward.
+
+### COMMCALC-28.4 THE SIBLINGS
+
+The frame poll is the only fixed-rate poll on this screen's latency path; `pollLogin` (the row poll
+while a login runs in the background) awaits its own request before sleeping 3s and so already paces
+itself by its responses. The upload-list refresh after a submit fires on a fixed ladder of timers,
+but it is not on any operator input path and ships no frames — explicitly excused rather than
+changed. The harness asserts the page declares **no** `setInterval` in code at all, so a future
+fixed-rate poll on this page fails the build wherever it is added.
+
+### COMMCALC-28.5 LOCKED
+
+`backend/harness_live_input_latency.py` §I — 91 checks in the file now, DB-free and browser-free. It
+fails the build if a `setInterval` drives the frame path (or appears in this page's code at all), if
+anything calls `refreshFrame` outside the scheduler, if the in-flight guard or the mid-flight
+remember is removed, if the next poll stops being armed in a `finally`, if the nudge fans out timers
+again, or if either cadence loses its one home. Three armed controls assert the pre-change shapes —
+the `setInterval(refreshFrame, 300)`, the fan-out `nudgeFrames`, and a bare `refreshFrame()` call —
+all read as broken. The harness already runs in the `carrier-vocab-guard` lock job.
+
+### COMMCALC-28.6 Cross-references
+
+Same home, other axes: §COMMCALC-27 (the input half of the same latency question), §COMMCALC-13
+(what a finished session leaves on the row), §COMMCALC-24 (which process may answer about a session).
+Same class: §COMMCALC-27 (work that only matters once the operator stopped, on the path of their next
+action). Neighbours: §41 (the three hops each poll crosses), §COMMCALC-10 (the progress watchdog on
+the same session), §COMMCALC-07 (the UPS pull this login exists to feed).
+
+
+## §COMMCALC-29. A DECLARED SOURCE THAT CANNOT BE READ IS REPORTED — never read as "nothing was declared" (defect found in live data 2026-10-23)
 
 **Found in my own work, one day after shipping it.** The owner applied §COMMCALC-26's migration and
 carrier-terms runbook and pressed Rebuild ledger. The rebuild reported success. Read back against
@@ -33011,7 +33104,7 @@ EVIDENCE feed: the table whose rows prove which product names are handsets at al
 commission feed `raw_ma_commission`, the one carrying a `sku` per activated line.
 `raw_ma_fulfillment` has no `sku`, so the read raised PostgREST `42703`.
 
-### COMMCALC-28.1 THE CLASS, NOT THE INSTANCE
+### COMMCALC-29.1 THE CLASS, NOT THE INSTANCE
 
 Correcting the value fixes the instance. The general fact that was wrong is this: **a reader that
 swallows a declared read's failure into an empty result makes a broken DECLARATION indistinguishable
@@ -33029,7 +33122,7 @@ A second, quieter copy of the same class sat in the summary: a device can be out
 no cost, and the sum then understates the exposure **while looking like a total**. $0.00 was
 presented exactly as a real figure would have been.
 
-### COMMCALC-28.2 THE ONE HOME
+### COMMCALC-29.2 THE ONE HOME
 
 `backend/app/modules/payables/declared_source.py` — PURE, standard library only.
 
@@ -33044,7 +33137,7 @@ presented exactly as a real figure would have been.
   carrier declares no cost source at all.
 - `merge(result, complaints)` — folds the notes into the build result under the key `warnings`.
 
-### COMMCALC-28.3 DEGRADE, DON'T DIE
+### COMMCALC-29.3 DEGRADE, DON'T DIE
 
 The old `_unit_price_map` held the evidence read and the price read inside ONE `try`, so an evidence
 failure returned `{}` and threw away the price home's documented no-evidence behaviour — its
@@ -33053,7 +33146,7 @@ order-type allowlist, which still prices most handsets. Measured on the live fee
 old code **0**. The price read now sits OUTSIDE the evidence branch, and the harness proves that
 structurally (§D10) because it is the difference between 73% and nothing.
 
-### COMMCALC-28.4 WHO SEES WHAT — reusing the §19.36 boundary, not a second copy
+### COMMCALC-29.4 WHO SEES WHAT — reusing the §19.36 boundary, not a second copy
 
 A complaint names the table and the column, because the person who must fix it is the platform admin
 reading the rebuild response. It travels under the MESSAGE KEY `warnings`, which
@@ -33061,7 +33154,7 @@ reading the rebuild response. It travels under the MESSAGE KEY `warnings`, which
 one `SETUP_NOTICE` sentence and the detail goes to the server log. No decision about customer-facing
 copy is re-made here.
 
-### COMMCALC-28.5 The siblings, fixed here rather than excused
+### COMMCALC-29.5 The siblings, fixed here rather than excused
 
 All three readers above take a `complaints` and record; `_sold_imei_set` passes it through. Dropping
 the optional `store` column remains a known benign fallback and is deliberately NOT a complaint —
@@ -33073,7 +33166,7 @@ presenting an incomplete sum of it as a total. The payables screen renders the r
 one home for the words — rendering the raw `owed_source` is what made the broken declaration read as
 an absent one.
 
-### COMMCALC-28.6 Locked so it cannot un-wire
+### COMMCALC-29.6 Locked so it cannot un-wire
 
 `backend/harness_payables_declared_source.py` — **42 passed, 0 failed**. §A the pure home, §B the two
 labels keep their distinct meanings, §C the exposure total cannot look complete when it is not
@@ -33082,7 +33175,7 @@ collector, the build must make one per carrier and pass it to each, the notes mu
 RESULT and not just a log line, no literal `owed_source = "unconfigured"` may survive, and the price
 read must stay outside the evidence branch.
 
-### COMMCALC-28.7 What is owner-gated
+### COMMCALC-29.7 What is owner-gated
 
 - `database/migrations/1092_payable_price_source_comments.sql` — COMMENTs only, no column, grant or
   row touched, nothing to recompute. It names on the columns themselves which table
@@ -33095,7 +33188,7 @@ read must stay outside the evidence branch.
   the distributor's own "Product Not Available" sku plus 22 models never bought on the sheet — NULL
   on purpose, never a $0 that would read as settled.
 
-### COMMCALC-28.8 Cross-references
+### COMMCALC-29.8 Cross-references
 
 Same home, other axes: §COMMCALC-26 (the declared terms this is the honesty half of), §COMMCALC-25
 (the filters on the same screen). Same class: §19.18 (a mechanism written and its callers left

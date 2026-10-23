@@ -1,5 +1,7 @@
 """A DECLARED SOURCE THAT CANNOT BE READ IS REPORTED — never read as "nothing was declared".
 
+Index §COMMCALC-29. Lock: `backend/harness_payables_declared_source.py`.
+
 OWNER-FACING DEFECT, 2026-10-23. `commcalc.payable_source_map` declared Total's device-cost evidence
 feed as `raw_ma_fulfillment.sku`. That table has no `sku` column, so the read raised, the caller's
 `except` returned an empty price map, and all 2,923 unsold Luxelink devices were written with

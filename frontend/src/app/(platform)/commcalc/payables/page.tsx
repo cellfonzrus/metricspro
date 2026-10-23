@@ -81,7 +81,7 @@ function PayablesPageBody() {
   const [pMeta, setPMeta] = useState<{ undated_excluded?: number }>({})
   // The rebuild's own complaints: a table or column the carrier's SETUP declares that the build
   // could not read. Silence here is what let a mis-declared cost source write 2,923 devices with no
-  // price that looked exactly like a carrier nobody had configured (§COMMCALC-28).
+  // price that looked exactly like a carrier nobody had configured (§COMMCALC-29).
   const [warns, setWarns] = useState<string[]>([])
   const [drill, setDrill] = useState<any | null>(null)
   // owed-by-date
