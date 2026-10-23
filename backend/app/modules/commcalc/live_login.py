@@ -121,6 +121,15 @@ def require_session_host():
 _SHOT_INTERVAL = 0.7           # legacy idle capture cadence (kept for the post-auth slow path)
 _IDLE_CLOSE_SECONDS = 20 * 60  # auto-close a session left idle this long (long enough to fetch a code)
 _HUMAN_ACTION_IDLE_SECONDS = 8 * 60  # a human_action (captcha) phase left untouched this long closes cleanly
+# §COMMCALC-30 — "nobody is there" is not the same fact as "the person there is not typing". Only
+# operator COMMANDS call `_touch()`; the frame and state polls never did, so an operator READING the
+# page or working through a captcha was indistinguishable from an abandoned tab, and the SHORTENED
+# budget above closed the session out from under them (owner, 2026-10-23: his 00:48 session died at
+# ~00:56 while he was in it). A surface still polling IS a human watching, so the shortened budget
+# does not apply to them — they get the ordinary `_IDLE_CLOSE_SECONDS` instead. No budget here gets
+# LONGER than one that already existed: an abandoned tab stops polling and closes on the old
+# schedule, and `in_flight_stale_after_s` (§COMMCALC-13) keeps the window it already had.
+_VIEWER_PRESENT_SECONDS = 30      # a frame/state poll within this long means a human is watching now
 # 'authenticated' is deliberately NOT terminal: after sign-in the browser stays OPEN (see _post_auth_loop)
 # so a '▶ Pull now' can run on the SAME trusted page. The session becomes terminal only on error/cancel
 # (incl. the post-auth idle timeout, which flips it to 'cancelled').
@@ -171,12 +180,26 @@ def preloop_limit(phase):
     return float(PRELOOP_PROGRESS_LIMIT_S.get(str(phase or ""), PRELOOP_PROGRESS_DEFAULT_S))
 
 
-def inactivity_limit(phase):
+def inactivity_limit(phase, watched=False):
     """THE reader of the OPERATOR-inactivity budget, used INSIDE the command loop. Factored out of
-    `_preauth_loop`'s inline conditional so the two questions above have one home each; the answers
-    are unchanged."""
-    return float(_HUMAN_ACTION_IDLE_SECONDS if str(phase or "") == "human_action"
-                 else _IDLE_CLOSE_SECONDS)
+    `_preauth_loop`'s inline conditional so the two questions above have one home each.
+
+    `watched` is the §COMMCALC-30 fact: a surface is still polling this session, so a human IS there
+    and simply has not typed yet. The ONLY thing it changes is that the SHORTENED `human_action`
+    budget — shortened on the assumption that nobody is acting — does not apply to a human who is
+    demonstrably there; they get the ordinary budget, never a longer one. Default False, which gives
+    exactly the pre-2026-10-23 answers."""
+    if str(phase or "") == "human_action" and not watched:
+        return float(_HUMAN_ACTION_IDLE_SECONDS)
+    return float(_IDLE_CLOSE_SECONDS)
+
+
+def max_inactivity_limit():
+    """The LONGEST an operator may legitimately hold a PRE-AUTH session without an input, over every
+    budget above. Anything deriving "how long may this take" dereferences THIS rather than naming one
+    constant, so a budget added later widens every derivation with it instead of silently invalidating
+    it — which is exactly what a longer watched budget would have done to `in_flight_stale_after_s`."""
+    return float(max(_IDLE_CLOSE_SECONDS, _HUMAN_ACTION_IDLE_SECONDS))
 _TERMINAL_TTL = 15 * 60       # keep a finished session's final state this long, then prune
 _POST_AUTH_IDLE_SECONDS = 15 * 60  # keep the authenticated browser open this long for a reuse-the-session pull
 
@@ -332,8 +355,12 @@ _IN_FLIGHT_STALE_MARGIN_S = 5 * 60
 
 def in_flight_stale_after_s():
     """How long an in-flight status may stand before it is a leftover. One expression over the two
-    homes that already answer "how long may this take", so a change to either moves this too."""
-    return float(_IDLE_CLOSE_SECONDS) + PRELOOP_PROGRESS_DEFAULT_S + float(_IN_FLIGHT_STALE_MARGIN_S)
+    homes that already answer "how long may this take", so a change to either moves this too.
+
+    It dereferences `max_inactivity_limit()` rather than one budget constant: §COMMCALC-30 added a
+    LONGER budget for a watched session, and reading a live watched session as stale would be exactly
+    the regression the comment above forbids."""
+    return max_inactivity_limit() + PRELOOP_PROGRESS_DEFAULT_S + float(_IN_FLIGHT_STALE_MARGIN_S)
 
 
 def in_flight_is_stale(auth_status, pending_started_at, now=None):
@@ -462,6 +489,7 @@ class LiveLoginSession:
         self._pending_ack = None                  # sessionId of the newest screencast frame awaiting ack
         self._updated_at = datetime.now(timezone.utc).isoformat()
         self._last_activity = time.time()
+        self._last_seen_at = 0.0                  # wall time an operator surface last asked (§COMMCALC-30)
         self._finished_at = None
         self._thread = None
         self._watchdog = None                     # the no-progress watchdog thread (see _watch)
@@ -488,6 +516,28 @@ class LiveLoginSession:
     def _touch(self):
         with self._lock:
             self._last_activity = time.time()
+
+    def _note_viewer(self):
+        """Record that an operator surface just asked about this session (§COMMCALC-30). Called by the
+        two methods that ANSWER such a question — `state` and `frame_since` — so presence is recorded
+        wherever the question is answered rather than at each endpoint that might forget to. It is
+        deliberately NOT `_touch`: watching is not acting, and conflating them would let an abandoned
+        tab hold a browser open forever."""
+        with self._lock:
+            self._last_seen_at = time.time()
+
+    def viewer_present(self, now=None):
+        """THE one reader of "is a human watching this session right now" (§COMMCALC-30). PURE and never
+        raises: a session nobody has polled reads as NOT watched, which keeps the pre-2026-10-23
+        budgets exactly, so the failure mode is the old behaviour rather than a browser held open."""
+        try:
+            with self._lock:
+                seen = self._last_seen_at
+            if not seen:
+                return False
+            return ((time.time() if now is None else now) - seen) <= _VIEWER_PRESENT_SECONDS
+        except Exception:
+            return False
 
     def _store_frame(self, shot):
         """Record a new frame (from the CDP screencast OR an explicit screenshot) + bump the sequence."""
@@ -550,6 +600,7 @@ class LiveLoginSession:
             return self._seq
 
     def state(self):
+        self._note_viewer()                       # answering about the session IS a sighting (§COMMCALC-30)
         with self._lock:
             pr = self.pull_result
             return {
@@ -579,6 +630,7 @@ class LiveLoginSession:
     def frame_since(self, since):
         """Lightweight frame poll: return the newest frame ONLY if `_seq` advanced past `since`, else a tiny
         unchanged payload (phase/message always included so the panel stays fresh without shipping a JPEG)."""
+        self._note_viewer()                       # answering about the session IS a sighting (§COMMCALC-30)
         try:
             since = int(since)
         except Exception:
@@ -1130,7 +1182,7 @@ class LiveLoginSession:
             with self._lock:
                 idle = time.time() - self._last_activity
                 ph = self.phase
-            limit = inactivity_limit(ph)
+            limit = inactivity_limit(ph, self.viewer_present())
             if idle > limit:
                 self._set(phase="cancelled", message="Live session closed after inactivity.")
                 return
@@ -1262,6 +1314,9 @@ class LiveLoginSession:
             self._pump(page)
             with self._lock:
                 idle = time.time() - self._last_activity
+            # NOT a §COMMCALC-30 site, and excused with its reason rather than left silent: this
+            # budget is the hold-open window for a signed-in browser, not a budget SHORTENED on the
+            # assumption nobody is acting, so a watching human is not being cut short by it.
             if idle > _POST_AUTH_IDLE_SECONDS:
                 self._set(phase="cancelled", message="Live session closed after inactivity (post-login).")
                 return

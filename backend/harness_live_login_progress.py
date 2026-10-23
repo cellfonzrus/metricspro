@@ -325,6 +325,86 @@ ok(s5._preauth_login_url(_FakeVp()) is None, "…and nor does its sibling")
 ok(s4._preauth_login_url(_FakeVp()) != "https://id.example/Login",
    "ARMED: the pre-change shape (inheriting the master-agent id-server) is RED")
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# §J  A HUMAN WHO IS WATCHING IS NOT IDLE (index §COMMCALC-30)
+#
+# Only operator COMMANDS call `_touch()`; the frame and state polls never did. So an operator READING
+# the page or working through a captcha was indistinguishable from an abandoned tab, and the
+# SHORTENED `human_action` budget closed the session out from under them — the owner's 00:48 session
+# on 2026-10-23 died at ~00:56 while he was in it. The fix gives a watched human the ORDINARY budget
+# and never a longer one, so nothing an abandoned tab can hold is widened.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+print("\n— J. a human who is watching is not idle —")
+
+# The budget, both ways round. Unwatched answers are the pre-2026-10-23 ones, unchanged.
+eq(ll.inactivity_limit("human_action"), float(8 * 60),
+   "an UNWATCHED human check still gets its 8 minutes")
+eq(ll.inactivity_limit("human_action", False), float(8 * 60), "…explicitly, too")
+eq(ll.inactivity_limit("human_action", True), float(ll._IDLE_CLOSE_SECONDS),
+   "a WATCHED human check gets the ordinary budget instead of the shortened one")
+ok(ll.inactivity_limit("human_action", True) > ll.inactivity_limit("human_action", False),
+   "THE DEFECT: watching lengthens the window the owner was losing")
+
+# …and watching never buys MORE than a budget that already existed, so the staleness window
+# (§COMMCALC-13) and the abandoned-tab bound both stay exactly where they were.
+for _ph in ("human_action", "awaiting_code", "login", "starting", "", None, "anything_else"):
+    ok(ll.inactivity_limit(_ph, True) <= ll.max_inactivity_limit(),
+       "watched '%s' asks for no more than the longest budget there is" % _ph)
+eq(ll.max_inactivity_limit(), float(ll._IDLE_CLOSE_SECONDS),
+   "the ceiling is unmoved by §COMMCALC-30")
+
+# ONE reader of "is a human watching", and it is PURE.
+_vp = _func("viewer_present")
+ok(_vp != "", "viewer_present is found")
+ok("try" in _vp and "except" in _vp, "viewer_present never raises")
+ok("_VIEWER_PRESENT_SECONDS" in _vp, "it dereferences the one declared presence window")
+ok(not re.search(r"\b\d{2,}\b", _vp), "…and spells no second copy of that window", _vp)
+_readers = [m for m in re.finditer(r"_last_seen_at", SRC)]
+ok(len(_readers) == 3,
+   "_last_seen_at is written once in __init__, set once in _note_viewer and read once in "
+   "viewer_present — no fourth site decides this for itself", len(_readers))
+
+s_j = session()
+ok(s_j.viewer_present() is False,
+   "a session nobody has polled reads as NOT watched — the failure mode is the old budget")
+s_j._note_viewer()
+ok(s_j.viewer_present() is True, "a sighting makes it watched")
+ok(s_j.viewer_present(now=time.time() + ll._VIEWER_PRESENT_SECONDS + 1) is False,
+   "and the sighting EXPIRES, so a closed tab stops holding the session open")
+ok(0 < ll._VIEWER_PRESENT_SECONDS <= 120,
+   "the presence window is short, so an abandoned tab is noticed promptly",
+   ll._VIEWER_PRESENT_SECONDS)
+
+# WATCHING IS NOT ACTING. If a sighting also touched the activity clock, an abandoned tab that kept
+# polling would hold a browser open forever — the regression this design must not cause.
+_nv = _func("_note_viewer")
+ok(_nv != "", "_note_viewer is found")
+ok("_last_activity" not in _nv,
+   "a sighting does NOT touch the activity clock — watching is not acting")
+_before = s_j._last_activity
+s_j._note_viewer()
+eq(s_j._last_activity, _before, "…proved on a real session, not just read off the source")
+
+# THE LOCK: both methods that answer about a session record the sighting. Either one forgetting
+# re-creates the defect for the surface that polls it.
+for _m in ("state", "frame_since"):
+    ok("_note_viewer" in _func(_m),
+       "%s records the sighting, so presence is recorded wherever the question is answered" % _m)
+
+# The loop dereferences the one reader rather than reading the flag itself.
+_loop = _func("_preauth_loop")
+ok("inactivity_limit" in _loop and "viewer_present" in _loop,
+   "the command loop asks both one homes rather than deciding for itself")
+ok("_last_seen_at" not in _loop, "…and never reads the raw flag")
+
+# Armed controls: the pre-change shapes must read as broken.
+ok("viewer_present" not in "limit = inactivity_limit(ph)",
+   "ARMED: the pre-change loop shape (budget with no presence) is RED")
+eq(ll.inactivity_limit("human_action", True) == float(8 * 60), False,
+   "ARMED: a watched human check answering 8 minutes would be the un-fixed behaviour")
+ok("_last_activity" in "def _note_viewer(self):\n    self._last_activity = time.time()",
+   "ARMED: a sighting that touched the activity clock is caught")
+
 print("\n%d passed, %d failed" % (PASS, FAIL))
 if FAIL:
     print("\nFAIL — a live login could stall with no limit, or a human window was shortened. "
