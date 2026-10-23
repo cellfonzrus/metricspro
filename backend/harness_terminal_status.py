@@ -195,7 +195,7 @@ ok(ll.in_flight_is_stale("authenticating", ago(hours=1).replace("+00:00", ""), n
    "a naive timestamp is read as UTC and still answers, rather than raising or reading as fresh")
 # the budget is DEREFERENCED, never a second number
 budget = _body(LL_SRC, "in_flight_stale_after_s")
-# §COMMCALC-29 put a level of indirection in front of the first home: the budget now dereferences
+# §COMMCALC-30 put a level of indirection in front of the first home: the budget now dereferences
 # `max_inactivity_limit()`, which is itself one expression over every inactivity constant. That is
 # strictly stronger than naming one constant — a budget added later widens this with it — so the
 # CHAIN is what is locked here, end to end, and still no duration is copied.
@@ -207,7 +207,7 @@ ok("_IDLE_CLOSE_SECONDS" in _ceiling and "_HUMAN_ACTION_IDLE_SECONDS" in _ceilin
 ok(not re.search(r"\b\d{3,}\b", _ceiling),
    "…with no duration spelled inside it either", _ceiling)
 eq(ll.max_inactivity_limit(), float(ll._IDLE_CLOSE_SECONDS),
-   "the ceiling is the longest budget there is, and §COMMCALC-29 did not raise it")
+   "the ceiling is the longest budget there is, and §COMMCALC-30 did not raise it")
 ok(not re.search(r"\b\d{3,}\b", budget),
    "…so no third copy of a duration is spelled inside it", budget)
 ok(ll.in_flight_stale_after_s() > float(ll._IDLE_CLOSE_SECONDS),

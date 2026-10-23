@@ -121,7 +121,7 @@ def require_session_host():
 _SHOT_INTERVAL = 0.7           # legacy idle capture cadence (kept for the post-auth slow path)
 _IDLE_CLOSE_SECONDS = 20 * 60  # auto-close a session left idle this long (long enough to fetch a code)
 _HUMAN_ACTION_IDLE_SECONDS = 8 * 60  # a human_action (captcha) phase left untouched this long closes cleanly
-# §COMMCALC-29 — "nobody is there" is not the same fact as "the person there is not typing". Only
+# §COMMCALC-30 — "nobody is there" is not the same fact as "the person there is not typing". Only
 # operator COMMANDS call `_touch()`; the frame and state polls never did, so an operator READING the
 # page or working through a captcha was indistinguishable from an abandoned tab, and the SHORTENED
 # budget above closed the session out from under them (owner, 2026-10-23: his 00:48 session died at
@@ -184,7 +184,7 @@ def inactivity_limit(phase, watched=False):
     """THE reader of the OPERATOR-inactivity budget, used INSIDE the command loop. Factored out of
     `_preauth_loop`'s inline conditional so the two questions above have one home each.
 
-    `watched` is the §COMMCALC-29 fact: a surface is still polling this session, so a human IS there
+    `watched` is the §COMMCALC-30 fact: a surface is still polling this session, so a human IS there
     and simply has not typed yet. The ONLY thing it changes is that the SHORTENED `human_action`
     budget — shortened on the assumption that nobody is acting — does not apply to a human who is
     demonstrably there; they get the ordinary budget, never a longer one. Default False, which gives
@@ -357,7 +357,7 @@ def in_flight_stale_after_s():
     """How long an in-flight status may stand before it is a leftover. One expression over the two
     homes that already answer "how long may this take", so a change to either moves this too.
 
-    It dereferences `max_inactivity_limit()` rather than one budget constant: §COMMCALC-29 added a
+    It dereferences `max_inactivity_limit()` rather than one budget constant: §COMMCALC-30 added a
     LONGER budget for a watched session, and reading a live watched session as stale would be exactly
     the regression the comment above forbids."""
     return max_inactivity_limit() + PRELOOP_PROGRESS_DEFAULT_S + float(_IN_FLIGHT_STALE_MARGIN_S)
@@ -489,7 +489,7 @@ class LiveLoginSession:
         self._pending_ack = None                  # sessionId of the newest screencast frame awaiting ack
         self._updated_at = datetime.now(timezone.utc).isoformat()
         self._last_activity = time.time()
-        self._last_seen_at = 0.0                  # wall time an operator surface last asked (§COMMCALC-29)
+        self._last_seen_at = 0.0                  # wall time an operator surface last asked (§COMMCALC-30)
         self._finished_at = None
         self._thread = None
         self._watchdog = None                     # the no-progress watchdog thread (see _watch)
@@ -518,7 +518,7 @@ class LiveLoginSession:
             self._last_activity = time.time()
 
     def _note_viewer(self):
-        """Record that an operator surface just asked about this session (§COMMCALC-29). Called by the
+        """Record that an operator surface just asked about this session (§COMMCALC-30). Called by the
         two methods that ANSWER such a question — `state` and `frame_since` — so presence is recorded
         wherever the question is answered rather than at each endpoint that might forget to. It is
         deliberately NOT `_touch`: watching is not acting, and conflating them would let an abandoned
@@ -527,7 +527,7 @@ class LiveLoginSession:
             self._last_seen_at = time.time()
 
     def viewer_present(self, now=None):
-        """THE one reader of "is a human watching this session right now" (§COMMCALC-29). PURE and never
+        """THE one reader of "is a human watching this session right now" (§COMMCALC-30). PURE and never
         raises: a session nobody has polled reads as NOT watched, which keeps the pre-2026-10-23
         budgets exactly, so the failure mode is the old behaviour rather than a browser held open."""
         try:
@@ -600,7 +600,7 @@ class LiveLoginSession:
             return self._seq
 
     def state(self):
-        self._note_viewer()                       # answering about the session IS a sighting (§COMMCALC-29)
+        self._note_viewer()                       # answering about the session IS a sighting (§COMMCALC-30)
         with self._lock:
             pr = self.pull_result
             return {
@@ -630,7 +630,7 @@ class LiveLoginSession:
     def frame_since(self, since):
         """Lightweight frame poll: return the newest frame ONLY if `_seq` advanced past `since`, else a tiny
         unchanged payload (phase/message always included so the panel stays fresh without shipping a JPEG)."""
-        self._note_viewer()                       # answering about the session IS a sighting (§COMMCALC-29)
+        self._note_viewer()                       # answering about the session IS a sighting (§COMMCALC-30)
         try:
             since = int(since)
         except Exception:
@@ -1314,7 +1314,7 @@ class LiveLoginSession:
             self._pump(page)
             with self._lock:
                 idle = time.time() - self._last_activity
-            # NOT a §COMMCALC-29 site, and excused with its reason rather than left silent: this
+            # NOT a §COMMCALC-30 site, and excused with its reason rather than left silent: this
             # budget is the hold-open window for a signed-in browser, not a budget SHORTENED on the
             # assumption nobody is acting, so a watching human is not being cut short by it.
             if idle > _POST_AUTH_IDLE_SECONDS:

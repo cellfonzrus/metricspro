@@ -126,10 +126,18 @@ def stamp_aging(rows, policies, today=None):
     verdict itself is `device_aging_policy.out_of_pocket` — `None` where neither a due date nor a
     holding period exists, which a screen must render as unknown rather than as settled.
 
-    Returns a summary {devices, out_of_pocket, out_of_pocket_amount, not_measured} so a caller can
-    headline the exposure without re-walking the rows.
+    Returns a summary {devices, out_of_pocket, out_of_pocket_amount, not_measured,
+    out_of_pocket_unpriced, amount_incomplete} so a caller can headline the exposure without
+    re-walking the rows.
+
+    WHY THE AMOUNT CARRIES ITS OWN HONESTY FLAG (§COMMCALC-29). A device can be out of pocket and
+    carry no cost, and the sum then understates the exposure while LOOKING like a total. On
+    2026-10-23 that was the whole of it: a mis-declared cost source priced nothing, so a real
+    $595,125.59 of exposure headlined as $0.00 with no hint that the number was incomplete.
+    `out_of_pocket_unpriced` counts the flagged devices with no amount, and `amount_incomplete` is
+    the one boolean a screen reads before presenting the sum as a total.
     """
-    n_oop, amt, n_unknown = 0, 0.0, 0
+    n_oop, amt, n_unknown, n_unpriced = 0, 0.0, 0, 0
     for r in rows or []:
         pol = policy_for(policies, r.get("carrier_id"))
         held = _aging.days_held(r.get("acquired_date"), today)
@@ -149,8 +157,12 @@ def stamp_aging(rows, policies, today=None):
         elif v["out_of_pocket"]:
             n_oop += 1
             try:
-                amt += float(r.get("owed_to_vip") or r.get("owed") or 0)
+                one = float(r.get("owed_to_vip") or r.get("owed") or 0)
             except (TypeError, ValueError):
-                pass
+                one = 0.0
+            amt += one
+            if not one:
+                n_unpriced += 1
     return {"devices": len(rows or []), "out_of_pocket": n_oop,
-            "out_of_pocket_amount": round(amt, 2), "not_measured": n_unknown}
+            "out_of_pocket_amount": round(amt, 2), "not_measured": n_unknown,
+            "out_of_pocket_unpriced": n_unpriced, "amount_incomplete": bool(n_unpriced)}

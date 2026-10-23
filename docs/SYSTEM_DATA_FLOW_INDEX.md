@@ -150,7 +150,7 @@ Primary code homes:
 | COMMCALC-24 | **A live session is read where it lives** | "I press Live login on the UPS portal and the panel says no live session is running, every time, for days. Which process holds a live browser session, which endpoints may answer a question about one, and what should a process that holds none say instead of 'nothing is running'?" |
 | COMMCALC-27 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks, and the page sent one web request per character typed. What is the operator's keystroke charged for before it runs, and what work has no business on the latency path of their next action? |
 | COMMCALC-28 | **A poll's cadence is a gap between responses, never a timer rate** | "It is very laggy" — said after the input fix had shipped and deployed. The live view asked for a new frame every 300ms on a fixed timer, across three hops that take longer than that, and fanned out three more requests per click. What happens to a poll whose request outlives its own interval, and whose connection budget is it spending? |
-| COMMCALC-29 | **A human who is watching is not idle** | His live session was not failing, it was being closed on him: "Live session closed after inactivity", eight minutes into a captcha he was working through. Only commands reset the activity clock; the frame and state polls never did. Which question is that clock actually answering, and which budget had no business being applied to a person who is demonstrably there? |
+| COMMCALC-30 | **A human who is watching is not idle** | His live session was not failing, it was being closed on him: "Live session closed after inactivity", eight minutes into a captcha he was working through. Only commands reset the activity clock; the frame and state polls never did. Which question is that clock actually answering, and which budget had no business being applied to a person who is demonstrably there? |
 
 ---
 
@@ -25928,6 +25928,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-27 | commcalc |
 | COMMCALC-28 | commcalc |
 | COMMCALC-29 | commcalc |
+| COMMCALC-30 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -33088,15 +33089,126 @@ Same class: §COMMCALC-27 (work that only matters once the operator stopped, on 
 action). Neighbours: §41 (the three hops each poll crosses), §COMMCALC-10 (the progress watchdog on
 the same session), §COMMCALC-07 (the UPS pull this login exists to feed).
 
+
+## §COMMCALC-29. A DECLARED SOURCE THAT CANNOT BE READ IS REPORTED — never read as "nothing was declared" (defect found in live data 2026-10-23)
+
+**Found in my own work, one day after shipping it.** The owner applied §COMMCALC-26's migration and
+carrier-terms runbook and pressed Rebuild ledger. The rebuild reported success. Read back against
+the live ledger: 4,322 Luxelink devices, 2,923 unsold, **0 priced**, every row
+`owed = NULL, owed_source = 'unconfigured'`, and the out-of-pocket exposure headlined **$0.00**. The
+true exposure was **$595,125.59** across 2,283 devices.
+
+**The immediate cause was one config value, and it was mine.** The runbook declared
+`payable_source_map.owed_price_table = 'raw_ma_fulfillment'`. That column does not name the price
+list — the price list is always the distributor's handset-ordering sheet and is deliberately NOT
+configurable (`account/device_cogs.ma_unit_price_map`, the one home §COMMCALC-26.4). It names the
+EVIDENCE feed: the table whose rows prove which product names are handsets at all, which is the
+commission feed `raw_ma_commission`, the one carrying a `sku` per activated line.
+`raw_ma_fulfillment` has no `sku`, so the read raised PostgREST `42703`.
+
+### COMMCALC-29.1 THE CLASS, NOT THE INSTANCE
+
+Correcting the value fixes the instance. The general fact that was wrong is this: **a reader that
+swallows a declared read's failure into an empty result makes a broken DECLARATION indistinguishable
+from an absent one.** "No invoice has priced this device" is a sentence about the DATA; the truth was
+a sentence about the SETUP, and nothing anywhere said so. Three readers in `payables/engine.py` had
+exactly that shape, and each one's silence is a different wrong answer:
+
+| declared read | what the silence says | what it costs |
+| --- | --- | --- |
+| the device-cost EVIDENCE feed (`owed_price_table`/`_model_field`) | "nobody invoiced this device" | every device unpriced — the 2026-10-23 defect |
+| `owed_link` (mig 620) | the same | every device the related report would have priced |
+| the sold-match feed (`sold_match_table`/`_imei_field`) | "this device is unsold and has no store" | the out-of-pocket list OVERSTATED, the store filter empty |
+
+A second, quieter copy of the same class sat in the summary: a device can be out of pocket and carry
+no cost, and the sum then understates the exposure **while looking like a total**. $0.00 was
+presented exactly as a real figure would have been.
+
+### COMMCALC-29.2 THE ONE HOME
+
+`backend/app/modules/payables/declared_source.py` — PURE, standard library only.
+
+- `Complaints(label)` — the declared reads that failed during one build. Append-only, never raises.
+- `read_declared(complaints, kind, table, field, read, empty, label)` — the fail-soft every caller
+  already had, with the failure KEPT. `read` is the only thing that touches a client, which is what
+  keeps the module provable with a lambda that raises.
+- `COST[kind]` — what the silence costs, stated once per kind so a new declared read cannot ship
+  wordless; the harness asserts every kind has one.
+- `owed_source_label(declared, have_prices)` → `price_source_unreadable` when a cost source was
+  declared and produced nothing, else `unconfigured`. **`unconfigured` keeps its old meaning**: this
+  carrier declares no cost source at all.
+- `merge(result, complaints)` — folds the notes into the build result under the key `warnings`.
+
+### COMMCALC-29.3 DEGRADE, DON'T DIE
+
+The old `_unit_price_map` held the evidence read and the price read inside ONE `try`, so an evidence
+failure returned `{}` and threw away the price home's documented no-evidence behaviour — its
+order-type allowlist, which still prices most handsets. Measured on the live feeds: with evidence
+**2,283 of 2,923 (78.1%)** unsold devices price; with the allowlist alone **2,143 (73.3%)**; with the
+old code **0**. The price read now sits OUTSIDE the evidence branch, and the harness proves that
+structurally (§D10) because it is the difference between 73% and nothing.
+
+### COMMCALC-29.4 WHO SEES WHAT — reusing the §19.36 boundary, not a second copy
+
+A complaint names the table and the column, because the person who must fix it is the platform admin
+reading the rebuild response. It travels under the MESSAGE KEY `warnings`, which
+`core/setup_notice.py` already owns: the super admin sees the technical text, everyone else gets the
+one `SETUP_NOTICE` sentence and the detail goes to the server log. No decision about customer-facing
+copy is re-made here.
+
+### COMMCALC-29.5 The siblings, fixed here rather than excused
+
+All three readers above take a `complaints` and record; `_sold_imei_set` passes it through. Dropping
+the optional `store` column remains a known benign fallback and is deliberately NOT a complaint —
+failing the key-only read too is. `unsold_inventory.stamp_aging` gained
+`out_of_pocket_unpriced` + `amount_incomplete`, the one boolean a screen reads before presenting the
+sum as a total — the verdict itself is unchanged and still comes from
+`commcalc/device_aging_policy.py` (§COMMCALC-26), because the defect was never in the verdict but in
+presenting an incomplete sum of it as a total. The payables screen renders the rebuild's warnings, and `lib/owed-source.ts` is the
+one home for the words — rendering the raw `owed_source` is what made the broken declaration read as
+an absent one.
+
+### COMMCALC-29.6 Locked so it cannot un-wire
+
+`backend/harness_payables_declared_source.py` — **42 passed, 0 failed**. §A the pure home, §B the two
+labels keep their distinct meanings, §C the exposure total cannot look complete when it is not
+(including the exact 2026-10-23 shape), §D the RATCHET: each of the four readers must accept a
+collector, the build must make one per carrier and pass it to each, the notes must reach the build
+RESULT and not just a log line, no literal `owed_source = "unconfigured"` may survive, and the price
+read must stay outside the evidence branch.
+
+### COMMCALC-29.7 What is owner-gated
+
+- `database/migrations/1092_payable_price_source_comments.sql` — COMMENTs only, no column, grant or
+  row touched, nothing to recompute. It names on the columns themselves which table
+  `owed_price_table` points at, because mig 1091 shipped them with no comment and the very first row
+  written against them got it wrong.
+- `/mnt/project-files/payables-carrier-terms/STEP_3_fix_price_source_2026-10-23.sql` — the one-Run
+  correction (`owed_price_table = 'raw_ma_commission'` on the two Total rows), then one more Rebuild
+  ledger press. Verified against the live feeds before it was handed over: 54 evidence skus, 36
+  priced models, 2,283 of 2,923 devices priced, $595,125.59. The 640 that stay NULL are 618 rows of
+  the distributor's own "Product Not Available" sku plus 22 models never bought on the sheet — NULL
+  on purpose, never a $0 that would read as settled.
+
+### COMMCALC-29.8 Cross-references
+
+Same home, other axes: §COMMCALC-26 (the declared terms this is the honesty half of), §COMMCALC-25
+(the filters on the same screen). Same class: §19.18 (a mechanism written and its callers left
+unwired), §66 (a last-resort placement read as evidence — the same mistake one layer up), §19.36 (the
+boundary reused here). Neighbours: §64 (store identity, which the same rebuild stamps), §19.48 (the
+complete paged read these three readers all cross).
+
 ---
 
-## §COMMCALC-29. A HUMAN WHO IS WATCHING IS NOT IDLE (owner evidence 2026-10-23)
+---
+
+## §COMMCALC-30. A HUMAN WHO IS WATCHING IS NOT IDLE (owner evidence 2026-10-23)
 
 Not a report — a finding. The owner's 00:48 live-login session did not fail; the row read
 `auth_status: None`, *"Live session closed after inactivity."*, with `login_shot_at 00:48:45`. It was
 killed by its own idle budget at roughly 00:56, while he was working in it.
 
-### COMMCALC-29.1 THE CLASS, stated once so nobody re-derives it
+### COMMCALC-30.1 THE CLASS, stated once so nobody re-derives it
 
 `_touch()` resets the activity clock, and it is called by operator COMMANDS only — `submit`,
 `resend`, `input_event`, `cancel`, `pull`. The `/live-login/state` and `/live-login/frame` polls never
@@ -33117,7 +33229,7 @@ closes the session out from under exactly the person it is waiting for.
 > **A budget shortened because we assume nobody is there must not apply while someone demonstrably
 > is. Watching is not acting — but it is being there.**
 
-### COMMCALC-29.2 ONE FACT, ONE HOME, DEREFERENCED
+### COMMCALC-30.2 ONE FACT, ONE HOME, DEREFERENCED
 
 - **`_note_viewer()`** records a sighting. It is called by the two methods that ANSWER a question
   about a session — `state()` and `frame_since()` — so presence is recorded *wherever the question is
@@ -33140,14 +33252,14 @@ row read as *live*, which is the one regression §COMMCALC-13 exists to prevent.
 is now the home that derivation dereferences, so a budget added later widens it instead of silently
 invalidating it.
 
-### COMMCALC-29.3 THE SIBLING, EXCUSED WITH ITS REASON
+### COMMCALC-30.3 THE SIBLING, EXCUSED WITH ITS REASON
 
 `_post_auth_loop`'s `_POST_AUTH_IDLE_SECONDS` (15 minutes) is **not** a site of this defect, and is
 left unchanged rather than silently: it is the hold-open window for an already signed-in browser, not
 a budget shortened on the assumption nobody is acting, so no watching human is being cut short by it.
 The excuse is recorded at the call site too.
 
-### COMMCALC-29.4 DUPLICATE CHECK (the build gate) — what was REUSED, not rebuilt
+### COMMCALC-30.4 DUPLICATE CHECK (the build gate) — what was REUSED, not rebuilt
 
 | question | existing home | this PR |
 | --- | --- | --- |
@@ -33158,7 +33270,7 @@ The excuse is recorded at the call site too.
 | how promptly does input reach the page | §COMMCALC-27 | reused, untouched |
 | how often does the client ask for a frame | §COMMCALC-28 | reused, untouched — and it is what makes presence detectable at all |
 
-### COMMCALC-29.5 LOCKED
+### COMMCALC-30.5 LOCKED
 
 `harness_live_login_progress.py` §J — 95 checks in the file now, DB-free and browser-free, in the
 same job that already ran it. It fails the build if the unwatched budgets move, if a watched phase
@@ -33168,7 +33280,7 @@ reads the raw flag instead of `viewer_present()`. `harness_terminal_status.py` �
 derivation CHAIN — budget → `max_inactivity_limit` → the constants — rather than one constant's name,
 which is strictly stronger. Three armed controls assert the pre-change shapes read as broken.
 
-### COMMCALC-29.6 Cross-references
+### COMMCALC-30.6 Cross-references
 
 Same home, other axes: §COMMCALC-27 (input on the latency path), §COMMCALC-28 (the frame poll, whose
 cadence is what makes presence observable), §COMMCALC-13 (what a finished session leaves on the row,

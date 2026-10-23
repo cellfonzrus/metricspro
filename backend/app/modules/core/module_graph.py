@@ -1810,7 +1810,7 @@ FACTS: dict[str, dict] = {
                     '`frameBusyRef` the ONE reader of "a request is in flight", a mid-flight nudge '
                     'is remembered rather than sent in parallel, and the next request is armed in a '
                     '`finally` from the moment the last one settled. AND the fifth axis '
-                    '(§COMMCALC-29): WHO IS THERE. `_touch` is called by operator COMMANDS only, '
+                    '(§COMMCALC-30): WHO IS THERE. `_touch` is called by operator COMMANDS only, '
                     'never by the /state or /frame polls — deliberately, so an abandoned tab cannot '
                     'hold a browser open — but that left one fact answering two questions, and the '
                     '`human_action` budget, SHORTENED to 8 minutes on the assumption nobody is '
@@ -1826,7 +1826,7 @@ FACTS: dict[str, dict] = {
                     'dereferences `max_inactivity_limit`. Watching is not acting: `_note_viewer` '
                     'never touches `_last_activity`.',
         "homes": ('app/modules/commcalc/live_login.py',),
-        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28', 'COMMCALC-29'),
+        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28', 'COMMCALC-30'),
         "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py',
                   'harness_live_session_host.py', 'harness_live_input_latency.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real

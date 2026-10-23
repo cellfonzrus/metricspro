@@ -326,7 +326,7 @@ ok(s4._preauth_login_url(_FakeVp()) != "https://id.example/Login",
    "ARMED: the pre-change shape (inheriting the master-agent id-server) is RED")
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
-# §J  A HUMAN WHO IS WATCHING IS NOT IDLE (index §COMMCALC-29)
+# §J  A HUMAN WHO IS WATCHING IS NOT IDLE (index §COMMCALC-30)
 #
 # Only operator COMMANDS call `_touch()`; the frame and state polls never did. So an operator READING
 # the page or working through a captcha was indistinguishable from an abandoned tab, and the
@@ -351,7 +351,7 @@ for _ph in ("human_action", "awaiting_code", "login", "starting", "", None, "any
     ok(ll.inactivity_limit(_ph, True) <= ll.max_inactivity_limit(),
        "watched '%s' asks for no more than the longest budget there is" % _ph)
 eq(ll.max_inactivity_limit(), float(ll._IDLE_CLOSE_SECONDS),
-   "the ceiling is unmoved by §COMMCALC-29")
+   "the ceiling is unmoved by §COMMCALC-30")
 
 # ONE reader of "is a human watching", and it is PURE.
 _vp = _func("viewer_present")
