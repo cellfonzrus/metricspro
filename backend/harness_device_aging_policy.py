@@ -133,8 +133,17 @@ ROWS = [
     {"carrier_id": "unknown-carrier", "acquired_date": "2026-01-01", "due_date": None, "owed_to_vip": 50.0},
 ]
 summ = ui.stamp_aging(ROWS, POL, TODAY)
-ok(summ == {"devices": 5, "out_of_pocket": 2, "out_of_pocket_amount": 579.0, "not_measured": 1},
+# The two honesty keys arrived with §COMMCALC-29: both out-of-pocket rows here carry a price, so
+# nothing is unpriced and the amount is a real total. The whole dict is compared on purpose — a new
+# key appearing unannounced is exactly the drift this harness exists to catch.
+ok(summ == {"devices": 5, "out_of_pocket": 2, "out_of_pocket_amount": 579.0, "not_measured": 1,
+            "out_of_pocket_unpriced": 0, "amount_incomplete": False},
    "E1 the exposure is counted AND priced, and the unjudgeable row is reported apart from both")
+ok(ui.stamp_aging([dict(ROWS[0], owed_to_vip=None)], POL, TODAY) ==
+   {"devices": 1, "out_of_pocket": 1, "out_of_pocket_amount": 0.0, "not_measured": 0,
+    "out_of_pocket_unpriced": 1, "amount_incomplete": True},
+   "E1b ...and a flagged device with NO price makes the amount say it is incomplete, rather than "
+   "presenting $0.00 as a total (§COMMCALC-29, the 2026-10-23 defect)")
 ok(ROWS[0]["out_of_pocket"] is True and ROWS[1]["out_of_pocket"] is False,
    "E2 per-row flags match the summary (one computation, not two)")
 ok(ROWS[2]["aging_bucket"] == ap.BUCKET_UNKNOWN and ROWS[2]["out_of_pocket"] is None,
