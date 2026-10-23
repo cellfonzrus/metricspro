@@ -1796,9 +1796,22 @@ FACTS: dict[str, dict] = {
                     'ONE reader of "still acting" (pure; an unreadable queue reads as not pending, '
                     'keeping the old always-settle path), `_next_input` drains human input WITHOUT '
                     'reordering SUBMIT_CODE / RESEND / CANCEL / PULL, and BOTH loops drain, bounded '
-                    'by `_INPUT_DRAIN_MAX` so a flood never starves the idle check.',
+                    'by `_INPUT_DRAIN_MAX` so a flood never starves the idle check. AND the fourth '
+                    'axis of the same question (§COMMCALC-28), on the OTHER side of the wire: the '
+                    'page polled `/live-login/frame` on a fixed-rate `setInterval(300)` and fanned '
+                    'out three more timers per input. A fixed-rate timer fires whether or not the '
+                    'last response came back, so once a poll outlived its interval — three hops, '
+                    'browser to the page\'s API route to the API host to the session host — the '
+                    'polls overlapped permanently, each carrying a stale `since` and so each '
+                    'answered with a FULL frame of the SAME paint, holding the per-origin '
+                    'connection budget the operator\'s own input needs. The owner reported the view '
+                    'still laggy after the input fix landed ("it is very laggy", 2026-10-23). A '
+                    'poll\'s cadence is a GAP BETWEEN RESPONSES: `pollFrames` is the ONE issuer, '
+                    '`frameBusyRef` the ONE reader of "a request is in flight", a mid-flight nudge '
+                    'is remembered rather than sent in parallel, and the next request is armed in a '
+                    '`finally` from the moment the last one settled.',
         "homes": ('app/modules/commcalc/live_login.py',),
-        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27'),
+        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28'),
         "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py',
                   'harness_live_session_host.py', 'harness_live_input_latency.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real

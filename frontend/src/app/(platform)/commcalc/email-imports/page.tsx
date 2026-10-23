@@ -58,6 +58,15 @@ type LiveInputEvent =
 // pause in typing lands at once, long enough that a password is one round trip rather than a dozen.
 const LIVE_TYPE_FLUSH_MS = 70
 
+// §COMMCALC-28 — the frame poll's cadence is a GAP BETWEEN RESPONSES, never a fixed timer rate. A
+// `setInterval` fires whether or not the last request came back, so once a poll takes longer than the
+// interval (three hops: browser → the page's API route → the API host → the session host) the polls
+// overlap and never recover: each one in flight carries a stale `since`, so each is answered with a
+// FULL frame of the same paint, and they occupy the browser's per-origin connection budget that the
+// operator's own input needs. One response, then the next request.
+const LIVE_FRAME_GAP_MS = 300    // steady cadence while the operator is idle
+const LIVE_FRAME_NUDGE_MS = 120  // right after an input, when the result is about to appear
+
 const providerOf = (host: string) =>
   Object.keys(PROVIDERS).find(k => PROVIDERS[k].imap_host && PROVIDERS[k].imap_host === (host || '')) || 'custom'
 
@@ -125,6 +134,14 @@ export default function EmailImportsPage() {
   const pendingTextRef = useRef('')                      // characters typed but not yet sent
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const sendChainRef = useRef<Promise<void>>(Promise.resolve())
+  // §COMMCALC-28 — the frame poll's own state. `frameBusyRef` is THE one reader of "a frame request is
+  // already in flight": nothing else may issue one, so at most ONE is ever outstanding. `frameSoonRef`
+  // records a nudge that arrived while one was in flight, so it is honoured once that one settles
+  // instead of becoming a second parallel request.
+  const frameBusyRef = useRef(false)
+  const frameSoonRef = useRef(false)
+  const frameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const frameOpenRef = useRef(false)                     // false once the modal closes — stops the loop
   const [customTypes, setCustomTypes] = useState<any[]>([])   // self-serve custom sheets (mig 099)
   const [newSheet, setNewSheet] = useState('')
   const [viewer, setViewer] = useState<any>(null)             // { report_key, label } while viewing data
@@ -189,14 +206,39 @@ export default function EmailImportsPage() {
     } catch { /* keep the last frame on a transient poll error */ }
   }, [live?.source?.id])
 
+  // THE one scheduler for the frame poll (§COMMCALC-28). It issues a request only when none is in
+  // flight, and the next request is scheduled from the moment the last one SETTLED — so a slow hop
+  // slows the cadence instead of stacking requests that compete with the operator's own input. A
+  // nudge that arrives mid-flight is remembered and honoured on settle, never sent in parallel.
+  const pollFrames = useCallback(async () => {
+    if (frameTimerRef.current) { clearTimeout(frameTimerRef.current); frameTimerRef.current = null }
+    if (!frameOpenRef.current) return
+    if (frameBusyRef.current) { frameSoonRef.current = true; return }
+    frameBusyRef.current = true
+    try {
+      await refreshFrame()
+    } finally {
+      frameBusyRef.current = false
+      if (frameOpenRef.current) {
+        const soon = frameSoonRef.current
+        frameSoonRef.current = false
+        frameTimerRef.current = setTimeout(() => { pollFrames() }, soon ? LIVE_FRAME_NUDGE_MS : LIVE_FRAME_GAP_MS)
+      }
+    }
+  }, [refreshFrame])
+
   useEffect(() => {
     const id = live?.source?.id
-    if (!id) return
+    if (!id) { frameOpenRef.current = false; return }
     liveSeqRef.current = 0
-    refreshFrame()
-    const iv = setInterval(refreshFrame, 300)   // ~3.3 polls/s — matches the worker's frame pump cadence
-    return () => clearInterval(iv)
-  }, [live?.source?.id, refreshFrame])
+    frameOpenRef.current = true
+    frameSoonRef.current = false
+    pollFrames()
+    return () => {
+      frameOpenRef.current = false
+      if (frameTimerRef.current) { clearTimeout(frameTimerRef.current); frameTimerRef.current = null }
+    }
+  }, [live?.source?.id, pollFrames])
 
   function pickAccount(acct: string) {
     const a = accounts.find(x => x.account === acct)
@@ -625,9 +667,16 @@ export default function EmailImportsPage() {
     pendingTextRef.current = ''
     return enqueueSend({ type: 'type', text })
   }
-  // Right after an input, pull a few quick frames so the result appears without waiting for the next tick.
-  function nudgeFrames(delays = [140, 380, 800]) {
-    for (const d of delays) setTimeout(() => { refreshFrame() }, d)
+  // Right after an input, ask for the next frame PROMPTLY so the result appears without waiting out the
+  // idle gap (§COMMCALC-28). This used to fan out three independent timers per input, each calling the
+  // poll directly — so a burst of clicks left a dozen overlapping frame requests in the connection
+  // queue ahead of the operator's next keystroke. It now asks the ONE scheduler to come back sooner.
+  function nudgeFrames() {
+    frameSoonRef.current = true
+    if (!frameBusyRef.current) {
+      if (frameTimerRef.current) { clearTimeout(frameTimerRef.current); frameTimerRef.current = null }
+      frameTimerRef.current = setTimeout(() => { pollFrames() }, LIVE_FRAME_NUDGE_MS)
+    }
   }
   function normXY(e: React.MouseEvent<HTMLImageElement>) {
     const r = e.currentTarget.getBoundingClientRect()
@@ -662,7 +711,7 @@ export default function EmailImportsPage() {
       // the moment typing pauses, and any other event flushes first, so order is never lost.
       pendingTextRef.current += k
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current)
-      flushTimerRef.current = setTimeout(() => { flushText(); nudgeFrames([120, 340]) }, LIVE_TYPE_FLUSH_MS)
+      flushTimerRef.current = setTimeout(() => { flushText(); nudgeFrames() }, LIVE_TYPE_FLUSH_MS)
       return
     } else {
       flushText()                         // the typed text precedes the key that acts on it
@@ -670,7 +719,7 @@ export default function EmailImportsPage() {
       const key = k.length === 1 ? k.toUpperCase() : k
       await enqueueSend({ type: 'key', key: mods.length ? [...mods, key].join('+') : key })
     }
-    nudgeFrames([120, 340])
+    nudgeFrames()
   }
   // Scroll: forward the wheel delta (throttled) so the human can reach off-screen portal controls.
   function wheelLive(e: React.WheelEvent) {
@@ -679,7 +728,7 @@ export default function EmailImportsPage() {
     if (now - wheelTsRef.current < 110) return
     wheelTsRef.current = now
     flushText()
-    enqueueSend({ type: 'scroll', deltaY: e.deltaY }); nudgeFrames([160, 420])
+    enqueueSend({ type: 'scroll', deltaY: e.deltaY }); nudgeFrames()
   }
   async function closeLive(cancel = true) {
     const id = live?.source?.id
