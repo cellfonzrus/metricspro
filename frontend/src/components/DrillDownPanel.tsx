@@ -278,13 +278,34 @@ export function useDrillOpen() {
  * once below the strip, is the shape — and it lives here so the remaining reports inherit it instead
  * of each page deciding again.
  */
-export function useDrillTile() {
+export function useDrillTile(
+  panels: Record<string, DrillPanel> = {},
+  gate?: (key: string, panel: DrillPanel) => boolean,
+) {
   const [open, setOpen] = useState<string | null>(null)
+  // THE OFFER RULE, ONE HOME (§CORE-17.3c). `dl` takes key/label pairs and keeps only the figures the
+  // SERVER actually served a panel for, so a feed that never resolved for this range shows no link
+  // rather than a link that opens an empty panel and reads like a bug. Every page that gained tile
+  // drills had written this loop again locally; one of them had also bolted its own extra condition
+  // on (the figure must agree with the tile to the cent, where a page narrows its rows after the
+  // server folded them). That condition is now the optional `gate`, so there is one loop and the
+  // per-page difference is a parameter rather than a second copy.
+  const dl = (...pairs: string[]) => {
+    const out: { key: string; label: string }[] = []
+    for (let i = 0; i < pairs.length; i += 2) {
+      const p = panels[pairs[i]]
+      if (p && (!gate || gate(pairs[i], p))) out.push({ key: pairs[i], label: pairs[i + 1] })
+    }
+    return out
+  }
   return {
     open,
     isOpen: (k: string) => open === k,
     toggle: (k: string) => setOpen(o => (o === k ? null : k)),
     close: () => setOpen(null),
+    /** The panel currently open, or undefined. Saves every caller indexing `panels` again. */
+    panel: open ? panels[open] : undefined,
+    dl,
   }
 }
 

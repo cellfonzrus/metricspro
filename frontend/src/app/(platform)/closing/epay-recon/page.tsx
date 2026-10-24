@@ -5,6 +5,8 @@ import { api, fmt, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
+import DrillDownPanel, { useDrillTile, type DrillPanel } from '@/components/DrillDownPanel'
+import { DrillStat, STORE_DRILL_COLUMNS } from '../_lib/DrillStat'
 
 // ePay bill-payment recon: DECLARED ePay (closing) vs SALES bill-payments (by tender) vs BANK deposited.
 export default function EpayReconPage() {
@@ -88,6 +90,11 @@ export default function EpayReconPage() {
     (!fStores.length || fStores.includes(r.store_code)) &&
     (!fMarketsFold.size || fMarketsFold.has((marketByCode[r.store_code] || '').trim().toLowerCase())))
   const t = data?.totals || {}
+  // THE SERVED PANELS (§CORE-17). The tiles show the DAY's figure for every store, which is what the
+  // server folded them from — the market/store/flagged pickers below narrow only the table, so a
+  // tile and its drill-down always describe the same population and the drill is always honest here.
+  const drills: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(drills)
   const inp = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
   function buildPayload(): ExportPayload {
@@ -179,11 +186,24 @@ export default function EpayReconPage() {
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
-            <Stat label="Declared ePay cash" value={fmt(t.declared_cash)} />
-            <Stat label="Sales bill‑pay cash" value={fmt(t.sales_cash)} color="var(--text2)" />
-            <Stat label="Bank deposited" value={fmt(t.bank_deposited)} color="var(--c-fg-16a34a)" />
-            <Stat label="Stores flagged" value={`${t.flagged || 0} / ${t.stores || 0}`} color={t.flagged ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'} />
+            <DrillStat label="Declared ePay cash" value={fmt(t.declared_cash)}
+              drill={drill} drills={drill.dl('declared_cash', 'the store‑days behind it')} />
+            <DrillStat label="Sales bill‑pay cash" value={fmt(t.sales_cash)} color="var(--text2)"
+              drill={drill} drills={drill.dl('sales_cash', 'the store‑days behind it')} />
+            <DrillStat label="Bank deposited" value={fmt(t.bank_deposited)} color="var(--c-fg-16a34a)"
+              drill={drill} drills={drill.dl('bank_deposited', 'the deposits behind it')} />
+            <DrillStat label="Stores flagged" value={`${t.flagged || 0} / ${t.stores || 0}`} color={t.flagged ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'}
+              drill={drill} drills={drill.dl('flagged', 'the flagged stores')} />
           </div>
+
+          {/* ONE panel at a time, below the strip (§CORE-17): the stores behind the figure, which
+              feeds they were read out of, and whether they add up to the tile. */}
+          {drill.open && (
+            <div style={{ marginBottom: 14 }}>
+              <DrillDownPanel panel={drill.panel} extraColumns={STORE_DRILL_COLUMNS}
+                emptyNote={`No store contributed to this figure on ${date}.`} />
+            </div>
+          )}
           <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
             <MarketStorePicker
               stores={storesForCascade}
@@ -259,9 +279,3 @@ export default function EpayReconPage() {
   )
 }
 
-function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
-  return <div className="card" style={{ padding: '14px 16px' }}>
-    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</div>
-    <div style={{ fontSize: 20, fontWeight: 700, marginTop: 4, color: color || 'var(--text1)' }}>{value}</div>
-  </div>
-}
