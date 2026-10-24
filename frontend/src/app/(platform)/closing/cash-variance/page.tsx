@@ -68,6 +68,12 @@ const legCell = (raw?: unknown) => {
   const l = (raw || {}) as LegField
   return !l.present ? '—' : `${money(l.amount)}${l.basis_label ? ` · ${l.basis_label}` : ''}`
 }
+// What a leg column SORTS by. The cell above is prose (an amount plus which cash it counted), so the
+// header needs the bare number — and a leg nobody recorded sorts as absent, never as zero.
+const legAmount = (raw?: unknown) => {
+  const l = (raw || {}) as LegField
+  return l.present ? (l.amount ?? null) : null
+}
 
 const rowCell = (r: any, f: string) => (f.startsWith('p:') ? (r?.pairs?.[f.slice(2)]?.variance ?? null) : r?.[f])
 const groupCell = (g: any, f: string) =>
@@ -413,12 +419,18 @@ export default function CashVariancePage() {
                               <DrillDownPanel panel={panel}
                                 emptyNote="No store-days were recorded behind this figure."
                                 extraColumns={[
-                                  { header: 'Store', get: (r: DrillRow) => String(r.fields?.store_address || r.fields?.store_code || '') },
-                                  { header: 'Verdict', get: (r: DrillRow) => BADGE[String(r.fields?.verdict || '')] || '' },
+                                  { header: 'Store',
+                                    get: (r: DrillRow) => String(r.fields?.store_address || r.fields?.store_code || ''),
+                                    sortValue: (r: DrillRow) => String(r.fields?.store_address || r.fields?.store_code || '') },
+                                  { header: 'Verdict',
+                                    get: (r: DrillRow) => BADGE[String(r.fields?.verdict || '')] || '',
+                                    sortValue: (r: DrillRow) => String(r.fields?.verdict || '') },
                                   { header: 'Management received',
-                                    get: (r: DrillRow) => legCell(r.fields?.got) },
+                                    get: (r: DrillRow) => legCell(r.fields?.got),
+                                    sortValue: (r: DrillRow) => legAmount(r.fields?.got) },
                                   { header: 'Cash envelope declared',
-                                    get: (r: DrillRow) => legCell(r.fields?.expected) },
+                                    get: (r: DrillRow) => legCell(r.fields?.expected),
+                                    sortValue: (r: DrillRow) => legAmount(r.fields?.expected) },
                                 ]} />
                             </td>
                           </tr>

@@ -1,7 +1,8 @@
 'use client'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { fmt } from '@/lib/client'
 import { sourceLabel } from '@/lib/sourceLabels'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 // THE ROWS BEHIND A FIGURE, AND WHERE THEY CAME FROM — the ONE renderer (owner ask 2026-10-24,
 // index §CORE-17). Server twin: `backend/app/modules/core/report_drilldown.py::panel`.
@@ -23,6 +24,13 @@ import { sourceLabel } from '@/lib/sourceLabels'
 // IT STATES A DISAGREEMENT. The server's `tie_out` says whether the rows add up to the figure; this
 // renders that sentence as-is, including when they do NOT. A drill-down that quietly showed rows
 // summing to something else would be worse than none: it would look like proof.
+//
+// ITS HEADERS SORT, through `useTableSort` and nothing of its own (owner directive 2026-08-10, "sort
+// function by clicking on the header for all reports"; locked by `harness_table_sort_lock.py`). A
+// drill-down is where someone hunts for the one row that explains the figure, so sorting matters more
+// here than on a rollup, and being the ONE renderer means wiring it once covers every report that
+// gains a drill-down. Sorting reorders the rows the server already sent — the tie-out is computed on
+// the server over ALL of them, so no order can change whether the evidence adds up.
 
 export type DrillOrigin = {
   table?: string | null; schema?: string | null; column?: string | null
@@ -45,6 +53,34 @@ export type DrillPanel = {
   sources?: { table: string; rows: number }[]
   untraceable_origins?: number
   note?: string | null
+}
+
+/** A report's own extra column. `sortValue` is what its header sorts BY — a formatted cell is a
+ *  React node and cannot be compared, so a column without one is explicitly `disabled` rather than
+ *  silently sorting on nothing. */
+export type DrillExtraColumn = {
+  header: string
+  get: (r: DrillRow) => React.ReactNode
+  sortValue?: (r: DrillRow) => string | number | null
+}
+
+/** Stable empty default, so `useMemo` below is not defeated by a fresh `[]` on every render. */
+const NO_EXTRA: DrillExtraColumn[] = []
+
+/** The built-in columns' sort fields. Prefixed so a report's own header can never collide with one. */
+const F_ROW = '_row', F_AMOUNT = '_amount', F_COUNTED = '_counted', F_ORIGIN = '_origin'
+
+/** One cell reader for every column. A row with no figure returns null, which `compareValues` sinks
+ *  to the bottom in BOTH directions — "not measured" must never sort as $0.00. */
+const cellReader = (extra: DrillExtraColumn[]) => (r: DrillRow, field: string) => {
+  if (field === F_ROW) return r.label
+  if (field === F_AMOUNT) return r.measured && r.present ? r.amount : null
+  if (field === F_COUNTED) return r.in_figure ? 'yes' : ''
+  if (field === F_ORIGIN) {
+    return (r.origins || []).filter(o => o && o.table).map(o => sourceLabel(o.table!)).join(' · ')
+  }
+  const c = extra.find(x => x.header === field)
+  return c && c.sortValue ? c.sortValue(r) : null
 }
 
 const num = (v: number | null | undefined, unit?: string) =>
@@ -124,15 +160,18 @@ export function DrillTieOut({ panel }: { panel: DrillPanel }) {
  * forking the component — the shape stays one shape, and a report's own vocabulary stays its own.
  */
 export default function DrillDownPanel({
-  panel, extraColumns = [], emptyNote,
+  panel, extraColumns = NO_EXTRA, emptyNote,
 }: {
   panel?: DrillPanel | null
-  extraColumns?: { header: string; get: (r: DrillRow) => React.ReactNode }[]
+  extraColumns?: DrillExtraColumn[]
   emptyNote?: string
 }) {
+  // Hooks run before the early return — a panel that is absent this render may be present the next.
+  const rows = panel?.rows || []
+  const cell = useMemo(() => cellReader(extraColumns), [extraColumns])
+  const s = useTableSort(rows, cell)
   if (!panel) return <div style={{ ...wrap, color: 'var(--text2)', fontSize: 12 }}>{emptyNote || 'Nothing to show behind this figure.'}</div>
   const unit = panel.figure?.unit
-  const rows = panel.rows || []
   return (
     <div style={wrap}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'baseline' }}>
@@ -158,15 +197,26 @@ export default function DrillDownPanel({
           <table style={{ borderCollapse: 'collapse', width: '100%' }}>
             <thead>
               <tr>
-                <th style={th}>Row</th>
-                <th style={th}>{unit === 'count' ? 'Count' : unit === 'hours' ? 'Hours' : 'Amount'}</th>
-                <th style={th}>Counted in the figure</th>
-                {extraColumns.map(c => <th key={c.header} style={th}>{c.header}</th>)}
-                <th style={th}>Where this came from</th>
+                <SortableTh field={F_ROW} sort={s.sort} onSort={s.toggle} style={th}>Row</SortableTh>
+                <SortableTh field={F_AMOUNT} sort={s.sort} onSort={s.toggle} style={th}>
+                  {unit === 'count' ? 'Count' : unit === 'hours' ? 'Hours' : 'Amount'}
+                </SortableTh>
+                <SortableTh field={F_COUNTED} sort={s.sort} onSort={s.toggle} style={th}>
+                  Counted in the figure
+                </SortableTh>
+                {/* A column whose cell is a formatted node and gave no `sortValue` has nothing to
+                    compare, so it says so rather than offering a header that does nothing. */}
+                {extraColumns.map(c => (
+                  <SortableTh key={c.header} field={c.header} sort={s.sort} onSort={s.toggle}
+                    style={th} disabled={!c.sortValue}>{c.header}</SortableTh>
+                ))}
+                <SortableTh field={F_ORIGIN} sort={s.sort} onSort={s.toggle} style={th}>
+                  Where this came from
+                </SortableTh>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
+              {s.sorted.map((r, i) => (
                 <tr key={(r.label || '') + i} style={r.in_figure ? undefined : { opacity: 0.75 }}>
                   <td style={td}>{r.label}</td>
                   <td style={td} title={r.measured ? '' : (r.reason_label || '')}>
