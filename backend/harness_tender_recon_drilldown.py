@@ -166,8 +166,12 @@ print("\n== G. the partial is DECLARED a partial ==")
 _pg = open(os.path.join(ROOT, "frontend", "src", "app", "(platform)", "closing", "tender-recon",
                         "page.tsx"), encoding="utf-8").read()
 check("G1 the page offers a figure's drill ONLY while the tile and the panel agree to the cent — a "
-      "panel explaining a figure the screen is not showing would look like proof of the wrong number",
-      "const agrees = (k: string)" in _pg and "Math.round(" in _pg and "if (agrees(pairs[i]))" in _pg)
+      "panel explaining a figure the screen is not showing would look like proof of the wrong number. "
+      "The check is this page's GATE on the shared offer rule (§CORE-17.3c), not a second copy of it",
+      "Math.round(" in _pg
+      and "useDrillTile(drills, (k, p) => cents(p.figure?.amount ?? NaN) === cents(" in _pg
+      and "const dl = drill.dl" in _pg
+      and "const dl = (...pairs: string[]) => {" not in _pg)
 check("G2 and when a filter makes them disagree the REASON IS STATED on screen, not hidden",
       "narrowed" in _pg and "would be about a different" in _pg)
 _ledger = open("harness_drilldown_pending.txt", encoding="utf-8").read()

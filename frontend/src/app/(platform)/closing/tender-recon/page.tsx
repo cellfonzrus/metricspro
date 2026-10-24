@@ -104,15 +104,12 @@ export default function XTenderReconPage() {
   // sides, which means this report's standard filters moving server-side. Recorded in §CORE-17.3b,
   // and this route deliberately still reads `owes` in the coverage ledger.
   const drills: Record<string, DrillPanel> = data?.drilldown || {}
-  const drill = useDrillTile()
   const cents = (n: number) => Math.round((Number(n) || 0) * 100)
-  const agrees = (k: string) => !!drills[k] && cents(drills[k].figure?.amount ?? NaN) === cents(t[k as keyof typeof t] as number)
+  // The cent-exact agreement check is this page's EXTRA condition, passed to the shared offer rule as
+  // its `gate` rather than written as a second copy of the loop (§CORE-17.3c).
+  const drill = useDrillTile(drills, (k, p) => cents(p.figure?.amount ?? NaN) === cents(t[k as keyof typeof t] as number))
   const narrowed = useMemo(() => filtered.length !== joinedRows.length, [filtered, joinedRows])
-  const dl = (...pairs: string[]) => {
-    const out: { key: string; label: string }[] = []
-    for (let i = 0; i < pairs.length; i += 2) if (agrees(pairs[i])) out.push({ key: pairs[i], label: pairs[i + 1] })
-    return out
-  }
+  const dl = drill.dl
   const DRILL_COLUMNS = [
     { header: 'Status', get: (r: DrillRow) => (r.fields?.match ? 'OK' : !r.fields?.in_closing ? 'no closing' : !r.fields?.in_pos ? 'no X report' : 'MISMATCH'),
       sortValue: (r: DrillRow) => (r.fields?.match ? 'OK' : !r.fields?.in_closing ? 'no closing' : !r.fields?.in_pos ? 'no X report' : 'MISMATCH') },
@@ -211,7 +208,7 @@ export default function XTenderReconPage() {
           {/* ONE panel at a time, below the strip. */}
           {drill.open && (
             <div style={{ marginBottom: 14 }}>
-              <DrillDownPanel panel={drills[drill.open]} extraColumns={DRILL_COLUMNS}
+              <DrillDownPanel panel={drill.panel} extraColumns={DRILL_COLUMNS}
                 emptyNote="No store in this range contributed to this figure." />
             </div>
           )}

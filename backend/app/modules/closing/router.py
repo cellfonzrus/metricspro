@@ -32,6 +32,8 @@ from . import pickup_actual as _pickup_actual
 from . import count_revision as _count_revision
 from . import cash_variance as _cash_variance
 from . import cash_recon_drilldown as _cash_recon_drilldown
+from . import day_recon_drilldown as _day_recon_drilldown
+from . import external_credit_drilldown as _external_credit_drilldown
 from app.modules.commcalc import data_lineage_registry as _lineage
 from . import closer_resolution
 from . import billpay_netting
@@ -1259,7 +1261,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
 
     # B2B MONEY actuals for that day (accessory gross, cash vs card by tender) → store money-recon.
     try:
-        b2b_money = _b2b_money_by_store(client, org_id, date)
+        b2b_money, _ = _b2b_money_by_store(client, org_id, date)
     except Exception as e:
         print("closing B2B money recon failed:", e)
         b2b_money = {}
@@ -3872,12 +3874,16 @@ def _is_epay(dept, cat, product):
 
 
 def _epay_sales_by_store(client, org_id, date, store=None):
-    """Bill-payment (ePay) sales $ per store, SPLIT BY TENDER (cash / credit / acima). Best-effort:
-    identifies bill-payment lines by category or product keyword, then buckets ext_price by tender."""
+    """({store_code: {cash, credit, acima}}, sales tables read) — bill-payment (ePay) sales $ per store,
+    SPLIT BY TENDER. Best-effort: identifies bill-payment lines by category or product keyword, then
+    buckets ext_price by tender. The second element is the sales-pair side(s) that actually answered
+    (§CORE-17.3c), dereferenced from `_b2b_sales_rows_sourced` so this never re-derives it."""
     resolve = _addr_resolver(client, org_id)
+    tables = ()
     try:
-        rows = _b2b_sales_rows(client, org_id, date,
-                               "store,department,category,product_desc,tender_type,ext_price,voided,trans_type")
+        rows, tables = _b2b_sales_rows_sourced(
+            client, org_id, date,
+            "store,department,category,product_desc,tender_type,ext_price,voided,trans_type")
     except Exception:
         rows = []
     out = {}
@@ -3896,7 +3902,7 @@ def _epay_sales_by_store(client, org_id, date, store=None):
         if store and code != store:
             continue
         out.setdefault(code, {"cash": 0.0, "credit": 0.0, "acima": 0.0})[bucket] += _f(r.get("ext_price"))
-    return out
+    return out, tables
 
 
 # ── Bank-deposit slip OCR + configurable match target (mig 502, retail-ops-7 item 3) ─────────────
@@ -4641,7 +4647,7 @@ def epay_recon(date: str, store: str = None, tolerance: float = 1.0,
                               "ocr_date": r.get("ocr_date"), "ocr_bank_name": r.get("ocr_bank_name"),
                               "match_target": r.get("match_target"), "declared_amount": r.get("declared_amount")})
 
-    sales = _epay_sales_by_store(client, org_id, d, store)
+    sales, _sales_tables = _epay_sales_by_store(client, org_id, d, store)
     codes = [store] if store else sorted(set(declared) | set(bank) | set(sales))
     if ks is not None:
         codes = [c for c in codes if in_keyset(ks, c, (declared.get(c) or {}).get("store_address"))]
@@ -4653,7 +4659,7 @@ def epay_recon(date: str, store: str = None, tolerance: float = 1.0,
         declared_cash, deposited = round(dec["cash"], 2), round(bk["amount"], 2)
         var = round(declared_cash - deposited, 2)
         out.append({
-            "store_code": code, "store_address": dec["store_address"] or code,
+            "store_code": code, "store_address": dec["store_address"] or code, "close_date": d,
             "declared": {"cash": declared_cash, "credit": round(dec["credit"], 2), "acima": round(dec["acima"], 2)},
             "sales": {"cash": round(sl["cash"], 2), "credit": round(sl["credit"], 2), "acima": round(sl["acima"], 2)},
             "bank_deposited": deposited, "cash_variance": var, "flag": abs(var) > tolerance,
@@ -4661,11 +4667,14 @@ def epay_recon(date: str, store: str = None, tolerance: float = 1.0,
             "reps": dec["reps"], "deposits": bk["deposits"],
         })
     out.sort(key=lambda x: -abs(x["cash_variance"]))
-    return {"date": d, "tolerance": tolerance, "rows": out,
-            "totals": {"declared_cash": round(sum(r["declared"]["cash"] for r in out), 2),
-                       "bank_deposited": round(sum(r["bank_deposited"] for r in out), 2),
-                       "sales_cash": round(sum(r["sales"]["cash"] for r in out), 2),
-                       "flagged": sum(1 for r in out if r["flag"]), "stores": len(out)}}
+    _totals = {"declared_cash": round(sum(r["declared"]["cash"] for r in out), 2),
+               "bank_deposited": round(sum(r["bank_deposited"] for r in out), 2),
+               "sales_cash": round(sum(r["sales"]["cash"] for r in out), 2),
+               "flagged": sum(1 for r in out if r["flag"]), "stores": len(out)}
+    return {"date": d, "tolerance": tolerance, "rows": out, "totals": _totals,
+            # §CORE-17: every tile names the store-days behind it. The sales leg's origin is the pair
+            # side the read actually answered from, dereferenced — never guessed here.
+            "drilldown": _day_recon_drilldown.epay_drilldowns(out, _totals, sales_tables=_sales_tables)}
 
 
 @router.get("/accessory-recon")
@@ -4705,7 +4714,7 @@ def accessory_recon(date: str, store: str = None, tolerance: float = 1.0,
                     _s["declared"] = _verified_overlay._f(_dm["dm_acc_sale"])
     except Exception:
         pass
-    b2b = _b2b_money_by_store(client, org_id, d)
+    b2b, _sales_tables = _b2b_money_by_store(client, org_id, d)
     codes = [store] if store else sorted(set(declared) | set(b2b))
     if ks is not None:
         codes = [c for c in codes if in_keyset(ks, c, (declared.get(c) or {}).get("store_address"))]
@@ -4716,17 +4725,23 @@ def accessory_recon(date: str, store: str = None, tolerance: float = 1.0,
         declared_v = round(dec["declared"], 2)
         var = round(declared_v - actual, 2)
         out.append({
-            "store_code": code, "store_address": dec["store_address"] or code,
+            "store_code": code, "store_address": dec["store_address"] or code, "close_date": d,
             "declared": declared_v, "actual": actual, "variance": var,
             "flag": abs(var) > tolerance,
             "direction": ("over" if var > tolerance else "under" if var < -tolerance else "ok"),
             "reps": sorted(dec["reps"], key=lambda x: -_f(x.get("acc_sale"))),
         })
     out.sort(key=lambda x: -abs(x["variance"]))
-    return {"date": d, "tolerance": tolerance, "rows": out,
-            "totals": {"declared": round(sum(r["declared"] for r in out), 2),
-                       "actual": round(sum(r["actual"] for r in out), 2),
-                       "flagged": sum(1 for r in out if r["flag"]), "stores": len(out)}}
+    _totals = {"declared": round(sum(r["declared"] for r in out), 2),
+               "actual": round(sum(r["actual"] for r in out), 2),
+               # The net variance is folded HERE, not on the screen. It was being recomputed in the
+               # page as `declared - actual`, which is a second copy of a server fold and therefore
+               # undrillable by construction (§CORE-17.3c).
+               "variance": round(sum(r["variance"] for r in out), 2),
+               "flagged": sum(1 for r in out if r["flag"]), "stores": len(out)}
+    return {"date": d, "tolerance": tolerance, "rows": out, "totals": _totals,
+            "drilldown": _day_recon_drilldown.accessory_drilldowns(
+                out, _totals, sales_tables=_sales_tables)}
 
 
 @router.get("/recon")
@@ -6142,7 +6157,13 @@ def external_credit_recon(date_from: str = None, date_to: str = None,
     except Exception as e:                       # pragma: no cover - I/O guard
         print(f"WARN card-settlement recon org_market_options failed: {e}")
         market_options = sorted(_present)
-    return {"rows": rows, "totals": _external_credit_recon.totals(rows),
+    _totals = _external_credit_recon.totals(rows)
+    return {"rows": rows, "totals": _totals,
+            # §CORE-17. The settled leg's table is the mig-207 registry row, not a constant: `spec`
+            # is None when no processor feed is registered, and the settled tile's rows then carry no
+            # origin — the honest answer, matching the `feeds.registered` banner on the screen.
+            "drilldown": _external_credit_drilldown.drilldowns(
+                rows, _totals, settlement_table=((spec or {}).get("table") or None)),
             "date_from": date_from, "date_to": date_to,
             "roles": list(roles), "role_titles": {**_external_credit_recon.ROLE_TITLES, **labels},
             "feeds": feeds, "unmapped": unmapped[:200], "unmapped_count": len(unmapped),
@@ -10083,6 +10104,22 @@ def _b2b_sales_rows(client, org_id: str, date: str, cols: str) -> list:
     branch was wrapped) silently blanked the recon for EVERY store that day, not just the affected one.
     Byte-identical to before whenever the primary source already has every relevant store's data for the
     day (the common/house case: fill=[] and this returns exactly `prows`, unchanged)."""
+    return _b2b_sales_rows_sourced(client, org_id, date, cols)[0]
+
+
+def _b2b_sales_rows_sourced(client, org_id: str, date: str, cols: str):
+    """(rows, tables) — THE read above, and the sales-pair table(s) it ACTUALLY drew rows from.
+
+    WHICH SIDE OF THE PAIR ANSWERED is a fact this read knows and every caller used to throw away, and
+    §CORE-17 needs it: a drill-down on a sales-derived figure must name the feed behind it. Naming both
+    tables would be a provenance claim nothing checked; naming a constant would be wrong half the year,
+    because the pick depends on whether the day is in an open month AND on which stores each side
+    carries. So the SELECTION — the one place that knows — reports it, and `_b2b_sales_rows` is a thin
+    read-rows-only wrapper over this. One fact, one home, dereferenced; never a second copy of the
+    primary/fallback/union logic in a drill-down declaration.
+
+    An empty `tables` means the read returned no rows, which is the honest origin for a figure of
+    $0.00 from nothing — not a feed name that supplied none of it."""
     def _q(table):
         try:
             return (client.schema("commcalc").table(table).select(cols)
@@ -10095,15 +10132,17 @@ def _b2b_sales_rows(client, org_id: str, date: str, cols: str) -> list:
     primary, other = ("daily_sales_feed", "raw_sales") if open_month else ("raw_sales", "daily_sales_feed")
     prows = _q(primary)
     if not prows:
-        return _q(other)
+        orows = _q(other)
+        return orows, ((other,) if orows else ())
     if "store" not in [c.strip() for c in cols.split(",")]:
-        return prows   # can't key a safe per-store union without the store column — primary-only (unchanged)
+        # can't key a safe per-store union without the store column — primary-only (unchanged)
+        return prows, (primary,)
     orows = _q(other)
     if not orows:
-        return prows
+        return prows, (primary,)
     pstores = {(r.get("store") or "").strip().lower() for r in prows}
     fill = [r for r in orows if (r.get("store") or "").strip().lower() not in pstores]
-    return prows + fill
+    return prows + fill, ((primary, other) if fill else (primary,))
 
 
 def _acc_cfg(client, org_id):
@@ -10431,10 +10470,11 @@ def _xreport_rows_by_store(client, org_id: str, date: str) -> dict:
     return out
 
 
-def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
-    """Aggregate that day's B2B sales per store_code: accessory GROSS (ext_price, dept Ondigo),
-    cash vs card totals (by tender_type), plus the raw tender breakdown for transparency. Source is
-    raw_sales, falling back to the daily feed (see _b2b_sales_rows). store is matched to store_code
+def _b2b_money_by_store(client, org_id: str, date: str):
+    """({store_code: aggregate}, sales tables read) — that day's B2B sales per store_code: accessory
+    GROSS (ext_price, dept Ondigo), cash vs card totals (by tender_type), plus the raw tender breakdown
+    for transparency. Source is raw_sales, falling back to the daily feed (see _b2b_sales_rows); the
+    second element is the side(s) that actually answered (§CORE-17.3c). store is matched to store_code
     by exact address then by an unambiguous leading street-number."""
     addr_to_code, num_to_code, num_counts = {}, {}, {}
     sm = (client.schema("commcalc").table("store_mapping")
@@ -10463,7 +10503,8 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
         return None
 
     acc = _acc_cfg(client, org_id)
-    rows = _b2b_sales_rows(client, org_id, date, "store,department,category,product_desc,tender_type,ext_price,tax,voided")
+    rows, _sales_tables = _b2b_sales_rows_sourced(
+        client, org_id, date, "store,department,category,product_desc,tender_type,ext_price,tax,voided")
 
     out = {}
     for r in rows:
@@ -10494,7 +10535,7 @@ def _b2b_money_by_store(client, org_id: str, date: str) -> dict:
         a["dept_available"] = bool(a.pop("_dept_seen", False))  # Department present → accessory recon valid
         for k in ("acc_gross", "cash", "card", "other", "total", "tax"):
             a[k] = round(a[k], 2)
-    return out
+    return out, _sales_tables
 
 
 # ── Reconciliation: rep-declared closing vs B2B actuals (cash/credit), + the close gate ──────

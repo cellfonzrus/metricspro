@@ -117,18 +117,12 @@ export default function CashReconManagementPage() {
   // Day ascending to start — a recon is read chronologically until you ask otherwise.
   const sortState = useTableSort(rows, reconCell, { field: 'day', dir: 'asc' })
 
-  // THE SERVED PANELS (§CORE-17). `dl` keeps a tile's links honest: it offers a figure only when the
-  // server actually sent rows for it, so a feed that never resolved for this range shows no link
-  // rather than a link that opens an empty panel and reads like a bug.
+  // THE SERVED PANELS (§CORE-17). `drill.dl` keeps a tile's links honest — it offers a figure only
+  // when the server actually sent rows for it — and lives in `useDrillTile`, not here, so every
+  // report's tiles answer "is there anything behind this?" the same way (§CORE-17.3c).
   const drills: Record<string, DrillPanel> = data?.drilldown || {}
-  const drill = useDrillTile()
-  const dl = (...pairs: string[]) => {
-    const out: { key: string; label: string }[] = []
-    for (let i = 0; i < pairs.length; i += 2) {
-      if (drills[pairs[i]]) out.push({ key: pairs[i], label: pairs[i + 1] })
-    }
-    return out
-  }
+  const drill = useDrillTile(drills)
+  const dl = drill.dl
 
   function exportPayload(): ExportPayload {
     return {
@@ -281,7 +275,7 @@ export default function CashReconManagementPage() {
               figure, which feeds they were read out of, and whether they add up to the tile. */}
           {drill.open && (
             <div style={{ marginBottom: 14 }}>
-              <DrillDownPanel panel={drills[drill.open]} extraColumns={TILE_COLUMNS}
+              <DrillDownPanel panel={drill.panel} extraColumns={TILE_COLUMNS}
                 emptyNote="No store-day in this range contributed to this figure." />
             </div>
           )}

@@ -44,6 +44,9 @@ const SOURCE_LABEL: Record<string, string> = {
   billpay_pickup: 'bill-payment pickup envelope',
   closing_attempt: 'closing submit attempt',
   daily_closing_verification: "the district manager's verification",
+  // The day-recon trail (§CORE-17.3c). A manager reads "the bank deposit slip", never a table.
+  bank_deposit: 'bank deposit slip',
+  merchant_settlement_day: 'card processor settlement',
   store_mapping: 'Store Mapping',
   payout_config: 'payout rates',
   // The clock-in/clock-out package (mig 1073, index §14z). The variance board names the feeds it

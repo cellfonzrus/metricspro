@@ -33444,6 +33444,64 @@ envelopes CURRENTLY ON SCREEN" — the same class, and the same remedy. `/closin
 already drills the same question through `/closing/tender-drilldown`, which is why this report ranked
 #2: one question, two paths, only one carrying evidence.
 
+### §CORE-17.3c A FIGURE'S FEED IS A FACT THE READ KNOWS — one home, dereferenced (2026-10-24, batch 3)
+
+**Built:** `/closing/epay-recon`, `/closing/accessory-recon`, `/closing/external-credit-recon`
+(PR batch 3). Declarations: `backend/app/modules/closing/day_recon_drilldown.py` (the two day recons
+— same grain, one row label, one set of row fields, two catalogues) and
+`backend/app/modules/closing/external_credit_drilldown.py` (the card-settlement tally).
+Proof: `backend/harness_day_recon_drilldown.py` (67 checks, incl. §Z negative controls).
+Owed count **92 → 89**.
+
+**THE PROBLEM THIS BATCH NAMED.** Both day recons read their "actual" leg from the SALES PAIR, and
+`closing/router._b2b_sales_rows` picks between the live daily feed and the monthly archive, falls back
+to the other, and unions per store. Which side answered is a fact that read knew and **every caller
+threw away** — leaving a drill-down three bad options: name both tables (a provenance claim nothing
+checked), name a constant (wrong half the year), or name nothing (a silent blank).
+
+**THE FIX IS AT THE SELECTION, not in the declarations.** `_b2b_sales_rows_sourced(client, org_id,
+date, cols) -> (rows, tables)` is now the real read and `_b2b_sales_rows` a thin rows-only wrapper
+over it. `_epay_sales_by_store` and `_b2b_money_by_store` return `(aggregate, tables)` and the
+endpoints hand those tables to the catalogue. The primary/fallback/union logic exists **once**
+(locked: §E5/E6 pin `open_month = str(date)[:7]` and `primary, other = (` to exactly one occurrence
+each). A declaration that re-derived the pick would be the second copy the house rules forbid.
+
+**AN UNRESOLVED TABLE NOW READS AS UNTRACEABLE, NOT AS NOTHING — fixed in the SHARED fold.** The
+declaration shape for a config-resolved feed is `tuple(t for t in (x,) if t)`, so an unregistered
+processor or an empty sales read collapses to `()`. `tile_panel` was then building an EMPTY origin
+list, which reported **zero** untraceable origins: a provenance gap wearing the clothes of a clean
+answer. `core/report_drilldown.tile_panel` now emits one untraceable origin for such a row, so every
+report naming a config-resolved feed inherits the honesty — cash recon's processor and sales legs
+included (§Z7 asserts it at the shared fold, not at these two reports).
+
+**A GAP STATUS CANNOT BECOME A MEASURED ZERO.** The card-settlement tally has three statuses that mean
+*we do not know* (`no_processor_data`, `no_declared_data`, `dm_merged`). `external_credit_drilldown`
+imports `GAP_STATUSES` from `external_credit_recon` — the report's own tuple, the same one its `totals`
+reads — so a status added there cannot start reading as $0.00 here (§D1 pins object identity). Those
+store-days appear in every panel, carrying their reason, **un-counted**. The "Without evidence" tile
+deliberately has **no** drill: it is three counts added together on the screen, and a figure the screen
+composes itself has no single fold behind it.
+
+**TWO SIBLING DUPLICATES CLOSED IN THE SAME PR.** (1) The "offer a tile's link only when the server
+served a panel" loop had been written locally in each page that gained tile drills, and one of them had
+bolted its own extra condition on. It is now `useDrillTile(panels, gate?)` → `.dl(...)` in
+`frontend/src/components/DrillDownPanel.tsx`, with the per-page difference as the `gate` parameter;
+`cash-recon-management` and `tender-recon` were migrated onto it and their locks re-pointed there
+(§E10/§E11, and the batch-1/2 harnesses' E9/G1). (2) The ePay and accessory screens carried a
+byte-identical `Stat` component each — the sibling defect in its smallest form — now
+`closing/_lib/DrillStat.tsx` with `STORE_DRILL_COLUMNS` as the client side of
+`day_recon_drilldown._row_fields` (§E12).
+
+**A SCREEN NO LONGER RECOMPUTES A SERVER FOLD.** The accessory recon's "Net variance" tile was
+`declared - actual` in TypeScript. A figure the screen folds itself is undrillable *by construction*,
+which is the §CORE-17.3b class arriving one tile at a time. It is a served `totals["variance"]` now,
+and §B4 fails the build if the client arithmetic returns.
+
+**A ROW ADDRESSES A STORE-DAY, not a store.** Both day recons take the date as a parameter rather than
+carrying it on their rows, so an origin keyed on `store_code` alone addressed every day there has ever
+been. Both endpoints now stamp `close_date` on each row (additive to the payload) and §A8 pins the key
+set.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
