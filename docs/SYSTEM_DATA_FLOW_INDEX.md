@@ -125,6 +125,7 @@ Primary code homes:
 | CORE-13 | **A migration grants what it creates** | "Supabase says that from 30 October a new table in `public` no longer gets Data API access automatically. Does that break this app, which migrations would break, and what stops the next migration shipping a table the application cannot read?" |
 | CORE-15 | **The dark theme** | "The workspace is black with white lettering. Where does \"what does this colour become on the dark theme\" live, how does a colour spelled inside an inline style reach it, and what proves nothing pale is left glowing on black?" |
 | CORE-14 | **One palette, dereferenced** | "Make the colours of the side menu alternate between the logo colours so each item stands out. Where does a colour used by the chrome live, how many places spell it, and what proves a row stays readable once it is coloured?" |
+| CORE-16 | **A self-call carries the tenant it is acting as** | "The envelope payout screen says the commission accrual and salary-owed fetches failed with 409 Conflict. What identity does a call the platform makes to itself carry, which company does it say it is acting for, and what stops the next such call from dropping it?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -25943,6 +25944,7 @@ status word rather than a blank that reads as nil.
 | CORE-13 | core |
 | CORE-14 | core |
 | CORE-15 | core |
+| CORE-16 | core |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -33290,6 +33292,126 @@ cadence is what makes presence observable), §COMMCALC-13 (what a finished sessi
 and the staleness window this must not widen), §COMMCALC-24 (which process may answer at all).
 Neighbours: §COMMCALC-10 (the progress budgets this sits beside), §COMMCALC-11 (the human check the
 8-minute budget was named for), §COMMCALC-07 (the UPS pull this login exists to feed).
+
+
+## §CORE-16. A SELF-CALL CARRIES THE TENANT IT IS ACTING AS (owner report 2026-10-24)
+
+Owner, on the envelope payout screen:
+
+> ℹ️ commission: commission accrual fetch failed (HTTPError: **409 Client Error: Conflict** for url:
+> `…/commcalc/payout/accrued?org_id=854f6d7b…&as_of=2026-10-17&store_code=Nostrand`)
+> ℹ️ salary: salary-owed fetch failed (HTTPError: **409 Client Error: Conflict** for url:
+> `…/storeops/salary-owed?org_id=854f6d7b…&start=2026-08-18&end=2026-10-17&store_code=Nostrand`)
+
+### `store_code=Nostrand` IS A RED HERRING — it never reached a handler
+
+`GET /closing/payout-due` does not import mod-commission and mod-people; it **calls the platform's own
+HTTP surface** at `INTERNAL_API_BASE_URL` (default `127.0.0.1:8000`) and forwards the caller's bearer
+token. That call therefore re-enters `app/core/tenant_middleware.py` **from the outside** and must
+prove the same two facts the browser's request proved — and it only ever proved one:
+
+| fact the gate needs | the browser's request | the self-call (before this) |
+|---|---|---|
+| WHO is calling (`Authorization`) | ✅ | ✅ *(added 2026-08-04; without it the envelope read **$0.00 owed**)* |
+| WHICH TENANT they act as (`x-active-org`) | ✅ | ❌ **dropped** |
+
+`_tenant_is_ambiguous` then refuses to guess (§28), which is the correct behaviour, and
+`_reject_tenant_choice` answers **409 `tenant_choice_required`** before the route body runs. So the
+store code, the dates and the org_id in the URL were never looked at.
+
+### THE EVIDENCE — the platform's own record, not an inference
+
+`core.access_log`, 2026-10-24 17:55 UTC, read-only:
+
+| time | status | path | actor | org |
+|---|---|---|---|---|
+| 17:55:46.300 | **409** | `/commcalc/payout/accrued` | **NULL** | **NULL** |
+| 17:55:46.308 | **409** | `/storeops/salary-owed` | **NULL** | **NULL** |
+| 17:55:46.512 | 200 | `/closing/payout-due` | `ab08bb15…` | `854f6d7b…` (Luxelink) |
+
+The pair of 409s sits *inside* the outer 200, and carries **no actor and no org** — the gate rejected
+before `_set_actor` ran. Login `ab08bb15…` is the §28 login: **admin in three companies**
+(house / Luxelink / Vzone), not a super-admin, and like all four multi-company logins it has
+`is_default_org IS NULL`, so `default_org` is None and there is nothing to fall back to. A
+single-membership login (92 of 96 when the gate shipped) could never see this.
+
+### THE CLASS, NOT THE INSTANCE
+
+The general fact that was wrong is not "the envelope screen loses the tenant". It is:
+
+> **a self-call re-enters the gate with LESS identity than the request that caused it.**
+
+Both known instances are that class, two years apart in the same four helper functions — a dropped
+token read as `$0.00`, a dropped tenant read as `409`. Both read as *a number*, not as *a refusal*.
+
+### ONE FACT, ONE HOME, DEREFERENCED
+
+`backend/app/core/internal_call.py` (**new**) is the ONE home for what a self-call carries:
+`internal_api_base()`, `acting_tenant(org_id)`, `self_call_headers(authorization, org_id)` and
+`self_call_note(status, what, sibling)`. The tenant comes from `tenant_middleware.acting_org()` — the
+middleware's **already-validated** resolution, which wins over the handler's `org_id` default — and
+falls back to that `org_id` outside a request the middleware saw (a sweep, a cron job).
+
+**NOT A WIDENING.** `x-active-org` is untrusted by design: the middleware honours it only when it
+names one of the caller's own memberships, and a super-admin's cross-tenant administration already
+reads the same header. Declaring the tenant the outer request was validated for removes a guess; it
+grants nothing. Proved by `harness_internal_self_call.py` C6.
+
+**ALL TEN SELF-CALL SITES WIRED**, not the two that were reported:
+
+| module | sites |
+|---|---|
+| `closing/router.py` | `_get_commission_accrued`, `_get_salary_owed`, `_post_commission_payout`, `_post_salary_advance`, the closing-expense P&L system-line push |
+| `storeops/router.py` | `_pto_push_expense_line`, `_payex_push_expense_line`, `_payex_push_gross_line`, `_additional_payroll_push_line`, `_dm_targets_summary_bulk` |
+
+The five `storeops` pushes sent **no headers at all** and so were 401ing silently — the same class,
+found by looking for the siblings rather than by a second report. `authorization` is now threaded
+from each manager-gated route. **REPORTED, NOT HIDDEN:** the pg_cron sweep
+`POST /storeops/salary-advance/additional-payroll/run-due` is secret-gated and holds no user token, so
+its push still cannot authenticate; it now says so through `self_call_note` (401 → "this figure is NOT
+$0, it is UNKNOWN") instead of appearing to succeed. Giving a cron a service identity is a separate,
+money-touching decision and is left for the owner.
+
+### LOCKED SO IT CANNOT UN-WIRE
+
+`backend/harness_internal_self_call.py` (42 checks, DB-free, no socket). Section **E is the build
+gate**: it walks the AST of every `backend/app/**/*.py`, resolves each `requests.*` call whose URL
+derives from an `*INTERNAL_API_BASE*` variable (one hop through a local `url =` assignment), and fails
+the build when any of them does not pass `headers=self_call_headers(...)`, when a second copy of the
+base URL appears, or when a module hand-rolls an `{"Authorization": authorization}` dict. E1 fails if
+the scan ever finds fewer than 9 sites, so it cannot pass by matching nothing, and E5–E7 are negative
+controls. Verified to bite: un-wiring one site turns E2 and E4 red.
+
+Section C is the regression, run through `tenant_middleware`'s **own** predicate: the old header dict
+is ambiguous for the reported login, the new one is not.
+
+### DUPLICATE CHECK (build gate)
+
+Checked §28 (which company am I in), §22 (operator entry sessions), §CORE-07/§CORE-12 (login
+identity), §50 (the module graph) and §16–18 before writing a line. **REUSED, not rebuilt:**
+`x-active-org` stays the one tenant selector and `_pick_active_org` / `_tenant_is_ambiguous` stay the
+one server-side rule — this change makes a caller *declare* through them, it does not add a second
+gate. `harness_ambiguous_tenant.py` keeps the gate's own cases (single membership, `is_default_org`, a
+foreign header); this harness does not re-prove them and that harness, previously **run by nothing**,
+is now executed in the same CI job — so `harness_unrun_pending.txt` shrinks 315 → 314 and
+`harness_ci_pipefail_lock.PINNED_MAX` with it. `_sib_note` was not deleted: it now dereferences
+`self_call_note`. **No second self-call mechanism was created.**
+
+### §16–18 CROSS-REFERENCES
+
+Registered in `app/modules/core/module_graph.py` as fact `internal_self_call`
+(home `app/core/internal_call.py`, lock `harness_internal_self_call.py`, callers
+`closing/router.py` + `storeops/router.py`). Depends on: §28 (the gate that refuses to guess),
+§CORE-07 (who a login is). Feeds: §47.8 (the envelope basis), the four payroll P&L system lines
+(§COMMCALC-23 labour), §4 (expenses). Neighbours: §22 (the other cross-tenant declaration),
+§19.18 (writing a registry without wiring the callers is not a fix), §50 (the interlink itself).
+
+CI: `carrier-vocab-guard` job `internal-self-call-tenant`. **No migration.**
+
+Files: `backend/app/core/internal_call.py` (**new**), `backend/app/modules/closing/router.py`,
+`backend/app/modules/storeops/router.py`, `backend/app/modules/core/module_graph.py`,
+`backend/harness_internal_self_call.py` (**new**), `backend/harness_unrun_pending.txt`,
+`backend/harness_ci_pipefail_lock.py`, `.github/workflows/carrier-vocab-guard.yml`.
 
 ## §NOTIFY-01. A FAILED SEND IS REPORTED WITH ITS RECIPIENT, ITS REASON AND ITS FIX — never as a count (owner report 2026-10-24)
 

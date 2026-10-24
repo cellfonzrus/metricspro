@@ -43,6 +43,37 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
+    'internal_self_call': {
+        "question": 'When a handler reaches a sibling module through the platform\'s OWN HTTP '
+                    'surface (`INTERNAL_API_BASE_URL`, default 127.0.0.1:8000), what identity must '
+                    'that call carry? TWO facts, not one: WHO is calling (the caller\'s bearer '
+                    'token) and WHICH TENANT they are acting as (`x-active-org`, as '
+                    '`tenant_middleware` already validated it). The call re-enters the same gate '
+                    'from the outside, so anything it drops is a fact the gate must guess — and '
+                    'the gate correctly refuses to. Dropping the token read as **$0.00 owed** on '
+                    'every envelope (2026-08-04); dropping the tenant read as a **409 '
+                    '`tenant_choice_required`** on the envelope payout screen for the four logins '
+                    'that belong to more than one company and have no `is_default_org` row (owner '
+                    'report 2026-10-24: `core.access_log` shows both 409s with `actor_auth_id` '
+                    'NULL between the outer 200s of `ab08bb15…` acting as Luxelink). The NOTE a '
+                    'refused self-call turns into is part of the fact: 401/403/404/409 each read '
+                    'as a cause, never as a number. Stamping the already-validated tenant is not a '
+                    'widening — `x-active-org` is honoured only when it names one of the '
+                    'caller\'s own memberships.',
+        "homes": ('app/core/internal_call.py',),
+        "index": ('CORE-16',),
+        "locks": ('harness_internal_self_call.py',),
+        # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
+        "callers": {
+            # mod-retail-ops' envelope payout + the closing-expense P&L push (5 self-calls).
+            'app/modules/closing/router.py': ('internal_api_base', 'self_call_headers',
+                                              'self_call_note'),
+            # mod-people's PTO / payroll-expense / gross / additional-payroll P&L pushes and the
+            # bulk targets read (5 self-calls).
+            'app/modules/storeops/router.py': ('internal_api_base', 'self_call_headers'),
+        },
+    },
     # ── §CORE-07 (owner report 2026-10-14) — which PERSON a login belongs to ─────────────────────
     'self_lockout': {
         "question": 'Would THIS administrative write take away the authority that just made it? '

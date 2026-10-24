@@ -10859,7 +10859,11 @@ def _gate_row(client, org_id, store_code, date, emp_name, declared_cash, declare
 # never a 500 on an unrelated page.
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 
-CLOSING_INTERNAL_API_BASE = os.environ.get("INTERNAL_API_BASE_URL") or "http://127.0.0.1:8000"
+from app.core.internal_call import internal_api_base, self_call_headers, self_call_note
+
+# Dereferenced, never re-spelled: `app.core.internal_call` is the ONE home for the self-call
+# base URL and for the headers such a call must carry (index §CORE-16).
+CLOSING_INTERNAL_API_BASE = internal_api_base()
 
 
 # ── Sibling cross-module HTTP calls (mod-commission / mod-people), same pattern as storeops'
@@ -10877,19 +10881,13 @@ CLOSING_INTERNAL_API_BASE = os.environ.get("INTERNAL_API_BASE_URL") or "http://1
 # what keeps the sibling's own span scoping honest — a DM still sees only their stores' figures.
 # Same class as the in-process Header()-sentinel 401: adding a gate to a shared route silently breaks
 # every internal caller, and it leaves no failure_log row.
-def _sib_headers(authorization):
-    return {"Authorization": authorization} if authorization else {}
-
-
 def _sib_note(r, what, sibling):
     """404 -> that package isn't deployed; 401/403 -> we called it without (or with a too-narrow)
-    token. Naming the status is the difference between a 10-minute fix and another blind hunt."""
-    if r.status_code == 404:
-        return f"{what} endpoint not deployed yet ({sibling} package pending)"
-    if r.status_code in (401, 403):
-        return (f"{what} refused the internal call ({r.status_code}) — the caller's Authorization "
-                f"header was missing or out of scope, so this figure is NOT $0, it is UNKNOWN")
-    return None
+    token; 409 -> it could not tell which COMPANY the call was for (the 2026-10-24 envelope defect:
+    the self-call dropped `x-active-org`, which is now stamped by `self_call_headers`). Naming the
+    status is the difference between a 10-minute fix and another blind hunt. ONE HOME:
+    `app.core.internal_call.self_call_note` — this wrapper only unpacks the response."""
+    return self_call_note(r.status_code, what, sibling)
 
 
 def _get_commission_accrued(org_id, as_of, employee_key=None, store_code=None, authorization=""):
@@ -10900,7 +10898,7 @@ def _get_commission_accrued(org_id, as_of, employee_key=None, store_code=None, a
     if store_code:
         params["store_code"] = store_code
     try:
-        r = requests.get(url, params=params, headers=_sib_headers(authorization), timeout=10)
+        r = requests.get(url, params=params, headers=self_call_headers(authorization, org_id), timeout=10)
         note = _sib_note(r, "commission accrual", "mod-commission")
         if note:
             return None, note
@@ -10918,7 +10916,7 @@ def _get_salary_owed(org_id, start, end, store_code=None, employee_id=None, auth
     if employee_id:
         params["employee_id"] = employee_id
     try:
-        r = requests.get(url, params=params, headers=_sib_headers(authorization), timeout=10)
+        r = requests.get(url, params=params, headers=self_call_headers(authorization, org_id), timeout=10)
         note = _sib_note(r, "salary-owed", "mod-people")
         if note:
             return None, note
@@ -10935,7 +10933,7 @@ def _post_commission_payout(org_id, employee_key, amount, paid_date, store_code,
             "store_code": store_code, "withdrawal_ref": withdrawal_ref, "recorded_by": recorded_by}
     try:
         r = requests.post(url, params={"org_id": org_id}, json=body,
-                          headers=_sib_headers(authorization), timeout=10)
+                          headers=self_call_headers(authorization, org_id), timeout=10)
         if r.status_code in (401, 403):
             # ⚠️ THE DANGEROUS ONE: the cash withdrawal IS persisted by the caller, so an unrecorded
             # payout means the rep's ledger still shows the money owed and they can be paid TWICE.
@@ -10960,7 +10958,7 @@ def _post_salary_advance(org_id, employee_id, amount, paid_date, store_code, wit
             "store_code": store_code, "withdrawal_ref": withdrawal_ref, "recorded_by": recorded_by}
     try:
         r = requests.post(url, params={"org_id": org_id}, json=body,
-                          headers=_sib_headers(authorization), timeout=10)
+                          headers=self_call_headers(authorization, org_id), timeout=10)
         if r.status_code in (401, 403):
             # Same double-pay exposure as the commission twin above — cash out, ledger unaware.
             return {"posted": False, "status": r.status_code,
@@ -11176,7 +11174,7 @@ def _push_expense_category_pl(client, org_id, period, category_id, category_name
     body = {"source_key": f"closing_expense:{category_id}", "label": category_name, "cells": cells}
     try:
         resp = requests.post(url, params={"org_id": org_id}, json=body,
-                             headers=_sib_headers(authorization), timeout=10)
+                             headers=self_call_headers(authorization, org_id), timeout=10)
         if resp.status_code == 404:
             return {"pushed": False, "status": 404, "note": "system-line endpoint not deployed yet"}
         if resp.status_code in (401, 403):
