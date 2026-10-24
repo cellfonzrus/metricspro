@@ -8632,7 +8632,12 @@ def gate_person_rows(rows, authorization: str, org_id: str = ORG_ID, *,
 # GET /pto-accrual/{period} instead of push. INTERNAL_API_BASE_URL lets an operator point this at a
 # non-default loopback if the backend's own bind address ever changes; the Railway container binds
 # 0.0.0.0:8000 (Dockerfile), so 127.0.0.1:8000 is the correct same-process default.
-PTO_INTERNAL_API_BASE = os.environ.get("INTERNAL_API_BASE_URL") or "http://127.0.0.1:8000"
+from app.core.internal_call import internal_api_base, self_call_headers
+
+# Dereferenced, never re-spelled: `app.core.internal_call` is the ONE home for the self-call
+# base URL and for the headers such a call must carry (index §CORE-16) — WHO is calling and
+# WHICH TENANT they are acting as. Dropping the second is the 2026-10-24 409.
+PTO_INTERNAL_API_BASE = internal_api_base()
 
 
 def _pto_config_rows(org_id: str) -> dict:
@@ -8839,7 +8844,7 @@ def get_pto_accrual(period: str, authorization: str = Header(default=""), org_id
             "hours_blockers": meta.get("hours_blockers")}
 
 
-def _pto_push_expense_line(org_id: str, period: str, cells: list) -> dict:
+def _pto_push_expense_line(org_id: str, period: str, cells: list, authorization: str = "") -> dict:
     """POST the per-store cost to mod-commission's Store Expenses system-line endpoint (shared
     contract — see docs/handoffs/people.md). Best-effort: any failure (404 = package not deployed
     yet, timeout, connection error) is caught and reported, NEVER raised — the ledger is already
@@ -8848,7 +8853,8 @@ def _pto_push_expense_line(org_id: str, period: str, cells: list) -> dict:
     url = f"{PTO_INTERNAL_API_BASE}/api/v1/commcalc/expenses/{period}/system-line"
     body = {"source_key": "pto_accrual", "label": "Paid Leave Accumulated", "cells": cells}
     try:
-        resp = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        resp = requests.post(url, params={"org_id": org_id}, json=body,
+                             headers=self_call_headers(authorization, org_id), timeout=10)
         if resp.status_code == 404:
             return {"pushed": False, "status": 404, "note": "system-line endpoint not deployed yet (mod-commission package pending) — ledger persisted, pull via GET /pto-accrual/{period} instead"}
         resp.raise_for_status()
@@ -8875,7 +8881,7 @@ def run_pto_accrual(period: str, authorization: str = Header(default=""), org_id
             sb().table("pto_accrual_ledger").insert(rows[i:i + 500]).execute()
 
     cells = pto_expense_cells_from_stores(result["stores"])
-    push = _pto_push_expense_line(org_id, period, cells) if cells else {"pushed": False, "status": None, "note": "no store activity this period — nothing to push"}
+    push = _pto_push_expense_line(org_id, period, cells, authorization) if cells else {"pushed": False, "status": None, "note": "no store activity this period — nothing to push"}
 
     return {"period": period, "mode": meta["org_effective"]["mode"], "rate": meta["org_effective"]["accrual_rate"],
             "employees": sorted(result["employees"].values(), key=lambda r: r.get("name") or ""),
@@ -8932,7 +8938,7 @@ def _requote(period: str) -> str:
     return quote(str(period), safe="")
 
 
-def _dm_targets_summary_bulk(org_id: str, period: str) -> dict:
+def _dm_targets_summary_bulk(org_id: str, period: str, authorization: str = "") -> dict:
     """THE one bulk internal-HTTP call this whole package makes: mod-commission's OWN all-stores
     endpoint (`GET /commcalc/targets/{period}/summary?include_untargeted=true`), same
     `INTERNAL_API_BASE_URL` convention the PTO/payroll-tax packages established. TTL-cached per
@@ -8947,7 +8953,8 @@ def _dm_targets_summary_bulk(org_id: str, period: str) -> dict:
     url = f"{PTO_INTERNAL_API_BASE}/api/v1/commcalc/targets/{_requote(period)}/summary"
     data = {}
     try:
-        resp = requests.get(url, params={"org_id": org_id, "include_untargeted": "true"}, timeout=30)
+        resp = requests.get(url, params={"org_id": org_id, "include_untargeted": "true"},
+                            headers=self_call_headers(authorization, org_id), timeout=30)
         resp.raise_for_status()
         data = resp.json() or {}
     except Exception as e:
@@ -8957,7 +8964,7 @@ def _dm_targets_summary_bulk(org_id: str, period: str) -> dict:
     return data or {}
 
 
-def _dm_target_rows(org_id: str, period: str, *, max_pairs: int = 20000) -> tuple:
+def _dm_target_rows(org_id: str, period: str, *, max_pairs: int = 20000, authorization: str = "") -> tuple:
     """Build the (employee, store) attribution rows for the whole org this period: every distinct
     pair with at least one positive-hour, non-deleted shift ("the stores they worked in") this
     module's OWN `storeops.shifts` describes, priced off the ONE bulk `/targets/.../summary` call
@@ -8993,7 +9000,7 @@ def _dm_target_rows(org_id: str, period: str, *, max_pairs: int = 20000) -> tupl
             market_by_code[code] = s.get("market") or ""
             address_by_code[code] = s.get("address") or ""
 
-    summary = _dm_targets_summary_bulk(org_id, period)
+    summary = _dm_targets_summary_bulk(org_id, period, authorization)
     warnings = []
     if not summary:
         warnings.append({"employee_name": "", "store_code": "",
@@ -9088,7 +9095,7 @@ def dm_accessory_attribution(period: str, authorization: str = Header(default=""
     except ValueError as e:
         raise HTTPException(400, str(e))
 
-    rows, warnings, truncated = _dm_target_rows(org_id, period)
+    rows, warnings, truncated = _dm_target_rows(org_id, period, authorization=authorization)
     dm_markets = _dm_roster(org_id)
     attributed = _dmta.attribute_rows_to_dms(rows, dm_markets)
     cross_dm = _dmta.cross_dm_employees(attributed)
@@ -9550,7 +9557,7 @@ def get_payroll_expenses(period: str, authorization: str = Header(default=""), o
             "hours_blockers": g.get("hours_blockers")}
 
 
-def _payex_push_expense_line(org_id: str, period: str, cells: list) -> dict:
+def _payex_push_expense_line(org_id: str, period: str, cells: list, authorization: str = "") -> dict:
     """POST the single rolled-up per-store cost to mod-commission's Store Expenses system-line
     endpoint (source_key='payroll_expenses', label='Payroll Expenses' — the SAME shared contract the
     PTO package pushes 'pto_accrual' through, a DIFFERENT source_key so the two coexist as separate
@@ -9559,7 +9566,8 @@ def _payex_push_expense_line(org_id: str, period: str, cells: list) -> dict:
     url = f"{PTO_INTERNAL_API_BASE}/api/v1/commcalc/expenses/{period}/system-line"
     body = {"source_key": "payroll_expenses", "label": "Payroll Expenses", "cells": cells}
     try:
-        resp = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        resp = requests.post(url, params={"org_id": org_id}, json=body,
+                             headers=self_call_headers(authorization, org_id), timeout=10)
         if resp.status_code == 404:
             return {"pushed": False, "status": 404, "note": "system-line endpoint not deployed yet — ledger persisted, pull via GET /payroll-expenses/{period} instead"}
         resp.raise_for_status()
@@ -9569,7 +9577,7 @@ def _payex_push_expense_line(org_id: str, period: str, cells: list) -> dict:
 
 
 def _payex_push_gross_line(org_id: str, period: str, cells: list, label: str = "Gross Payroll",
-                            expense_type: str = "Fixed") -> dict:
+                            expense_type: str = "Fixed", authorization: str = "") -> dict:
     """POST the per-store GROSS PAYROLL — the exact wages basis the burden calc above uses — to
     mod-commission's Store Expenses system-line endpoint as its OWN line: source_key='payroll_gross',
     label='Gross Payroll'. OWNER DECISION 2026-07-15: this is a DIFFERENT source_key than
@@ -9582,7 +9590,8 @@ def _payex_push_gross_line(org_id: str, period: str, cells: list, label: str = "
     body = {"source_key": "payroll_gross", "label": label, "cells": cells,
             "expense_type": expense_type}
     try:
-        resp = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        resp = requests.post(url, params={"org_id": org_id}, json=body,
+                             headers=self_call_headers(authorization, org_id), timeout=10)
         if resp.status_code == 404:
             return {"pushed": False, "status": 404, "note": "system-line endpoint not deployed yet — ledger persisted, pull via GET /payroll-expenses/{period} instead"}
         resp.raise_for_status()
@@ -9633,7 +9642,7 @@ def run_payroll_expenses(period: str, authorization: str = Header(default=""), o
         for i in range(0, len(exp_rows), 500):
             sb().table("payroll_expense_ledger").insert(exp_rows[i:i + 500]).execute()
 
-    push = _payex_push_expense_line(org_id, period, g["cells"]) if g["cells"] else {"pushed": False, "status": None, "note": "no store activity this period — nothing to push"}
+    push = _payex_push_expense_line(org_id, period, g["cells"], authorization) if g["cells"] else {"pushed": False, "status": None, "note": "no store activity this period — nothing to push"}
 
     # ── Gross Payroll (additive, migration 405) — org-scoped write, wrapped so a not-yet-applied
     # migration degrades gracefully (the push still fires; only the audit-ledger persist is skipped).
@@ -9656,7 +9665,7 @@ def run_payroll_expenses(period: str, authorization: str = Header(default=""), o
         _gross_ledger_error = None
 
     gross_push = (_payex_push_gross_line(org_id, period, gross_cells, sal["config"]["line_label"],
-                                          sal["config"]["expense_type"])
+                                          sal["config"]["expense_type"], authorization)
                   if gross_cells else
                   {"pushed": False, "status": None,
                    "note": "no bookable store had payroll evidence this period — nothing to push "
@@ -9957,7 +9966,7 @@ def _additional_payroll_gather(org_id, period):
             "period_start": period_start.isoformat(), "period_end": period_end.isoformat()}
 
 
-def _additional_payroll_push_line(org_id, period, cells):
+def _additional_payroll_push_line(org_id, period, cells, authorization=""):
     """POST the per-store Additional Payroll excess to mod-commission's Store Expenses system-line
     endpoint (source_key='additional_payroll', label='Additional Payroll') — a DIFFERENT source_key
     than 'payroll_gross'/'payroll_expenses'/'pto_accrual' so it coexists as its OWN, non-double-
@@ -9967,7 +9976,8 @@ def _additional_payroll_push_line(org_id, period, cells):
     url = f"{PTO_INTERNAL_API_BASE}/api/v1/commcalc/expenses/{period}/system-line"
     body = {"source_key": "additional_payroll", "label": "Additional Payroll", "cells": cells}
     try:
-        resp = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        resp = requests.post(url, params={"org_id": org_id}, json=body,
+                             headers=self_call_headers(authorization, org_id), timeout=10)
         if resp.status_code == 404:
             return {"pushed": False, "status": 404, "note": "system-line endpoint not deployed yet — recomputed live, pull via GET /salary-advance/additional-payroll/{period} instead"}
         resp.raise_for_status()
@@ -10003,7 +10013,7 @@ def run_additional_payroll(period: str, authorization: str = Header(default=""),
     ONLY write this can ever cause is the additive 'additional_payroll' Store Expenses system line."""
     _require_manager(authorization, org_id)
     g = _additional_payroll_gather(org_id, period)
-    push = _additional_payroll_push_line(org_id, period, g["cells"]) if g["cells"] else \
+    push = _additional_payroll_push_line(org_id, period, g["cells"], authorization) if g["cells"] else \
         {"pushed": False, "status": None, "note": "no excess this period — nothing to push"}
     return {"period": period, "employees": g["employees"], "cells": g["cells"], "push": push}
 
@@ -10027,7 +10037,7 @@ def additional_payroll_run_due(x_notify_secret: str = Header(default="")):
     results = []
     for oid in orgs:
         g = _additional_payroll_gather(oid, period)
-        push = _additional_payroll_push_line(oid, period, g["cells"]) if g["cells"] else \
+        push = _additional_payroll_push_line(oid, period, g["cells"], "") if g["cells"] else \
             {"pushed": False, "status": None, "note": "no excess this period"}
         results.append({"org_id": oid, "stores_written": len(g["cells"]), "push": push})
     return {"period": period, "orgs_processed": len(orgs), "results": results}
@@ -10083,7 +10093,7 @@ def record_salary_advance(body: SalaryAdvanceIn, authorization: str = Header(def
 
     period = paid_date.strftime("%Y-%m")
     g = _additional_payroll_gather(org_id, period)
-    push = _additional_payroll_push_line(org_id, period, g["cells"]) if g["cells"] else \
+    push = _additional_payroll_push_line(org_id, period, g["cells"], authorization) if g["cells"] else \
         {"pushed": False, "status": None, "note": "no excess this period — nothing to push"}
     return {"ok": True, "id": (ins.data or [{}])[0].get("id"), "employee_id": employee_id,
             "amount": amount, "paid_date": row["paid_date"],

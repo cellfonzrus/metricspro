@@ -271,7 +271,10 @@ def misplaced(files, read_source, wheels):
 
 # ── THE THIRD RULE — a harness no workflow runs is a file, not a gate ─────────────────────────────
 PENDING_FILE = os.path.join(HERE, "harness_unrun_pending.txt")
-PINNED_MAX = 315          # must equal the number of entries in harness_unrun_pending.txt
+PINNED_MAX = 314          # must equal the number of entries in harness_unrun_pending.txt
+                          # 315 -> 314 on 2026-10-24: harness_ambiguous_tenant.py is now RUN
+                          # (carrier-vocab-guard job `internal-self-call-tenant`), beside the
+                          # new harness_internal_self_call.py. The list may only shrink.
                           # 321 -> 317 on 2026-10-16: harness_month_leg_resolution.py (the per-rung
                           # feed proof) plus the three MA booking/config proofs this change repaired
                           # are now run by carrier-vocab-guard.yml.
