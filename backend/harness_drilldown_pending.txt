@@ -84,7 +84,7 @@
 /admin/org-chart	owes	
 /closing	owes	
 /closing/accessory-recon	shared	all four tiles drill to their stores through core/report_drilldown.tiles; declaration in closing/day_recon_drilldown.py
-/closing/billpay-pickup	owes	
+/closing/billpay-pickup	shared	all seven figures drill to their envelopes through the SAME declaration as /closing/pickup (closing/pickup_drilldown.billpay_catalogue); a card-only row is shown and not counted
 /closing/cash-recon-management	shared	all eleven tiles (sixteen figures) drill to their store-days through core/report_drilldown.tiles; declaration in closing/cash_recon_drilldown.py
 /closing/closing-pickup-status	owes	
 /closing/envelope-report	owes	

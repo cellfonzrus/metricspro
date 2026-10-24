@@ -159,3 +159,62 @@ def catalogue():
 
 def drilldowns(rows, totals, cap=None):
     return report_drilldown.tiles(catalogue(), rows, totals, cap=cap or report_drilldown.ROW_CAP)
+
+
+# ── THE BILL-PAY MIRROR (owner directive 2026-09-02: "the same process same wiring") ─────────────
+# GET /closing/billpay-pickups is the same envelope on the bill-pay side of the same physical cash,
+# with the same field names, the same filters and the same keyset gating. So it EXTENDS this
+# declaration rather than getting a sibling file: one label, one row-fields function, one set of
+# state readers, two catalogues — the two screens differ in which figures they show, not in what
+# identifies an envelope. Fixing one of them and not the other is the defect the house rules name.
+#
+# TWO REAL DIFFERENCES, both declared rather than assumed:
+#  - A bill payment taken ON CARD has no physical cash to collect, so `ready` there counts only the
+#    envelopes with cash > 0. That rule lives in the endpoint; this reads it off the same test.
+#  - The card side is its own figure (`total_credit`), named as such — it is not cash and must never
+#    be added into one.
+#
+# REPORTED, NOT PAPERED OVER: bill-pay envelopes carry `actual_picked_amount` exactly as cash ones
+# do, and the bill-pay endpoint never totals it. So that screen has no counted side at all — not a
+# figure without rows, a figure that does not exist. Adding it is a change to what the report SHOWS
+# and is left to the owner rather than slipped in with a drill-down.
+def _ready_cash_envelope(r):
+    """An envelope with physical cash still to collect. A card-only display row is not one."""
+    return not (r or {}).get("picked_up") and float((r or {}).get("cash") or 0) > 0
+
+
+def billpay_catalogue():
+    common = {"row_label": _label, "keys": ROW_KEYS, "schema": "commcalc", "fields": _row_fields}
+    COUNT = report_drilldown.UNIT_COUNT
+    return (
+        {"key": "total_cash", "label": "Bill-pay cash the stores declared",
+         "total": "total_cash", "value": "cash", "tables": DECLARED, **common},
+        {"key": "total_credit", "label": "Bill payments taken on a card",
+         "total": "total_credit", "value": "credit", "tables": DECLARED,
+         "note": ("Not cash: there is nothing to collect on these, which is why they are a figure "
+                  "of their own rather than part of the cash above."), **common},
+        {"key": "collected_cash", "label": "Bill-pay cash on the envelopes collected",
+         "total": "collected_cash", "value": _cash_when(True), "tables": DECLARED,
+         "in_figure": (lambda r: bool((r or {}).get("picked_up"))), **common},
+        {"key": "ready_cash", "label": "Bill-pay cash still waiting to be collected",
+         "total": "ready_cash", "value": _cash_when(False), "tables": DECLARED,
+         "in_figure": (lambda r: not (r or {}).get("picked_up")), **common},
+        {"key": "ready", "label": "Envelopes with cash waiting to be collected",
+         "total": "ready",
+         "value": (lambda r: 1 if _ready_cash_envelope(r) else None),
+         "tables": DECLARED, "unit": COUNT,
+         "note": ("A bill payment taken on a card has no cash to collect, so it is not waiting for "
+                  "anyone."),
+         "in_figure": _ready_cash_envelope, **common},
+        {"key": "collected", "label": "Envelopes collected",
+         "total": "collected", "value": _state(True), "tables": PICKED, "unit": COUNT,
+         "in_figure": (lambda r: bool((r or {}).get("picked_up"))), **common},
+        {"key": "flagged", "label": "Envelopes flagged on deposit",
+         "total": "flagged", "value": _flag, "tables": PICKED, "unit": COUNT,
+         "in_figure": (lambda r: bool((r or {}).get("deposit_flagged"))), **common},
+    )
+
+
+def billpay_drilldowns(rows, totals, cap=None):
+    return report_drilldown.tiles(billpay_catalogue(), rows, totals,
+                                  cap=cap or report_drilldown.ROW_CAP)

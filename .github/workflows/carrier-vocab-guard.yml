@@ -232,6 +232,7 @@ on:
       - "backend/app/modules/closing/pickup_drilldown.py"
       - "frontend/src/app/(platform)/closing/tender-recon-3way/page.tsx"
       - "frontend/src/app/(platform)/closing/pickup/page.tsx"
+      - "frontend/src/app/(platform)/closing/billpay-pickup/page.tsx"
       - "frontend/src/app/(platform)/closing/epay-recon/page.tsx"
       - "frontend/src/app/(platform)/closing/accessory-recon/page.tsx"
       - "frontend/src/app/(platform)/closing/external-credit-recon/page.tsx"

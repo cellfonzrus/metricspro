@@ -13,7 +13,8 @@ import { resolveStoreCodes } from '../_lib/market-store-cascade'
 import EnvelopeViewLink from '@/components/EnvelopeViewLink'
 import { repOptions } from '@/lib/rep-options'
 import { WorkflowNext } from '@/components/WorkflowNext'
-import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel } from '@/components/DrillDownPanel'
+import { DrillPickupStat as Stat, ENVELOPE_DRILL_COLUMNS as DRILL_COLUMNS } from '../_lib/DrillStat'
 
 // DM cash pickup — see the day's cash envelopes, check off the ones collected with a note, confirm.
 // On confirm, the assigned recipient gets an email + WhatsApp summary.
@@ -885,28 +886,3 @@ const L = ({ t, children }: { t: string; children: React.ReactNode }) => (
   <label style={{ fontSize: 11, color: 'var(--text3)' }}><div style={{ marginBottom: 3 }}>{t}</div>{children}</label>
 )
 
-const Stat = ({ label, value, sub, accent, color, drills, drill }: {
-  label: string; value: string; sub?: string; accent?: boolean; color?: string
-  drills?: { key: string; label: string }[]
-  drill?: { open: string | null; toggle: (k: string) => void }
-}) => (
-  <div className="card" style={{ padding: '12px 16px', minWidth: 150, flex: '0 1 auto', borderTop: accent ? '3px solid var(--accent)' : undefined }}>
-    <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
-    <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2, color: color || undefined }}>{value}</div>
-    {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
-    {/* A figure the server served no panel for offers no link, rather than one that opens nothing. */}
-    {drill && drills && drills.length ? <DrillTileLinks drills={drills} open={drill.open} onToggle={drill.toggle} /> : null}
-  </div>
-)
-
-// THE COLUMNS FOR AN ENVELOPE DRILL ROW — the client side of `closing/pickup_drilldown._row_fields`.
-// The server declares what identifies a row in ONE function; this renders it in one place, so a field
-// added there is added here rather than in each figure's own column list.
-const DRILL_COLUMNS = [
-  { header: 'Store code', get: (r: DrillRow) => String(r.fields?.store_code || '—'),
-    sortValue: (r: DrillRow) => String(r.fields?.store_code || '') },
-  { header: 'Filed by', get: (r: DrillRow) => String(r.fields?.employee_name || '—'),
-    sortValue: (r: DrillRow) => String(r.fields?.employee_name || '') },
-  { header: 'Envelope', get: (r: DrillRow) => String(r.fields?.state || '—'),
-    sortValue: (r: DrillRow) => String(r.fields?.state || '') },
-]

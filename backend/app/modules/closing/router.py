@@ -8235,16 +8235,23 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
         })
     by_store.sort(key=lambda r: -r["billpay_pending"])
 
-    return {"date": date, "start": start, "end": end, "envelopes": out,
-            # `ready` counts CASH envelopes awaiting pickup — a credit-only display row (owner
-            # 2026-09-02 #2) has no physical cash to collect and never counts as "ready".
-            "ready": sum(1 for e in out if not e["picked_up"] and e["cash"] > 0),
-            "collected": sum(1 for e in out if e["picked_up"]),
-            "flagged": sum(1 for e in out if e["deposit_flagged"]),
-            "total_cash": round(sum(e["cash"] for e in out), 2),
-            "total_credit": round(sum(e["credit"] for e in out), 2),
-            "collected_cash": round(sum(e["cash"] for e in out if e["picked_up"]), 2),
-            "ready_cash": round(sum(e["cash"] for e in out if not e["picked_up"]), 2),
+    _totals = {
+        # `ready` counts CASH envelopes awaiting pickup — a credit-only display row (owner
+        # 2026-09-02 #2) has no physical cash to collect and never counts as "ready".
+        "ready": sum(1 for e in out if not e["picked_up"] and e["cash"] > 0),
+        "collected": sum(1 for e in out if e["picked_up"]),
+        "flagged": sum(1 for e in out if e["deposit_flagged"]),
+        "total_cash": round(sum(e["cash"] for e in out), 2),
+        "total_credit": round(sum(e["credit"] for e in out), 2),
+        "collected_cash": round(sum(e["cash"] for e in out if e["picked_up"]), 2),
+        "ready_cash": round(sum(e["cash"] for e in out if not e["picked_up"]), 2),
+    }
+    return {"date": date, "start": start, "end": end, "envelopes": out, **_totals,
+            # §CORE-17. Every figure opens to the envelopes behind it, through the SAME declaration
+            # the cash pickup uses — the two screens are one mechanism (§CORE-17.3e). No narrowing
+            # is applied or needed: every filter here is a query parameter, as on /pickups.
+            "drilldown": _pickup_drilldown.billpay_drilldowns(out, _totals),
+            "totals": _totals,
             "as_of": _as_of, "by_store": by_store, "position": pos_meta,
             # Same rep-picker contract as GET /closing/pickups (owner report 2026-09-07): every rep
             # with an envelope in this window/scope, collected before the employee filter.

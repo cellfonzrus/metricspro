@@ -33603,12 +33603,34 @@ into it, so a later reader cannot "fix" it back into the class it was never in.
 - **One figure the screen WAS folding itself is now served**: the gross cash column's footer total
   (`total_cash_gross`), which was the only footer with no rows behind it by construction.
 
+**`/closing/billpay-pickup` — the sibling, fixed in the same breath.** The bill-pay pickup is the same
+process wearing a second screen (owner directive 2026-09-02, "the same process same wiring") over the
+same envelope fields, so its seven figures are declared as a SECOND CATALOGUE in
+`pickup_drilldown.py` — `billpay_catalogue()` — reusing the one label, the one row-fields function and
+the one set of state readers. No sibling file, locked by §H1. The two screens also share ONE stat tile
+and one set of drill columns now (`closing/_lib/DrillStat.DrillPickupStat` /
+`ENVELOPE_DRILL_COLUMNS`); each had carried a byte-identical `Stat`, which is the sibling defect in
+its smallest form and is how it came back after §CORE-17.3c fixed it for the day recons.
+
+- A bill payment taken **on a card** has no physical cash to collect, so it never counts as waiting;
+  it is still SHOWN in that panel, not counted, with its reason, and it is counted at a real $0.00 in
+  the waiting-CASH panel. Shown-not-counted and counted-at-zero are different facts and the reader of
+  either figure needs the difference (§H4, §H6, §H6b).
+- The card side is its own figure (`total_credit`) and is never added into a cash one (§H5).
+
+**REPORTED, NOT PAPERED OVER (defect, owner's to decide).** Bill-pay envelopes carry
+`actual_picked_amount` exactly as cash ones do, and `GET /closing/billpay-pickups` **never totals it**
+— so that screen has no counted side at all. That is not a figure missing its rows; it is a figure
+that does not exist, and the cash page's whole honesty argument (declared is the number a short pickup
+does not change) therefore has no counterpart on the bill-pay side. Adding it changes what the report
+SHOWS, so it is written down here rather than slipped in with a drill-down.
+
 **Four reasons added to `report_drilldown.UNMEASURED_REASONS`** — `no_processor_data`,
 `no_declared_data`, `dm_merged`, `not_collected` — so an un-numbered row says in words why, in the one
 place those words live. Changing that tuple deliberately fails `harness_drill_narrow_fixtures.py`; the
 fixtures are regenerated with `--write`, never the check relaxed.
 
-Proof: `backend/harness_batch5_drilldown.py` (61 checks, §Z1–Z7 negative controls). Owed count 88 → 86.
+Proof: `backend/harness_batch5_drilldown.py` (74 checks, §Z1–Z7 negative controls). Owed count 88 → 85.
 
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
