@@ -61,7 +61,7 @@ const th: React.CSSProperties = {
 const td: React.CSSProperties = { padding: '5px 8px', borderBottom: '1px solid var(--border)', fontSize: 12 }
 const chip: React.CSSProperties = {
   display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 11,
-  background: 'var(--surface3)', border: '1px solid var(--border)', marginRight: 6, marginTop: 4,
+  background: 'var(--surface)', border: '1px solid var(--border)', marginRight: 6, marginTop: 4,
 }
 
 /** The sources line — "where is the data coming from", which is the whole of the owner's ask. */
@@ -78,7 +78,7 @@ export function DrillSources({ panel }: { panel: DrillPanel }) {
       ))}
       {/* A provenance gap is REPORTED, never tidied away (CLAUDE.md). */}
       {!!panel.untraceable_origins && (
-        <span style={{ ...chip, color: 'var(--warn, #b45309)' }}>
+        <span style={{ ...chip, color: 'var(--warn, var(--c-fg-b45309))' }}>
           {panel.untraceable_origins} figure(s) could not be traced to a source
         </span>
       )}
@@ -113,7 +113,7 @@ export function DrillTieOut({ panel }: { panel: DrillPanel }) {
   if (!t?.words) return null
   const icon = t.ties === true ? '✅' : t.ties === false ? '⚠️' : '—'
   return (
-    <div style={{ fontSize: 11, color: t.ties === false ? 'var(--danger, #b91c1c)' : 'var(--text2)', marginTop: 6 }}>
+    <div style={{ fontSize: 11, color: t.ties === false ? 'var(--danger, var(--c-fg-b91c1c))' : 'var(--text2)', marginTop: 6 }}>
       {icon} {t.words}
     </div>
   )
@@ -202,7 +202,7 @@ export function DrillToggle({ open, onClick, label = 'rows behind this' }:
     <button type="button" onClick={onClick} aria-expanded={open}
       title={open ? 'Hide the rows behind this figure' : `Show the ${label}`}
       style={{
-        background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent, #2563eb)',
+        background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)',
         fontSize: 12, padding: 0, marginRight: 6,
       }}>
       {open ? '▾' : '▸'}
