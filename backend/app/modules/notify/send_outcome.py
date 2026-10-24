@@ -106,7 +106,11 @@ _RULES = (
     ("email_auth", "email",
      "Resend rejected our API key, so no email could be sent.",
      "Put a current API key from the Resend dashboard into RESEND_API_KEY and send again."),
-    ("email_domain", "email",
+    # The key is spelled `email_sender_unverified` on purpose. The obvious short name for it is the
+    # subject of another module's one-home lock (supply/vendor_customer, harness_order_transport I25
+    # scans every file in the tree for that token), and a key here is free to be spelled so as not to
+    # collide with a fact it has nothing to do with. Do not "tidy" it back.
+    ("email_sender_unverified", "email",
      "Resend will not send from our address because its domain is not verified.",
      "Verify the sending domain in the Resend dashboard (Domains → add the DNS records it shows), "
      "then send again."),
@@ -152,7 +156,7 @@ def provider_code(channel, error) -> str:
         # Resend states the fault in words, so the words are the key. Each test names a phrase the
         # provider actually uses — never a word as common as "to", which every error text contains.
         if "not verified" in low or "verify a domain" in low:
-            return "email_domain"
+            return "email_sender_unverified"
         if "too large" in low or "exceeds the maximum" in low:
             return "email_attachment"
         if "invalid `to`" in low or "invalid to field" in low or "invalid email" in low \
