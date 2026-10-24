@@ -1003,6 +1003,18 @@ FACTS: dict[str, dict] = {
             'app/modules/notify/router.py': ('send_identity',),
         },
     },
+    'send_failure_reason': {
+        "question": 'Why did this send fail for this recipient, and what does a human do about it?',
+        "homes": ('app/modules/notify/send_outcome.py',),
+        "index": ('NOTIFY-01',),
+        "locks": ('harness_notify_send_outcome.py',),
+        # HAND-WRITTEN, per the precedent above: `--bless` strips the per-caller notes. The digest leg
+        # imports it INSIDE the except branch, so the alias it binds is `_why`, not the module name.
+        "callers": {
+            'app/modules/notify/router.py': ('send_outcome',),
+            'app/modules/notify/digest_delivery.py': ('_why',),
+        },
+    },
     'alert_channel_ladder': {
         "question": 'Which channels does this recipient still owe, and what did each one do?',
         "homes": ('app/modules/notify/digest_delivery.py',),

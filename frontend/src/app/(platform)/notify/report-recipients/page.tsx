@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { SendOutcomeView, type SendOutcome } from '@/lib/send-outcome'
 
 // Unified report → designated recipient routing (Theme 4). ONE page to set who each report is sent
 // to (email/WhatsApp). Different reports route to different people. Any module's "send to the
@@ -17,6 +18,7 @@ export default function ReportRecipientsPage() {
   const [draft, setDraft] = useState<Record<string, Draft>>({})
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
+  const [outcome, setOutcome] = useState<{ label: string; outcome: SendOutcome } | null>(null)
 
   const load = useCallback(() => {
     api('/api/v1/notify/recipients').then((r: any) => setRecipients(r?.saved || [])).catch(() => {})
@@ -53,7 +55,11 @@ export default function ReportRecipientsPage() {
     setBusy(rk)
     try {
       const res: any = await api('/api/v1/notify/send-to-designated', { method: 'POST', body: JSON.stringify({ report_key: rk }) })
-      setMsg(res?.skipped ? `⚠️ ${draft[rk].label}: ${res.skipped}` : `✅ ${draft[rk].label}: sent ${res?.sent ?? 0}, failed ${res?.failed ?? 0}.`)
+      // SIBLING OF THE SEND BOX (§NOTIFY-01): this page said "sent 1, failed 2" and left the reader
+      // to guess who. The outcome names each recipient, the reason and the remedy; the page renders
+      // it rather than re-wording it.
+      setOutcome(res?.outcome ? { label: draft[rk].label, outcome: res.outcome } : null)
+      setMsg(res?.outcome ? `${draft[rk].label}:` : (res?.skipped ? `⚠️ ${draft[rk].label}: ${res.skipped}` : `✅ ${draft[rk].label}: sent ${res?.sent ?? 0}, failed ${res?.failed ?? 0}.`))
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
   }
 
@@ -72,6 +78,9 @@ export default function ReportRecipientsPage() {
         <Link href="/notify" className="btn btn-secondary" style={{ fontSize: 13, textDecoration: 'none' }}>＋ Manage recipients</Link>
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>{recipients.length} saved recipient{recipients.length === 1 ? '' : 's'}. Add people there first, then assign them per report here.</span>
         {msg && <span style={{ fontSize: 13, marginLeft: 'auto' }}>{msg}</span>}
+      </div>
+      <div>
+        <SendOutcomeView outcome={outcome?.outcome} />
       </div>
 
       <div className="card" style={{ padding: 0, overflowX: 'auto' }}>

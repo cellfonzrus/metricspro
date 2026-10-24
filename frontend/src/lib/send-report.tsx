@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { renderExcelBase64, renderPdfBase64, type ExportPayload } from '@/lib/export'
+import { SendOutcomeView, type SendOutcome } from '@/lib/send-outcome'
 
 type Emp = { name: string; email: string | null; phone: string | null; store: string | null }
 type Saved = { id: string; name: string | null; email: string | null; phone: string | null }
@@ -45,6 +46,8 @@ export function SendReportButton({ reportKey, filters, compact, exportPayload, s
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string>('')
+  // The result of the last send, named per recipient (notify/send_outcome is the one home for it).
+  const [outcome, setOutcome] = useState<SendOutcome | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -79,13 +82,13 @@ export function SendReportButton({ reportKey, filters, compact, exportPayload, s
     const channels = [chEmail && 'email', chWhatsapp && 'whatsapp'].filter(Boolean)
     const formats = [fmtXlsx && 'xlsx', fmtPdf && 'pdf'].filter(Boolean)
     const { emails, phones } = collect()
-    if (!channels.length) { setResult('Pick at least one channel.'); return }
+    if (!channels.length) { setOutcome(null); setResult('Pick at least one channel.'); return }
     // The format picker only governs the in-browser render paths; a server-rendered file is already a
     // fixed PDF, so its "format" is not chosen here.
     if (!serverFiles && !formats.length) { setResult('Pick at least one format.'); return }
     if (chEmail && !emails.length) { setResult('Email selected but no email recipients.'); return }
     if (chWhatsapp && !phones.length) { setResult('WhatsApp selected but no phone recipients.'); return }
-    setBusy(true); setResult('')
+    setBusy(true); setResult(''); setOutcome(null)
     try {
       let res: any
       if (serverFiles) {
@@ -117,7 +120,11 @@ export function SendReportButton({ reportKey, filters, compact, exportPayload, s
           body: JSON.stringify({ report_key: reportKey, filters, channels, formats, emails, phones, message }),
         })
       }
-      setResult(`✓ Sent: ${res.sent} ok, ${res.failed} failed.`)
+      // A COUNT IS NOT A REASON (owner 2026-10-24). The backend names every recipient that was
+      // not reached, why, and what to do; this button only renders it. The old two-integer sentence
+      // is the fallback for a backend that predates the outcome.
+      if (res?.outcome) { setOutcome(res.outcome as SendOutcome); setResult('') }
+      else setResult(`✓ Sent: ${res.sent} ok, ${res.failed} failed.`)
     } catch (e: any) {
       setResult('Send failed: ' + (e?.message || e))
     } finally { setBusy(false) }
@@ -187,6 +194,7 @@ export function SendReportButton({ reportKey, filters, compact, exportPayload, s
               <span style={{ fontSize: 12, color: result.startsWith('✓') ? 'green' : '#c00' }}>{result}</span>
               <button className="btn btn-primary" disabled={busy} onClick={send}>{busy ? '⏳ Sending…' : 'Send now'}</button>
             </div>
+            <SendOutcomeView outcome={outcome} />
           </div>
         </div>
       )}
