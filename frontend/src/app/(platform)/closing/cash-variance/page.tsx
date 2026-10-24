@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { Fragment, useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
@@ -8,6 +8,8 @@ import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 import { usePosTerm } from '@/lib/report-labels'
+import DrillDownPanel, { DrillToggle, useDrillOpen, type DrillPanel, type DrillRow }
+  from '@/components/DrillDownPanel'
 
 // CASH VARIANCE AFTER MANAGEMENT RECON — owner ask 2026-10-10, verbatim: "need to create a report
 // after management recon to assess the shortage and overage based on what the management received
@@ -58,6 +60,14 @@ const money = (v: any) => (v == null ? '' : fmt(v))
 // pair that tied, which is the absence-is-zero defect wearing display clothes.
 const cmpText = (c?: Cmp) => (c?.measured ? money(c.variance) : '—')
 const cmpTitle = (c?: Cmp) => (c?.measured ? `${c.verdict} on the ${c.basis} basis` : (c?.reason_label || ''))
+// One leg of a comparison on a drill row: the figure WITH the cash it counted, because a figure
+// without its basis is the very thing this report exists to stop being subtracted. A leg nobody
+// recorded says so instead of showing $0.00.
+type LegField = { amount?: number | null; present?: boolean; basis_label?: string | null }
+const legCell = (raw?: unknown) => {
+  const l = (raw || {}) as LegField
+  return !l.present ? '—' : `${money(l.amount)}${l.basis_label ? ` · ${l.basis_label}` : ''}`
+}
 
 const rowCell = (r: any, f: string) => (f.startsWith('p:') ? (r?.pairs?.[f.slice(2)]?.variance ?? null) : r?.[f])
 const groupCell = (g: any, f: string) =>
@@ -73,6 +83,11 @@ export default function CashVariancePage() {
   })
   const [verdict, setVerdict] = useState('')
   const [view, setView] = useState<'days' | 'stores' | 'employees'>('employees')
+  // THE DRILL-DOWN (owner ask 2026-10-24): every rollup figure opens to the store-days behind it,
+  // and each of those names the table its figures were read out of. Served by the one home
+  // `core/report_drilldown.py` through `closing/cash_variance.drilldowns` (§CORE-16) — this screen
+  // renders the panel and derives nothing, so it cannot disagree with the row it opened from.
+  const drill = useDrillOpen()
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -366,9 +381,16 @@ export default function CashVariancePage() {
                   <tbody>
                     {groups.sorted.map((g: any, i: number) => {
                       const h = g.pairs?.[HEADLINE] || {}
+                      const subject = String((isEmp ? g.employee_name : g.store_code) || '')
+                      const key = (isEmp ? 'e:' : 's:') + subject
+                      const panel: DrillPanel | null =
+                        (data?.drilldown?.[isEmp ? 'employee_name' : 'store_code'] || {})[subject] || null
                       return (
-                        <tr key={(isEmp ? g.employee_name : g.store_code) || i}>
+                      <Fragment key={key || i}>
+                        <tr>
                           <td style={td}>
+                            <DrillToggle open={drill.isOpen(key)} onClick={() => drill.toggle(key)}
+                              label="store-days behind this figure" />
                             {isEmp ? g.employee_name : (g.store_address || g.store_code)}
                             <div style={{ fontSize: 11, color: 'var(--text3)' }}>
                               {(isEmp ? (g.stores || []) : (g.employees || [])).slice(0, 3).join(', ')}
@@ -385,6 +407,23 @@ export default function CashVariancePage() {
                           <td style={td}>{money(h.net_variance)}</td>
                           <td style={td}>{g.last_close}</td>
                         </tr>
+                        {drill.isOpen(key) && (
+                          <tr>
+                            <td style={{ ...td, padding: 0 }} colSpan={cols.length}>
+                              <DrillDownPanel panel={panel}
+                                emptyNote="No store-days were recorded behind this figure."
+                                extraColumns={[
+                                  { header: 'Store', get: (r: DrillRow) => String(r.fields?.store_address || r.fields?.store_code || '') },
+                                  { header: 'Verdict', get: (r: DrillRow) => BADGE[String(r.fields?.verdict || '')] || '' },
+                                  { header: 'Management received',
+                                    get: (r: DrillRow) => legCell(r.fields?.got) },
+                                  { header: 'Cash envelope declared',
+                                    get: (r: DrillRow) => legCell(r.fields?.expected) },
+                                ]} />
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                       )
                     })}
                   </tbody>

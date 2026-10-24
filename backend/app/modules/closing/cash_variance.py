@@ -619,3 +619,177 @@ def basis_catalog(processor_term=None):
         BASIS_BILLPAY: f"{term} cash" if term else "Bill payment cash",
     }
     return [{"key": k, "label": labels[k]} for k in BASES]
+
+
+# ── THE DRILL-DOWN: every figure on this report names the rows behind it (owner ask 2026-10-24) ──
+# Owner, verbatim: *"cash variance at employee should have the drill down from wheter the data is
+# cming from"*. The provenance was already here and had nowhere to go: every `leg()` has carried its
+# `source` table and a `detail` sentence since this module was written. What was missing was the
+# SHAPE of a drill-down, and that is now `core/report_drilldown.py` (§CORE-16) — shared, so the next
+# report gets one without inventing a fourth answer to the same question.
+#
+# NOTHING IS RE-DERIVED. The rows are the report's own `day_row` output, the verdicts are the ones
+# already on them, and the figure is the group's own `net_variance` off `totals()`. A drill-down that
+# recomputed its evidence could disagree with the table above it — which is the §COMMCALC-09 defect
+# (a stored figure beside a recomputed breakdown) in presentation form.
+
+#: Every leg of this report is read from a `commcalc` relation. Named once rather than five times.
+LEG_SOURCE_SCHEMA = "commcalc"
+
+#: Which keys ADDRESS the row a leg was read out of, per table — all of them read off the day row's
+#: own identity, so the screen, an export and a support query reach for the SAME row. `envelope_count`
+#: and `daily_closing` are addressed by the closing row's id because that is the key the count is
+#: filed under; the pickup and attempt tables carry no id this report holds, so their natural key is
+#: the grain this whole report is keyed on.
+LEG_ROW_KEYS = {
+    "envelope_count": ("closing_row_id",),
+    "cash_pickup": ("store_code", "close_date", "employee_name"),
+    "billpay_pickup": ("store_code", "close_date", "employee_name"),
+    "daily_closing": ("closing_row_id",),
+    "closing_attempt": ("store_code", "close_date", "employee_name"),
+}
+
+#: Which COLUMN on that table held the figure. The same columns the leg builders above read — named
+#: here so the drill-down can say "read out of `t_cash`" without a second opinion about which column
+#: means which cash, which is the very confusion this module exists to prevent.
+LEG_SOURCE_COLUMN = {
+    "envelope_count": "counted_amount",
+    "cash_pickup": "actual_picked_amount",
+    "billpay_pickup": "actual_picked_amount",
+    "daily_closing": "t_cash",
+    "closing_attempt": "b2b_cash",
+}
+
+#: Which leg of a pair is which, from `day_row`'s own `pairs` construction. Declared as data so the
+#: drill-down cannot name a different pair of legs than the comparison it is explaining.
+PAIR_LEGS = {
+    "received_vs_envelope": ("received", "declared"),
+    "declared_vs_pos": ("declared", "pos"),
+    "received_vs_pos": ("received", "pos"),
+}
+
+#: Which tables a leg's figure can have come from, BESIDE the one `leg.source` names. The received
+#: leg is the only one that can be two rows added together (both envelopes counted at pickup), and
+#: when it is, the drill-down must name both or it would credit the whole drawer to one envelope.
+LEG_EXTRA_TABLES = {"cash_pickup": ("billpay_pickup",)}
+
+
+def _leg_origins(leg_dict, identity, origin):
+    """PURE: the source rows behind ONE leg. A leg nobody recorded has NO origin — it is not traced
+    to a row that does not exist, and `drill_row` carries it as unmeasured instead."""
+    src = (leg_dict or {}).get("source")
+    if not src:
+        return []
+    tables = [src]
+    if str((leg_dict or {}).get("detail") or "").startswith("both envelopes"):
+        tables += list(LEG_EXTRA_TABLES.get(src, ()))
+    out = []
+    for t in tables:
+        out.append(origin(t, schema=LEG_SOURCE_SCHEMA,
+                          keys={k: (identity or {}).get(k) for k in LEG_ROW_KEYS.get(t, ())},
+                          column=LEG_SOURCE_COLUMN.get(t),
+                          note=(leg_dict or {}).get("detail") if t == src else
+                               "the bill-payment envelope, counted and added in"))
+    return out
+
+
+def day_drill_row(row, pair_key, basis_labels=None):
+    """PURE: one store-day of this report as a drill row — the day's variance, the two source rows it
+    came out of, and every figure a reader needs to judge it without leaving the panel.
+
+    `in_figure` is True only for a day the headline figure COUNTS, i.e. one scored out of band. A day
+    inside the band, and a day that could not be measured, are still shown: they are the context that
+    makes the figure readable, and `tie_out` says in words how many are shown without being counted.
+    Dropping them would present a shorter month than the one the report measured.
+
+    `basis_labels` is `{basis_key: label}` from `basis_catalog`, so the row carries the basis in the
+    tenant's own wording and the screen spells no basis key. Absent, the key is served as-is and the
+    screen renders what the report already served it.
+    """
+    from app.modules.core import report_drilldown
+    r = row or {}
+    legs = r.get("legs") or {}
+    cmp_ = (r.get("pairs") or {}).get(pair_key) or {}
+    got_name, exp_name = PAIR_LEGS.get(pair_key, ("received", "declared"))
+    origins = (_leg_origins(legs.get(got_name), r, report_drilldown.origin)
+               + _leg_origins(legs.get(exp_name), r, report_drilldown.origin))
+    labels = dict(basis_labels or {})
+
+    def _leg_field(name):
+        lg = legs.get(name) or ABSENT
+        return {"amount": lg.get("amount"), "present": lg.get("present"),
+                "basis": lg.get("basis"),
+                "basis_label": labels.get(lg.get("basis")) or lg.get("basis"),
+                "source": lg.get("source"), "detail": lg.get("detail")}
+
+    verdict = cmp_.get("verdict") if cmp_.get("measured") else "not_measured"
+    return report_drilldown.drill_row(
+        str(r.get("close_date") or "")[:10] or "(no date)",
+        origins,
+        amount=cmp_.get("variance"),
+        # Only an out-of-band day is inside the figure — see the docstring.
+        in_figure=verdict in ("short", "over"),
+        measured=bool(cmp_.get("measured")),
+        reason=cmp_.get("reason"),
+        subject=r.get("employee_name"),
+        fields={
+            "store_code": r.get("store_code"), "store_address": r.get("store_address"),
+            "market": r.get("market"), "employee_name": r.get("employee_name"),
+            "verdict": verdict, "reason_label": cmp_.get("reason_label"),
+            "basis": cmp_.get("basis"), "basis_label": labels.get(cmp_.get("basis")),
+            "band": cmp_.get("band"),
+            "got": _leg_field(got_name), "expected": _leg_field(exp_name),
+            # Every pair's verdict on the same day, so a reader can see at a glance that the
+            # end-to-end check is unmeasurable while the envelope check is short — the single most
+            # common live shape, and the one a one-pair drill-down would hide.
+            "pairs": {k: {"variance": (v or {}).get("variance"),
+                          "verdict": ((v or {}).get("verdict")
+                                      if (v or {}).get("measured") else "not_measured"),
+                          "reason_label": (v or {}).get("reason_label")}
+                      for k, v in (r.get("pairs") or {}).items()},
+        })
+
+
+def group_drilldown(group, group_rows, label_key, pair_key, pair_label, basis_labels=None, cap=None):
+    """PURE: the drill-down for ONE rollup row — one employee, or one store.
+
+    THE FIGURE IS THE GROUP'S OWN `net_variance`, read off the group `totals()` already produced, and
+    it ties to the cent by construction: `net_variance` is over_total − short_total, and those two are
+    summed over exactly the out-of-band days this panel marks `in_figure`. So the tie-out is a real
+    check of this report against its own evidence, not a tautology dressed as one — the harness plants
+    a dropped day and a mis-scored day and both break it.
+    """
+    from app.modules.core import report_drilldown
+    p = (group or {}).get("pairs", {}).get(pair_key) or {}
+    name = str((group or {}).get(label_key) or "")
+    rows = [day_drill_row(r, pair_key, basis_labels) for r in (group_rows or [])]
+    return report_drilldown.panel(
+        # SAID IN THE LABEL, because `net_variance` is over MINUS short and this module's own
+        # `totals()` warns about exactly this: a rep $100 short one day and $100 over the next nets
+        # to $0.00 while having twice handed over the wrong cash. A figure of zero here must read as
+        # "they cancelled out", never as "clean" — the note below carries the two gross counts.
+        f"{pair_label} — net of short and over", p.get("net_variance"), rows,
+        subject=name, subject_kind=label_key, unit=report_drilldown.UNIT_MONEY, cap=cap,
+        note=(f"{p.get('short', 0)} short and {p.get('over', 0)} over of "
+              f"{p.get('measured', 0)} measured day(s); {p.get('not_measured', 0)} day(s) could not "
+              f"be measured at all."))
+
+
+def drilldowns(rows, groups, label_key, pair_key, pair_label, basis_labels=None, cap=None):
+    """PURE: one panel per rollup row, keyed by the subject the rollup is keyed on.
+
+    THE GROUPING IS THE ROLLUP'S OWN. The rows are re-bucketed with the SAME key functions
+    `by_employee` / `by_store` used, so a panel can never hold a different set of days than the row
+    it opens from — a drill-down grouped one way beside a table grouped another is the §4e defect
+    (a drill accumulated at one grain explaining a statement rendered at another).
+    """
+    keyfn = ((lambda r: (r.get("employee_name") or "").strip() or "(unnamed)")
+             if label_key == "employee_name"
+             else (lambda r: (r.get("store_code") or "").strip().upper() or "(no store)"))
+    buckets = {}
+    for r in rows or []:
+        buckets.setdefault(keyfn(r), []).append(r)
+    return {str(g.get(label_key) or ""): group_drilldown(
+                g, buckets.get(str(g.get(label_key) or "")) or [], label_key,
+                pair_key, pair_label, basis_labels, cap)
+            for g in (groups or [])}

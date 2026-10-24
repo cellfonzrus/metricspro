@@ -1,0 +1,162 @@
+# THE DRILL-DOWN COVERAGE LEDGER — index §CORE-16, owner ask 2026-10-24
+#
+# Owner, verbatim: "update in index thta drilldown is needed for every report geenerated from any
+# data which comming from within the platforma as a defalut".
+#
+# EVERY report route the platform serves appears here EXACTLY ONCE, with its state. The guard
+# `harness_drilldown_coverage.py` fails the build when a route in the report directory is missing
+# from this file, when a route here no longer exists, or when the `owes` count GROWS. So a new
+# report cannot ship without either a drill-down or a written-down reason -- which is the owner's
+# "by default", enforced rather than remembered.
+#
+# STATES
+#   shared     - renders the one shared drill-down (components/DrillDownPanel.tsx over
+#                core/report_drilldown.py). This is what a new report does.
+#   own        - had a drill-down of its own before §CORE-16 and it names its sources. EXCUSED and
+#                NAMED, to converge onto the shared panel; converging one is a PR of its own, and
+#                until then the note says what it already does.
+#   flat       - shows the source rows already; there is no summarised figure to drill from.
+#   not_report - a config screen, a wizard or a work queue. Not a report, so the rule does not apply.
+#   owes       - a summarised figure with no way to the rows behind it. THIS COUNT MAY ONLY SHRINK.
+#
+# Format: <route><TAB><state><TAB><note>. Lines starting with # are comments.
+# Audited 2026-10-24; the per-route findings are in the project folder under drilldown-audit/.
+
+# OWES: 93 of 136 report routes.
+
+/closing/cash-variance	shared	owner ask 2026-10-24, the first report on the shared mechanism
+/accounts	own	the reference's other half (ScopeDrillDown)
+/accounts/pl	own	the reference drill (PR #408, index 4e); drill rows still name no source feed
+/commcalc/commission-ledger	own	category tile to ledger rows; provenance panel names each source_table
+/commcalc/daily-commission	own	accrual modal states 'Read from <source> ... recomputed at'
+/commcalc/ma-overview-recon	own	generic tile-to-rows drill over 12 tables, names source_table
+/commcalc/payables	own	per-IMEI 'what offsets what' modal names owed_source + primary_rebate.source
+/commcalc/sales-recon	own	transaction modal states the monthly-file-vs-feed side per transaction
+/commcalc/sales-report	own	cell to transactions to line items, names the primary feed via sourceLabel
+/failures	own	grouped count to the failure rows with detail.ref and traceback
+/accounts/journal	flat	already shows the source rows; nothing is summarised above them
+/commcalc/asset/aging	flat	already shows the source rows; nothing is summarised above them
+/commcalc/asset/aging-rebate	flat	already shows the source rows; nothing is summarised above them
+/commcalc/asset/charges/rma	flat	already shows the source rows; nothing is summarised above them
+/commcalc/asset/hotsheet-recon	flat	already shows the source rows; nothing is summarised above them
+/commcalc/asset/marketplace-purchases	flat	already shows the source rows; nothing is summarised above them
+/commcalc/asset/missing-phones	flat	already shows the source rows; nothing is summarised above them
+/commcalc/chargebacks	flat	already shows the source rows; nothing is summarised above them
+/commcalc/commission-discrepancy	flat	already shows the source rows; nothing is summarised above them
+/commcalc/commission-withholding	flat	already shows the source rows; nothing is summarised above them
+/commcalc/device-history	flat	already shows the source rows; nothing is summarised above them
+/commcalc/distributors	flat	already shows the source rows; nothing is summarised above them
+/commcalc/flags	flat	already shows the source rows; nothing is summarised above them
+/commcalc/schematic	flat	already shows the source rows; nothing is summarised above them
+/hr/compliance	flat	already shows the source rows; nothing is summarised above them
+/hr/people	flat	already shows the source rows; nothing is summarised above them
+/remediation	flat	already shows the source rows; nothing is summarised above them
+/storeops/attendance	flat	already shows the source rows; nothing is summarised above them
+/storeops/shift-extensions	flat	already shows the source rows; nothing is summarised above them
+/storeops/swaps	flat	already shows the source rows; nothing is summarised above them
+/storeops/timeoff	flat	already shows the source rows; nothing is summarised above them
+/storeops/visits	flat	already shows the source rows; nothing is summarised above them
+/admin/fix-requests	not_report	config, wizard or work queue, not a report
+/admin/tenants	not_report	config, wizard or work queue, not a report
+/commcalc/accessory-definition	not_report	config, wizard or work queue, not a report
+/commcalc/expenses	not_report	config, wizard or work queue, not a report
+/commcalc/kpi	not_report	config, wizard or work queue, not a report
+/commcalc/onboarding	not_report	config, wizard or work queue, not a report
+/helpdesk	not_report	config, wizard or work queue, not a report
+/hr/onboarding	not_report	config, wizard or work queue, not a report
+/storeops	not_report	config, wizard or work queue, not a report
+/storeops/employees	not_report	config, wizard or work queue, not a report
+/storeops/timeclock-permissions	not_report	config, wizard or work queue, not a report
+/accounts/analysis	owes	
+/accounts/balance-sheet	owes	
+/accounts/cash-flow	owes	
+/accounts/cost-centers	owes	
+/accounts/device-payable	owes	
+/accounts/device-purchases	owes	
+/accounts/inventory	owes	
+/accounts/liabilities-due	owes	
+/accounts/profit-centers	owes	
+/accounts/recon	owes	
+/accounts/residual-per-sub	owes	
+/accounts/royalty	owes	
+/accounts/royalty/recon	owes	
+/accounts/trends	owes	
+/admin/org-chart	owes	
+/closing	owes	
+/closing/accessory-recon	owes	
+/closing/billpay-pickup	owes	
+/closing/cash-recon-management	owes	
+/closing/closing-pickup-status	owes	
+/closing/envelope-report	owes	
+/closing/epay-recon	owes	
+/closing/external-credit-recon	owes	
+/closing/management	owes	
+/closing/pickup	owes	
+/closing/recon	owes	
+/closing/tender-recon	owes	
+/closing/tender-recon-3way	owes	
+/closing/verify	owes	
+/commcalc	owes	
+/commcalc/accessory-cost-audit	owes	
+/commcalc/accessory-flags	owes	
+/commcalc/accessory-target-plan	owes	
+/commcalc/activations	owes	
+/commcalc/asset	owes	
+/commcalc/asset/borrowed	owes	
+/commcalc/asset/dashboard	owes	
+/commcalc/asset/inventory-recon	owes	
+/commcalc/asset/lending	owes	
+/commcalc/asset/on-inventory	owes	
+/commcalc/asset/owed-weekly	owes	
+/commcalc/atu-opportunity	owes	
+/commcalc/bill-payments	owes	
+/commcalc/carrier-vs-pay	owes	
+/commcalc/coaching	owes	
+/commcalc/commission-legs	owes	
+/commcalc/comp-trend	owes	
+/commcalc/custom-report	owes	
+/commcalc/device-line-reimbursement	owes	
+/commcalc/discrepancy	owes	
+/commcalc/dlar-vs-platform	owes	
+/commcalc/epay-fee-recon	owes	
+/commcalc/exec	owes	
+/commcalc/exec/mtd	owes	
+/commcalc/expected-commission	owes	
+/commcalc/financing	owes	
+/commcalc/gp	owes	
+/commcalc/kpi-failing	owes	
+/commcalc/ma-commission	owes	
+/commcalc/mdf-entitlement-coverage	owes	
+/commcalc/month-focus	owes	
+/commcalc/peer-comparison	owes	
+/commcalc/processor-ledger	owes	
+/commcalc/product-mix	owes	
+/commcalc/productivity	owes	
+/commcalc/recovery	owes	
+/commcalc/reports	owes	
+/commcalc/sales-analyzer	owes	
+/commcalc/sales-comparison	owes	
+/commcalc/spiff-impact	owes	
+/commcalc/store-takeover	owes	
+/commcalc/targets	owes	
+/commcalc/targets/accessories	owes	
+/commcalc/targets/action-plan	owes	
+/commcalc/targets/my	owes	
+/commcalc/targets/report-cards	owes	
+/commcalc/tax-collected	owes	
+/commcalc/vip	owes	
+/commcalc/vip/paygo	owes	
+/commcalc/whatif	owes	
+/commcalc/zero-sales	owes	
+/crm/reports	owes	
+/helpdesk/dashboard	owes	
+/hr	owes	
+/hr/payroll-expenses	owes	
+/storeops/hours-budget	owes	
+/storeops/payroll	owes	
+/storeops/payroll-tax	owes	
+/storeops/reports	owes	
+/storeops/schedule	owes	
+/storeops/team	owes	
+/storeops/timeclock	owes	
+/storeops/visits/plan	owes	
