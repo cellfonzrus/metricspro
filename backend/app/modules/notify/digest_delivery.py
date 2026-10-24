@@ -121,6 +121,12 @@ async def deliver_recipient(client, org_id, scope, *, addresses, items, carried,
             leg["delivered"] = await _send(ch, addr, built, wa_filename, from_name=from_name)
         except Exception as e:
             leg["error"] = str(e)[:200]
+            # SIBLING OF THE SEND BOX (§NOTIFY-01): a digest leg parked the provider's raw string and
+            # left every reader to interpret it. The reason and the remedy come from the one home, so
+            # a digest preview explains a dead channel in the same words a report send does.
+            from app.modules.notify import send_outcome as _why
+            leg.update({k: v for k, v in _why.classify(ch, e).items()
+                        if k in ("code", "reason", "fix", "recognised")})
             print(f"WARN {scope} {ch} to {addr} failed: {e}")
         if not leg["delivered"]:
             continue       # nothing carried, nothing recorded — this channel is owed it next run

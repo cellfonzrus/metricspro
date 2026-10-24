@@ -7585,6 +7585,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /storevisit/dm-visit-performance` | the market manager's monitor: per DM per quota day required / assigned / completed / shortfall, the next priority picks with reasons, plus unowned and unmeasured stores (§47.17) |
 | `GET /storevisit/visit-priority-options` | the carrier-specific deliverables dropdown — `targets_engine.CATEGORIES` ∪ this org's `carrier_kpi_metric` rows; a tenant adds a deliverable on the KPI screen and it appears here (§47.17) |
 | `POST /storevisit/visit-assignments/auto-fill` | the Friday-evening fill; DRY RUN by default, tops a DM-day up to quota without replacing a manual pick (§47.17) |
+| `POST /notify/send-file` · `POST /notify/send` · `POST /notify/send-to-designated` — their `outcome` | `notify/send_outcome.summarize` over the `send_log` rows the send just built | WHAT A SEND ACTUALLY DID: every recipient NOT reached, on which channel, why, and the remedy a human applies — counted per (channel, target), so five people missing two attachments each is `5`, never `10`. `sent` / `failed` stay as attempt counts for existing callers; they are a count, never a reason (§NOTIFY-01) |
+| `GET /notify/send-log` — the `failure_reason` / `failure_fix` / `failure_code` stamp | `notify/send_outcome.stamp` (on the READ, after `send_identity.stamp_display`) | why a history row failed, in the same words the Send box used — including rows written before the module existed, because a display fact is resolved on read and never assumed stored (§NOTIFY-01, §13b.1 pattern) |
 
 ## 18. Cross-reference: by METRIC / KPI
 
@@ -25897,6 +25899,7 @@ status word rather than a blank that reads as nil.
 | 15.1 | notify |
 | 15.2 | notify |
 | 15.3 | notify |
+| NOTIFY-01 | notify |
 | COMMCALC-01 | commcalc |
 | CORE-01 | core |
 | CORE-02 | core |
@@ -33583,3 +33586,73 @@ Files: `backend/app/core/internal_call.py` (**new**), `backend/app/modules/closi
 `backend/app/modules/storeops/router.py`, `backend/app/modules/core/module_graph.py`,
 `backend/harness_internal_self_call.py` (**new**), `backend/harness_unrun_pending.txt`,
 `backend/harness_ci_pipefail_lock.py`, `.github/workflows/carrier-vocab-guard.yml`.
+
+## §NOTIFY-01. A FAILED SEND IS REPORTED WITH ITS RECIPIENT, ITS REASON AND ITS FIX — never as a count (owner report 2026-10-24)
+
+Owner: *"send report shows Sent: 6 ok, 10 failed., which failed and why should be listed with how to
+fix it"*.
+
+**THE INSTANCE, measured in production before anything was changed.** The 18:03 send of *Closing &
+Cash Pickup Status* wrote 16 `notify.send_log` rows: **6 emails sent**, and **10 WhatsApp failures
+that are FIVE people × TWO files** (the .xlsx and the .pdf), every one of them Meta
+`(#133010) Account not registered`. So the sentence overstated the damage by a factor of two, named
+nobody, and gave no remedy — while the row carrying the provider's own words sat in the database. It
+also could not say the thing that mattered most: **all five also received the email**, so nobody
+missed the report.
+
+**THE CLASS.** Not "the Send box is terse". **Nothing owned the question "what did this send actually
+do"**, so all four paths answered it their own way and discarded the reasons: `/notify/send`,
+`/notify/send-file` and `/notify/send-to-designated` each returned the same two integers, and
+`notify/digest_delivery` parked the raw provider string on a leg for every reader to interpret. Adding
+a list to the one button would have been the patchwork the house rules forbid.
+
+**ONE HOME: `backend/app/modules/notify/send_outcome.py`** (PURE — no IO, no app import).
+- `classify(channel, error)` → `{code, reason, fix, recognised, error}`. An **ALLOWLIST**: a code this
+  house has ruled on gets a plain-language reason and the console step a human takes; anything else is
+  `recognised: False` with **no fix** and the provider's own words as the reason. A confident wrong
+  remedy costs more than an admitted gap — the same rule as
+  `carrier_dollar_class.component_is_evidence` (§66).
+- A ruling is **channel-scoped**. A WhatsApp-only code quoted by an email failure is not recognised; a
+  ruling declared for any channel (an expired access token) reaches both.
+- `summarize(rows, note=)` → the outcome a surface renders, built from the `send_log` rows the send
+  just inserted, so no caller keeps a second list in step with them. **One entry per (channel,
+  target)** — a PERSON on a CHANNEL, not an attachment — with the attempt counts kept beside it so the
+  old number stays accountable. A target that carried one file and failed another is `partial` and
+  counted **failed**: something it was owed did not arrive.
+- `headline(outcome)` is the ONE sentence, tri-state: all delivered / partly delivered / **nothing
+  arrived** — and a send with nobody to send to says why instead of claiming a success.
+- `stamp(rows)` is the READ side: `GET /notify/send-log` explains a failed history row in the same
+  words, including rows written before this module existed.
+
+**THE SIBLINGS, fixed in the same PR, not excused.** `_dispatch` and `send_file` both return
+`outcome`; the two "nobody to send to" early returns of `/send-to-designated` go through
+`_nothing_sent`, which carries the reason in the same shape; and a `digest_delivery` leg now
+dereferences `classify` instead of leaving its raw string to be read.
+
+**THE SURFACES render it, never re-word it.** `frontend/src/lib/send-outcome.tsx`
+(`SendOutcomeView`) is the one home for what a send result looks like on screen, used by the Send
+modal (`lib/send-report.tsx`, the one sender — §COMMCALC-19) and by Report Recipients. The Notify
+history shows the stamped reason with the provider's raw text on hover. **No remedy sentence is copied
+into the browser** — a second spelling of a fact is a future divergence, and a lock fails the build if
+one appears.
+
+**WHAT THIS DID NOT DO.** It did not make WhatsApp work. The live finding stands on its own and is a
+data/configuration defect, REPORTED rather than hidden: the sender number is not registered with
+Meta's Cloud API **for the account our access token belongs to** (every attempt on 2026-10-24 is
+`#133010`, where every day up to 2026-10-23 had worked — the token/phone-number PAIRING broken by the
+2026-10-22 rotation, *not* a missing registration, and the allowlist's remedy says so because the
+plausible wrong fix is the thing this mechanism exists to avoid; the existing diagnostic
+`GET /notify/whatsapp-account` is pointed at rather than rebuilt), and behind that the Meta app is
+still in development mode — 163 historic
+`(#131030) Recipient phone number not in allowed list` failures, and exactly one number has ever
+received anything. Both fixes are Meta-console steps for the owner; the app now says so on the screen
+where the failure appears.
+
+**LOCK: `backend/harness_notify_send_outcome.py`** — 53 checks, DB-free, driving the REAL module over
+the REAL production error strings, with the owner's exact 16 rows as the regression (§D: 6 ok, 5
+failed, every one named, one deduped fix, and the 10 attempts still stated). The un-wiring locks, each
+with an armed control: an **AST scan of every `return {…}` in `notify/router.py` whose keys include
+both `sent` and `failed` fails the build unless it also carries `outcome`** (so a new send path cannot
+go back to two integers); the digest leg must dereference the same home; no module but the one home
+may rule on a provider error code; every surface must render the one view; and no remedy sentence may
+appear in the browser. In CI as **"A failed send names who, why and the fix"**.

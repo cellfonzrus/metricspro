@@ -553,6 +553,12 @@ on:
       - "backend/harness_storevisit_alerts.py"
       - "backend/app/modules/storeops/alert_log.py"
       - "backend/app/modules/notify/digest_delivery.py"
+      - "backend/app/modules/notify/send_outcome.py"
+      - "backend/harness_notify_send_outcome.py"
+      - "frontend/src/lib/send-outcome.tsx"
+      - "frontend/src/lib/send-report.tsx"
+      - "frontend/src/app/(platform)/notify/page.tsx"
+      - "frontend/src/app/(platform)/notify/report-recipients/page.tsx"
       - "database/migrations/1051_alert_log_channel.sql"
       - "backend/harness_alert_channel_record.py"
       - "backend/app/modules/commcalc/manager_followup.py"
@@ -2390,6 +2396,24 @@ jobs:
       - name: Run the notify send-identity proof (one home for the report's name; the history never shows a machine key — index §15.3)
         working-directory: backend
         run: python3 harness_notify_send_identity.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE SEND-FAILURE PROOF (index §NOTIFY-01) pins the ONE home for "why did this send fail for this
+  # recipient, and what does a human do about it" — notify/send_outcome.py — over the real module and
+  # the REAL provider strings read out of production: the owner's exact 16 rows summarize to 6 ok and
+  # FIVE failed (not ten: five people times two attachments), each named with a reason and the console
+  # step that fixes it; an UNRULED error prescribes nothing rather than guessing; and the UN-WIRING
+  # LOCKS — an AST scan fails the build if any send path in notify/router.py returns `sent`/`failed`
+  # without an `outcome`, with the pre-fix literal as an armed control. stdlib only, DB-free.
+  notify-send-outcome-proof:
+    name: A failed send names who, why and the fix (DB-free, the real module)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the send-outcome proof (a failure is reported with its recipient and its remedy, never as a count — index §NOTIFY-01)
+        working-directory: backend
+        run: python3 harness_notify_send_outcome.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
   # THE DATABASE-RESILIENCE PROOF — owner directive 2026-10-08 ("do it"), taking this file off
   # backend/harness_unrun_pending.txt. It is the only thing asserting that a dropped Supabase

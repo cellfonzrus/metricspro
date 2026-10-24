@@ -22,7 +22,7 @@ from app.core.schemas import LaxModel
 from app.core.run_secret import verify_notify_secret
 from app.modules.core.run_for_tenant import run_for_tenant_async, TenantNotRunnable
 from app.modules.core import auth_security as _sec
-from . import report_registry, render, download_token, whatsapp_window, send_identity
+from . import report_registry, render, download_token, whatsapp_window, send_identity, send_outcome
 from .channels import email_resend, whatsapp_meta
 
 
@@ -345,6 +345,14 @@ def put_report_config(report_key: str, body: PutReportConfigIn, org_id: str = OR
     return {"ok": True, "report_key": report_key}
 
 
+def _nothing_sent(reason: str) -> dict:
+    """A send that carried nothing still has to SAY SO in the one shape every surface reads. The two
+    integers and `skipped` are unchanged for existing callers; `outcome` carries the sentence
+    (§NOTIFY-01) so no page has to invent wording for "there was nobody to send to"."""
+    return {"sent": 0, "failed": 0, "skipped": reason,
+            "outcome": send_outcome.summarize([], note=reason)}
+
+
 @router.post("/send-to-designated")
 async def send_to_designated(body: SendToDesignatedIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Send a report to its CONFIGURED designated recipients (report_config). The single entry point
@@ -357,7 +365,7 @@ async def send_to_designated(body: SendToDesignatedIn, org_id: str = ORG_ID, aut
     cfg = (sb().table("report_config").select("*").eq("org_id", org_id)
            .eq("report_key", report_key).limit(1).execute().data or [])
     if not cfg or cfg[0].get("is_active") is False:
-        return {"sent": 0, "failed": 0, "skipped": "no active designated recipients for this report"}
+        return _nothing_sent("no active designated recipients for this report")
     cfg = cfg[0]
     emails, phones = _resolve_targets(sb(), org_id, {
         "recipient_ids": cfg.get("recipient_ids") or [],
@@ -371,7 +379,7 @@ async def send_to_designated(body: SendToDesignatedIn, org_id: str = ORG_ID, aut
     emails = sorted(set(emails) | set(r_em))
     phones = sorted(set(phones) | set(r_ph))
     if not emails and not phones:
-        return {"sent": 0, "failed": 0, "skipped": "designated recipients have no contact info"}
+        return _nothing_sent("designated recipients have no contact info")
     channels = cfg.get("channels") or (["email"] if emails else []) + (["whatsapp"] if phones else [])
     try:
         # NOTE: other modules call this function IN-PROCESS (commcalc sales-recon) without the
@@ -584,7 +592,10 @@ async def _dispatch(org_id, report_key, filters, channels, formats, emails, phon
     _insert_log(log_rows)
 
     return {"sent": sent, "failed": failed, "targets": {"emails": emails, "phones": phones},
-            "formats": formats, "channels": channels}
+            "formats": formats, "channels": channels,
+            # WHO is owed this report and WHY, named by the one home (§NOTIFY-01). The two integers
+            # above stay for callers that already read them; they are a count, never a reason.
+            "outcome": send_outcome.summarize(log_rows)}
 
 
 @router.post("/send-file")
@@ -660,7 +671,8 @@ async def send_file(body: dict, org_id: str = ORG_ID):
                 except Exception as e:
                     _log("whatsapp", ph, "failed", err=str(e))
     _insert_log(log_rows)
-    return {"sent": sent, "failed": failed, "targets": {"emails": emails, "phones": phones}, "channels": channels}
+    return {"sent": sent, "failed": failed, "targets": {"emails": emails, "phones": phones},
+            "channels": channels, "outcome": send_outcome.summarize(log_rows)}
 
 
 def _content_disposition(filename) -> str:
@@ -912,7 +924,9 @@ def send_log(org_id: str = ORG_ID, limit: int = 200):
     a display name is resolved by the read, never assumed to be in the row)."""
     rows = sb().table("send_log").select("*").eq("org_id", org_id) \
         .order("created_at", desc=True).limit(min(max(limit, 1), 1000)).execute().data or []
-    return send_identity.stamp_display(rows, report_registry.report_labels())
+    # Two display facts, each resolved by the READ: which report a row carried (send_identity) and
+    # why a failed row failed, in the same words the Send box used (send_outcome, §NOTIFY-01).
+    return send_outcome.stamp(send_identity.stamp_display(rows, report_registry.report_labels()))
 
 
 def _log_schedule_config_error(org_id, sub, err) -> None:
