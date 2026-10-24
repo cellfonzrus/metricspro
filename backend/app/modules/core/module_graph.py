@@ -64,7 +64,7 @@ FACTS: dict[str, dict] = {
         "homes": ('app/modules/core/report_drilldown.py',),
         "index": ('CORE-17',),
         "locks": ('harness_report_drilldown.py', 'harness_drilldown_coverage.py',
-                  'harness_cash_recon_drilldown.py'),
+                  'harness_cash_recon_drilldown.py', 'harness_tender_recon_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -74,6 +74,10 @@ FACTS: dict[str, dict] = {
             # remaining reports owe, so it lives in the one home and a report declares only its
             # own catalogue. First declaration: the eleven cash-recon tiles.
             'app/modules/closing/cash_recon_drilldown.py': ('report_drilldown',),
+            # The X-report-vs-closing tiles (§CORE-17.3b). Declared and tying on the unfiltered
+            # range; the route still reads `owes` because its tiles are recomputed on the client,
+            # so the drill is offered only where the two provably agree.
+            'app/modules/commcalc/tender_recon_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────

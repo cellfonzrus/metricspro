@@ -213,6 +213,8 @@ on:
       # §CORE-17.3a — the TILE fold and the first report declared against it.
       - "backend/harness_cash_recon_drilldown.py"
       - "backend/app/modules/closing/cash_recon_drilldown.py"
+      - "backend/harness_tender_recon_drilldown.py"
+      - "backend/app/modules/commcalc/tender_recon_drilldown.py"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
       # index §4e — the P&L drill path: company → market → store → line (owner report 2026-10-07)
       - "frontend/prove_pl_drill_path.mjs"
@@ -1329,6 +1331,9 @@ jobs:
       - name: Run the cash-recon tile drill lock (every money tile the screen shows is DECLARED and its rows tie back to it; a planted cent, a dropped store-day, a flipped variance sign each break a tie-out; the feed tables are dereferenced from the lineage registry, never named in a report — index §CORE-17.3a)
         working-directory: backend
         run: python3 harness_cash_recon_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the tender-recon tile drill lock (all seven figures declared and tying on the unfiltered range; both sides of the comparison named; the PARTIAL is declared a partial — the route still reads `owes` and the page refuses a drill whose figure the screen is not showing — index §CORE-17.3b)
+        working-directory: backend
+        run: python3 harness_tender_recon_drilldown.py | tail -35 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

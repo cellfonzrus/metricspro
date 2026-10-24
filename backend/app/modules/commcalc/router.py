@@ -32,6 +32,7 @@ from app.modules.commcalc import product_mix as _pmix       # 2026-10-09 — THE
 from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 — THE DM / market-manager report card (index §59.9; pure)
 from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-09 — THE accessory company-goal allocation (index §61; pure)
 from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
+from app.modules.commcalc import tender_recon_drilldown as _tender_recon_drilldown   # 2026-10-24 — THE X-report-vs-closing tile drill (index §CORE-17.3a; declaration only, pure)
 from app.modules.commcalc import month_focus as _mfocus   # 2026-10-09 — the month's declared focus and the weekly check-in (index §63)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
@@ -11368,12 +11369,21 @@ def x_tender_recon(date: str = "", period: str = "", tolerance: float = 1.0, org
         })
         t['pos_cash'] += pc['cash']; t['closing_cash'] += cc['cash']
         t['pos_card'] += pc['card']; t['closing_card'] += cc['card']
+    _totals = {**{k: round(v, 2) for k, v in t.items()},
+               "cash_variance": round(t['pos_cash'] - t['closing_cash'], 2),
+               "card_variance": round(t['pos_card'] - t['closing_card'], 2),
+               "stores": len(rows_out),
+               "mismatches": sum(1 for r in rows_out if not r['match'])}
+    # EVERY TILE NAMES THE STORES BEHIND IT (§CORE-17.3a). The audit ranked this report SECOND of the
+    # 93, because its 3-way sibling already drills the same question — one path with evidence and one
+    # without is the duplicate defect, so the undrilled one moves. Declaration in
+    # `commcalc/tender_recon_drilldown.py`; the fold and the tie-out are `core/report_drilldown`.
+    # Folded from the SAME rows and totals this response serves, so a tile and its drill-down cannot
+    # disagree, and a wrong declaration says so on screen rather than silently.
     return {"ready": True, "date": date, "period": period, "tolerance": tolerance,
             "rows": rows_out,
-            "totals": {**{k: round(v, 2) for k, v in t.items()},
-                       "cash_variance": round(t['pos_cash'] - t['closing_cash'], 2),
-                       "card_variance": round(t['pos_card'] - t['closing_card'], 2),
-                       "stores": len(rows_out), "mismatches": sum(1 for r in rows_out if not r['match'])}}
+            "totals": _totals,
+            "drilldown": _tender_recon_drilldown.drilldowns(rows_out, _totals)}
 
 
 @router.get("/carrier-category-map")
