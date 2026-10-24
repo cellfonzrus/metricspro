@@ -34,8 +34,8 @@ No Supabase, and no socket, is contacted.
   D. END TO END — closing's two fetchers really put `x-active-org` on the wire, and a 409 comes back
      as "UNKNOWN", never as $0.00.
   E. WIRING LOCK (build gate) — every `requests.*` call to an INTERNAL_API_BASE url passes
-     `headers=self_call_headers(...)`; nothing re-spells the base URL; the scan itself cannot
-     silently start matching nothing.
+     `headers=self_call_headers(...)`; nothing re-spells the base URL; and the derived site set is
+     compared with a DECLARED one (§CORE-10), so a self-call cannot leave the scan silently.
   F. THE REFUSAL IS NAMED — 401/403/404/409 each read as a cause, not as a number.
 """
 from __future__ import annotations
@@ -258,14 +258,37 @@ for p in PY_FILES:
                        and any(isinstance(t, ast.Name) and t.id == "url" for t in a.targets)]
             if not any(BASE_VAR.search(a) for a in assigns):
                 continue
-        site = f"{p.relative_to(ROOT)}:{node.lineno}"
+        owner = next((f.name for f in ast.walk(tree)
+                      if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
+                      and f.lineno <= node.lineno <= (f.end_lineno or node.lineno)), "<module>")
+        site = f"{p.relative_to(ROOT)}::{owner}"
         selfcall_sites.append(site)
         kw = {k.arg: (ast.get_source_segment(src, k.value) or "") for k in node.keywords}
         if "self_call_headers(" not in (kw.get("headers") or ""):
             unwired.append(f"{site}  headers={kw.get('headers')!r}")
 
-check("E1 the scan FOUND the self-call sites (it cannot pass by matching nothing)",
-      len(selfcall_sites) >= 9, f"found {len(selfcall_sites)}: {selfcall_sites}")
+# DECLARED, not bounded (index §CORE-10, harness_subject_set_lock): a bare `>= 9` would let a
+# subject LEAVE the derived set and take its own assertion with it, silently. Written by hand — a
+# self-call that appears or disappears must be read by a human, and names itself here.
+EXPECTED_SELFCALL_SITES = {
+    # mod-retail-ops — the envelope payout preview, the two cash-movement records, the P&L push.
+    "app/modules/closing/router.py::_get_commission_accrued",
+    "app/modules/closing/router.py::_get_salary_owed",
+    "app/modules/closing/router.py::_post_commission_payout",
+    "app/modules/closing/router.py::_post_salary_advance",
+    "app/modules/closing/router.py::_push_expense_category_pl",
+    # mod-people — the four Store Expenses system lines and the bulk targets read.
+    "app/modules/storeops/router.py::_pto_push_expense_line",
+    "app/modules/storeops/router.py::_payex_push_expense_line",
+    "app/modules/storeops/router.py::_payex_push_gross_line",
+    "app/modules/storeops/router.py::_additional_payroll_push_line",
+    "app/modules/storeops/router.py::_dm_targets_summary_bulk",
+}
+_derived = set(selfcall_sites)
+check("E1 the self-call sites are EXACTLY the declared set (a site cannot leave silently)",
+      _derived == EXPECTED_SELFCALL_SITES,
+      f"only derived: {sorted(_derived - EXPECTED_SELFCALL_SITES)}\n        "
+      f"only declared: {sorted(EXPECTED_SELFCALL_SITES - _derived)}")
 check("E2 EVERY self-call dereferences the one home for its headers",
       not unwired, "un-wired:\n        " + "\n        ".join(unwired))
 
