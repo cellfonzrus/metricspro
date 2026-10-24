@@ -23,6 +23,9 @@ type LogRow = {
   id: string; report_key: string; report_label?: string | null; channel: string; target: string; status: string
   error: string | null; triggered_by: string | null; created_at: string
   delivery_status?: string | null; delivery_error?: string | null; delivery_updated_at?: string | null
+  // Stamped by the READ (notify/send_outcome, §NOTIFY-01) — a row written before that module
+  // existed is explained too, because a display fact is resolved on read, never assumed stored.
+  failure_reason?: string | null; failure_fix?: string | null; failure_code?: string | null
   delivery_route?: string | null
 }
 // GET /notify/health — configuration truth (no network calls, no secrets). The whatsapp_* keys make the
@@ -461,9 +464,11 @@ function SendLog({ log }: { log: LogRow[] }) {
         <b> sent</b> with no delivery was accepted and never confirmed — that is the silent-drop case).
         “Sent as” says whether the recipient got the real file or a download link.
         “Report” is the report that was exported and sent — the same name the page&apos;s own export carries.
+        “Why it failed / how to fix it” is the same explanation the Send box gives, in plain language;
+        hover it to see the provider&apos;s own words.
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead><tr><th style={th}>When</th><th style={th}>Report</th><th style={th}>Channel</th><th style={th}>Target</th><th style={th}>Status</th><th style={th}>Delivery</th><th style={th}>Sent as</th><th style={th}>By</th><th style={th}>Error</th></tr></thead>
+        <thead><tr><th style={th}>When</th><th style={th}>Report</th><th style={th}>Channel</th><th style={th}>Target</th><th style={th}>Status</th><th style={th}>Delivery</th><th style={th}>Sent as</th><th style={th}>By</th><th style={th}>Why it failed / how to fix it</th></tr></thead>
         <tbody>
           {log.map(l => (
             <tr key={l.id}>
@@ -474,7 +479,11 @@ function SendLog({ log }: { log: LogRow[] }) {
               <td style={{ ...td, color: deliveryColor(l.delivery_status) }}>{l.delivery_status || '—'}</td>
               <td style={{ ...td, fontSize: 12 }}>{routeLabel(l.delivery_route)}</td>
               <td style={td}>{l.triggered_by}</td>
-              <td style={{ ...td, color: 'var(--c-fg-cc0000)', fontSize: 11 }}>{l.delivery_error || l.error}</td>
+              <td style={{ ...td, color: 'var(--c-fg-cc0000)', fontSize: 11 }}
+                  title={l.delivery_error || l.error || ''}>
+                {l.failure_reason || l.delivery_error || l.error}
+                {l.failure_fix && <div style={{ color: 'var(--text2)', marginTop: 2 }}>→ {l.failure_fix}</div>}
+              </td>
             </tr>
           ))}
           {log.length === 0 && <tr><td style={td} colSpan={9}>No sends yet.</td></tr>}
