@@ -124,6 +124,7 @@ Primary code homes:
 | CORE-12 | **A write may not shut the door on its own author** | "I made myself market manager under Vzone and cannot get admin privileges anymore under ss. Which writes can take away the access that just made them, and is there a screen left that could undo one?" |
 | CORE-13 | **A migration grants what it creates** | "Supabase says that from 30 October a new table in `public` no longer gets Data API access automatically. Does that break this app, which migrations would break, and what stops the next migration shipping a table the application cannot read?" |
 | CORE-15 | **The dark theme** | "The workspace is black with white lettering. Where does \"what does this colour become on the dark theme\" live, how does a colour spelled inside an inline style reach it, and what proves nothing pale is left glowing on black?" |
+| CORE-17 | **A figure names the rows behind it** | "Where is this number coming from? Open a reported figure and see the rows it was summed from, and which report, feed or upload each row came out of. Which reports still have no drill-down, and what stops the next one shipping without one?" |
 | CORE-14 | **One palette, dereferenced** | "Make the colours of the side menu alternate between the logo colours so each item stands out. Where does a colour used by the chrome live, how many places spell it, and what proves a row stays readable once it is coloured?" |
 | CORE-16 | **A self-call carries the tenant it is acting as** | "The envelope payout screen says the commission accrual and salary-owed fetches failed with 409 Conflict. What identity does a call the platform makes to itself carry, which company does it say it is acting for, and what stops the next such call from dropping it?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
@@ -25945,6 +25946,7 @@ status word rather than a blank that reads as nil.
 | CORE-14 | core |
 | CORE-15 | core |
 | CORE-16 | core |
+| CORE-17 | core |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -33293,6 +33295,178 @@ and the staleness window this must not widen), §COMMCALC-24 (which process may 
 Neighbours: §COMMCALC-10 (the progress budgets this sits beside), §COMMCALC-11 (the human check the
 8-minute budget was named for), §COMMCALC-07 (the UPS pull this login exists to feed).
 
+---
+
+## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
+
+> **Numbered CORE-17, not CORE-16.** The allocator handed out `CORE-16` while this was being
+> built, and PR #532 (*a self-call carries the tenant it is acting as*) merged it first, so
+> this section moved — the fifth time two threads have raced for one index number (§50 notes
+> the first four). `harness_index_section_register.py --next` reads the index in your WORKING
+> TREE, which is what had merged when you branched; it is not a reservation. Re-check right
+> before pushing: `git fetch origin main && git show origin/main:docs/SYSTEM_DATA_FLOW_INDEX.md
+> | grep -c "<NUMBER>"`.
+
+Owner, verbatim: *"cash variance at employee should have the drill down from wheter the data is cming
+from , update in index thta drilldown is needed for every report geenerated from any data which
+comming from within the platforma as a defalut , assign an agent o check all reports to check where
+the drill donw ins not there and sytart building it"*.
+
+### §CORE-17.1 THE HOUSE RULE (owner directive 2026-10-24)
+
+**EVERY REPORT BUILT FROM DATA THE PLATFORM HOLDS HAS A DRILL-DOWN, BY DEFAULT.** A report that
+summarises — a tile, a rollup row, a per-person, per-store, per-month or per-line total — opens that
+figure to the ROWS IT WAS BUILT FROM, and every row NAMES WHERE IT CAME FROM: the report, feed or
+upload, and the keys that address the row inside it.
+
+Three things follow, and they are build gates, not advice:
+
+1. **The drill-down is the shared one** — `core/report_drilldown.py` on the server,
+   `components/DrillDownPanel.tsx` on the screen. A report does not invent a shape.
+2. **A source is named through `sourceLabel()`**, never printed as a table. The operator reads
+   *"management envelope count"*; `envelope_count` never reaches a screen (§19.38).
+3. **A report with no drill-down is WRITTEN DOWN as owing one** —
+   `backend/harness_drilldown_pending.txt`, gated by `harness_drilldown_coverage.py`. A new report
+   route is **un-mergeable** until its author declares which it is: `shared`, `own`, `flat`,
+   `not_report`, or `owes`. "By default" is enforced, not remembered.
+
+A report that genuinely has nothing to drill to (it already shows the source rows) declares `flat`
+and says so. A config screen, wizard or work queue declares `not_report`. Both carry a written
+reason — an excuse nobody wrote down is indistinguishable from an oversight.
+
+### §CORE-17.2 DUPLICATE CHECK (build gate)
+
+Searched: §4e (the P&L drill-down — `account/coa.py` `accrue_detail`/`add`, `scopeFinancials.ts`
+`drillFilter`/`nextRung`/`lineTieOut`, `plStatement.plQuery`, PR #408), §6i/§6j
+(`commcalc/commission_drilldown.py` `explain_rep` / `attach_line_identity`,
+`GET /commission-explain` / `/commission-drill`), §19.38 (`frontend/src/lib/sourceLabels.ts` — a
+feed's plain name), §66 (`carrier_dollar_class.component_is_evidence`), §COMMCALC-09
+(`payout_slice_evidence` — is a stored value evidence at all), §2 / `data_lineage_registry.py` (which
+table is which feed), `closing/metric_catalog.figure_unit`, and `GET /ma-overview-recon/drill`.
+
+REUSED, NOT REBUILT:
+
+- **the feed's plain name** — `sourceLabel()` is the ONE home and the panel dereferences it. No
+  second vocabulary; `harness_report_drilldown.py` §F2 fails the build if a table a drill can name
+  has no entry there.
+- **"we could not measure this"** — `UNMEASURED_REASONS` is `closing/cash_variance`'s own wording,
+  asserted identical by §G5. A fourth spelling of the same sentence is the divergence.
+- **the unit vocabulary** — `money` / `count` / `hours`, the words
+  `closing/metric_catalog.figure_unit` already uses.
+- **the cash legs** — the cash-variance drill re-reads nothing and re-derives nothing: the rows are
+  `day_row`'s own output, the verdicts the ones already on them, the figure the group's own
+  `net_variance` off `totals()`. A drill-down that recomputed its evidence could disagree with the
+  table above it, which is the §COMMCALC-09 defect in presentation form.
+
+NAMED SIBLINGS, EXCUSED HERE, TO CONVERGE (not silently left):
+
+- **`GET /ma-overview-recon/drill`** is already a generic "rows behind a tile, with its
+  `source_table` named" endpoint over twelve tables. It is the closest existing mechanism and it is
+  **not** extended here, because it is bound to `ma_overview.SOURCES` / `match_all` / the tile
+  registry — one scannable table per tile with a row predicate — and cannot express a figure derived
+  by comparing five tables (which is what cash variance is). It should adopt this panel's RESPONSE
+  SHAPE so there is one shape and one renderer; that is MA-commission territory and routes to the
+  commission agent. Ledger state: `own`.
+- **the P&L drill (§4e)** computes its tie-out in TypeScript (`lineTieOut`) over a payload shape that
+  predates this. Converging it would re-open PR #408's 56+58-check proof and is a PR of its own.
+  Ledger state: `own`, with the note that its drill rows still name no source feed.
+
+### §CORE-17.3 THE MECHANISM
+
+| What | Where | Says |
+|---|---|---|
+| **ONE source row reference** | `core/report_drilldown.origin(table, schema, keys, column, note)` | which table, which schema, the keys that ADDRESS the row, the column the figure was read out of. A blank key is dropped, so a key that is present means something. A table nobody named is `traceable: False` — never guessed |
+| **ONE row behind a figure** | `report_drilldown.drill_row(label, origins, amount, in_figure, measured, reason, fields)` | `amount=None` ⇒ `present: False` / `measured: False` with a reason sentence — **absence is never zero**. `in_figure=False` keeps a row the figure deliberately excludes IN the drill-down, flagged, because those rows are the context that makes the figure readable |
+| **The report against its own evidence** | `report_drilldown.tie_out(amount, rows)` | Σ(counted rows) vs the figure. `ties: True` only when every counted row is measured AND the total matches to the cent; **`None`** — never False — when a counted row has no number, because a sum missing a row was never a comparison; `False`, in words, when the rows are all measured and total something else: *"the report and its own evidence disagree"* |
+| **The panel a screen renders** | `report_drilldown.panel(...)` → `{schema, figure, subject, rows, rows_total_count, capped, tie_out, sources, untraceable_origins, note}` | **`sources` is the owner's question answered in one read**: the distinct tables the rows came out of, each with how many rows touched it. The tie-out is over ALL the rows, BEFORE the `ROW_CAP` of 400, and `rows_total_count` always states the true count, so a capped panel cannot present a shorter month as the whole of one. An origin naming no table is REPORTED under `untraceable_origins` |
+| **The one renderer** | `frontend/src/components/DrillDownPanel.tsx` (+ `DrillToggle`, `useDrillOpen`, `DrillSources`, `DrillTieOut`) | prints every source through `sourceLabel()`; shows the tie-out sentence AS SERVED including when it fails; a row with no figure reads *"not measured"*, never $0.00; `extraColumns` lets a report add its own columns off each row's `fields` without forking the component |
+| **The cash-variance producer** | `closing/cash_variance.py` — `LEG_ROW_KEYS`, `LEG_SOURCE_COLUMN`, `LEG_EXTRA_TABLES`, `PAIR_LEGS`, `day_drill_row`, `group_drilldown`, `drilldowns` | which keys address each leg's row and which column held it, named ONCE so the screen, an export and a support query reach for the SAME row. The received leg built from BOTH counted envelopes names both tables, or it would credit the whole drawer to one envelope |
+| **The endpoint** | `GET /closing/cash-variance` → `drilldown: {employee_name: {<name>: panel}, store_code: {<code>: panel}}` + `drilldown_pair` | one panel per rollup row, keyed on the subject the rollup is keyed on, re-bucketed with the SAME key functions `by_employee` / `by_store` used — so a panel can never hold a different set of days than the row it opened from (the §4e grain defect) |
+| **The screen** | `/closing/cash-variance` — the Employee and Store views, each row a `DrillToggle` | the figure is the group's `net_variance` and its LABEL says *"net of short and over"*, because $0.00 here means *they cancelled out*, never *clean*; the note carries the two gross counts beside it |
+
+**THE FIGURE TIES BY CONSTRUCTION, AND THAT IS A REAL CHECK, NOT A TAUTOLOGY.** `net_variance` is
+`over_total − short_total`, summed over exactly the out-of-band days the panel marks `in_figure`. The
+harness plants a dropped day and a mis-scored day and **both break the tie-out**. In-band days and
+unmeasurable days are shown and not counted, and the panel says in words how many.
+
+### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
+
+Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
+
+| state | routes | meaning |
+|---|---|---|
+| `owes` | **93** | a summarised figure with no way to the rows behind it |
+| `flat` | 22 | already shows the source rows |
+| `not_report` | 11 | config, wizard or work queue |
+| `own` | 9 | a drill-down of its own that names its sources, predating this |
+| `shared` | 1 | on the shared mechanism (cash variance) |
+
+The nine that already drill: `/accounts`, `/accounts/pl`, `/commcalc/payables`,
+`/commcalc/sales-report`, `/commcalc/sales-recon`, `/commcalc/commission-ledger`,
+`/commcalc/daily-commission`, `/commcalc/ma-overview-recon`, `/failures`. **Not one other page in
+the platform names the table, feed or upload behind a figure** — which is why every `partial` verdict
+in the audit was partial for the same reason, and why the provenance half is the shared mechanism's
+main job.
+
+Worst-first, by how disputable the money is: `/closing/cash-recon-management` (eleven cash tiles, no
+drill at all), `/commcalc/device-line-reimbursement` ("Paid to a DIFFERENT store" / "Not paid
+anywhere" are accusations in dollars across two feeds), `/accounts/liabilities-due` (four tiles
+composed from four other reports, composition invisible), `/commcalc` (the dashboard rep payout
+total), `/commcalc/carrier-vs-pay` (a report whose whole subject is a disagreement about money, with
+no way to the two lines that disagree), `/hr/payroll-expenses`, `/closing/tender-recon` (its 3-way
+sibling already has `/closing/tender-drilldown` — one question, two paths, only one drilled),
+`/commcalc/asset/owed-weekly`. Per-route findings: project folder `drilldown-audit/`.
+
+**TWO GAPS FOUND BY THE AUDIT AND NOT CLOSED HERE, so nobody re-derives them:**
+
+- **`REPORT_DIRECTORY` is not a complete registry of what a report is.** `/closing/cash-variance` is
+  a report and is absent from it, because the owner's 2026-10-08 "cleaner look" ruling puts some
+  reports on dashboard tiles rather than sidebar rows. `tileOnly` cannot stand in for the missing
+  half — **327** nav entries carry it, nearly all setup screens — so the coverage gate names its
+  exceptions in `EXTRA_REPORTS` rather than inferring them. Making the directory complete is a nav
+  change of its own.
+- **`"source"` means four different things across ~30 backend payloads** (a table name, a screen
+  name, an upload route, a free sentence). `origin()` is the one shape going forward; the existing
+  keys are not renamed here.
+
+### §CORE-17.5 LOCKED SO IT CANNOT UN-WIRE
+
+`backend/harness_report_drilldown.py` — **61 checks**, pure stdlib, driving the real functions:
+A `origin` (blank keys dropped, an unnamed table not traceable) · B `drill_row` (absence is never
+zero; an excluded row is flagged, not dropped) · C `tie_out` (ties / **None** / False-in-words, and
+an empty drill-down against a non-zero figure is not a tie) · D `panel` (the sources list, the cap
+with the true count, the tie-out before the cap, `untraceable_origins`) · E the cash-variance drill
+end to end **with five negative controls** — a dropped out-of-band day breaks the tie (Z1), a
+mis-scored day breaks the tie (Z2), a day tampered to unmeasurable leaves the evidence short and the
+tie-out SAYS SO (Z3) while the recomputed rollup ties again and proves unmeasurable days are never
+counted (Z3b), the store rollup drills from the same rows and ties too (Z4), an empty report drills
+to an empty mapping rather than a panel asserting a tie (Z5) · F **every table a drill can name is
+created by a migration AND has a `sourceLabels.ts` entry** · G build locks: the endpoint builds no
+panel of its own, the producer defines no panel shape, **the one home holds no non-zero dollar
+literal and no `compare`** so it can never become a second opinion about money, the reason vocabulary
+has not forked, the page hand-rolls no panel, RULE TWO holds in both files.
+
+`backend/harness_drilldown_coverage.py` — **17 checks**, the ratchet: every report route declared
+exactly once, no ledger route has stopped existing, every excused state carries a written reason,
+every `shared` route really renders the shared panel (writing the registry without wiring the caller
+is not a fix at all — §19.18), and **`OWES_MAX = 93`, which may only go DOWN**. Re-pin it downward in
+the same PR that builds a drill-down; a change that raises it is a report shipped without evidence.
+
+### §CORE-17.6 WHAT IS DELIBERATELY NOT HERE
+
+- **No new table and no migration.** The drill-down presents figures other modules computed.
+- **No business figure.** The one home carries amounts handed to it and computes none; §G4 fails the
+  build on a non-zero dollar literal in it.
+- **No write, no chargeback, no flag.** Opening a drill-down creates nothing. Turning a counted
+  shortage into money off a rep's pay is still `envelope_report.chargeback_parent_row`, from a screen
+  where a human ticks a box.
+- **The 93 are not built in this PR.** They are written down, ratcheted, and ordered worst-first.
+
+**Cross-ref:** §16 (`core/report_drilldown.py`, `components/DrillDownPanel.tsx`,
+`harness_drilldown_pending.txt`), §17 (`GET /closing/cash-variance` → `drilldown`), §18 ("where is
+this figure from" → `panel.sources` → `sourceLabel`), §72 (cash variance itself), §4e (the P&L drill
+this generalises), §19.38 (`sourceLabel`), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
+module graph).
 
 ## §CORE-16. A SELF-CALL CARRIES THE TENANT IT IS ACTING AS (owner report 2026-10-24)
 

@@ -37,6 +37,12 @@ const SOURCE_LABEL: Record<string, string> = {
   pos_tender_summary: 'X-report (tenders)',
   inventory_value: 'inventory aging report',
   daily_closing: 'daily closing sheet',
+  // The cash-accountability trail (§CORE-17 drill-downs, owner ask 2026-10-24). A manager reads
+  // "the management envelope count", never a table name.
+  envelope_count: 'management envelope count',
+  cash_pickup: 'cash pickup envelope',
+  billpay_pickup: 'bill-payment pickup envelope',
+  closing_attempt: 'closing submit attempt',
   store_mapping: 'Store Mapping',
   payout_config: 'payout rates',
   // The clock-in/clock-out package (mig 1073, index §14z). The variance board names the feeds it

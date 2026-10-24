@@ -5637,6 +5637,22 @@ def cash_variance_report(date_from: str = None, date_to: str = None,
 
     stores_roll = _cash_variance.by_store(out)
     emps_roll = _cash_variance.by_employee(out)
+
+    # ── THE DRILL-DOWN (owner ask 2026-10-24) ──────────────────────────────────────────────────
+    # "cash variance at employee should have the drill down from wheter the data is cming from".
+    # Built through the ONE home `core/report_drilldown.py` (§CORE-16) over the rows THIS REPORT
+    # ALREADY PRODUCED — no second read, no second derivation. The provenance was already on every
+    # `leg()` (its `source` table and its `detail` sentence); what was missing was the shape of a
+    # drill-down, and that shape is now shared, so the next report inherits it.
+    _pairs = _cash_variance.pair_catalog(_pos_term(client, org_id))
+    _head = _pairs[0]
+    _basis_labels = {b["key"]: b["label"] for b in _cash_variance.basis_catalog(
+        _carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY))}
+    drills = {
+        lk: _cash_variance.drilldowns(out, roll, lk, _head["key"], _head["label"], _basis_labels)
+        for lk, roll in (("employee_name", emps_roll), ("store_code", stores_roll))
+    }
+
     return {
         "rows": out,
         "totals": _cash_variance.totals(out),
@@ -5654,9 +5670,14 @@ def cash_variance_report(date_from: str = None, date_to: str = None,
         # are served from the pure module, so a new pair gets its column and cannot get a stale header.
         # The pair labels carry the TENANT'S OWN POS word (RULE TWO — no vendor is spelled on a
         # screen or in a payload; harness_carrier_vocab_guard's POS axis fails the build on one).
-        "pairs": _cash_variance.pair_catalog(_pos_term(client, org_id)),
-        "bases": _cash_variance.basis_catalog(
-            _carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY)),
+        "pairs": _pairs,
+        "bases": [{"key": k, "label": v} for k, v in _basis_labels.items()],
+        # One panel per rollup row, keyed by the subject the rollup is keyed on. Each panel carries
+        # its own `sources` list — the tables its rows came out of, counted — which is the owner's
+        # question answered in one read, and a `tie_out` that STATES a disagreement between the
+        # figure and its own evidence rather than rounding one away.
+        "drilldown": drills,
+        "drilldown_pair": _head["key"],
         "band": dollar_band,
         "trend_min_days": trend_days,
         "band_is_house_default": not bool((cfg_row or {}).get("cash_variance_band")),

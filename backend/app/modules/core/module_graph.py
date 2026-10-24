@@ -43,6 +43,34 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    # ── §CORE-17 (owner ask 2026-10-24) — a reported figure NAMES the rows behind it ────────────
+    'report_drilldown': {
+        "question": 'WHERE IS THIS NUMBER COMING FROM? A report that summarises — a tile, a rollup '
+                    'row, a per-person or per-store total — must open that figure to the rows it '
+                    'was built from, and every row must name the report, feed or upload it came '
+                    'out of plus the keys that address it there. Before this there were as many '
+                    'answers as reports: the P&L accumulates `detail` labels in `account/coa.py` '
+                    'and ties them out in TypeScript (§4e), the commission explain re-computes '
+                    'from the plan engine, `/ma-overview-recon/drill` scans one table per tile, '
+                    'and `"source"` means a table name, a screen name, an upload route or a free '
+                    'sentence on ~30 other payloads. 93 of 136 report routes answered nothing at '
+                    'all (audit 2026-10-24). The SHAPE of the answer lives here — `origin`, '
+                    '`drill_row`, `tie_out`, `panel` — and the tie-out STATES a disagreement '
+                    'between a figure and its own evidence rather than rounding one away. Absence '
+                    'is never zero and never a tie: `ties` is None, not False, when a counted row '
+                    'has no number. Which reports still OWE a drill-down is part of the same fact '
+                    'and is written down (`harness_drilldown_pending.txt`), because "by default" '
+                    'is a ratchet, not a sentence in a document.',
+        "homes": ('app/modules/core/report_drilldown.py',),
+        "index": ('CORE-17',),
+        "locks": ('harness_report_drilldown.py', 'harness_drilldown_coverage.py'),
+        # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
+        "callers": {
+            # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
+            # report on the shared mechanism; the endpoint reaches it through `drilldowns`.
+            'app/modules/closing/cash_variance.py': ('report_drilldown',),
+        },
+    },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
     'internal_self_call': {
         "question": 'When a handler reaches a sibling module through the platform\'s OWN HTTP '

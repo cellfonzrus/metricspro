@@ -202,6 +202,14 @@ on:
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
       - "database/migrations/**"   # index §19.39 — the infra-names lock derives its table / schema registry from them
       - "backend/harness_account_expenses_one_home.py"
+      # index §CORE-17 — the drill-down one home, its coverage ratchet and the ledger. Named here
+      # as well as covered by the wildcards above, per the §13e lesson: a job behind an allowlist
+      # that does not name its own subject skips silently.
+      - "backend/harness_report_drilldown.py"
+      - "backend/harness_drilldown_coverage.py"
+      - "backend/harness_drilldown_pending.txt"
+      - "backend/app/modules/core/report_drilldown.py"
+      - "frontend/src/components/DrillDownPanel.tsx"
       # index §4e — the P&L drill path: company → market → store → line (owner report 2026-10-07)
       - "frontend/prove_pl_drill_path.mjs"
       # index §4e — the labour double-count (ONE home for the platform's labour-row vocabulary)
@@ -1308,6 +1316,12 @@ jobs:
       - name: Run the cash-variance lock (a cash figure carries its basis; compare REFUSES across bases — replays the six live store-days whose "shortage" was the bill-pay cash to the cent; the $5 band is config, never code — index §72)
         working-directory: backend
         run: python3 harness_cash_variance.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the drill-down lock (a reported figure NAMES the rows behind it and every row names the table it came out of; the tie-out STATES a disagreement between a figure and its own evidence; absence is never zero and never a tie — index §CORE-17)
+        working-directory: backend
+        run: python3 harness_report_drilldown.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the drill-down COVERAGE gate (every report route declared exactly once; a new report is un-mergeable until its author says whether it drills, is flat, is not a report, or owes one; the owes count may only SHRINK — index §CORE-17.5)
+        working-directory: backend
+        run: python3 harness_drilldown_coverage.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
