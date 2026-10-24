@@ -6,6 +6,7 @@ import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar
 import StandardFilterBar from '@/components/StandardFilterBar'
 import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
 
 // Card Settlement Recon — OWNER DIRECTIVE 2026-09-04, verbatim: "we need to pull in data from the
 // merchants from both pos merchant provider and the external credit card provider … need to scrape
@@ -94,6 +95,21 @@ export default function CardSettlementReconPage() {
   const roleTitle = (r: string) => titles[r] || r
   const feeds: Record<string, any> = data?.feeds || {}
   const gaps = (t.no_processor_data || 0) + (t.no_declared_data || 0) + (t.dm_merged || 0)
+  // THE SERVED PANELS (§CORE-17). Every filter on this report is applied SERVER-side (role, status,
+  // markets, stores, dates), so the tiles and the panels are folded over exactly the same rows — no
+  // agreement gate is needed here, unlike the X-report recon whose filters are client-side.
+  const drills: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(drills)
+  const DRILL_COLUMNS = [
+    { header: 'Store code', get: (r: DrillRow) => String(r.fields?.store_code || '—'),
+      sortValue: (r: DrillRow) => String(r.fields?.store_code || '') },
+    { header: 'Market', get: (r: DrillRow) => String(r.fields?.market || '—'),
+      sortValue: (r: DrillRow) => String(r.fields?.market || '') },
+    { header: 'Processor', get: (r: DrillRow) => String(r.fields?.processor || '—'),
+      sortValue: (r: DrillRow) => String(r.fields?.processor || '') },
+    { header: 'Verdict', get: (r: DrillRow) => String(r.fields?.status || '—').replace(/_/g, ' '),
+      sortValue: (r: DrillRow) => String(r.fields?.status || '') },
+  ]
 
   const columns: ExportColumn[] = useMemo(() => [
     { header: 'Date', field: 'close_date', type: 'date', role: 'date', get: (r: any) => r.close_date },
@@ -163,14 +179,33 @@ export default function CardSettlementReconPage() {
       {/* Summary tiles. Gaps are counted separately and contribute NO dollars — a missing scrape
           must never read as a balanced day. */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '14px 0' }}>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Store-days</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.cells ?? 0}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Declared</div><div style={{ fontSize: 20, fontWeight: 700 }}>{fmt(t.declared_total || 0)}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Processor settled</div><div style={{ fontSize: 20, fontWeight: 700 }}>{fmt(t.settled_total || 0)}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Short</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-c0392b)' }}>{t.short ?? 0} · {fmt(t.short_total || 0)}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Over</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-b7791f)' }}>{t.over ?? 0} · {fmt(t.over_total || 0)}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Matched</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-237a4b)' }}>{t.match ?? 0}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Without evidence</div><div style={{ fontSize: 20, fontWeight: 700 }}>{gaps}</div></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Store-days</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.cells ?? 0}</div>
+          <DrillTileLinks drills={drill.dl('cells', 'the store-days')} open={drill.open} onToggle={drill.toggle} /></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Declared</div><div style={{ fontSize: 20, fontWeight: 700 }}>{fmt(t.declared_total || 0)}</div>
+          <DrillTileLinks drills={drill.dl('declared_total', 'the store-days behind it')} open={drill.open} onToggle={drill.toggle} /></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Processor settled</div><div style={{ fontSize: 20, fontWeight: 700 }}>{fmt(t.settled_total || 0)}</div>
+          <DrillTileLinks drills={drill.dl('settled_total', 'the store-days behind it')} open={drill.open} onToggle={drill.toggle} /></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Short</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-c0392b)' }}>{t.short ?? 0} · {fmt(t.short_total || 0)}</div>
+          <DrillTileLinks drills={drill.dl('short', 'the short store-days', 'short_total', 'the short dollars')} open={drill.open} onToggle={drill.toggle} /></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Over</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-b7791f)' }}>{t.over ?? 0} · {fmt(t.over_total || 0)}</div>
+          <DrillTileLinks drills={drill.dl('over', 'the over store-days', 'over_total', 'the over dollars')} open={drill.open} onToggle={drill.toggle} /></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Matched</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-237a4b)' }}>{t.match ?? 0}</div>
+          <DrillTileLinks drills={drill.dl('match', 'the agreeing store-days')} open={drill.open} onToggle={drill.toggle} /></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Without evidence</div><div style={{ fontSize: 20, fontWeight: 700 }}>{gaps}</div>
+          {/* No drill: `gaps` is three counts added together on the screen, and a figure the screen
+              composes itself has no single fold behind it. The store-days it counts appear, with
+              their reason, inside EVERY panel above — un-counted, which is the point. */}</div>
       </div>
+
+      {/* ONE panel at a time (§CORE-17): the store-days behind the figure, which feeds they were read
+          out of, and whether they add up to the tile. A store-day the processor feed never covered
+          shows here with its reason and NO number, rather than being left out. */}
+      {drill.open && (
+        <div style={{ marginBottom: 14 }}>
+          <DrillDownPanel panel={drill.panel} extraColumns={DRILL_COLUMNS}
+            emptyNote="No store-day in this range contributed to this figure." />
+        </div>
+      )}
 
       {/* Feed honesty: say plainly when a processor's daily pull has not registered or has not
           landed for the window, instead of rendering zeros that look reconciled. */}

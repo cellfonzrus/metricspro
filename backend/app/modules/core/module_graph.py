@@ -64,7 +64,8 @@ FACTS: dict[str, dict] = {
         "homes": ('app/modules/core/report_drilldown.py',),
         "index": ('CORE-17',),
         "locks": ('harness_report_drilldown.py', 'harness_drilldown_coverage.py',
-                  'harness_cash_recon_drilldown.py', 'harness_tender_recon_drilldown.py'),
+                  'harness_cash_recon_drilldown.py', 'harness_tender_recon_drilldown.py',
+                  'harness_day_recon_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -78,6 +79,13 @@ FACTS: dict[str, dict] = {
             # range; the route still reads `owes` because its tiles are recomputed on the client,
             # so the drill is offered only where the two provably agree.
             'app/modules/commcalc/tender_recon_drilldown.py': ('report_drilldown',),
+            # The two closing DAY recons — ePay bank-deposit and accessory (§CORE-17.3c). One grain
+            # (store-day), one row-fields function, two catalogues: the reports differ in their
+            # figures, not in what identifies a row.
+            'app/modules/closing/day_recon_drilldown.py': ('report_drilldown',),
+            # The card-settlement tally (§CORE-17.3c). Its gap statuses are dereferenced from
+            # `external_credit_recon.GAP_STATUSES`, so "we do not know" cannot become a measured $0.
+            'app/modules/closing/external_credit_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────

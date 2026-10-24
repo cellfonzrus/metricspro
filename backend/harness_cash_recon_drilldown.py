@@ -299,8 +299,13 @@ _page = os.path.join(ROOT, "frontend", "src", "app", "(platform)", "closing",
 _pg = open(_page, encoding="utf-8").read()
 check("E8 the page renders the SHARED panel and hand-rolls none of it",
       "DrillDownPanel" in _pg and "tie_out" not in _pg)
-check("E9 and it offers a tile's link only when the server sent that panel",
-      "if (drills[pairs[i]])" in _pg)
+_drill_home = open(os.path.join(ROOT, "frontend", "src", "components",
+                                "DrillDownPanel.tsx"), encoding="utf-8").read()
+check("E9 and it offers a tile's link only when the server sent that panel — DEREFERENCED from the "
+      "shared offer rule (§CORE-17.3c), never a second copy of the loop in this page",
+      "useDrillTile(drills)" in _pg and "const dl = drill.dl" in _pg
+      and "if (p && (!gate || gate(pairs[i], p)))" in _drill_home
+      and "const dl = (...pairs: string[]) => {" not in _pg)
 _labels = open(os.path.join(ROOT, "frontend", "src", "lib", "sourceLabels.ts"), encoding="utf-8").read()
 _named = {s["table"] for v in D.values() for s in v["sources"]}
 _unlabelled = sorted(t for t in _named if ("  %s:" % t) not in _labels)

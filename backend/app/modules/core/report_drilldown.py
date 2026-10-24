@@ -365,8 +365,15 @@ def tile_panel(figure_label, amount, rows, *, value, tables, row_label=None, key
         fl = read_f(r)
         if isinstance(fl, tuple) and fields is not None and not callable(fields):
             fl = dict(zip(tuple(fields), fl))
+        # A row whose tables did not RESOLVE still states a provenance, as one that cannot be
+        # traced. The declaration shape for a config-resolved feed is `tuple(t for t in (x,) if x)`,
+        # so an unregistered processor / an empty sales read collapses to `()` — and an empty origin
+        # list reported nothing untraceable at all, which is a silent blank wearing the clothes of a
+        # clean answer. Fixed HERE rather than in each catalogue, because every report that names a
+        # config-resolved feed has the same shape (cash recon's processor and sales legs included).
+        _tables = tuple(read_t(r) or ()) or (None,)
         out.append(drill_row(
-            lab, origins_of([(t, kv) for t in (read_t(r) or ())], schema=schema, column=column),
+            lab, origins_of([(t, kv) for t in _tables], schema=schema, column=column),
             amount=v,
             in_figure=(read_in(r) if read_in else v is not None),
             measured=read_m(r), reason=read_rs(r),

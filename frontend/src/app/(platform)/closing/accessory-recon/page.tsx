@@ -4,6 +4,8 @@ import { api, fmt, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
+import DrillDownPanel, { useDrillTile, type DrillPanel } from '@/components/DrillDownPanel'
+import { DrillStat, STORE_DRILL_COLUMNS } from '../_lib/DrillStat'
 
 // Accessory reporting recon: what reps DECLARED as accessory sales on the daily closing sheet vs what
 // the sales transactions ACTUALLY show for that store/day. Catches reps entering wrong accessory numbers.
@@ -63,6 +65,10 @@ export default function AccessoryReconPage() {
   }
 
   const t = data?.totals || {}
+  // THE SERVED PANELS (§CORE-17). The tiles are the DAY's figure for every store — the pickers below
+  // narrow only the table — so a tile and its drill-down always describe the same population.
+  const drills: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(drills)
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
@@ -87,11 +93,25 @@ export default function AccessoryReconPage() {
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
-            <Stat label="Declared (all stores)" value={fmt(t.declared)} />
-            <Stat label="Actual (sales)" value={fmt(t.actual)} color="var(--c-fg-16a34a)" />
-            <Stat label="Net variance" value={fmt((t.declared || 0) - (t.actual || 0))} color={Math.abs((t.declared || 0) - (t.actual || 0)) > 1 ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'} />
-            <Stat label="Stores flagged" value={`${t.flagged || 0} / ${t.stores || 0}`} color={t.flagged ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'} />
+            <DrillStat label="Declared (all stores)" value={fmt(t.declared)}
+              drill={drill} drills={drill.dl('declared', 'the stores behind it')} />
+            <DrillStat label="Actual (sales)" value={fmt(t.actual)} color="var(--c-fg-16a34a)"
+              drill={drill} drills={drill.dl('actual', 'the stores behind it')} />
+            {/* The net variance is the SERVER's fold, not `declared - actual` recomputed here: a
+                figure the screen computes itself has no rows behind it by construction. */}
+            <DrillStat label="Net variance" value={fmt(t.variance)} color={Math.abs(t.variance || 0) > (data?.tolerance ?? 1) ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'}
+              drill={drill} drills={drill.dl('variance', 'the stores behind it')} />
+            <DrillStat label="Stores flagged" value={`${t.flagged || 0} / ${t.stores || 0}`} color={t.flagged ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'}
+              drill={drill} drills={drill.dl('flagged', 'the flagged stores')} />
           </div>
+
+          {/* ONE panel at a time, below the strip (§CORE-17). */}
+          {drill.open && (
+            <div style={{ marginBottom: 14 }}>
+              <DrillDownPanel panel={drill.panel} extraColumns={STORE_DRILL_COLUMNS}
+                emptyNote={`No store contributed to this figure on ${date}.`} />
+            </div>
+          )}
 
           <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
             <MarketStorePicker
@@ -155,9 +175,3 @@ export default function AccessoryReconPage() {
   )
 }
 
-function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
-  return <div className="card" style={{ padding: '14px 16px' }}>
-    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</div>
-    <div style={{ fontSize: 20, fontWeight: 700, marginTop: 4, color: color || 'var(--text1)' }}>{value}</div>
-  </div>
-}
