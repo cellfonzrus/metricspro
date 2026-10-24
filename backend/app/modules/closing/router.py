@@ -31,6 +31,8 @@ from . import entry_quality
 from . import pickup_actual as _pickup_actual
 from . import count_revision as _count_revision
 from . import cash_variance as _cash_variance
+from . import cash_recon_drilldown as _cash_recon_drilldown
+from app.modules.commcalc import data_lineage_registry as _lineage
 from . import closer_resolution
 from . import billpay_netting
 from . import submit_refusal as _refusal
@@ -8736,15 +8738,7 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
     _dm_nc = [r for r in out if r["cash_picked_comparable"] is False]
     _mgmt_unscored = [r for r in out if r["mgmt_counted"] is not None
                       and r["mgmt_variance"] is None]
-    return {"start": start, "end": end, "rows": out, "billpay_source": billpay_source,
-            "tender_basis": tender_basis_info(client, org_id),
-            "sales_source": sales_source,
-            "tolerance": _f(tolerance),
-            "rep_options": sorted(_rep_options),
-            "filters": {"market": market or markets or None,
-                        "stores": sorted(store_set) if store_set else None,
-                        "employees": sorted(emp_set) if emp_set else None},
-            "totals": {"cash_declared": round(sum(r["cash_declared"] for r in out), 2),
+    _totals = {"cash_declared": round(sum(r["cash_declared"] for r in out), 2),
                        "credit_declared": round(sum(r["credit_declared"] for r in out), 2),
                        "epay_declared": round(sum(r["epay_cash_declared"] + r["epay_credit_declared"] for r in out), 2),
                        "cash_pickup": round(sum(r["cash_pickup"] for r in out), 2),
@@ -8773,7 +8767,27 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
                        "mgmt_unscored_days": len(_mgmt_unscored),
                        "mismatched_store_days": mismatches,
                        "three_way_mismatched": sum(1 for r in out
-                                                   if r["three_way_status"] == "mismatch")},
+                                                   if r["three_way_status"] == "mismatch")}
+    # EVERY TILE NAMES THE STORE-DAYS BEHIND IT (§CORE-17, owner ask 2026-10-24). The declaration is
+    # `closing/cash_recon_drilldown.catalogue`; the fold, the tie-out and the provenance roll-up are
+    # `core/report_drilldown.tiles`. NOTHING IS RECOMPUTED: the panels are built from `out` and
+    # `_totals` — the very rows and totals this response serves — so a tile and its drill-down cannot
+    # disagree, and if the declaration is wrong the tie-out says so on screen rather than silently.
+    # The two feed legs' tables are DEREFERENCED from the lineage registry, never named here.
+    _drills = _cash_recon_drilldown.drilldowns(
+        out, _totals, _f(tolerance),
+        processor_table=_lineage.billpay_processor_feed(billpay_source),
+        sales_table=(_lineage.LIVE_SALES_FEED if sales_present else None))
+    return {"start": start, "end": end, "rows": out, "billpay_source": billpay_source,
+            "tender_basis": tender_basis_info(client, org_id),
+            "sales_source": sales_source,
+            "tolerance": _f(tolerance),
+            "rep_options": sorted(_rep_options),
+            "filters": {"market": market or markets or None,
+                        "stores": sorted(store_set) if store_set else None,
+                        "employees": sorted(emp_set) if emp_set else None},
+            "totals": _totals,
+            "drilldown": _drills,
             "three_way": _tw_sum,
             "note": (" ".join(_notes) or None)}
 

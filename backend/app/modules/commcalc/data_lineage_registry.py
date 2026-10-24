@@ -49,6 +49,34 @@ EPAY_DAILY = "raw_epay_daily_tx"          # Boost ePay settlement
 MA_DAILY_TX = "raw_ma_daily_tx"           # VidaPay / Total MA daily transactions
 DAILY_CLOSING = "daily_closing"           # employee cash + tender declaration (owned by the closing module)
 
+
+# ── WHICH TABLE A BILL-PAYMENT PROCESSOR'S FEED LANDS IN ───────────────────────────────────────
+# A drill-down has to tell the reader WHERE a figure came from (§CORE-17), and for the processor leg
+# of the bill-payment recon that depends on which processor the tenant resolved. The resolution
+# itself is `metric_source_of_truth` (config, never a branch); this maps its answer to the table the
+# feed actually lands in, so a provenance line DEREFERENCES the fact instead of restating a table
+# name at the call site — which is the whole point of this registry.
+#
+# Keyed by the processor value `metric_source_of_truth` stores, so a new processor is a ROW here plus
+# its ingest edge, never a branch in a report.
+BILLPAY_PROCESSOR_FEEDS = {
+    "epay": EPAY_DAILY,
+    "vidapay": MA_DAILY_TX,
+}
+
+
+def billpay_processor_feed(source_label):
+    """The feed table behind a resolved bill-payment processor, from the label the closing resolvers
+    already return (`"processor:<name>"`, or `"none"`).
+
+    An UNKNOWN processor returns None, and a drill-down then reports an origin it could not trace
+    rather than naming a table on a guess. A wrong provenance claim is worse than an admitted gap.
+    """
+    name = str(source_label or "").strip().lower()
+    if name.startswith("processor:"):
+        name = name.split(":", 1)[1].strip()
+    return BILLPAY_PROCESSOR_FEEDS.get(name)
+
 # ── THE COMMISSION-PER-DEVICE FEED — which table says "the carrier paid (or clawed back) on this IMEI" ─
 # Owner 2026-09-24 (index §11b): inventory is "crashed against the sales report by invoice and the
 # commission received reports". ONE fact, ONE home: the per-line vendor rebate / commission history

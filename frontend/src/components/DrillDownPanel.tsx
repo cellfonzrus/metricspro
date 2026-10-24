@@ -268,3 +268,48 @@ export function useDrillOpen() {
     toggle: (k: string) => setOpen(o => ({ ...o, [k]: !o[k] })),
   }
 }
+
+/**
+ * Open/closed state for a row of TILES, where only one panel is open at a time.
+ *
+ * WHY SINGLE-OPEN, AND WHY IT IS HERE. The §CORE-17 audit found that most of the 93 reports owing a
+ * drill-down owe it on a strip of summary tiles, and a tile's panel is a wide table: letting four of
+ * them stand open stacks four wide tables above the report they belong to. One open panel, rendered
+ * once below the strip, is the shape — and it lives here so the remaining reports inherit it instead
+ * of each page deciding again.
+ */
+export function useDrillTile() {
+  const [open, setOpen] = useState<string | null>(null)
+  return {
+    open,
+    isOpen: (k: string) => open === k,
+    toggle: (k: string) => setOpen(o => (o === k ? null : k)),
+    close: () => setOpen(null),
+  }
+}
+
+/** The little buttons on a tile, one per figure it shows. A tile that carries a short AND an over
+ *  figure offers both, because "which rows is this?" is a different question for each. */
+export function DrillTileLinks({ drills, open, onToggle }: {
+  drills: { key: string; label: string }[]
+  open: string | null
+  onToggle: (k: string) => void
+}) {
+  if (!drills.length) return null
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+      {drills.map(d => (
+        <button key={d.key} type="button" onClick={() => onToggle(d.key)}
+          aria-expanded={open === d.key}
+          title={open === d.key ? 'Hide the rows behind this figure' : `Show the rows behind ${d.label}`}
+          style={{
+            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+            color: 'var(--accent)', fontSize: 10.5, textDecoration: 'underline',
+            fontWeight: open === d.key ? 700 : 400,
+          }}>
+          {open === d.key ? '▾' : '▸'} {d.label}
+        </button>
+      ))}
+    </div>
+  )
+}
