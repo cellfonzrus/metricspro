@@ -66,7 +66,7 @@ nothing, writes nothing, and deliberately computes no business figure of its own
 carries was handed to it.
 
 PURE: no I/O, no framework import, no clock, no org/carrier/tenant/product name (RULE TWO).
-Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §CORE-16.
+Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §CORE-17.
 """
 from __future__ import annotations
 

@@ -124,8 +124,9 @@ Primary code homes:
 | CORE-12 | **A write may not shut the door on its own author** | "I made myself market manager under Vzone and cannot get admin privileges anymore under ss. Which writes can take away the access that just made them, and is there a screen left that could undo one?" |
 | CORE-13 | **A migration grants what it creates** | "Supabase says that from 30 October a new table in `public` no longer gets Data API access automatically. Does that break this app, which migrations would break, and what stops the next migration shipping a table the application cannot read?" |
 | CORE-15 | **The dark theme** | "The workspace is black with white lettering. Where does \"what does this colour become on the dark theme\" live, how does a colour spelled inside an inline style reach it, and what proves nothing pale is left glowing on black?" |
-| CORE-16 | **A figure names the rows behind it** | "Where is this number coming from? Open a reported figure and see the rows it was summed from, and which report, feed or upload each row came out of. Which reports still have no drill-down, and what stops the next one shipping without one?" |
+| CORE-17 | **A figure names the rows behind it** | "Where is this number coming from? Open a reported figure and see the rows it was summed from, and which report, feed or upload each row came out of. Which reports still have no drill-down, and what stops the next one shipping without one?" |
 | CORE-14 | **One palette, dereferenced** | "Make the colours of the side menu alternate between the logo colours so each item stands out. Where does a colour used by the chrome live, how many places spell it, and what proves a row stays readable once it is coloured?" |
+| CORE-16 | **A self-call carries the tenant it is acting as** | "The envelope payout screen says the commission accrual and salary-owed fetches failed with 409 Conflict. What identity does a call the platform makes to itself carry, which company does it say it is acting for, and what stops the next such call from dropping it?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -25942,6 +25943,7 @@ status word rather than a blank that reads as nil.
 | CORE-14 | core |
 | CORE-15 | core |
 | CORE-16 | core |
+| CORE-17 | core |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -33292,14 +33294,22 @@ Neighbours: §COMMCALC-10 (the progress budgets this sits beside), §COMMCALC-11
 
 ---
 
-## §CORE-16. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
+## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
+
+> **Numbered CORE-17, not CORE-16.** The allocator handed out `CORE-16` while this was being
+> built, and PR #532 (*a self-call carries the tenant it is acting as*) merged it first, so
+> this section moved — the fifth time two threads have raced for one index number (§50 notes
+> the first four). `harness_index_section_register.py --next` reads the index in your WORKING
+> TREE, which is what had merged when you branched; it is not a reservation. Re-check right
+> before pushing: `git fetch origin main && git show origin/main:docs/SYSTEM_DATA_FLOW_INDEX.md
+> | grep -c "<NUMBER>"`.
 
 Owner, verbatim: *"cash variance at employee should have the drill down from wheter the data is cming
 from , update in index thta drilldown is needed for every report geenerated from any data which
 comming from within the platforma as a defalut , assign an agent o check all reports to check where
 the drill donw ins not there and sytart building it"*.
 
-### §CORE-16.1 THE HOUSE RULE (owner directive 2026-10-24)
+### §CORE-17.1 THE HOUSE RULE (owner directive 2026-10-24)
 
 **EVERY REPORT BUILT FROM DATA THE PLATFORM HOLDS HAS A DRILL-DOWN, BY DEFAULT.** A report that
 summarises — a tile, a rollup row, a per-person, per-store, per-month or per-line total — opens that
@@ -33321,7 +33331,7 @@ A report that genuinely has nothing to drill to (it already shows the source row
 and says so. A config screen, wizard or work queue declares `not_report`. Both carry a written
 reason — an excuse nobody wrote down is indistinguishable from an oversight.
 
-### §CORE-16.2 DUPLICATE CHECK (build gate)
+### §CORE-17.2 DUPLICATE CHECK (build gate)
 
 Searched: §4e (the P&L drill-down — `account/coa.py` `accrue_detail`/`add`, `scopeFinancials.ts`
 `drillFilter`/`nextRung`/`lineTieOut`, `plStatement.plQuery`, PR #408), §6i/§6j
@@ -33358,7 +33368,7 @@ NAMED SIBLINGS, EXCUSED HERE, TO CONVERGE (not silently left):
   predates this. Converging it would re-open PR #408's 56+58-check proof and is a PR of its own.
   Ledger state: `own`, with the note that its drill rows still name no source feed.
 
-### §CORE-16.3 THE MECHANISM
+### §CORE-17.3 THE MECHANISM
 
 | What | Where | Says |
 |---|---|---|
@@ -33376,7 +33386,7 @@ NAMED SIBLINGS, EXCUSED HERE, TO CONVERGE (not silently left):
 harness plants a dropped day and a mis-scored day and **both break the tie-out**. In-band days and
 unmeasurable days are shown and not counted, and the panel says in words how many.
 
-### §CORE-16.4 THE AUDIT, MEASURED 2026-10-24
+### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
 
@@ -33416,7 +33426,7 @@ sibling already has `/closing/tender-drilldown` — one question, two paths, onl
   name, an upload route, a free sentence). `origin()` is the one shape going forward; the existing
   keys are not renamed here.
 
-### §CORE-16.5 LOCKED SO IT CANNOT UN-WIRE
+### §CORE-17.5 LOCKED SO IT CANNOT UN-WIRE
 
 `backend/harness_report_drilldown.py` — **61 checks**, pure stdlib, driving the real functions:
 A `origin` (blank keys dropped, an unnamed table not traceable) · B `drill_row` (absence is never
@@ -33439,7 +33449,7 @@ every `shared` route really renders the shared panel (writing the registry witho
 is not a fix at all — §19.18), and **`OWES_MAX = 93`, which may only go DOWN**. Re-pin it downward in
 the same PR that builds a drill-down; a change that raises it is a report shipped without evidence.
 
-### §CORE-16.6 WHAT IS DELIBERATELY NOT HERE
+### §CORE-17.6 WHAT IS DELIBERATELY NOT HERE
 
 - **No new table and no migration.** The drill-down presents figures other modules computed.
 - **No business figure.** The one home carries amounts handed to it and computes none; §G4 fails the
@@ -33454,3 +33464,122 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 this figure from" → `panel.sources` → `sourceLabel`), §72 (cash variance itself), §4e (the P&L drill
 this generalises), §19.38 (`sourceLabel`), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
 module graph).
+
+## §CORE-16. A SELF-CALL CARRIES THE TENANT IT IS ACTING AS (owner report 2026-10-24)
+
+Owner, on the envelope payout screen:
+
+> ℹ️ commission: commission accrual fetch failed (HTTPError: **409 Client Error: Conflict** for url:
+> `…/commcalc/payout/accrued?org_id=854f6d7b…&as_of=2026-10-17&store_code=Nostrand`)
+> ℹ️ salary: salary-owed fetch failed (HTTPError: **409 Client Error: Conflict** for url:
+> `…/storeops/salary-owed?org_id=854f6d7b…&start=2026-08-18&end=2026-10-17&store_code=Nostrand`)
+
+### `store_code=Nostrand` IS A RED HERRING — it never reached a handler
+
+`GET /closing/payout-due` does not import mod-commission and mod-people; it **calls the platform's own
+HTTP surface** at `INTERNAL_API_BASE_URL` (default `127.0.0.1:8000`) and forwards the caller's bearer
+token. That call therefore re-enters `app/core/tenant_middleware.py` **from the outside** and must
+prove the same two facts the browser's request proved — and it only ever proved one:
+
+| fact the gate needs | the browser's request | the self-call (before this) |
+|---|---|---|
+| WHO is calling (`Authorization`) | ✅ | ✅ *(added 2026-08-04; without it the envelope read **$0.00 owed**)* |
+| WHICH TENANT they act as (`x-active-org`) | ✅ | ❌ **dropped** |
+
+`_tenant_is_ambiguous` then refuses to guess (§28), which is the correct behaviour, and
+`_reject_tenant_choice` answers **409 `tenant_choice_required`** before the route body runs. So the
+store code, the dates and the org_id in the URL were never looked at.
+
+### THE EVIDENCE — the platform's own record, not an inference
+
+`core.access_log`, 2026-10-24 17:55 UTC, read-only:
+
+| time | status | path | actor | org |
+|---|---|---|---|---|
+| 17:55:46.300 | **409** | `/commcalc/payout/accrued` | **NULL** | **NULL** |
+| 17:55:46.308 | **409** | `/storeops/salary-owed` | **NULL** | **NULL** |
+| 17:55:46.512 | 200 | `/closing/payout-due` | `ab08bb15…` | `854f6d7b…` (Luxelink) |
+
+The pair of 409s sits *inside* the outer 200, and carries **no actor and no org** — the gate rejected
+before `_set_actor` ran. Login `ab08bb15…` is the §28 login: **admin in three companies**
+(house / Luxelink / Vzone), not a super-admin, and like all four multi-company logins it has
+`is_default_org IS NULL`, so `default_org` is None and there is nothing to fall back to. A
+single-membership login (92 of 96 when the gate shipped) could never see this.
+
+### THE CLASS, NOT THE INSTANCE
+
+The general fact that was wrong is not "the envelope screen loses the tenant". It is:
+
+> **a self-call re-enters the gate with LESS identity than the request that caused it.**
+
+Both known instances are that class, two years apart in the same four helper functions — a dropped
+token read as `$0.00`, a dropped tenant read as `409`. Both read as *a number*, not as *a refusal*.
+
+### ONE FACT, ONE HOME, DEREFERENCED
+
+`backend/app/core/internal_call.py` (**new**) is the ONE home for what a self-call carries:
+`internal_api_base()`, `acting_tenant(org_id)`, `self_call_headers(authorization, org_id)` and
+`self_call_note(status, what, sibling)`. The tenant comes from `tenant_middleware.acting_org()` — the
+middleware's **already-validated** resolution, which wins over the handler's `org_id` default — and
+falls back to that `org_id` outside a request the middleware saw (a sweep, a cron job).
+
+**NOT A WIDENING.** `x-active-org` is untrusted by design: the middleware honours it only when it
+names one of the caller's own memberships, and a super-admin's cross-tenant administration already
+reads the same header. Declaring the tenant the outer request was validated for removes a guess; it
+grants nothing. Proved by `harness_internal_self_call.py` C6.
+
+**ALL TEN SELF-CALL SITES WIRED**, not the two that were reported:
+
+| module | sites |
+|---|---|
+| `closing/router.py` | `_get_commission_accrued`, `_get_salary_owed`, `_post_commission_payout`, `_post_salary_advance`, the closing-expense P&L system-line push |
+| `storeops/router.py` | `_pto_push_expense_line`, `_payex_push_expense_line`, `_payex_push_gross_line`, `_additional_payroll_push_line`, `_dm_targets_summary_bulk` |
+
+The five `storeops` pushes sent **no headers at all** and so were 401ing silently — the same class,
+found by looking for the siblings rather than by a second report. `authorization` is now threaded
+from each manager-gated route. **REPORTED, NOT HIDDEN:** the pg_cron sweep
+`POST /storeops/salary-advance/additional-payroll/run-due` is secret-gated and holds no user token, so
+its push still cannot authenticate; it now says so through `self_call_note` (401 → "this figure is NOT
+$0, it is UNKNOWN") instead of appearing to succeed. Giving a cron a service identity is a separate,
+money-touching decision and is left for the owner.
+
+### LOCKED SO IT CANNOT UN-WIRE
+
+`backend/harness_internal_self_call.py` (42 checks, DB-free, no socket). Section **E is the build
+gate**: it walks the AST of every `backend/app/**/*.py`, resolves each `requests.*` call whose URL
+derives from an `*INTERNAL_API_BASE*` variable (one hop through a local `url =` assignment), and fails
+the build when any of them does not pass `headers=self_call_headers(...)`, when a second copy of the
+base URL appears, or when a module hand-rolls an `{"Authorization": authorization}` dict. E1 fails if
+the scan ever finds fewer than 9 sites, so it cannot pass by matching nothing, and E5–E7 are negative
+controls. Verified to bite: un-wiring one site turns E2 and E4 red.
+
+Section C is the regression, run through `tenant_middleware`'s **own** predicate: the old header dict
+is ambiguous for the reported login, the new one is not.
+
+### DUPLICATE CHECK (build gate)
+
+Checked §28 (which company am I in), §22 (operator entry sessions), §CORE-07/§CORE-12 (login
+identity), §50 (the module graph) and §16–18 before writing a line. **REUSED, not rebuilt:**
+`x-active-org` stays the one tenant selector and `_pick_active_org` / `_tenant_is_ambiguous` stay the
+one server-side rule — this change makes a caller *declare* through them, it does not add a second
+gate. `harness_ambiguous_tenant.py` keeps the gate's own cases (single membership, `is_default_org`, a
+foreign header); this harness does not re-prove them and that harness, previously **run by nothing**,
+is now executed in the same CI job — so `harness_unrun_pending.txt` shrinks 315 → 314 and
+`harness_ci_pipefail_lock.PINNED_MAX` with it. `_sib_note` was not deleted: it now dereferences
+`self_call_note`. **No second self-call mechanism was created.**
+
+### §16–18 CROSS-REFERENCES
+
+Registered in `app/modules/core/module_graph.py` as fact `internal_self_call`
+(home `app/core/internal_call.py`, lock `harness_internal_self_call.py`, callers
+`closing/router.py` + `storeops/router.py`). Depends on: §28 (the gate that refuses to guess),
+§CORE-07 (who a login is). Feeds: §47.8 (the envelope basis), the four payroll P&L system lines
+(§COMMCALC-23 labour), §4 (expenses). Neighbours: §22 (the other cross-tenant declaration),
+§19.18 (writing a registry without wiring the callers is not a fix), §50 (the interlink itself).
+
+CI: `carrier-vocab-guard` job `internal-self-call-tenant`. **No migration.**
+
+Files: `backend/app/core/internal_call.py` (**new**), `backend/app/modules/closing/router.py`,
+`backend/app/modules/storeops/router.py`, `backend/app/modules/core/module_graph.py`,
+`backend/harness_internal_self_call.py` (**new**), `backend/harness_unrun_pending.txt`,
+`backend/harness_ci_pipefail_lock.py`, `.github/workflows/carrier-vocab-guard.yml`.

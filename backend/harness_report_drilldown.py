@@ -314,7 +314,7 @@ IDX = open(f"{ROOT}/docs/SYSTEM_DATA_FLOW_INDEX.md", encoding="utf-8").read()
 check("H1 the one home exists where the index says it does",
       os.path.exists("app/modules/core/report_drilldown.py"))
 check("H2 registered in the index (the mandatory owner directive 2026-09-01)",
-      "core/report_drilldown.py" in IDX and "CORE-16" in IDX)
+      "core/report_drilldown.py" in IDX and "CORE-17" in IDX)
 check("H3 the shared renderer is registered too — a server shape with no one renderer is half a fix",
       "DrillDownPanel.tsx" in IDX)
 check("H4 the coverage ledger exists: the reports that still owe a drill-down are WRITTEN DOWN, so "

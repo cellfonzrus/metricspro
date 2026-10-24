@@ -625,7 +625,7 @@ def basis_catalog(processor_term=None):
 # Owner, verbatim: *"cash variance at employee should have the drill down from wheter the data is
 # cming from"*. The provenance was already here and had nowhere to go: every `leg()` has carried its
 # `source` table and a `detail` sentence since this module was written. What was missing was the
-# SHAPE of a drill-down, and that is now `core/report_drilldown.py` (§CORE-16) — shared, so the next
+# SHAPE of a drill-down, and that is now `core/report_drilldown.py` (§CORE-17) — shared, so the next
 # report gets one without inventing a fourth answer to the same question.
 #
 # NOTHING IS RE-DERIVED. The rows are the report's own `day_row` output, the verdicts are the ones

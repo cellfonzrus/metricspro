@@ -85,7 +85,7 @@ export default function CashVariancePage() {
   const [view, setView] = useState<'days' | 'stores' | 'employees'>('employees')
   // THE DRILL-DOWN (owner ask 2026-10-24): every rollup figure opens to the store-days behind it,
   // and each of those names the table its figures were read out of. Served by the one home
-  // `core/report_drilldown.py` through `closing/cash_variance.drilldowns` (§CORE-16) — this screen
+  // `core/report_drilldown.py` through `closing/cash_variance.drilldowns` (§CORE-17) — this screen
   // renders the panel and derives nothing, so it cannot disagree with the row it opened from.
   const drill = useDrillOpen()
   const [data, setData] = useState<any>(null)

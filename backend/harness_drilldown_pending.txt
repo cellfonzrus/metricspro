@@ -1,4 +1,4 @@
-# THE DRILL-DOWN COVERAGE LEDGER — index §CORE-16, owner ask 2026-10-24
+# THE DRILL-DOWN COVERAGE LEDGER — index §CORE-17, owner ask 2026-10-24
 #
 # Owner, verbatim: "update in index thta drilldown is needed for every report geenerated from any
 # data which comming from within the platforma as a defalut".
@@ -12,7 +12,7 @@
 # STATES
 #   shared     - renders the one shared drill-down (components/DrillDownPanel.tsx over
 #                core/report_drilldown.py). This is what a new report does.
-#   own        - had a drill-down of its own before §CORE-16 and it names its sources. EXCUSED and
+#   own        - had a drill-down of its own before §CORE-17 and it names its sources. EXCUSED and
 #                NAMED, to converge onto the shared panel; converging one is a PR of its own, and
 #                until then the note says what it already does.
 #   flat       - shows the source rows already; there is no summarised figure to drill from.

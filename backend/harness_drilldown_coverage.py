@@ -1,4 +1,4 @@
-"""BUILD GATE — a report cannot ship without a drill-down or a written-down reason (§CORE-16).
+"""BUILD GATE — a report cannot ship without a drill-down or a written-down reason (§CORE-17).
 
 OWNER ASK 2026-10-24, verbatim: *"update in index thta drilldown is needed for every report
 geenerated from any data which comming from within the platforma as a defalut, assign an agent o
@@ -16,7 +16,7 @@ index would be re-broken by the next report nobody remembered to check. So the r
   3. The `owes` count MAY ONLY SHRINK (`OWES_MAX`). Adding a report with no drill-down raises it and
      fails here; building one lowers it and the author re-pins the number down.
   4. A route marked `shared` really renders the shared panel, and a route marked `own` really has a
-     drill of its own. A state that is not true of the code is the un-wiring §CORE-16 exists to stop.
+     drill of its own. A state that is not true of the code is the un-wiring §CORE-17 exists to stop.
 
 WHY THE PINNED NUMBER IS DELIBERATE AND MUST NOT BE RELAXED: it is the only thing that makes
 "default" mean anything. `harness_unrun_pending.txt`'s PINNED_MAX is the house precedent (§50) and
@@ -58,7 +58,7 @@ PAGE_OVERRIDE = {
 #: half — 327 nav entries carry it, nearly all of them setup screens — so the exceptions are NAMED
 #: here instead of inferred. A named excuse is the house posture; an inferred one is a guess.
 #: THE REAL REMEDY is to make `REPORT_DIRECTORY` complete, which is a nav change of its own and is
-#: recorded as such in §CORE-16.4.
+#: recorded as such in §CORE-17.4.
 EXTRA_REPORTS = {
     "/closing/cash-variance": "a report, reached from the Closing dashboard tile, not the directory",
 }

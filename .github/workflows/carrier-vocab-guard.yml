@@ -202,7 +202,7 @@ on:
       - "backend/app/**/*.py"   # index §19.36 — the setup-internals lock scans every backend string + the boundary
       - "database/migrations/**"   # index §19.39 — the infra-names lock derives its table / schema registry from them
       - "backend/harness_account_expenses_one_home.py"
-      # index §CORE-16 — the drill-down one home, its coverage ratchet and the ledger. Named here
+      # index §CORE-17 — the drill-down one home, its coverage ratchet and the ledger. Named here
       # as well as covered by the wildcards above, per the §13e lesson: a job behind an allowlist
       # that does not name its own subject skips silently.
       - "backend/harness_report_drilldown.py"
@@ -227,6 +227,12 @@ on:
       # backend/app/**/*.py above.
       - "backend/harness_db_resilience.py"
       - "backend/requirements.txt"
+      # index §CORE-16 — an internal self-call carries the tenant it is acting as (owner report
+      # 2026-10-24). The two harnesses are named here because a lock whose allowlist does not name
+      # its own subject skips silently (the §13e lesson); their subjects under backend/app/** are
+      # already covered above.
+      - "backend/harness_internal_self_call.py"
+      - "backend/harness_ambiguous_tenant.py"
       # index §56 — one home for a chart's plain-language caption; every Trends chart card wired
       - "backend/harness_trends_chart_notes.py"
       - "frontend/src/components/ChartNote.tsx"
@@ -1304,10 +1310,10 @@ jobs:
       - name: Run the cash-variance lock (a cash figure carries its basis; compare REFUSES across bases — replays the six live store-days whose "shortage" was the bill-pay cash to the cent; the $5 band is config, never code — index §72)
         working-directory: backend
         run: python3 harness_cash_variance.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the drill-down lock (a reported figure NAMES the rows behind it and every row names the table it came out of; the tie-out STATES a disagreement between a figure and its own evidence; absence is never zero and never a tie — index §CORE-16)
+      - name: Run the drill-down lock (a reported figure NAMES the rows behind it and every row names the table it came out of; the tie-out STATES a disagreement between a figure and its own evidence; absence is never zero and never a tie — index §CORE-17)
         working-directory: backend
         run: python3 harness_report_drilldown.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the drill-down COVERAGE gate (every report route declared exactly once; a new report is un-mergeable until its author says whether it drills, is flat, is not a report, or owes one; the owes count may only SHRINK — index §CORE-16.5)
+      - name: Run the drill-down COVERAGE gate (every report route declared exactly once; a new report is un-mergeable until its author says whether it drills, is flat, is not a report, or owes one; the owes count may only SHRINK — index §CORE-17.5)
         working-directory: backend
         run: python3 harness_drilldown_coverage.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
@@ -2417,3 +2423,32 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_db_resilience.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # AN INTERNAL SELF-CALL CARRIES THE TENANT IT IS ACTING AS (index §CORE-16, owner report 2026-10-24).
+  # The envelope payout screen read "commission accrual fetch failed … 409 Conflict" because
+  # `GET /closing/payout-due` fetches mod-commission's accrual and mod-people's salary-owed over the
+  # platform's OWN HTTP surface and forwarded only the bearer token. For a login that belongs to more
+  # than one company and has no `is_default_org` row, the gate could not tell WHICH company the
+  # self-call was for and refused (409 `tenant_choice_required`) before the route ran. The design fix
+  # is `app/core/internal_call.py` — the ONE home for a self-call's headers — and section E of this
+  # harness FAILS THE BUILD if any self-call site stops dereferencing it or a second copy of the base
+  # URL appears. harness_ambiguous_tenant.py (the gate's own predicate, previously run by NOTHING and
+  # pinned on harness_unrun_pending.txt) runs in the same job rather than being re-proved.
+  # Sections D/E import the app, so this runs with the backend's dependencies.
+  internal-self-call-tenant:
+    name: An internal self-call carries the tenant it is acting as
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: The acting tenant is a choice, never a guess (the gate's own predicate)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_ambiguous_tenant.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Every internal self-call carries WHO and WHICH TENANT (E = the wiring lock)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_internal_self_call.py | tail -50 | tee -a "$GITHUB_STEP_SUMMARY"

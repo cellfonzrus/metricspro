@@ -4,7 +4,7 @@ import { fmt } from '@/lib/client'
 import { sourceLabel } from '@/lib/sourceLabels'
 
 // THE ROWS BEHIND A FIGURE, AND WHERE THEY CAME FROM — the ONE renderer (owner ask 2026-10-24,
-// index §CORE-16). Server twin: `backend/app/modules/core/report_drilldown.py::panel`.
+// index §CORE-17). Server twin: `backend/app/modules/core/report_drilldown.py::panel`.
 //
 // Owner, verbatim: "cash variance at employee should have the drill down from wheter the data is
 // cming from , update in index thta drilldown is needed for every report geenerated from any data
