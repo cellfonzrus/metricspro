@@ -63,12 +63,17 @@ FACTS: dict[str, dict] = {
                     'is a ratchet, not a sentence in a document.',
         "homes": ('app/modules/core/report_drilldown.py',),
         "index": ('CORE-17',),
-        "locks": ('harness_report_drilldown.py', 'harness_drilldown_coverage.py'),
+        "locks": ('harness_report_drilldown.py', 'harness_drilldown_coverage.py',
+                  'harness_cash_recon_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
             # report on the shared mechanism; the endpoint reaches it through `drilldowns`.
             'app/modules/closing/cash_variance.py': ('report_drilldown',),
+            # tile_panel / tiles — the TILE shape (§CORE-17.3a). This is the fold most of the
+            # remaining reports owe, so it lives in the one home and a report declares only its
+            # own catalogue. First declaration: the eleven cash-recon tiles.
+            'app/modules/closing/cash_recon_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1111,6 +1116,11 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             'app/modules/commcalc/auto_calc.py': ('_lineage',),
+            # A DRILL-DOWN HAS TO NAME A TABLE, so the cash-recon tiles' provenance asks the
+            # registry which feed the resolved bill-payment processor lands in, and which table is
+            # the live sales feed (§CORE-17.3a). Naming either at the call site would be the copied
+            # fact this registry exists to prevent — and a provenance claim nobody checked.
+            'app/modules/closing/router.py': ('_lineage',),
             'app/modules/commcalc/dlar_sweep.py': ('_lineage',),
             'app/modules/commcalc/email_sweep.py': ('_lineage',),
             'app/modules/commcalc/epay_sweep.py': ('_lin',),

@@ -33389,6 +33389,30 @@ NAMED SIBLINGS, EXCUSED HERE, TO CONVERGE (not silently left):
 harness plants a dropped day and a mis-scored day and **both break the tie-out**. In-band days and
 unmeasurable days are shown and not counted, and the panel says in words how many.
 
+### §CORE-17.3a THE TILE SHAPE — Σ(one field) over the report's own rows (added 2026-10-24, batch 1)
+
+Most of the 93 owe the SAME drill-down: a tile shows a total, the report already holds the per-row
+figures it was folded from, and there is no way from one to the other. Ninety-two per-report folds
+would be ninety-two answers to "which rows is this?" — the sibling defect, arriving one report at a
+time. So the fold is in the one home and a report declares only what is particular to it.
+
+| What | Where | Says |
+|---|---|---|
+| **The shared fold** | `core/report_drilldown.tile_panel(figure_label, amount, rows, value, tables, row_label, keys, in_figure, …)` | `value` reads a row's contribution (**None ⇒ the row has no number**, shown with its reason, never counted as nothing); `tables` names where it was read from, as a tuple or a per-row callable; `in_figure` is the predicate for WHICH ROWS THE TILE COUNTS, defaulting to "the row has a number", so a short/over tile counts its own subset and keeps the rest as context |
+| **Every tile from one declaration** | `report_drilldown.tiles(catalogue, rows, totals)` | a tile is added by adding a ROW to the catalogue, never by writing another fold. A tile whose `total` key the report did not produce is **ABSENT** rather than a panel asserting a figure behind nothing — so a feed that never resolved for the range offers no link instead of an empty panel that reads like a bug |
+| **`figure_label` vs `row_label`** | both, deliberately two words | they were one word (`label`) for an afternoon, and in a catalogue dict one silently ate the other: **every tile on the first report served the row accessor as its own title**. `harness_cash_recon_drilldown.py` §C11 caught it before it shipped. The two names are what stop it recurring |
+| **The first report on it** | `closing/cash_recon_drilldown.py` — `catalogue(tolerance, processor_table, sales_table)`, `drilldowns(rows, totals, …)` | the §CORE-17 audit's **#1** of the 93: eleven cash tiles, sixteen figures, the most disputable money on the platform and no way to the store-day that produced it. The declaration computes NOTHING — per tile it names the `totals` key, the row field, the tables and the predicate |
+| **The endpoint** | `GET /closing/cash-recon-management` → `drilldown: {<tile key>: panel}` | folded from the SAME `out` and `_totals` the response serves, so a tile and its drill-down cannot disagree — and if the declaration is wrong the tie-out says so on the manager's screen rather than silently |
+| **The screen** | `/closing/cash-recon-management` — a link per figure on each tile, ONE panel open at a time below the strip | `DrillTileLinks` + `useDrillTile` (shared, in `DrillDownPanel.tsx`, so the remaining reports inherit the shape). A tile offers a figure's link only when the server actually sent that panel |
+| **Which table a processor feed lands in** | `commcalc/data_lineage_registry.BILLPAY_PROCESSOR_FEEDS` + `billpay_processor_feed(source_label)` | the processor leg's provenance depends on which processor `metric_source_of_truth` resolved. Keyed by that stored value, so a new processor is a ROW plus its ingest edge, never a branch in a report. An unknown processor returns **None** and the drill reports an untraceable origin — a wrong provenance claim is worse than an admitted gap |
+
+**WHY THE TIE-OUT EARNS ITS KEEP HERE.** A tile drill-down is the claim *these are the rows that
+figure was summed from*, and the wrong field or the wrong predicate makes a drill-down that LOOKS
+like proof. `harness_cash_recon_drilldown.py` (52 checks) plants a one-cent total, a dropped
+store-day, a blanked row, a wrong bucket total and a flipped variance sign — **each one breaks a
+tie-out**. It also fails the build when a MONEY total the endpoint serves has no declaration, which
+is how the screen reached eleven undrillable tiles.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):

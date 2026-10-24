@@ -276,3 +276,130 @@ def origins_of(table_keys, *, schema=None, column=None, note=None):
     table is itself most of the answer.
     """
     return [origin(t, schema=schema, keys=k, column=column, note=note) for t, k in (table_keys or [])]
+
+
+# ── THE TILE SHAPE — Σ(one field) over rows the report already has. ────────────────────────────
+#
+# WHY THIS IS HERE AND NOT IN EACH REPORT. The audit behind §CORE-17 found 93 report routes owing a
+# drill-down, and the overwhelming majority owe the SAME one: a tile shows a total, the report
+# already holds the per-row figures that total was folded from, and there is no way from one to the
+# other. Ninety-two per-report folds would be ninety-two answers to "which rows is this?" — the
+# sibling-derivation defect the index rules forbid, arriving one report at a time instead of all at
+# once. So the fold lives here, once, and a report declares only what is particular to it: which
+# field holds the figure, which tables it came out of, and which rows the tile counts.
+#
+# A REPORT DECLARES, IT DOES NOT COMPUTE. Everything a caller passes is an accessor or a name. This
+# module still sums nothing a report has not already summed, judges nothing, and holds no rate,
+# threshold or dollar of its own — `tie_out` then checks the report's own total against the rows it
+# named, which is the whole point: a declaration that does not add up says so.
+
+
+def _reader(spec, default=None):
+    """A field name, a tuple of field names, or a callable — resolved to a callable over one row.
+
+    A report's rows are plain dicts off a payload, so naming the field is the honest common case and
+    a lambda is the escape hatch. A tuple reads several fields, which is how a row's natural key and
+    its human label are both usually spelled.
+    """
+    if spec is None:
+        return (lambda _r: default)
+    if callable(spec):
+        return spec
+    if isinstance(spec, (tuple, list)):
+        names = tuple(spec)
+        return (lambda r: tuple((r or {}).get(n) for n in names))
+    return (lambda r: (r or {}).get(spec))
+
+
+def tile_panel(figure_label, amount, rows, *, value, tables, row_label=None, keys=(),
+               column=None, schema=None, unit=UNIT_MONEY, in_figure=None, measured=None,
+               reason=None, fields=None, subject=None, subject_kind=None, note=None,
+               cap=ROW_CAP):
+    """PURE: the drill-down for a TILE — a figure that is Σ(one field) over the report's own rows.
+
+    `value` reads the row's contribution; **None means the row has no number**, and such a row is
+    shown with its reason rather than counted as nothing. `tables` names where that figure was read
+    from — a tuple, or a callable when a row's provenance genuinely differs row to row (one feed
+    present for this store-day, absent for that one). `keys` are the field names that address the
+    row in those tables, so a reader can find it again.
+
+    `figure_label` NAMES THE TILE and `row_label` names each row, and they are deliberately two
+    words rather than one: in a catalogue both live in the same dict, and when they shared the name
+    `label` one silently overwrote the other — every tile on the first report to use this served the
+    row accessor as its own title. Caught by `harness_cash_recon_drilldown.py` §C11 before it
+    shipped; the two names are what stop it recurring.
+
+    `in_figure` is the predicate for **which rows the tile counts**, and defaults to "the row has a
+    number". A tile that counts a subset — the short days, the mismatched days — passes its own
+    predicate, and the rows it excludes stay in the panel as the context that makes the figure
+    readable. That is the difference between a drill-down and a filtered list.
+
+    THE TIE-OUT IS NOT A FORMALITY HERE. A report whose tile sums a field one way and declares it
+    another will come back `ties: False`, in words, on the operator's screen. That is the intended
+    outcome: it is the report disagreeing with its own evidence, and it is better seen than averaged
+    away.
+    """
+    read_v = _reader(value)
+    read_l = _reader(row_label if row_label is not None else "label", default=None)
+    read_k = _reader(keys, default=None) if keys else (lambda _r: None)
+    read_t = tables if callable(tables) else (lambda _r: tables)
+    read_f = _reader(fields, default=None) if fields is not None else (lambda _r: None)
+    read_m = measured if callable(measured) else _reader(measured, default=None)
+    read_rs = reason if callable(reason) else _reader(reason, default=None)
+    read_in = in_figure if callable(in_figure) else None
+    key_names = tuple(keys) if isinstance(keys, (tuple, list)) else ((keys,) if keys else ())
+
+    out = []
+    for r in (rows or []):
+        if not r:
+            continue
+        v = read_v(r)
+        kv = read_k(r)
+        if key_names and not isinstance(kv, dict):
+            kv = dict(zip(key_names, kv if isinstance(kv, tuple) else (kv,)))
+        elif not isinstance(kv, dict):
+            kv = None
+        lab = read_l(r)
+        if isinstance(lab, tuple):
+            lab = " · ".join(str(x) for x in lab if x not in (None, ""))
+        fl = read_f(r)
+        if isinstance(fl, tuple) and fields is not None and not callable(fields):
+            fl = dict(zip(tuple(fields), fl))
+        out.append(drill_row(
+            lab, origins_of([(t, kv) for t in (read_t(r) or ())], schema=schema, column=column),
+            amount=v,
+            in_figure=(read_in(r) if read_in else v is not None),
+            measured=read_m(r), reason=read_rs(r),
+            fields=(fl if isinstance(fl, dict) else None),
+        ))
+    return panel(figure_label, amount, out, subject=subject, subject_kind=subject_kind,
+                 unit=unit, note=note, cap=cap)
+
+
+def tiles(catalogue, rows, totals, *, schema=None, cap=ROW_CAP):
+    """PURE: every tile on a report, from ONE declaration table.
+
+    `catalogue` is a tuple of dicts — one per tile — each naming the tile's `key` (what the screen
+    asks for), its `label` (what the reader sees), the `total` key its figure lives under, and
+    whatever else `tile_panel` takes — including `row_label`, which names the ROWS, not the tile.
+    A report therefore adds a tile by adding a ROW, not by writing another fold, and the harness can
+    read the catalogue to check every tile on the screen has one.
+
+    A tile whose total key is absent from `totals` is SKIPPED rather than served with a zero: a
+    figure the report did not produce has no rows behind it, and inventing $0.00 would assert one.
+    """
+    out = {}
+    for t in (catalogue or ()):
+        spec = dict(t)
+        key = _s(spec.pop("key", None))
+        total_key = spec.pop("total", None)
+        if not key or total_key not in (totals or {}):
+            continue
+        amount = (totals or {}).get(total_key)
+        if amount is None:
+            continue
+        spec.setdefault("schema", schema)
+        spec.setdefault("cap", cap)
+        label = spec.pop("label", None)
+        out[key] = tile_panel(label if label is not None else key, amount, rows, **spec)
+    return out

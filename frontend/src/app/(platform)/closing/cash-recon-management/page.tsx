@@ -16,6 +16,24 @@ const reconCell = (r: any, f: string) => (f === 'store' ? (r?.store_name || r?.s
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import ScreenLink from '@/components/ScreenLink'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
+
+// EVERY TILE NAMES THE STORE-DAYS BEHIND IT (§CORE-17, owner ask 2026-10-24: "drilldown is needed
+// for every report geenerated from any data which comming from within the platforma as a defalut").
+// The §CORE-17 audit named this screen FIRST of the 93 that owed one — eleven cash tiles, the most
+// disputable money on the platform, and no way from any of them to the store-day that produced it.
+//
+// The panels are SERVED, not assembled here: the endpoint folds them from the same `rows` and
+// `totals` this page renders, so a tile and its drill-down cannot disagree. This page only chooses
+// which figures each tile offers, and renders one panel at a time below the strip.
+const TILE_COLUMNS = [
+  { header: 'Store', get: (r: DrillRow) => String(r.fields?.store_name || ''),
+    sortValue: (r: DrillRow) => String(r.fields?.store_name || '') },
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.market || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.market || '') },
+  { header: 'People', get: (r: DrillRow) => ((r.fields?.reps as string[]) || []).join(', ') || '—',
+    sortValue: (r: DrillRow) => ((r.fields?.reps as string[]) || []).join(', ') },
+]
 
 // Management one-screen cash reconciliation (owner directive 2026-09-02, verbatim): "for the
 // management it should show what has been received as per the system in both cash pick up, epay
@@ -98,6 +116,19 @@ export default function CashReconManagementPage() {
   const t = data?.totals || {}
   // Day ascending to start — a recon is read chronologically until you ask otherwise.
   const sortState = useTableSort(rows, reconCell, { field: 'day', dir: 'asc' })
+
+  // THE SERVED PANELS (§CORE-17). `dl` keeps a tile's links honest: it offers a figure only when the
+  // server actually sent rows for it, so a feed that never resolved for this range shows no link
+  // rather than a link that opens an empty panel and reads like a bug.
+  const drills: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile()
+  const dl = (...pairs: string[]) => {
+    const out: { key: string; label: string }[] = []
+    for (let i = 0; i < pairs.length; i += 2) {
+      if (drills[pairs[i]]) out.push({ key: pairs[i], label: pairs[i + 1] })
+    }
+    return out
+  }
 
   function exportPayload(): ExportPayload {
     return {
@@ -207,31 +238,51 @@ export default function CashReconManagementPage() {
 
           {data && (
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-              <Stat label="Cash declared" value={fmt(t.cash_declared || 0)} accent />
-              <Stat label="Credit declared" value={fmt(t.credit_declared || 0)} />
-              <Stat label="Bill-pay declared" value={fmt(t.epay_declared || 0)} />
+              <Stat label="Cash declared" value={fmt(t.cash_declared || 0)} accent
+                drill={drill} drills={dl('cash_declared', 'these rows')} />
+              <Stat label="Credit declared" value={fmt(t.credit_declared || 0)}
+                drill={drill} drills={dl('credit_declared', 'these rows')} />
+              <Stat label="Bill-pay declared" value={fmt(t.epay_declared || 0)}
+                drill={drill} drills={dl('epay_declared', 'these rows')} />
               <Stat label="Expected in envelopes" value={fmt(t.cash_pickup || 0)}
                 sub={t.cash_picked_actual
                   ? `${fmt(t.cash_picked_actual)} actually taken${t.dm_not_comparable_days ? ` · ${t.dm_not_comparable_days} not comparable` : ''}`
-                  : 'snapshotted at pickup'} />
-              <Stat label={`DM verified ${procName}`} value={fmt(t.billpay_pickup || 0)} />
+                  : 'snapshotted at pickup'}
+                drill={drill} drills={dl('cash_pickup', 'expected', 'cash_picked_actual', 'counted at pickup',
+                                         'dm_short_amount', 'short', 'dm_over_amount', 'over')} />
+              <Stat label={`DM verified ${procName}`} value={fmt(t.billpay_pickup || 0)}
+                drill={drill} drills={dl('billpay_pickup', 'these rows')} />
               {/* MANAGEMENT'S OWN COUNT — fed from commcalc.envelope_count (mig 936), the count the
                   envelope report already captures with counted_by/counted_at. No second entry box:
                   one number, one place it is entered. */}
               <Stat label="Management counted" value={t.mgmt_counted_days ? fmt(t.mgmt_counted || 0) : '—'}
                 sub={t.mgmt_uncounted_days
                   ? `${t.mgmt_counted_days || 0} counted · ${t.mgmt_uncounted_days} not counted yet`
-                  : 'every store-day counted'} />
+                  : 'every store-day counted'}
+                drill={drill} drills={dl('mgmt_counted', 'these rows')} />
               <Stat label="Management short / over"
                 value={(t.mgmt_short_days || t.mgmt_over_days)
                   ? `${fmt(t.mgmt_short_amount || 0)} / +${fmt(t.mgmt_over_amount || 0)}`
                   : '✓'}
                 sub={(t.mgmt_short_days || t.mgmt_over_days)
                   ? `${t.mgmt_short_days || 0} short · ${t.mgmt_over_days || 0} over`
-                  : 'counted store-days all tie'} />
-              <Stat label="Sales-tx bill pay" value={t.sales_billpay == null ? '—' : fmt(t.sales_billpay)} sub={t.sales_billpay_card == null ? 'no sales-tx data' : `${fmt(t.sales_billpay_card)} on card`} />
-              <Stat label="Processor bill pay" value={fmt(t.pos_billpay || 0)} sub={t.mismatched_store_days ? `⚠ ${t.mismatched_store_days} mismatched store-day${t.mismatched_store_days === 1 ? '' : 's'}` : 'no mismatches'} />
-              <Stat label="3-way recon" value={t.three_way_mismatched ? `⚠ ${t.three_way_mismatched}` : '✓'} sub={t.three_way_mismatched ? `store-day${t.three_way_mismatched === 1 ? '' : 's'} out of tolerance` : 'declared vs sales-tx vs processor agree'} />
+                  : 'counted store-days all tie'}
+                drill={drill} drills={dl('mgmt_short_amount', 'short', 'mgmt_over_amount', 'over')} />
+              <Stat label="Sales-tx bill pay" value={t.sales_billpay == null ? '—' : fmt(t.sales_billpay)} sub={t.sales_billpay_card == null ? 'no sales-tx data' : `${fmt(t.sales_billpay_card)} on card`}
+                drill={drill} drills={dl('sales_billpay', 'these rows')} />
+              <Stat label="Processor bill pay" value={fmt(t.pos_billpay || 0)} sub={t.mismatched_store_days ? `⚠ ${t.mismatched_store_days} mismatched store-day${t.mismatched_store_days === 1 ? '' : 's'}` : 'no mismatches'}
+                drill={drill} drills={dl('pos_billpay', 'these rows', 'mismatched_store_days', 'the mismatched days')} />
+              <Stat label="3-way recon" value={t.three_way_mismatched ? `⚠ ${t.three_way_mismatched}` : '✓'} sub={t.three_way_mismatched ? `store-day${t.three_way_mismatched === 1 ? '' : 's'} out of tolerance` : 'declared vs sales-tx vs processor agree'}
+                drill={drill} drills={dl('three_way_mismatched', 'the disagreeing days')} />
+            </div>
+          )}
+
+          {/* ONE panel at a time, below the strip (§CORE-17). It carries the store-days behind the
+              figure, which feeds they were read out of, and whether they add up to the tile. */}
+          {drill.open && (
+            <div style={{ marginBottom: 14 }}>
+              <DrillDownPanel panel={drills[drill.open]} extraColumns={TILE_COLUMNS}
+                emptyNote="No store-day in this range contributed to this figure." />
             </div>
           )}
 
@@ -324,10 +375,17 @@ export default function CashReconManagementPage() {
   )
 }
 
-const Stat = ({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) => (
+const Stat = ({ label, value, sub, accent, drills, drill }: {
+  label: string; value: string; sub?: string; accent?: boolean
+  /** The figures on this tile that have rows behind them, in the order they are shown. */
+  drills?: { key: string; label: string }[]
+  drill?: { open: string | null; toggle: (k: string) => void }
+}) => (
   <div className="card" style={{ padding: '12px 16px', minWidth: 140, flex: '0 1 auto', borderTop: accent ? '3px solid var(--accent)' : undefined }}>
     <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
     <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>{value}</div>
     {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+    {/* A tile the server served no panel for offers no link, rather than a link that opens nothing. */}
+    {drill && drills ? <DrillTileLinks drills={drills} open={drill.open} onToggle={drill.toggle} /> : null}
   </div>
 )
