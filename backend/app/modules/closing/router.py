@@ -33,6 +33,8 @@ from . import count_revision as _count_revision
 from . import cash_variance as _cash_variance
 from . import cash_recon_drilldown as _cash_recon_drilldown
 from . import day_recon_drilldown as _day_recon_drilldown
+from . import pickup_drilldown as _pickup_drilldown
+from . import three_way_drilldown as _three_way_drilldown
 from . import external_credit_drilldown as _external_credit_drilldown
 from app.modules.commcalc import data_lineage_registry as _lineage
 from . import closer_resolution
@@ -3087,8 +3089,17 @@ def tender_recon_3way(date: str = "", date_from: str = "", date_to: str = "", st
         days_out = [_tender_recon_3way_day(client, org_id, dd, store, keys, tlabel, resolve_x, resolve_s,
                                             resolve_addr, name_by_code, resolved_codes, dep_cfg, ks=ks)
                     for dd in dates]
+        # §CORE-17.3d. The screen's "Selection totals" strip was eleven figures folded in TypeScript
+        # over client-filtered rows with no way to the store-days behind them — the third instance of
+        # that class. The fold is HERE now, once, over the flattened store-days; the screen narrows
+        # these panels to its own selection and reads each tile off its narrowed panel.
+        _flat = _three_way_drilldown.flat_rows(days_out)
+        _totals = _three_way_drilldown.totals(_flat)
         return {"date_from": d_from, "date_to": d_to, "tenders": tenders_axis, "days": days_out,
-                "dates_total": len(all_dates), "range_capped": range_capped}
+                "dates_total": len(all_dates), "range_capped": range_capped,
+                "store_days": _flat, "totals": _totals,
+                "drilldown": _three_way_drilldown.drilldowns(
+                    _flat, _totals, sales_tables=_lineage.SALES_DISPLAY_SOURCES)}
 
     raise HTTPException(400, "date or date_from/date_to required (YYYY-MM-DD)")
 
@@ -6940,36 +6951,49 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
         })
     by_store.sort(key=lambda r: -r["cash_on_hand"])
 
-    return {"date": date, "start": start, "end": end, "envelopes": out,
-            "ready": sum(1 for e in out if not e["picked_up"]),
-            "collected": sum(1 for e in out if e["picked_up"]),
-            "flagged": sum(1 for e in out if e["deposit_flagged"]),
-            # Cash-dollar totals (the count fields above are envelope counts).
-            "total_cash": round(sum(e["cash"] for e in out), 2),
-            "collected_cash": round(sum(e["cash"] for e in out if e["picked_up"]), 2),
-            "ready_cash": round(sum(e["cash"] for e in out if not e["picked_up"]), 2),
-            # WHAT WAS ACTUALLY TAKEN, totalled (owner 2026-09-08: "does the cash pick up show the
-            # actual pick up and total that at the bottom"). `collected_cash` above is the DECLARED
-            # envelope amount — the figure a short pickup does NOT change — so on its own it can
-            # never show a shortfall. These three are the counted side.
-            #
-            # ONLY the collected envelopes that actually CARRY a count are summed, and the ones that
-            # do not are counted separately rather than folded in at their declared value: adding a
-            # declared amount into an "actual" total would quietly manufacture agreement, and
-            # treating an unrecorded envelope as 0.00 would manufacture a 100% shortfall. Both are
-            # the silent-zero defect this page keeps paying for. `collected_actual_variance` is only
-            # meaningful over the envelopes it covers, which is why the count travels with it.
-            "collected_actual": round(sum(_f(e["actual_picked_amount"]) for e in out
-                                          if e["picked_up"] and e.get("actual_picked_amount") is not None), 2),
-            "collected_actual_envelopes": sum(1 for e in out
-                                              if e["picked_up"] and e.get("actual_picked_amount") is not None),
-            "collected_actual_missing": sum(1 for e in out
-                                            if e["picked_up"] and e.get("actual_picked_amount") is None),
-            "collected_actual_variance": round(sum(_f(e["actual_picked_amount"]) - _f(e["cash"])
-                                                   for e in out
-                                                   if e["picked_up"] and e.get("actual_picked_amount") is not None), 2),
-            # The equipment/accessory split (§23m), totalled the same way the column shows it.
-            "total_cash_sales": round(sum(_f(e.get("cash_sales")) for e in out), 2),
+    _totals = {
+        "ready": sum(1 for e in out if not e["picked_up"]),
+        "collected": sum(1 for e in out if e["picked_up"]),
+        "flagged": sum(1 for e in out if e["deposit_flagged"]),
+        # Cash-dollar totals (the count fields above are envelope counts).
+        "total_cash": round(sum(e["cash"] for e in out), 2),
+        "collected_cash": round(sum(e["cash"] for e in out if e["picked_up"]), 2),
+        "ready_cash": round(sum(e["cash"] for e in out if not e["picked_up"]), 2),
+        # WHAT WAS ACTUALLY TAKEN, totalled (owner 2026-09-08: "does the cash pick up show the
+        # actual pick up and total that at the bottom"). `collected_cash` above is the DECLARED
+        # envelope amount — the figure a short pickup does NOT change — so on its own it can
+        # never show a shortfall. These three are the counted side.
+        #
+        # ONLY the collected envelopes that actually CARRY a count are summed, and the ones that
+        # do not are counted separately rather than folded in at their declared value: adding a
+        # declared amount into an "actual" total would quietly manufacture agreement, and
+        # treating an unrecorded envelope as 0.00 would manufacture a 100% shortfall. Both are
+        # the silent-zero defect this page keeps paying for. `collected_actual_variance` is only
+        # meaningful over the envelopes it covers, which is why the count travels with it.
+        "collected_actual": round(sum(_f(e["actual_picked_amount"]) for e in out
+                                      if e["picked_up"] and e.get("actual_picked_amount") is not None), 2),
+        "collected_actual_envelopes": sum(1 for e in out
+                                          if e["picked_up"] and e.get("actual_picked_amount") is not None),
+        "collected_actual_missing": sum(1 for e in out
+                                        if e["picked_up"] and e.get("actual_picked_amount") is None),
+        "collected_actual_variance": round(sum(_f(e["actual_picked_amount"]) - _f(e["cash"])
+                                               for e in out
+                                               if e["picked_up"] and e.get("actual_picked_amount") is not None), 2),
+        # The equipment/accessory split (§23m), totalled the same way the column shows it.
+        "total_cash_sales": round(sum(_f(e.get("cash_sales")) for e in out), 2),
+        # The GROSS column's own total. It was the one footer figure the screen folded itself, which
+        # made it the only one with no rows behind it (§CORE-17) — folded here with the rest, reading
+        # the same "gross, or the collected figure when there is no separate gross" rule the column does.
+        "total_cash_gross": round(sum(_f(e["cash_gross"] if e.get("cash_gross") is not None
+                                         else e.get("cash")) for e in out), 2),
+    }
+    return {"date": date, "start": start, "end": end, "envelopes": out, **_totals,
+            # §CORE-17. Every footer figure opens to the envelopes behind it. No narrowing is applied
+            # or needed: every filter on this screen is a query parameter, so the footers already fold
+            # over the same server-filtered list these panels do (§CORE-17.3d names why this screen is
+            # NOT the client-folded class it was listed as).
+            "drilldown": _pickup_drilldown.drilldowns(out, _totals),
+            "totals": _totals,
             "not_closed": not_closed,
             # Per-store cash-on-hand, AS OF `_as_of` (the Day-mode date, or Range-mode's end date) --
             # closes the loop between the Store Cash on Hand report and the actual pickup action.

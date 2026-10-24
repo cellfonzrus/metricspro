@@ -91,10 +91,10 @@
 /closing/epay-recon	shared	all four tiles drill to their stores through core/report_drilldown.tiles; declaration in closing/day_recon_drilldown.py
 /closing/external-credit-recon	shared	all eight tiles drill to their store-days per processor role; declaration in closing/external_credit_drilldown.py
 /closing/management	owes	
-/closing/pickup	owes	
+/closing/pickup	shared	all twelve footer/strip figures drill to their envelopes, store-day per person; NO narrowing — every filter here is a query parameter, so the server's fold already covers the envelopes on screen; declaration in closing/pickup_drilldown.py
 /closing/recon	owes	
 /closing/tender-recon	shared	all seven figures drill, and each tile is READ OFF its narrowed panel so the two are one fold under any filter (lib/drill-narrow, index §CORE-17.3d); declaration in commcalc/tender_recon_drilldown.py
-/closing/tender-recon-3way	owes	
+/closing/tender-recon-3way	shared	all ten selection-total figures drill to their store-days, each tile READ OFF its narrowed panel (lib/drill-narrow, index §CORE-17.3d); declaration in closing/three_way_drilldown.py
 /closing/verify	owes	
 /commcalc	owes	
 /commcalc/accessory-cost-audit	owes	

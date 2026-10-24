@@ -33560,9 +33560,55 @@ no `row_key` is KEPT, never dropped — dropping it would silently shrink the fi
 failure this mechanism exists to prevent.
 
 **Shipped on `/closing/tender-recon`** (owed count 89 → 88), which is where the excuse was written, so
-the mechanism and the first conversion are proved together. `/closing/tender-recon-3way` and
-`/closing/pickup` are the next two conversions and need a server declaration each; the narrowing side
-is already built.
+the mechanism and the first conversion are proved together. The other two conversions landed as batch
+5 — see §CORE-17.3e.
+
+### §CORE-17.3e THE TWO REPORTS THAT GAP WAS BLOCKING, and one claim that turned out false (2026-10-24, batch 5)
+
+Both conversions §CORE-17.3d left open, with one correction worth more than either of them.
+
+**`/closing/tender-recon-3way` — `backend/app/modules/closing/three_way_drilldown.py`.** Ten figures.
+The same tenders captured three independent ways per store-day (the rep's closing sheet, the POS
+X-report, the sales transactions), and a "Selection totals" strip over whatever the reader filtered down
+to. It is the §CORE-17.3d shape exactly: the server folds once, the screen narrows the served panels to
+its own selection with `lib/drill-narrow`, each tile is READ OFF its narrowed panel, and the page's own
+reduce survives only as the fallback for a figure no panel was served for (which says so on screen).
+
+- **`flat_rows(days)` and `totals(rows)` are the ONE home for the flattening and the strip.** The
+  endpoint returns one block per calendar date; the screen flattens the same payload for its cards, so
+  two flattenings would be two populations. One home, dereferenced by both.
+- **Net and gross are both drillable, in their own right.** `gross_cx`/`gross_xs` sum |difference| per
+  store-day so offsetting errors cannot hide in them (the owner's explicit caution, 2026-08-03); the net
+  figures are folded PER ROW rather than subtracted from two other tiles, which is what makes them
+  openable at all. A figure composed from two other tiles has no rows of its own by construction.
+- Its selection key is the store-DAY (`ROW_KEYS = ("store_code", "close_date")`); the page's flat rows
+  carry `date`, so `screenKey` maps it — locked by §F3 of the harness.
+
+**`/closing/pickup` — `backend/app/modules/closing/pickup_drilldown.py`. IT WAS NOT IN THE CLASS.**
+§CORE-17.3b listed this screen as the sibling instance, on the strength of its own comment ("footer
+totals over the envelopes CURRENTLY ON SCREEN"). That reading was half wrong, and checking it rather
+than inheriting it is why this is the short half of the batch: **every filter on that page — date or
+range, store, market, employee, DM — is a QUERY PARAMETER**, so the server already returns exactly the
+envelopes on screen and its fold covers exactly them. The screen needs the plain tile shape; no
+narrowing is applied, and `harness_batch5_drilldown.py` §F5 FAILS THE BUILD if `drill-narrow` is wired
+into it, so a later reader cannot "fix" it back into the class it was never in.
+
+- Twelve figures, keyed per envelope: the store-day AND the person who filed it, because two envelopes
+  for one store-day are two people's declarations.
+- **The counted figures still refuse to cover an envelope nobody counted.** Folding a declared amount
+  into an "actual" total would manufacture agreement; reading an uncounted envelope as $0.00 would
+  manufacture a 100% shortfall. The declaration reads that refusal off the same fields the endpoint
+  does, and each excluded envelope appears in the panel with its reason (`not_collected` /
+  `not_recorded`) rather than vanishing from it.
+- **One figure the screen WAS folding itself is now served**: the gross cash column's footer total
+  (`total_cash_gross`), which was the only footer with no rows behind it by construction.
+
+**Four reasons added to `report_drilldown.UNMEASURED_REASONS`** — `no_processor_data`,
+`no_declared_data`, `dm_merged`, `not_collected` — so an un-numbered row says in words why, in the one
+place those words live. Changing that tuple deliberately fails `harness_drill_narrow_fixtures.py`; the
+fixtures are regenerated with `--write`, never the check relaxed.
+
+Proof: `backend/harness_batch5_drilldown.py` (61 checks, §Z1–Z7 negative controls). Owed count 88 → 86.
 
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 

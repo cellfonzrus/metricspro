@@ -7,6 +7,8 @@ import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
+import { narrowPanels, screenKey } from '@/lib/drill-narrow'
 
 // 3-Way Tender Recon — the SAME tenders captured three independent ways, per store, per day, per tender:
 //  (1) Daily Closing (what the rep entered), (2) POS X-report, (3) Sales Transactions (raw_sales/feed).
@@ -138,6 +140,19 @@ export default function TenderRecon3WayPage() {
   //    `filtered`. Net variance ALONE can hide offsetting errors across stores/days (a +$50 day netting
   //    against a -$50 day reads as a clean $0), so a GROSS (absolute, never netted) figure and a
   //    mismatched-store-day COUNT are shown alongside the net — per the owner's explicit caution. ──
+  //
+  // §CORE-17.3d — THE STRIP AND ITS EVIDENCE ARE ONE FOLD. This was the third instance of the class:
+  // eleven figures reduced in TypeScript here, with no way to the store-days behind any of them. The
+  // server now folds them once (`closing/three_way_drilldown.totals`) and serves a panel per figure
+  // with each drill row carrying the store-day it explains; `narrowPanels` restricts every panel to
+  // THIS selection using the same key the cards below are grouped by, and each figure is read OFF its
+  // narrowed panel. The reduce below survives only as the fallback for a figure no panel was served
+  // for (an older payload, or a panel the server capped) — and such a tile offers no drill and the
+  // strip says so underneath.
+  const drills = useMemo<Record<string, DrillPanel>>(() => data?.drilldown || {}, [data])
+  const selected = useMemo(() => new Set(
+    filtered.map(r => screenKey({ store_code: r.store_code, close_date: r.date }))), [filtered])
+  const panels = useMemo(() => narrowPanels(drills, (_r, k) => selected.has(k)), [drills, selected])
   const summary = useMemo(() => {
     let closing = 0, xrep = 0, sales = 0, grossCX = 0, grossXS = 0, mismatchDays = 0
     for (const r of filtered) {
@@ -146,13 +161,25 @@ export default function TenderRecon3WayPage() {
       grossXS += Math.abs(r.totals.sales - r.totals.x_report)
       if (r.tenders.some(t => !t.match)) mismatchDays++
     }
+    const of = (k: string, fallback: number) => (panels[k] ? (panels[k].figure?.amount ?? 0) : fallback)
     return {
-      closing, xrep, sales, netCX: xrep - closing, netXS: sales - xrep, grossCX, grossXS,
-      mismatchDays, total: filtered.length,
-      unmappedX: filtered.reduce((a, r) => a + (r.x_report_unmapped?.amount || 0), 0),
-      unmappedS: filtered.reduce((a, r) => a + (r.sales_unmapped?.amount || 0), 0),
+      closing: of('closing', closing), xrep: of('x_report', xrep), sales: of('sales', sales),
+      netCX: of('net_cx', xrep - closing), netXS: of('net_xs', sales - xrep),
+      grossCX: of('gross_cx', grossCX), grossXS: of('gross_xs', grossXS),
+      mismatchDays: of('mismatch_store_days', mismatchDays), total: filtered.length,
+      unmappedX: of('x_report_unmapped',
+        filtered.reduce((a, r) => a + (r.x_report_unmapped?.amount || 0), 0)),
+      unmappedS: of('sales_unmapped',
+        filtered.reduce((a, r) => a + (r.sales_unmapped?.amount || 0), 0)),
     }
-  }, [filtered])
+  }, [filtered, panels])
+  // `tileDrill`, not `drill`: this page already has a `drill` — the per-tender transaction drill that
+  // predates the strip — and one name for two things is how a screen starts lying about which figure
+  // a panel explains.
+  const tileDrill = useDrillTile(panels)
+  const dl = tileDrill.dl
+  // A figure the fallback computed: the reader is told why it has no rows rather than left to wonder.
+  const unpanelled = useMemo(() => Object.keys(drills).filter(k => !panels[k]), [drills, panels])
 
   // sources_present / x_report_ever are tenant/day-level honesty signals, independent of the store/
   // market filter — OR'd across every day actually FETCHED (the selected date range), not narrowed by
@@ -320,15 +347,38 @@ export default function TenderRecon3WayPage() {
               Selection totals — {opts.stores.length && filt.stores.length ? `${filt.stores.length} of ${opts.stores.length} store(s)` : `all ${opts.stores.length || summary.total} store(s)`}, {from === to ? from : `${from} → ${to}`} ({summary.total} store-day{summary.total === 1 ? '' : 's'})
             </div>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              <Tile label="Daily Closing" value={fmt(summary.closing)} />
+              <Tile label="Daily Closing" value={fmt(summary.closing)}
+                drill={tileDrill} drills={dl('closing', 'these store-days')} />
               <Tile label="POS X-report" value={fmt(summary.xrep)} sub={`net Δ vs closing ${summary.netCX >= 0 ? '+' : ''}${fmt(summary.netCX)}`}
-                accent={Math.abs(summary.netCX) > 1 ? '#b91c1c' : '#15803d'} />
+                accent={Math.abs(summary.netCX) > 1 ? '#b91c1c' : '#15803d'}
+                drill={tileDrill} drills={dl('x_report', 'these store-days', 'net_cx', 'the net Δ')} />
               <Tile label="Sales Transactions" value={fmt(summary.sales)} sub={`net Δ vs X-report ${summary.netXS >= 0 ? '+' : ''}${fmt(summary.netXS)}`}
-                accent={Math.abs(summary.netXS) > 1 ? '#b91c1c' : '#15803d'} />
-              <Tile label="Gross |Δ| closing↔X-report" value={fmt(summary.grossCX)} sub="NOT netted — offsetting errors don't hide here" accent={summary.grossCX > 1 ? '#b91c1c' : '#15803d'} />
-              <Tile label="Gross |Δ| X-report↔sales" value={fmt(summary.grossXS)} sub="NOT netted" accent={summary.grossXS > 1 ? '#b91c1c' : '#15803d'} />
-              <Tile label="Store-days w/ a mismatch" value={`${summary.mismatchDays} / ${summary.total}`} accent={summary.mismatchDays > 0 ? '#b91c1c' : '#15803d'} />
+                accent={Math.abs(summary.netXS) > 1 ? '#b91c1c' : '#15803d'}
+                drill={tileDrill} drills={dl('sales', 'these store-days', 'net_xs', 'the net Δ')} />
+              <Tile label="Gross |Δ| closing↔X-report" value={fmt(summary.grossCX)} sub="NOT netted — offsetting errors don't hide here" accent={summary.grossCX > 1 ? '#b91c1c' : '#15803d'}
+                drill={tileDrill} drills={dl('gross_cx', 'each store-day’s |Δ|')} />
+              <Tile label="Gross |Δ| X-report↔sales" value={fmt(summary.grossXS)} sub="NOT netted" accent={summary.grossXS > 1 ? '#b91c1c' : '#15803d'}
+                drill={tileDrill} drills={dl('gross_xs', 'each store-day’s |Δ|')} />
+              <Tile label="Store-days w/ a mismatch" value={`${summary.mismatchDays} / ${summary.total}`} accent={summary.mismatchDays > 0 ? '#b91c1c' : '#15803d'}
+                drill={tileDrill} drills={dl('mismatch_store_days', 'the mismatched store-days')} />
             </div>
+            {/* ONE panel at a time, below the strip. */}
+            {tileDrill.open && (
+              <div style={{ marginTop: 12 }}>
+                <DrillDownPanel panel={tileDrill.panel} extraColumns={DRILL_COLUMNS}
+                  emptyNote="No store-day in this selection contributed to this figure." />
+              </div>
+            )}
+            {/* A FIGURE WITHOUT EVIDENCE SAYS SO — a missing panel means the server capped its rows
+                (too many to narrow honestly) or did not serve that figure, and the tile fell back to
+                a reduce with nothing behind it. */}
+            {unpanelled.length > 0 && (
+              <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 10 }}>
+                {unpanelled.length} figure(s) above could not be opened for this selection — there are
+                more store-days behind them than the report serves at once, so narrowing them to your
+                filter would leave rows out. Pick a shorter range or fewer stores to open them.
+              </div>
+            )}
             {(summary.netCX === 0 || Math.abs(summary.netCX) <= 1) && summary.grossCX > 1 && (
               <div style={{ fontSize: 12, color: 'var(--c-fg-b91c1c)', marginTop: 8, fontWeight: 600 }}>
                 ⚠ The net closing↔X-report variance looks clean, but the gross (absolute) figure above is {fmt(summary.grossCX)} —
@@ -415,12 +465,29 @@ export default function TenderRecon3WayPage() {
   )
 }
 
-function Tile({ label, value, sub, accent }: { label: string; value: any; sub?: string; accent?: string }) {
+// THE COLUMNS FOR THIS REPORT'S DRILL ROW — the client side of `closing/three_way_drilldown._row_fields`.
+// Its fields are the store-day and the verdict, which is not the `_lib/DrillStat` day-recon shape (that
+// one names the reps who filed the day), so the columns are declared where the fields are declared.
+const DRILL_COLUMNS = [
+  { header: 'Store code', get: (r: DrillRow) => String(r.fields?.store_code || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.store_code || '') },
+  { header: 'Three legs', get: (r: DrillRow) => String(r.fields?.verdict || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.verdict || '') },
+]
+
+function Tile({ label, value, sub, accent, drills, drill }: {
+  label: string; value: any; sub?: string; accent?: string
+  drills?: { key: string; label: string }[]
+  drill?: { open: string | null; toggle: (k: string) => void }
+}) {
   return (
     <div className="card" style={{ padding: '10px 14px', minWidth: 150 }}>
       <div style={{ fontSize: 10, color: 'var(--text2)', textTransform: 'uppercase' }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2, color: accent || 'var(--text)' }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+      {/* A tile the server served no narrowed panel for offers no link, rather than one that opens
+          nothing — the shared rule in `useDrillTile().dl`. */}
+      {drill && drills && drills.length ? <DrillTileLinks drills={drills} open={drill.open} onToggle={drill.toggle} /> : null}
     </div>
   )
 }

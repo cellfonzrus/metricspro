@@ -72,7 +72,8 @@ FACTS: dict[str, dict] = {
         "index": ('CORE-17',),
         "locks": ('harness_report_drilldown.py', 'harness_drilldown_coverage.py',
                   'harness_cash_recon_drilldown.py', 'harness_tender_recon_drilldown.py',
-                  'harness_day_recon_drilldown.py', 'harness_drill_narrow_fixtures.py'),
+                  'harness_day_recon_drilldown.py', 'harness_drill_narrow_fixtures.py',
+                  'harness_batch5_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -93,6 +94,14 @@ FACTS: dict[str, dict] = {
             # The card-settlement tally (§CORE-17.3c). Its gap statuses are dereferenced from
             # `external_credit_recon.GAP_STATUSES`, so "we do not know" cannot become a measured $0.
             'app/modules/closing/external_credit_drilldown.py': ('report_drilldown',),
+            # The 3-way recon's selection strip (§CORE-17.3e). ALSO the one home for the flattening
+            # the strip is folded over (`flat_rows`) and the strip itself (`totals`), because the
+            # screen flattens the same payload for its cards and two flattenings are two populations.
+            'app/modules/closing/three_way_drilldown.py': ('report_drilldown',),
+            # The cash-pickup footers (§CORE-17.3e). The PLAIN tile shape deliberately: every filter
+            # on that screen is a query parameter, so the server's fold already covers the envelopes
+            # on screen and `drill-narrow` is NOT wired in (locked, harness §F5).
+            'app/modules/closing/pickup_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
