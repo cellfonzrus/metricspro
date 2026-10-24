@@ -162,25 +162,36 @@ check("E6 every table these drills can name reads as plain words, never as a tab
       all(("  %s:" % t) in _labels for t in _named),
       sorted(t for t in _named if ("  %s:" % t) not in _labels))
 
-print("\n== G. the partial is DECLARED a partial ==")
+print("\n== G. the partial is GONE — one fold now serves the tile and its evidence ==")
 _pg = open(os.path.join(ROOT, "frontend", "src", "app", "(platform)", "closing", "tender-recon",
                         "page.tsx"), encoding="utf-8").read()
-check("G1 the page offers a figure's drill ONLY while the tile and the panel agree to the cent — a "
-      "panel explaining a figure the screen is not showing would look like proof of the wrong number. "
-      "The check is this page's GATE on the shared offer rule (§CORE-17.3c), not a second copy of it",
-      "Math.round(" in _pg
-      and "useDrillTile(drills, (k, p) => cents(p.figure?.amount ?? NaN) === cents(" in _pg
-      and "const dl = drill.dl" in _pg
+check("G1 the page no longer folds its tiles a second time: each figure is READ OFF its narrowed "
+      "panel, so the tile and its rows are the same fold and cannot drift (§CORE-17.3d)",
+      "narrowPanels(drills" in _pg and "panels[k] ? (panels[k].figure?.amount ?? 0) : fallback()" in _pg)
+check("G2 it narrows with the SAME store key the table filters by, through the shared home — never "
+      "its own matcher",
+      "screenKey({ store: r.store })" in _pg and "from '@/lib/drill-narrow'" in _pg)
+check("G3 the client reduce survives ONLY as the fallback for a figure no panel was served for, and "
+      "such a tile offers no drill (the shared offer rule gates on the panel existing)",
+      "useDrillTile(panels)" in _pg and "const agrees = (k: string)" not in _pg
       and "const dl = (...pairs: string[]) => {" not in _pg)
-check("G2 and when a filter makes them disagree the REASON IS STATED on screen, not hidden",
-      "narrowed" in _pg and "would be about a different" in _pg)
+check("G4 and a figure that fell through to the fallback SAYS SO on screen, rather than its link "
+      "quietly vanishing",
+      "unpanelled" in _pg and "narrowing them to your filter would" in _pg)
 _ledger = open("harness_drilldown_pending.txt", encoding="utf-8").read()
-check("G3 so this route deliberately STILL READS `owes` in the coverage ledger — a partial drill is "
-      "not a drill, and the count does not move for it",
-      re.search(r"^/closing/tender-recon\towes", _ledger, re.M) is not None)
+check("G5 so this route no longer reads `owes` in the coverage ledger — the partial that kept it "
+      "there is fixed, not restated",
+      re.search(r"^/closing/tender-recon\tshared", _ledger, re.M) is not None)
 _idx = open(os.path.join(ROOT, "docs", "SYSTEM_DATA_FLOW_INDEX.md"), encoding="utf-8").read()
-check("G4 and the real remedy is WRITTEN DOWN rather than left to be re-derived (§CORE-17.3b)",
-      "CORE-17.3b" in _idx and "tender_recon_drilldown" in _idx)
+check("G6 the mechanism that closed it is registered, and the §CORE-17.3b note it supersedes says so",
+      "CORE-17.3d" in _idx and "drill-narrow" in _idx)
+_narrow = open(os.path.join(ROOT, "frontend", "src", "lib", "drill-narrow.ts"),
+               encoding="utf-8").read()
+check("G7 the narrowing lives in ONE home and REFUSES a capped panel rather than serve a figure "
+      "missing rows nobody can see",
+      "export function narrowPanel(" in _narrow and "if (panel.capped) return null" in _narrow)
+check("G8 and a narrowed verdict never claims a check it could not make",
+      "by_construction" in _narrow and "cannot disagree with them" in _narrow)
 
 print("\n== F. registration ==")
 check("F1 the declaration is registered in the index", "tender_recon_drilldown" in _idx)

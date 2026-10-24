@@ -33439,6 +33439,13 @@ agreement guard becomes dead code to delete. It is not done here because the sto
 is a matched address string and the market is joined from the roster on the client, so moving the
 filters is a change to the endpoint's identity handling rather than a line in a drill-down PR.
 
+> **SUPERSEDED 2026-10-24 by §CORE-17.3d.** The partial below was reported twice and then found a
+> third time, so the cause was fixed rather than restated: a tile now reads its number off its own
+> narrowed panel, and the remedy proposed here (moving this report's filters server-side) was NOT the
+> one taken — see §CORE-17.3d for why. `/closing/tender-recon` reads `shared` now. Kept because the
+> reasoning for refusing a dishonest drill still stands, and because it is the record of a gap being
+> reported rather than papered over.
+
 **THE SIBLING TO CHECK WHEN IT IS DONE:** `/closing/pickup` computes its four cash footers over "the
 envelopes CURRENTLY ON SCREEN" — the same class, and the same remedy. `/closing/tender-recon-3way`
 already drills the same question through `/closing/tender-drilldown`, which is why this report ranked
@@ -33501,6 +33508,61 @@ and §B4 fails the build if the client arithmetic returns.
 carrying it on their rows, so an origin keyed on `store_code` alone addressed every day there has ever
 been. Both endpoints now stamp `close_date` on each row (additive to the payload) and §A8 pins the key
 set.
+
+### §CORE-17.3d ONE FOLD FOR A FIGURE AND ITS EVIDENCE, even under a screen filter (2026-10-24, batch 4)
+
+**This SUPERSEDES the reported gap of §CORE-17.3b.** That section recorded a partial: a report whose
+tiles are folded in TypeScript over the rows the reader filtered down to, while its drill-down panels
+are folded server-side over the whole range. Under any filter the two describe different populations,
+so the drill was offered only where they happened to agree, and the route stayed `owes`. The remedy
+written down there was "move this report's standard filters server-side".
+
+**Three reports hit it, so the cause got fixed instead of a third excuse written.**
+`/closing/tender-recon` (§CORE-17.3b), `/closing/pickup` (named there as the sibling) and
+`/closing/tender-recon-3way` (its "Selection totals" strip, found while surveying batch 4). Three
+instances is the class, and the house rule is explicit: *name the class, not the instance.*
+
+**THE FIX IS ONE FOLD, NOT SERVER-SIDE FILTERS.** Moving the filters would change each endpoint's
+identity and keyset handling on money screens, lose the instant client-side filtering, and still leave
+two folds. Instead:
+
+1. `core/report_drilldown.drill_row` now carries `row_key` — the natural key of the REPORT ROW a drill
+   row explains, the same dict its origins are keyed by. `tile_panel` fills it from the catalogue's own
+   `keys`, so every report already on the tile shape gets it with no change.
+2. `frontend/src/lib/drill-narrow.ts` is the ONE home for restricting a panel to a screen's selection:
+   `narrowPanel(panel, keep, label?)`, `narrowPanels`, `rowKeyOf`, `screenKey`, `agreesToTheCent`.
+3. **The tile reads its number OFF the narrowed panel** (`panels[k].figure.amount`) rather than
+   reducing the rows again. That is what makes them one fold: there is no second arithmetic to drift.
+   A report's own client reduce survives only as the fallback for a figure no panel was served for,
+   and such a tile offers no drill.
+
+**WHY A CLIENT-SIDE FOLD IS ALLOWED TO BE AUTHORITATIVE HERE, given the server is the authority.**
+Because with nothing dropped it is not a fold at all: `narrowPanel` returns the server's own panel
+object untouched when the selection is the whole range. `frontend/prove_drill_narrow.mjs` §A8 pins that
+identity by object identity, and §A2–A7 keep it field-by-field as a regression guard, so a future change
+that starts recomputing the unfiltered case has to come back and agree rather than quietly ship a second
+arithmetic. The fixtures are real panels from the real server declarations, regenerated and checked by
+`backend/harness_drill_narrow_fixtures.py` (`--write` after a deliberate shape change).
+
+**A NARROWED VERDICT NEVER CLAIMS A CHECK IT COULD NOT MAKE.** The server's tie-out is a real
+comparison — the figure comes from the report, the rows from the evidence, and they can disagree. A
+narrowed figure is Σ(the selection's rows), so comparing it against those rows could only come back
+True: a check that cannot fail, printed as though it had passed. So a narrowed tie-out states what IS
+true (the figure is the selection's own total), carries `by_construction`, keeps the server's whole-range
+verdict beside it as `whole_range`, and the renderer marks it **∑** rather than ✅. `ties` is still
+**null**, never true, when a kept row has no number.
+
+**IT REFUSES RATHER THAN GUESS ON A CAPPED PANEL.** The server caps a panel at `ROW_CAP` rows and
+computes its tie-out over all of them before the cap. Narrowing a capped list would produce a figure
+missing rows nobody can see, so `narrowPanel` returns `null`, `narrowPanels` leaves it out, the screen
+offers no link, and the page says which figures could not be opened and why. A row the server sent with
+no `row_key` is KEPT, never dropped — dropping it would silently shrink the figure, which is the exact
+failure this mechanism exists to prevent.
+
+**Shipped on `/closing/tender-recon`** (owed count 89 → 88), which is where the excuse was written, so
+the mechanism and the first conversion are proved together. `/closing/tender-recon-3way` and
+`/closing/pickup` are the next two conversions and need a server declaration each; the narrowing side
+is already built.
 
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 

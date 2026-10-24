@@ -9,6 +9,7 @@ import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterVa
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 import { SetupNotice } from '@/lib/setupNotice'
 import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
+import { narrowPanels, screenKey } from '@/lib/drill-narrow'
 
 // X-Tender Recon — the POS "X report" tenders (commcalc.pos_tender_summary) vs the daily closing sheet
 // employees submit (commcalc.daily_closing), per store, cash vs card. Reads GET /commcalc/x-tender-recon.
@@ -79,37 +80,54 @@ export default function XTenderReconPage() {
   const filtered = useMemo(() => filterRows(joinedRows, filt, acc), [joinedRows, filt, acc])
   const rows = filtered.filter(r => !onlyMismatch || !r.match)
 
-  // RULE FIVE: tiles must follow the filter selection too — recompute totals client-side over the
-  // filtered rows (identical to the server totals when no filter is active; server `data.totals` is
-  // intentionally no longer read so tiles, table and exports can never disagree).
+  // THE TILES AND THEIR EVIDENCE ARE ONE FOLD (§CORE-17.3d) — this replaces the reported gap of
+  // §CORE-17.3b rather than restating it.
+  //
+  // RULE FIVE says the tiles follow the filter selection, and this page's filters are client-side, so
+  // the tiles used to be their own TypeScript reduce over `filtered` while the server folded the drill
+  // panels over the whole range. Under any filter those are different populations, and a panel
+  // explaining a figure the screen is not showing looks like proof of the wrong number — so the drill
+  // was offered only where the two happened to agree.
+  //
+  // Now the server serves each drill row with the `row_key` of the report row it explains, and
+  // `narrowPanels` restricts every panel to THIS SELECTION using the same store key the table filters
+  // by. The tile then reads its number off the narrowed panel instead of reducing the rows again, so
+  // there is one fold and the tile cannot drift from its evidence. The client reduce survives only as
+  // the fallback for a figure no panel was served for (an older payload, or a panel the server capped
+  // — see `narrowPanel`), and such a tile offers no drill.
+  // `drills` is memoised rather than written inline: a fresh `{}` on every render would re-narrow
+  // every panel on every render, and is the dependency eslint's exhaustive-deps rule objects to.
+  const drills = useMemo<Record<string, DrillPanel>>(() => data?.drilldown || {}, [data])
+  const selected = useMemo(
+    () => new Set(filtered.map((r: { store?: string }) => screenKey({ store: r.store }))), [filtered])
+  const panels = useMemo(
+    () => narrowPanels(drills, (_r, k) => selected.has(k)), [drills, selected])
   const t = useMemo(() => {
     const sum = (k: string) => filtered.reduce((a: number, r: any) => a + (Number(r[k]) || 0), 0)
+    const of = (k: string, fallback: () => number) =>
+      panels[k] ? (panels[k].figure?.amount ?? 0) : fallback()
     return {
-      pos_cash: sum('pos_cash'), closing_cash: sum('closing_cash'), cash_variance: sum('cash_variance'),
-      pos_card: sum('pos_card'), closing_card: sum('closing_card'), card_variance: sum('card_variance'),
-      stores: filtered.length, mismatches: filtered.filter((r: any) => !r.match).length,
+      pos_cash: of('pos_cash', () => sum('pos_cash')),
+      closing_cash: of('closing_cash', () => sum('closing_cash')),
+      cash_variance: of('cash_variance', () => sum('cash_variance')),
+      pos_card: of('pos_card', () => sum('pos_card')),
+      closing_card: of('closing_card', () => sum('closing_card')),
+      card_variance: of('card_variance', () => sum('card_variance')),
+      stores: filtered.length,
+      mismatches: of('mismatches', () => filtered.filter((r: any) => !r.match).length),
     }
-  }, [filtered])
+  }, [filtered, panels])
   const scope = mode === 'date' ? date : (period || 'period')
 
-  // THE TILES NAME THE STORES BEHIND THEM (§CORE-17.3a) — AND REFUSE TO WHEN THEY CANNOT.
-  //
-  // This page recomputes its tiles in TypeScript over the FILTERED rows (see the RULE FIVE note
-  // above), while the panels are folded server-side over the whole range. So under a store or market
-  // filter the tile and the panel are about different populations, and a panel explaining a figure
-  // the screen is not showing would look like proof of the wrong number — worse than no drill at all.
-  //
-  // So the drill is offered only while the two provably AGREE, to the cent, and otherwise the reason
-  // is stated. That is a REPORTED GAP, not a fix: the real remedy is for one fold to serve both
-  // sides, which means this report's standard filters moving server-side. Recorded in §CORE-17.3b,
-  // and this route deliberately still reads `owes` in the coverage ledger.
-  const drills: Record<string, DrillPanel> = data?.drilldown || {}
-  const cents = (n: number) => Math.round((Number(n) || 0) * 100)
-  // The cent-exact agreement check is this page's EXTRA condition, passed to the shared offer rule as
-  // its `gate` rather than written as a second copy of the loop (§CORE-17.3c).
-  const drill = useDrillTile(drills, (k, p) => cents(p.figure?.amount ?? NaN) === cents(t[k as keyof typeof t] as number))
-  const narrowed = useMemo(() => filtered.length !== joinedRows.length, [filtered, joinedRows])
+  // A figure with a narrowed panel agrees with it BY CONSTRUCTION — the tile is read off it. The
+  // shared offer rule still gates on the panel existing, which is what a capped or unserved figure
+  // falls through.
+  const drill = useDrillTile(panels)
   const dl = drill.dl
+  // A figure the fallback computed: the reader is told plainly why it has no rows, rather than left
+  // to wonder where the link went.
+  const unpanelled = useMemo(
+    () => Object.keys(drills).filter(k => !panels[k]), [drills, panels])
   const DRILL_COLUMNS = [
     { header: 'Status', get: (r: DrillRow) => (r.fields?.match ? 'OK' : !r.fields?.in_closing ? 'no closing' : !r.fields?.in_pos ? 'no X report' : 'MISMATCH'),
       sortValue: (r: DrillRow) => (r.fields?.match ? 'OK' : !r.fields?.in_closing ? 'no closing' : !r.fields?.in_pos ? 'no X report' : 'MISMATCH') },
@@ -212,14 +230,15 @@ export default function XTenderReconPage() {
                 emptyNote="No store in this range contributed to this figure." />
             </div>
           )}
-          {/* THE GAP IS STATED, NOT HIDDEN. A narrowed view has no drill because the tiles are
-              recomputed on screen while the evidence is folded over the whole range; saying so beats
-              a panel about a different set of stores. */}
-          {narrowed && Object.keys(drills).length > 0 && (
+          {/* A FIGURE WITHOUT EVIDENCE SAYS SO. Every tile here normally reads its number off its
+              own narrowed panel, so a missing panel means the server capped its rows (too many to
+              narrow honestly) or did not serve that figure at all — and the tile fell back to a
+              reduce with nothing behind it. Saying which figures those are beats a vanished link. */}
+          {unpanelled.length > 0 && (
             <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 12 }}>
-              The tiles above are recomputed over your current filter, so the rows behind them are not
-              offered here — the evidence is built over the whole range and would be about a different
-              set of stores. Clear the store and market filters to open any figure.
+              {unpanelled.length} figure(s) above could not be opened for this range — there are more
+              rows behind them than the report serves at once, so narrowing them to your filter would
+              leave rows out. Pick a shorter range or fewer stores to open them.
             </div>
           )}
 

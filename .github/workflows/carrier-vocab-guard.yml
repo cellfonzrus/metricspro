@@ -219,6 +219,12 @@ on:
       - "backend/app/modules/closing/day_recon_drilldown.py"
       - "backend/app/modules/closing/external_credit_drilldown.py"
       - "backend/app/modules/closing/external_credit_recon.py"
+      - "backend/harness_drill_narrow_fixtures.py"
+      - "frontend/prove_drill_narrow.mjs"
+      - "frontend/prove_drill_narrow_fixtures.json"
+      - "frontend/src/lib/drill-narrow.ts"
+      - "frontend/src/components/DrillDownPanel.tsx"
+      - "frontend/src/app/(platform)/closing/tender-recon/page.tsx"
       - "frontend/src/app/(platform)/closing/_lib/DrillStat.tsx"
       - "frontend/src/app/(platform)/closing/epay-recon/page.tsx"
       - "frontend/src/app/(platform)/closing/accessory-recon/page.tsx"
@@ -1345,6 +1351,9 @@ jobs:
       - name: Run the day-recon tile drill lock (the ePay, accessory and card-settlement tiles name their store-days; the SALES feed that actually answered is dereferenced from the read, never guessed; an unresolved feed reads as untraceable rather than as nothing; a gap status can never become a measured $0 — index §CORE-17.3c)
         working-directory: backend
         run: python3 harness_day_recon_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the one-fold lock (a figure and its evidence are the SAME fold even under a screen filter — the client narrowing is pinned to the server's panel by identity on the unfiltered case, its fixtures are regenerated from the real declarations, and it refuses a capped panel rather than serve a figure missing rows — index §CORE-17.3d)
+        working-directory: backend
+        run: python3 harness_drill_narrow_fixtures.py | tail -10 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1684,6 +1693,12 @@ jobs:
       - name: Run the Account-hub expenses-column proof (the display contract behind the Expenses column)
         working-directory: frontend
         run: node prove_accounts_expenses_column.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+      # ONE FOLD FOR A FIGURE AND ITS EVIDENCE (index §CORE-17.3d). Runs HERE because it transpiles
+      # the real src/lib/drill-narrow.ts with the repo's own tsc, so it needs the frontend's
+      # dependencies — the same reason the setup-gate proof below lives in this job.
+      - name: Prove the client fold IS the server fold (identity on the unfiltered case, over fixtures regenerated from the real server declarations; refuses a capped panel; a narrowed verdict never claims a check it could not make)
+        working-directory: frontend
+        run: node prove_drill_narrow.mjs | tee -a "$GITHUB_STEP_SUMMARY"
       # THE CONFINEMENT RULE (index §39, §14z). Runs HERE because it transpiles the real
       # src/lib/setup-gate.ts with the repo's own tsc, so it needs the frontend's dependencies —
       # and `harness_ci_pipefail_lock.py` fails the build when a proof is run where it cannot load.

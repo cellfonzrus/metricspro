@@ -40,6 +40,9 @@ export type DrillRow = {
   label?: string; subject?: string | null; amount?: number | null; present?: boolean
   in_figure?: boolean; measured?: boolean; reason?: string | null; reason_label?: string | null
   origins?: DrillOrigin[]; sources?: string[]; fields?: Record<string, unknown> | null
+  /** The natural key of the REPORT ROW this drill row explains (§CORE-17.3d) — what lets a screen
+   *  that filters its own rows narrow the panel to the same selection its tile is folded over. */
+  row_key?: Record<string, string | number | null> | null
 }
 export type DrillPanel = {
   schema?: number
@@ -49,6 +52,12 @@ export type DrillPanel = {
   tie_out?: {
     figure?: number; rows_total?: number; difference?: number; ties?: boolean | null
     counted_rows?: number; unmeasured_rows?: number; shown_not_counted?: number; words?: string
+    /** Set by `narrowPanel` when the figure is the SELECTION'S own total, so it cannot disagree with
+     *  the rows below it — a sum that was composed, not one that was checked (§CORE-17.3d). */
+    by_construction?: boolean
+    /** The server's verdict over the whole range it was asked for, kept beside a narrowed one
+     *  because that comparison WAS a check. */
+    whole_range?: DrillPanel['tie_out'] | null
   }
   sources?: { table: string; rows: number }[]
   untraceable_origins?: number
@@ -143,11 +152,14 @@ function OriginCell({ origins }: { origins?: DrillOrigin[] }) {
   )
 }
 
-/** The tie-out sentence. `ties === null` is "could not be checked", which is NOT a pass. */
+/** The tie-out sentence. `ties === null` is "could not be checked", which is NOT a pass — and a
+ *  `by_construction` pass is not a check either: it is a sum the screen composed for the selection
+ *  you are viewing, so it gets its own mark rather than the tick a real comparison earns
+ *  (§CORE-17.3d). Printing ✅ for both would be reassurance nobody tested. */
 export function DrillTieOut({ panel }: { panel: DrillPanel }) {
   const t = panel.tie_out
   if (!t?.words) return null
-  const icon = t.ties === true ? '✅' : t.ties === false ? '⚠️' : '—'
+  const icon = t.ties === false ? '⚠️' : t.by_construction ? '∑' : t.ties === true ? '✅' : '—'
   return (
     <div style={{ fontSize: 11, color: t.ties === false ? 'var(--danger, var(--c-fg-b91c1c))' : 'var(--text2)', marginTop: 6 }}>
       {icon} {t.words}
