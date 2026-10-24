@@ -33413,6 +33413,37 @@ store-day, a blanked row, a wrong bucket total and a flipped variance sign — *
 tie-out**. It also fails the build when a MONEY total the endpoint serves has no declaration, which
 is how the screen reached eleven undrillable tiles.
 
+### §CORE-17.3b A TILE RECOMPUTED ON SCREEN HAS NO SERVER-FOLDED EVIDENCE — reported, not papered over (2026-10-24, batch 2)
+
+**THE FINDING, from `/closing/tender-recon` (the audit's #2).** Some report pages recompute their own
+tiles in TypeScript over the rows left after the client-side standard filters, so that the tile, the
+table and the export can never disagree (RULE FIVE). The drill-down panels, though, are folded
+server-side over the whole range. Under a store or market filter the two therefore describe
+**different populations**, and a panel explaining a figure the screen is not showing would look like
+proof of the wrong number — which is worse than no drill at all.
+
+**WHAT SHIPPED, AND WHAT DID NOT.** `commcalc/tender_recon_drilldown.py` declares all seven figures
+and they tie exactly on the unfiltered range, which is the default view. The page offers a figure's
+drill **only while the tile and the panel agree to the cent** and states the reason on screen when
+they do not. That is a **reported gap, not a fix**: `/closing/tender-recon` therefore **deliberately
+still reads `owes`** in `harness_drilldown_pending.txt` and the owed count did **not** move for it.
+`harness_tender_recon_drilldown.py` §G asserts all three, so the partial cannot be mistaken for the
+finished thing — and the count cannot be quietly lowered while it stands.
+
+**THE REAL REMEDY, stated once so nobody re-derives it: one fold serving both sides.** The
+client-side total recompute is itself a second implementation of the endpoint's own fold — the
+duplicate the index rules forbid, in TypeScript. Closing it properly means this report's standard
+filters moving SERVER-SIDE (the posture `harness_closing_filter_contract.py` already enforces across
+the closing module), after which the tile and the panel are the same fold over the same rows and the
+agreement guard becomes dead code to delete. It is not done here because the store key on this recon
+is a matched address string and the market is joined from the roster on the client, so moving the
+filters is a change to the endpoint's identity handling rather than a line in a drill-down PR.
+
+**THE SIBLING TO CHECK WHEN IT IS DONE:** `/closing/pickup` computes its four cash footers over "the
+envelopes CURRENTLY ON SCREEN" — the same class, and the same remedy. `/closing/tender-recon-3way`
+already drills the same question through `/closing/tender-drilldown`, which is why this report ranked
+#2: one question, two paths, only one carrying evidence.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):

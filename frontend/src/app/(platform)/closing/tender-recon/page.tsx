@@ -8,6 +8,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 import { SetupNotice } from '@/lib/setupNotice'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
 
 // X-Tender Recon — the POS "X report" tenders (commcalc.pos_tender_summary) vs the daily closing sheet
 // employees submit (commcalc.daily_closing), per store, cash vs card. Reads GET /commcalc/x-tender-recon.
@@ -91,6 +92,32 @@ export default function XTenderReconPage() {
   }, [filtered])
   const scope = mode === 'date' ? date : (period || 'period')
 
+  // THE TILES NAME THE STORES BEHIND THEM (§CORE-17.3a) — AND REFUSE TO WHEN THEY CANNOT.
+  //
+  // This page recomputes its tiles in TypeScript over the FILTERED rows (see the RULE FIVE note
+  // above), while the panels are folded server-side over the whole range. So under a store or market
+  // filter the tile and the panel are about different populations, and a panel explaining a figure
+  // the screen is not showing would look like proof of the wrong number — worse than no drill at all.
+  //
+  // So the drill is offered only while the two provably AGREE, to the cent, and otherwise the reason
+  // is stated. That is a REPORTED GAP, not a fix: the real remedy is for one fold to serve both
+  // sides, which means this report's standard filters moving server-side. Recorded in §CORE-17.3b,
+  // and this route deliberately still reads `owes` in the coverage ledger.
+  const drills: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile()
+  const cents = (n: number) => Math.round((Number(n) || 0) * 100)
+  const agrees = (k: string) => !!drills[k] && cents(drills[k].figure?.amount ?? NaN) === cents(t[k as keyof typeof t] as number)
+  const narrowed = useMemo(() => filtered.length !== joinedRows.length, [filtered, joinedRows])
+  const dl = (...pairs: string[]) => {
+    const out: { key: string; label: string }[] = []
+    for (let i = 0; i < pairs.length; i += 2) if (agrees(pairs[i])) out.push({ key: pairs[i], label: pairs[i + 1] })
+    return out
+  }
+  const DRILL_COLUMNS = [
+    { header: 'Status', get: (r: DrillRow) => (r.fields?.match ? 'OK' : !r.fields?.in_closing ? 'no closing' : !r.fields?.in_pos ? 'no X report' : 'MISMATCH'),
+      sortValue: (r: DrillRow) => (r.fields?.match ? 'OK' : !r.fields?.in_closing ? 'no closing' : !r.fields?.in_pos ? 'no X report' : 'MISMATCH') },
+  ]
+
   function buildPayload(): ExportPayload {
     return {
       title: 'X-Tender Recon (POS vs Daily Closing)', subtitle: scope,
@@ -168,13 +195,36 @@ export default function XTenderReconPage() {
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <Tile label="POS cash" value={fmt(t.pos_cash || 0)} sub={`closing ${fmt(t.closing_cash || 0)}`} />
-            <Tile label="Cash variance" value={fmt(t.cash_variance || 0)} accent={Math.abs(t.cash_variance || 0) > tolerance ? '#b91c1c' : '#15803d'} />
-            <Tile label="POS card" value={fmt(t.pos_card || 0)} sub={`closing ${fmt(t.closing_card || 0)}`} />
-            <Tile label="Card variance" value={fmt(t.card_variance || 0)} accent={Math.abs(t.card_variance || 0) > tolerance ? '#b91c1c' : '#15803d'} />
+            <Tile label="POS cash" value={fmt(t.pos_cash || 0)} sub={`closing ${fmt(t.closing_cash || 0)}`}
+              drill={drill} drills={dl('pos_cash', 'POS rows', 'closing_cash', 'closing rows')} />
+            <Tile label="Cash variance" value={fmt(t.cash_variance || 0)} accent={Math.abs(t.cash_variance || 0) > tolerance ? '#b91c1c' : '#15803d'}
+              drill={drill} drills={dl('cash_variance', 'these stores')} />
+            <Tile label="POS card" value={fmt(t.pos_card || 0)} sub={`closing ${fmt(t.closing_card || 0)}`}
+              drill={drill} drills={dl('pos_card', 'POS rows', 'closing_card', 'closing rows')} />
+            <Tile label="Card variance" value={fmt(t.card_variance || 0)} accent={Math.abs(t.card_variance || 0) > tolerance ? '#b91c1c' : '#15803d'}
+              drill={drill} drills={dl('card_variance', 'these stores')} />
             <Tile label="Stores" value={t.stores ?? 0} />
-            <Tile label="Mismatches" value={t.mismatches ?? 0} accent={(t.mismatches || 0) > 0 ? '#b91c1c' : '#15803d'} />
+            <Tile label="Mismatches" value={t.mismatches ?? 0} accent={(t.mismatches || 0) > 0 ? '#b91c1c' : '#15803d'}
+              drill={drill} drills={dl('mismatches', 'the mismatched stores')} />
           </div>
+
+          {/* ONE panel at a time, below the strip. */}
+          {drill.open && (
+            <div style={{ marginBottom: 14 }}>
+              <DrillDownPanel panel={drills[drill.open]} extraColumns={DRILL_COLUMNS}
+                emptyNote="No store in this range contributed to this figure." />
+            </div>
+          )}
+          {/* THE GAP IS STATED, NOT HIDDEN. A narrowed view has no drill because the tiles are
+              recomputed on screen while the evidence is folded over the whole range; saying so beats
+              a panel about a different set of stores. */}
+          {narrowed && Object.keys(drills).length > 0 && (
+            <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 12 }}>
+              The tiles above are recomputed over your current filter, so the rows behind them are not
+              offered here — the evidence is built over the whole range and would be about a different
+              set of stores. Clear the store and market filters to open any figure.
+            </div>
+          )}
 
           <div className="card" style={{ padding: 0, overflow: 'auto' }}>
             <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -222,12 +272,17 @@ export default function XTenderReconPage() {
   )
 }
 
-function Tile({ label, value, sub, accent }: { label: string; value: any; sub?: string; accent?: string }) {
+function Tile({ label, value, sub, accent, drills, drill }: {
+  label: string; value: any; sub?: string; accent?: string
+  drills?: { key: string; label: string }[]
+  drill?: { open: string | null; toggle: (k: string) => void }
+}) {
   return (
     <div className="card" style={{ padding: '12px 16px', minWidth: 150 }}>
       <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4, color: accent || 'var(--text)' }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+      {drill && drills && drills.length ? <DrillTileLinks drills={drills} open={drill.open} onToggle={drill.toggle} /> : null}
     </div>
   )
 }
