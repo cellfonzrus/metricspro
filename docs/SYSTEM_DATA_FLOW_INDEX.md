@@ -125,6 +125,7 @@ Primary code homes:
 | CORE-13 | **A migration grants what it creates** | "Supabase says that from 30 October a new table in `public` no longer gets Data API access automatically. Does that break this app, which migrations would break, and what stops the next migration shipping a table the application cannot read?" |
 | CORE-15 | **The dark theme** | "The workspace is black with white lettering. Where does \"what does this colour become on the dark theme\" live, how does a colour spelled inside an inline style reach it, and what proves nothing pale is left glowing on black?" |
 | CORE-14 | **One palette, dereferenced** | "Make the colours of the side menu alternate between the logo colours so each item stands out. Where does a colour used by the chrome live, how many places spell it, and what proves a row stays readable once it is coloured?" |
+| CORE-16 | **A self-call carries the tenant it is acting as** | "The envelope payout screen says the commission accrual and salary-owed fetches failed with 409 Conflict. What identity does a call the platform makes to itself carry, which company does it say it is acting for, and what stops the next such call from dropping it?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -25940,6 +25941,7 @@ status word rather than a blank that reads as nil.
 | CORE-13 | core |
 | CORE-14 | core |
 | CORE-15 | core |
+| CORE-16 | core |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
