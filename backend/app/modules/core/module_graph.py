@@ -61,11 +61,18 @@ FACTS: dict[str, dict] = {
                     'has no number. Which reports still OWE a drill-down is part of the same fact '
                     'and is written down (`harness_drilldown_pending.txt`), because "by default" '
                     'is a ratchet, not a sentence in a document.',
-        "homes": ('app/modules/core/report_drilldown.py',),
+        # The CLIENT side of the same fact is a second home on purpose (§CORE-17.3d): a report whose
+        # tiles are folded over the rows the reader filtered down to needs the panel narrowed to that
+        # same selection, and `drill-narrow.ts` is the only place that happens. It is pinned to the
+        # server's fold by object identity on the unfiltered case (frontend/prove_drill_narrow.mjs §A8)
+        # over fixtures regenerated from the real declarations (harness_drill_narrow_fixtures.py), so
+        # the two cannot become two arithmetics hoping to agree.
+        "homes": ('app/modules/core/report_drilldown.py',
+                  'frontend/src/lib/drill-narrow.ts'),
         "index": ('CORE-17',),
         "locks": ('harness_report_drilldown.py', 'harness_drilldown_coverage.py',
                   'harness_cash_recon_drilldown.py', 'harness_tender_recon_drilldown.py',
-                  'harness_day_recon_drilldown.py'),
+                  'harness_day_recon_drilldown.py', 'harness_drill_narrow_fixtures.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first

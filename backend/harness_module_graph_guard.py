@@ -193,7 +193,13 @@ def check_homes(graph) -> None:
         homes = graph.FACTS[key]["homes"]
         check(bool(homes), f"D[{key}] names no home")
         for h in homes:
+            # A home is named backend-relative, which is where almost all of them are. A FACT whose
+            # one home is on the other side of the wire — a fold the browser has to do, pinned to the
+            # server's (§CORE-17.3d) — names it repo-relative, so both spellings resolve rather than a
+            # cross-tier one-home being unregisterable and therefore unlocked.
             p = os.path.join(HERE, h)
+            if not os.path.exists(p):
+                p = os.path.join(ROOT, h)
             check(os.path.exists(p) and os.path.getsize(p) > 400,
                   f"D[{key}] home {h} is missing or a stub")
             check(seen.setdefault(h, key) == key,

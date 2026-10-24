@@ -142,7 +142,7 @@ def origin(table, *, schema=None, keys=None, column=None, note=None):
 
 # ── One row behind a figure. ───────────────────────────────────────────────────────────────────
 def drill_row(label, origins, *, amount=None, in_figure=True, measured=None, reason=None,
-              fields=None, subject=None):
+              fields=None, subject=None, row_key=None):
     """PURE: one of the rows a figure was built from.
 
     `amount=None` means this row has no number — nobody recorded one — and `measured` defaults to
@@ -155,6 +155,12 @@ def drill_row(label, origins, *, amount=None, in_figure=True, measured=None, rea
 
     `fields` is whatever else the screen should show on this row (a basis, a verdict, a store), as a
     plain dict. Nothing in it is interpreted here: this module presents evidence, it does not judge it.
+
+    `row_key` is the natural key that addresses the REPORT ROW this drill row explains — the same dict
+    the origins are keyed by. It exists so a screen that filters its own rows can line the two up and
+    narrow the panel to the same selection its tile is folded over (§CORE-17.3d). Without it the only
+    honest options on such a report were to refuse the drill or to show a panel about a population the
+    screen is not showing.
     """
     ors = [o for o in (origins or []) if o]
     has = amount is not None
@@ -170,6 +176,7 @@ def drill_row(label, origins, *, amount=None, in_figure=True, measured=None, rea
         "origins": ors,
         "sources": sorted({o["table"] for o in ors if o.get("table")}),
         "fields": dict(fields or {}) or None,
+        "row_key": ({k: v for k, v in (row_key or {}).items() if v not in (None, "")} or None),
     }
 
 
@@ -374,6 +381,7 @@ def tile_panel(figure_label, amount, rows, *, value, tables, row_label=None, key
         _tables = tuple(read_t(r) or ()) or (None,)
         out.append(drill_row(
             lab, origins_of([(t, kv) for t in _tables], schema=schema, column=column),
+            row_key=kv,
             amount=v,
             in_figure=(read_in(r) if read_in else v is not None),
             measured=read_m(r), reason=read_rs(r),

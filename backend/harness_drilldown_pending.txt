@@ -93,7 +93,7 @@
 /closing/management	owes	
 /closing/pickup	owes	
 /closing/recon	owes	
-/closing/tender-recon	owes	
+/closing/tender-recon	shared	all seven figures drill, and each tile is READ OFF its narrowed panel so the two are one fold under any filter (lib/drill-narrow, index §CORE-17.3d); declaration in commcalc/tender_recon_drilldown.py
 /closing/tender-recon-3way	owes	
 /closing/verify	owes	
 /commcalc	owes	

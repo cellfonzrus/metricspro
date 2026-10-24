@@ -1,0 +1,4472 @@
+{
+  "_note": "GENERATED — do not hand-edit. Real panels from the real server declarations, regenerate with `python3 backend/harness_drill_narrow_fixtures.py --write`. Consumed by frontend/prove_drill_narrow.mjs (index §CORE-17.3d).",
+  "panels": {
+    "accessory_no_feed.actual": {
+      "capped": false,
+      "figure": {
+        "amount": 330.0,
+        "label": "Accessory sales in the sales transactions",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 240.0,
+          "fields": {
+            "rep_names": null,
+            "store_address": "1 Main St",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": null,
+              "traceable": false
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-1"
+          },
+          "sources": [],
+          "subject": null
+        },
+        {
+          "amount": 90.0,
+          "fields": {
+            "rep_names": null,
+            "store_address": "2 Oak Ave",
+            "store_code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": null,
+              "traceable": false
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-2"
+          },
+          "sources": [],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 330.0,
+        "rows_total": 330.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 2
+    },
+    "accessory_no_feed.declared": {
+      "capped": false,
+      "figure": {
+        "amount": 390.0,
+        "label": "Accessory sales the reps declared",
+        "unit": "money"
+      },
+      "note": "A verified district-manager correction is the authoritative declaration for the store-day; the per-rep breakdown below stays as filed.",
+      "rows": [
+        {
+          "amount": 300.0,
+          "fields": {
+            "rep_names": null,
+            "store_address": "1 Main St",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "acc_sale",
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": "acc_sale",
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 90.0,
+          "fields": {
+            "rep_names": null,
+            "store_address": "2 Oak Ave",
+            "store_code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "acc_sale",
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": "acc_sale",
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 2,
+          "table": "daily_closing_verification"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 390.0,
+        "rows_total": 390.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "accessory_no_feed.flagged": {
+      "capped": false,
+      "figure": {
+        "amount": 1.0,
+        "label": "Stores whose declared and actual accessory sales disagree",
+        "unit": "count"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 1.0,
+          "fields": {
+            "rep_names": null,
+            "store_address": "1 Main St",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "rep_names": null,
+            "store_address": "2 Oak Ave",
+            "store_code": "B-2"
+          },
+          "in_figure": false,
+          "label": "2 Oak Ave",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 2,
+          "table": "daily_closing_verification"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 1,
+        "difference": 0.0,
+        "figure": 1.0,
+        "rows_total": 1.0,
+        "shown_not_counted": 1,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 1 row(s) behind this figure add up to it exactly; 1 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "accessory_no_feed.variance": {
+      "capped": false,
+      "figure": {
+        "amount": 60.0,
+        "label": "Net difference between declared and actual",
+        "unit": "money"
+      },
+      "note": "Declared minus actual, folded over the same store-days as the two figures above it — one fold, server-side, so the screen cannot show a different difference.",
+      "rows": [
+        {
+          "amount": 60.0,
+          "fields": {
+            "rep_names": null,
+            "store_address": "1 Main St",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 0.0,
+          "fields": {
+            "rep_names": null,
+            "store_address": "2 Oak Ave",
+            "store_code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 2,
+          "table": "daily_closing_verification"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 60.0,
+        "rows_total": 60.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "card.cells": {
+      "capped": false,
+      "figure": {
+        "amount": 3.0,
+        "label": "Store-days tallied",
+        "unit": "count"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 1.0,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "short",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St · 2026-09-02 · External card",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 1.0,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "match",
+            "store_code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave · 2026-09-02 · External card",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 1.0,
+          "fields": {
+            "basis": "rep",
+            "market": "NJ",
+            "processor": "External card",
+            "status": "no_processor_data",
+            "store_code": "B-3"
+          },
+          "in_figure": true,
+          "label": "3 Elm Rd · 2026-09-02 · External card",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": "no_processor_data",
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-3"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 3,
+          "table": "daily_closing_verification"
+        },
+        {
+          "rows": 3,
+          "table": "merchant_settlement_day"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 3,
+        "difference": 0.0,
+        "figure": 3.0,
+        "rows_total": 3.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 3 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "card.declared_total": {
+      "capped": false,
+      "figure": {
+        "amount": 700.0,
+        "label": "Card settlement the stores declared",
+        "unit": "money"
+      },
+      "note": "A district manager's merged card total is NOT counted here: it states one figure for both card legs, so attributing part of it to this one would be a guess.",
+      "rows": [
+        {
+          "amount": 500.0,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "short",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St · 2026-09-02 · External card",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 200.0,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "match",
+            "store_code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave · 2026-09-02 · External card",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "NJ",
+            "processor": "External card",
+            "status": "no_processor_data",
+            "store_code": "B-3"
+          },
+          "in_figure": false,
+          "label": "3 Elm Rd · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": "no_processor_data",
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-3"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 3,
+          "table": "daily_closing_verification"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 700.0,
+        "rows_total": 700.0,
+        "shown_not_counted": 1,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly; 1 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "card.match": {
+      "capped": false,
+      "figure": {
+        "amount": 1.0,
+        "label": "Store-days that agree",
+        "unit": "count"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "short",
+            "store_code": "B-1"
+          },
+          "in_figure": false,
+          "label": "1 Main St · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 1.0,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "match",
+            "store_code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave · 2026-09-02 · External card",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "NJ",
+            "processor": "External card",
+            "status": "no_processor_data",
+            "store_code": "B-3"
+          },
+          "in_figure": false,
+          "label": "3 Elm Rd · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": "no_processor_data",
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-3"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 3,
+          "table": "daily_closing_verification"
+        },
+        {
+          "rows": 3,
+          "table": "merchant_settlement_day"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 1,
+        "difference": 0.0,
+        "figure": 1.0,
+        "rows_total": 1.0,
+        "shown_not_counted": 2,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 1 row(s) behind this figure add up to it exactly; 2 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "card.over": {
+      "capped": false,
+      "figure": {
+        "amount": 0.0,
+        "label": "Store-days over",
+        "unit": "count"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "short",
+            "store_code": "B-1"
+          },
+          "in_figure": false,
+          "label": "1 Main St · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "match",
+            "store_code": "B-2"
+          },
+          "in_figure": false,
+          "label": "2 Oak Ave · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "NJ",
+            "processor": "External card",
+            "status": "no_processor_data",
+            "store_code": "B-3"
+          },
+          "in_figure": false,
+          "label": "3 Elm Rd · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": "no_processor_data",
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-3"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 3,
+          "table": "daily_closing_verification"
+        },
+        {
+          "rows": 3,
+          "table": "merchant_settlement_day"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 0,
+        "difference": 0.0,
+        "figure": 0.0,
+        "rows_total": 0,
+        "shown_not_counted": 3,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 0 row(s) behind this figure add up to it exactly; 3 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "card.over_total": {
+      "capped": false,
+      "figure": {
+        "amount": 0.0,
+        "label": "Over — the processor settled more than the store declared",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "short",
+            "store_code": "B-1"
+          },
+          "in_figure": false,
+          "label": "1 Main St · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "match",
+            "store_code": "B-2"
+          },
+          "in_figure": false,
+          "label": "2 Oak Ave · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "NJ",
+            "processor": "External card",
+            "status": "no_processor_data",
+            "store_code": "B-3"
+          },
+          "in_figure": false,
+          "label": "3 Elm Rd · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": "no_processor_data",
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-3"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 3,
+          "table": "daily_closing_verification"
+        },
+        {
+          "rows": 3,
+          "table": "merchant_settlement_day"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 0,
+        "difference": 0.0,
+        "figure": 0.0,
+        "rows_total": 0,
+        "shown_not_counted": 3,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 0 row(s) behind this figure add up to it exactly; 3 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "card.settled_total": {
+      "capped": false,
+      "figure": {
+        "amount": 670.0,
+        "label": "What the processor settled",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 470.0,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "short",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St · 2026-09-02 · External card",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 200.0,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "match",
+            "store_code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave · 2026-09-02 · External card",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "NJ",
+            "processor": "External card",
+            "status": "no_processor_data",
+            "store_code": "B-3"
+          },
+          "in_figure": false,
+          "label": "3 Elm Rd · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": "no_processor_data",
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-3"
+          },
+          "sources": [
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "merchant_settlement_day"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 670.0,
+        "rows_total": 670.0,
+        "shown_not_counted": 1,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly; 1 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "card.short": {
+      "capped": false,
+      "figure": {
+        "amount": 1.0,
+        "label": "Store-days short",
+        "unit": "count"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 1.0,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "short",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St · 2026-09-02 · External card",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "match",
+            "store_code": "B-2"
+          },
+          "in_figure": false,
+          "label": "2 Oak Ave · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "NJ",
+            "processor": "External card",
+            "status": "no_processor_data",
+            "store_code": "B-3"
+          },
+          "in_figure": false,
+          "label": "3 Elm Rd · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": "no_processor_data",
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-3"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 3,
+          "table": "daily_closing_verification"
+        },
+        {
+          "rows": 3,
+          "table": "merchant_settlement_day"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 1,
+        "difference": 0.0,
+        "figure": 1.0,
+        "rows_total": 1.0,
+        "shown_not_counted": 2,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 1 row(s) behind this figure add up to it exactly; 2 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "card.short_total": {
+      "capped": false,
+      "figure": {
+        "amount": 30.0,
+        "label": "Short — the processor settled less than the store declared",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 30.0,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "short",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St · 2026-09-02 · External card",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "LI",
+            "processor": "External card",
+            "status": "match",
+            "store_code": "B-2"
+          },
+          "in_figure": false,
+          "label": "2 Oak Ave · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "basis": "rep",
+            "market": "NJ",
+            "processor": "External card",
+            "status": "no_processor_data",
+            "store_code": "B-3"
+          },
+          "in_figure": false,
+          "label": "3 Elm Rd · 2026-09-02 · External card",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-02",
+                "processor_role": "external_cc",
+                "store_code": "B-3"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "merchant_settlement_day",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": "no_processor_data",
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-02",
+            "processor_role": "external_cc",
+            "store_code": "B-3"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "merchant_settlement_day"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 3,
+          "table": "daily_closing_verification"
+        },
+        {
+          "rows": 3,
+          "table": "merchant_settlement_day"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 1,
+        "difference": 0.0,
+        "figure": 30.0,
+        "rows_total": 30.0,
+        "shown_not_counted": 2,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 1 row(s) behind this figure add up to it exactly; 2 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "cash.cash_declared": {
+      "capped": false,
+      "figure": {
+        "amount": 520.0,
+        "label": "Cash declared by the reps",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 400.0,
+          "fields": {
+            "day": "2026-09-01",
+            "market": "LI",
+            "reps": [
+              "Abid"
+            ],
+            "store_name": "1 Main St"
+          },
+          "in_figure": true,
+          "label": "1 Main St · 2026-09-01",
+          "measured": true,
+          "origins": [
+            {
+              "column": "t_cash",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": "t_cash",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "day": "2026-09-01",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 120.0,
+          "fields": {
+            "day": "2026-09-01",
+            "market": "LI",
+            "reps": [],
+            "store_name": "2 Oak Ave"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave · 2026-09-01",
+          "measured": true,
+          "origins": [
+            {
+              "column": "t_cash",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": "t_cash",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "day": "2026-09-01",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 2,
+          "table": "daily_closing_verification"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 520.0,
+        "rows_total": 520.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "cash.credit_declared": {
+      "capped": false,
+      "figure": {
+        "amount": 100.0,
+        "label": "Credit declared by the reps",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 100.0,
+          "fields": {
+            "day": "2026-09-01",
+            "market": "LI",
+            "reps": [
+              "Abid"
+            ],
+            "store_name": "1 Main St"
+          },
+          "in_figure": true,
+          "label": "1 Main St · 2026-09-01",
+          "measured": true,
+          "origins": [
+            {
+              "column": "t_credit",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": "t_credit",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "day": "2026-09-01",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 0.0,
+          "fields": {
+            "day": "2026-09-01",
+            "market": "LI",
+            "reps": [],
+            "store_name": "2 Oak Ave"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave · 2026-09-01",
+          "measured": true,
+          "origins": [
+            {
+              "column": "t_credit",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": "t_credit",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "day": "2026-09-01",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 2,
+          "table": "daily_closing_verification"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 100.0,
+        "rows_total": 100.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "cash.mgmt_over_amount": {
+      "capped": false,
+      "figure": {
+        "amount": 30.0,
+        "label": "Over against what management counted",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": -20.0,
+          "fields": {
+            "day": "2026-09-01",
+            "market": "LI",
+            "reps": [
+              "Abid"
+            ],
+            "store_name": "1 Main St"
+          },
+          "in_figure": false,
+          "label": "1 Main St · 2026-09-01",
+          "measured": true,
+          "origins": [
+            {
+              "column": "variance",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "envelope_count",
+              "traceable": true
+            },
+            {
+              "column": "variance",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "day": "2026-09-01",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "envelope_count"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 30.0,
+          "fields": {
+            "day": "2026-09-01",
+            "market": "LI",
+            "reps": [],
+            "store_name": "2 Oak Ave"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave · 2026-09-01",
+          "measured": true,
+          "origins": [
+            {
+              "column": "variance",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "envelope_count",
+              "traceable": true
+            },
+            {
+              "column": "variance",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "day": "2026-09-01",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "envelope_count"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 2,
+          "table": "envelope_count"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 1,
+        "difference": 0.0,
+        "figure": 30.0,
+        "rows_total": 30.0,
+        "shown_not_counted": 1,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 1 row(s) behind this figure add up to it exactly; 1 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "cash.mgmt_short_amount": {
+      "capped": false,
+      "figure": {
+        "amount": -20.0,
+        "label": "Short against what management counted",
+        "unit": "money"
+      },
+      "note": "Each envelope was scored against ITS OWN expected figure when it was counted, on the basis the counter chose — this is that stored score, not a fresh subtraction against the whole drawer.",
+      "rows": [
+        {
+          "amount": -20.0,
+          "fields": {
+            "day": "2026-09-01",
+            "market": "LI",
+            "reps": [
+              "Abid"
+            ],
+            "store_name": "1 Main St"
+          },
+          "in_figure": true,
+          "label": "1 Main St · 2026-09-01",
+          "measured": true,
+          "origins": [
+            {
+              "column": "variance",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "envelope_count",
+              "traceable": true
+            },
+            {
+              "column": "variance",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "day": "2026-09-01",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing",
+            "envelope_count"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 30.0,
+          "fields": {
+            "day": "2026-09-01",
+            "market": "LI",
+            "reps": [],
+            "store_name": "2 Oak Ave"
+          },
+          "in_figure": false,
+          "label": "2 Oak Ave · 2026-09-01",
+          "measured": true,
+          "origins": [
+            {
+              "column": "variance",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "envelope_count",
+              "traceable": true
+            },
+            {
+              "column": "variance",
+              "keys": {
+                "day": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "day": "2026-09-01",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing",
+            "envelope_count"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 2,
+          "table": "envelope_count"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 1,
+        "difference": 0.0,
+        "figure": -20.0,
+        "rows_total": -20.0,
+        "shown_not_counted": 1,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 1 row(s) behind this figure add up to it exactly; 1 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "epay.bank_deposited": {
+      "capped": false,
+      "figure": {
+        "amount": 370.0,
+        "label": "Cash deposited at the bank",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 250.0,
+          "fields": {
+            "rep_names": "Abid",
+            "store_address": "1 Main St",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "amount",
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "bank_deposit",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "bank_deposit"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 120.0,
+          "fields": {
+            "rep_names": null,
+            "store_address": "2 Oak Ave",
+            "store_code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "amount",
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "bank_deposit",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "bank_deposit"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "bank_deposit"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 370.0,
+        "rows_total": 370.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "epay.declared_cash": {
+      "capped": false,
+      "figure": {
+        "amount": 520.0,
+        "label": "Bill-payment cash the reps declared",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 400.0,
+          "fields": {
+            "rep_names": "Abid",
+            "store_address": "1 Main St",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "epay_on_cash",
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_closing"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 120.0,
+          "fields": {
+            "rep_names": null,
+            "store_address": "2 Oak Ave",
+            "store_code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "epay_on_cash",
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_closing"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "daily_closing"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 520.0,
+        "rows_total": 520.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "epay.flagged": {
+      "capped": false,
+      "figure": {
+        "amount": 1.0,
+        "label": "Stores whose declared cash and deposit disagree",
+        "unit": "count"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 1.0,
+          "fields": {
+            "rep_names": "Abid",
+            "store_address": "1 Main St",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "bank_deposit",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "bank_deposit",
+            "daily_closing"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "rep_names": null,
+            "store_address": "2 Oak Ave",
+            "store_code": "B-2"
+          },
+          "in_figure": false,
+          "label": "2 Oak Ave",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "bank_deposit",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "bank_deposit",
+            "daily_closing"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "bank_deposit"
+        },
+        {
+          "rows": 2,
+          "table": "daily_closing"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 1,
+        "difference": 0.0,
+        "figure": 1.0,
+        "rows_total": 1.0,
+        "shown_not_counted": 1,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 1 row(s) behind this figure add up to it exactly; 1 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "epay.sales_cash": {
+      "capped": false,
+      "figure": {
+        "amount": 500.0,
+        "label": "Bill-payment cash in the sales transactions",
+        "unit": "money"
+      },
+      "note": "The bill-payment lines of the day's sales, bucketed to the cash tender — the same transactions the sales report reads, not a separate tally.",
+      "rows": [
+        {
+          "amount": 380.0,
+          "fields": {
+            "rep_names": "Abid",
+            "store_address": "1 Main St",
+            "store_code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-1"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-1"
+          },
+          "sources": [
+            "daily_sales_feed"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 120.0,
+          "fields": {
+            "rep_names": null,
+            "store_address": "2 Oak Ave",
+            "store_code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "close_date": "2026-09-01",
+                "store_code": "B-2"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "close_date": "2026-09-01",
+            "store_code": "B-2"
+          },
+          "sources": [
+            "daily_sales_feed"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "daily_sales_feed"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 500.0,
+        "rows_total": 500.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "tender.card_variance": {
+      "capped": false,
+      "figure": {
+        "amount": 0.0,
+        "label": "Card difference, POS less closing",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 0.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": false,
+            "store": "1 Main St"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "pos_tender_summary"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 0.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": true,
+            "store": "2 Oak Ave"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "pos_tender_summary"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 0.0,
+          "fields": {
+            "in_closing": false,
+            "in_pos": true,
+            "match": false,
+            "store": "3 Elm Rd"
+          },
+          "in_figure": true,
+          "label": "3 Elm Rd",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "3 Elm Rd"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "pos_tender_summary"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 3,
+          "table": "daily_closing_verification"
+        },
+        {
+          "rows": 3,
+          "table": "pos_tender_summary"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 3,
+        "difference": 0.0,
+        "figure": 0.0,
+        "rows_total": 0.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 3 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "tender.cash_variance": {
+      "capped": false,
+      "figure": {
+        "amount": 520.0,
+        "label": "Cash difference, POS less closing",
+        "unit": "money"
+      },
+      "note": "Positive means the register rang up more cash than the sheet declared. A store present on only ONE side still appears, because a missing side is the finding.",
+      "rows": [
+        {
+          "amount": 20.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": false,
+            "store": "1 Main St"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "pos_tender_summary"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 0.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": true,
+            "store": "2 Oak Ave"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "pos_tender_summary"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 500.0,
+          "fields": {
+            "in_closing": false,
+            "in_pos": true,
+            "match": false,
+            "store": "3 Elm Rd"
+          },
+          "in_figure": true,
+          "label": "3 Elm Rd",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "3 Elm Rd"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "pos_tender_summary"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 3,
+          "table": "daily_closing_verification"
+        },
+        {
+          "rows": 3,
+          "table": "pos_tender_summary"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 3,
+        "difference": 0.0,
+        "figure": 520.0,
+        "rows_total": 520.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 3 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "tender.closing_card": {
+      "capped": false,
+      "figure": {
+        "amount": 160.0,
+        "label": "Card the closing sheet declared",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 100.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": false,
+            "store": "1 Main St"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "store_cc",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": "store_cc",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 60.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": true,
+            "store": "2 Oak Ave"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "store_cc",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": "store_cc",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 0.0,
+          "fields": {
+            "in_closing": false,
+            "in_pos": true,
+            "match": false,
+            "store": "3 Elm Rd"
+          },
+          "in_figure": true,
+          "label": "3 Elm Rd",
+          "measured": true,
+          "origins": [
+            {
+              "column": "store_cc",
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": "store_cc",
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "3 Elm Rd"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 3,
+          "table": "daily_closing_verification"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 3,
+        "difference": 0.0,
+        "figure": 160.0,
+        "rows_total": 160.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 3 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "tender.closing_cash": {
+      "capped": false,
+      "figure": {
+        "amount": 500.0,
+        "label": "Cash the closing sheet declared",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 380.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": false,
+            "store": "1 Main St"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "store_cash",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": "store_cash",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 120.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": true,
+            "store": "2 Oak Ave"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "store_cash",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": "store_cash",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 0.0,
+          "fields": {
+            "in_closing": false,
+            "in_pos": true,
+            "match": false,
+            "store": "3 Elm Rd"
+          },
+          "in_figure": true,
+          "label": "3 Elm Rd",
+          "measured": true,
+          "origins": [
+            {
+              "column": "store_cash",
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": "store_cash",
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "3 Elm Rd"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 3,
+          "table": "daily_closing_verification"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 3,
+        "difference": 0.0,
+        "figure": 500.0,
+        "rows_total": 500.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 3 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "tender.mismatches": {
+      "capped": false,
+      "figure": {
+        "amount": 2.0,
+        "label": "Stores outside the tolerance band",
+        "unit": "count"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 1.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": false,
+            "store": "1 Main St"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "pos_tender_summary"
+          ],
+          "subject": null
+        },
+        {
+          "amount": null,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": true,
+            "store": "2 Oak Ave"
+          },
+          "in_figure": false,
+          "label": "2 Oak Ave",
+          "measured": false,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": false,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "pos_tender_summary"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 1.0,
+          "fields": {
+            "in_closing": false,
+            "in_pos": true,
+            "match": false,
+            "store": "3 Elm Rd"
+          },
+          "in_figure": true,
+          "label": "3 Elm Rd",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_closing_verification",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "3 Elm Rd"
+          },
+          "sources": [
+            "daily_closing",
+            "daily_closing_verification",
+            "pos_tender_summary"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_closing"
+        },
+        {
+          "rows": 3,
+          "table": "daily_closing_verification"
+        },
+        {
+          "rows": 3,
+          "table": "pos_tender_summary"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 2.0,
+        "rows_total": 2.0,
+        "shown_not_counted": 1,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly; 1 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "tender.pos_card": {
+      "capped": false,
+      "figure": {
+        "amount": 160.0,
+        "label": "Card the X-report rang up",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 100.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": false,
+            "store": "1 Main St"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "amount",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "pos_tender_summary"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 60.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": true,
+            "store": "2 Oak Ave"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "amount",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "pos_tender_summary"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 0.0,
+          "fields": {
+            "in_closing": false,
+            "in_pos": true,
+            "match": false,
+            "store": "3 Elm Rd"
+          },
+          "in_figure": true,
+          "label": "3 Elm Rd",
+          "measured": true,
+          "origins": [
+            {
+              "column": "amount",
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "3 Elm Rd"
+          },
+          "sources": [
+            "pos_tender_summary"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "pos_tender_summary"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 3,
+        "difference": 0.0,
+        "figure": 160.0,
+        "rows_total": 160.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 3 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "tender.pos_cash": {
+      "capped": false,
+      "figure": {
+        "amount": 1020.0,
+        "label": "Cash the X-report rang up",
+        "unit": "money"
+      },
+      "note": null,
+      "rows": [
+        {
+          "amount": 400.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": false,
+            "store": "1 Main St"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "amount",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "pos_tender_summary"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 120.0,
+          "fields": {
+            "in_closing": true,
+            "in_pos": true,
+            "match": true,
+            "store": "2 Oak Ave"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "amount",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "pos_tender_summary"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 500.0,
+          "fields": {
+            "in_closing": false,
+            "in_pos": true,
+            "match": false,
+            "store": "3 Elm Rd"
+          },
+          "in_figure": true,
+          "label": "3 Elm Rd",
+          "measured": true,
+          "origins": [
+            {
+              "column": "amount",
+              "keys": {
+                "store": "3 Elm Rd"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "pos_tender_summary",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "3 Elm Rd"
+          },
+          "sources": [
+            "pos_tender_summary"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "pos_tender_summary"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 3,
+        "difference": 0.0,
+        "figure": 1020.0,
+        "rows_total": 1020.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 3 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    }
+  }
+}
