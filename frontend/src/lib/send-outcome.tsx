@@ -6,6 +6,11 @@
 // the only way to learn WHO missed the report was to read the database. Every surface that sends
 // something renders THIS, so a failure is named the same way wherever it is shown — and the words are
 // the backend's, never re-worded here: a second spelling of a remedy is a future divergence.
+//
+// The failure list is a DATA TABLE, so it sorts from its own headers through the house hook rather
+// than joining the unsorted-table register: a send to thirty recipients is read by grouping the same
+// reason together, and a new unsorted table is exactly the debt that lock refuses.
+import { useTableSort, SortableTh } from '@/components/SortableTh'
 
 export type SendOutcome = {
   headline: string
@@ -24,14 +29,24 @@ export type SendOutcome = {
 const CHANNEL_LABEL: Record<string, string> = { email: 'Email', whatsapp: 'WhatsApp' }
 function channelLabel(c: string) { return CHANNEL_LABEL[c] || c }
 
+// STABLE (module scope), per useTableSort's contract — a fresh closure re-runs the memo every render.
+function failedCell(f: NonNullable<SendOutcome['failed']>[number], field: string) {
+  if (field === 'channel') return channelLabel(f.channel)
+  if (field === 'reason') return f.reason
+  if (field === 'fix') return f.fix || ''
+  return f.target
+}
+
 /** The sentence alone — for a caller with no room for the list. Never re-worded in the browser. */
 export function outcomeHeadline(o: SendOutcome | null | undefined): string {
   return (o?.headline || '').trim()
 }
 
 export function SendOutcomeView({ outcome }: { outcome: SendOutcome | null | undefined }) {
+  // The hook runs before the early return, never after it.
+  const failed = outcome?.failed || []
+  const { sorted, sort, toggle } = useTableSort(failed, failedCell)
   if (!outcome) return null
-  const failed = outcome.failed || []
   const green = failed.length === 0 && outcome.ok_count > 0
   return (
     <div style={{ fontSize: 12, marginTop: 6 }}>
@@ -50,11 +65,14 @@ export function SendOutcomeView({ outcome }: { outcome: SendOutcome | null | und
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 6 }}>
           <thead>
             <tr style={{ textAlign: 'left', color: '#64748b' }}>
-              <th style={cell}>Did not arrive</th><th style={cell}>Channel</th><th style={cell}>Why</th><th style={cell}>How to fix it</th>
+              <SortableTh field="target" sort={sort} onSort={toggle} style={cell}>Did not arrive</SortableTh>
+              <SortableTh field="channel" sort={sort} onSort={toggle} style={cell}>Channel</SortableTh>
+              <SortableTh field="reason" sort={sort} onSort={toggle} style={cell}>Why</SortableTh>
+              <SortableTh field="fix" sort={sort} onSort={toggle} style={cell}>How to fix it</SortableTh>
             </tr>
           </thead>
           <tbody>
-            {failed.map((f, i) => (
+            {sorted.map((f, i) => (
               <tr key={i}>
                 <td style={cell}>{f.target}{f.partial ? ' (part of it did)' : ''}</td>
                 <td style={cell}>{channelLabel(f.channel)}</td>
