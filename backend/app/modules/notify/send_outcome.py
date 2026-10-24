@@ -39,11 +39,20 @@ import re
 # than silence.
 _RULES = (
     # ── WhatsApp Cloud API, matched on Meta's own "(#code)" ──
+    # The REMEDY here is the one the estate learned the hard way after the 2026-10-22 credential
+    # rotation, and it is NOT "re-register the number": #133010 means our access token belongs to a
+    # different Meta app or System User than the one that owns the phone number, so both values are
+    # valid and the PAIRING is wrong. A re-registration would have been the confident wrong remedy
+    # this allowlist exists to avoid.
     ("133010", "whatsapp",
-     "Our WhatsApp sender number is not registered with Meta's Cloud API, so Meta refused every "
-     "message — this is our end, not the recipient's.",
-     "In Meta Business Suite → WhatsApp Manager → API Setup, register the sending number again (it "
-     "asks for the 6-digit PIN), then check that WHATSAPP_PHONE_NUMBER_ID still names that number."),
+     "Meta does not recognise our sending number for the account our access token belongs to, so it "
+     "refused every message — this is our setup, not the recipient's number.",
+     "The access token and the sending number must belong to the SAME Meta app and WhatsApp Business "
+     "Account. Regenerate the token in Meta Business Settings → System Users (pick the system user "
+     "that has the WhatsApp Business Account assigned, with the app selected and "
+     "whatsapp_business_messaging), and check WHATSAPP_PHONE_NUMBER_ID was not overwritten — it is "
+     "not a secret and must not be rotated. GET /notify/whatsapp-account (super-admin) reads the "
+     "configured number straight from Meta and shows which one it is."),
     ("131030", "whatsapp",
      "Meta will not deliver to this number: the WhatsApp app is still in development mode, which "
      "only allows the numbers on its test list.",
@@ -71,10 +80,14 @@ _RULES = (
      "The template was sent values it does not accept, so Meta rejected it.",
      "Compare the template's placeholders in WhatsApp Manager with what the sender fills in — they "
      "have to match one for one."),
+    # #190 is the TOKEN ITSELF being dead — usually the temporary API Setup token, which expires after
+    # 24 hours. Kept distinct from #133010 above on purpose: "it worked yesterday" fits a 24h expiry
+    # neatly and is the WRONG diagnosis when the code is 133010.
     ("190", "",
      "Our access token has expired or been revoked, so the provider would not let us send at all.",
-     "Generate a fresh permanent access token in Meta Business Suite → System Users and set it as "
-     "WHATSAPP_ACCESS_TOKEN, then send again."),
+     "Generate a fresh PERMANENT access token in Meta Business Settings → System Users (the "
+     "temporary one on the API Setup page dies after 24 hours) and set it as WHATSAPP_ACCESS_TOKEN, "
+     "then send again."),
     ("80007", "whatsapp",
      "We sent more messages than Meta's rate limit allows for this number.",
      "Nothing is broken — wait and send again. If it recurs, request a higher messaging limit in "

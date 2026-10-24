@@ -80,10 +80,19 @@ E_NOT_CONFIGURED = "Email sending isn't set up yet — contact support to switch
 # ── A. the allowlist: a ruled code is named AND has a remedy ──────────────────────────────────────
 c = so.classify("whatsapp", E_133010)
 check("A1 the owner's actual failure is RULED: #133010 is recognised", c["recognised"] and c["code"] == "133010")
-check("A2 its reason says it is OUR sender, not the recipient's number",
-      "sender" in c["reason"].lower() and "not registered" in c["reason"].lower(), detail=c["reason"])
-check("A3 its fix names the console step a human takes, not a code change",
-      "whatsapp manager" in c["fix"].lower() and "register" in c["fix"].lower(), detail=c["fix"])
+check("A2 its reason blames OUR setup, never the recipient's number",
+      "our se" in c["reason"].lower() and "not the recipient" in c["reason"].lower(), detail=c["reason"])
+# THE REMEDY THE ESTATE LEARNED THE HARD WAY (whatsapp-token-must-match-waba, after the 2026-10-22
+# rotation): #133010 is the token/phone-number PAIRING, not a missing registration. This check pins
+# the pairing wording so a future edit cannot quietly restore the plausible wrong fix.
+check("A3 its fix is the PAIRING, not a re-registration — the confident wrong remedy is pinned out",
+      "same meta app" in c["fix"].lower() and "system user" in c["fix"].lower()
+      and "6-digit pin" not in c["fix"].lower(), detail=c["fix"])
+check("A3b and it points at the diagnostic that already exists rather than a new one",
+      "/notify/whatsapp-account" in c["fix"], detail=c["fix"])
+check("A3c #190 stays a DIFFERENT fact: the token itself, with its 24h-expiry trap named",
+      "24 hours" in so.classify("whatsapp", E_190)["fix"]
+      and so.classify("whatsapp", E_190)["code"] != "133010")
 check("A4 the provider's own words are KEPT beside the plain reason (never replaced)",
       "133010" in c["error"] and c["error"] != c["reason"])
 

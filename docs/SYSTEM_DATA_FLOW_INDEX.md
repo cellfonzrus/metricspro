@@ -33341,13 +33341,17 @@ one appears.
 
 **WHAT THIS DID NOT DO.** It did not make WhatsApp work. The live finding stands on its own and is a
 data/configuration defect, REPORTED rather than hidden: the sender number is not registered with
-Meta's Cloud API (every attempt on 2026-10-24 is `#133010`, where every day up to 2026-10-23 had
-worked), and behind that the Meta app is still in development mode — 163 historic
+Meta's Cloud API **for the account our access token belongs to** (every attempt on 2026-10-24 is
+`#133010`, where every day up to 2026-10-23 had worked — the token/phone-number PAIRING broken by the
+2026-10-22 rotation, *not* a missing registration, and the allowlist's remedy says so because the
+plausible wrong fix is the thing this mechanism exists to avoid; the existing diagnostic
+`GET /notify/whatsapp-account` is pointed at rather than rebuilt), and behind that the Meta app is
+still in development mode — 163 historic
 `(#131030) Recipient phone number not in allowed list` failures, and exactly one number has ever
 received anything. Both fixes are Meta-console steps for the owner; the app now says so on the screen
 where the failure appears.
 
-**LOCK: `backend/harness_notify_send_outcome.py`** — 51 checks, DB-free, driving the REAL module over
+**LOCK: `backend/harness_notify_send_outcome.py`** — 53 checks, DB-free, driving the REAL module over
 the REAL production error strings, with the owner's exact 16 rows as the regression (§D: 6 ok, 5
 failed, every one named, one deduped fix, and the 10 attempts still stated). The un-wiring locks, each
 with an armed control: an **AST scan of every `return {…}` in `notify/router.py` whose keys include
