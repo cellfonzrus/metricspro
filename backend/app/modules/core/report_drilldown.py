@@ -98,6 +98,16 @@ UNMEASURED_REASONS = {
                       "not a variance",
     "not_recorded": "nothing was ever recorded here, which is not the same as nothing happened",
     "not_computed": "no run has computed this yet, so the blank is a missing calculation",
+    # The shapes the batch-3 and batch-5 reports brought with them. A reason with no entry here still
+    # travels on the row, but the screen prints the bare key instead of a sentence — so every reason a
+    # declaration can emit is spelled out, in the words the reader needs rather than the field name.
+    "no_processor_data": "the processor's feed reported nothing for this store-day, which is not the "
+                         "same as it settling nothing",
+    "no_declared_data": "no closing row was filed for this store-day, so there is nothing to compare "
+                        "the other side against",
+    "dm_merged": "the district manager corrected the combined total without stating the split, so "
+                 "attributing part of it to this one figure would be a guess",
+    "not_collected": "this envelope has not been collected yet, so nothing has been counted",
 }
 
 

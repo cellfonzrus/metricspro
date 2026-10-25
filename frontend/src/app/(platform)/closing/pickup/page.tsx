@@ -13,6 +13,8 @@ import { resolveStoreCodes } from '../_lib/market-store-cascade'
 import EnvelopeViewLink from '@/components/EnvelopeViewLink'
 import { repOptions } from '@/lib/rep-options'
 import { WorkflowNext } from '@/components/WorkflowNext'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel } from '@/components/DrillDownPanel'
+import { DrillPickupStat as Stat, ENVELOPE_DRILL_COLUMNS as DRILL_COLUMNS } from '../_lib/DrillStat'
 
 // DM cash pickup — see the day's cash envelopes, check off the ones collected with a note, confirm.
 // On confirm, the assigned recipient gets an email + WhatsApp summary.
@@ -274,10 +276,25 @@ export default function CashPickupPage() {
   const selectedKeys = ready.filter(e => sel_[key(e)])
   const selTotal = selectedKeys.reduce((s, e) => s + (e.cash || 0), 0)
 
-  // Footer totals over the envelopes CURRENTLY ON SCREEN — so the bottom line always agrees with the
-  // filters, which a server-side total could not promise. The actual-picked total deliberately
-  // covers only the collected envelopes that carry a count; the rest are counted, not absorbed.
+  // ── §CORE-17: THE FOOTER AND ITS EVIDENCE ARE ONE FOLD ──────────────────────────────────────────
+  // These figures used to be reduced here, over "the envelopes CURRENTLY ON SCREEN", on the reading
+  // that a server total could not follow the filters. That reading was half wrong and checking it is
+  // why this is now four lines: EVERY filter on this page (date/range, store, market, employee, DM) is
+  // a QUERY PARAMETER, so `data.envelopes` already IS the filtered population and the server's fold
+  // covers exactly it. So the footer reads the served totals, the server serves a panel per figure
+  // naming the envelopes behind it, and there is one fold instead of two hoping to agree. The reduce
+  // survives only as the fallback for an older payload that serves no `totals` block.
+  //
+  // The counted figures still cover only the collected envelopes that CARRY a count — an uncounted
+  // envelope is reported beside the total, never folded in at its declared value and never as $0.00.
+  // That rule now lives once, server-side, and the panel shows each excluded envelope with its reason.
   const footTotals = useMemo(() => {
+    const t = data?.totals
+    if (t) return { cash: t.total_cash || 0, salesCash: t.total_cash_sales || 0,
+                    totalCash: t.total_cash_gross || 0, actual: t.collected_actual || 0,
+                    actualCount: t.collected_actual_envelopes || 0,
+                    missingCount: t.collected_actual_missing || 0,
+                    variance: t.collected_actual_variance || 0 }
     let cash = 0, salesCash = 0, totalCash = 0, actual = 0, actualCount = 0, missingCount = 0, variance = 0
     for (const e of envelopes) {
       cash += e.cash || 0
@@ -291,7 +308,11 @@ export default function CashPickupPage() {
     }
     return { cash: round2(cash), salesCash: round2(salesCash), totalCash: round2(totalCash),
              actual: round2(actual), actualCount, missingCount, variance: round2(variance) }
-  }, [envelopes])
+  }, [envelopes, data])
+  // The panels, keyed by figure. No narrowing (`drill-narrow`) is applied or needed here — see above.
+  const panels = useMemo<Record<string, DrillPanel>>(() => data?.drilldown || {}, [data])
+  const drill = useDrillTile(panels)
+  const dl = drill.dl
 
   // Per-store "cash on hand" + a live "left after this pickup" preview (OWNER DIRECTIVE 2026-08-04).
   // `by_store` (backend, reusing the SAME `_cash_position_core` Store Cash on Hand / Cash Position
@@ -440,6 +461,9 @@ export default function CashPickupPage() {
         {(fMarkets.length > 0 || fStores.length > 0 || fEmps.length > 0 || fDm) && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 9px' }} onClick={() => { setFMarkets([]); setFStores([]); setFEmps([]); setFDm('') }}>Clear</button>}
         {market && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Market: {market}</span>}
         {data && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{data.ready} ready · {data.collected} collected{data.flagged ? ` · ${data.flagged} ⚠ flagged` : ''}</span>}
+        {/* A div inside the span above would be invalid markup, so the flagged figure's link sits
+            beside it rather than inside it. */}
+        {data?.flagged ? <DrillTileLinks drills={dl('flagged', 'the flagged envelopes')} open={drill.open} onToggle={drill.toggle} /> : null}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
           {(data?.envelopes || []).length > 0 && <><ExportButtons payload={exportPayload} compact /><SendReportButton exportPayload={exportPayload} compact /></>}
           <Link href="/closing/cash-position" style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>💰 Cash Position</Link>
@@ -450,8 +474,10 @@ export default function CashPickupPage() {
       {/* Day summary — total cash collected end-of-day + collection progress */}
       {data && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-          <Stat label="Total cash (end of day)" value={fmt(data.total_cash || 0)} accent />
-          <Stat label="Collected (declared)" value={fmt(data.collected_cash || 0)} sub={`${data.collected} envelope${data.collected === 1 ? '' : 's'}`} />
+          <Stat label="Total cash (end of day)" value={fmt(data.total_cash || 0)} accent
+            drill={drill} drills={dl('total_cash', 'these envelopes', 'total_cash_sales', 'the merchandise share')} />
+          <Stat label="Collected (declared)" value={fmt(data.collected_cash || 0)} sub={`${data.collected} envelope${data.collected === 1 ? '' : 's'}`}
+            drill={drill} drills={dl('collected_cash', 'what they declared', 'collected', 'the envelopes')} />
           {/* The COUNTED side beside the declared one. Collected(declared) is the envelope figure a
               short pickup does not change, so on its own it can never show a shortfall. */}
           <Stat label="Actually picked"
@@ -462,8 +488,18 @@ export default function CashPickupPage() {
                   : data.collected_actual_variance < 0 ? `${fmt(data.collected_actual_variance)} short`
                   : `+${fmt(data.collected_actual_variance)} over`} over ${data.collected_actual_envelopes} counted`
                 + (data.collected_actual_missing ? ` · ${data.collected_actual_missing} not counted` : '')
-              : `no counts recorded${data.collected ? ` on ${data.collected} collected` : ''}`} />
-          <Stat label="Still to collect" value={fmt(data.ready_cash || 0)} sub={`${data.ready} envelope${data.ready === 1 ? '' : 's'}`} />
+              : `no counts recorded${data.collected ? ` on ${data.collected} collected` : ''}`}
+            drill={drill} drills={dl('collected_actual', 'what was counted', 'collected_actual_variance', 'the difference', 'collected_actual_missing', 'the uncounted envelopes')} />
+          <Stat label="Still to collect" value={fmt(data.ready_cash || 0)} sub={`${data.ready} envelope${data.ready === 1 ? '' : 's'}`}
+            drill={drill} drills={dl('ready_cash', 'what is waiting', 'ready', 'the envelopes')} />
+        </div>
+      )}
+
+      {/* ONE panel at a time, under the strip — the envelopes behind whichever figure was opened. */}
+      {drill.open && (
+        <div style={{ marginBottom: 16 }}>
+          <DrillDownPanel panel={drill.panel} extraColumns={DRILL_COLUMNS}
+            emptyNote="No envelope in this view contributed to this figure." />
         </div>
       )}
 
@@ -737,9 +773,11 @@ export default function CashPickupPage() {
                       bold one is whichever is being collected, so the bottom line and the Confirm
                       button can never be read as two different amounts. */}
                   <td style={{ ...cell, border: 0, color: footTotals.cash === footTotals.salesCash ? undefined : 'var(--text2)',
-                               fontWeight: footTotals.cash === footTotals.salesCash ? 700 : 400 }}>{fmt(footTotals.salesCash)}</td>
+                               fontWeight: footTotals.cash === footTotals.salesCash ? 700 : 400 }}>{fmt(footTotals.salesCash)}
+                    <DrillTileLinks drills={dl('total_cash_sales', 'these envelopes')} open={drill.open} onToggle={drill.toggle} /></td>
                   <td style={{ ...cell, border: 0, color: footTotals.cash === footTotals.totalCash ? undefined : 'var(--text2)',
-                               fontWeight: footTotals.cash === footTotals.totalCash ? 700 : 400 }}>{fmt(footTotals.totalCash)}</td>
+                               fontWeight: footTotals.cash === footTotals.totalCash ? 700 : 400 }}>{fmt(footTotals.totalCash)}
+                    <DrillTileLinks drills={dl('total_cash_gross', 'these envelopes')} open={drill.open} onToggle={drill.toggle} /></td>
                   <td style={{ ...cell, border: 0 }} />
                   <td style={{ ...cell, border: 0 }}>
                     {footTotals.actualCount === 0
@@ -757,6 +795,11 @@ export default function CashPickupPage() {
                             over {footTotals.actualCount} counted envelope{footTotals.actualCount === 1 ? '' : 's'}
                             {footTotals.missingCount > 0 && ` · ${footTotals.missingCount} picked up but not counted`}
                           </div>
+                          <DrillTileLinks
+                            drills={dl('collected_actual', 'what was counted',
+                                       'collected_actual_variance', 'the difference',
+                                       'collected_actual_missing', 'the uncounted envelopes')}
+                            open={drill.open} onToggle={drill.toggle} />
                         </>}
                   </td>
                   <td style={{ ...cell, border: 0 }} colSpan={4} />
@@ -843,10 +886,3 @@ const L = ({ t, children }: { t: string; children: React.ReactNode }) => (
   <label style={{ fontSize: 11, color: 'var(--text3)' }}><div style={{ marginBottom: 3 }}>{t}</div>{children}</label>
 )
 
-const Stat = ({ label, value, sub, accent, color }: { label: string; value: string; sub?: string; accent?: boolean; color?: string }) => (
-  <div className="card" style={{ padding: '12px 16px', minWidth: 150, flex: '0 1 auto', borderTop: accent ? '3px solid var(--accent)' : undefined }}>
-    <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
-    <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2, color: color || undefined }}>{value}</div>
-    {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
-  </div>
-)

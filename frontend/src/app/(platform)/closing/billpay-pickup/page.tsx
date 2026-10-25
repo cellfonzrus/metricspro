@@ -9,6 +9,8 @@ import { SendReportButton } from '@/lib/send-report'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 import { EntityPickerChips } from '../_lib/EntityPickerChips'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel } from '@/components/DrillDownPanel'
+import { DrillPickupStat as Stat, ENVELOPE_DRILL_COLUMNS as DRILL_COLUMNS } from '../_lib/DrillStat'
 import { resolveStoreCodes } from '../_lib/market-store-cascade'
 import EnvelopeViewLink from '@/components/EnvelopeViewLink'
 import { repOptions } from '@/lib/rep-options'
@@ -164,6 +166,15 @@ export default function BillPayPickupPage() {
   const selectedKeys = ready.filter(e => sel_[key(e)])
   const selTotal = selectedKeys.reduce((s, e) => s + (e.cash || 0), 0)
 
+  // §CORE-17 — every figure on this screen opens to the envelopes behind it, through the SAME
+  // declaration the cash pickup uses (`closing/pickup_drilldown`): the two screens are one
+  // mechanism, so fixing one and not the other would be the sibling defect. The server folds every
+  // figure here already and each filter is a query parameter, so there is nothing to narrow and the
+  // tiles keep reading the served totals — see §CORE-17.3e.
+  const panels = useMemo<Record<string, DrillPanel>>(() => data?.drilldown || {}, [data])
+  const drill = useDrillTile(panels)
+  const dl = drill.dl
+
   // Per-store bill-pay position + a live "pending after this pickup" preview — same pattern as
   // Cash Pickup's by_store panel, on the billpay side (declared − picked = pending remittance).
   const selByStore = useMemo(() => {
@@ -264,6 +275,9 @@ export default function BillPayPickupPage() {
         {(fMarkets.length > 0 || fStores.length > 0 || fEmps.length > 0 || fDm) && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 9px' }} onClick={() => { setFMarkets([]); setFStores([]); setFEmps([]); setFDm('') }}>Clear</button>}
         {market && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Market: {market}</span>}
         {data && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{data.ready} ready · {data.collected} collected{data.flagged ? ` · ${data.flagged} ⚠ flagged` : ''}</span>}
+        {/* A div inside the span above would be invalid markup, so the flagged figure's link sits
+            beside it rather than inside it. */}
+        {data?.flagged ? <DrillTileLinks drills={dl('flagged', 'the flagged envelopes')} open={drill.open} onToggle={drill.toggle} /> : null}
         {data?.pos_source && data.pos_source !== 'none' && <span style={{ fontSize: 12, color: 'var(--text3)' }}>POS source: {data.pos_source}</span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
           {(data?.envelopes || []).length > 0 && <><ExportButtons payload={exportPayload} compact /><SendReportButton exportPayload={exportPayload} compact /></>}
@@ -275,10 +289,22 @@ export default function BillPayPickupPage() {
       {/* Day summary — bill-pay cash declared / collected / still to collect */}
       {data && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-          <Stat label="Bill-pay cash (declared)" value={fmt(data.total_cash || 0)} accent />
-          <Stat label="Bill pay on credit card (declared)" value={fmt(data.total_credit || 0)} sub="taken on card — no cash to pick up" />
-          <Stat label="Collected" value={fmt(data.collected_cash || 0)} sub={`${data.collected} envelope${data.collected === 1 ? '' : 's'}`} />
-          <Stat label="Still to collect" value={fmt(data.ready_cash || 0)} sub={`${data.ready} envelope${data.ready === 1 ? '' : 's'}`} />
+          <Stat label="Bill-pay cash (declared)" value={fmt(data.total_cash || 0)} accent
+            drill={drill} drills={dl('total_cash', 'these envelopes')} />
+          <Stat label="Bill pay on credit card (declared)" value={fmt(data.total_credit || 0)} sub="taken on card — no cash to pick up"
+            drill={drill} drills={dl('total_credit', 'these envelopes')} />
+          <Stat label="Collected" value={fmt(data.collected_cash || 0)} sub={`${data.collected} envelope${data.collected === 1 ? '' : 's'}`}
+            drill={drill} drills={dl('collected_cash', 'what they declared', 'collected', 'the envelopes')} />
+          <Stat label="Still to collect" value={fmt(data.ready_cash || 0)} sub={`${data.ready} envelope${data.ready === 1 ? '' : 's'}`}
+            drill={drill} drills={dl('ready_cash', 'what is waiting', 'ready', 'the envelopes with cash')} />
+        </div>
+      )}
+
+      {/* ONE panel at a time, under the strip — the envelopes behind whichever figure was opened. */}
+      {drill.open && (
+        <div style={{ marginBottom: 16 }}>
+          <DrillDownPanel panel={drill.panel} extraColumns={DRILL_COLUMNS}
+            emptyNote="No envelope in this view contributed to this figure." />
         </div>
       )}
 
@@ -470,10 +496,3 @@ const L = ({ t, children }: { t: string; children: React.ReactNode }) => (
   <label style={{ fontSize: 11, color: 'var(--text3)' }}><div style={{ marginBottom: 3 }}>{t}</div>{children}</label>
 )
 
-const Stat = ({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) => (
-  <div className="card" style={{ padding: '12px 16px', minWidth: 150, flex: '0 1 auto', borderTop: accent ? '3px solid var(--accent)' : undefined }}>
-    <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
-    <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{value}</div>
-    {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
-  </div>
-)

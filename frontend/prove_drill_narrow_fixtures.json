@@ -679,7 +679,7 @@
           ],
           "present": true,
           "reason": "no_processor_data",
-          "reason_label": null,
+          "reason_label": "the processor's feed reported nothing for this store-day, which is not the same as it settling nothing",
           "row_key": {
             "close_date": "2026-09-02",
             "processor_role": "external_cc",
@@ -877,7 +877,7 @@
           ],
           "present": false,
           "reason": "no_processor_data",
-          "reason_label": null,
+          "reason_label": "the processor's feed reported nothing for this store-day, which is not the same as it settling nothing",
           "row_key": {
             "close_date": "2026-09-02",
             "processor_role": "external_cc",
@@ -1108,7 +1108,7 @@
           ],
           "present": false,
           "reason": "no_processor_data",
-          "reason_label": null,
+          "reason_label": "the processor's feed reported nothing for this store-day, which is not the same as it settling nothing",
           "row_key": {
             "close_date": "2026-09-02",
             "processor_role": "external_cc",
@@ -1344,7 +1344,7 @@
           ],
           "present": false,
           "reason": "no_processor_data",
-          "reason_label": null,
+          "reason_label": "the processor's feed reported nothing for this store-day, which is not the same as it settling nothing",
           "row_key": {
             "close_date": "2026-09-02",
             "processor_role": "external_cc",
@@ -1580,7 +1580,7 @@
           ],
           "present": false,
           "reason": "no_processor_data",
-          "reason_label": null,
+          "reason_label": "the processor's feed reported nothing for this store-day, which is not the same as it settling nothing",
           "row_key": {
             "close_date": "2026-09-02",
             "processor_role": "external_cc",
@@ -1740,7 +1740,7 @@
           ],
           "present": false,
           "reason": "no_processor_data",
-          "reason_label": null,
+          "reason_label": "the processor's feed reported nothing for this store-day, which is not the same as it settling nothing",
           "row_key": {
             "close_date": "2026-09-02",
             "processor_role": "external_cc",
@@ -1966,7 +1966,7 @@
           ],
           "present": false,
           "reason": "no_processor_data",
-          "reason_label": null,
+          "reason_label": "the processor's feed reported nothing for this store-day, which is not the same as it settling nothing",
           "row_key": {
             "close_date": "2026-09-02",
             "processor_role": "external_cc",
@@ -2202,7 +2202,7 @@
           ],
           "present": false,
           "reason": "no_processor_data",
-          "reason_label": null,
+          "reason_label": "the processor's feed reported nothing for this store-day, which is not the same as it settling nothing",
           "row_key": {
             "close_date": "2026-09-02",
             "processor_role": "external_cc",

@@ -90,6 +90,12 @@ ALLOW = {
         "closing tender-source picker ('sales' vs 'x_report' = where a tender's truth comes from); the file input uploads the tender map, not a report kind",
     ("components/DailyClosingVerify.tsx", "surface"):
         "the DM verify's X-report attach for ONE closing day — the x_report kind is POS-agnostic ({} applies-to) so the registry answer is 'shown' for every tenant; routing it is the closing agent's PR",
+    ("app/(platform)/closing/tender-recon-3way/page.tsx", "surface"):
+        "the 3-way recon's X-Report upload is for ONE day and ONE kind — no choice is rendered, so "
+        "there is no kind list to dereference (same shape as DailyClosingVerify above). The two key "
+        "literals the heuristic sees are now the DRILL-DOWN PANEL KEYS of its selection-total figures "
+        "(§CORE-17.3e): 'closing' / 'x_report' / 'sales' are the report's three LEGS, which is the same "
+        "tender-source vocabulary tender-config is excused for, not kinds on offer",
 }
 assert all(v for v in ALLOW.values()), "every allow entry carries a reason"
 

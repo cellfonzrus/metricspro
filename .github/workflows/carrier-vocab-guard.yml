@@ -226,6 +226,13 @@ on:
       - "frontend/src/components/DrillDownPanel.tsx"
       - "frontend/src/app/(platform)/closing/tender-recon/page.tsx"
       - "frontend/src/app/(platform)/closing/_lib/DrillStat.tsx"
+      # §CORE-17.3e — the 3-way selection strip and the cash-pickup footers.
+      - "backend/harness_batch5_drilldown.py"
+      - "backend/app/modules/closing/three_way_drilldown.py"
+      - "backend/app/modules/closing/pickup_drilldown.py"
+      - "frontend/src/app/(platform)/closing/tender-recon-3way/page.tsx"
+      - "frontend/src/app/(platform)/closing/pickup/page.tsx"
+      - "frontend/src/app/(platform)/closing/billpay-pickup/page.tsx"
       - "frontend/src/app/(platform)/closing/epay-recon/page.tsx"
       - "frontend/src/app/(platform)/closing/accessory-recon/page.tsx"
       - "frontend/src/app/(platform)/closing/external-credit-recon/page.tsx"
@@ -1354,6 +1361,9 @@ jobs:
       - name: Run the one-fold lock (a figure and its evidence are the SAME fold even under a screen filter — the client narrowing is pinned to the server's panel by identity on the unfiltered case, its fixtures are regenerated from the real declarations, and it refuses a capped panel rather than serve a figure missing rows — index §CORE-17.3d)
         working-directory: backend
         run: python3 harness_drill_narrow_fixtures.py | tail -10 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-5 drill lock (the 3-way selection strip is folded ONCE over a list flattened once and each tile is read off its narrowed panel; the cash-pickup footers are the PLAIN tile shape because every filter there is a query parameter, and wiring the narrowing into that page FAILS this check; a counted figure still refuses to cover an envelope nobody counted — index §CORE-17.3e)
+        working-directory: backend
+        run: python3 harness_batch5_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
