@@ -34102,6 +34102,19 @@ substring equality against `OWES_MAX = 71` — was rewritten shrink-only too, wi
 `_owes_max()` reader and the same three negative controls. A successor lowering the ratchet to 68 now
 has to touch neither file.
 
+**ONE EXISTING LOCK CAUGHT THIS BATCH ONE STEP SHORT OF ITS OWN RULE, and was not touched.**
+`harness_feed_watchdog.py` §F8 requires that once a table HAS a registry constant, every watchdog map
+keys it BY that constant and never re-spells it. Giving `raw_payment_detail`, `raw_mi`,
+`raw_comp_report` and `raw_ma_commission` constants therefore turned the PRE-EXISTING literals in
+`DATA_DATE_COLUMN_BY_TABLE`, `FEED_CADENCE_BY_TABLE`, `FEED_LABEL_BY_TABLE` and the MA store-column map
+into second copies the instant the constants appeared — the §19.18 shape, created by the very change
+that was closing it. Ten keys now dereference; no value changed, no table was renamed, `watched_feeds()`
+returns the identical set, 51/1 → **52/0**. **Naming a fact is half the fix: the other half is deleting
+every copy in the same commit, and a lock that fires on the half-done state is doing its job.** The ~140
+`client.table("raw_…")` call-sites across `app/modules/**` are query arguments rather than the
+registry's declaration, are outside F8's subject, and are deliberately left for their own PR — one of
+them is inside the commission engine, which belongs to another thread.
+
 **No migration, no new table, no money moved** — three read-only `drilldown` payloads, one additive
 `drilldown_store` mapping beside them, six feed-name constants and one writer map on the lineage
 registry, and three reason sentences on the one home's `UNMEASURED_REASONS` whose KEYS are
