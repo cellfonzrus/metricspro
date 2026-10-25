@@ -74,7 +74,8 @@ FACTS: dict[str, dict] = {
                   'harness_cash_recon_drilldown.py', 'harness_tender_recon_drilldown.py',
                   'harness_day_recon_drilldown.py', 'harness_drill_narrow_fixtures.py',
                   'harness_batch5_drilldown.py', 'harness_batch6_drilldown.py',
-                  'harness_batch7_drilldown.py', 'harness_batch8_drilldown.py'),
+                  'harness_batch7_drilldown.py', 'harness_batch8_drilldown.py',
+                  'harness_batch9_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -130,6 +131,14 @@ FACTS: dict[str, dict] = {
             # resolution time opens to `measured`, its own denominator, which this declaration folds
             # and the endpoint now also shows on the tile.
             'app/modules/helpdesk/dashboard_drilldown.py': ('report_drilldown',),
+            # The Closing & Cash Pickup Status tiles (§CORE-17.3i). The first declaration whose most
+            # important rows name NO table: a store-day nobody filed anything for was read out of
+            # nothing and is on the report because the roster expected it, which is served as a
+            # stated untraceable origin. Both state vocabularies are dereferenced, never re-spelled.
+            'app/modules/closing/chain_drilldown.py': ('report_drilldown',),
+            # Management Review's attempt groups (§CORE-17.3i). A turned-away submit is shown and
+            # never counted — `submit_refusal.is_real_try` stays the one rule for what is a try.
+            'app/modules/closing/attempts_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────

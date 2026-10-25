@@ -40,6 +40,8 @@ from . import three_way_drilldown as _three_way_drilldown
 from . import envelope_drilldown as _envelope_drilldown
 from . import rollup_drilldown as _rollup_drilldown
 from . import external_credit_drilldown as _external_credit_drilldown
+from . import chain_drilldown as _chain_drilldown
+from . import attempts_drilldown as _attempts_drilldown
 from app.modules.commcalc import data_lineage_registry as _lineage
 from . import closer_resolution
 from . import billpay_netting
@@ -3035,6 +3037,12 @@ def closing_attempts(period: str = None, date: str = None, store: str = None,
         })
     out.sort(key=lambda x: (x["close_date"] or "", x["store_address"] or ""), reverse=True)
     return {"groups": out, "total": len(out), "rep_options": rep_options,
+            # ── WHERE EACH ATTEMPT COUNT CAME FROM (§CORE-17) ─────────────────────────────────────
+            # One panel per group, keyed EXACTLY as the screen keys its rows. A try names the attempt
+            # row it is; only the try the gate ACCEPTED names the closing row that stands, and a
+            # turned-away submit is shown and never counted — it stored no closing, so counting it
+            # would read as a recount. See `closing/attempts_drilldown.py`.
+            "drilldown_by_group": _attempts_drilldown.group_drilldowns(out),
             # Echo what was actually applied, and say plainly when a market pick could NOT be (roster
             # unavailable) rather than returning a silently unfiltered list that looks filtered.
             "filters": {"stores": sorted(store_set) if store_set else None,
@@ -9352,7 +9360,18 @@ def accountability_chain(date: str = "", start: str = "", end: str = "", stores:
         print(f"WARN accountability chain actor names unavailable: {_ae}")
     # Recomputed over the VISIBLE rows (keyset consistency — never a count the viewer cannot see).
     summary = _da.chain_summary(rows)
+    # ── WHERE EVERY TILE'S FIGURE CAME FROM (§CORE-17) ───────────────────────────────────────────
+    # The panels are tied against the SUMMARY BUILT ABOVE, flattened rather than re-folded, so a
+    # tile and the rows behind it cannot be two different arithmetics. NO narrowing is needed on this
+    # report: every filter it offers is a query parameter, so these rows ARE the rows on screen.
+    #
+    # The rows this report exists for name NO table: a store-day nobody filed anything for was read
+    # out of nothing, and it is on the report because the roster expected the store to file. That is
+    # served as a stated, countable untraceable origin rather than a guessed provenance — see
+    # `closing/chain_drilldown.py`.
+    _chain_drill = _chain_drilldown.drilldowns(rows, summary)
     return {"start": start, "end": end, "days": len(days), "rows": rows, "summary": summary,
+            "drilldown": _chain_drill,
             # Which dates the who-worked signal was actually resolved for (see the cap above) — the
             # screen says so rather than letting an unresolved day read as an empty store.
             "worked_resolved_dates": sorted(_worked_by_date),

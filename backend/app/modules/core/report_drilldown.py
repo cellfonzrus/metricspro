@@ -116,6 +116,10 @@ UNMEASURED_REASONS = {
                      "while the total still counts it",
     "not_resolved": "this one is not finished yet, so it contributes no duration — an average over "
                     "the finished ones is not an average over all of them",
+    "not_filed": "nobody filed a closing for this store-day, so there is no declared figure at all — "
+                 "the drawer was never counted, which is not the same as it being empty",
+    "submit_refused": "this submit was turned away before anything was stored, so it is not a "
+                      "recount — it is a person who came in and could not file",
 }
 
 

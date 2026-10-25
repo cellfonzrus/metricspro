@@ -7,6 +7,7 @@ import ReportShell from '@/components/ReportShell'
 import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import type { ExportColumn } from '@/lib/export'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
 
 // WHO DID NOT CLOSE, AND WHOSE CASH IS STILL IN THE DRAWER (owner ask 2026-10-14), verbatim:
 // "On the daily closing dashboard and daily closing page I need report which store did not submit
@@ -50,6 +51,25 @@ type ChainRow = {
   worked?: { people?: WorkedPerson[]; scheduled_only?: WorkedPerson[]; source?: string; resolved?: boolean }
 }
 type StateCount = { key: string; label: string; store_days: number }
+
+// WHAT IDENTIFIES ONE STORE-DAY IN A DRILL-DOWN — the client side of `closing/chain_drilldown._fields`.
+// `Evidence` is the column this report is really about: a store-day nobody filed anything for was read
+// out of NOTHING, and it is on the report because the roster expected that store to file. The panel
+// says so in that cell rather than showing an empty line.
+const STORE_DAY_COLUMNS = [
+  { header: 'Closing', get: (r: DrillRow) => String(r.fields?.closing || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.closing || '') },
+  { header: 'Cash pickup', get: (r: DrillRow) => String(r.fields?.pickup || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.pickup || '') },
+  { header: 'Stuck at', get: (r: DrillRow) => String(r.fields?.stuck_at || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.stuck_at || '') },
+  { header: 'Declared', get: (r: DrillRow) => money(Number(r.fields?.declared || 0)),
+    sortValue: (r: DrillRow) => Number(r.fields?.declared || 0) },
+  { header: 'Still in store', get: (r: DrillRow) => money(Number(r.fields?.awaiting || 0)),
+    sortValue: (r: DrillRow) => Number(r.fields?.awaiting || 0) },
+  { header: 'Evidence', get: (r: DrillRow) => String(r.fields?.evidence || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.evidence || '') },
+]
 type ChainResponse = {
   start: string; end: string; days: number; stores_expected: number
   rows: ChainRow[]
@@ -59,6 +79,7 @@ type ChainResponse = {
     pickup_states?: StateCount[]
     cash_declared?: number; cash_picked?: number; cash_awaiting?: number
   }
+  drilldown?: Record<string, DrillPanel>
   stages: { key: string; label: string }[]
   filters?: { spine?: boolean }
   worked_resolved_dates?: string[]
@@ -152,6 +173,12 @@ export default function ClosingPickupStatus({ filterValue, onFilterChange, showF
 
   const rows: ChainRow[] = data?.rows || []
   const summary = data?.summary || {}
+  // EVERY TILE OPENS TO ITS STORE-DAYS (§CORE-17). No narrowing is needed or applied: every filter
+  // on this report — the range, the stores, the markets, the employees and the owner's two state
+  // filters — is a query parameter, so the server folded exactly the store-days on screen.
+  const panels: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(panels)
+  const dl = drill.dl
   const closingStates: StateCount[] = summary.closing_states || []
   const pickupStates: StateCount[] = summary.pickup_states || []
 
@@ -242,11 +269,23 @@ export default function ClosingPickupStatus({ filterValue, onFilterChange, showF
             <div style={tile}>
               <div style={{ fontSize: 12, color: 'var(--text3)' }}>Store-days</div>
               <div style={{ fontSize: 19, fontWeight: 700 }}>{summary.store_days ?? 0}</div>
+              <DrillTileLinks drills={dl('store_days', 'the store-days')} open={drill.open} onToggle={drill.toggle} />
             </div>
-            {[...closingStates, ...pickupStates].filter(s => s.store_days > 0).map(s => (
+            {/* A state tile's panel is asked for by the state's OWN key, so a state renamed in the
+                pure module moves the tile and its drill together. A tile the server served no panel
+                for offers no link, rather than one that opens nothing. */}
+            {closingStates.filter(s => s.store_days > 0).map(s => (
               <div key={s.key} style={tile}>
                 <div style={{ fontSize: 12, color: 'var(--text3)' }}>{s.label}</div>
                 <div style={{ fontSize: 19, fontWeight: 700 }}>{s.store_days}</div>
+                <DrillTileLinks drills={dl(`closing_${s.key}`, 'the store-days')} open={drill.open} onToggle={drill.toggle} />
+              </div>
+            ))}
+            {pickupStates.filter(s => s.store_days > 0).map(s => (
+              <div key={s.key} style={tile}>
+                <div style={{ fontSize: 12, color: 'var(--text3)' }}>{s.label}</div>
+                <div style={{ fontSize: 19, fontWeight: 700 }}>{s.store_days}</div>
+                <DrillTileLinks drills={dl(`pickup_${s.key}`, 'the store-days')} open={drill.open} onToggle={drill.toggle} />
               </div>
             ))}
             <div style={tile}>
@@ -255,8 +294,11 @@ export default function ClosingPickupStatus({ filterValue, onFilterChange, showF
                 {money(summary.cash_awaiting)}
               </div>
               <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>of {money(summary.cash_declared)} declared</div>
+              <DrillTileLinks drills={dl('cash_awaiting', 'still in store', 'cash_picked', 'collected', 'cash_declared', 'declared')}
+                              open={drill.open} onToggle={drill.toggle} />
             </div>
           </div>
+          <DrillDownPanel panel={drill.panel} extraColumns={STORE_DAY_COLUMNS} />
 
           <ReportShell
             title="Closing & Cash Pickup Status"

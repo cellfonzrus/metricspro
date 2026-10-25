@@ -9,6 +9,7 @@ import { api, fmt, localToday } from '@/lib/client'
 import { usePosTerm } from '@/lib/report-labels'
 import ScreenLink from '@/components/ScreenLink'
 import { setupFailed } from '@/lib/setupNotice'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
 
 // Management Review (permission-gated: super-admin / company-wide scope / explicit /closing/management
 // grant — DMs excluded). Shows the 3-try close-attempt log: every value a rep entered before a close
@@ -19,6 +20,26 @@ import { setupFailed } from '@/lib/setupNotice'
 // plan is the thing the manager reads before committing, so a renamed field should fail the build.
 type RefileMove = { table: string; match: string; count: number; store_columns: string[] }
 type RefileReview = { table: string; count: number; message: string }
+// WHAT IDENTIFIES ONE SUBMIT IN A DRILL-DOWN — the client side of `closing/attempts_drilldown._fields`.
+// `Outcome` is the column that matters: a submit the system turned away stored no closing, so it is
+// never counted in the attempt badge, and this says which rows those are in the submitter's own words.
+const TRY_COLUMNS = [
+  { header: 'Try', get: (r: DrillRow) => `#${r.fields?.attempt_no ?? '?'}`,
+    sortValue: (r: DrillRow) => Number(r.fields?.attempt_no || 0) },
+  { header: 'Cash entered', get: (r: DrillRow) => fmt(Number(r.fields?.entered_cash || 0)),
+    sortValue: (r: DrillRow) => Number(r.fields?.entered_cash || 0) },
+  { header: 'Credit entered', get: (r: DrillRow) => fmt(Number(r.fields?.entered_credit || 0)),
+    sortValue: (r: DrillRow) => Number(r.fields?.entered_credit || 0) },
+  { header: 'Outcome', get: (r: DrillRow) => (r.fields?.turned_away ? 'turned away'
+      : r.fields?.auto_accepted ? 'auto-accepted'
+        : r.fields?.accepted ? 'accepted' : r.fields?.blocked ? 'recount' : '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.accepted || '') },
+  { header: 'Why', get: (r: DrillRow) => String(r.fields?.why || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.why || '') },
+  { header: 'At', get: (r: DrillRow) => String(r.fields?.at || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.at || '') },
+]
+
 type RefilePlan = {
   ok: boolean
   from_store_code: string
@@ -62,6 +83,9 @@ export default function ClosingManagementPage() {
   // everything (closing/closing_refile), this screen only shows the plan and the refusal.
   const [refTo, setRefTo] = useState<Record<string, string>>({})
   const [refPlan, setRefPlan] = useState<Record<string, RefilePlan | null>>({})
+  // EVERY ATTEMPT COUNT OPENS TO ITS SUBMITS (§CORE-17), one panel per group, keyed exactly as this
+  // screen keys its rows. No narrowing: every filter here is a query parameter, so the server's fold
+  // already covers the groups on screen.
 
   function load() {
     setLoading(true); setErr('')
@@ -123,6 +147,8 @@ export default function ClosingManagementPage() {
   }
 
   const groups: any[] = data?.groups || []
+  const groupPanels: Record<string, DrillPanel> = data?.drilldown_by_group || {}
+  const drill = useDrillTile(groupPanels)
   const forbidden = /permission|403|restricted/i.test(err)
 
   return (
@@ -198,6 +224,12 @@ export default function ClosingManagementPage() {
                         this existed the attempt left no trace at all, so a missing closing could not be
                         told apart from one never submitted. */}
                     {g.refusals > 0 && <span className="badge" style={{ fontSize: 11, background: 'var(--c-bg-fef3c7)', color: 'var(--c-fg-92400e)' }}>⚠ {g.refusals} submit{g.refusals > 1 ? 's' : ''} turned away — {REFUSAL_WORDS[g.last_refusal_code] || 'see tries'}</span>}
+                    {/* A group the server served no panel for offers no link, rather than one that
+                        opens nothing. The wrapper stops the click reaching the card's expander. */}
+                    <span onClick={e => e.stopPropagation()}>
+                      <DrillTileLinks drills={drill.dl(key, 'where this came from')}
+                                      open={drill.open} onToggle={drill.toggle} />
+                    </span>
                     {g.released_at && <span className="badge" style={{ fontSize: 11, background: 'var(--c-bg-dbeafe)', color: 'var(--c-fg-1d4ed8)' }}>🔓 released by {g.released_by || 'management'}{g.correction_count ? ` · corrected ${g.correction_count}×` : ''}</span>}
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -226,6 +258,11 @@ export default function ClosingManagementPage() {
                     <span style={{ fontSize: 12, color: 'var(--text3)' }}>{isOpen ? '▲ hide tries' : '▼ show tries'}</span>
                   </div>
                 </div>
+                {drill.open === key && (
+                  <div style={{ padding: '0 14px 12px' }}>
+                    <DrillDownPanel panel={drill.panel} extraColumns={TRY_COLUMNS} />
+                  </div>
+                )}
                 {relMsg[key] && <div style={{ fontSize: 11, padding: '0 14px 8px', color: relMsg[key].startsWith('❌') ? 'var(--c-fg-b91c1c)' : 'var(--text2)' }}>{relMsg[key]}</div>}
                 {refPlan[key]?.ok && (
                   <div style={{ fontSize: 11, padding: '0 14px 10px', color: 'var(--text2)' }}>
