@@ -4,6 +4,9 @@ import { api, fmt, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 
 type Payment = { id: string; amount: number; paid_date: string; note: string | null }
 type Loan = {
@@ -13,6 +16,19 @@ type Loan = {
 }
 type Pair = { borrower_store: string; lender_store: string; market: string | null; borrowed: number; repaid: number; outstanding: number; loans: number }
 type NetRow = { store: string; owes: number; owed: number; net: number }
+
+// §CORE-17.3l — the extra columns these panels carry off each drill row's own `fields` (each with a
+// `sortValue`, per harness_table_sort_lock).
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const LOAN_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: r => dtext(r, 'market') || '—', sortValue: r => dtext(r, 'market') },
+  { header: 'Paybacks', get: r => dtext(r, 'detail') || '—', sortValue: r => dtext(r, 'detail') },
+  { header: 'Borrowed', get: r => dtext(r, 'borrowed') || '—', sortValue: r => Number(r.fields?.borrowed ?? 0) },
+  { header: 'Repaid', get: r => dtext(r, 'repaid') || '—', sortValue: r => Number(r.fields?.repaid ?? 0) },
+]
 
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const th: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }
@@ -35,6 +51,10 @@ export default function BorrowedMoneyPage() {
   const [byStore, setByStore] = useState<NetRow[]>([])
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
+  // §CORE-17.3l — one panel per money figure, folded by the server over the loans themselves. Store,
+  // market and status are all QUERY PARAMETERS, so `lib/drill-narrow` is NOT wired in.
+  const [panels, setPanels] = useState<Record<string, DrillPanel>>({})
+  const drill = useDrillTile(panels)
 
   // filters
   const [fStore, setFStore] = useState('')
@@ -59,6 +79,7 @@ export default function BorrowedMoneyPage() {
       setStores(opt.stores || []); setMarkets(opt.markets || []); setRegistryStores(opt.registry_stores || [])
       setLoans(list.borrowings || [])
       setTotals({ total_borrowed: list.total_borrowed || 0, total_repaid: list.total_repaid || 0, total_outstanding: list.total_outstanding || 0, count: list.count || 0 })
+      setPanels(list.drilldown || {})
       setPairs(sum.pairs || []); setByStore(sum.by_store || [])
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
     setLoading(false)
@@ -150,10 +171,11 @@ export default function BorrowedMoneyPage() {
     ],
   })
 
-  const card = (label: string, val: string, color?: string) => (
+  const card = (label: string, val: string, color?: string, drillKey?: string) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 150 }}>
       <div style={{ fontSize: 12, color: 'var(--text2)' }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 700, color }}>{val}</div>
+      {drillKey && <DrillTileLinks drills={drill.dl(drillKey, 'the loans behind this')} open={drill.open} onToggle={drill.toggle} />}
     </div>
   )
 
@@ -240,11 +262,22 @@ export default function BorrowedMoneyPage() {
 
       {/* Summary cards */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-        {card('Outstanding', fmt(totals.total_outstanding), totals.total_outstanding > 0 ? '#dc2626' : '#059669')}
-        {card('Total borrowed', fmt(totals.total_borrowed))}
-        {card('Total repaid', fmt(totals.total_repaid), '#059669')}
+        {card('Outstanding', fmt(totals.total_outstanding), totals.total_outstanding > 0 ? '#dc2626' : '#059669', 'total_outstanding')}
+        {card('Total borrowed', fmt(totals.total_borrowed), undefined, 'total_borrowed')}
+        {card('Total repaid', fmt(totals.total_repaid), '#059669', 'total_repaid')}
+        {/* The BORROWING COUNT carries no drill: the ledger of every loan is printed below it. */}
         {card('Borrowings', String(totals.count))}
       </div>
+
+      {/* ONE panel open at a time, below the strip — the shared renderer. The "who owes whom" and
+          "net position by store" tables below get no panels of their own: both re-partition exactly
+          these loans, and each loan is on this screen with its borrower, its lender and its
+          outstanding amount. */}
+      {drill.panel && (
+        <div style={{ marginBottom: 16 }}>
+          <DrillDownPanel panel={drill.panel} extraColumns={LOAN_DRILL_COLUMNS} />
+        </div>
+      )}
 
       {loading ? <div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div> : (
         <>

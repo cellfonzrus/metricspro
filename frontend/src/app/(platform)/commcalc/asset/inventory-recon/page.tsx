@@ -7,9 +7,24 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { usePosTerm } from '@/lib/report-labels'
 import { useReportKinds, notApplicableCopy } from '@/lib/report-kinds'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 
 type Cat = { asset: number; b2b: number; diff: number }
-type Row = { store: string; market: string | null; categories: Record<string, Cat>; total_abs_diff: number; in_asset: boolean; in_b2b: boolean }
+type Row = { store: string; market: string | null; categories: Record<string, Cat>; total_abs_diff: number; in_asset: boolean; in_b2b: boolean; asset_unclassified?: number }
+
+// §CORE-17.3l — the extra columns the unit-disagreement panel carries off each drill row's own
+// `fields` (each with a `sortValue`, per harness_table_sort_lock).
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const RECON_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: r => dtext(r, 'market') || '—', sortValue: r => dtext(r, 'market') },
+  { header: 'By device type', get: r => dtext(r, 'detail') || '—', sortValue: r => dtext(r, 'detail') },
+  { header: 'Not classified', get: r => dtext(r, 'unclassified_on_ledger') || '—', sortValue: r => Number(r.fields?.unclassified_on_ledger ?? 0) },
+]
 
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const th: React.CSSProperties = { textAlign: 'center', padding: '8px 8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }
@@ -30,6 +45,10 @@ export default function InventoryReconPage() {
   const [fMarket, setFMarket] = useState('')
   const [asOf, setAsOf] = useState('')
   const [upDate, setUpDate] = useState(localToday())
+  // §CORE-17.3l — store, market and snapshot date are all QUERY PARAMETERS, so the server's own
+  // fold already covers exactly the rows on screen; `lib/drill-narrow` is NOT wired in.
+  const panels: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(panels)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -186,9 +205,26 @@ export default function InventoryReconPage() {
       {/* Summary */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
         <div className="card" style={{ padding: '12px 16px' }}><div style={{ fontSize: 12, color: 'var(--text2)' }}>Mismatched stores</div><div style={{ fontSize: 20, fontWeight: 700, color: (data?.mismatch_stores || 0) ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)' }}>{data?.mismatch_stores ?? 0}</div></div>
-        <div className="card" style={{ padding: '12px 16px' }}><div style={{ fontSize: 12, color: 'var(--text2)' }}>Total |diff| units</div><div style={{ fontSize: 20, fontWeight: 700 }}>{data?.total_abs_diff ?? 0}</div></div>
+        <div className="card" style={{ padding: '12px 16px' }}>
+          <div style={{ fontSize: 12, color: 'var(--text2)' }}>Total |diff| units</div>
+          <div style={{ fontSize: 20, fontWeight: 700 }}>{data?.total_abs_diff ?? 0}</div>
+          {/* The MISMATCHED-STORES count beside this one carries no drill: the table below IS the
+              list of stores, highlights exactly the mismatched ones and sorts them to the top
+              (batch-11 precedent). This figure is Σ|ledger − POS| folded per store and per device
+              type, so it opens. */}
+          <DrillTileLinks drills={drill.dl('total_abs_diff', 'the stores behind this')} open={drill.open} onToggle={drill.toggle} />
+        </div>
         <div className="card" style={{ padding: '12px 16px' }}><div style={{ fontSize: 12, color: 'var(--text2)' }}>{pos} snapshot</div><div style={{ fontSize: 16, fontWeight: 700 }}>{data?.b2b_loaded ? (data?.as_of || '—') : 'none yet'}</div></div>
       </div>
+
+      {/* ONE panel open at a time, above the table — the shared renderer. No panel exists at all
+          until a POS snapshot is loaded: with one side absent the "difference" is not a
+          comparison, so the server serves none rather than one that ties to itself. */}
+      {drill.panel && (
+        <div style={{ marginBottom: 14 }}>
+          <DrillDownPanel panel={drill.panel} extraColumns={RECON_DRILL_COLUMNS} />
+        </div>
+      )}
 
       {loading ? <div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div> : !data?.b2b_loaded ? (
         <div className="card" style={{ padding: 24, color: 'var(--text2)', fontSize: 14 }}>

@@ -3,6 +3,9 @@ import { useState, useEffect, useMemo } from 'react'
 import { api, fmt } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 
 // Asset Lending (VIP PayGo) report — the weekly lent-device billing ledger. Data comes from the VIP
 // PayGo sweep (commcalc.vip_paygo_payments) via /commcalc/vip/paygo/summary; this presents it as an
@@ -14,6 +17,18 @@ type Batch = { vip_payment_id: number; batch_type: string; dealer?: string; crea
 
 const yearOf = (d?: string) => (d || '').slice(0, 4)
 
+// §CORE-17.3l — the extra columns these panels carry off each drill row's own `fields` (each with a
+// `sortValue`, per harness_table_sort_lock).
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const BATCH_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Devices', get: r => dtext(r, 'detail') || '—', sortValue: r => dtext(r, 'detail') },
+  { header: 'Overdue', get: r => dtext(r, 'overdue') || '—', sortValue: r => Number(r.fields?.overdue ?? 0) },
+  { header: 'Batch', get: r => dtext(r, 'batch_id') || '—', sortValue: r => dtext(r, 'batch_id') },
+]
+
 export default function AssetLendingPage() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -24,6 +39,11 @@ export default function AssetLendingPage() {
   const [funds, setFunds] = useState<any>(null)
   const [form, setForm] = useState<any>({ pay_date: '', period: '', amount: '', funding_source: 'own', account_label: '', ref: '' })
   const [busy, setBusy] = useState(false)
+  // §CORE-17.3l — the two LIFETIME figures open to the approved weekly batches. The year filter is
+  // client-side but it does not move these figures (they are lifetime), so there is nothing to
+  // narrow and `lib/drill-narrow` is NOT wired in.
+  const panels: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(panels)
 
   useEffect(() => {
     setLoading(true)
@@ -79,7 +99,10 @@ export default function AssetLendingPage() {
 
   const years = useMemo(() => Array.from(new Set(history.map(b => yearOf(b.created_on)))).sort().reverse(), [history])
   const rows = useMemo(() => allBatches.filter(b => !yearFilter || yearOf(b.created_on) === yearFilter), [allBatches, yearFilter])
-  const lifetimeDevices = history.reduce((s, b) => s + (b.invoice_count || 0), 0)
+  // ONE FOLD, SERVED (§CORE-17.3d). This tile used to be summed here on the client, so it had no
+  // server-folded evidence to open at all. The endpoint now folds it in the same loop as the other
+  // lifetime totals; the arithmetic is this page's own, so the figure is identical to the unit.
+  const lifetimeDevices: number = totals.devices_lifetime ?? 0
   const grandTotal = (totals.lifetime_paid || 0) + (totals.current_owed || 0)
   const dealer = current?.dealer || history[0]?.dealer || ''
 
@@ -136,12 +159,27 @@ export default function AssetLendingPage() {
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            {/* THE FIRST TWO TILES OFFER NO DRILL, DELIBERATELY: each is one column of the ONE
+                stored pending batch, with nothing under it on this report — batch 10's leaf
+                ruling. The GRAND TOTAL offers none either: it is the lifetime figure plus the open
+                week, composed from two other tiles (§CORE-17.3h). The weekly ledger below shows
+                the pending row itself. */}
             <Tile label={`Outstanding now${current?.created_on ? ` — wk ${current.created_on}` : ''}`} value={fmt(totals.current_owed || 0)} accent="#b45309" />
             <Tile label="Devices on the open week" value={current?.invoice_count ?? 0} />
-            <Tile label={`Lifetime billed (${totals.weeks || 0} wks)`} value={fmt(totals.lifetime_paid || 0)} accent="#15803d" />
-            <Tile label="Devices billed (lifetime)" value={lifetimeDevices.toLocaleString()} />
+            <Tile label={`Lifetime billed (${totals.weeks || 0} wks)`} value={fmt(totals.lifetime_paid || 0)} accent="#15803d">
+              <DrillTileLinks drills={drill.dl('lifetime_paid', 'the weeks behind this')} open={drill.open} onToggle={drill.toggle} />
+            </Tile>
+            <Tile label="Devices billed (lifetime)" value={lifetimeDevices.toLocaleString()}>
+              <DrillTileLinks drills={drill.dl('devices_lifetime', 'the weeks behind this')} open={drill.open} onToggle={drill.toggle} />
+            </Tile>
             <Tile label="Grand total (incl. open week)" value={fmt(grandTotal)} />
           </div>
+
+          {/* ONE panel open at a time, below the strip — the shared renderer. The By-year and
+              By-month tables get no panels: clicking a year already narrows the weekly ledger to
+              exactly its batches, which is this report's own drill, and a second answer beside an
+              existing one is the defect rather than the fix. */}
+          {drill.panel && <DrillDownPanel panel={drill.panel} extraColumns={BATCH_DRILL_COLUMNS} />}
 
           {/* funding recon — how these bills were paid (own vs borrowed account) */}
           <div className="card" style={{ padding: 16 }}>
@@ -275,11 +313,12 @@ export default function AssetLendingPage() {
   )
 }
 
-function Tile({ label, value, accent }: { label: string; value: any; accent?: string }) {
+function Tile({ label, value, accent, children }: { label: string; value: React.ReactNode; accent?: string; children?: React.ReactNode }) {
   return (
     <div className="card" style={{ padding: '12px 16px', minWidth: 150 }}>
       <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4, color: accent || 'var(--text)' }}>{value}</div>
+      {children}
     </div>
   )
 }

@@ -5,6 +5,9 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 
 function ymd(d: Date) {
   const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0')
@@ -31,14 +34,29 @@ type Report = {
   upcoming: { thursday: string; sold_owed: number; aging_owed: number; total_owed: number; count: number }[]
   rows: any[]
   total_due_rows: number
+  /** §CORE-17.3l — one panel per KPI, folded by the server over the By-Store rows below for THIS
+   *  billing Friday. The device counts beside each KPI carry no panel: every panel row states them. */
+  drilldown?: Record<string, DrillPanel>
 }
 
-function Kpi({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+// The extra columns these panels carry off each drill row's own `fields` (each with a `sortValue`,
+// per harness_table_sort_lock).
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const WEEK_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: r => dtext(r, 'market') || '—', sortValue: r => dtext(r, 'market') },
+  { header: 'Devices', get: r => dtext(r, 'detail') || '—', sortValue: r => dtext(r, 'detail') },
+]
+
+function Kpi({ label, value, sub, color, children }: { label: string; value: string; sub?: string; color?: string; children?: React.ReactNode }) {
   return (
     <div className="card" style={{ padding: '18px 22px' }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color: color || 'var(--text1)' }}>{value}</div>
       {sub && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>{sub}</div>}
+      {children}
     </div>
   )
 }
@@ -52,6 +70,10 @@ export default function OwedWeeklyPage() {
   const [stores, setStores] = useState<{store:string;market:string}[]>([])
   const [report, setReport] = useState<Report | null>(null)
   const [loading, setLoading] = useState(true)
+  // §CORE-17.3l — the Friday, the markets and the stores are all QUERY PARAMETERS, so the server's
+  // fold already covers exactly what is on screen; `lib/drill-narrow` is NOT wired in.
+  const panels: Record<string, DrillPanel> = report?.drilldown || {}
+  const drill = useDrillTile(panels)
 
   useEffect(() => {
     apiCached(`/api/v1/asset/filter-options?org_id=${ORG_ID}`, LOOKUP)
@@ -151,10 +173,23 @@ export default function OwedWeeklyPage() {
         <>
           {/* KPI cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
-            <Kpi label="Total Due This Friday" value={fmt(report.due_this_week.total.owed)} sub={`${report.due_this_week.total.count.toLocaleString()} devices`} color="var(--accent)" />
-            <Kpi label="Sold Phones" value={fmt(report.due_this_week.sold.owed)} sub={`${report.due_this_week.sold.count.toLocaleString()} sold — billed this week`} color="var(--c-fg-059669)" />
-            <Kpi label="Aged > 60 Days (Never Sold)" value={fmt(report.due_this_week.aging.owed)} sub={`${report.due_this_week.aging.count.toLocaleString()} devices past due date`} color="var(--c-fg-d97706)" />
+            <Kpi label="Total Due This Friday" value={fmt(report.due_this_week.total.owed)} sub={`${report.due_this_week.total.count.toLocaleString()} devices`} color="var(--accent)">
+              <DrillTileLinks drills={drill.dl('total_owed', 'the stores behind this')} open={drill.open} onToggle={drill.toggle} />
+            </Kpi>
+            <Kpi label="Sold Phones" value={fmt(report.due_this_week.sold.owed)} sub={`${report.due_this_week.sold.count.toLocaleString()} sold — billed this week`} color="var(--c-fg-059669)">
+              <DrillTileLinks drills={drill.dl('sold_owed', 'the stores behind this')} open={drill.open} onToggle={drill.toggle} />
+            </Kpi>
+            <Kpi label="Aged > 60 Days (Never Sold)" value={fmt(report.due_this_week.aging.owed)} sub={`${report.due_this_week.aging.count.toLocaleString()} devices past due date`} color="var(--c-fg-d97706)">
+              <DrillTileLinks drills={drill.dl('aging_owed', 'the stores behind this')} open={drill.open} onToggle={drill.toggle} />
+            </Kpi>
           </div>
+
+          {/* ONE panel open at a time, below the strip — the shared renderer. */}
+          {drill.panel && (
+            <div style={{ marginBottom: 24 }}>
+              <DrillDownPanel panel={drill.panel} extraColumns={WEEK_DRILL_COLUMNS} />
+            </div>
+          )}
 
           {/* By store */}
           <div className="card" style={{ padding: 0, marginBottom: 24 }}>

@@ -68,6 +68,11 @@ const SOURCE_LABEL: Record<string, string> = {
   vip_invoices: 'distributor invoices',
   vip_paygo_payments: 'distributor device-financing payments',
   store_borrowings: 'inter-store borrowing record',
+  // The device-asset family (§CORE-17.3l). An operator reads "the register's inventory count", never
+  // the table, and never the POS vendor's name — the tenant's own POS term comes from
+  // `lib/report-labels.ts` in copy, so the plain name here stays product-neutral (RULE TWO).
+  b2b_inventory: 'point-of-sale inventory count',
+  store_borrowing_payments: 'inter-store borrowing paybacks',
   inventory_aging_device: 'inventory aging (per device)',
   employees: 'employee records',
   payroll_settings: 'payroll withholding setup',

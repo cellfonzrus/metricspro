@@ -34120,6 +34120,123 @@ them is inside the commission engine, which belongs to another thread.
 registry, and three reason sentences on the one home's `UNMEASURED_REASONS` whose KEYS are
 `carrier_vs_pay`'s own reason constants (locked identical, §Y1, so the two vocabularies cannot drift).
 
+### §CORE-17.3l A REPORT FAMILY'S GRAIN COUNT IS MEASURED, NOT ASSUMED (2026-10-25, batch 12)
+
+Batch 12 of the §CORE-17 audit, the DEVICE-ASSET subsystem (commission agent): **`/commcalc/asset`**
+(Asset Ledger), **`/commcalc/asset/dashboard`** (Asset Charges Dashboard),
+**`/commcalc/asset/on-inventory`** (On-Inventory by Store), **`/commcalc/asset/owed-weekly`** (Weekly
+Owed to Distributor — the audit's #8 worst), **`/commcalc/asset/inventory-recon`** (On-Inventory ↔ the
+POS snapshot), **`/commcalc/asset/borrowed`** (Inter-store Borrowed Money) and
+**`/commcalc/asset/lending`** (Asset Lending / Distributor PayGo). Owed count **71 → 64**.
+Declaration: `backend/app/modules/asset/device_asset_drilldown.py`. Proof:
+`backend/harness_batch12_drilldown.py`, **125 checks**, §Z1–Z12 negative controls, wired into the
+carrier-vocab-guard lock job.
+
+**THE RULING THIS BATCH SETTLES.** The batch was handed over as *"probably one or two grains — a
+device, and a store-week of devices owed"*, with the instruction to MEASURE that rather than assume
+it. Reading the seven producers gives **six**, because *a grain is the row a figure is Σ over, not the
+subject the report is about*:
+
+| grain | the report folded over it | why it is not one of the others |
+|---|---|---|
+| a STATUS / CATEGORY bucket of the ledger | `/commcalc/asset`'s five cards | the endpoint serves no device rows at all; the By-Status and By-Category tables ARE its rows, and two of its cards are folded over different ones of the two |
+| a STORE × CATEGORY aggregate of the ledger | `/commcalc/asset/dashboard` | `asset_charges_summary` is a Postgres aggregate and the endpoint is totals-only by design — these are the only rows that exist |
+| a STORE's unsold exposure | `/commcalc/asset/on-inventory` | money owed, in aging bands measured as of today |
+| a STORE on ONE billing Friday | `/commcalc/asset/owed-weekly` | the population is the devices billing that Friday, nothing else |
+| a STORE compared between TWO inventories | `/commcalc/asset/inventory-recon` | a disagreement in UNITS, with two sides and therefore two possible provenances |
+| an inter-store LOAN / a weekly PayGo BATCH | `/commcalc/asset/borrowed`, `/commcalc/asset/lending` | the financing side: neither is keyed by a store at all |
+
+**Four of those six are keyed by a store and are still four different grains**, in three different
+units. One catalogue stretched over them would have to lie about three of its reports — and the
+tie-out would have said so out loud, which is how we would have found out. `harness_batch12_drilldown`
+§Y6b asserts the measurement: eight catalogue row shapes, and each panel's keys really address its
+own grain. **The general lesson, written down once: a shared SUBJECT is not a shared GRAIN. Count the
+row a figure is summed over, not the noun in the report's title.**
+
+**ONE MODULE, SEVEN CATALOGUES, AND WHY THAT IS NOT THE SIBLING DEFECT.** The §CORE-17.3k argument,
+one subsystem further out. What these seven share is not a row shape but the thing a drill-down exists
+for — *which stored relation was this device-asset figure read out of* — and there are exactly THREE
+answers in the family: the distributor's unit LEDGER, the POS unit SNAPSHOT, and the financing records
+the platform writes itself. Seven files would be seven answers to one question.
+
+| What | Where | Says |
+|---|---|---|
+| **The one declaration** | `asset/device_asset_drilldown.py` — `ledger_catalogue`/`ledger_drilldowns`, `charges_drilldowns`, `on_inventory_catalogue`/`_drilldowns`, `owed_weekly_catalogue`/`_rows`/`_totals`/`_drilldowns`, `inventory_recon_catalogue`/`_drilldowns`, `borrowings_catalogue`/`_drilldowns`, `lending_catalogue`/`_drilldowns` | seven catalogues, three provenance answers, one "an empty report drills to nothing" rule. Every figure is the producer's own, dereferenced |
+| **A report with TWO row families** | `ledger_drilldowns` | the Asset Ledger's cards are folded over its By-Status table, EXCEPT the On-Inventory card, which is folded over its By-Category table. The catalogue therefore names which family each card belongs to — the one thing a plain `tiles()` catalogue cannot express, because a panel over the wrong population is proof of a different number (§A4) |
+| **WHICH SIDE of the POS comparison answered, per ROW** | `device_asset_drilldown.recon_tables` | read off the producer's own `in_asset` / `in_b2b` verdict: a store the POS file never mentioned names ONLY the ledger, a store the ledger holds no unsold device for names ONLY the snapshot, and one neither reported names **nothing**. Naming both on every row would claim the POS mentioned a store it never did (§E4–§E6, §Z9) |
+| **The per-row RMA net-loss rule** | `device_asset_drilldown.rma_net_loss` + `is_rma_row`, `RMA_CATEGORY`, `RMA_SHORTFALL_TOLERANCE` | `GET /asset/charges-summary` folded this inline, so the drill-down would have had to restate its three branches — the copied-fact defect in its smallest form. It is the ONE home now and the endpoint dereferences it; it returns the RAW net, so the endpoint stays one `round` over the raw sum and the figure is byte-identical (§Z6). Same posture as `three_way_drilldown` owning the flattening its strip is folded over |
+| **`GET /asset/summary`'s own On-Inventory predicate** | `device_asset_drilldown.counts_as_on_inventory`, `OPEN_STATUS` | named once so the card and its panel count the same categories by construction. Deliberately still case-SENSITIVE — see defect 3 |
+| **The five device-asset table constants** | `data_lineage_registry.ASSET_LEDGER`, `POS_INVENTORY_SNAPSHOT`, `STORE_BORROWINGS`, `STORE_BORROWING_PAYMENTS`, `PAYGO_BATCHES` | only `ASSET_LEDGER` is a registered ingest feed; the rest are the `DISCREPANCY_SNAPSHOT` shape — name constants for relations the platform writes itself. **Naming a fact is half the fix:** the pre-existing `asset_ledger` and `vip_paygo_payments` literals in six registry maps were re-keyed to the constants in the SAME commit, which is what `harness_feed_watchdog` §F8 requires (52/0, no value changed) |
+| **The endpoints** | `GET /asset/summary`, `/asset/charges-summary`, `/asset/on-inventory-by-store`, `/asset/owed-weekly`, `/asset/inventory-recon`, `/asset/borrowings` → `drilldown`; `GET /commcalc/vip/paygo/summary` → `drilldown` + an additive `totals.devices_lifetime` | each ATTACHES the declaration's output and folds no panel of its own (§Y9, §Y9b) |
+| **One fold for a figure the CLIENT used to sum** | `device_asset_drilldown.devices_lifetime` | "Devices billed (lifetime)" was a `reduce` on the lending page, so it had no server-folded evidence at all (§CORE-17.3b). Served now, from the same `history` the response carries, by the declaration that opens it; the page's own sum is gone and the figure is identical (§Z8, §Y12) |
+| **No narrowing on any of the seven** | `harness_batch12_drilldown.py` §Y11 | every filter that moves a figure on these screens is a QUERY PARAMETER. The lock FAILS THE BUILD if `lib/drill-narrow` is wired into any of them, and §Y11b proves the scan is not vacuous by finding it on a page that really is in that class |
+
+**WHAT IS DELIBERATELY NOT CLAIMED, so nobody reads a missing link as an oversight.** Four refusals,
+each one an existing ruling applied:
+
+- **A FIGURE COMPOSED FROM TWO OTHER TILES.** The Charges Dashboard's **Total Loss** (`appeals + rma`)
+  and PayGo's **Grand total** (`lifetime + open week`) serve **no key at all** — not an empty panel.
+  Both halves of both open instead (§CORE-17.3h as batch 10 extended it; §B2, §Y5).
+- **A LEAF.** PayGo's "Outstanding now" and "Devices on the open week" are two columns of ONE stored
+  batch row with nothing under them on this report — the batch's invoice list is a different
+  endpoint. Batch 10's leaf ruling (§G1).
+- **A COUNT WHOSE LIST IS ON SCREEN.** The ledger's device count, the on-inventory store count, the
+  recon's mismatched-store count and the borrowing count (batch 11 precedent). Likewise the
+  owed-weekly device counts, which every panel row already carries as a field — the carrier-vs-pay
+  rep-count precedent exactly (§C1, §D1, §E1, §F1).
+- **A ROLLUP THAT ALREADY HAS A DRILL OF ITS OWN.** PayGo's By-year rows filter the weekly ledger to
+  exactly their batches on click; the Asset Ledger's By-Category rows already open to their device
+  rows through `GET /asset/category-detail`; the Borrowed screen's "who owes whom" and "net position
+  by store" tables re-partition loans printed in full below them. A second answer beside an existing
+  one is the defect, not the fix.
+
+**AND A DIFFERENCE THAT *IS* DRILLABLE, BY THE §CORE-17.3k TEST, TWICE.** The recon's
+`total_abs_diff` is Σ|ledger − POS| folded per store AND per device type and then added up, so the
+rows and the figure come from different places (§E2). A loan's `outstanding` is `amount − repaid` per
+loan while `GET /asset/borrowings` serves `Σamount − Σrepaid`, subtracted at the TOTAL — so that
+panel's tie-out really compares the two ways of reaching the number instead of restating one of them,
+and it is the one figure on this batch most likely to catch a rounding divergence rather than assert
+it away (§F3).
+
+**FIVE LIVE DEFECTS THESE REPORTS HAVE TODAY — REPORTED, NOT FIXED, AND NO FIGURE MOVED.**
+
+1. **The Charges Dashboard's RMA tile can only ever read "0 items".** `RMA` is not one of
+   `CHARGE_GROUPS`' keys, so `data.groups['rma']` is undefined and the page builds the tile as
+   `{count: 0, owed: total_loss.rma}`. The dollars beside it are real. NOT fixed: putting the true
+   count on the tile changes a figure the owner reads. The panel's `rows_total_count` states how many
+   store-RMA rows are behind the money, which is the honest half that costs nothing (§Z10).
+2. **The On-Inventory ↔ POS recon drops every ledger device whose model does not classify.**
+   `_asset_oninv_by_bucket` skips a row when `inv_bucket(device_model)` returns nothing, so the ASSET
+   side runs short and the gap reads as missing POS stock. Still dropped — and the count now travels
+   per store (`asset_unclassified`, kept OUTSIDE `by_store` so which stores appear is unchanged) and
+   is SHOWN on the drill row, counted into nothing. The figure is untouched and the reader can finally
+   see the hole (§E8, §Z11, §Z11b).
+3. **"On Inventory" is matched case-SENSITIVELY by `GET /asset/summary` and case-INSENSITIVELY by the
+   two `ilike` reads beside it.** `counts_as_on_inventory` is the summary's own predicate, named once.
+   Deliberately NOT unified: making the summary case-insensitive would move the On-Inventory card for
+   any tenant whose file spells the category differently, which is a decision about a figure (§Z7b).
+4. **A PayGo batch the portal reported without an amount is folded into Lifetime Billed as $0.00** —
+   `float(r['amount'] or 0)`. The panel shows it WITHOUT a figure and does not count it; a null adds
+   zero to a sum either way, so the figure is identical to the cent and only the row changes (§G2,
+   §Z3).
+5. **The POS UNIT snapshot is not a registered lineage feed while the $ side of the SAME uploaded file
+   is.** `inventory_value` is watched; `b2b_inventory` is not, so the watchdog cannot tell a stale unit
+   snapshot from a missing one — and the recon page already warns that the automatic Inventory Aging
+   import feeds the value side and not this one. NOT fixed: registering a feed needs a lineage seed
+   migration, which this read-only batch does not carry (§Z12).
+
+**ABSENCE IS NEVER ZERO, AND A MEASURED ZERO IS A DIFFERENT ROW.** A PayGo week with no reported
+amount carries no figure; a store with nothing in an aging band, a loan nobody has paid against and a
+fully-reimbursed return are real measurements at $0.00 and ARE counted (§C4, §F6, §B6). §Z3 plants the
+careless declaration that coerces the unpriced week to $0.00: it ties, exactly as the honest one does,
+and the difference is visible only on the ROW — which is the whole argument for putting it there.
+
+**No migration, no new table, no money moved** — seven read-only `drilldown` payloads, two additive
+keys on existing producers (`totals.devices_lifetime`, `rows[].asset_unclassified`, each folded in the
+same loop as the totals it accompanies), five table-name constants on the lineage registry with six
+pre-existing literals re-keyed to them, and no new entry in `UNMEASURED_REASONS` at all — the one
+reason this batch emits (`amount_not_recorded`) is batch 10's own.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
@@ -34201,12 +34318,16 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 `closing/envelope_drilldown.py`, `closing/rollup_drilldown.py`, `closing/chain_drilldown.py`,
 `closing/attempts_drilldown.py`, `commcalc/tender_recon_drilldown.py`, `crm/reports_drilldown.py`,
 `helpdesk/dashboard_drilldown.py`, `account/statement_drilldown.py`,
-`account/liabilities_drilldown.py`, `commcalc/carrier_pay_drilldown.py`), §17 (`GET
+`account/liabilities_drilldown.py`, `commcalc/carrier_pay_drilldown.py`,
+`asset/device_asset_drilldown.py`), §17 (`GET
 /closing/cash-variance` → `drilldown`; `GET /commcalc/discrepancy/{period}` → `drilldown` +
 `drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET
-/commcalc/commission-received-breakout` → `drilldown`), §18 ("where is this figure from" →
-`panel.sources` → `sourceLabel`; "did the carrier pay what we computed, and out of which legs" →
-§CORE-17.3k), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
+/commcalc/commission-received-breakout` → `drilldown`; `GET /asset/summary`, `GET
+/asset/charges-summary`, `GET /asset/on-inventory-by-store`, `GET /asset/owed-weekly`, `GET
+/asset/inventory-recon`, `GET /asset/borrowings`, `GET /commcalc/vip/paygo/summary` →
+`drilldown`), §18 ("where is this figure from" → `panel.sources` → `sourceLabel`; "did the
+carrier pay what we computed, and out of which legs" → §CORE-17.3k; "which devices is this
+store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
 (`sourceLabel`), §2 / `data_lineage_registry.py` (which table is which feed), §15 (the B2B ↔ MA
 activation recon these three reports read), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
 module graph).

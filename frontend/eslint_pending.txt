@@ -142,7 +142,7 @@
 2	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/asset/hotsheet-recon/page.tsx
 7	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/asset/inventory-recon/page.tsx
 7	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/asset/invoice-due/page.tsx
-12	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/asset/lending/page.tsx
+11	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/asset/lending/page.tsx
 4	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/asset/marketplace-purchases/page.tsx
 10	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/asset/missing-phones/page.tsx
 3	@typescript-eslint/no-explicit-any	src/app/(platform)/commcalc/asset/on-inventory/page.tsx

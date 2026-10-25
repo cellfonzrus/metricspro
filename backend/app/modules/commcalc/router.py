@@ -33,6 +33,7 @@ from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 �
 from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-09 — THE accessory company-goal allocation (index §61; pure)
 from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
 from app.modules.commcalc import tender_recon_drilldown as _tender_recon_drilldown   # 2026-10-24 — THE X-report-vs-closing tile drill (index §CORE-17.3a; declaration only, pure)
+from app.modules.asset import device_asset_drilldown as _asset_dd   # 2026-10-25 — THE device-asset family's drill declaration (index §CORE-17.3l; declaration only, pure)
 from app.modules.commcalc import month_focus as _mfocus   # 2026-10-09 — the month's declared focus and the weekly check-in (index §63)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
@@ -15305,7 +15306,7 @@ def vip_paygo_summary(org_id: str = ORG_ID):
     pending = [r for r in rows if r.get('batch_type') == 'pending']
     approved = [r for r in rows if r.get('batch_type') != 'pending']
     current = max(pending, key=lambda r: r.get('created_on') or '', default=None)
-    return {
+    out = {
         "configured": True,
         "current": current,
         "history": approved,
@@ -15316,6 +15317,14 @@ def vip_paygo_summary(org_id: str = ORG_ID):
             "lifetime_paid": round(sum(float(r.get('amount') or 0) for r in approved), 2),
         },
     }
+    # ONE FOLD FOR A FIGURE AND ITS EVIDENCE (§CORE-17.3d, via §CORE-17.3l). The Asset Lending page
+    # reduced "Devices billed (lifetime)" for itself in TypeScript, so that tile had no server-folded
+    # evidence at all. It is served here, from the same `history` the response carries, by the
+    # declaration that also opens it — the page's own reduce is gone, and the arithmetic is its own,
+    # so the figure is identical.
+    out["totals"]["devices_lifetime"] = _asset_dd.devices_lifetime(out)
+    out["drilldown"] = _asset_dd.lending_drilldowns(out)
+    return out
 
 
 @router.get("/vip/paygo/payment/{vip_payment_id}")

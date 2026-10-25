@@ -5,6 +5,9 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 
 // "(no market)" bucket (2026-07-27 market-filter-dropdown fix) — must match router.py's
 // NO_MARKET_SENTINEL exactly.
@@ -25,7 +28,24 @@ type Totals = {
   unknown_age_count: number; unknown_age_owed: number
   total_amount: number; total_amount_column: string; total_phones_outstanding: number
 }
-type Data = { today: string; data_as_of: string | null; stores: StoreRow[]; totals: Totals; bucket_basis?: string }
+type Data = {
+  today: string; data_as_of: string | null; stores: StoreRow[]; totals: Totals; bucket_basis?: string
+  /** §CORE-17.3l — one panel per figure on the strip and in the table footer, folded by the server
+   *  over the SAME per-store rows the table prints. */
+  drilldown?: Record<string, DrillPanel>
+}
+
+// The extra columns these panels carry off each drill row's own `fields` (each with a `sortValue`,
+// per harness_table_sort_lock).
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const STORE_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: r => dtext(r, 'market') || '—', sortValue: r => dtext(r, 'market') },
+  { header: 'Devices', get: r => dtext(r, 'detail') || '—', sortValue: r => dtext(r, 'detail') },
+  { header: 'Unknown age', get: r => dtext(r, 'unknown_age_count') || '—', sortValue: r => Number(r.fields?.unknown_age_count ?? 0) },
+]
 // Display-level variant merging (2026-07-28 owner-driven addition) — see aging/page.tsx header
 // comment for the full rationale; same shape here.
 type StoreGroup = { key: string; display: string; variants: string[]; also_seen_as: string[]; market: string | null; row_count: number }
@@ -55,6 +75,11 @@ export default function OnInventoryByStorePage() {
   const [dateTo, setDateTo] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('owed')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  // §CORE-17.3l — every filter here is a QUERY PARAMETER, so the server's fold already covers the
+  // rows on screen; `lib/drill-narrow` is deliberately NOT wired in. The table's client-side SORT
+  // only reorders rows, which cannot change what a figure was folded over.
+  const panels: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(panels)
 
   useEffect(() => {
     apiCached(`/api/v1/asset/filter-options?org_id=${ORG_ID}`, LOOKUP)
@@ -226,18 +251,27 @@ export default function OnInventoryByStorePage() {
               shown on Inventory Aging, same money-column choice (owed_to_vip), labeled explicitly. */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 24 }}>
             {[
-              { label: 'Total Phones Outstanding', val: data.totals.total_phones_outstanding.toLocaleString(), sub: `${data.totals.store_count} stores`, color: 'var(--c-fg-2563eb)' },
-              { label: `Total Amount (${data.totals.total_amount_column})`, val: fmt(data.totals.total_amount), sub: 'unsold exposure', color: 'var(--c-fg-d97706)' },
-              { label: '45–60 WARN Owed', val: fmt(data.totals.warn_owed), sub: 'sell before day 60', color: 'var(--c-fg-d97706)' },
-              { label: '>60 MISSED Owed', val: fmt(data.totals.missed_owed), sub: 'past due — billed unsold', color: 'var(--c-fg-dc2626)' },
+              /* `store_count` on the first card carries no drill of its own: it is the cardinality
+                 of the table below, which IS the list of stores (batch-11 precedent). */
+              { label: 'Total Phones Outstanding', val: data.totals.total_phones_outstanding.toLocaleString(), sub: `${data.totals.store_count} stores`, color: 'var(--c-fg-2563eb)', drill: 'total_phones_outstanding' },
+              { label: `Total Amount (${data.totals.total_amount_column})`, val: fmt(data.totals.total_amount), sub: 'unsold exposure', color: 'var(--c-fg-d97706)', drill: 'total_amount' },
+              { label: '45–60 WARN Owed', val: fmt(data.totals.warn_owed), sub: 'sell before day 60', color: 'var(--c-fg-d97706)', drill: 'warn_owed' },
+              { label: '>60 MISSED Owed', val: fmt(data.totals.missed_owed), sub: 'past due — billed unsold', color: 'var(--c-fg-dc2626)', drill: 'missed_owed' },
             ].map(c => (
               <div key={c.label} className="card" style={{ padding: '18px 22px', borderTop: `3px solid ${c.color}` }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{c.label}</div>
                 <div style={{ fontSize: 24, fontWeight: 700, color: c.color, marginTop: 6 }}>{c.val}</div>
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{c.sub}</div>
+                <DrillTileLinks drills={drill.dl(c.drill, 'the stores behind this')} open={drill.open} onToggle={drill.toggle} />
               </div>
             ))}
           </div>
+          {/* ONE panel open at a time, below the strip — the shared renderer. */}
+          {drill.panel && (
+            <div style={{ marginBottom: 20 }}>
+              <DrillDownPanel panel={drill.panel} extraColumns={STORE_DRILL_COLUMNS} />
+            </div>
+          )}
           {data.totals.unknown_age_count > 0 && (
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: -12, marginBottom: 16 }}>
               ℹ️ {data.totals.unknown_age_count} device(s) / {fmt(data.totals.unknown_age_owed)} have no usable acquired date — counted in the totals above, see each store&apos;s own count below.
@@ -292,8 +326,14 @@ export default function OnInventoryByStorePage() {
                     <td />
                     <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-d97706)' }}>{fmt(data.totals.warn_owed)}</td>
                     <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-dc2626)' }}>{fmt(data.totals.missed_owed)}</td>
-                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-6b7280)' }}>{fmt(data.totals.unknown_age_owed)}</td>
-                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: 'var(--text3)' }}>{data.totals.zero_count}</td>
+                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: 'var(--c-fg-6b7280)' }}>
+                      {fmt(data.totals.unknown_age_owed)}
+                      <DrillTileLinks drills={drill.dl('unknown_age_owed', 'stores')} open={drill.open} onToggle={drill.toggle} />
+                    </td>
+                    <td style={{ padding: '10px 12px', fontSize: 12, textAlign: 'right', color: 'var(--text3)' }}>
+                      {data.totals.zero_count}
+                      <DrillTileLinks drills={drill.dl('zero_count', 'stores')} open={drill.open} onToggle={drill.toggle} />
+                    </td>
                   </tr>
                 </tfoot>
               </table>

@@ -75,14 +75,16 @@ REGISTER = "eslint_pending.txt"
 
 # MEASURED on this tree, not estimated. Both may only ever be LOWERED.
 #   python3 -c "import json,collections;d=json.load(open('/tmp/r.json'));print(sum(len(f['messages']) for f in d))"
-PINNED_TOTAL = 5585        # findings pinned by frontend/eslint_pending.txt (5953 on main before the
+PINNED_TOTAL = 5584        # findings pinned by frontend/eslint_pending.txt (5953 on main before the
                            # gate landed; 5917 when it did; 5645 once react/no-unescaped-entities
                            # and @typescript-eslint/no-unused-expressions were cleared to zero; 5643
                            # once the admin-assigned-password card moved out of /admin/security into
                            # its own component, which cleared two `any` annotations with it — §CORE-08;
                            # 5588 once the five form components that a user types into were hoisted to
                            # module scope, clearing 43 `react-hooks/static-components` findings in four
-                           # pages plus two more — §19.56)
+                           # pages plus two more — §19.56; 5584 once the Asset Lending page stopped
+                           # folding its own lifetime device count and read the served total instead,
+                           # which cleared the `any` that fold needed — §CORE-17.3l)
 PINNED_SUPPRESSIONS = 92     # `eslint-disable` directives under frontend/ (110 on main before this
                              # change; 20 that ESLint itself reported as suppressing NOTHING were
                              # deleted, and 8 blanket ones were given the rule name they rely on).
