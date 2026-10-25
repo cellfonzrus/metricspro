@@ -6,8 +6,45 @@ import { api } from '@/lib/client'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { panel, input, label, btn, th, cell, fmtMoney } from '@/lib/crm'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
+
+// WHAT IDENTIFIES ONE LEAD IN A DRILL-DOWN — the client side of `crm/reports_drilldown._lead_fields`.
+// `Stage` is the one that earns its comment: a lead whose stage is not in the stage vocabulary is
+// DROPPED by `pipeline_core.funnel` while the TOTAL tile still counts it, so the panel says which
+// rows those are rather than showing them as a stage of their own.
+const LEAD_COLUMNS = [
+  { header: 'State', get: (r: DrillRow) => String(r.fields?.state || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.state || '') },
+  { header: 'Stage', get: (r: DrillRow) => (r.reason === 'stage_unknown'
+      ? 'not in the stage list' : String(r.fields?.stage || '—')),
+    sortValue: (r: DrillRow) => String(r.fields?.stage || '') },
+  { header: 'Source', get: (r: DrillRow) => String(r.fields?.source || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.source || '') },
+  { header: 'Lost reason', get: (r: DrillRow) => String(r.fields?.lost_reason || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.lost_reason || '') },
+  { header: 'Value', get: (r: DrillRow) => (r.fields?.value == null ? '—' : fmtMoney(Number(r.fields.value))),
+    sortValue: (r: DrillRow) => Number(r.fields?.value || 0) },
+  { header: 'Owner', get: (r: DrillRow) => String(r.fields?.owner || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.owner || '') },
+]
+
+// And one logged touch — the client side of `_activity_fields`.
+const ACTIVITY_COLUMNS = [
+  { header: 'Kind', get: (r: DrillRow) => String(r.fields?.kind || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.kind || '') },
+  { header: 'Rep', get: (r: DrillRow) => String(r.fields?.rep || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.rep || '') },
+  { header: 'Lead', get: (r: DrillRow) => String(r.fields?.lead || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.lead || '') },
+  { header: 'Logged', get: (r: DrillRow) => String(r.fields?.logged_at || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.logged_at || '') },
+]
 
 type TabKey = 'conversion' | 'activity' | 'source'
+
+/** A table LINE on any of the three tabs, in the only respect this screen reads one: the key its own
+ *  endpoint bucketed its panels on, and (on the funnel) the count the stages add up to. */
+type ReportLine = { employee_id?: string; source?: string; stage?: string; count?: number }
 
 export default function CrmReportsPage() {
   const [tab, setTab] = useState<TabKey>('conversion')
@@ -15,6 +52,8 @@ export default function CrmReportsPage() {
   const [end, setEnd] = useState('')
   const [conv, setConv] = useState<any>(null)
   const [act, setAct] = useState<any[]>([])
+  // The activity response WHOLE, not just its rows: the per-rep panels ride on it (§CORE-17).
+  const [actMeta, setActMeta] = useState<{ drilldown_by_rep?: Record<string, DrillPanel> } | null>(null)
   const [summary, setSummary] = useState<any>(null)
   const [msg, setMsg] = useState('')
   const [loading, setLoading] = useState(true)
@@ -30,7 +69,7 @@ export default function CrmReportsPage() {
         api(`/api/v1/crm/reports/activity?${p}`),
         api(`/api/v1/crm/summary?${p}`),
       ])
-      setConv(c); setAct(a?.rows || []); setSummary(s)
+      setConv(c); setAct(a?.rows || []); setActMeta(a); setSummary(s)
     } catch (e: any) { setMsg(e?.message || String(e)) }
     setLoading(false)
   }, [start, end])
@@ -84,6 +123,41 @@ export default function CrmReportsPage() {
     sheets: [{ name: 'Report', columns, rows }],
   }), [title, columns, rows, start, end])
 
+  // EVERY FIGURE OPENS TO ITS RECORDS (§CORE-17). No narrowing is needed or applied: the only
+  // filters on this screen are the two dates and they are query parameters, so the server folded
+  // exactly the leads shown.
+  //
+  // A RATE GETS NO PANEL. `win_rate` and `close_rate` are quotients — there is no set of leads that
+  // adds up to 34% — so they offer the COUNTS they divide instead, and the server serves no panel
+  // under those keys at all (crm/reports_drilldown.lead_catalogue).
+  const tilePanels: Record<string, DrillPanel> = conv?.drilldown || {}
+  const tileDrill = useDrillTile(tilePanels)
+  const dl = tileDrill.dl
+
+  // ONE PANEL PER TABLE ROW, from whichever grouping the open tab is showing. Each map is keyed by
+  // the SAME key its own endpoint bucketed on — stage name, source name, `actor_employee_id` — so a
+  // row's panel holds exactly the records that row counted, not a regrouping of them.
+  const { rowPanels, rowKeyOfLine, rowColumns } = useMemo(() => {
+    if (tab === 'activity') {
+      return { rowPanels: (actMeta?.drilldown_by_rep || {}) as Record<string, DrillPanel>,
+               rowKeyOfLine: (r: ReportLine) => String(r?.employee_id ?? ''), rowColumns: ACTIVITY_COLUMNS }
+    }
+    if (tab === 'source') {
+      return { rowPanels: (summary?.drilldown_by_source || {}) as Record<string, DrillPanel>,
+               rowKeyOfLine: (r: ReportLine) => String(r?.source ?? ''), rowColumns: LEAD_COLUMNS }
+    }
+    return { rowPanels: (conv?.drilldown_by_stage || {}) as Record<string, DrillPanel>,
+             rowKeyOfLine: (r: ReportLine) => String(r?.stage ?? ''), rowColumns: LEAD_COLUMNS }
+  }, [tab, actMeta, summary, conv])
+  const rowDrill = useDrillTile(rowPanels)
+  const hasRowPanels = Object.keys(rowPanels).length > 0
+
+  // REPORTED, NOT PAPERED OVER: `pipeline_core.funnel` drops a lead whose stage is not in the stage
+  // vocabulary, while the TOTAL tile counts every lead. So the funnel can add up to less than the
+  // total on the same screen. The figures are left alone and the gap is stated.
+  const funnelSum = (conv?.by_stage || []).reduce((n: number, r: ReportLine) => n + Number(r?.count || 0), 0)
+  const funnelShort = tab === 'conversion' && conv ? Number(conv.totals?.total || 0) - funnelSum : 0
+
   return (
     <div style={{ padding: 20, maxWidth: 1200 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>📈 CRM Reports</h1>
@@ -111,18 +185,40 @@ export default function CrmReportsPage() {
       {loading && <div style={{ color: 'var(--text2)' }}>Loading…</div>}
 
       {tab === 'conversion' && conv && (
+        <>
         <div style={{ ...panel, marginBottom: 12, display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>TOTAL</div><div style={{ fontSize: 22, fontWeight: 700 }}>{conv.totals.total}</div></div>
-          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>WON</div><div style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-fg-16a34a)' }}>{conv.totals.won}</div></div>
-          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>LOST</div><div style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-fg-dc2626)' }}>{conv.totals.lost}</div></div>
-          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>WIN RATE</div><div style={{ fontSize: 22, fontWeight: 700 }}>{conv.totals.win_rate}%</div></div>
-          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>CLOSE RATE</div><div style={{ fontSize: 22, fontWeight: 700 }}>{conv.totals.close_rate}%</div></div>
+          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>TOTAL</div><div style={{ fontSize: 22, fontWeight: 700 }}>{conv.totals.total}</div>
+            <DrillTileLinks drills={dl('total', 'the leads')} open={tileDrill.open} onToggle={tileDrill.toggle} /></div>
+          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>WON</div><div style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-fg-16a34a)' }}>{conv.totals.won}</div>
+            <DrillTileLinks drills={dl('won', 'the leads')} open={tileDrill.open} onToggle={tileDrill.toggle} /></div>
+          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>LOST</div><div style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-fg-dc2626)' }}>{conv.totals.lost}</div>
+            <DrillTileLinks drills={dl('lost', 'the leads')} open={tileDrill.open} onToggle={tileDrill.toggle} /></div>
+          {/* A PERCENTAGE HAS NO LEADS THAT ADD UP TO IT, so these two offer the counts they divide
+              rather than a panel that could only pretend to tie out. Win rate is won over the closed
+              leads; close rate is the closed leads over the total. */}
+          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>WIN RATE</div><div style={{ fontSize: 22, fontWeight: 700 }}>{conv.totals.win_rate}%</div>
+            <DrillTileLinks drills={dl('won', 'won', 'lost', 'lost')} open={tileDrill.open} onToggle={tileDrill.toggle} /></div>
+          <div><div style={{ fontSize: 11, color: 'var(--text2)' }}>CLOSE RATE</div><div style={{ fontSize: 22, fontWeight: 700 }}>{conv.totals.close_rate}%</div>
+            <DrillTileLinks drills={dl('won', 'won', 'lost', 'lost', 'total', 'all leads')} open={tileDrill.open} onToggle={tileDrill.toggle} /></div>
         </div>
+        <DrillDownPanel panel={tileDrill.panel} extraColumns={LEAD_COLUMNS} />
+        {funnelShort > 0 && (
+          <div style={{ ...panel, marginBottom: 12, fontSize: 12, color: 'var(--text2)' }}>
+            The funnel below adds up to {funnelSum} of the {conv.totals.total} leads in this period.
+            The {funnelShort} missing {funnelShort === 1 ? 'lead is' : 'leads are'} in a stage that is
+            not in your stage list, so the funnel drops {funnelShort === 1 ? 'it' : 'them'} while the
+            total still counts {funnelShort === 1 ? 'it' : 'them'}. Open TOTAL above to see which.
+          </div>
+        )}
+        </>
       )}
 
       <div style={{ ...panel, padding: 0, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead><tr>{columns.map(c => <th key={c.header} style={th}>{c.header}</th>)}</tr></thead>
+          <thead><tr>{columns.map(c => <th key={c.header} style={th}>{c.header}</th>)}
+            {/* A row whose grouping the server served no panel for gets no link, rather than one
+                that opens nothing (§CORE-17.3c). */}
+            {hasRowPanels && <th style={th}>Evidence</th>}</tr></thead>
           <tbody>
             {rows.map((r: any, i: number) => (
               <tr key={i}>{columns.map(c => (
@@ -132,14 +228,21 @@ export default function CrmReportsPage() {
                 // 2026-10-15. `harness_column_render_lock.py` holds every such table to this.
                 <td key={c.header} style={cell}>{c.render ? c.render(r)
                   : (c.money ? fmtMoney(Number(c.get(r))) : String(c.get(r) ?? '—'))}</td>
-              ))}</tr>
+              ))}
+                {hasRowPanels && (
+                  <td style={cell}>
+                    <DrillTileLinks drills={rowDrill.dl(rowKeyOfLine(r), 'open')}
+                                    open={rowDrill.open} onToggle={rowDrill.toggle} />
+                  </td>
+                )}</tr>
             ))}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={columns.length} style={{ ...cell, color: 'var(--text2)', textAlign: 'center', padding: 20 }}>Nothing in this period.</td></tr>
+              <tr><td colSpan={columns.length + (hasRowPanels ? 1 : 0)} style={{ ...cell, color: 'var(--text2)', textAlign: 'center', padding: 20 }}>Nothing in this period.</td></tr>
             )}
           </tbody>
         </table>
       </div>
+      <DrillDownPanel panel={rowDrill.panel} extraColumns={rowColumns} />
 
       {tab === 'conversion' && conv?.lost_reasons?.length > 0 && (
         <div style={{ ...panel, marginTop: 14 }}>

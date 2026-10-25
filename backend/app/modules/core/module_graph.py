@@ -74,7 +74,7 @@ FACTS: dict[str, dict] = {
                   'harness_cash_recon_drilldown.py', 'harness_tender_recon_drilldown.py',
                   'harness_day_recon_drilldown.py', 'harness_drill_narrow_fixtures.py',
                   'harness_batch5_drilldown.py', 'harness_batch6_drilldown.py',
-                  'harness_batch7_drilldown.py'),
+                  'harness_batch7_drilldown.py', 'harness_batch8_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -121,6 +121,15 @@ FACTS: dict[str, dict] = {
             # corrected day (locked, harness §D3). The two cash tiles are declared in
             # `recon_drilldown.py` instead, beside the counts they share `_money_issues` with.
             'app/modules/closing/rollup_drilldown.py': ('report_drilldown',),
+            # The CRM's three report tabs (§CORE-17.3h). The file where the house rule for a
+            # QUOTIENT is written down: `win_rate` and `close_rate` get no panel at all, because no
+            # set of leads adds up to a percentage, so they offer the counts they divide. Also the
+            # one place the funnel's silent drop of an unknown-stage lead is made visible.
+            'app/modules/crm/reports_drilldown.py': ('report_drilldown',),
+            # The Helpdesk dashboard's tiles (§CORE-17.3h). Same ruling for an AVERAGE: the mean
+            # resolution time opens to `measured`, its own denominator, which this declaration folds
+            # and the endpoint now also shows on the tile.
+            'app/modules/helpdesk/dashboard_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
