@@ -6,6 +6,8 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import { usePosTerm } from '@/lib/report-labels'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
+import { narrowPanels, screenKey } from '@/lib/drill-narrow'
 
 // Reconciliation sheet — every day's closing-vs-POS discrepancies for the month.
 // BLOCK = cash short or credit over (these stop a rep from closing). FLAG = cash over / credit
@@ -67,8 +69,9 @@ export default function ClosingReconPage() {
     } catch (err: any) { alert('Charge failed: ' + (err?.message || err)) }
   }
 
-  const s = data?.summary || {}
-  const errors: any[] = data?.errors || []
+  // Memoised, not an inline `||`: two memos below take it as a dependency, and a fresh [] on every
+  // render would re-narrow every drill panel each time.
+  const errors = useMemo<any[]>(() => data?.errors || [], [data])
   // Market joined onto each error row from the org-scoped store roster (by code, else address) — the
   // same join shape the sibling recon pages already use. Feeds both the cascade widget's options AND
   // the actual store/market narrowing below.
@@ -83,7 +86,12 @@ export default function ClosingReconPage() {
     }
     return m
   }, [pStores])
-  const marketOf = (e: any) => marketByKey[(e.store_code || '').trim().toLowerCase()] || marketByKey[(e.store_address || '').trim().toLowerCase()] || ''
+  // Memoised because the selection below is memoised on it: an inline closure is a new value on
+  // every render, which would re-narrow every drill panel each time (and is what the
+  // preserve-manual-memoization rule objects to).
+  const marketOf = useCallback(
+    (e: any) => marketByKey[(e.store_code || '').trim().toLowerCase()] || marketByKey[(e.store_address || '').trim().toLowerCase()] || '',
+    [marketByKey])
   const storesForCascade: StoreOpt[] = useMemo(() => {
     const seen = new Map<string, StoreOpt>()
     for (const e of errors) {
@@ -91,19 +99,21 @@ export default function ClosingReconPage() {
       if (id && !seen.has(id)) seen.set(id, { id, label: id, market: marketOf(e) || null })
     }
     return [...seen.values()]
-  }, [errors, marketByKey])
+  }, [errors, marketOf])
   const dateOpts = Array.from(new Set(errors.map(e => e.date).filter(Boolean))).sort()
   // A money row's direction: cash short=under / cash over; credit over / credit under. Non-money rows null.
-  const dirOf = (e: any): keyof typeof dirs | null => {
+  const dirOf = useCallback((e: any): keyof typeof dirs | null => {
     if (e.variance == null) return null
     if (e.metric === 'cash') return e.variance < 0 ? 'cash_under' : 'cash_over'
     if (e.metric === 'credit') return e.variance > 0 ? 'credit_over' : 'credit_under'
     return null
-  }
+  }, [])
   const fMarketsFold = useMemo(() => new Set(fMarkets.map(m => m.trim().toLowerCase())), [fMarkets])
   const fStoresFold = useMemo(() => new Set(fStores.map(s => s.trim().toLowerCase())), [fStores])
-  const shown = errors.filter(e => {
-    if (filter !== 'all' && e.severity !== filter) return false
+  // THE POPULATION THE COUNTS DESCRIBE — every filter on this page EXCEPT the severity one, which
+  // is what the four tiles themselves select. Separating the two is the point: a tile that narrowed
+  // to its own selection would read as the whole month's blocks the moment you clicked it.
+  const base = useMemo(() => errors.filter(e => {
     const storeKey = (e.store_address || e.store_code || '').trim().toLowerCase()
     if (fStoresFold.size && !fStoresFold.has(storeKey)) return false
     if (fMarketsFold.size && !fMarketsFold.has((marketOf(e) || '').trim().toLowerCase())) return false
@@ -111,7 +121,39 @@ export default function ClosingReconPage() {
     const d = dirOf(e)                       // direction checkboxes only hide the money rows they name
     if (d && !dirs[d]) return false
     return true
-  })
+  }), [errors, fStoresFold, fMarketsFold, dateFilter, dirs, marketOf, dirOf])
+  const shown = base.filter(e => filter === 'all' || e.severity === filter)
+
+  // ── §CORE-17: the counts and the accusations behind them are ONE fold ─────────────────────────
+  // These four tiles read the SERVER's whole-month summary while the table below them is filtered on
+  // the client, so under any store, market, date or direction filter they described a different
+  // population than the rows on screen — and there was no way at all from a count to the evidence.
+  // Now each tile reads its number off its panel NARROWED to this selection (`lib/drill-narrow`,
+  // §CORE-17.3d), and every row names the closing row its declared figure was filed on and the
+  // sales feed its counterpart came from. A pending row names no feed, because none answered.
+  const drills = useMemo<Record<string, DrillPanel>>(() => data?.drilldown || {}, [data])
+  const selected = useMemo(() => new Set(base.map(e => screenKey({
+    date: e.date, store_code: e.store_code, rep: e.rep, metric: e.metric,
+  }))), [base])
+  const panels = useMemo(() => narrowPanels(drills, (_r, k) => selected.has(k)), [drills, selected])
+  const count = (k: string, fallback: () => number) =>
+    panels[k] ? (panels[k].figure?.amount ?? 0) : fallback()
+  const sev = (want: string) => () => base.filter(e => e.severity === want).length
+  const drill = useDrillTile(panels)
+  const dl = drill.dl
+  const unpanelled = useMemo(() => Object.keys(drills).filter(k => !panels[k]), [drills, panels])
+  const DRILL_COLUMNS = [
+    { header: 'Rep', get: (r: DrillRow) => String(r.fields?.rep || '—'),
+      sortValue: (r: DrillRow) => String(r.fields?.rep || '') },
+    { header: 'Figure', get: (r: DrillRow) => String(r.fields?.metric || '—'),
+      sortValue: (r: DrillRow) => String(r.fields?.metric || '') },
+    { header: 'Declared', get: (r: DrillRow) => (r.fields?.declared == null ? '—' : fmt(Number(r.fields.declared))),
+      sortValue: (r: DrillRow) => Number(r.fields?.declared ?? 0) },
+    { header: pos, get: (r: DrillRow) => (r.fields?.counterpart == null ? '—' : fmt(Number(r.fields.counterpart))),
+      sortValue: (r: DrillRow) => Number(r.fields?.counterpart ?? 0) },
+    { header: 'Why', get: (r: DrillRow) => String(r.fields?.verdict || '—'),
+      sortValue: (r: DrillRow) => String(r.fields?.verdict || '') },
+  ]
   const money = (v: any) => v == null ? '—' : fmt(v)
 
   return (
@@ -157,11 +199,30 @@ export default function ClosingReconPage() {
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12, marginBottom: 16 }}>
-            <Tile label="Blocks" value={s.blocks || 0} tone="#b42318" onClick={() => setFilter('block')} active={filter === 'block'} />
-            <Tile label="Flags" value={s.flags || 0} tone="#b45309" onClick={() => setFilter('flag')} active={filter === 'flag'} />
-            <Tile label="Recon pending" value={s.pending || 0} tone="var(--text3)" onClick={() => setFilter('pending')} active={filter === 'pending'} />
-            <Tile label="All rows" value={s.total || 0} tone="var(--text2)" onClick={() => setFilter('all')} active={filter === 'all'} />
+            <Tile label="Blocks" value={count('blocks', sev('block'))} tone="#b42318" onClick={() => setFilter('block')} active={filter === 'block'}
+              drill={drill} drills={dl('blocks', 'the blocked closes')} />
+            <Tile label="Flags" value={count('flags', sev('flag'))} tone="#b45309" onClick={() => setFilter('flag')} active={filter === 'flag'}
+              drill={drill} drills={dl('flags', 'the flagged closes')} />
+            <Tile label="Recon pending" value={count('pending', sev('pending'))} tone="var(--text3)" onClick={() => setFilter('pending')} active={filter === 'pending'}
+              drill={drill} drills={dl('pending', 'the reps it cannot judge')} />
+            <Tile label="All rows" value={count('total', () => base.length)} tone="var(--text2)" onClick={() => setFilter('all')} active={filter === 'all'}
+              drill={drill} drills={dl('total', 'every row')} />
           </div>
+
+          {/* ONE panel at a time, under the tiles — each row with the closing row and the feed behind it. */}
+          {drill.open && (
+            <div style={{ marginBottom: 16 }}>
+              <DrillDownPanel panel={drill.panel} extraColumns={DRILL_COLUMNS}
+                emptyNote="No row in this selection contributed to this count." />
+            </div>
+          )}
+          {unpanelled.length > 0 && (
+            <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 12 }}>
+              {unpanelled.length} count(s) above could not be opened for this selection — there are
+              more rows behind them than the report serves at once, so narrowing them to your filter
+              would leave rows out. Pick one month, fewer stores or a single date to open them.
+            </div>
+          )}
 
           {shown.length === 0 ? (
             <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>
@@ -208,10 +269,21 @@ export default function ClosingReconPage() {
   )
 }
 
-const Tile = ({ label, value, tone, onClick, active }: { label: string; value: number; tone: string; onClick: () => void; active: boolean }) => (
+const Tile = ({ label, value, tone, onClick, active, drills, drill }: {
+  label: string; value: number; tone: string; onClick: () => void; active: boolean
+  drills?: { key: string; label: string }[]
+  drill?: { open: string | null; toggle: (k: string) => void }
+}) => (
   <div className="card" style={{ padding: 14, cursor: 'pointer', borderColor: active ? tone : undefined, borderWidth: active ? 2 : 1, borderStyle: 'solid' }} onClick={onClick}>
     <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
     <div style={{ fontSize: 24, fontWeight: 700, marginTop: 2, color: tone }}>{value}</div>
+    {/* The whole card is the severity filter, so the drill link stops the click from reaching it —
+        otherwise opening the evidence would also change what the table is showing. */}
+    {drill && drills && drills.length ? (
+      <div onClick={ev => ev.stopPropagation()}>
+        <DrillTileLinks drills={drills} open={drill.open} onToggle={drill.toggle} />
+      </div>
+    ) : null}
   </div>
 )
 

@@ -43,12 +43,17 @@ STATES = ("shared", "own", "flat", "not_report", "owes")
 #: THE RATCHET. The count of report routes that still owe a drill-down, measured 2026-10-24 by the
 #: three-way audit. IT MAY ONLY GO DOWN. Lower it in the same PR that builds one; a change that
 #: RAISES it is a report shipped without evidence, which is what this file exists to refuse.
-OWES_MAX = 85
+OWES_MAX = 83
 
 #: Routes whose page file lives somewhere the path rule below does not reach, or which are rendered
 #: by a shared component rather than their own page. Named rather than skipped silently.
 PAGE_OVERRIDE = {
     "/closing/closing-pickup-status": "frontend/src/app/(platform)/closing/_lib/ClosingPickupStatus.tsx",
+    # /closing/verify's own page is a 20-line wrapper: the verification table, its chargeback strip
+    # and that strip's drill-down all live in the shared component, which is mounted at this route
+    # and at /storeops/closing. Naming it here points the lock at the file that answers, instead of
+    # at a wrapper that never could.
+    "/closing/verify": "frontend/src/components/DailyClosingVerify.tsx",
 }
 
 #: REPORT PAGES DELIBERATELY KEPT OUT OF `REPORT_DIRECTORY`, with the reason. The directory is the

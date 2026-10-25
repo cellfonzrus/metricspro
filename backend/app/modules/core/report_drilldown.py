@@ -108,6 +108,8 @@ UNMEASURED_REASONS = {
     "dm_merged": "the district manager corrected the combined total without stating the split, so "
                  "attributing part of it to this one figure would be a guess",
     "not_collected": "this envelope has not been collected yet, so nothing has been counted",
+    "no_sales_feed_match": "the sales feed was not loaded for this day, or this person could not be "
+                           "matched to it, so no comparison was made at all",
 }
 
 

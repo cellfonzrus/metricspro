@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
 import { api, apiUpload, fmt, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
@@ -99,6 +100,21 @@ const badgeStyle: Record<string, React.CSSProperties> = {
   waived: { background: 'var(--surface2)', color: 'var(--text3)' },
 }
 
+// THE COLUMNS FOR A CHARGEBACK DRILL ROW — the client side of
+// `closing/ops_chargeback_drilldown._row_fields`.
+const CHARGEBACK_DRILL_COLUMNS = [
+  { header: 'Store', get: (r: DrillRow) => String(r.fields?.store_code || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.store_code || '') },
+  { header: 'District manager', get: (r: DrillRow) => String(r.fields?.employee_name || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.employee_name || '') },
+  { header: 'Decision', get: (r: DrillRow) => String(r.fields?.state || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.state || '') },
+  { header: 'Decided by', get: (r: DrillRow) => String(r.fields?.decided_by || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.decided_by || '') },
+  { header: 'Period', get: (r: DrillRow) => String(r.fields?.period || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.period || '') },
+]
+
 function MissedChargebacksPanel({ filt }: { filt: StandardFilterValue }) {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -137,6 +153,13 @@ function MissedChargebacksPanel({ filt }: { filt: StandardFilterValue }) {
     finally { setBusy(b => ({ ...b, [id]: false })) }
   }
 
+  // §CORE-17 — each of these figures is money out of a NAMED person's pay, so it opens to the
+  // store-days it is charging for. Every filter on this panel is a query parameter, so the server's
+  // fold covers exactly the incidents listed below it and no narrowing is applied (§CORE-17.3e).
+  const panels: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(panels)
+  const dl = drill.dl
+
   if (loading && !data) return null   // don't flash an empty banner while the very first load runs
   const rows: any[] = data?.rows || []
   const totals = data?.totals || { pending: 0, posted: 0, waived: 0, to_be_foregone: 0 }
@@ -157,6 +180,19 @@ function MissedChargebacksPanel({ filt }: { filt: StandardFilterValue }) {
           <span style={{ color: 'var(--text3)' }}>{open ? '▲' : '▼'}</span>
         </div>
       </div>
+      {/* The header is the expand/collapse control, so these links stop the click reaching it. */}
+      <div onClick={ev => ev.stopPropagation()}>
+        <DrillTileLinks
+          drills={dl('pending', 'the pending ones', 'posted', 'the deducted ones',
+                     'waived', 'the forgiven ones', 'to_be_foregone', 'what comes out of commission')}
+          open={drill.open} onToggle={drill.toggle} />
+      </div>
+      {drill.open && (
+        <div style={{ marginTop: 10 }}>
+          <DrillDownPanel panel={drill.panel} extraColumns={CHARGEBACK_DRILL_COLUMNS}
+            emptyNote="No missed verification in this view contributed to this figure." />
+        </div>
+      )}
       {open && (
         <div className="table-wrapper" style={{ marginTop: 10 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>

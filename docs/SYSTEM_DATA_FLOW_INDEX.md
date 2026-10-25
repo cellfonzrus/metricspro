@@ -33632,6 +33632,59 @@ fixtures are regenerated with `--write`, never the check relaxed.
 
 Proof: `backend/harness_batch5_drilldown.py` (74 checks, §Z1–Z7 negative controls). Owed count 88 → 85.
 
+### §CORE-17.3f AN ACCUSATION NAMES ITS EVIDENCE (2026-10-25, batch 6)
+
+Two reports whose every figure is a claim ABOUT A NAMED PERSON, which is a different bar from a
+measurement: a recon row says *this rep declared $400 and the feed says $380, so the close is
+blocked*, and a chargeback row says *$150 is coming out of this district manager's commission*. A
+figure that costs someone money has to show which days it is counting and where each side of the
+comparison came from.
+
+**`/closing/recon` — `backend/app/modules/closing/recon_drilldown.py`.** Four figures (blocks, flags,
+pending, all rows), and because they are COUNTS their panels are the accusations themselves. The rows
+a count does not count stay in the panel as context — that is the difference between a drill-down and
+a filtered list.
+
+- **An accusation is addressed by day, store, person AND figure**, because one rep-day can be blocked
+  on cash and flagged on credit at the same time: two accusations about two figures, not one row.
+- **The declared side names the closing row; the counterpart names the sales-pair side the read
+  ACTUALLY answered from.** `_b2b_day` now reports its `sales_tables` (§CORE-17.3c), so this is
+  dereferenced rather than guessed — and every other caller of that read can now do the same.
+- **A PENDING ROW IS AN ACCUSATION THE REPORT REFUSES TO MAKE.** The feed was not loaded, or the rep
+  could not be matched, so nothing was compared. It names no feed (a counted, stated provenance gap),
+  carries no variance, and says which of the two blanks it is — `no_sales_feed_match` or
+  `not_computed`. A $0.00 variance there would read as *we checked and it agreed*.
+- **The rule that made a row a block is NOT copied into the declaration.** `router._money_issues` is
+  the one home for it (cash short blocks, cash over flags; credit over blocks, credit under flags,
+  outside the tenant's tolerance) and writes its verdict onto the row; the declaration shows that
+  verdict. A second copy of the thresholds could drift from the one actually applied, so §E2 fails
+  the build on any number in either declaration.
+- **Its four counts were reading the whole month while the table read the filter** — pre-existing and
+  never written down. They are narrowed now (§CORE-17.3d). The SEVERITY filter is deliberately NOT
+  part of the selection, because the four tiles ARE that filter: including it would make every tile
+  read its own subset the moment one was clicked (§F3).
+
+**The DM-verify chargeback strip (`/closing/verify`) —
+`backend/app/modules/closing/ops_chargeback_drilldown.py`.** Four money figures above
+"Missed verifications & chargebacks", each one money taken, or about to be taken, out of a named
+DM's pay. Plain tile shape: every filter there is a query parameter.
+
+- `to_be_foregone` is pending + posted **folded from the rows**, not composed from two other tiles —
+  a tile composed from two tiles has no rows of its own. A waived chargeback is forgiven: counted in
+  neither, still shown. The statuses it covers are declared once (`FOREGONE_STATUSES`).
+- It names **one** table, `ops_chargeback`, because that is where the amount and the decision live —
+  not the closing or verification tables a reader would look in and not find it. There IS no
+  verification row; that absence is why the chargeback exists.
+
+**Not converted, and why** (both are work QUEUES whose figures are not folds): `/closing/management`
+is a list of closing attempts and `/closing/closing-pickup-status` a compliance queue. What they owe
+is per-ROW provenance (which attempt, by whom, at what time, and the accepted closing row it led to),
+which is a different affordance from a figure's panel and is not served by forcing the tile shape
+onto them. They stay `owes` with that reason in the ledger rather than being marked done.
+
+Proof: `backend/harness_batch6_drilldown.py` (57 checks, §Z1–Z6 negative controls). Owed count
+85 → 83.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):

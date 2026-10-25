@@ -44,6 +44,9 @@ const SOURCE_LABEL: Record<string, string> = {
   billpay_pickup: 'bill-payment pickup envelope',
   closing_attempt: 'closing submit attempt',
   daily_closing_verification: "the district manager's verification",
+  // The accountability trail (§CORE-17.3f): a chargeback is the penalty recorded against a person
+  // for a missed verification, and a reader sees that, not the table it sits in.
+  ops_chargeback: 'recorded chargeback',
   // The day-recon trail (§CORE-17.3c). A manager reads "the bank deposit slip", never a table.
   bank_deposit: 'bank deposit slip',
   merchant_settlement_day: 'card processor settlement',

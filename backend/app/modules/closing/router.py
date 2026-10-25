@@ -34,6 +34,8 @@ from . import cash_variance as _cash_variance
 from . import cash_recon_drilldown as _cash_recon_drilldown
 from . import day_recon_drilldown as _day_recon_drilldown
 from . import pickup_drilldown as _pickup_drilldown
+from . import recon_drilldown as _recon_drilldown
+from . import ops_chargeback_drilldown as _ops_chargeback_drilldown
 from . import three_way_drilldown as _three_way_drilldown
 from . import external_credit_drilldown as _external_credit_drilldown
 from app.modules.commcalc import data_lineage_registry as _lineage
@@ -4858,8 +4860,18 @@ def closing_recon(period: str, market: str = None, tolerance: float = 1.0, autho
         blocks = sum(1 for e in errors if e["severity"] == "block")
         flags = sum(1 for e in errors if e["severity"] == "flag")
         pending = sum(1 for e in errors if e["severity"] == "pending")
+    _summary = {"blocks": blocks, "flags": flags, "pending": pending, "total": len(errors)}
+    # §CORE-17: every count opens to the accusations behind it, each naming the closing row its
+    # declared figure was filed on and the sales-pair side its counterpart was actually read from
+    # (§CORE-17.3c). A pending row names no feed at all rather than claiming one that answered
+    # nothing. The sales side is taken from the days this request computed; a day beyond the cap was
+    # never queried, so it contributes no claim about which feed answered.
+    _recon_sales_tables = tuple(sorted({t for d in day_cache.values()
+                                        for t in ((d or {}).get("sales_tables") or ())}))
     return {"period": period, "errors": errors,
-            "summary": {"blocks": blocks, "flags": flags, "pending": pending, "total": len(errors)},
+            "summary": _summary,
+            "drilldown": _recon_drilldown.drilldowns(errors, _summary,
+                                                     sales_tables=_recon_sales_tables),
             "recon_capped": recon_capped, "dates_computed": len(recon_dates), "dates_total": len(all_dates)}
 
 
@@ -5311,7 +5323,12 @@ def get_missed_dm_verifies(lookback_days: int = 14, date_from: str = None, date_
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
-    return {"rows": rows, "totals": ops_chargebacks.totals(rows),
+    _cb_totals = ops_chargebacks.totals(rows)
+    return {"rows": rows, "totals": _cb_totals,
+            # §CORE-17: money coming out of a named person's pay opens to the store-days it is
+            # charging for. Every filter here is a query parameter, so this fold covers exactly the
+            # incidents on screen and no narrowing is applied.
+            "drilldown": _ops_chargeback_drilldown.drilldowns(rows, _cb_totals),
             "can_decide": _can_mgmt_review(_caller_perms(client, authorization)),
             "market_filter_skipped": market_filter_skipped}
 
@@ -10607,9 +10624,13 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
     from app.modules.commcalc import line_class as _lcls
     acc = _acc_cfg(client, org_id)
     _lr = _line_rules(client, org_id)
-    rows = _b2b_sales_rows(client, org_id, date,
-                           "store,salesperson,department,category,product_desc,contract_type,trans_id,tender_type,ext_price,voided,trans_type,"
-                           "serial_1,mdn")
+    # WHICH SIDE OF THE SALES PAIR ANSWERED is a fact this read knows and every caller used to throw
+    # away (§CORE-17.3c). Dereferenced here so a recon row can name the feed its "actual" came from,
+    # rather than naming both tables as a provenance claim nothing checked.
+    rows, _sales_tables = _b2b_sales_rows_sourced(
+        client, org_id, date,
+        "store,salesperson,department,category,product_desc,contract_type,trans_id,tender_type,ext_price,voided,trans_type,"
+        "serial_1,mdn")
     by_store, by_rep, counts, seen = {}, {}, {}, {}
     # THE COUNT UNIT (2026-09-25) — the same line_class definition as every activation count; the
     # Return skip is the one this loop applies to the counts (voided rows never reach them)
@@ -10655,7 +10676,9 @@ def _b2b_day(client, org_id: str, date: str) -> dict:
 
     for code, s in seen.items():
         counts[code] = {"activations": len(s["act"]), "upgrades": len(s["upg"])}
-    return {"has_data": len(rows) > 0, "by_store": by_store, "by_rep": by_rep, "counts": counts}
+    return {"has_data": len(rows) > 0, "by_store": by_store, "by_rep": by_rep, "counts": counts,
+            # The pair side(s) these figures were actually drawn from — read, never guessed.
+            "sales_tables": _sales_tables}
 
 
 def _rep_b2b(day: dict, store_code: str, emp_name: str):
