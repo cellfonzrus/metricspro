@@ -73,7 +73,7 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_report_drilldown.py', 'harness_drilldown_coverage.py',
                   'harness_cash_recon_drilldown.py', 'harness_tender_recon_drilldown.py',
                   'harness_day_recon_drilldown.py', 'harness_drill_narrow_fixtures.py',
-                  'harness_batch5_drilldown.py'),
+                  'harness_batch5_drilldown.py', 'harness_batch6_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -102,6 +102,13 @@ FACTS: dict[str, dict] = {
             # on that screen is a query parameter, so the server's fold already covers the envelopes
             # on screen and `drill-narrow` is NOT wired in (locked, harness §F5).
             'app/modules/closing/pickup_drilldown.py': ('report_drilldown',),
+            # The close recon's four counts (§CORE-17.3f). Its rows are ACCUSATIONS, so the panel is
+            # the accusations themselves and the rows a count excludes stay in it as context. The
+            # rule that made a row a block is NOT here: `router._money_issues` keeps that.
+            'app/modules/closing/recon_drilldown.py': ('report_drilldown',),
+            # The DM-verify chargeback strip (§CORE-17.3f) — money out of a named person's pay,
+            # opening to the missed verifications it charges for.
+            'app/modules/closing/ops_chargeback_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────

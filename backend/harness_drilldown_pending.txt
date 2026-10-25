@@ -86,16 +86,16 @@
 /closing/accessory-recon	shared	all four tiles drill to their stores through core/report_drilldown.tiles; declaration in closing/day_recon_drilldown.py
 /closing/billpay-pickup	shared	all seven figures drill to their envelopes through the SAME declaration as /closing/pickup (closing/pickup_drilldown.billpay_catalogue); a card-only row is shown and not counted
 /closing/cash-recon-management	shared	all eleven tiles (sixteen figures) drill to their store-days through core/report_drilldown.tiles; declaration in closing/cash_recon_drilldown.py
-/closing/closing-pickup-status	owes	
+/closing/closing-pickup-status	owes	a compliance QUEUE: owes the closing/envelope rows (and the roster entry expected to file) behind each not-submitted store-day, not a figure's panel — index §CORE-17.3f
 /closing/envelope-report	owes	
 /closing/epay-recon	shared	all four tiles drill to their stores through core/report_drilldown.tiles; declaration in closing/day_recon_drilldown.py
 /closing/external-credit-recon	shared	all eight tiles drill to their store-days per processor role; declaration in closing/external_credit_drilldown.py
-/closing/management	owes	
+/closing/management	owes	a work QUEUE of closing attempts: what it owes is per-ROW provenance (which attempt, by whom, when, and the accepted closing row), not a figure's panel — index §CORE-17.3f
 /closing/pickup	shared	all twelve footer/strip figures drill to their envelopes, store-day per person; NO narrowing — every filter here is a query parameter, so the server's fold already covers the envelopes on screen; declaration in closing/pickup_drilldown.py
-/closing/recon	owes	
+/closing/recon	shared	all four counts drill to the accusations behind them, each naming the closing row and the sales feed that answered; counts READ OFF their narrowed panels (lib/drill-narrow); declaration in closing/recon_drilldown.py
 /closing/tender-recon	shared	all seven figures drill, and each tile is READ OFF its narrowed panel so the two are one fold under any filter (lib/drill-narrow, index §CORE-17.3d); declaration in commcalc/tender_recon_drilldown.py
 /closing/tender-recon-3way	shared	all ten selection-total figures drill to their store-days, each tile READ OFF its narrowed panel (lib/drill-narrow, index §CORE-17.3d); declaration in closing/three_way_drilldown.py
-/closing/verify	owes	
+/closing/verify	shared	the DM-verify chargeback strip's four money figures drill to the missed verifications they charge for; declaration in closing/ops_chargeback_drilldown.py
 /commcalc	owes	
 /commcalc/accessory-cost-audit	owes	
 /commcalc/accessory-flags	owes	

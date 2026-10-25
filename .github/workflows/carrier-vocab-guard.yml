@@ -233,6 +233,12 @@ on:
       - "frontend/src/app/(platform)/closing/tender-recon-3way/page.tsx"
       - "frontend/src/app/(platform)/closing/pickup/page.tsx"
       - "frontend/src/app/(platform)/closing/billpay-pickup/page.tsx"
+      # §CORE-17.3f — the close recon's accusations and the DM-verify chargeback strip.
+      - "backend/harness_batch6_drilldown.py"
+      - "backend/app/modules/closing/recon_drilldown.py"
+      - "backend/app/modules/closing/ops_chargeback_drilldown.py"
+      - "frontend/src/app/(platform)/closing/recon/page.tsx"
+      - "frontend/src/components/DailyClosingVerify.tsx"
       - "frontend/src/app/(platform)/closing/epay-recon/page.tsx"
       - "frontend/src/app/(platform)/closing/accessory-recon/page.tsx"
       - "frontend/src/app/(platform)/closing/external-credit-recon/page.tsx"
@@ -1364,6 +1370,9 @@ jobs:
       - name: Run the batch-5 drill lock (the 3-way selection strip is folded ONCE over a list flattened once and each tile is read off its narrowed panel; the cash-pickup footers are the PLAIN tile shape because every filter there is a query parameter, and wiring the narrowing into that page FAILS this check; a counted figure still refuses to cover an envelope nobody counted — index §CORE-17.3e)
         working-directory: backend
         run: python3 harness_batch5_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-6 drill lock (a close recon's accusations name the closing row and the feed each side came from, and a PENDING row names no feed because none answered; the rule that made a row a block stays in `_money_issues`; the chargeback strip's "to be foregone" is folded from its rows, never composed from two tiles — index §CORE-17.3f)
+        working-directory: backend
+        run: python3 harness_batch6_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
