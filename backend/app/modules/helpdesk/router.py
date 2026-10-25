@@ -45,6 +45,8 @@ from app.modules.core.entitlements import (
     module_enabled as _core_module_enabled,
     assert_module_enabled as _core_require_module,
 )
+# Every tile on the dashboard names its evidence (§CORE-17).
+from . import dashboard_drilldown as _dashboard_drilldown
 
 
 def _module_enabled(org_id: str, key: str = "helpdesk") -> bool:
@@ -602,7 +604,9 @@ def dashboard(org_id: str = ORG_ID, date_from: str = "", date_to: str = ""):
     dimension, so only the period core-filter applies here (documented deviation)."""
     _require_module(org_id)
     st, _, _, _ = _maps(org_id)
-    tickets = db("tickets").select("status_id,created_at,resolved_at").eq("org_id", org_id).limit(5000).execute().data or []
+    # `id` and `subject` are read for the drill-down rows (§CORE-17) — a panel has to be able to name
+    # the ticket it is showing. Additive: no figure below reads either one.
+    tickets = db("tickets").select("id,subject,status_id,created_at,resolved_at").eq("org_id", org_id).limit(5000).execute().data or []
     df, dt = (date_from or "").strip()[:10], (date_to or "").strip()[:10]
     if df or dt:
         def _in_range(t):
@@ -634,8 +638,23 @@ def dashboard(org_id: str = ORG_ID, date_from: str = "", date_to: str = ""):
             except Exception:
                 pass
     avg_res = round(sum(res_hours) / len(res_hours), 1) if res_hours else None
+    # ── WHERE EVERY TILE'S FIGURE CAME FROM (§CORE-17) ───────────────────────────────────────────
+    # The stage and status readers are the ones this function ALREADY used (`st`), handed to the
+    # declaration rather than re-read — the vocabulary has one home per request.
+    # `measured` is the average's DENOMINATOR, which no tile has ever shown: the average is a mean
+    # over the resolved tickets only, and a mean has no tickets that add up to it, so that figure
+    # opens to this count instead of to a panel of its own (see dashboard_drilldown's docstring).
+    def _stage_of(t):
+        return (st.get((t or {}).get("status_id")) or {}).get("stage") or "open"
+
+    def _status_label(sid):
+        return (st.get(sid) or {}).get("label")
+    _figures = _dashboard_drilldown.totals(tickets, stage_of=_stage_of)
     return {"total": len(tickets), "open": open_count, "by_stage": by_stage,
-            "avg_resolution_hours": avg_res, "aging": aging}
+            "avg_resolution_hours": avg_res, "aging": aging,
+            "measured": _figures["measured"],
+            "drilldown": _dashboard_drilldown.drilldowns(
+                tickets, _figures, stage_of=_stage_of, status_label=_status_label)}
 
 
 # ── AI support assistant (Phase 2) — tenant-scoped, READ-ONLY ───────────────────────────────────

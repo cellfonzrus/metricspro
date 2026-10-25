@@ -148,8 +148,8 @@
 /commcalc/vip/paygo	owes	
 /commcalc/whatif	owes	
 /commcalc/zero-sales	owes	
-/crm/reports	owes	
-/helpdesk/dashboard	owes	
+/crm/reports	shared	all three tabs drill: the four conversion COUNTS to their leads (crm/reports_drilldown.py), one panel per funnel stage, per source and per rep, each keyed as its own endpoint bucketed; WIN RATE and CLOSE RATE get NO panel and offer the counts they divide instead — index §CORE-17.3h
+/helpdesk/dashboard	shared	all four tiles and the per-stage breakdown drill to their tickets (helpdesk/dashboard_drilldown.py); AVG RESOLUTION gets no panel and opens to `measured`, the average's denominator, which the tile now also shows; an unmapped status is shown and says so — index §CORE-17.3h
 /hr	owes	
 /hr/payroll-expenses	owes	
 /storeops/hours-budget	owes	

@@ -27,6 +27,8 @@ from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
 from app.modules.crm import customer360, pipeline_core as core
+# Every figure on the CRM reports names its evidence (§CORE-17).
+from . import reports_drilldown as _reports_drilldown
 
 router = APIRouter(prefix="/crm", tags=["CRM"])
 
@@ -1352,6 +1354,12 @@ def summary(org_id: str = ORG_ID, start: str = "", end: str = "", store_code: st
         b["value"] += float(l.get("value_estimate") or 0) if l.get("status") == "won" else 0.0
     for b in by_source.values():
         b["conversion"] = round(100.0 * b["won"] / b["leads"], 1) if b["leads"] else 0.0
+    # Ordered ONCE and served to both the screen and the fold, so a line and its panel cannot be
+    # about different leads.
+    _by_source_rows = sorted(by_source.values(), key=lambda b: -b["leads"])
+    # The vocabularies the drill rows name, built ONCE from the `vocab` already read above — a
+    # lookup that rebuilt the dict per row would be a second copy of it per row.
+    _stage_by_id, _disp_by_id = _by_id(vocab["stages"]), _by_id(vocab["dispositions"])
 
     return {
         "totals": core.conversion_rates(leads),
@@ -1368,7 +1376,15 @@ def summary(org_id: str = ORG_ID, start: str = "", end: str = "", store_code: st
                                      if l.get("agency_id") and not l.get("agency_accepted_at")),
         },
         "leaderboard": sorted(by_owner.values(), key=lambda b: (-b["won"], -b["leads"])),
-        "by_source": sorted(by_source.values(), key=lambda b: -b["leads"]),
+        "by_source": _by_source_rows,
+        # One panel per source line (§CORE-17), keyed on the source NAME the bucket above is keyed
+        # on — including "Unknown", which is where an unrecognised source lands there and here. The
+        # conversion percentage on the line is a quotient and gets no panel; its two counts do.
+        "drilldown_by_source": _reports_drilldown.by_source_drilldowns(
+            leads, _by_source_rows,
+            stage_name=(lambda i: (_stage_by_id.get(i) or {}).get("name")),
+            source_name=(lambda i: (src.get(i) or {}).get("name")),
+            disposition_name=(lambda i: (_disp_by_id.get(i) or {}).get("name"))),
         "stale_sample": [_decorate(l, vocab) for l in stale[:25]],
         "config": {"stale_lead_hours": cfg.get("stale_lead_hours"),
                    "escalate_after_hours": cfg.get("escalate_after_hours")},
@@ -1399,7 +1415,13 @@ def report_activity(org_id: str = ORG_ID, start: str = "", end: str = "", limit:
         b = by_rep.setdefault(key, {"employee_id": key, "total": 0})
         b["total"] += 1
         b[r.get("kind") or "note"] = b.get(r.get("kind") or "note", 0) + 1
-    return {"rows": sorted(by_rep.values(), key=lambda b: -b["total"])}
+    _by_rep = sorted(by_rep.values(), key=lambda b: -b["total"])
+    return {"rows": _by_rep,
+            # One panel per rep line (§CORE-17), keyed on the same `actor_employee_id` the buckets
+            # above are keyed on. A touch names BOTH its activity row and the lead it was kept for,
+            # because a touch on a lead this caller cannot see is dropped above — the lead is part of
+            # why the figure is what it is.
+            "drilldown_by_rep": _reports_drilldown.activity_drilldowns(rows, _by_rep)}
 
 
 @router.get("/reports/conversion")
@@ -1416,9 +1438,29 @@ def report_conversion(org_id: str = ORG_ID, start: str = "", end: str = "",
             continue
         name = (disp.get(l.get("disposition_id")) or {}).get("name") or "Not recorded"
         lost_reasons[name] = lost_reasons.get(name, 0) + 1
-    return {"totals": core.conversion_rates(leads), "by_stage": by_stage,
+    # ── WHERE EVERY FIGURE CAME FROM (§CORE-17) ─────────────────────────────────────────────────
+    # The three vocabulary readers are built from the `_vocab` call ALREADY made above, so the names
+    # on a drill row and the names in the report come from one lookup, not two.
+    _stages = _by_id(vocab["stages"])
+    _sources = _by_id(vocab["sources"])
+    def _stage_name(i):
+        return (_stages.get(i) or {}).get("name")
+    def _source_name(i):
+        return (_sources.get(i) or {}).get("name")
+    def _disposition_name(i):
+        return (disp.get(i) or {}).get("name")
+    _totals = core.conversion_rates(leads)
+    _vocab_readers = {"stage_name": _stage_name, "source_name": _source_name,
+                      "disposition_name": _disposition_name}
+    return {"totals": _totals, "by_stage": by_stage,
             "lost_reasons": sorted(({"reason": k, "count": v} for k, v in lost_reasons.items()),
-                                   key=lambda r: -r["count"])}
+                                   key=lambda r: -r["count"]),
+            # A RATE GETS NO PANEL. `win_rate` and `close_rate` are quotients, so the counts they
+            # divide are what open — see crm/reports_drilldown.py. The per-stage panels are keyed on
+            # the stage NAME the funnel row carries.
+            "drilldown": _reports_drilldown.lead_drilldowns(leads, _totals, **_vocab_readers),
+            "drilldown_by_stage": _reports_drilldown.by_stage_drilldowns(
+                leads, by_stage, **_vocab_readers)}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════

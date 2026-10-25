@@ -33752,6 +33752,73 @@ are UNCHANGED — a figure is never moved to make a screen read better — and t
 both panels, uncounted, each naming which of the two blanks it is (§F3, §F4). It is the same class as
 §CORE-17.3f's pending recon rows, on the dashboard.
 
+### §CORE-17.3h A RATE OR AN AVERAGE GETS NO PANEL (2026-10-25, batch 8)
+
+Batch 8 of the §CORE-17 audit: **`/crm/reports`** (conversion, sources, rep activity) and
+**`/helpdesk/dashboard`**. Owed count **81 → 79**. Proof: `backend/harness_batch8_drilldown.py`,
+**79 checks**, §Z1–Z7 negative controls, wired into the carrier-vocab-guard lock job. Declarations:
+`backend/app/modules/crm/reports_drilldown.py` and
+`backend/app/modules/helpdesk/dashboard_drilldown.py`.
+
+**THE RULE THIS BATCH SETTLES, for every report after it: a figure that is a QUOTIENT gets no
+drill-down of its own. It offers the counts it divides, each with a real panel.** `win_rate` is won
+÷ closed, `close_rate` is closed ÷ total, `avg_resolution_hours` is a mean over the resolved
+tickets. There is no set of records that ADDS UP to a percentage or to a mean, so a panel behind one
+could only be a tie-out that cannot fail — the worst kind of reassurance, and precisely what
+`report_drilldown.tie_out` exists to refuse. The three declarations therefore serve **no key at
+all** for those figures (locked: harness §A5/§A6, §E4), the screens' rate tiles link to their
+numerator and denominator instead (§H2, §H3), and the counts' own panels say in words which half of
+the rate the reader is looking at. The house had already settled this shape once — the Daily Closing
+dashboard's DM-verified tile serves `verified` and `filed` rather than one ratio (§CORE-17.3g) — and
+this section is that ruling written down so the next report does not re-derive it.
+
+**The average's DENOMINATOR was never on the screen.** `/helpdesk/dashboard`'s "Avg resolution
+(hrs)" is computed only from tickets carrying BOTH `created_at` and `resolved_at`. On a period with
+200 tickets of which 12 are resolved it is a measurement of 12 and reads as a measurement of 200. So
+`helpdesk/dashboard_drilldown.totals` folds `measured`, the endpoint now serves it, the tile shows
+"over 12 of 200 resolved", and that is the figure the tile's drill-down opens. The unresolved
+tickets appear in that panel, uncounted, with `not_resolved` as their stated reason — never folded
+in at zero hours, which would drag the mean toward a number nobody measured. §E5 caught the first
+cut of this inheriting the generic unmapped-status reason instead, which would have explained the
+wrong thing on the one panel a reader opens to understand the mean.
+
+**The vocabulary is PROVENANCE, not decoration**, in both reports, because in both an entry missing
+from it CHANGES the figure:
+
+- `crm_stage` decides whether a lead reaches the funnel at all, so a lead whose stage resolves names
+  it and a lead whose stage does not names only `crm_lead` (§B1, §B2). `crm_disposition` is named
+  per row, only where a reason was actually recorded (§B3, §B4).
+- `ticket_statuses` turns a `status_id` into a lifecycle stage, and an unmapped id silently falls
+  back to `"open"`. That ticket names only `tickets`, carries `not_recorded`, and is still counted
+  as open — the panel reports the fallback, it does not change the figure (§F2, §F3).
+
+**REPORTED, NOT PAPERED OVER — two live defects these reports have today.**
+
+1. **`pipeline_core.funnel` silently drops a lead whose `stage_id` is not in the stage vocabulary**
+   (`if b is None: continue`), while `conversion_rates` counts every lead. So Σ(by_stage.count) can
+   be LESS than the TOTAL tile on the same screen, and nothing said so. §C reproduces it from the
+   real `funnel` and `conversion_rates` (total 4, Σ 3). The figures are UNCHANGED: the dropped lead
+   is in the TOTAL panel with `stage_unknown`, it is in none of the per-stage panels (which are
+   keyed on `stage_id` exactly as `funnel` keys its buckets, so they cannot disagree with it), and
+   the screen now states the shortfall in words above the funnel.
+2. **`/crm/reports/activity` returns `{"rows": []}` on ANY exception from its read**, so a failed
+   read reads as "nobody logged anything". That is the endpoint's own shape and was not changed
+   here; it is written down in `crm/reports_drilldown.py` and locked into §G7 so a reader of an
+   empty rep-activity table knows the other reading.
+
+**Per-row panels, keyed as each endpoint keys its own buckets.** One panel per funnel stage
+(`stage_id`), per source line (the source NAME, including the `"Unknown"` bucket an unrecognised
+source lands in), and per rep line (`actor_employee_id`, including the `"—"` bucket an unattributed
+touch lands in). A touch names BOTH `crm_activity` and `crm_lead`, because the endpoint drops a
+touch whose lead the caller cannot see — the lead is part of why the figure is what it is, not
+context. Neither screen narrows its panels and neither should: every filter on both is a query
+parameter, so the server folded exactly the records on screen (locked, §H4).
+
+**The aging card is keyed on NOW, not on the period** — an open ticket is bucketed by how old it is
+at the moment the page loaded, while every figure above it is keyed on `created_at` inside the
+chosen range. Both are right and they are different questions, so the heading says so and the card
+gets no panel: "how old right now" has no stable set of rows a server folded it over.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):

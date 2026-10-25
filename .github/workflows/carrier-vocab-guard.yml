@@ -248,6 +248,14 @@ on:
       - "frontend/src/app/(platform)/closing/page.tsx"
       - "frontend/src/app/(platform)/closing/epay-recon/page.tsx"
       - "frontend/src/app/(platform)/closing/accessory-recon/page.tsx"
+      # §CORE-17.3h — the CRM reports and the Helpdesk dashboard: a rate gets no panel.
+      - "backend/harness_batch8_drilldown.py"
+      - "backend/app/modules/crm/reports_drilldown.py"
+      - "backend/app/modules/helpdesk/dashboard_drilldown.py"
+      - "backend/app/modules/crm/router.py"
+      - "backend/app/modules/helpdesk/router.py"
+      - "frontend/src/app/(platform)/crm/reports/page.tsx"
+      - "frontend/src/app/(platform)/helpdesk/dashboard/page.tsx"
       - "frontend/src/app/(platform)/closing/external-credit-recon/page.tsx"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
       # index §4e — the P&L drill path: company → market → store → line (owner report 2026-10-07)
@@ -1383,6 +1391,9 @@ jobs:
       - name: Run the batch-7 drill lock (three people count one envelope in three tables, so each figure names only the ones it was read out of and an UNCOUNTED envelope is shown rather than folded in at $0.00; the Daily Closing tiles are STORE-DAY sums because a DM's correction is authoritative for the store-day, and the lock proves a rep-day fold would NOT add up to them; a rep-day the recon could not judge is shown uncounted instead of reading as "no cash is missing" — index §CORE-17.3g)
         working-directory: backend
         run: python3 harness_batch7_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-8 drill lock (a RATE OR AN AVERAGE GETS NO PANEL — win rate, close rate and average resolution time are quotients, so they offer the counts they divide and the declarations serve no panel under those keys; the average's denominator is served and shown because the tile read as a measurement of every ticket; the stage and status vocabularies are named only on the rows they actually answered for, and the lead `funnel` silently drops is visible rather than hidden — index §CORE-17.3h)
+        working-directory: backend
+        run: python3 harness_batch8_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

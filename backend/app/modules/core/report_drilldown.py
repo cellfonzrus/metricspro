@@ -112,6 +112,10 @@ UNMEASURED_REASONS = {
                            "matched to it, so no comparison was made at all",
     "not_counted": "management has not counted this envelope yet, so there is no variance to "
                    "measure — the figure is light by an unknown amount, not by nothing",
+    "stage_unknown": "this record's stage is not in the stage list, so the per-stage report drops it "
+                     "while the total still counts it",
+    "not_resolved": "this one is not finished yet, so it contributes no duration — an average over "
+                    "the finished ones is not an average over all of them",
 }
 
 
