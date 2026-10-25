@@ -356,7 +356,10 @@ export default function DiscrepancyPage() {
                               lines it is made of. The toggle stops the click bubbling to the row's own
                               filter — opening the evidence is not the same gesture as filtering. */}
                           {p && (
-                            <span onClick={e => { e.stopPropagation(); storeDrill.toggle(s.store) }}>
+                            // The span only stops the click reaching the row's own filter — the
+                            // toggle itself is the button's. Doing both would toggle twice and
+                            // look like a dead control.
+                            <span onClick={e => e.stopPropagation()}>
                               <DrillToggle open={storeDrill.isOpen(s.store)}
                                 onClick={() => storeDrill.toggle(s.store)}
                                 label="commission lines behind this store" />
