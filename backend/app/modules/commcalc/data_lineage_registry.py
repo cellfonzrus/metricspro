@@ -48,7 +48,7 @@ CUSTOM_CAPTURE = "raw_custom_import"      # b2b custom sheets (Activation Detail
 EPAY_DAILY = "raw_epay_daily_tx"          # Boost ePay settlement
 MA_DAILY_TX = "raw_ma_daily_tx"           # VidaPay / Total MA daily transactions
 DAILY_CLOSING = "daily_closing"           # employee cash + tender declaration (owned by the closing module)
-# The four commission-money feeds that were only ever named as literals inside
+# The five commission-money feeds that were only ever named as literals inside
 # `COMMISSION_CALC_FEEDS` below. Named here because the §CORE-17 drill-downs have to say WHICH table a
 # figure was read out of, and a declaration restating a table name at the call site is the copied fact
 # this registry exists to prevent (§CORE-17.3k).
@@ -121,6 +121,7 @@ def discrepancy_writer_feeds(source):
     An unrecognised (or absent) writer returns `()` — the drill then names the snapshot alone and the
     row says in words that its writer recorded no provenance. PURE."""
     return DISCREPANCY_WRITER_FEEDS.get(str(source or "").strip().lower(), ())
+
 
 # ── THE COMMISSION-PER-DEVICE FEED — which table says "the carrier paid (or clawed back) on this IMEI" ─
 # Owner 2026-09-24 (index §11b): inventory is "crashed against the sales report by invoice and the
