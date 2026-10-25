@@ -567,13 +567,13 @@ DATA_DATE_COLUMN_BY_TABLE = {
     "raw_sales_invoice": "trans_date",
     "raw_sales_invoice_tender": "trans_date",
     # carrier / processor money feeds
-    "raw_payment_detail": "payment_date",
-    "raw_comp_report": "begin_date",          # the statement's own coverage start
-    "raw_ma_commission": "tx_date",
+    PAYMENT_DETAIL: "payment_date",
+    COMP_REPORT: "begin_date",      # the statement's own coverage start
+    MA_COMMISSION: "tx_date",
     MA_DAILY_TX: "tx_date",
     "raw_ma_fulfillment": "date_ordered",
     # period-keyed snapshots: one snapshot per month, replaced not appended, so no row names a day
-    "raw_mi": None,
+    MI_RESIDUAL: None,
     COMMISSION_PER_DEVICE_FEED: None,
     # day-grain operational feeds
     # The B2B clock in / clock out report (mig 1073, §14z): one row per punch, and `business_date` is
@@ -710,7 +710,7 @@ def period_grain_reason(table: str):
 # `None` is a DECLARATION, not a gap: the table carries no column naming a dealer account, so money
 # from it is booked company-wide rather than guessed onto a store.
 STORE_ACCOUNT_COLUMN_BY_TABLE = {
-    "raw_ma_commission": "merchant_account_id",
+    MA_COMMISSION: "merchant_account_id",
     MA_DAILY_TX: "account_id",
     "raw_ma_fulfillment": "tspid",
 }
@@ -780,7 +780,7 @@ def is_snapshot(table: str) -> bool:
 # The default is daily, deliberately: a feed nobody thought about is better watched too keenly than not
 # at all. A slower feed says so here.
 FEED_CADENCE_BY_TABLE = {
-    "raw_mi": CADENCE_MONTHLY,                # one monthly subscriber snapshot
+    MI_RESIDUAL: CADENCE_MONTHLY,             # one monthly subscriber snapshot
     COMMISSION_PER_DEVICE_FEED: CADENCE_MONTHLY,
     "royalty_report": CADENCE_MONTHLY,        # the franchisor's monthly statement
     "ma_overview_upload": CADENCE_MONTHLY,
@@ -884,12 +884,12 @@ def unwatched_reason(table: str):
 FEED_LABEL_BY_TABLE = {
     LIVE_SALES_FEED: "Sales transactions (live feed)",
     MONTHLY_SALES: "Sales transactions (monthly reconciliation)",
-    "raw_payment_detail": "Payment detail",
-    "raw_comp_report": "Compensation report (commission basis)",
-    "raw_mi": "Subscriber base snapshot",
+    PAYMENT_DETAIL: "Payment detail",
+    COMP_REPORT: "Compensation report (commission basis)",
+    MI_RESIDUAL: "Subscriber base snapshot",
     "raw_dlar_rep": "Daily activity by rep",
     "raw_dlar_store": "Daily activity by store",
-    "raw_ma_commission": "Master-agent commission",
+    MA_COMMISSION: "Master-agent commission",
     MA_DAILY_TX: "Master-agent daily transactions",
     "raw_ma_fulfillment": "Master-agent fulfilment orders",
     "pos_tender_summary": "Register tender summary",
