@@ -37,6 +37,8 @@ from . import pickup_drilldown as _pickup_drilldown
 from . import recon_drilldown as _recon_drilldown
 from . import ops_chargeback_drilldown as _ops_chargeback_drilldown
 from . import three_way_drilldown as _three_way_drilldown
+from . import envelope_drilldown as _envelope_drilldown
+from . import rollup_drilldown as _rollup_drilldown
 from . import external_credit_drilldown as _external_credit_drilldown
 from app.modules.commcalc import data_lineage_registry as _lineage
 from . import closer_resolution
@@ -686,9 +688,27 @@ def closing_submissions(date_from: str = None, date_to: str = None,
             "remarks": r.get("remarks"),
         })
 
+    # ── THE DASHBOARD'S TWO CASH TILES NAME THEIR EVIDENCE (§CORE-17) ───────────────────────────
+    # The same `_money_issues` cash verdict the recon counts, folded as money — declared beside its
+    # sibling in `closing/recon_drilldown.py`, not in a second file. The feed each row was compared
+    # against is DEREFERENCED from the day read (`_b2b_day`'s `sales_tables`, §CORE-17.3c) rather
+    # than named here.
+    #
+    # GATED ON THE SAME BOUNDARY THE FIGURES ARE. `can_review` already zeroes `cash_short_amount`,
+    # `cash_over_amount`, `b2b_cash` and the gate reasons for a caller without company-wide money
+    # review. Serving the panels anyway would hand that caller the evidence behind figures the
+    # endpoint deliberately withholds, so there are no panels at all for them — the screen then
+    # offers no link, which is the one-home offer rule doing its job (`useDrillTile().dl`).
+    _sub_drill = None
+    if can_review:
+        _sub_sales_tables = tuple(sorted({t for d in day_cache.values()
+                                          for t in ((d or {}).get("sales_tables") or ())}))
+        _sub_drill = _recon_drilldown.submission_drilldowns(
+            out, _recon_drilldown.submission_totals(out), sales_tables=_sub_sales_tables)
     return {"rows": out, "date_from": date_from, "date_to": date_to, "truncated": truncated,
             "status_capped": status_capped, "status_dates_computed": len(status_dates),
-            "status_dates_total": len(dates), "can_review": can_review}
+            "status_dates_total": len(dates), "can_review": can_review,
+            "drilldown": _sub_drill}
 
 
 # ── Stores (for the rep submission form's store picker) ────────────────────────────────────
@@ -904,6 +924,11 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
 
     by_store, by_rep, grand = {}, {}, blank()
     _sd, _sd_code = {}, {}   # per-(store key, day) rep-sum + its store_code, for the TKT-1030 overlay
+    # THE SAME STORE-DAYS, WITH THEIR COUNTS AND THEIR NAMES — the drill-down population for every
+    # tile on the dashboard (§CORE-17). Kept as a SEPARATE dict rather than widened into `_sd` on
+    # purpose: `_sd`'s every field is walked by the overlay loop below, and a figure the overlay does
+    # not know about has no business being handed to it.
+    _sd_counts, _sd_meta = {}, {}
     kept_rows = []
     for r in rows:
         raw_code = r.get("store_code")
@@ -963,11 +988,25 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
             _sda[k] = round(_sda[k] + _f(r.get(k)), 2)
         _sda["epay_on_cash"] = round(_sda["epay_on_cash"] + epd["cash"], 2)
         _sda["epay_on_cc"] = round(_sda["epay_on_cc"] + epd["cc"], 2)
+        # The count figures and the row count at the SAME grain, for the drill-down. A DM correction
+        # covers money only, so these are never overlaid — which is itself worth a reader seeing.
+        _sdc = _sd_counts.setdefault(_sdk, {k: 0 for k in COUNT} | {"rows": 0})
+        for k in COUNT:
+            _sdc[k] += int(r.get(k) or 0)
+        _sdc["rows"] += 1
+        _sd_meta.setdefault(_sdk, {"store_code": raw_code, "store_address": row_address,
+                                   "store_name": r.get("store_name"), "market": mk_bucket})
 
     # DM verified-correction overlay (TKT-1030, owner 2026-08-20): by_store + grand (store-day / company
     # aggregates) reflect the DM's verified corrections; by_rep stays RAW (a store-day correction can't be
     # attributed to one rep). Applied as a per-store-day delta so only corrected store-days move, and it
     # is a strict no-op when there is no verified correction. Best-effort.
+    # THE CORRECTED STORE-DAY FIGURE, KEPT RATHER THAN DISCARDED. `grand` is the raw rep-sum plus
+    # these deltas, so the only population that adds up to a dashboard tile is the store-days AFTER
+    # the overlay — which is exactly what the drill-down must show, and what this loop computed and
+    # then threw away. `_sd_dm` records which store-days a DM actually corrected, so each drill row
+    # can name `daily_closing_verification` only where it genuinely answered.
+    _sd_final, _sd_dm = {k: dict(v) for k, v in _sd.items()}, set()
     try:
         _ov = _verified_overlay.build_overlay_map(client, org_id, {d for (_k, d) in _sd.keys()})
         if _ov:
@@ -980,6 +1019,8 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
                     _delta = round(_corr.get(_fld, _rv) - _rv, 2)
                     if not _delta:
                         continue
+                    _sd_final[(_k, _dd)][_fld] = round(_rv + _delta, 2)
+                    _sd_dm.add((_k, _dd))
                     if _k in by_store:
                         by_store[_k][_fld] = round(by_store[_k].get(_fld, 0.0) + _delta, 2)
                     grand[_fld] = round(grand.get(_fld, 0.0) + _delta, 2)
@@ -991,6 +1032,24 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
         return d
 
     submitted_keys = {_vkey(r.get("store_code"), r.get("close_date")) for r in kept_rows if r.get("store_code")}
+    # ── WHERE EVERY TILE'S FIGURE CAME FROM (§CORE-17) ───────────────────────────────────────────
+    # The store-days the tiles are actually summed over, AFTER the DM overlay — see
+    # `closing/rollup_drilldown.py` for why the store-day, and not the rep submission, is the only
+    # population that adds up to these figures. `verified` is read from the SAME `verified_keys` set
+    # the coverage figure is counted from, through the SAME `_vkey`, so the tile and its rows cannot
+    # disagree about which store-days a DM signed off.
+    _store_days = []
+    for (_k, _dd), _money in sorted(_sd_final.items()):
+        _m = _sd_meta.get((_k, _dd)) or {}
+        _vk = _vkey(_m.get("store_code"), _dd)
+        _store_days.append({**_money, **(_sd_counts.get((_k, _dd)) or {}), **_m,
+                            "close_date": str(_dd)[:10],
+                            "dm_corrected": (_k, _dd) in _sd_dm,
+                            "verified": _vk in verified_keys and _vk in submitted_keys})
+    _tile_figures = _rollup_drilldown.totals(
+        _store_days,
+        submitted_keys=len(submitted_keys),
+        verified_keys=len(verified_keys & submitted_keys))
     bs = sorted((finalize(v) for v in by_store.values()),
                 key=lambda s: str(s.get("store_address") or s.get("store_name") or ""))
     br = sorted((finalize(v) for v in by_rep.values()), key=lambda s: -s.get("rows", 0))
@@ -1040,6 +1099,12 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
         "period": period, "date_from": date_from, "date_to": date_to,
         "by_store": bs, "by_rep": br, "totals": finalize(grand),
         "verified_keys": len(verified_keys & submitted_keys), "submitted_keys": len(submitted_keys),
+        # EVERY TILE NAMES ITS EVIDENCE (§CORE-17). The panels are folded over the store-days the
+        # tiles are summed over, and each row names the reps' closing sheet plus — only where a
+        # district manager's correction actually answered — the verification it came from.
+        "drilldown": _rollup_drilldown.drilldowns(
+            _store_days, _tile_figures,
+            processor_label=_carrier_term(client, org_id, "processor") or "Bill-pay"),
         "market_filter_skipped": market_filter_skipped,
         "unfinished": unfinished_days,
         "unfinished_counts": _unfinished.summarize(unfinished_days),
@@ -5494,8 +5559,23 @@ def envelope_report(date_from: str = None, date_to: str = None,
     # accountability view over a date range, where `rows` answers one store-day at a time. Computed
     # AFTER status_filter so the rollup describes exactly what the screen is showing, and derived by
     # calling `totals` per group, so it can never disagree with the tiles.
-    return {"rows": out, "totals": envelope_report_mod.totals(out),
-            "by_employee": envelope_report_mod.by_employee(out),
+    _totals = envelope_report_mod.totals(out)
+    _groups = envelope_report_mod.by_employee(out)
+    # WHICH CASH, in this tenant's own wording — resolved ONCE here and handed to the drill-down as a
+    # function, so the declaration spells no basis key and no basis label (the vocabulary's one home
+    # is `envelope_report.basis_options` / `basis_label`, §19.38).
+    _processor = _carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY)
+    def _basis_short(key):
+        return envelope_report_mod.basis_label(key, _processor, short=True) if key else None
+    return {"rows": out, "totals": _totals,
+            "by_employee": _groups,
+            # EVERY FIGURE ON THIS REPORT NAMES ITS EVIDENCE (§CORE-17). Three people record three
+            # numbers for one envelope in three different tables; a tile said so to nobody until now.
+            # `drilldown` is the five tiles' nine figures; `drilldown_by_employee` is one panel per
+            # By-employee line, keyed by the employee name that line is keyed on.
+            "drilldown": _envelope_drilldown.drilldowns(out, _totals, basis_label=_basis_short),
+            "drilldown_by_employee": _envelope_drilldown.by_employee_drilldowns(
+                out, _groups, basis_label=_basis_short),
             "date_from": date_from, "date_to": date_to,
             # The selector's own vocabulary, served from the pure module so the screen never hardcodes
             # a basis word or a label (owner 2026-10-01).
@@ -5503,8 +5583,9 @@ def envelope_report(date_from: str = None, date_to: str = None,
             # The bill-payment basis names the tenant's OWN processor ('ePay' on the Boost side,
             # 'VidaPay' on the Total side, the neutral noun when neither is declared) — resolved from
             # the report_labels `processor` term, never spelled in code or in page copy.
-            "basis_options": envelope_report_mod.basis_options(
-                _carrier_term(client, org_id, envelope_report_mod.ENVELOPE_BASIS_TERM_KEY)),
+            # The processor term is read ONCE above (`_processor`) and dereferenced here, rather than
+            # read a second time — the selector's labels and the drill-down's wording are one fact.
+            "basis_options": envelope_report_mod.basis_options(_processor),
             "market_filter_skipped": market_filter_skipped,
             "can_decide": _can_mgmt_review(_caller_perms(client, authorization))}
 

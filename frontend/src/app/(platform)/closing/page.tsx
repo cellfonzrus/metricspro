@@ -13,8 +13,43 @@ import { useReportLabels } from '@/lib/report-labels'
 import SubmissionsTable, { monthStart } from './_lib/SubmissionsTable'
 import ClosingPickupStatus from './_lib/ClosingPickupStatus'
 import { MarketStorePicker, type StoreOpt } from './_lib/MarketStorePicker'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
+import { narrowPanels, screenKey } from '@/lib/drill-narrow'
 
 const csv = (a: string[]) => (a.length ? a.join(',') : undefined)
+
+// WHAT IDENTIFIES ONE STORE-DAY IN A DRILL-DOWN — the client side of
+// `closing/rollup_drilldown._row_fields`. `figures` is the one that matters: it says whether a day's
+// money is the reps' submitted sum or the district manager's corrected total, which is the whole
+// reason these panels name two tables instead of one.
+const STORE_DAY_COLUMNS = [
+  { header: 'Store code', get: (r: DrillRow) => String(r.fields?.store_code || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.store_code || '') },
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.market || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.market || '') },
+  { header: 'Figures', get: (r: DrillRow) => String(r.fields?.figures || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.figures || '') },
+  { header: 'Submissions', get: (r: DrillRow) => String(r.fields?.submissions ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.submissions ?? 0) },
+  { header: 'DM verified', get: (r: DrillRow) => (r.fields?.dm_verified ? 'Yes' : 'No'),
+    sortValue: (r: DrillRow) => (r.fields?.dm_verified ? 1 : 0) },
+]
+
+// WHAT IDENTIFIES ONE REP-DAY — the client side of `closing/recon_drilldown._submission_fields`,
+// which the close recon's own panels already use. The two cash tiles are the same accusation as that
+// report's counts, folded as money, so they render through the same field names.
+const REP_DAY_COLUMNS = [
+  { header: 'Store code', get: (r: DrillRow) => String(r.fields?.store_code || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.store_code || '') },
+  { header: 'Rep', get: (r: DrillRow) => String(r.fields?.rep || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.rep || '') },
+  { header: 'Close gate', get: (r: DrillRow) => String(r.fields?.severity || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.severity || '') },
+  { header: 'Declared', get: (r: DrillRow) => (r.fields?.declared == null ? '—' : fmt(Number(r.fields.declared))),
+    sortValue: (r: DrillRow) => Number(r.fields?.declared ?? 0) },
+  { header: 'Sales feed', get: (r: DrillRow) => (r.fields?.counterpart == null ? 'not loaded' : fmt(Number(r.fields.counterpart))),
+    sortValue: (r: DrillRow) => Number(r.fields?.counterpart ?? 0) },
+]
 
 export default function ClosingDashboard() {
   const { user, permissions } = useAuth()
@@ -54,11 +89,42 @@ export default function ClosingDashboard() {
   const [subMeta, setSubMeta] = useState<any>(null)
   const onScopedRows = useCallback((rows: any[], meta: any) => { setSubRows(rows); setSubMeta(meta) }, [])
   const drillTo = (d: 'all' | 'cash_short' | 'cash_over') => { setTab('detail'); setDrill(d) }
-  const cashShortTotal = useMemo(() => Math.round(subRows.reduce((s, r) => s + (r.cash_short_amount || 0), 0) * 100) / 100, [subRows])
-  const cashOverTotal = useMemo(() => Math.round(subRows.reduce((s, r) => s + (r.cash_over_amount || 0), 0) * 100) / 100, [subRows])
+  const cashShortRaw = useMemo(() => Math.round(subRows.reduce((s, r) => s + (r.cash_short_amount || 0), 0) * 100) / 100, [subRows])
+  const cashOverRaw = useMemo(() => Math.round(subRows.reduce((s, r) => s + (r.cash_over_amount || 0), 0) * 100) / 100, [subRows])
   // Same money-secrecy boundary the detail tab already shows a note for — undefined (meta not loaded
   // yet) reads as "unknown", not a false negative; only an explicit `false` hides the real $ amounts.
   const canReviewMoney = subMeta?.can_review !== false
+
+  // ── WHERE EVERY TILE'S FIGURE CAME FROM (§CORE-17) ─────────────────────────────────────────────
+  // TWO FAMILIES, because the tiles have two populations and that is the point.
+  //
+  // The ten rollup tiles are folded by the SERVER over store-days, after the DM overlay, from a
+  // population the server filtered (date, stores, markets, reps are all query parameters) — so no
+  // narrowing is needed, and no narrowing is applied.
+  const rollupPanels = useMemo<Record<string, DrillPanel>>(() => data?.drilldown || {}, [data])
+  const rollupDrill = useDrillTile(rollupPanels)
+  //
+  // The two cash tiles are folded HERE, on the client, from the submissions rows — the store/market/
+  // rep filter on that endpoint is client-side (see SubmissionsTable). So this is the narrowing class
+  // (§CORE-17.3d): the server's panel covers the whole date range and is cut down to the same rows
+  // the tiles are summed over, keyed exactly as the server keyed them.
+  const subSelected = useMemo(() => new Set(subRows.map(r => screenKey({
+    close_date: r.close_date, store_code: r.store_code, employee_name: r.employee_name,
+  }))), [subRows])
+  const cashPanels = useMemo(
+    () => narrowPanels(subMeta?.drilldown || {}, (_r, k) => subSelected.has(k)),
+    [subMeta, subSelected])
+  const cashDrill = useDrillTile(cashPanels)
+  // ONE FOLD, NOT TWO (§CORE-17.3d). Where a panel was served, the tile is READ OFF IT, so the
+  // number on the card and the rows behind it cannot drift. The client reduce stays as the fallback
+  // for the cases there is no panel: a caller without money review (the server serves none, by
+  // design) and a panel the server had to cap.
+  const cashShortTotal = cashPanels.cash_short ? (cashPanels.cash_short.figure?.amount ?? 0) : cashShortRaw
+  const cashOverTotal = cashPanels.cash_over ? (cashPanels.cash_over.figure?.amount ?? 0) : cashOverRaw
+  // Two short names for the one offer rule, so a tile's own line stays readable. Each keeps only the
+  // figures ITS family actually served a panel for.
+  const rd = rollupDrill.dl
+  const cd = cashDrill.dl
 
   useEffect(() => {
     const mkt = user?.market
@@ -227,27 +293,50 @@ export default function ClosingDashboard() {
               CURRENT dashboard scope (same shared `filt`); Cash Short/Cash Over additionally narrow to
               exactly the rows behind that tile. See the design-choice comment above `drill` state. */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: 18 }}>
-            <Tile label="Cash collected" value={fmt(cashTotal(t))} onClick={() => drillTo('all')} />
-            <Tile label="Credit collected" value={fmt(cardTotal(t))} onClick={() => drillTo('all')} />
-            <Tile label={`${ep} cash`} value={fmt(epayCash(t))} sub="already inside Cash collected" onClick={() => drillTo('all')} />
-            <Tile label={`${ep} credit`} value={fmt(epayCard(t))} sub="already inside Credit collected" onClick={() => drillTo('all')} />
-            <Tile label="Accessory sales" value={fmt(t.acc_sale)} onClick={() => drillTo('all')} />
-            <Tile label="Other (Zelle/CashApp)" value={fmt(t.other_account)} onClick={() => drillTo('all')} />
-            <Tile label="Activations" value={`${(t.new_line_count || 0) + (t.postpaid_count || 0)}`} sub={`${t.new_line_count || 0} new · ${t.postpaid_count || 0} postpaid`} onClick={() => drillTo('all')} />
-            <Tile label="Upgrades" value={`${t.upgrade_count || 0}`} onClick={() => drillTo('all')} />
-            <Tile label="Rep submissions" value={`${t.rows || 0}`} sub={`${t.days || 0} day(s)`} onClick={() => drillTo('all')} />
-            <Tile label="DM verified" value={cov} sub="store-days verified" onClick={() => drillTo('all')} />
+            <Tile label="Cash collected" value={fmt(cashTotal(t))} onClick={() => drillTo('all')}
+                  drills={rd('cash', 'where this came from')} drill={rollupDrill} />
+            <Tile label="Credit collected" value={fmt(cardTotal(t))} onClick={() => drillTo('all')}
+                  drills={rd('credit', 'where this came from')} drill={rollupDrill} />
+            <Tile label={`${ep} cash`} value={fmt(epayCash(t))} sub="already inside Cash collected" onClick={() => drillTo('all')}
+                  drills={rd('epay_on_cash', 'where this came from')} drill={rollupDrill} />
+            <Tile label={`${ep} credit`} value={fmt(epayCard(t))} sub="already inside Credit collected" onClick={() => drillTo('all')}
+                  drills={rd('epay_on_cc', 'where this came from')} drill={rollupDrill} />
+            <Tile label="Accessory sales" value={fmt(t.acc_sale)} onClick={() => drillTo('all')}
+                  drills={rd('acc_sale', 'where this came from')} drill={rollupDrill} />
+            <Tile label="Other (Zelle/CashApp)" value={fmt(t.other_account)} onClick={() => drillTo('all')}
+                  drills={rd('other_account', 'where this came from')} drill={rollupDrill} />
+            <Tile label="Activations" value={`${(t.new_line_count || 0) + (t.postpaid_count || 0)}`} sub={`${t.new_line_count || 0} new · ${t.postpaid_count || 0} postpaid`} onClick={() => drillTo('all')}
+                  drills={rd('activations', 'where this came from')} drill={rollupDrill} />
+            <Tile label="Upgrades" value={`${t.upgrade_count || 0}`} onClick={() => drillTo('all')}
+                  drills={rd('upgrade_count', 'where this came from')} drill={rollupDrill} />
+            <Tile label="Rep submissions" value={`${t.rows || 0}`} sub={`${t.days || 0} day(s)`} onClick={() => drillTo('all')}
+                  drills={rd('rows', 'where this came from')} drill={rollupDrill} />
+            {/* TWO FIGURES, TWO PANELS. The coverage tile reads "verified / filed", and each half is
+                its own count of store-days — the unverified days are the work the figure measures,
+                so they are shown in the verified panel, uncounted. `days` is deliberately absent:
+                it is a DISTINCT count of dates, not a sum over rows, so no set of rows adds up to
+                it and a panel would be a claim nobody could check. */}
+            <Tile label="DM verified" value={cov} sub="store-days verified" onClick={() => drillTo('all')}
+                  drills={rd('verified_keys', 'verified', 'submitted_keys', 'filed')} drill={rollupDrill} />
             {/* retail-ops-25 — the 2 NEW tiles (OWNER DIRECTIVE 2026-08-03). Sourced from the SAME
                 canonical `_money_issues` figures the close gate itself computes (GET
                 /closing/submissions' cash_short_amount/cash_over_amount, never re-derived here) —
                 summed but never NETTED against each other (the whole point of two separate tiles). */}
             <Tile label="Cash short" value={canReviewMoney ? fmt(cashShortTotal) : '—'}
                   sub={canReviewMoney ? `block — vs ${pos} sales` : 'company-wide roles only'}
-                  tone={cashShortTotal > 0 ? '#b42318' : undefined} onClick={() => drillTo('cash_short')} />
+                  tone={cashShortTotal > 0 ? '#b42318' : undefined} onClick={() => drillTo('cash_short')}
+                  drills={cd('cash_short', 'where this came from')} drill={cashDrill} />
             <Tile label="Cash over" value={canReviewMoney ? fmt(cashOverTotal) : '—'}
                   sub={canReviewMoney ? 'flag — investigate' : 'company-wide roles only'}
-                  tone={cashOverTotal > 0 ? '#b45309' : undefined} onClick={() => drillTo('cash_over')} />
+                  tone={cashOverTotal > 0 ? '#b45309' : undefined} onClick={() => drillTo('cash_over')}
+                  drills={cd('cash_over', 'where this came from')} drill={cashDrill} />
           </div>
+          {/* The two panel families render under the strip. Only one can be open at a time within a
+              family, and opening one family's panel leaves the other's alone — the ten rollup tiles
+              and the two cash tiles explain different populations, so a reader comparing them wants
+              both on screen. */}
+          <DrillDownPanel panel={rollupDrill.panel} extraColumns={STORE_DAY_COLUMNS} />
+          <DrillDownPanel panel={cashDrill.panel} extraColumns={REP_DAY_COLUMNS} />
 
           {/* Tabs */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
@@ -296,11 +385,27 @@ export default function ClosingDashboard() {
 // retail-ops-25 (PACKAGE B): every tile is now clickable — a drill-down into the row-level detail
 // backing it (see the `drillTo` design-choice comment above). `onClick` is optional so this component
 // stays usable as a plain display tile elsewhere with no behavior change.
-const Tile = ({ label, value, sub, tone, onClick }: { label: string; value: string; sub?: string; tone?: string; onClick?: () => void }) => (
+// §CORE-17 (owner ask 2026-10-24): a tile now carries TWO affordances, and they answer two different
+// questions. The card itself still opens the ROWS — the submissions table, narrowed. The link below
+// opens where the FIGURE CAME FROM: which store-days it sums, and which table each side of each one
+// was read out of. `drills` is already filtered to the figures the server served a panel for, so a
+// tile with nothing behind it shows no link rather than one that opens nothing.
+const Tile = ({ label, value, sub, tone, onClick, drills, drill }: {
+  label: string; value: string; sub?: string; tone?: string; onClick?: () => void
+  drills?: { key: string; label: string }[]
+  drill?: { open: string | null; toggle: (k: string) => void }
+}) => (
   <div className="card" style={{ padding: 14, cursor: onClick ? 'pointer' : undefined }}
        onClick={onClick} role={onClick ? 'button' : undefined} title={onClick ? 'Click to see the underlying rows' : undefined}>
     <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
     <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2, color: tone }}>{value}</div>
     {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+    {/* The whole card is the row drill-down, so a click on the provenance link must not also fire
+        it — the two are different answers and a reader asked for one of them. */}
+    {drill && drills && drills.length ? (
+      <div onClick={ev => ev.stopPropagation()}>
+        <DrillTileLinks drills={drills} open={drill.open} onToggle={drill.toggle} />
+      </div>
+    ) : null}
   </div>
 )

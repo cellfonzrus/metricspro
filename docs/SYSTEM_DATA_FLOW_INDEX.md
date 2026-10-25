@@ -33685,6 +33685,73 @@ onto them. They stay `owes` with that reason in the ledger rather than being mar
 Proof: `backend/harness_batch6_drilldown.py` (57 checks, §Z1–Z6 negative controls). Owed count
 85 → 83.
 
+### §CORE-17.3g THREE PEOPLE COUNT ONE ENVELOPE (2026-10-25, batch 7)
+
+Batch 7 of the §CORE-17 audit: **`/closing/envelope-report`** (the Management Envelope Receipt) and
+**`/closing`** (the Daily Closing dashboard). Owed count **83 → 81**. Proof:
+`backend/harness_batch7_drilldown.py`, **99 checks**, §Z1–Z8 negative controls, wired into the
+carrier-vocab-guard lock job.
+
+**The receipt — `closing/envelope_drilldown.py`, 9 figures on 5 tiles.** Three different people
+record three different numbers for one envelope, in three different tables, and the screen showed
+them side by side as if they were one measurement. So each figure names ONLY the tables it was read
+out of: `daily_closing` for a count of envelopes filed, `+ envelope_count` for a variance (one is
+scored against the other), `+ ops_chargeback` for the chargeback figures, because that is where the
+amount and the decision live and nowhere else. A short envelope nobody assigned to anyone does NOT
+name the chargeback table — §B4 caught the first cut of this declaration claiming it on every row.
+
+- **An uncounted envelope is not a clean one.** It is a real envelope and `envelopes` counts it, but
+  it is deliberately not counted in short / over / match or in either dollar figure, with
+  `not_counted` as its stated reason. Folding it in at $0.00 would read as "management counted this
+  and it came out exactly right", which is the opposite of the truth and the exact reading the
+  receipt exists to prevent.
+- **The By-employee rollup gets ONE PANEL PER LINE**, keyed on the employee name that line is keyed
+  on. That is the owner's original ask — *"cash variance at employee should have the drill down from
+  where the data is coming from"* — applied to the second surface of that shape, and it is not a new
+  mechanism: `cash_variance.drilldowns` / `group_drilldown` already serve one panel per rollup row.
+  The figure is the line's own `net_variance`, and the LABEL SAYS "net of short and over" because a
+  rep $50 short one day and $50 over the next nets to zero while twice having handed over the wrong
+  cash. The note carries both gross counts and the envelopes nobody counted.
+- The basis a stored count was SCORED on rides on each row in the tenant's own wording, resolved
+  once at the endpoint from `envelope_report.basis_label` — the declaration spells no basis key
+  (§B8), and the processor term is now read ONCE and dereferenced by both the selector's labels and
+  the drill-down's (§G8; it was read twice).
+
+**The dashboard — `closing/rollup_drilldown.py`, 11 figures on 10 tiles, and the grain is a FACT.**
+These tiles are not Σ(rep submissions). `verified_overlay` makes a DM's correction authoritative FOR
+THE STORE-DAY — its own docstring says it "is applied to store-day AGGREGATES only" and that per-rep
+detail keeps the reps' raw figures — so a panel of rep-days would NOT add up to the tile on any day a
+DM corrected, and the gap would read as a defect in the report rather than as the design. §D3 proves
+exactly that: the store-day fold ties AND the rep-day fold does not. The endpoint now KEEPS the
+corrected store-day figure its overlay loop already computed and threw away (§G9).
+
+- A corrected store-day names `daily_closing_verification`; an uncorrected one names
+  `daily_closing` alone, and the row says in words whose figures they are. A provenance claimed
+  where no authority was exercised is a lie that reads like rigour.
+- **A DM corrects money, not counts.** The count panels therefore name the closing sheet alone even
+  on a corrected day — §E4 caught the money reader being reused for them.
+- `days` has NO panel on purpose: it is a DISTINCT count of dates, not a sum over rows, so no set of
+  rows adds up to it and a panel would be a claim nobody could check. The DM-verified tile is TWO
+  figures (verified / filed), and the unverified store-days are shown in the verified panel,
+  uncounted — they are the work the figure measures.
+
+**The dashboard's two cash tiles are the close recon's own accusation, folded as money.** Both come
+from `_money_issues`, so they are declared as a SIBLING in `closing/recon_drilldown.py`
+(`submission_catalogue`), not in a file of their own — one fact, one home, two folds, the shape
+`pickup_drilldown.billpay_catalogue` already set. Their grain is the rep-day, so `metric` is no part
+of their address. They ARE the client-folded class (§CORE-17.3d): narrowed through
+`lib/drill-narrow` and READ OFF their narrowed panels, with the client reduce kept as the fallback.
+The panels are served only to a caller who may review money, because the endpoint already withholds
+those figures from everyone else and the evidence behind a hidden figure is the hidden figure (§G12).
+
+**REPORTED, NOT PAPERED OVER — a live presentation defect on the dashboard.** A rep-day the recon
+could not judge (the sales feed was not loaded for that day, or the rep could not be matched to it)
+contributes 0.00 to both cash tiles. The SUM is right; the presentation is not, because
+"Cash short $0.00" then reads as "no cash is missing" when nothing was compared at all. The figures
+are UNCHANGED — a figure is never moved to make a screen read better — and those rows now appear in
+both panels, uncounted, each naming which of the two blanks it is (§F3, §F4). It is the same class as
+§CORE-17.3f's pending recon rows, on the dashboard.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):

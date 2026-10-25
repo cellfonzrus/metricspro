@@ -110,6 +110,8 @@ UNMEASURED_REASONS = {
     "not_collected": "this envelope has not been collected yet, so nothing has been counted",
     "no_sales_feed_match": "the sales feed was not loaded for this day, or this person could not be "
                            "matched to it, so no comparison was made at all",
+    "not_counted": "management has not counted this envelope yet, so there is no variance to "
+                   "measure — the figure is light by an unknown amount, not by nothing",
 }
 
 

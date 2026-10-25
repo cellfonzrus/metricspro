@@ -82,12 +82,12 @@
 /accounts/royalty/recon	owes	
 /accounts/trends	owes	
 /admin/org-chart	owes	
-/closing	owes	
+/closing	shared	all twelve tiles drill; TWO populations — the ten rollup tiles over store-days AFTER the DM overlay (closing/rollup_drilldown.py, the only grain that adds up to them), and the two cash tiles over rep-days, narrowed on the client (lib/drill-narrow) and READ OFF their panels; `days` has no panel on purpose (a distinct count, not a sum)
 /closing/accessory-recon	shared	all four tiles drill to their stores through core/report_drilldown.tiles; declaration in closing/day_recon_drilldown.py
 /closing/billpay-pickup	shared	all seven figures drill to their envelopes through the SAME declaration as /closing/pickup (closing/pickup_drilldown.billpay_catalogue); a card-only row is shown and not counted
 /closing/cash-recon-management	shared	all eleven tiles (sixteen figures) drill to their store-days through core/report_drilldown.tiles; declaration in closing/cash_recon_drilldown.py
 /closing/closing-pickup-status	owes	a compliance QUEUE: owes the closing/envelope rows (and the roster entry expected to file) behind each not-submitted store-day, not a figure's panel — index §CORE-17.3f
-/closing/envelope-report	owes	
+/closing/envelope-report	shared	all nine figures on the five tiles drill to their envelopes, each naming only the tables it was read out of (closing/envelope_drilldown.py), AND one panel per By-employee line keyed on that line's own key — the owner's employee-level cash variance; an uncounted envelope is shown and never counted at $0.00
 /closing/epay-recon	shared	all four tiles drill to their stores through core/report_drilldown.tiles; declaration in closing/day_recon_drilldown.py
 /closing/external-credit-recon	shared	all eight tiles drill to their store-days per processor role; declaration in closing/external_credit_drilldown.py
 /closing/management	owes	a work QUEUE of closing attempts: what it owes is per-ROW provenance (which attempt, by whom, when, and the accepted closing row), not a figure's panel — index §CORE-17.3f

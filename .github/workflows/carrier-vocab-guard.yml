@@ -239,6 +239,13 @@ on:
       - "backend/app/modules/closing/ops_chargeback_drilldown.py"
       - "frontend/src/app/(platform)/closing/recon/page.tsx"
       - "frontend/src/components/DailyClosingVerify.tsx"
+      # §CORE-17.3g — the Management Envelope Receipt and the Daily Closing dashboard.
+      - "backend/harness_batch7_drilldown.py"
+      - "backend/app/modules/closing/envelope_drilldown.py"
+      - "backend/app/modules/closing/rollup_drilldown.py"
+      - "backend/app/modules/closing/verified_overlay.py"
+      - "frontend/src/app/(platform)/closing/envelope-report/page.tsx"
+      - "frontend/src/app/(platform)/closing/page.tsx"
       - "frontend/src/app/(platform)/closing/epay-recon/page.tsx"
       - "frontend/src/app/(platform)/closing/accessory-recon/page.tsx"
       - "frontend/src/app/(platform)/closing/external-credit-recon/page.tsx"
@@ -1373,6 +1380,9 @@ jobs:
       - name: Run the batch-6 drill lock (a close recon's accusations name the closing row and the feed each side came from, and a PENDING row names no feed because none answered; the rule that made a row a block stays in `_money_issues`; the chargeback strip's "to be foregone" is folded from its rows, never composed from two tiles — index §CORE-17.3f)
         working-directory: backend
         run: python3 harness_batch6_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-7 drill lock (three people count one envelope in three tables, so each figure names only the ones it was read out of and an UNCOUNTED envelope is shown rather than folded in at $0.00; the Daily Closing tiles are STORE-DAY sums because a DM's correction is authoritative for the store-day, and the lock proves a rep-day fold would NOT add up to them; a rep-day the recon could not judge is shown uncounted instead of reading as "no cash is missing" — index §CORE-17.3g)
+        working-directory: backend
+        run: python3 harness_batch7_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
