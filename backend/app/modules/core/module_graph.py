@@ -74,7 +74,8 @@ FACTS: dict[str, dict] = {
                   'harness_cash_recon_drilldown.py', 'harness_tender_recon_drilldown.py',
                   'harness_day_recon_drilldown.py', 'harness_drill_narrow_fixtures.py',
                   'harness_batch5_drilldown.py', 'harness_batch6_drilldown.py',
-                  'harness_batch7_drilldown.py', 'harness_batch8_drilldown.py'),
+                  'harness_batch7_drilldown.py', 'harness_batch8_drilldown.py',
+                  'harness_batch10_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -130,6 +131,18 @@ FACTS: dict[str, dict] = {
             # resolution time opens to `measured`, its own denominator, which this declaration folds
             # and the endpoint now also shows on the tile.
             'app/modules/helpdesk/dashboard_drilldown.py': ('report_drilldown',),
+            # The Balance Sheet and the Cash Flow (§CORE-17.3j) — ONE declaration, because they
+            # share a grain: both read one stored `account_statements` row and render its
+            # sections/lines, and the cash flow's lines ARE balance-sheet line keys. The first
+            # declaration to say where provenance STOPS: a stored statement does not record which
+            # feed each line was read out of, so a feed is named only where the booking code reads
+            # it unconditionally and a config-resolved line names none.
+            'app/modules/account/statement_drilldown.py': ('report_drilldown',),
+            # The Current Monetary Liabilities tiles (§CORE-17.3j). Six figures composed from four
+            # other derivations, each now openable: the feed the RESOLVED payable basis read, one
+            # row per person with the hours table that answered for them, and an unset rent shown
+            # without a figure and never counted.
+            'app/modules/account/liabilities_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────

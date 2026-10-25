@@ -116,6 +116,15 @@ UNMEASURED_REASONS = {
                      "while the total still counts it",
     "not_resolved": "this one is not finished yet, so it contributes no duration — an average over "
                     "the finished ones is not an average over all of them",
+    # The shapes the batch-10 finance reports brought with them (§CORE-17.3j).
+    "detail_not_recorded": "the stored statement kept this line's dollars without keeping what they "
+                           "were summed from, so the breakdown was never written down — the figure "
+                           "is real, its row-level evidence was not recorded",
+    "amount_not_recorded": "no amount is recorded for this one, so it is shown without a figure and "
+                           "not counted — the report counts these separately, because something "
+                           "nobody recorded is not something worth $0.00",
+    "feed_unresolved": "this figure's own basis is not one we know a feed for, so where it was read "
+                       "out of cannot be named — an unnamed source is reported rather than guessed",
 }
 
 
@@ -129,6 +138,17 @@ def _f(v):
 def _s(v):
     s = str(v).strip() if v is not None else ""
     return s or None
+
+
+def money(v):
+    """PURE: a figure rounded to cents THE ONE WAY this mechanism rounds.
+
+    Public because a declaration sometimes has to ask whether a figure handed to it is zero, or add
+    two figures the report already served (the Liabilities + Equity total is the two stored
+    subtotals). Spelling that arithmetic in the declaration would be a second copy of this rounding
+    — and a declaration that writes `0.0` to say "zero" has acquired a dollar literal of its own,
+    which is exactly what the build locks on these declarations refuse."""
+    return _f(v)
 
 
 # ── ONE source row reference. ──────────────────────────────────────────────────────────────────

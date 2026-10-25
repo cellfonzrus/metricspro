@@ -136,8 +136,15 @@ def aggregate_payroll(raw_rows, compute_pay):
     tax liability split. `payroll_tax_due` = employer FICA + every withheld amount (SS, Medicare,
     federal, state) — the dollars owed to tax authorities for the period; `gross` is what is owed
     to employees before withholding. Returns the section dict (no gate logic here — the router
-    fails closed before calling)."""
-    by_store, gross = {}, 0.0
+    fails closed before calling).
+
+    `rows` IS THE SAME FOLD, NOT A SECOND ONE (§CORE-17, index §CORE-17.3j). The per-person cells
+    come out of the loop that already produces the totals, so the drill-down behind "Payroll due this
+    week" and "Payroll tax due" is the very arithmetic those tiles are — never a restatement of it.
+    Each cell also carries WHICH HOURS ANSWERED for that person (clocked, hand-entered, or the
+    schedule under `payroll_raw`'s scheduled-hours fallback), which is what lets a drill row name the
+    table it was actually read out of instead of naming all three."""
+    by_store, gross, rows = {}, 0.0, []
     employer_fica = withheld = 0.0
     for r in raw_rows or []:
         p = compute_pay(r.get("total_hours"), r.get("pay_rate"), r.get("settings") or {})
@@ -147,10 +154,19 @@ def aggregate_payroll(raw_rows, compute_pay):
         cell["gross"] = _round(cell["gross"] + g)
         cell["employees"] += 1
         gross = round(gross + g, 2)
-        employer_fica = round(employer_fica + _safe_float(p.get("employer_fica")), 2)
-        withheld = round(withheld + _safe_float(p.get("fica_ss")) + _safe_float(p.get("fica_medicare"))
-                         + _safe_float(p.get("federal")) + _safe_float(p.get("state")), 2)
-    return {"by_store": by_store, "gross_total": _round(gross),
+        ef = _safe_float(p.get("employer_fica"))
+        wh = (_safe_float(p.get("fica_ss")) + _safe_float(p.get("fica_medicare"))
+              + _safe_float(p.get("federal")) + _safe_float(p.get("state")))
+        employer_fica = round(employer_fica + ef, 2)
+        withheld = round(withheld + wh, 2)
+        rows.append({"employee_id": r.get("employee_id"), "name": r.get("name"), "store": st,
+                     "basis": str(r.get("basis") or "").strip() or None,
+                     "clocked_hours": _round(r.get("clocked_hours")),
+                     "manual_hours": _round(r.get("manual_hours")),
+                     "total_hours": _round(r.get("total_hours")),
+                     "gross": _round(g), "employer_fica": _round(ef), "withheld": _round(wh),
+                     "tax_total": _round(ef + wh)})
+    return {"by_store": by_store, "gross_total": _round(gross), "rows": rows,
             "tax": {"employer_fica": _round(employer_fica), "withheld": _round(withheld),
                     "total": _round(employer_fica + withheld)},
             "employees": sum(c["employees"] for c in by_store.values())}

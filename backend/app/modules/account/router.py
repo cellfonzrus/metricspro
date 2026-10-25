@@ -796,34 +796,72 @@ async def get_pl_range(period_from: str, period_to: str = "", scope: str = "cons
 @router.get("/balance-sheet/{period}")
 async def get_bs(period: str, scope: str = "consolidated", stores: str = "", markets: str = "",
                  org_id: str = ORG_ID):
+    """The Balance Sheet for one period and scope, with WHERE EVERY FIGURE ON IT CAME FROM
+    (§CORE-17.3j): `drilldown` carries a panel per section subtotal, a panel per line, and one each
+    for Liabilities + Equity and the imbalance — folded from the SAME `statement` payload this
+    response serves, so a figure and its evidence cannot be two arithmetics.
+
+    NO NARROWING IS NEEDED HERE. The store/market filter on this report is SERVER-side
+    (`_filtered_read` sums the matched per-store snapshots), so the panels are folded over exactly
+    the statement the screen is showing, filtered or not. See `account/statement_drilldown.py` for
+    what a line can and cannot name — a stored statement does not record which feed each line was
+    read out of, which is stated rather than guessed."""
     require_org(org_id)
     if (stores or "").strip() or (markets or "").strip():
-        return _filtered_read(period, "balance_sheet", scope, stores, markets, org_id)
+        return _with_statement_drilldown(
+            _filtered_read(period, "balance_sheet", scope, stores, markets, org_id),
+            "balance_sheet")
     row = _read(period, "balance_sheet", scope, org_id)
     stale = autocompute.staleness(sb(), org_id, period, computed_at=(row.get("computed_at") if row else None))
     if not row:
         return {"period": period, "scope": scope, "computed": False,
                 "scope_display": _scope_display(scope, None, org_id), **stale}
-    return {"period": period, "scope": scope, "computed": True,
-            "scope_display": _scope_display(scope, row.get("scope_label"), org_id),
-            "statement": row["payload"], "narrative": row.get("narrative"),
-            "model": row.get("model"), "crosscheck_ok": row.get("crosscheck_ok"), **stale}
+    return _with_statement_drilldown(
+        {"period": period, "scope": scope, "computed": True,
+         "scope_display": _scope_display(scope, row.get("scope_label"), org_id),
+         "statement": row["payload"], "narrative": row.get("narrative"),
+         "model": row.get("model"), "crosscheck_ok": row.get("crosscheck_ok"), **stale},
+        "balance_sheet")
+
+
+def _with_statement_drilldown(resp, st_type):
+    """WHERE EVERY FIGURE ON A STATEMENT SCREEN CAME FROM (§CORE-17.3j) — attached in ONE place for
+    both statement reads and both of the Balance Sheet's two paths, so a drill-down cannot exist on
+    the unfiltered read and go missing on the filtered one.
+
+    Tied against the `statement` payload THIS RESPONSE SERVES, never a second read of it. A period
+    that was never computed carries no statement and therefore no panels — a figure nobody produced
+    has no rows behind it."""
+    from app.modules.account import statement_drilldown as _sd
+    st = (resp or {}).get("statement")
+    if not st:
+        return resp
+    resp["drilldown"] = (_sd.balance_sheet_drilldowns(st) if st_type == "balance_sheet"
+                         else _sd.cash_flow_drilldowns(st))
+    return resp
 
 
 @router.get("/cash-flow/{period}")
 async def get_cf(period: str, scope: str = "consolidated", org_id: str = ORG_ID):
     """The stored derived Cash Flow snapshot (statement_type 'cash_flow', written by
     statement_engine.compute_and_store alongside the P&L / Balance Sheet). Not computed yet ⇒
-    {"computed": false} with the staleness block, same contract as the other statement reads."""
+    {"computed": false} with the staleness block, same contract as the other statement reads.
+
+    `drilldown` (§CORE-17.3j) opens each section subtotal to its own lines and the implied change in
+    cash to the three subtotals. A cash-flow LINE is a leaf — one balance-sheet line's change between
+    two stored statements — and the beginning / ending cash balances belong to the Balance Sheet, so
+    neither offers a panel; `account/statement_drilldown.py` says why in words."""
     require_org(org_id)
     row = _read(period, "cash_flow", scope, org_id)
     stale = autocompute.staleness(sb(), org_id, period, computed_at=(row.get("computed_at") if row else None))
     if not row:
         return {"period": period, "scope": scope, "computed": False,
                 "scope_display": _scope_display(scope, None, org_id), **stale}
-    return {"period": period, "scope": scope, "computed": True,
-            "scope_display": _scope_display(scope, row.get("scope_label"), org_id),
-            "statement": row["payload"], "model": row.get("model"), **stale}
+    return _with_statement_drilldown(
+        {"period": period, "scope": scope, "computed": True,
+         "scope_display": _scope_display(scope, row.get("scope_label"), org_id),
+         "statement": row["payload"], "model": row.get("model"), **stale},
+        "cash_flow")
 
 
 @router.get("/statement/{period}")
@@ -1099,6 +1137,23 @@ def _liabilities_due_impl(authorization, org_id, today_iso=""):
     except Exception:
         pass
     out["due_this_week_total_known"] = round(known, 2)
+    # ── WHERE EVERY TILE'S FIGURE CAME FROM (§CORE-17.3j) ───────────────────────────────────────
+    # Built from the payload THIS FUNCTION HAS JUST ASSEMBLED — the same per-store rows, the same
+    # per-person payroll cells `aggregate_payroll` folded its totals from, the same lease rows — so a
+    # tile and the rows behind it can never be two arithmetics. A section the gate refused carries no
+    # total and therefore gets no panel: fail closed here too. Declaration:
+    # `account/liabilities_drilldown.py`.
+    try:
+        from app.modules.account import liabilities_drilldown as _ldd
+        out["drilldown"] = _ldd.drilldowns(out)
+    except Exception as e:
+        out["drilldown_note"] = f"drill-down unavailable: {type(e).__name__}: {e}"
+    # The per-person cells travel to the screen INSIDE the panels (which is where a reader opens
+    # them); they are dropped from the section dicts so the same pay figures are not served twice.
+    for _p in (((out.get("payroll") or {}).get("due") or [])
+               + [(out.get("payroll") or {}).get("current")]):
+        if isinstance(_p, dict):
+            _p.pop("rows", None)
     return out
 
 
@@ -1107,7 +1162,12 @@ async def liabilities_due_endpoint(date: str = "", authorization: str = Header(d
                                    org_id: str = ORG_ID):
     """Current Monetary Liabilities — per store, standard filters client-side (owner directive
     2026-09-03). See `_liabilities_due_impl` for the composition contract. `date` (YYYY-MM-DD)
-    overrides "today" for testing/backdating a week view."""
+    overrides "today" for testing/backdating a week view.
+
+    `drilldown` (§CORE-17.3j) carries a panel per tile — the stores behind the distributor figures,
+    the people behind payroll and its tax estimate, the leases behind rents and premiums — each row
+    naming the table it was actually read out of, and each carrying its row key so the screen's own
+    client-side store/market filter narrows the panel and the tile reads its number off it."""
     require_org(org_id)
     try:
         return await run_in_threadpool(_liabilities_due_impl, authorization, org_id, date)

@@ -256,6 +256,15 @@ on:
       - "backend/app/modules/helpdesk/router.py"
       - "frontend/src/app/(platform)/crm/reports/page.tsx"
       - "frontend/src/app/(platform)/helpdesk/dashboard/page.tsx"
+      # §CORE-17.3j — the three finance reports, and where a stored statement's provenance stops.
+      - "backend/harness_batch10_drilldown.py"
+      - "backend/app/modules/account/statement_drilldown.py"
+      - "backend/app/modules/account/liabilities_drilldown.py"
+      - "backend/app/modules/account/liabilities_due.py"
+      - "backend/app/modules/account/statement_engine.py"
+      - "frontend/src/app/(platform)/accounts/balance-sheet/page.tsx"
+      - "frontend/src/app/(platform)/accounts/cash-flow/page.tsx"
+      - "frontend/src/app/(platform)/accounts/liabilities-due/page.tsx"
       - "frontend/src/app/(platform)/closing/external-credit-recon/page.tsx"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
       # index §4e — the P&L drill path: company → market → store → line (owner report 2026-10-07)
@@ -1394,6 +1403,9 @@ jobs:
       - name: Run the batch-8 drill lock (a RATE OR AN AVERAGE GETS NO PANEL — win rate, close rate and average resolution time are quotients, so they offer the counts they divide and the declarations serve no panel under those keys; the average's denominator is served and shown because the tile read as a measurement of every ticket; the stage and status vocabularies are named only on the rows they actually answered for, and the lead `funnel` silently drops is visible rather than hidden — index §CORE-17.3h)
         working-directory: backend
         run: python3 harness_batch8_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-10 drill lock (a figure read out of a stored statement NAMES that snapshot and the trail STOPS there — a feed is named only where the booking code reads the line from it unconditionally, a config-resolved line names none and says which basis chose it, and a $0.00 line never claims a feed answered; no balance-sheet line records a breakdown, so such a line's panel says so and refuses to claim a tie; a difference and a leaf get no panel; the liabilities tiles open to the stores, the people and the leases inside them with the hours table read per person — index §CORE-17.3j)
+        working-directory: backend
+        run: python3 harness_batch10_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

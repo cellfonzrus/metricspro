@@ -14,8 +14,22 @@ import { usePosTerm } from '@/lib/report-labels'
 import { StalenessBanner } from '../_components/StalenessBanner'
 import { statementInfoSheet, statementSubtitle, type StatementMeta } from '../_components/statementExport'
 import { scopeDisplay, statementScopeDisplay } from '../_components/scopeFinancials'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillExtraColumn } from '@/components/DrillDownPanel'
 
 const SEC: Record<string, string> = { asset: 'Assets', liability: 'Liabilities', equity: 'Equity' }
+
+// WHERE EVERY FIGURE ON THIS SHEET CAME FROM (§CORE-17.3j). The panels come from the server, folded
+// over the SAME `statement` payload this page renders (`account/statement_drilldown.py`), so a line
+// and its evidence cannot be two arithmetics. NO narrowing: the store/market filter on this report is
+// server-side, so a panel is already about the statement on screen. The columns below are this
+// report's own `fields` — a line's section, how it is booked, which line a breakdown entry sits
+// inside, and, where the feed was chosen from config at compute time, what chose it.
+const BS_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Section', get: r => String(r.fields?.section ?? '—'), sortValue: r => String(r.fields?.section ?? '') },
+  { header: 'Booked as', get: r => String(r.fields?.kind ?? '—'), sortValue: r => String(r.fields?.kind ?? '') },
+  { header: 'Inside line', get: r => String(r.fields?.inside ?? '—'), sortValue: r => String(r.fields?.inside ?? '') },
+  { header: 'Why no feed is named', get: r => String(r.fields?.why_no_feed ?? '—') },
+]
 
 function BSInner() {
   const { period } = usePeriod()
@@ -69,6 +83,9 @@ function BSInner() {
   const st = data?.statement
   // THE scope's display name — the backend's one home, read once (scopeFinancials, §13b.1).
   const scopeName = statementScopeDisplay(data, scopes, scope)
+  // The drill-downs the server served, and the ONE offer rule: a figure offers its link only when a
+  // panel for it actually arrived (§CORE-17.3c). One panel open at a time, rendered below the sheet.
+  const drill = useDrillTile(data?.drilldown || {})
   const sec = (t: string) => (st?.sections || []).find((s: any) => s.type === t)
 
   // RULE FOUR (§3c) export. DISPLAY/EXPORT ONLY — figures come straight from the computed snapshot.
@@ -164,19 +181,25 @@ function BSInner() {
           {!st.balanced && (
             <div className="card" style={{ padding: 12, background: 'var(--c-bg-fef2f2)', border: '1px solid var(--c-bg-fecaca)', fontSize: 13, color: 'var(--c-fg-991b1b)' }}>
               ⚠ Assets ≠ Liabilities + Equity by <strong>{fmt(st.imbalance)}</strong>. Enter cash / opening balances on the <Link href="/accounts/journal">Journal</Link> page to balance.
+              <DrillTileLinks drills={drill.dl('imbalance', 'the two totals behind this gap')} open={drill.open} onToggle={drill.toggle} />
             </div>
           )}
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <tbody>
-                {['asset', 'liability', 'equity'].map(t => <Section key={t} s={sec(t)} open={open} setOpen={setOpen} />)}
+                {['asset', 'liability', 'equity'].map(t => <Section key={t} s={sec(t)} open={open} setOpen={setOpen} drill={drill} />)}
                 <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2, var(--c-bg-f1f5f9))' }}>
-                  <td style={{ padding: '10px 16px', fontWeight: 700, fontSize: 14 }}>Liabilities + Equity</td>
+                  <td style={{ padding: '10px 16px', fontWeight: 700, fontSize: 14 }}>
+                    Liabilities + Equity
+                    <DrillTileLinks drills={drill.dl('liabilities_plus_equity', 'rows behind this')} open={drill.open} onToggle={drill.toggle} />
+                  </td>
                   <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 700, fontSize: 14 }}>{fmt((st.liabilities_total || 0) + (st.equity_total || 0))}</td>
                 </tr>
               </tbody>
             </table>
           </div>
+          {/* The one renderer, one panel at a time, below the sheet it explains. */}
+          {drill.open && <DrillDownPanel panel={drill.panel} extraColumns={BS_COLUMNS} />}
           {data.narrative && (
             <div className="card" style={{ padding: 16 }}>
               <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: 'var(--text2)' }}>Narrative</div>
@@ -202,7 +225,10 @@ function BSInner() {
   )
 }
 
-function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; setOpen: any }) {
+function Section({ s, open, setOpen, drill }: {
+  s: any; open: Record<string, boolean>; setOpen: any
+  drill: ReturnType<typeof useDrillTile>
+}) {
   if (!s) return null
   return (
     <>
@@ -228,6 +254,11 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
                     {l.note}
                   </div>
                 )}
+                {/* The rows behind THIS line, when the server served them (§CORE-17.3j). A line whose
+                    breakdown the compute never recorded still opens, and its panel says so in words
+                    rather than showing an empty expander that reads like a bug. */}
+                <DrillTileLinks drills={drill.dl(`line_${s.type}_${l.key}`, 'rows behind this')}
+                  open={drill.open} onToggle={drill.toggle} />
               </td>
               <td style={{ padding: '7px 16px', textAlign: 'right', fontSize: 13, color: l.amount ? 'var(--text)' : 'var(--text3)' }}>{l.amount ? fmt(l.amount) : '—'}</td>
             </tr>
@@ -241,7 +272,10 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
         )
       })}
       <tr style={{ borderTop: '1px solid var(--border)' }}>
-        <td style={{ padding: '7px 16px', fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Total {SEC[s.type] || s.type}</td>
+        <td style={{ padding: '7px 16px', fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Total {SEC[s.type] || s.type}
+          <DrillTileLinks drills={drill.dl(`section_${s.type}`, 'lines behind this total')}
+            open={drill.open} onToggle={drill.toggle} />
+        </td>
         <td style={{ padding: '7px 16px', textAlign: 'right', fontSize: 13, fontWeight: 600 }}>{fmt(s.subtotal)}</td>
       </tr>
     </>

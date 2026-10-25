@@ -15,7 +15,25 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import ReportExportBar from '@/components/ReportExportBar'
 import StatTile from '@/components/StatTile'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillExtraColumn } from '@/components/DrillDownPanel'
+import { narrowPanels } from '@/lib/drill-narrow'
 import type { ExportSheet } from '@/lib/export'
+
+// WHERE EVERY TILE'S FIGURE CAME FROM (§CORE-17.3j). Six tiles composed from four other derivations,
+// each now opening to the stores, people or leases inside it (`account/liabilities_drilldown.py`).
+//
+// THE TILES READ OFF THEIR OWN NARROWED PANELS, which closes a live defect this screen had: every
+// filter here is CLIENT-side over the already span-scoped rows, so under a store or market filter the
+// two distributor tiles kept showing the unfiltered total while the table beneath them showed the
+// filtered rows (the rent and insurance tiles narrowed). `narrowPanels` restricts each panel by the
+// SAME predicate the tables filter by and the tile then reads `figure.amount` off it, so the two are
+// one fold and cannot drift again (§CORE-17.3d, lib/drill-narrow). A company-wide row names no store
+// and is deliberately KEPT — dropping it would silently shrink the figure.
+const LD_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: r => String(r.fields?.store ?? '—'), sortValue: r => String(r.fields?.store ?? '') },
+  { header: 'Market', get: r => String(r.fields?.market ?? '—'), sortValue: r => String(r.fields?.market ?? '') },
+  { header: 'Detail', get: r => String(r.fields?.detail ?? '—'), sortValue: r => String(r.fields?.detail ?? '') },
+]
 
 const th: React.CSSProperties = { textAlign: 'left', padding: '7px 10px', fontSize: 12, color: 'var(--text2)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '7px 10px', fontSize: 13, borderBottom: '1px solid var(--border)' }
@@ -28,6 +46,23 @@ function Section({ title, note, children }: { title: string; note?: string; chil
       {note && <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 8 }}>{note}</div>}
       {children}
     </div>
+  )
+}
+
+/** A tile's sub-line plus its drill link. `StatTile` takes no children by design, so the link rides
+ *  in the slot the tile already has for a second line — and a tile the server served no panel for
+ *  renders no link at all (the offer rule, one home: `useDrillTile.dl`). */
+function Sub({ text, drills, drill }: {
+  text?: string
+  drills: { key: string; label: string }[]
+  drill: { open: string | null; toggle: (k: string) => void }
+}) {
+  if (!text && !drills.length) return null
+  return (
+    <>
+      {text}
+      <DrillTileLinks drills={drills} open={drill.open} onToggle={drill.toggle} />
+    </>
   )
 }
 
@@ -59,6 +94,19 @@ export default function LiabilitiesDuePage() {
     return true
   }
   const filtering = selStores.size > 0 || selMkts.size > 0
+
+  // Every panel narrowed to THIS selection, by the same predicate the tables use.
+  const panels = useMemo(
+    () => narrowPanels(data?.drilldown || {}, r => keep(r.fields?.store, r.fields?.market)),
+    [data, selStores, selMkts])   // eslint-disable-line react-hooks/exhaustive-deps
+  const drill = useDrillTile(panels)
+  /** A tile's number: its own narrowed panel's figure where there is one, else the server's total —
+   *  never a third arithmetic. A panel the server capped cannot be narrowed honestly (it returns
+   *  null), and such a tile keeps the served figure and offers no drill. */
+  const tileAmt = (k: string, served: number | null | undefined): number => {
+    const p = panels[k]
+    return p?.figure?.amount != null ? p.figure.amount : Number(served || 0)
+  }
 
   const dist = data?.distributor || {}
   const outstanding = dist.outstanding
@@ -149,17 +197,25 @@ export default function LiabilitiesDuePage() {
       {!loading && data && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 16 }}>
-            <StatTile label="Owed to distributor (outstanding)" value={outstanding ? fmt(outstanding.total) : '—'}
-              sub={dist.configured ? `as of ${outstanding?.as_of || data.as_of}` : 'not configured for this org'} />
-            <StatTile label="Distributor payments due this week" value={dueWeek ? fmt(dueWeek.total) : '—'} />
-            <StatTile label="Payroll due this week" value={payroll.allowed ? (payrollDue.length ? fmt(payrollDueGross) : 'none') : '🔒'}
-              sub={payroll.allowed ? (payrollDue.length ? `payday ${payrollDue.map(p => p.payday).join(', ')}` : 'no payday falls this week') : 'restricted'} />
-            <StatTile label="Payroll tax due" value={payroll.allowed ? (payrollDue.length ? fmt(payrollDueTax) : 'none') : '🔒'}
-              sub={payroll.allowed && payrollDue.length ? 'employer FICA + withheld' : undefined} />
-            <StatTile label="Rents due this week" value={rents.allowed ? fmt(filtering ? rentTotal : rents.total) : '🔒'}
-              sub={rents.allowed && (filtering ? rentUnknown : rents.unknown) ? `${filtering ? rentUnknown : rents.unknown} store(s) with rent not set` : undefined} />
-            <StatTile label="Insurance premiums due" value={insurance.allowed ? fmt(filtering ? insTotal : insurance.total) : '🔒'} />
+            <StatTile label="Owed to distributor (outstanding)" value={outstanding ? fmt(tileAmt('distributor_outstanding', outstanding.total)) : '—'}
+              sub={<Sub text={dist.configured ? `as of ${outstanding?.as_of || data.as_of}` : 'not configured for this org'}
+                drills={drill.dl('distributor_outstanding', 'stores behind this')} drill={drill} />} />
+            <StatTile label="Distributor payments due this week" value={dueWeek ? fmt(tileAmt('distributor_due_week', dueWeek.total)) : '—'}
+              sub={<Sub drills={drill.dl('distributor_due_week', 'stores behind this')} drill={drill} />} />
+            <StatTile label="Payroll due this week" value={payroll.allowed ? (payrollDue.length ? fmt(tileAmt('payroll_due_gross', payrollDueGross)) : 'none') : '🔒'}
+              sub={<Sub text={payroll.allowed ? (payrollDue.length ? `payday ${payrollDue.map(p => p.payday).join(', ')}` : 'no payday falls this week') : 'restricted'}
+                drills={drill.dl('payroll_due_gross', 'people behind this')} drill={drill} />} />
+            <StatTile label="Payroll tax due" value={payroll.allowed ? (payrollDue.length ? fmt(tileAmt('payroll_due_tax', payrollDueTax)) : 'none') : '🔒'}
+              sub={<Sub text={payroll.allowed && payrollDue.length ? 'employer FICA + withheld — an estimate' : undefined}
+                drills={drill.dl('payroll_due_tax', 'people behind this')} drill={drill} />} />
+            <StatTile label="Rents due this week" value={rents.allowed ? fmt(tileAmt('rents_due', filtering ? rentTotal : rents.total)) : '🔒'}
+              sub={<Sub text={rents.allowed && (filtering ? rentUnknown : rents.unknown) ? `${filtering ? rentUnknown : rents.unknown} store(s) with rent not set` : undefined}
+                drills={drill.dl('rents_due', 'leases behind this')} drill={drill} />} />
+            <StatTile label="Insurance premiums due" value={insurance.allowed ? fmt(tileAmt('insurance_due', filtering ? insTotal : insurance.total)) : '🔒'}
+              sub={<Sub drills={drill.dl('insurance_due', 'leases behind this')} drill={drill} />} />
           </div>
+          {/* The one renderer, one panel at a time, below the strip it belongs to. */}
+          {drill.open && <DrillDownPanel panel={drill.panel} extraColumns={LD_COLUMNS} />}
 
           <Section title="🏭 Monies owed to the distributor"
             note={dist.configured
@@ -188,8 +244,8 @@ export default function LiabilitiesDuePage() {
                     ) : null}
                     <tr>
                       <td style={{ ...td, fontWeight: 700 }}>Total</td><td style={td}></td>
-                      <td style={{ ...td, fontWeight: 700 }}>{money(outstanding.total)}</td>
-                      <td style={{ ...td, fontWeight: 700 }}>{money(dueWeek?.total)}</td>
+                      <td style={{ ...td, fontWeight: 700 }}>{money(tileAmt('distributor_outstanding', outstanding.total))}</td>
+                      <td style={{ ...td, fontWeight: 700 }}>{money(dueWeek ? tileAmt('distributor_due_week', dueWeek.total) : null)}</td>
                     </tr>
                   </tbody>
                 </table>
