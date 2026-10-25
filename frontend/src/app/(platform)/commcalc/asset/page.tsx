@@ -5,6 +5,9 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { LinkedText } from '@/components/ScreenLink'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 
 type Summary = {
   loaded: boolean
@@ -16,6 +19,9 @@ type Summary = {
   on_inventory: number
   by_status: Record<string, { count: number; owed: number; reimbursed: number; fees: number }>
   by_category: Record<string, { count: number; owed: number; fees: number }>
+  /** §CORE-17.3l — one panel per headline card, folded by the server over the By-Status /
+   *  By-Category rows below. The card reads what the server served; this page folds nothing. */
+  drilldown?: Record<string, DrillPanel>
 }
 
 type CatStatus = { count: number; owed: number; reimbursed: number; fees: number }
@@ -46,15 +52,28 @@ type CatDetail = {
   limit: number
 }
 
-function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+function StatCard({ label, value, sub, color, children }: { label: string; value: string; sub?: string; color?: string; children?: React.ReactNode }) {
   return (
     <div className="card" style={{ padding: '20px 24px' }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>{label}</div>
       <div style={{ fontSize: 26, fontWeight: 700, color: color || 'var(--text1)' }}>{value}</div>
       {sub && <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>{sub}</div>}
+      {children}
     </div>
   )
 }
+
+// The extra columns these panels carry off each drill row's own `fields`. Each declares a
+// `sortValue`, because a drill column with no comparison is a header that does nothing
+// (harness_table_sort_lock).
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const LEDGER_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Devices', get: r => dtext(r, 'detail') || '—', sortValue: r => dtext(r, 'detail') },
+  { header: 'Fees', get: r => dtext(r, 'fees') || '—', sortValue: r => Number(r.fields?.fees ?? 0) },
+]
 
 const STATUS_COLORS: Record<string, string> = {
   'Paid In Full': '#059669',
@@ -95,6 +114,10 @@ export default function AssetPage() {
 
   // Drill-down state
   const [openCat, setOpenCat] = useState<string | null>(null)
+  // §CORE-17.3l — every filter on this page is a QUERY PARAMETER, so the server's own fold already
+  // covers exactly the rows on screen and `lib/drill-narrow` is deliberately NOT wired in.
+  const panels: Record<string, DrillPanel> = summary?.drilldown || {}
+  const drill = useDrillTile(panels)
   const [detail, setDetail] = useState<CatDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -342,12 +365,31 @@ export default function AssetPage() {
         <>
           {/* Top stat cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16, marginBottom: 24 }}>
-            <StatCard label="Distributor Fees Collected" value={fmt(summary.total_fees)} sub={`${summary.total_rows.toLocaleString()} devices`} color="var(--accent)" />
-            <StatCard label="Open Balance Owed" value={fmt(summary.total_open_balance)} sub="still owed to Distributor" color="var(--c-fg-dc2626)" />
-            <StatCard label="Total Reimbursed" value={fmt(summary.total_reimbursed)} sub="Carrier → Distributor credited" color="var(--c-fg-059669)" />
-            <StatCard label="All-Time Owed" value={fmt(summary.total_owed_alltime)} sub="gross financed" />
-            <StatCard label="On Inventory" value={fmt(summary.on_inventory)} sub="not yet sold" color="var(--c-fg-d97706)" />
+            <StatCard label="Distributor Fees Collected" value={fmt(summary.total_fees)} sub={`${summary.total_rows.toLocaleString()} devices`} color="var(--accent)">
+              <DrillTileLinks drills={drill.dl('total_fees', 'the statuses behind this')} open={drill.open} onToggle={drill.toggle} />
+            </StatCard>
+            <StatCard label="Open Balance Owed" value={fmt(summary.total_open_balance)} sub="still owed to Distributor" color="var(--c-fg-dc2626)">
+              <DrillTileLinks drills={drill.dl('total_open_balance', 'the statuses behind this')} open={drill.open} onToggle={drill.toggle} />
+            </StatCard>
+            <StatCard label="Total Reimbursed" value={fmt(summary.total_reimbursed)} sub="Carrier → Distributor credited" color="var(--c-fg-059669)">
+              <DrillTileLinks drills={drill.dl('total_reimbursed', 'the statuses behind this')} open={drill.open} onToggle={drill.toggle} />
+            </StatCard>
+            <StatCard label="All-Time Owed" value={fmt(summary.total_owed_alltime)} sub="gross financed">
+              <DrillTileLinks drills={drill.dl('total_owed_alltime', 'the statuses behind this')} open={drill.open} onToggle={drill.toggle} />
+            </StatCard>
+            <StatCard label="On Inventory" value={fmt(summary.on_inventory)} sub="not yet sold" color="var(--c-fg-d97706)">
+              <DrillTileLinks drills={drill.dl('on_inventory', 'the categories behind this')} open={drill.open} onToggle={drill.toggle} />
+            </StatCard>
           </div>
+
+          {/* ONE panel open at a time, below the strip — the shared renderer, nothing of this
+              page's own. The device COUNT on the fees card carries no drill: the By Status table
+              immediately below IS what it counts. */}
+          {drill.panel && (
+            <div style={{ marginBottom: 24 }}>
+              <DrillDownPanel panel={drill.panel} extraColumns={LEDGER_DRILL_COLUMNS} />
+            </div>
+          )}
 
           {/* By Status + By Category side by side */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>

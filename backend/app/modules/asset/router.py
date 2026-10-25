@@ -12,6 +12,9 @@ from app.modules.asset.market_filter import (
 # `commcalc.flags` dereferences the registry instead of spelling its own severity.
 from app.modules.commcalc import flag_registry as _reg
 from app.modules.commcalc import line_class as _lc   # THE add-a-line predicate (index §59)
+# §CORE-17.3l — WHERE DID THIS DEVICE-ASSET FIGURE COME FROM. Every drill-down on these reports is
+# the shared panel's, declared once; the endpoints below ATTACH it and fold nothing of their own.
+from app.modules.asset import device_asset_drilldown as _dd
 
 router = APIRouter()
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -634,14 +637,18 @@ async def get_asset_summary(org_id: str = ORG_ID, store: str = "", market: str =
 
     total_rows = len(rows)
     total_fees = sum(float(r.get("commissions") or 0) for r in rows)
-    # open balance = owed_to_vip for Open status only
-    total_open = sum(float(r.get("owed_to_vip") or 0) for r in rows if (r.get("status") or "") == "Open")
+    # open balance = owed_to_vip for Open status only. The status value and the On-Inventory
+    # predicate below are dereferenced from the drill-down declaration (§CORE-17.3l), which is their
+    # ONE home — so each card and the panel behind it count the same rows by construction.
+    total_open = sum(float(r.get("owed_to_vip") or 0) for r in rows
+                     if (r.get("status") or "") == _dd.OPEN_STATUS)
     # reimbursed = sum of reimbursement col (actual Boost payments received)
     total_reimbursed = sum(float(r.get("reimbursement") or 0) for r in rows)
     # all-time owed = all owed_to_vip
     total_owed = sum(float(r.get("owed_to_vip") or 0) for r in rows)
     # on inventory = owed_to_vip for On Inventory category
-    on_inventory = sum(float(r.get("owed_to_vip") or 0) for r in rows if "On Inventory" in (r.get("category") or ""))
+    on_inventory = sum(float(r.get("owed_to_vip") or 0) for r in rows
+                       if _dd.counts_as_on_inventory(r.get("category")))
 
     # By status
     by_status: dict = {}
@@ -664,7 +671,7 @@ async def get_asset_summary(org_id: str = ORG_ID, store: str = "", market: str =
         by_category[c]["owed"] += float(r.get("owed_to_vip") or 0)
         by_category[c]["fees"] += float(r.get("commissions") or 0)
 
-    return {
+    out = {
         "loaded": True,
         "total_rows": total_rows,
         "total_fees": round(total_fees, 2),
@@ -675,6 +682,10 @@ async def get_asset_summary(org_id: str = ORG_ID, store: str = "", market: str =
         "by_status": by_status,
         "by_category": by_category,
     }
+    # §CORE-17.3l — the five cards open to the By-Status / By-Category rows they were folded over.
+    # Folded from the SAME `out` the response serves, so a card and its evidence cannot disagree.
+    out["drilldown"] = _dd.ledger_drilldowns(out)
+    return out
 
 
 @router.get("/category-detail")
@@ -1007,9 +1018,15 @@ def list_borrowings(org_id: str = ORG_ID, store: str = "", market: str = "", sta
         rows = [r for r in rows if r["settled"]]
     tot_borrowed = round(sum(r["amount"] for r in rows), 2)
     tot_repaid = round(sum(r["repaid"] for r in rows), 2)
-    return {"borrowings": rows, "count": len(rows),
-            "total_borrowed": tot_borrowed, "total_repaid": tot_repaid,
-            "total_outstanding": round(tot_borrowed - tot_repaid, 2)}
+    out = {"borrowings": rows, "count": len(rows),
+           "total_borrowed": tot_borrowed, "total_repaid": tot_repaid,
+           "total_outstanding": round(tot_borrowed - tot_repaid, 2)}
+    # §CORE-17.3l — the three money figures open to the loans themselves, each naming whether its
+    # figure came out of the loan or out of its paybacks. The Outstanding headline is subtracted at
+    # the TOTAL here while every loan carries its OWN outstanding, so that panel's tie-out really
+    # compares the two ways of reaching the number (§CORE-17.3k).
+    out["drilldown"] = _dd.borrowings_drilldowns(out)
+    return out
 
 
 class BorrowingCreateIn(LaxModel):
@@ -1183,17 +1200,25 @@ def _asset_oninv_by_bucket(client, org_id, store="", market=""):
             break
         page += 1
     by_store = {}
+    # A DEVICE THE LEDGER HOLDS THAT THIS COMPARISON CANNOT SEE (§CORE-17.3l, live defect 2). A model
+    # that classifies into none of the five types is dropped from every bucket, so the ASSET side of
+    # the recon runs short and the gap reads as missing POS stock. It is STILL dropped — the figures
+    # are untouched, and which stores appear is unchanged, because this count is kept OUTSIDE
+    # `by_store` on purpose — but the number now travels to the drill-down, which shows the reader
+    # the hole instead of hiding it.
+    unclassified = {}
     for r in rows:
         b = _inv_bucket(r.get("device_model"))
-        if not b:
-            continue
         s = r.get("store") or "(unknown)"
+        if not b:
+            unclassified[s] = unclassified.get(s, 0) + 1
+            continue
         d = by_store.setdefault(s, {"store": s, "market": r.get("market"),
                                     **{k: 0 for k in INV_BUCKETS}})
         if not d["market"] and r.get("market"):
             d["market"] = r.get("market")
         d[b] += 1
-    return by_store
+    return by_store, unclassified
 
 
 @router.get("/inventory-recon")
@@ -1202,7 +1227,7 @@ async def inventory_recon(org_id: str = ORG_ID, store: str = "", market: str = "
     against the latest b2bsoft inventory snapshot, per store + category. Differences
     (asset − b2b) surface per cell; b2b stores not seen in asset are surfaced separately."""
     client = sb()
-    asset = _asset_oninv_by_bucket(client, org_id, store, market)
+    asset, asset_unclassified = _asset_oninv_by_bucket(client, org_id, store, market)
 
     # b2b side: pick the snapshot date (latest unless as_of given)
     q = client.schema("commcalc").table("b2b_inventory").select("*").eq("org_id", org_id)
@@ -1236,15 +1261,23 @@ async def inventory_recon(org_id: str = ORG_ID, store: str = "", market: str = "
             cats[k] = {"asset": av, "b2b": bv, "diff": av - bv}
             total_abs += abs(av - bv)
         out.append({"store": s, "market": a.get("market"), "categories": cats,
-                    "total_abs_diff": total_abs, "in_asset": s in asset, "in_b2b": s in b2b})
+                    "total_abs_diff": total_abs, "in_asset": s in asset, "in_b2b": s in b2b,
+                    # Additive, and counted into nothing: how many of this store's ledger devices
+                    # this comparison cannot see at all (§CORE-17.3l, live defect 2).
+                    "asset_unclassified": asset_unclassified.get(s, 0)})
     out.sort(key=lambda r: -r["total_abs_diff"])
-    return {
+    resp = {
         "as_of": snap, "available_dates": dates, "b2b_loaded": bool(b2b_rows),
         "buckets": INV_BUCKETS, "rows": out,
         "mismatch_stores": sum(1 for r in out if r["total_abs_diff"] > 0),
         "total_abs_diff": sum(r["total_abs_diff"] for r in out),
         "b2b_only_stores": sorted([r["store"] for r in out if r["in_b2b"] and not r["in_asset"]]),
     }
+    # §CORE-17.3l — the unit disagreement opens to the stores it was folded over, each naming the
+    # side(s) of the comparison it was really read out of. No panel at all until the POS snapshot is
+    # loaded: with one side absent the "difference" is not a comparison.
+    resp["drilldown"] = _dd.inventory_recon_drilldowns(resp)
+    return resp
 
 
 class UploadB2bInventoryIn(LaxModel):
@@ -1533,7 +1566,7 @@ async def get_owed_weekly(
         .range(offset, offset + limit - 1).execute()
     week_rows = _attach_vip_invoices(client, org_id, rows_resp.data or [])
 
-    return {
+    out = {
         "thursday": thursday,
         "filters": {"store": store or None, "market": market or None},
         "due_this_week": due_this_week,
@@ -1544,6 +1577,10 @@ async def get_owed_weekly(
         "offset": offset,
         "limit": limit,
     }
+    # §CORE-17.3l — the three KPIs open to the By-Store rows for THIS billing Friday. The device
+    # COUNTS beside them carry no panel of their own: every panel row already states both of them.
+    out["drilldown"] = _dd.owed_weekly_drilldowns(out)
+    return out
 
 
 # Cap on the number of distinct device_model rows returned by the aging per-model breakdown —
@@ -2170,7 +2207,7 @@ async def get_on_inventory_by_store(
         "total_amount_column": "owed_to_vip",
         "total_phones_outstanding": device_count,
     }
-    return {
+    out = {
         "today": today.isoformat(), "data_as_of": fd, "stores": stores, "totals": totals,
         "bucket_basis": ("acquired_date / date range narrows which devices are INCLUDED; the "
                          "aging bucket (<45 / 45-60 / >60 days) is always computed AS OF TODAY, "
@@ -2180,6 +2217,10 @@ async def get_on_inventory_by_store(
         "filters": {"store": store or None, "market": market or None, "month": month, "year": year,
                     "date_from": date_from or None, "date_to": date_to or None},
     }
+    # §CORE-17.3l — every figure on the strip and in the table footer opens to the per-store rows it
+    # was folded over. Folded from the SAME `stores`/`totals` the response serves.
+    out["drilldown"] = _dd.on_inventory_drilldowns(out)
+    return out
 
 
 # ---- Asset charge classification (single source of truth) ----
@@ -2605,22 +2646,24 @@ async def get_charges_summary(org_id: str = ORG_ID, store: str = "", market: str
         G["by_store"] = sorted(({**v, "owed": round(v["owed"], 2)} for v in G["by_store"].values()),
                                key=lambda x: x["owed"], reverse=True)
 
-    # Total Loss = denied appeals owed + RMA net loss (unreimbursed full + shortfall)
-    appeals_loss = round(sum(v["owed"] for v in groups["appeals"]["by_category"]), 2)
-    rma_loss = 0.0
-    for row in agg:
-        if (row.get("category") or "") == "RMA":
-            owed = float(row.get("owed") or 0)
-            reimb = float(row.get("reimb") or 0)
-            if reimb <= 0:
-                rma_loss += owed
-            elif reimb < owed - 0.01:
-                rma_loss += (owed - reimb)
-    rma_loss = round(rma_loss, 2)
+    # Total Loss = denied appeals owed + RMA net loss (unreimbursed full + shortfall).
+    # THE PER-ROW RMA RULE IS DEREFERENCED, NOT RESTATED (§CORE-17.3l). It used to be folded inline
+    # here, so the drill-down behind the tile would have had to spell the same three branches a
+    # second time — the copied-fact defect in its smallest form. `device_asset_drilldown.rma_net_loss`
+    # is now its one home and returns the RAW net, so this stays ONE `round` over the raw sum and the
+    # figure is byte-identical to what it has always been.
+    appeals_loss = round(sum(v["owed"] for v in groups[_dd.APPEALS_GROUP]["by_category"]), 2)
+    rma_loss = round(sum(_dd.rma_net_loss(row) for row in agg if _dd.is_rma_row(row)), 2)
 
+    total_loss = {"total": round(appeals_loss + rma_loss, 2),
+                  "appeals": appeals_loss, "rma": rma_loss}
     return {
         "groups": groups,
-        "total_loss": {"total": round(appeals_loss + rma_loss, 2), "appeals": appeals_loss, "rma": rma_loss},
+        "total_loss": total_loss,
+        # The five group tiles and BOTH halves of the Total Loss headline open to the store-category
+        # rows the aggregate returned. The headline TOTAL serves no panel: it is composed from the two
+        # figures beside it, so no set of rows adds up to it (§CORE-17.3h).
+        "drilldown": _dd.charges_drilldowns(agg, groups, total_loss, group_of=_cat_to_group),
         "filters": {"store": store or None, "market": market or None, "month": month, "year": year, "week_friday": week_friday or None},
     }
 

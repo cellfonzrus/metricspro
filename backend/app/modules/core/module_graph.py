@@ -76,7 +76,7 @@ FACTS: dict[str, dict] = {
                   'harness_batch5_drilldown.py', 'harness_batch6_drilldown.py',
                   'harness_batch7_drilldown.py', 'harness_batch8_drilldown.py',
                   'harness_batch9_drilldown.py', 'harness_batch10_drilldown.py',
-                  'harness_batch11_drilldown.py'),
+                  'harness_batch11_drilldown.py', 'harness_batch12_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -160,6 +160,17 @@ FACTS: dict[str, dict] = {
             # one question. Also where a DIFFERENCE is shown to be drillable when it is folded per
             # row rather than subtracted from two other totals.
             'app/modules/commcalc/carrier_pay_drilldown.py': ('report_drilldown',),
+            # The seven DEVICE-ASSET reports (§CORE-17.3l) — the Asset Ledger, the Charges
+            # Dashboard, On-Inventory by Store, Weekly Owed to Distributor, the On-Inventory ↔ POS
+            # recon, Inter-store Borrowed Money and Asset Lending. ONE module, SEVEN catalogues,
+            # because the family has SIX row grains (measured, not assumed: four of them are keyed
+            # by a store and are still four different populations in three different units) and
+            # exactly THREE provenance answers — the distributor's unit ledger, the POS unit
+            # snapshot named PER ROW, and the financing records the platform writes itself. Also
+            # the one home for the per-row RMA net-loss rule the charges endpoint used to fold
+            # inline, and for `GET /asset/summary`'s own On-Inventory predicate, so a tile and its
+            # evidence cannot come to mean different rows.
+            'app/modules/asset/device_asset_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1213,6 +1224,12 @@ FACTS: dict[str, dict] = {
             # which tables the sold union is. It also added the five commission feed CONSTANTS the
             # registry had only ever held as literals inside `COMMISSION_CALC_FEEDS`.
             'app/modules/commcalc/carrier_pay_drilldown.py': ('_lineage',),
+            # THE SAME REASON again (§CORE-17.3l): the seven device-asset reports name a table per
+            # figure — and the POS recon names one per ROW, because a store the POS file never
+            # mentioned must name only the ledger. It also added the five device-asset table
+            # constants and re-keyed every map that had spelled `asset_ledger` or
+            # `vip_paygo_payments` as a literal, because naming a fact is only half the fix.
+            'app/modules/asset/device_asset_drilldown.py': ('_lineage',),
             'app/modules/commcalc/dlar_sweep.py': ('_lineage',),
             'app/modules/commcalc/email_sweep.py': ('_lineage',),
             'app/modules/commcalc/epay_sweep.py': ('_lin',),

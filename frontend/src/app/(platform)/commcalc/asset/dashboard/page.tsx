@@ -5,9 +5,30 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { NoLedgerData } from '../_shared/NoLedgerData'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 
 type Group = { key: string; label: string; count: number; owed: number }
-type Summary = { groups: Record<string, Group>; total_loss: { total: number; appeals: number; rma: number } }
+type Summary = {
+  groups: Record<string, Group>
+  total_loss: { total: number; appeals: number; rma: number }
+  /** §CORE-17.3l — a panel per charge-group tile and one per HALF of the Total Loss headline. The
+   *  headline total itself serves none: it is composed from the two figures beside it. */
+  drilldown?: Record<string, DrillPanel>
+}
+
+// The extra columns these panels carry off each drill row's own `fields` (each with a `sortValue`,
+// per harness_table_sort_lock).
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const CHARGE_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: r => dtext(r, 'market') || '—', sortValue: r => dtext(r, 'market') },
+  { header: 'Items', get: r => dtext(r, 'detail') || '—', sortValue: r => dtext(r, 'detail') },
+  { header: 'Reimbursed', get: r => dtext(r, 'reimbursed') || '—', sortValue: r => Number(r.fields?.reimbursed ?? 0) },
+]
 
 const TILES = [
   { key:'appeals',       icon:'🚨', href:'/commcalc/asset/charges/appeals',      color:'var(--c-fg-dc2626)', blurb:'Carrier denied or withheld payment — direct loss.' },
@@ -33,6 +54,10 @@ export default function AssetDashboard() {
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState('')
+  // §CORE-17.3l — every filter here is a QUERY PARAMETER (period, market, store), so the server's
+  // fold already covers exactly the rows the tiles describe; `lib/drill-narrow` is NOT wired in.
+  const panels: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(panels)
 
   // filters
   const [mode, setMode] = useState<'all'|'month'|'week'>('all')
@@ -192,14 +217,21 @@ export default function AssetDashboard() {
             <div style={{ fontSize:13, color:'var(--c-fg-7f1d1d)' }}>
               Appeals {fmt(data.total_loss.appeals)} · RMA net loss {fmt(data.total_loss.rma)}
             </div>
+            {/* THE HEADLINE TOTAL OFFERS NO DRILL, DELIBERATELY: it is appeals + RMA, composed from
+                the two figures above, so no set of rows adds up to it (§CORE-17.3h). Both halves
+                open instead. */}
+            <DrillTileLinks
+              drills={drill.dl('loss_appeals', 'the stores behind the appeals loss',
+                               'loss_rma', 'the stores behind the RMA net loss')}
+              open={drill.open} onToggle={drill.toggle} />
           </div>
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:18 }}>
             {TILES.map(t => {
               const v = tileVal(t.key)
               return (
-                <a key={t.key} href={t.href} style={{ textDecoration:'none' }}>
-                  <div className="card" style={{ padding:'22px 24px', borderTop:`4px solid ${t.color}`, height:'100%' }}>
+                <div key={t.key} className="card" style={{ padding:'22px 24px', borderTop:`4px solid ${t.color}`, height:'100%' }}>
+                  <a href={t.href} style={{ textDecoration:'none', color:'inherit', display:'block' }}>
                     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
                       <div style={{ fontSize:15, fontWeight:700 }}>{t.icon} {t.key==='rma' ? 'RMA Reconciliation' : data.groups[t.key]?.label}</div>
                       <div style={{ fontSize:11, color:'var(--text3)', textTransform:'uppercase' }}>{v.count.toLocaleString()} items</div>
@@ -207,11 +239,26 @@ export default function AssetDashboard() {
                     <div style={{ fontSize:28, fontWeight:700, color:t.color, margin:'10px 0 4px' }}>{fmt(v.owed)}</div>
                     <div style={{ fontSize:13, color:'var(--text2)' }}>{t.key==='rma' ? 'Net loss (unreimbursed + shortfall)' : t.blurb}</div>
                     <div style={{ fontSize:12, color:t.color, fontWeight:600, marginTop:14 }}>View report →</div>
-                  </div>
-                </a>
+                  </a>
+                  {/* The drill link sits OUTSIDE the anchor: a button inside a link is neither a
+                      button nor a link. The RMA tile's figure is the Total Loss net, so its panel
+                      is that one — never the group's gross owed. */}
+                  <DrillTileLinks
+                    drills={drill.dl(t.key === 'rma' ? 'loss_rma' : `group_${t.key}`, 'the stores behind this')}
+                    open={drill.open} onToggle={drill.toggle} />
+                </div>
               )
             })}
           </div>
+
+          {/* ONE panel open at a time, below the strip. The RMA tile's ITEM COUNT is structurally
+              0 — `RMA` is not one of the charge groups, so the page has no count to show for it
+              (reported as a live defect in §CORE-17.3l). The panel states the true row count. */}
+          {drill.panel && (
+            <div style={{ marginTop: 18 }}>
+              <DrillDownPanel panel={drill.panel} extraColumns={CHARGE_DRILL_COLUMNS} />
+            </div>
+          )}
         </>
       )}
     </div>

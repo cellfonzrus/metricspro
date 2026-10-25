@@ -62,6 +62,27 @@ CARRIER_STATEMENT = "carrier_commission"  # the direct-carrier statement landing
 #: figure on that report names this table and names a FEED only where the writer recorded one.
 DISCREPANCY_SNAPSHOT = "discrepancy_results"
 
+# ── THE DEVICE-ASSET FAMILY'S OWN TABLES (§CORE-17.3l, batch 12) ─────────────────────────────────
+# Named here for the same reason the five commission-money feeds were (§CORE-17.3k): the asset
+# drill-downs have to say WHICH table a figure was read out of, and a declaration restating a table
+# name at the call site is the copied fact this registry exists to prevent. `asset_ledger` already
+# appeared as a literal in five maps below and now dereferences this constant in all of them —
+# naming a fact is half the fix, deleting every copy in the same commit is the other half
+# (harness_feed_watchdog §F8).
+#
+# ONLY `ASSET_LEDGER` IS A REGISTERED INGEST FEED. The other four are stored relations the platform
+# writes itself — a POS inventory snapshot typed in on the recon page, two inter-store borrowing
+# tables, and the distributor PayGo batches the portal sweep lands — so they are NAME constants, the
+# `DISCREPANCY_SNAPSHOT` shape, not entries in `INGEST_TABLES_BY_MODULE`.
+ASSET_LEDGER = "asset_ledger"             # the distributor's unit ledger (Asset_Lending.xlsx)
+#: The per-store × device-type UNIT snapshot the inventory recon compares the ledger against. Typed
+#: in (or uploaded) on `/commcalc/asset/inventory-recon`; the $ side of the SAME file lands in
+#: `inventory_value` instead, which IS a registered feed. That asymmetry is reported in §CORE-17.3l.
+POS_INVENTORY_SNAPSHOT = "b2b_inventory"
+STORE_BORROWINGS = "store_borrowings"              # one row per inter-store loan (mig 018)
+STORE_BORROWING_PAYMENTS = "store_borrowing_payments"   # its paybacks, by `borrowing_id`
+PAYGO_BATCHES = "vip_paygo_payments"       # one row per weekly distributor lending batch
+
 
 # ── WHICH TABLE A BILL-PAYMENT PROCESSOR'S FEED LANDS IN ───────────────────────────────────────
 # A drill-down has to tell the reader WHERE a figure came from (§CORE-17), and for the processor leg
@@ -260,7 +281,7 @@ INGEST_TABLES_BY_MODULE = {
     ),
     # asset — the Asset Lending ledger, parsed from an uploaded Asset_Lending.xlsx (staging → atomic swap).
     "asset": (
-        "asset_ledger",
+        ASSET_LEDGER,
     ),
     # supply (mig 1021, index §36) — the vendor catalog price snapshot: each supply vendor's products, prices,
     # pack sizes and stock, landed by ONE lander (supply/store.land_catalog) from two routes — the price-compare
@@ -299,14 +320,14 @@ FRESHNESS_COLUMN_BY_TABLE = {
     # VIP sweep landing tables: the sweep stamps `swept_at` when a row lands. `created_at` exists but
     # moves on re-write, so it is the same trap as daily_sales_feed — declared here rather than left
     # implicit in the one list that happened to know about it.
-    "vip_paygo_payments": "swept_at",
+    PAYGO_BATCHES: "swept_at",
     "vip_credit_memos": "swept_at",
     # THESE THREE TABLES HAVE NO `created_at` AT ALL (measured against the live schema 2026-10-03), so
     # the default left `last_ingest_at` None and the watchdog could only ever say "stopped arriving" —
     # the §19.18 discriminator dead again, on three more feeds. Found the moment the watchdog began
     # covering every registered feed instead of three: `asset_ledger` reported 16 days late with no
     # arrival time to explain whether the file had stopped or its content had frozen.
-    "asset_ledger": "uploaded_at",
+    ASSET_LEDGER: "uploaded_at",
     "pos_tender_summary": "updated_at",
     "inventory_value": "updated_at",
     # The B2B clock report (mig 1073): rows are replaced per slice on a re-send, so `created_at` moves
@@ -585,7 +606,7 @@ DATA_DATE_COLUMN_BY_TABLE = {
     "raw_dlar_store": "as_of_date",
     "pos_tender_summary": "close_date",
     "inventory_value": "as_of_date",
-    "asset_ledger": "acquired_date",          # when the distributor booked the unit to us
+    ASSET_LEDGER: "acquired_date",          # when the distributor booked the unit to us
     # Unpopulated on every org in this deployment, so no data-date column is declared from a real row.
     # Watched on arrival; add the column here the day one lands (the lock makes that a conscious change).
     EPAY_DAILY: None,
@@ -636,7 +657,7 @@ PERIOD_GRAIN_REASONS = {
 # maps to them), stated so the lock can tell "not an upload" apart from "forgotten".
 NOT_UPLOADED_TABLES = (
     "raw_sales_invoice", "raw_sales_invoice_tender", "pos_tender_summary", "inventory_value",
-    "asset_ledger",
+    ASSET_LEDGER,
 )
 
 
@@ -744,7 +765,7 @@ NO_MONTH_COLUMN_REASONS = {
     "portal_metric_day": ("one row per store-day-worker-category — `business_date` is its month fact; "
                           "a re-pull restates a day on the natural key, it never replaces a period"),
     "merchant_settlement_batch": "one row per processor batch — dated by its own batch day",
-    "asset_ledger": "the distributor's unit ledger — `acquired_date` is the row's only month fact",
+    ASSET_LEDGER: "the distributor's unit ledger — `acquired_date` is the row's only month fact",
 }
 
 
@@ -894,7 +915,7 @@ FEED_LABEL_BY_TABLE = {
     "raw_ma_fulfillment": "Master-agent fulfilment orders",
     "pos_tender_summary": "Register tender summary",
     "inventory_value": "Inventory aging snapshot",
-    "asset_ledger": "Asset lending ledger (device cost)",
+    ASSET_LEDGER: "Asset lending ledger (device cost)",
     COMMISSION_PER_DEVICE_FEED: "Per-device rebate history",
     EPAY_DAILY: "Settlement transactions",
     "merchant_settlement_day": "Card settlement by day",

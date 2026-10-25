@@ -22,7 +22,7 @@
 # Format: <route><TAB><state><TAB><note>. Lines starting with # are comments.
 # Audited 2026-10-24; the per-route findings are in the project folder under drilldown-audit/.
 
-# OWES: 93 of 136 report routes.
+# OWES: 93 of 136 report routes at the 2026-10-24 audit; 64 after batch 12 (index CORE-17.3l).
 
 /closing/cash-variance	shared	owner ask 2026-10-24, the first report on the shared mechanism
 /accounts	own	the reference's other half (ScopeDrillDown)
@@ -101,13 +101,13 @@
 /commcalc/accessory-flags	owes	
 /commcalc/accessory-target-plan	owes	
 /commcalc/activations	owes	
-/commcalc/asset	owes	
-/commcalc/asset/borrowed	owes	
-/commcalc/asset/dashboard	owes	
-/commcalc/asset/inventory-recon	owes	
-/commcalc/asset/lending	owes	
-/commcalc/asset/on-inventory	owes	
-/commcalc/asset/owed-weekly	owes	
+/commcalc/asset	shared	the five headline cards open to the By-Status / By-Category rows they were folded over; REFUSES to claim the device count (the By Status table is what it counts) or a second answer beside the By-Category row's own device drill	
+/commcalc/asset/borrowed	shared	outstanding / borrowed / repaid open to the loans, each naming whether its figure came out of the loan or its paybacks; REFUSES to claim the borrowing count, who-owes-whom and net-by-store (all re-partition the loans printed below)	
+/commcalc/asset/dashboard	shared	the five charge-group tiles and BOTH halves of the Total Loss headline open to the store-category rows the ledger aggregate returned; REFUSES to claim the headline total (appeals + RMA, composed from two tiles) and reports that the RMA tile's item count is structurally 0	
+/commcalc/asset/inventory-recon	shared	the unit disagreement opens to the stores, each naming which side(s) of the comparison it was read out of and how many ledger devices do not classify at all; REFUSES to claim the mismatched-store count (the table highlights exactly those rows) and serves NO panel until a POS snapshot is loaded	
+/commcalc/asset/lending	shared	lifetime billed and lifetime devices open to the approved weekly batches, and a batch with no reported amount is shown without a figure; REFUSES to claim the open week's two leaf figures, the grand total (composed), the by-year/by-month rollups (the year click is their own drill) and the funding totals (another endpoint)	
+/commcalc/asset/on-inventory	shared	every figure on the strip and in the table footer opens to the per-store rows the table prints; REFUSES to claim the store count (the table is the list of stores)	
+/commcalc/asset/owed-weekly	shared	the three KPIs open to the By-Store rows for that billing Friday; REFUSES to claim the device counts (every panel row states them) and the upcoming-Friday forecast rows (clicking one already loads that week)	
 /commcalc/atu-opportunity	owes	
 /commcalc/bill-payments	owes	
 /commcalc/carrier-vs-pay	shared	commcalc/carrier_pay_drilldown.py (§CORE-17.3k) — all four tiles open to the reps behind them: earned, paid, the per-rep difference and the three activation counts. Each row names the feed its OWN verdict says answered, or nothing where the carrier side was never looked up. REFUSES to claim: the rep-count figures (cardinalities of states every row already carries), and the panels are deliberately folded over the UNFILTERED rows because the endpoint's totals are — a reported defect, stated on the screen

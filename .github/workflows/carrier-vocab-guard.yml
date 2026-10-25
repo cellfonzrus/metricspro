@@ -283,6 +283,19 @@ on:
       - "frontend/src/app/(platform)/commcalc/discrepancy/page.tsx"
       - "frontend/src/app/(platform)/commcalc/carrier-vs-pay/page.tsx"
       - "frontend/src/app/(platform)/commcalc/commission-legs/page.tsx"
+      # §CORE-17.3l — the seven device-asset reports: one declaration, seven catalogues, six grains,
+      # and three provenance answers (the unit ledger, the POS snapshot named per row, the financing
+      # records). Also the one home for the per-row RMA net-loss rule.
+      - "backend/harness_batch12_drilldown.py"
+      - "backend/app/modules/asset/device_asset_drilldown.py"
+      - "backend/app/modules/asset/router.py"
+      - "frontend/src/app/(platform)/commcalc/asset/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/asset/dashboard/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/asset/on-inventory/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/asset/owed-weekly/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/asset/inventory-recon/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/asset/borrowed/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/asset/lending/page.tsx"
       - "frontend/src/app/(platform)/closing/external-credit-recon/page.tsx"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
       # index §4e — the P&L drill path: company → market → store → line (owner report 2026-10-07)
@@ -1430,6 +1443,9 @@ jobs:
       - name: Run the batch-11 drill lock (the three commission disagreement reports — a DIFFERENCE is drillable only because it is folded PER ROW, so Σ(the per-line gaps) and Σ(the per-rep differences) are real comparisons that can disagree; a figure read out of the stored discrepancy run NAMES that run and names a feed only where the writer recorded one, per row, off the row's own stored evidence; a claim nobody could price, a rep whose statement was never loaded and a month a feed never delivered are all SHOWN and not counted, and none of them moves a figure by a cent; the provenance map is keyed on stored values and is checked complete against the producer's own stream registry and against the prose the page prints — index §CORE-17.3k)
         working-directory: backend
         run: python3 harness_batch11_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-12 drill lock (the seven device-asset reports — the family's grain count is MEASURED, so six row shapes get six catalogues and a figure never opens to a population it was not folded over; the POS recon names its side(s) PER ROW, so a store the POS file never mentioned names only the ledger; the ledger devices that classify into none of the five types are counted into nothing and SHOWN, which is the silent drop surfaced rather than fixed; a composed total, a leaf and a count whose list is on screen get no panel at all; the RMA net-loss rule and the On-Inventory predicate have ONE home each, dereferenced by the endpoints that used to spell them — index §CORE-17.3l)
+        working-directory: backend
+        run: python3 harness_batch12_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
