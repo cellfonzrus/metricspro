@@ -73,7 +73,8 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_report_drilldown.py', 'harness_drilldown_coverage.py',
                   'harness_cash_recon_drilldown.py', 'harness_tender_recon_drilldown.py',
                   'harness_day_recon_drilldown.py', 'harness_drill_narrow_fixtures.py',
-                  'harness_batch5_drilldown.py', 'harness_batch6_drilldown.py'),
+                  'harness_batch5_drilldown.py', 'harness_batch6_drilldown.py',
+                  'harness_batch7_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -109,6 +110,17 @@ FACTS: dict[str, dict] = {
             # The DM-verify chargeback strip (§CORE-17.3f) — money out of a named person's pay,
             # opening to the missed verifications it charges for.
             'app/modules/closing/ops_chargeback_drilldown.py': ('report_drilldown',),
+            # The Management Envelope Receipt (§CORE-17.3g). THREE PEOPLE COUNT ONE ENVELOPE, in
+            # three tables, so each figure names only the ones it was read out of — and it serves a
+            # SECOND panel family, one per By-employee line, the owner's employee-level cash
+            # variance. An uncounted envelope is shown and never folded in at $0.00.
+            'app/modules/closing/envelope_drilldown.py': ('report_drilldown',),
+            # The Daily Closing dashboard's tile strip (§CORE-17.3g). The grain is the STORE-DAY and
+            # that is a fact, not a preference: `verified_overlay` makes a DM's correction
+            # authoritative for the store-day, so a rep-day fold would not add up to the tile on any
+            # corrected day (locked, harness §D3). The two cash tiles are declared in
+            # `recon_drilldown.py` instead, beside the counts they share `_money_issues` with.
+            'app/modules/closing/rollup_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1226,6 +1238,10 @@ FACTS: dict[str, dict] = {
             'app/modules/closing/billpay_pickup.py': ('envelope_report',),
             'app/modules/closing/external_credit_recon.py': ('_envelope_report',),
             'app/modules/closing/pickup_actual.py': ('count_fields',),
+            # The receipt's drill-down reads the STATUS VOCABULARY from here (§CORE-17.3g) rather
+            # than listing short/over/match again, so a status added to `envelope_report.STATUSES`
+            # cannot leave a tile counting the wrong rows. It derives no cash figure of its own.
+            'app/modules/closing/envelope_drilldown.py': ('_envelope_report',),
             'app/modules/closing/router.py': ('_er', 'envelope_report_mod'),
         },
     },

@@ -8,6 +8,7 @@ import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 import { apiUrl, absoluteApiUrl } from '@/lib/apiBase'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillPanel, type DrillRow } from '@/components/DrillDownPanel'
 
 // Management Envelope Receipt (owner rename 2026-10-01; was 'Envelope Report' — DISPLAY only: the route
 // /closing/envelope-report, the report_key closing_envelope_report and the envelope_count table are
@@ -64,6 +65,36 @@ const EMP_COLS: [string, string][] = [
   ['Over', 'over'], ['$ Over', 'over_total'], ['Match', 'match'],
   ['Net variance', 'net_variance'], ['Chargebacks', 'chargebacks'], ['$ Charged back', 'chargeback_total'],
   ['Stores', ''], ['Last close', 'last_close'],
+  // WHERE THIS LINE'S MONEY CAME FROM (§CORE-17). The owner's ask that started this was about an
+  // employee-level cash variance, and this is that line: it opens to the envelopes behind it, each
+  // naming the closing sheet, the management count and the chargeback row.
+  ['Evidence', ''],
+]
+
+// WHAT IDENTIFIES ONE ENVELOPE IN A DRILL-DOWN — the client side of
+// `closing/envelope_drilldown._fields`. The server declares a drill row's fields in ONE function and
+// both panel families (the five tiles, and one panel per By-employee line) are built from it, so this
+// one column list renders both rather than each view carrying its own.
+// `counted_on` is the basis the stored count was SCORED on, in the server's own wording — this screen
+// still spells no basis word (§19.38).
+const DRILL_COLUMNS = [
+  { header: 'Store code', get: (r: DrillRow) => String(r.fields?.store_code || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.store_code || '') },
+  { header: 'Employee', get: (r: DrillRow) => String(r.fields?.employee_name || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.employee_name || '') },
+  { header: 'State', get: (r: DrillRow) => String(r.fields?.state || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.state || '') },
+  { header: 'Declared', get: (r: DrillRow) => (r.fields?.declared == null ? '—' : fmt(Number(r.fields.declared))),
+    sortValue: (r: DrillRow) => Number(r.fields?.declared ?? 0) },
+  { header: 'Counted', get: (r: DrillRow) => (r.fields?.counted == null ? '—' : fmt(Number(r.fields.counted))),
+    sortValue: (r: DrillRow) => Number(r.fields?.counted ?? 0) },
+  { header: 'Counted on', get: (r: DrillRow) => (r.fields?.counted_on_recorded === false
+      ? 'not recorded' : String(r.fields?.counted_on || '—')),
+    sortValue: (r: DrillRow) => String(r.fields?.counted_on || '') },
+  { header: 'Counted by', get: (r: DrillRow) => String(r.fields?.counted_by || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.counted_by || '') },
+  { header: 'Chargeback', get: (r: DrillRow) => String(r.fields?.chargeback || '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.chargeback || '') },
 ]
 
 // STABLE readers — a new function each render would rebuild the sort memo every time.
@@ -149,6 +180,17 @@ export default function EnvelopeReportPage() {
   // Falls back to the key only if the server stopped serving that basis, which is visible, not silent.
   const basisShort = useCallback(
     (key: string) => basisCols.find(b => b.key === key)?.short || key, [basisCols])
+  // EVERY FIGURE ON THIS REPORT OPENS TO ITS ENVELOPES (§CORE-17). Two panel families, both from
+  // `closing/envelope_drilldown`: the tile strip's nine figures, and one panel per By-employee line.
+  // NO NARROWING is needed (§CORE-17.3d) — every filter on this screen (date range, stores, markets,
+  // employees, status, basis) is a query parameter, so the server folded exactly the envelopes shown.
+  const panels = useMemo<Record<string, DrillPanel>>(() => data?.drilldown || {}, [data])
+  const empPanels = useMemo<Record<string, DrillPanel>>(() => data?.drilldown_by_employee || {}, [data])
+  const tileDrill = useDrillTile(panels)
+  const dl = tileDrill.dl
+  // A SECOND handle, not a second mechanism: the two views are open at different times and each has
+  // its own open row, so one shared `open` would close a tile panel when a line was opened.
+  const empDrill = useDrillTile(empPanels)
   const envSort = useTableSort(rows, envCell, { field: 'close_date', dir: 'desc' })
   // Seeded on $ short descending: the point of this view is who is worst, so it opens on the answer.
   const empSort = useTableSort(byEmp, empCell, { field: 'short_total', dir: 'desc' })
@@ -319,14 +361,26 @@ export default function EnvelopeReportPage() {
         )}
       />
 
-      {/* Summary tiles */}
+      {/* Summary tiles. A tile that shows TWO figures (a count and its dollars) offers a link per
+          figure, because they are two folds over two different subsets of the same envelopes — the
+          count of short envelopes and the money missing from them. `dl` keeps only the figures the
+          server actually served a panel for, so a tile never offers a link that opens nothing. */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '14px 0' }}>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Envelopes</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.envelopes ?? 0}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Counted</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.counted ?? 0}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Short</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-c0392b)' }}>{t.short ?? 0} · {fmt(t.short_total || 0)}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Over</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-b7791f)' }}>{t.over ?? 0} · {fmt(t.over_total || 0)}</div></div>
-        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Chargebacks</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.chargebacks ?? 0} · {fmt(t.chargeback_total || 0)}</div></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Envelopes</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.envelopes ?? 0}</div>
+          <DrillTileLinks drills={dl('envelopes', 'envelopes')} open={tileDrill.open} onToggle={tileDrill.toggle} /></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Counted</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.counted ?? 0}</div>
+          <DrillTileLinks drills={dl('counted', 'counted', 'match', 'came out right')} open={tileDrill.open} onToggle={tileDrill.toggle} /></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Short</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-c0392b)' }}>{t.short ?? 0} · {fmt(t.short_total || 0)}</div>
+          <DrillTileLinks drills={dl('short', 'envelopes', 'short_total', 'money')} open={tileDrill.open} onToggle={tileDrill.toggle} /></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Over</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-fg-b7791f)' }}>{t.over ?? 0} · {fmt(t.over_total || 0)}</div>
+          <DrillTileLinks drills={dl('over', 'envelopes', 'over_total', 'money')} open={tileDrill.open} onToggle={tileDrill.toggle} /></div>
+        <div style={tile}><div style={{ fontSize: 12, color: 'var(--text3)' }}>Chargebacks</div><div style={{ fontSize: 20, fontWeight: 700 }}>{t.chargebacks ?? 0} · {fmt(t.chargeback_total || 0)}</div>
+          <DrillTileLinks drills={dl('chargebacks', 'envelopes', 'chargeback_total', 'money')} open={tileDrill.open} onToggle={tileDrill.toggle} /></div>
+        {/* There is no Match tile on this strip, and a figure with a panel nobody can open is the
+            un-wiring §CORE-17 exists to stop — so `match` is offered from Counted, which is exactly
+            short + over + match. Every figure the catalogue declares is reachable. */}
       </div>
+      <DrillDownPanel panel={tileDrill.panel} extraColumns={DRILL_COLUMNS} />
 
       {/* One fetch, two views (owner 2026-09-26, "report by user"). */}
       <div style={{ display: 'inline-flex', gap: 2, marginBottom: 12 }}>
@@ -392,6 +446,12 @@ export default function EnvelopeReportPage() {
                     {(e.stores || []).join(', ') || '—'}
                   </td>
                   <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>{e.last_close || '—'}</td>
+                  <td style={{ padding: '6px 10px' }}>
+                    {/* The panel is keyed by the employee name THIS LINE is keyed on, so it can
+                        never hold a different set of envelopes than the line it opens from. */}
+                    <DrillTileLinks drills={empDrill.dl(e.employee_name, 'where this came from')}
+                      open={empDrill.open} onToggle={empDrill.toggle} />
+                  </td>
                 </tr>
               ))}
               {byEmp.length === 0 && (
@@ -401,6 +461,11 @@ export default function EnvelopeReportPage() {
               )}
             </tbody>
           </table>
+          {/* NET IS NOT CLEAN. The panel's own label and note say so: net variance is over minus
+              short, so a rep $50 short one day and $50 over the next nets to zero while twice
+              having handed over the wrong cash. The note carries both gross counts and how many
+              envelopes nobody has counted at all. */}
+          <DrillDownPanel panel={empDrill.panel} extraColumns={DRILL_COLUMNS} />
         </div>
       )}
 

@@ -120,3 +120,124 @@ def catalogue(*, sales_tables=()):
 def drilldowns(rows, totals, *, sales_tables=(), cap=None):
     return report_drilldown.tiles(catalogue(sales_tables=sales_tables), rows, totals,
                                   cap=cap or report_drilldown.ROW_CAP)
+
+
+# ── THE DASHBOARD'S TWO CASH TILES — the same accusation, folded as money ─────────────────────────
+# `/closing`'s "Cash short" and "Cash over" tiles are not a second mechanism and must not get a
+# second declaration. They are `_money_issues`' CASH verdict for a rep-day — the identical fact the
+# four counts above are counting — carried on the submissions row as `cash_short_amount` /
+# `cash_over_amount` and summed. The recon counts the accusations; the dashboard adds up their
+# dollars. One fact, one home, two folds, so the declaration lives here beside its sibling rather
+# than in a file of its own (the shape `pickup_drilldown.billpay_catalogue` already set).
+#
+# THE GRAIN IS THE REP-DAY, NOT THE ACCUSATION. A submissions row carries one cash figure, not one
+# per metric, so `metric` is no part of its address — which is exactly why it needs its own keys and
+# its own label and cannot simply reuse the catalogue above.
+#
+# REPORTED, NOT PAPERED OVER: a rep-day the recon could not judge — the sales feed was not loaded for
+# that day, or the rep could not be matched to it — contributes 0.00 to BOTH tiles today. The sum is
+# right; the presentation is not, because "Cash short $0.00" then reads as "no cash is missing" when
+# the truth is that nothing was compared. These rows are shown in both panels, NOT counted, each
+# saying which blank it is. The tiles' figures are unchanged: a figure is never moved to make a
+# screen read better.
+
+#: A rep-day's address on the submissions report.
+SUBMISSION_KEYS = ("close_date", "store_code", "employee_name")
+
+#: The states in which no comparison was made at all, so there is no variance to count.
+UNJUDGED = ("recon_pending", "not_computed")
+
+
+def _submission_label(r):
+    r = r or {}
+    return " · ".join(str(x) for x in (
+        r.get("store_address") or r.get("store_code") or "?",
+        str(r.get("close_date") or "?")[:10],
+        r.get("employee_name") or "(no name)",
+    ))
+
+
+def _submission_fields(r):
+    r = r or {}
+    return {"store_code": r.get("store_code"),
+            "rep": r.get("employee_name"),
+            "metric": "cash",
+            "severity": r.get("gate_status"),
+            "verdict": ", ".join(r.get("gate_reasons") or []) or None,
+            "declared": r.get("t_cash"),
+            "counterpart": r.get("b2b_cash")}
+
+
+def _unjudged(r):
+    return (r or {}).get("gate_status") in UNJUDGED
+
+
+def _submission_reason(r):
+    """Why a rep-day carries no variance. Same two blanks as the recon's pending rows, named with the
+    same two reasons, because it is the same read that came back empty."""
+    if not _unjudged(r):
+        return None
+    return ("not_computed" if (r or {}).get("gate_status") == "not_computed"
+            else "no_sales_feed_match")
+
+
+def _cash_variance(field):
+    def read(r):
+        r = r or {}
+        if _unjudged(r):
+            return None
+        v = float(r.get(field) or 0)
+        return v if v else None
+    return read
+
+
+def _submission_tables(sales_tables):
+    SALES = tuple(t for t in (sales_tables or ()) if t)
+
+    def read(r):
+        if _unjudged(r) or (r or {}).get("b2b_cash") is None:
+            return DECLARED + (None,)
+        return DECLARED + (SALES or (None,))
+    return read
+
+
+_UNJUDGED_NOTE = ("A rep-day the recon could not judge — the sales feed was not loaded for that day, "
+                  "or the rep could not be matched to it — is shown here and not counted. It "
+                  "contributes nothing to the figure, which is not the same as contributing $0.00.")
+
+
+def submission_catalogue(*, sales_tables=()):
+    common = {"row_label": _submission_label, "keys": SUBMISSION_KEYS, "schema": "commcalc",
+              "fields": _submission_fields, "tables": _submission_tables(sales_tables),
+              "reason": _submission_reason, "note": _UNJUDGED_NOTE}
+    return (
+        {"key": "cash_short", "label": "Cash short of the sales feed", "total": "cash_short",
+         "value": _cash_variance("cash_short_amount"),
+         "in_figure": (lambda r: not _unjudged(r) and float((r or {}).get("cash_short_amount") or 0) > 0),
+         **common},
+        {"key": "cash_over", "label": "Cash over the sales feed", "total": "cash_over",
+         "value": _cash_variance("cash_over_amount"),
+         "in_figure": (lambda r: not _unjudged(r) and float((r or {}).get("cash_over_amount") or 0) > 0),
+         **common},
+    )
+
+
+def submission_totals(rows):
+    """PURE: the two figures the dashboard's tiles show. Summed, NEVER netted against each other —
+    a rep $50 short one day and $50 over the next has twice handed over the wrong cash, which is the
+    whole reason the owner asked for two tiles rather than one (2026-08-03)."""
+    # Seeded with a bare 0, not 0.0: the batch-6 lock (§E2) bans every float literal in this file so
+    # that a tolerance or a rate can never be copied in beside the rule that owns it, and an
+    # accumulator seed has no business being the exception that opens it.
+    out = {"cash_short": 0, "cash_over": 0}
+    for r in (rows or []):
+        if _unjudged(r):
+            continue
+        out["cash_short"] = round(out["cash_short"] + float((r or {}).get("cash_short_amount") or 0), 2)
+        out["cash_over"] = round(out["cash_over"] + float((r or {}).get("cash_over_amount") or 0), 2)
+    return out
+
+
+def submission_drilldowns(rows, totals, *, sales_tables=(), cap=None):
+    return report_drilldown.tiles(submission_catalogue(sales_tables=sales_tables), rows, totals,
+                                  cap=cap or report_drilldown.ROW_CAP)
