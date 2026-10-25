@@ -703,8 +703,33 @@ for _r in PAGES:
     check("I5(%s) the ledger reads `shared` and says what it refuses to claim — an excuse nobody "
           "wrote down is indistinguishable from an oversight" % _r,
           _ln.split("\t")[1:2] == ["shared"] and "REFUSES to claim" in _ln, _ln[:160])
-check("I6 the ratchet was re-pinned DOWNWARD in the same PR, never upward",
-      "OWES_MAX = 71" in _read("backend/harness_drilldown_coverage.py"))
+def _owes_max(src):
+    """THE RATCHET'S PIN, or None when it cannot be read at all.
+
+    **SHRINK-ONLY, AND IT MUST NOT BE RE-TIGHTENED TO `==`.** Batch 10 wrote its equivalent as
+    `OWES_MAX == 74`, and an equality against a MONOTONE GLOBAL counter can only hold for one commit:
+    it went red the moment THIS batch lowered the ratchet, which is the very thing
+    `harness_drilldown_coverage` exists to require. (That check is narrowed to `<= 74` in this same
+    PR; batches 1–9 never pinned it, so those two were the whole class.) The rule the ratchet states
+    is *"may only shrink"* — `<=` IS that rule, and `==` was stricter than the rule and therefore
+    wrong for it. A later batch lowering the pin to 68 must not have to touch this file.
+
+    It still FAILS CLOSED: a pin above this batch's 71 is red, and a pin that cannot be read at all
+    is red rather than absent."""
+    m = re.search(r"^OWES_MAX = (\d+)", src or "", re.M)
+    return int(m.group(1)) if m else None
+
+
+_pin = _owes_max(_read("backend/harness_drilldown_coverage.py"))
+check("I6 the ratchet was re-pinned DOWNWARD in the same PR and has never been pushed back up past "
+      "this batch's 71", _pin is not None and _pin <= 71, _pin)
+check("I6b NEGATIVE CONTROL — a pin ABOVE 71 is caught, so the ratchet cannot be loosened by editing "
+      "the number", _owes_max("OWES_MAX = 72\n") > 71)
+check("I6c NEGATIVE CONTROL — a LATER batch's lower pin passes without touching this file, which is "
+      "the whole point of asserting the direction instead of the value",
+      _owes_max("OWES_MAX = 71\n") <= 71 and _owes_max("OWES_MAX = 68\n") <= 71)
+check("I6d NEGATIVE CONTROL — FAIL CLOSED: a ratchet with no readable pin is not a pass",
+      _owes_max("# the pin was deleted\n") is None and _owes_max("OWES_MAX = many\n") is None)
 
 
 print("\n" + "=" * 96)

@@ -33876,7 +33876,8 @@ Batch 10 of the §CORE-17 audit, the first FINANCE batch (CLAUDE.md routes the m
 finance agent): **`/accounts/balance-sheet`**, **`/accounts/cash-flow`** and
 **`/accounts/liabilities-due`** — the audit's #3 worst ("four tiles composed from four other
 reports, composition invisible"). Owed count **77 → 74**. Proof:
-`backend/harness_batch10_drilldown.py`, **85 checks**, §Z1–Z9 negative controls, wired into the
+`backend/harness_batch10_drilldown.py`, **88 checks** (85 as shipped; §I6 narrowed to its own subject
+by batch 11 — see §CORE-17.3k), §Z1–Z9 negative controls, wired into the
 carrier-vocab-guard lock job. Declarations:
 `backend/app/modules/account/statement_drilldown.py` (the two statements — ONE declaration, see
 below) and `backend/app/modules/account/liabilities_drilldown.py`.
@@ -33991,7 +33992,7 @@ commission agent): **`/commcalc/discrepancy`** (Pay Discrepancy), **`/commcalc/c
 disagreement about money, with no way to the two lines that disagree"*) and
 **`/commcalc/commission-legs`** (Commission received over M1–M12). Owed count **74 → 71**.
 Declaration: `backend/app/modules/commcalc/carrier_pay_drilldown.py`. Proof:
-`backend/harness_batch11_drilldown.py`, **97 checks**, §Z1–Z9 negative controls, wired into the
+`backend/harness_batch11_drilldown.py`, **100 checks**, §Z1–Z9 negative controls, wired into the
 carrier-vocab-guard lock job.
 
 **THE RULING THIS BATCH SETTLES, and it narrows two earlier ones rather than contradicting them.**
@@ -34083,6 +34084,23 @@ row depends on that row's comp type, so its rows name the snapshot alone. Closin
 the WRITER storing its provenance, which moves money-path code and is a PR of its own. A stored
 `source_table` the registry's own display union does not recognise is IGNORED rather than printed
 (§A8): a stored string is not a licence to put an arbitrary identifier on a manager's screen.
+
+**ONE EXISTING LOCK WAS NARROWED TO ITS OWN SUBJECT, not relaxed — and it is the same shape batch 10
+narrowed, one layer out.** `harness_batch10_drilldown.py` §I6 asserted `OWES_MAX == 74`, and an
+EQUALITY against a MONOTONE GLOBAL counter can only hold for one commit: the moment the next batch
+lowers the ratchet — which `harness_drilldown_coverage` *exists to require* — that file goes red for
+doing exactly the right thing. Batch 11 (74 → 71) was the first to hit it. The subject of the check is
+*batch 10 lowered it by three*, and the honest invariant for that is `<= 74`. The rule is unchanged
+and it still FAILS CLOSED: a pin above 74 is red (§I6b), a deleted pin and an unparseable one are red
+(§I6d), and the only behaviour added is that a LOWER pin passes (§I6c). 85 checks → **88**. The
+general lesson, written down once: **a lock about a ratchet asserts the DIRECTION, never the value** —
+a value assertion makes the lock expire on the next correct change, and the next reader's reflex when
+it goes red is to edit the number, which is how a ratchet quietly becomes decoration. The whole class
+was swept in the same breath: every `harness_*.py` was grepped for `OWES_MAX`, and only batches 10 and
+11 pin it (batches 1–9 never did), so THIS batch's own §I6 — which had been written as the same
+substring equality against `OWES_MAX = 71` — was rewritten shrink-only too, with the identical
+`_owes_max()` reader and the same three negative controls. A successor lowering the ratchet to 68 now
+has to touch neither file.
 
 **No migration, no new table, no money moved** — three read-only `drilldown` payloads, one additive
 `drilldown_store` mapping beside them, six feed-name constants and one writer map on the lineage

@@ -584,9 +584,35 @@ for _r in ("/accounts/balance-sheet", "/accounts/cash-flow", "/accounts/liabilit
     check("I5(%s) reads `shared` in the coverage ledger, with a written note" % _r,
           re.search(r"^%s\tshared\t\S" % re.escape(_r), _ledger, re.M) is not None)
 _cov = _read("backend", "harness_drilldown_coverage.py")
-_owes = int(re.search(r"^OWES_MAX = (\d+)", _cov, re.M).group(1))
-check("I6 the ratchet was re-pinned DOWNWARD by the three this batch built",
-      _owes == 74, _owes)
+
+
+def _owes_max(src):
+    """THE RATCHET'S PIN, or None when it cannot be read at all.
+
+    NARROWED 2026-10-25 (batch 11), rule unchanged, by the §CORE-17.3j precedent this file set for
+    `harness_pl_drill_detail` §G5. This check was written `_owes == 74`, and an EQUALITY against a
+    MONOTONE GLOBAL counter can only hold for one commit: the moment the next batch lowers the
+    ratchet — which `harness_drilldown_coverage` exists to require — this file goes red for doing
+    exactly the right thing. Batch 11 (74 → 71) was the first to hit it.
+
+    The subject of the check is *this batch lowered it*, and the honest invariant for that is
+    `<= 74`: batch 10's three were built, the pin went DOWN to 74, and it may only keep shrinking.
+    It still FAILS CLOSED — a pin above 74, a deleted pin and an unparseable one are all red (§I6b,
+    §I6c, §I6d) — so nothing about the rule is weakened; only its lifetime is."""
+    m = re.search(r"^OWES_MAX = (\d+)", src or "", re.M)
+    return int(m.group(1)) if m else None
+
+
+_owes = _owes_max(_cov)
+check("I6 the ratchet was re-pinned DOWNWARD by the three this batch built, and has only kept "
+      "shrinking since", _owes is not None and _owes <= 74, _owes)
+check("I6b NEGATIVE CONTROL — a pin ABOVE this batch's 74 is still caught, so the ratchet cannot be "
+      "loosened by editing it upward", _owes_max("OWES_MAX = 75\n") > 74)
+check("I6c NEGATIVE CONTROL — the pin batch 10 itself set still passes, and a later batch's lower "
+      "pin does too, which is the only behaviour this narrowing added",
+      _owes_max("OWES_MAX = 74\n") <= 74 and _owes_max("OWES_MAX = 71\n") <= 74)
+check("I6d NEGATIVE CONTROL — FAIL CLOSED: a ratchet with no readable pin is not a pass",
+      _owes_max("# the pin was deleted\n") is None and _owes_max("OWES_MAX = many\n") is None)
 
 print("\n== Z. negative controls — every check above can fail ==")
 _z = bs_statement()
