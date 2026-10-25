@@ -446,7 +446,7 @@ check("Y1b every reason this declaration can emit has a sentence — a bare key 
        if k not in rd.UNMEASURED_REASONS])
 check("Y2 THE PROVENANCE MAP IS COMPLETE against the producer's OWN stream registry, in both "
       "directions — a new money stream cannot ship without saying where it was read from",
-      set(cpd.FEEDS_BY_STREAM) == set(cr.STREAMS),
+      set(cpd.FEEDS_BY_STREAM) == set(cr.STREAMS) == set(cpd._stream_keys()),
       (sorted(set(cr.STREAMS) - set(cpd.FEEDS_BY_STREAM)),
        sorted(set(cpd.FEEDS_BY_STREAM) - set(cr.STREAMS))))
 _bad_src = [k for k, (t, _c) in cpd.FEEDS_BY_STREAM.items()

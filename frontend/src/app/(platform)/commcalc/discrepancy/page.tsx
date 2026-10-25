@@ -346,7 +346,10 @@ export default function DiscrepancyPage() {
               </tr></thead>
               <tbody>
                 {storeSummary.map(s => {
-                  const p = isPhantom ? undefined : storePanels[s.store]
+                  // A line with no store at all is bucketed by the server the way this endpoint
+                  // already buckets one ("Unknown"), so it still offers its evidence instead of
+                  // being the one row on the table with no way in.
+                  const p = isPhantom ? undefined : storePanels[s.store || 'Unknown']
                   return (
                     <Fragment key={s.store}>
                       <tr onClick={() => setStoreFilter(storeFilter === s.store ? '' : s.store)}
