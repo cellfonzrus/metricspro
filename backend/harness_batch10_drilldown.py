@@ -586,7 +586,7 @@ for _r in ("/accounts/balance-sheet", "/accounts/cash-flow", "/accounts/liabilit
 _cov = _read("backend", "harness_drilldown_coverage.py")
 _owes = int(re.search(r"^OWES_MAX = (\d+)", _cov, re.M).group(1))
 check("I6 the ratchet was re-pinned DOWNWARD by the three this batch built",
-      _owes == 76, _owes)
+      _owes == 74, _owes)
 
 print("\n== Z. negative controls — every check above can fail ==")
 _z = bs_statement()

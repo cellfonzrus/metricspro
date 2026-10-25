@@ -33819,19 +33819,71 @@ at the moment the page loaded, while every figure above it is keyed on `created_
 chosen range. Both are right and they are different questions, so the heading says so and the card
 gets no panel: "how old right now" has no stable set of rows a server folded it over.
 
+### §CORE-17.3i THE ROWS A WORK QUEUE EXISTS FOR HAVE NO EVIDENCE (2026-10-25, batch 9)
+
+Batch 9 of the §CORE-17 audit: **`/closing/closing-pickup-status`** (Closing & Cash Pickup Status,
+shared with the Daily Closing dashboard's own tab) and **`/closing/management`** (Management Review's
+3-try attempt log). Owed count **79 → 77**. Proof: `backend/harness_batch9_drilldown.py`, **75
+checks**, §Z1–Z6 negative controls, wired into the carrier-vocab-guard lock job. Declarations:
+`backend/app/modules/closing/chain_drilldown.py` and
+`backend/app/modules/closing/attempts_drilldown.py`.
+
+**THE FINDING THIS BATCH RECORDS, for every work queue after it: a row can have NO provenance, and
+that is the answer, not a gap in the tool.** Every earlier batch drilled from a figure to the rows it
+was read out of. Here the rows the report exists for were read out of nothing: a store-day nobody
+filed anything for has no closing sheet, no turned-away submit, no pickup envelope and no count — it
+is on the report because the ROSTER expected that store to file. `chain_drilldown` therefore names no
+table for it, which the shared fold already turns into a **stated, countable untraceable origin**,
+and the row carries `not_filed` plus an `evidence` field saying in words that the roster is the only
+thing that put it there. Naming a table would be a provenance claim nothing checked; leaving the row
+out would hide the report's own subject. A row on these reports can name anywhere from zero to five
+tables, one per stage that actually ran (locked: harness §B1–§B4).
+
+**An unfiled store-day is never worth $0.00.** It contributes 0.00 to declared / collected /
+still-in-store today, so "Cash still in stores $0" reads as "no money is waiting" when the drawer was
+never counted. Those rows are shown in all three cash panels and NOT counted — and the tie-out still
+holds exactly, because what they contributed was zero (§C1, §C2).
+
+**REPORTED, NOT PAPERED OVER — the "No cash to collect" tile counts store-days nobody filed.**
+`deposit_accountability.cash_pickup_state` reaches `nothing_to_collect` when there are no declared
+envelopes AND nothing was collected, and a store-day with no closing has no declared envelopes. So an
+unfiled store-day lands under a tile reading "No cash to collect" when the truth is that nobody told
+us what was in the drawer. Reproduced from the real function (§C5); the figure is UNCHANGED and the
+tile's panel says which of its rows are the unfiled ones (§C6).
+
+**Management Review: a turned-away submit is not a recount.** One panel per attempt group, keyed on
+`close_date|store_code|employee_name` — the screen's own row key, field for field, locked by §D2 —
+with the badge's attempt count as its figure. `submit_refusal.is_real_try` stays the one rule for what
+counts as a try, so a refused submit (which stored no closing at all) is shown and never counted:
+counting it would read as a rep who recounted three times when their photo failed three times. The
+words on such a row are the refusal's own submitter-facing sentence, dereferenced from
+`submit_refusal.message_for` — the declaration spells no refusal's meaning of its own (§E2).
+**Only the try the gate ACCEPTED names the closing row that stands**; a recount and a refusal name the
+attempt log alone, and a group whose closing row could not be matched names no closing row at all
+(§E3, §E4).
+
+**Neither state vocabulary is re-spelled.** The closing states come from `unfinished_day.STATES` /
+`LABELS` and the pickup states from `deposit_accountability.PICKUP_STATES` / `PICKUP_LABELS`, and the
+screen asks for each tile's panel by that state's own key — so a state renamed in its own home moves
+the tile and its drill together rather than leaving a dead link (§A3, §G5, §H2). A stage cell is read
+BY KEY and never by position, so a chain that gains a stage cannot silently point these figures at
+another one (§G6). Neither screen narrows its panels and neither should: every filter on both is a
+query parameter (§H5).
+
 ### §CORE-17.3j A FIGURE READ OUT OF A SNAPSHOT NAMES THE SNAPSHOT — and the trail stops there (2026-10-25, batch 10)
 
 Batch 10 of the §CORE-17 audit, the first FINANCE batch (CLAUDE.md routes the module to the
 finance agent): **`/accounts/balance-sheet`**, **`/accounts/cash-flow`** and
 **`/accounts/liabilities-due`** — the audit's #3 worst ("four tiles composed from four other
-reports, composition invisible"). Owed count **79 → 76**. Proof:
-`backend/harness_batch10_drilldown.py`, **83 checks**, §Z1–Z9 negative controls, wired into the
+reports, composition invisible"). Owed count **77 → 74**. Proof:
+`backend/harness_batch10_drilldown.py`, **85 checks**, §Z1–Z9 negative controls, wired into the
 carrier-vocab-guard lock job. Declarations:
 `backend/app/modules/account/statement_drilldown.py` (the two statements — ONE declaration, see
 below) and `backend/app/modules/account/liabilities_drilldown.py`.
 
-> Numbered `.3j` while `.3i` (batch 9, the two closing work queues) was in flight on its own branch.
-> Same race §CORE-17's own header note describes; the letters are allocation order, not dependency.
+> Numbered `.3j` while `.3i` (batch 9, the two closing work queues) was still in flight on its own
+> branch; batch 9 landed first (PR #543) and this section was merged in after it. Same race
+> §CORE-17's own header note describes — the letters are allocation order, not dependency.
 
 **THE RULE THIS BATCH SETTLES, for every report built on a stored snapshot: NAME THE SNAPSHOT, AND
 SAY WHERE THE TRAIL STOPS.** Both statement screens read exactly one table —
