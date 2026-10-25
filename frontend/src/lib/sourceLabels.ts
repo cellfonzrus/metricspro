@@ -60,6 +60,18 @@ const SOURCE_LABEL: Record<string, string> = {
   shifts: 'the schedule',
   clock_variance_correction: 'recorded clock corrections',
   clock_feed_login_link: 'approved clock-report logins',
+  // The finance statements and the liabilities composition (§CORE-17.3j). An owner reads "the
+  // computed financial statements", never the table the snapshot sits in.
+  account_statements: 'computed financial statements',
+  journal_entries: 'manual journal entries',
+  asset_ledger: 'device asset landing ledger',
+  vip_invoices: 'distributor invoices',
+  vip_paygo_payments: 'distributor device-financing payments',
+  store_borrowings: 'inter-store borrowing record',
+  inventory_aging_device: 'inventory aging (per device)',
+  employees: 'employee records',
+  payroll_settings: 'payroll withholding setup',
+  store_lease: 'store lease & insurance setup',
 }
 
 /** The plain name of a data source. An unknown table still never prints as an identifier: `raw_` is dropped and

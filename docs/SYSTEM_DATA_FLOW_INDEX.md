@@ -33870,6 +33870,119 @@ BY KEY and never by position, so a chain that gains a stage cannot silently poin
 another one (§G6). Neither screen narrows its panels and neither should: every filter on both is a
 query parameter (§H5).
 
+### §CORE-17.3j A FIGURE READ OUT OF A SNAPSHOT NAMES THE SNAPSHOT — and the trail stops there (2026-10-25, batch 10)
+
+Batch 10 of the §CORE-17 audit, the first FINANCE batch (CLAUDE.md routes the module to the
+finance agent): **`/accounts/balance-sheet`**, **`/accounts/cash-flow`** and
+**`/accounts/liabilities-due`** — the audit's #3 worst ("four tiles composed from four other
+reports, composition invisible"). Owed count **77 → 74**. Proof:
+`backend/harness_batch10_drilldown.py`, **85 checks**, §Z1–Z9 negative controls, wired into the
+carrier-vocab-guard lock job. Declarations:
+`backend/app/modules/account/statement_drilldown.py` (the two statements — ONE declaration, see
+below) and `backend/app/modules/account/liabilities_drilldown.py`.
+
+> Numbered `.3j` while `.3i` (batch 9, the two closing work queues) was still in flight on its own
+> branch; batch 9 landed first (PR #543) and this section was merged in after it. Same race
+> §CORE-17's own header note describes — the letters are allocation order, not dependency.
+
+**THE RULE THIS BATCH SETTLES, for every report built on a stored snapshot: NAME THE SNAPSHOT, AND
+SAY WHERE THE TRAIL STOPS.** Both statement screens read exactly one table —
+`commcalc.account_statements`, the row `statement_engine.compute_and_store` wrote. The compute knew
+which feed each line came from (it had just read the asset ledger, the invoices, the borrowings) and
+**it keeps the dollars and throws the provenance away**. So:
+
+- every drill row names `account_statements`, keyed by the period, the scope and the line, because
+  that is where the figure was actually read out of;
+- a FEED is named only where the booking code reads that line from it unconditionally
+  (`statement_drilldown.LINE_FEEDS` — the ledger and the PayGo batches for what is owed to the
+  distributor, the invoices for unpaid AP, the borrowings for both inter-store lines, the two
+  marketplace feeds for the settlement clearing, the two sales feeds for sales tax);
+- a line whose feed is chosen from **per-org config at compute time** names **NO feed** and says
+  which basis decided it (`CONFIG_RESOLVED_LINES` — inventory, the distributor payable, store cash
+  on hand). The snapshot does not record which basis answered, and naming one would be a provenance
+  claim nothing checked;
+- **a line at $0.00 names no feed either.** Its feed WAS read and produced nothing, so claiming it
+  answered is the same lie in smaller print (§Z5 shows the constant a careless declaration would
+  serve, and that it differs from what is served).
+
+Closing the gap properly means the COMPUTE storing the feed per line. That moves money-path code and
+is a PR of its own; it is not done here and is written down instead.
+
+**AND ONE FEED CANNOT BE NAMED AT ALL YET.** The chargeback reserve is booked from
+`commcalc.chargeback_items`, which `coa` reads and migrations 030/036 INDEX — but no migration in
+this repository CREATES it, so it is not a registered table and a `sourceLabels.ts` entry for it
+fails the infra lock (`harness_carrier_vocab_guard` IW3). Naming it would therefore either break the
+build or put a raw identifier on a manager's screen, so that line names no feed and says why in the
+reader's own words (`statement_drilldown.UNREGISTERED_FEED_LINES`, `why_no_feed()`; §B5b, §B5c). The
+remedy is a migration that creates or formally registers the table — a schema change, surfaced here
+rather than smuggled into a drill-down PR.
+
+**ONE DECLARATION FOR TWO REPORTS, because they share a GRAIN** — not merely a module. Both render
+`sections[].lines[]` with a subtotal each out of one stored payload, and the Cash Flow's own lines
+ARE Balance-Sheet line keys (`statement_engine.cash_flow` labels each "Change in <that line>"). One
+row shape, one provenance rule, two catalogues — the `day_recon_drilldown` precedent (§CORE-17.3c),
+rather than two siblings that drift.
+
+**A DIFFERENCE AND A LEAF GET NO PANEL, which extends §CORE-17.3h from the quotient.** The Cash
+Flow's tie-out delta is implied MINUS reported, and the reported half is the Balance Sheet's own cash
+lines — which this payload does not carry. So the delta, the reported change and the two cash
+balances serve **no key at all**; the implied change opens to the three subtotals and the screen says
+where the other half lives. A cash-flow LINE gets none either: it is already the leaf, one
+balance-sheet line's change between two stored statements, with nothing under it on this report
+(§D3).
+
+| What | Where | Says |
+|---|---|---|
+| **The two statements' declaration** | `account/statement_drilldown.py` — `LINE_FEEDS`, `CONFIG_RESOLVED_LINES`, `line_tables`, `balance_sheet_drilldowns`, `cash_flow_drilldowns` | a panel per section subtotal, per line, for Liabilities + Equity and for the imbalance (whose second row is counted NEGATIVE, so the two sides really do add up to the gap). Every figure is the statement's own, dereferenced |
+| **The liabilities declaration** | `account/liabilities_drilldown.py` — `PAYABLE_BASIS_FEEDS`, `catalogue`, `drilldowns` | six tiles over six different row lists, each declaring which list, which field, which tables and which rows the figure counts. The feed is keyed on the stored basis value, so a new basis is a ROW plus its derivation — never a branch (RULE TWO) |
+| **The endpoints** | `GET /account/balance-sheet/{period}`, `GET /account/cash-flow/{period}` → `drilldown`; `GET /account/liabilities-due` → `drilldown` | the statements attach theirs in ONE place (`router._with_statement_drilldown`), so a drill-down cannot exist on the unfiltered read and go missing on the filtered one. **No narrowing** on either statement: their store/market filter is SERVER-side |
+| **The liabilities screen narrows, and its tiles read off the narrowed panels** | `/accounts/liabilities-due` — `narrowPanels` + `useDrillTile` | every filter there is client-side, so the §CORE-17.3d shape applies: one fold serves the tile and the panel. A company-wide row names no store and is KEPT rather than silently shrinking the figure |
+| **One fold for the payroll tiles** | `liabilities_due.aggregate_payroll` now returns `rows` | the per-person cells come out of the SAME loop that produces `gross_total` and the tax split, so the drill-down behind those two tiles is the arithmetic they are, not a restatement (§G7). The cells are dropped from the served sections, because they travel inside the panels |
+| **Provenance read per PERSON on a payroll row** | `liabilities_drilldown._hours_tables` | the one who clocked in names the time clock, the one whose hours were typed names the hand-entered hours, and the one with no punch at all names **the schedule** — `payroll_raw`'s own scheduled-hours fallback. Three people on one tile, three different answers (§E7) |
+| **Rounding, dereferenced** | `report_drilldown.money` (new, public) | a declaration that writes `0.0` to say "zero" has acquired a dollar literal of its own, which the build locks on these declarations refuse. So the ONE rounding is public and both declarations read it |
+
+**REPORTED, NOT PAPERED OVER — three live defects these reports have today.**
+
+1. **NO `coa.BS_SPEC` LINE RECORDS A BREAKDOWN, SO THE BALANCE SHEET'S OWN EXPANDER NEVER OPENS.**
+   `coa.add()` records a drill label only when its caller passes `detail_label`, and **not one**
+   balance-sheet booking does — inventory, owed-to-distributor, invoices unpaid, the chargeback
+   reserve and both inter-store lines all call it with three arguments (§C1 proves it at the source).
+   The screen renders the expander whenever `line.detail` is non-empty, so on this statement it is
+   always empty while the identical expander on the P&L is full. The figures are UNCHANGED: such a
+   line's panel carries ONE row with no number, `detail_not_recorded`, and a tie-out of **None** —
+   never a breakdown invented at $0.00, and never a tie claimed over a row nobody recorded (§C2, §C3).
+2. **A SCOPE LOSES THE DETAIL THE TWO EXTRA LINES DO CARRY.** `statement_engine._book` records only
+   `line["detail"]` (the org-wide roll-up) and never `detail_by_store`, while `engine._scoped` builds
+   a non-consolidated scope's detail exclusively FROM `detail_by_store`. So the handset-payable and
+   sales-tax lines — the only two that record a breakdown — show it on Consolidated and show nothing
+   on any company, store or filtered read. That is the §4e defect (owner report 2026-10-07) returning
+   on the lines added after it was fixed for `coa.add` (§C6).
+3. **A MANUAL JOURNAL ENTRY FOLDED ONTO A COMPUTED LINE ADDS DOLLARS AND NO EVIDENCE.**
+   `engine._assemble` matches an entry to a spec line BY LABEL and adds its amount without touching
+   that line's detail. Where it happens the panel comes back `ties: False` **in words** — the report
+   disagreeing with its own evidence, which is the outcome this mechanism exists to show rather than
+   round away (§C7, §C8).
+
+**AND ONE DEFECT THIS BATCH CLOSED, because the §CORE-17.3d remedy is what the drill-down needed
+anyway.** On `/accounts/liabilities-due` every filter is client-side: under a store or market filter
+the two distributor tiles kept showing the **unfiltered** total while the table beneath them showed
+the filtered rows, and the rent and insurance tiles narrowed. The tiles now read their numbers off
+their own narrowed panels, so the tile, its table and its evidence are one fold (§H4). No figure
+moved: the unfiltered view is byte-identical.
+
+**ONE EXISTING LOCK WAS NARROWED TO ITS OWN SUBJECT, not relaxed.** §4e's lock
+`harness_pl_drill_detail.py` §G5 forbids a SECOND per-store drill-detail derivation anywhere in
+`backend/app`, and detected one by the substring `detail_by_store` appearing in a file that does not
+call `coa.accrue_detail`. Finding 2 above is *about* that grain, so the declaration's own defect
+report tripped the lock from a DOCSTRING — prose, no derivation. The scan now reads **code only**
+(comments and docstrings dropped by `tokenize`; a file that will not tokenise is scanned whole, so
+the narrowing fails closed), and three new negative controls pin that it still catches a module which
+builds the grain itself (§G5b), does not catch one that merely describes it (§G5c), and keeps the old
+strictness on an unparseable file (§G5d). The rule is unchanged; 55 checks → **59**.
+
+**No migration, no new table, no money moved** — three read-only `drilldown` payloads, one additive
+`rows` key on a pure producer, and one public rounding helper on the one home.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):

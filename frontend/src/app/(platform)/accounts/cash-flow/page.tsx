@@ -7,6 +7,7 @@ import { usePeriod } from '@/lib/period-context'
 import ReportExportBar from '@/components/ReportExportBar'
 import { StalenessBanner } from '../_components/StalenessBanner'
 import { scopeDisplay, statementScopeDisplay } from '../_components/scopeFinancials'
+import DrillDownPanel, { DrillTileLinks, useDrillTile, type DrillExtraColumn } from '@/components/DrillDownPanel'
 import type { ExportSheet } from '@/lib/export'
 
 // Cash Flow statement (roadmap Phase 2 UI; backend since PR #179): the stored DERIVED cash-flow
@@ -14,6 +15,17 @@ import type { ExportSheet } from '@/lib/export'
 // written by statement_engine.compute_and_store next to the P&L / BS. DISPLAY-ONLY — figures come
 // straight from GET /account/cash-flow/{period}; the tie-out is REPORTED, never papered over.
 const SEC_ICON: Record<string, string> = { operating: '⚙️', investing: '🏗️', financing: '🏦' }
+
+// WHERE EVERY FIGURE HERE CAME FROM (§CORE-17.3j). Each section subtotal opens to its own lines and
+// the implied change opens to the three subtotals, folded server-side over the SAME stored payload
+// this page renders (`account/statement_drilldown.py`). A LINE gets no panel: it is already the leaf
+// — one balance-sheet line's change between two stored statements. The beginning and ending cash
+// balances get none either: they are the Balance Sheet's own cash lines, which this statement does
+// not carry, so the honest answer is the Balance Sheet rather than a panel of rows nobody held.
+const CF_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Section', get: r => String(r.fields?.section ?? '—'), sortValue: r => String(r.fields?.section ?? '') },
+  { header: 'Kind', get: r => String(r.fields?.kind ?? '—'), sortValue: r => String(r.fields?.kind ?? '') },
+]
 
 function CFInner() {
   const { period } = usePeriod()
@@ -37,6 +49,8 @@ function CFInner() {
   const st = data?.statement
   // THE scope's display name — the backend's one home, read once (scopeFinancials, §13b.1).
   const scopeName = statementScopeDisplay(data, scopes, scope)
+  // The ONE offer rule: a figure offers its link only where the server actually served a panel.
+  const drill = useDrillTile(data?.drilldown || {})
 
   function sheets(): ExportSheet[] {
     const rows: any[] = []
@@ -103,19 +117,27 @@ function CFInner() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <tbody>
                 {(st.sections || []).map((s: any) => (
-                  <SectionRows key={s.type} s={s} />
+                  <SectionRows key={s.type} s={s} drill={drill} />
                 ))}
                 <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2, var(--c-bg-f1f5f9))' }}>
-                  <td style={{ padding: '10px 16px', fontWeight: 700, fontSize: 14 }}>Implied change in cash</td>
+                  <td style={{ padding: '10px 16px', fontWeight: 700, fontSize: 14 }}>Implied change in cash
+                    <DrillTileLinks drills={drill.dl('implied_cash_change', 'the three subtotals behind this')}
+                      open={drill.open} onToggle={drill.toggle} />
+                  </td>
                   <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 700, fontSize: 14 }}>{fmt(st.implied_cash_change)}</td>
                 </tr>
-                <tr><td style={{ padding: '7px 16px', fontSize: 13 }}>Cash &amp; equivalents — beginning</td>
+                <tr><td style={{ padding: '7px 16px', fontSize: 13 }}>Cash &amp; equivalents — beginning
+                  <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                    read off the balance sheet&rsquo;s own cash lines, which this statement does not carry — open them on the <Link href="/accounts/balance-sheet">Balance Sheet</Link>
+                  </div></td>
                   <td style={{ padding: '7px 16px', textAlign: 'right', fontSize: 13 }}>{fmt(st.cash_begin)}</td></tr>
                 <tr style={{ borderTop: '1px solid var(--border)' }}><td style={{ padding: '7px 16px', fontSize: 13, fontWeight: 600 }}>Cash &amp; equivalents — ending</td>
                   <td style={{ padding: '7px 16px', textAlign: 'right', fontSize: 13, fontWeight: 600 }}>{fmt(st.cash_end)}</td></tr>
               </tbody>
             </table>
           </div>
+          {/* The one renderer, one panel at a time, below the statement it explains. */}
+          {drill.open && <DrillDownPanel panel={drill.panel} extraColumns={CF_COLUMNS} />}
           {st.notes?.length > 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>{st.notes.map((n: string, i: number) => <div key={i}>· {n}</div>)}</div>}
         </div>
       )}
@@ -123,7 +145,7 @@ function CFInner() {
   )
 }
 
-function SectionRows({ s }: { s: any }) {
+function SectionRows({ s, drill }: { s: any; drill: ReturnType<typeof useDrillTile> }) {
   return (
     <>
       <tr style={{ background: 'var(--surface2, var(--c-bg-f8fafc))' }}>
@@ -138,7 +160,9 @@ function SectionRows({ s }: { s: any }) {
         </tr>
       ))}
       <tr style={{ borderTop: '1px solid var(--border)' }}>
-        <td style={{ padding: '7px 16px', fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Net cash — {s.name.toLowerCase()}</td>
+        <td style={{ padding: '7px 16px', fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Net cash — {s.name.toLowerCase()}
+          <DrillTileLinks drills={drill.dl(s.type, 'lines behind this total')} open={drill.open} onToggle={drill.toggle} />
+        </td>
         <td style={{ padding: '7px 16px', textAlign: 'right', fontSize: 13, fontWeight: 600 }}>{fmt(s.subtotal)}</td>
       </tr>
     </>

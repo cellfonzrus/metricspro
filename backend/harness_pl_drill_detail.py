@@ -39,9 +39,11 @@ Stdlib only, no DB, no network. Uses the REAL `coa.PL_SPEC`, `coa.accrue_detail`
 `engine._assemble` and `statement_filter.filtered_statement`.
 Run:  cd backend && python3 harness_pl_drill_detail.py
 """
+import io
 import os
 import re
 import sys
+import tokenize
 import types
 
 sys.path.insert(0, "app")
@@ -328,19 +330,60 @@ ok("G3 coa.add accrues drill detail through the ONE accumulator",
 ok("G4 build_inputs initialises BOTH drill grains on every spec line",
    '"detail_by_store": {}, "detail_company_wide": {}' in COA_SRC)
 # No SECOND derivation: nothing in backend/app may build a per-store drill dict of its own.
+# The subject is a MECHANISM, so the scan reads CODE and not prose: a module that DESCRIBES this
+# grain in its docstring — a drill-down declaration reporting that `statement_engine._book` never
+# records it, say — is documenting the one home, not growing a second one. Narrowed 2026-10-25,
+# after `account/statement_drilldown.py` tripped the substring on its own defect report. The RULE
+# is unchanged and §G5b–§G5d below prove the narrowed scan still catches the real thing.
+
+
+def _code_without_prose(src):
+    """PURE: `src` with its comments and docstrings removed. Fails CLOSED — a file that will not
+    tokenise is returned whole, so the lock stays exactly as strict as it was."""
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return src
+    out, prev = [], tokenize.NEWLINE
+    opens = (tokenize.NEWLINE, tokenize.NL, tokenize.INDENT, tokenize.DEDENT)
+    for t in toks:
+        if t.type == tokenize.COMMENT:
+            continue
+        if t.type == tokenize.STRING and prev in opens:      # a string opening a logical line
+            prev = t.type
+            continue
+        out.append(t.string)
+        prev = t.type
+    return "\n".join(out)
+
+
+def _second_derivation(src):
+    """A module derives the per-store drill grain ITSELF when its CODE touches that grain without
+    going through `coa.accrue_detail`, the one accumulator."""
+    body = _code_without_prose(src)
+    return "detail_by_store" in body and "accrue_detail" not in body
+
+
 offenders = []
 for dirpath, _d, files in os.walk(os.path.join(HERE, "app")):
     for f in files:
         if not f.endswith(".py"):
             continue
-        p = os.path.join(dirpath, f)
-        rel = os.path.relpath(p, HERE)
+        fp = os.path.join(dirpath, f)
+        rel = os.path.relpath(fp, HERE)
         if rel.endswith(("account/coa.py", "account/engine.py")):
             continue
-        body = open(p, encoding="utf-8", errors="ignore").read()
-        if "detail_by_store" in body and "accrue_detail" not in body:
+        if _second_derivation(open(fp, encoding="utf-8", errors="ignore").read()):
             offenders.append(rel)
 ok("G5 NO second drill-detail derivation in backend/app", not offenders, offenders)
+ok("G5b …and the scan still CATCHES one: code that builds the grain itself is an offender",
+   _second_derivation('"""A docstring."""\n\ndef f(line, store, amt):\n'
+                      '    line["detail_by_store"].setdefault(store, {})["x"] = amt\n'))
+ok("G5c …while a module that only DESCRIBES the grain in prose is not an offender",
+   not _second_derivation('"""`_book` never records detail_by_store."""\n\n'
+                          'def f():  # detail_by_store is read in engine\n    return 1\n'))
+ok("G5d a file that will not tokenise is scanned WHOLE (the narrowing fails closed)",
+   _second_derivation('def f(:\n    line["detail_by_store"] = {}\n'))
 ok("G6 statement_filter still has exactly ONE detail summation (no sibling added)",
    SF_SRC.count('tgt["detail"][dk]') == 1)
 ok("G7 RULE TWO — no tenant / carrier / store-name branch in the changed logic",
