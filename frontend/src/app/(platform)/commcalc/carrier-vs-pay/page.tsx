@@ -123,7 +123,7 @@ export default function CarrierVsPayPage() {
   // §CORE-17.3k — the panels the server folded, one per tile figure. NO client narrowing: every
   // filter here is a query parameter, and the strip's figures are folded over every rep whatever is
   // selected, so narrowing a panel would make it disagree with the tile it opened from. The banner
-  // below says that out loud instead (harness_batch11_drilldown §F5 fails the build if `drill-narrow`
+  // below says that out loud instead (harness_batch11_drilldown §Y11 fails the build if `drill-narrow`
   // is wired into this page).
   const panels: Record<string, DrillPanel> = data?.drilldown || {}
   const drill = useDrillTile(panels)

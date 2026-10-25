@@ -500,6 +500,7 @@ check("Y8 ONE MODULE, THREE CATALOGUES — the three reports are declared togeth
           ROOT, "backend/app/modules/commcalc/commission_legs_drilldown.py")))
 
 ROUTER_CODE = open(ROUTER, encoding="utf-8").read()
+SRC = {r: _read(p) for r, p in PAGES.items()}
 check("Y9 THE ENDPOINTS BUILD NO PANEL — each one attaches the declaration's output and folds nothing",
       ROUTER_CODE.count("_cpdd.carrier_vs_pay_drilldowns") == 1
       and ROUTER_CODE.count("_cpdd.discrepancy_drilldowns") == 1
@@ -509,11 +510,15 @@ check("Y9 THE ENDPOINTS BUILD NO PANEL — each one attaches the declaration's o
       [k for k in ("carrier_vs_pay_drilldowns", "discrepancy_drilldowns",
                    "discrepancy_store_drilldowns", "breakout_drilldowns")
        if ROUTER_CODE.count("_cpdd." + k) != 1])
-check("Y9b the discrepancy endpoint serves its per-tab total, so the screen's headline reads OFF the "
-      "panel instead of re-reducing the rows in TypeScript (§CORE-17.3d)",
-      "_cpdd.status_total" in ROUTER_CODE and '"status_totals"' in ROUTER_CODE)
+check("Y9b ONE FOLD, ONE COPY — the per-tab total reaches the screen only as the PANEL'S OWN figure, "
+      "so the headline reads it off the evidence it opens (§CORE-17.3d) and the same number is not "
+      "also served under a key of its own",
+      '"status_totals"' not in ROUTER_CODE
+      and "figure?.amount" in SRC["/commcalc/discrepancy"]
+      and "status_totals" not in SRC["/commcalc/discrepancy"].replace(
+          "status_totals?: Record<string, number>", ""),
+      [t for t in ('"status_totals"',) if t in ROUTER_CODE])
 
-SRC = {r: _read(p) for r, p in PAGES.items()}
 for route, src in SRC.items():
     check("Y10 %s renders the ONE shared panel — writing the registry without wiring the caller is "
           "not a fix at all (§19.18)" % route,

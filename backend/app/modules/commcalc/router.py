@@ -29192,18 +29192,20 @@ async def get_discrepancy_results(period: str, org_id: str = ORG_ID, authorizati
             stores[store]["flagged_count"] += 1
 
     # §CORE-17.3k — EVERY HEADLINE AND EVERY BY-STORE GAP OPENS TO THE COMMISSION LINES BEHIND IT.
-    # `status_totals` is served so the screen's headline READS OFF the panel it opens rather than
-    # re-reducing the rows in TypeScript: one fold for the figure and its evidence (§CORE-17.3d).
-    # The number does not move — a line whose gap was never sized contributes nothing to a sum
-    # whether it is skipped here or coerced to zero there — but the panel can now SAY which lines
-    # those were instead of folding them in at $0.00 (defect 2 in `carrier_pay_drilldown`).
+    # ONE FOLD, AND ONE COPY OF IT. The screen's headline READS ITS NUMBER OFF the panel it opens
+    # (`drilldown["gap_<tab>"].figure.amount`) rather than re-reducing the rows in TypeScript, so the
+    # tile and its evidence cannot drift (§CORE-17.3d) — and the per-tab total is therefore NOT also
+    # served under a key of its own, which would be the same number twice in one payload.
+    # The number does not move: a line whose gap was never sized contributes nothing to a sum whether
+    # the server skips it or the old client reduce coerced it to zero. What changes is that the panel
+    # can now SAY which lines those were instead of folding them in at $0.00 (defect 2 in
+    # `carrier_pay_drilldown`'s header).
     from app.modules.commcalc import carrier_pay_drilldown as _cpdd
     return {
         "period": period,
         "summary": sorted(stores.values(), key=lambda x: x["total_gap"], reverse=True),
         "total_gap_usd": round(sum(s["total_gap"] for s in stores.values()), 2),
         "total_flagged": sum(s["flagged_count"] for s in stores.values()),
-        "status_totals": {s: _cpdd.status_total(rows, s) for s in _cpdd.DISCREPANCY_STATUSES},
         "drilldown": _cpdd.discrepancy_drilldowns(rows),
         "drilldown_store": _cpdd.discrepancy_store_drilldowns(rows),
     }

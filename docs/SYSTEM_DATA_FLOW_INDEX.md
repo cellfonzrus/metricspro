@@ -34022,7 +34022,8 @@ which is the duplicate defect arriving one report at a time.
 | **Which feed a money STREAM was read out of** | `carrier_pay_drilldown.FEEDS_BY_STREAM` | keyed on `commission_received.STREAMS`' own stream keys, with the COLUMN where a stream is one column of a shared feed (`raw_mi`'s two residual columns). Locked both ways, and locked against the stream's own `source` sentence — the prose the page prints and the machine fact cannot diverge (§Y2, §Y2b, §Y2c) |
 | **Which feed a REP's earned figure answered from** | `carrier_pay_drilldown.earned_tables` | read per ROW off the row's own verdict, because four reps on one tile have four different answers: a pre-attributed tenant names the CALCULATED rep commissions (§CORE-17.3j — the snapshot, not the feed the calculation read), a rep whose activations were looked up names both statement tables, and a rep the carrier side was never looked up for names **nothing** and is reported as an origin that cannot be traced |
 | **The four feed constants that were only ever literals** | `data_lineage_registry.PAYMENT_DETAIL`, `MI_RESIDUAL`, `COMP_REPORT`, `MA_COMMISSION`, `CARRIER_STATEMENT`, `DISCREPANCY_SNAPSHOT` | named in the registry and dereferenced by `COMMISSION_CALC_FEEDS` itself, so a declaration naming a feed reads the one home instead of restating a table name at the call site |
-| **The endpoints** | `GET /commcalc/discrepancy/{period}` → `status_totals` + `drilldown` + `drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET /commcalc/commission-received-breakout` → `drilldown` | each ATTACHES the declaration's output and folds nothing (§Y9). The discrepancy endpoint also serves its per-tab total so the screen's headline READS IT OFF the panel rather than re-reducing the rows in TypeScript — one fold for the figure and its evidence (§CORE-17.3d) |
+| **The endpoints** | `GET /commcalc/discrepancy/{period}` → `drilldown` + `drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET /commcalc/commission-received-breakout` → `drilldown` | each ATTACHES the declaration's output and folds nothing (§Y9) |
+| **ONE FOLD, AND ONE COPY OF IT** | the discrepancy screen's headline reads `drilldown["gap_<tab>"].figure.amount` | the tile's number IS the panel's figure, so the two cannot drift (§CORE-17.3d) — and the per-tab total is therefore **not** also served under a key of its own, which would be the same number twice in one payload. The page's own reduce survives only as the fallback for a payload carrying no panel, and such a tile offers no drill (§Y9b, §Y12) |
 | **No narrowing on any of the three** | `harness_batch11_drilldown.py` §Y11 | every filter that moves a figure on these screens is a QUERY PARAMETER, so the server's own fold already covers what is on screen. The lock FAILS THE BUILD if `lib/drill-narrow` is wired into any of them — the §CORE-17.3e `pickup_drilldown` posture, so a later reader cannot "fix" them into a class they were never in |
 | **The By-Store gap opens too** | `discrepancy_store_drilldowns` | a district manager acts on that number, so it has rows. The store panels PARTITION the tab's panel — a line is in exactly one of them — and a line with no store at all is kept under a stated bucket rather than dropped, which would silently shrink the figure (§A16, §A17) |
 
@@ -34084,7 +34085,7 @@ the WRITER storing its provenance, which moves money-path code and is a PR of it
 (§A8): a stored string is not a licence to put an arbitrary identifier on a manager's screen.
 
 **No migration, no new table, no money moved** — three read-only `drilldown` payloads, one additive
-`status_totals` key on one endpoint, six feed-name constants and one writer map on the lineage
+`drilldown_store` mapping beside them, six feed-name constants and one writer map on the lineage
 registry, and three reason sentences on the one home's `UNMEASURED_REASONS` whose KEYS are
 `carrier_vs_pay`'s own reason constants (locked identical, §Y1, so the two vocabularies cannot drift).
 
@@ -34170,8 +34171,8 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 `closing/attempts_drilldown.py`, `commcalc/tender_recon_drilldown.py`, `crm/reports_drilldown.py`,
 `helpdesk/dashboard_drilldown.py`, `account/statement_drilldown.py`,
 `account/liabilities_drilldown.py`, `commcalc/carrier_pay_drilldown.py`), §17 (`GET
-/closing/cash-variance` → `drilldown`; `GET /commcalc/discrepancy/{period}` → `status_totals` +
-`drilldown` + `drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET
+/closing/cash-variance` → `drilldown`; `GET /commcalc/discrepancy/{period}` → `drilldown` +
+`drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET
 /commcalc/commission-received-breakout` → `drilldown`), §18 ("where is this figure from" →
 `panel.sources` → `sourceLabel`; "did the carrier pay what we computed, and out of which legs" →
 §CORE-17.3k), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38

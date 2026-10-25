@@ -67,9 +67,8 @@ type Row = {
 type StoreSummary = { store: string; total_gap: number; flagged_count: number; rows: Row[] }
 type DiscrepancyResp = {
   period: string; summary: StoreSummary[]; total_gap_usd: number; total_flagged: number
-  // §CORE-17.3k. `status_totals` is the server's own fold per tab, and the headline READS IT OFF the
-  // panel below rather than re-reducing the rows here — one fold for the figure and its evidence.
-  status_totals?: Record<string, number>
+  // §CORE-17.3k. The headline READS ITS NUMBER OFF the panel it opens, rather than re-reducing the
+  // rows here — one fold for the figure and its evidence, and one copy of it in the payload.
   drilldown?: Record<string, DrillPanel>
   drilldown_store?: Record<string, Record<string, DrillPanel>>
 }

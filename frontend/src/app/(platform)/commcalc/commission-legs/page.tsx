@@ -176,7 +176,7 @@ export default function CommissionLegsPage() {
   }, [bo, streams])
   // §CORE-17.3k — the panels the server folded: one per group-tile figure, one per stream total.
   // NO client narrowing: the store and market filters here are query parameters, so the server's own
-  // fold already covers exactly what is on screen (harness_batch11_drilldown §F5 fails the build if
+  // fold already covers exactly what is on screen (harness_batch11_drilldown §Y11 fails the build if
   // `drill-narrow` is wired in). One panel is open at a time, rendered below the tile strip.
   const panels: Record<string, DrillPanel> = useMemo(() => bo?.drilldown || {}, [bo])
   const drill = useDrillTile(panels)
