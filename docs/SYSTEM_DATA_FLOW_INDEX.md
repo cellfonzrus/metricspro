@@ -33970,6 +33970,16 @@ the filtered rows, and the rent and insurance tiles narrowed. The tiles now read
 their own narrowed panels, so the tile, its table and its evidence are one fold (§H4). No figure
 moved: the unfiltered view is byte-identical.
 
+**ONE EXISTING LOCK WAS NARROWED TO ITS OWN SUBJECT, not relaxed.** §4e's lock
+`harness_pl_drill_detail.py` §G5 forbids a SECOND per-store drill-detail derivation anywhere in
+`backend/app`, and detected one by the substring `detail_by_store` appearing in a file that does not
+call `coa.accrue_detail`. Finding 2 above is *about* that grain, so the declaration's own defect
+report tripped the lock from a DOCSTRING — prose, no derivation. The scan now reads **code only**
+(comments and docstrings dropped by `tokenize`; a file that will not tokenise is scanned whole, so
+the narrowing fails closed), and three new negative controls pin that it still catches a module which
+builds the grain itself (§G5b), does not catch one that merely describes it (§G5c), and keeps the old
+strictness on an unparseable file (§G5d). The rule is unchanged; 55 checks → **59**.
+
 **No migration, no new table, no money moved** — three read-only `drilldown` payloads, one additive
 `rows` key on a pure producer, and one public rounding helper on the one home.
 
