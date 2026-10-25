@@ -75,7 +75,8 @@ FACTS: dict[str, dict] = {
                   'harness_day_recon_drilldown.py', 'harness_drill_narrow_fixtures.py',
                   'harness_batch5_drilldown.py', 'harness_batch6_drilldown.py',
                   'harness_batch7_drilldown.py', 'harness_batch8_drilldown.py',
-                  'harness_batch9_drilldown.py', 'harness_batch10_drilldown.py'),
+                  'harness_batch9_drilldown.py', 'harness_batch10_drilldown.py',
+                  'harness_batch11_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -151,6 +152,14 @@ FACTS: dict[str, dict] = {
             # row per person with the hours table that answered for them, and an unset rent shown
             # without a figure and never counted.
             'app/modules/account/liabilities_drilldown.py': ('report_drilldown',),
+            # The three commission DISAGREEMENT reports (§CORE-17.3k) — Pay Discrepancy,
+            # Carrier Earned vs Employee Paid and Commission received over M1–M12. ONE module, THREE
+            # catalogues, because they do NOT share a row grain (a commission line, a rep, a money
+            # stream in a month) but they do share the provenance rule, the "one side was never
+            # reported" vocabulary and the snapshot ruling — three files would be three answers to
+            # one question. Also where a DIFFERENCE is shown to be drillable when it is folded per
+            # row rather than subtracted from two other totals.
+            'app/modules/commcalc/carrier_pay_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1198,6 +1207,12 @@ FACTS: dict[str, dict] = {
             # the live sales feed (§CORE-17.3a). Naming either at the call site would be the copied
             # fact this registry exists to prevent — and a provenance claim nobody checked.
             'app/modules/closing/router.py': ('_lineage',),
+            # THE SAME REASON, one batch on (§CORE-17.3k): the three commission disagreement reports
+            # name a feed per ROW, so the declaration asks the registry which table each money
+            # stream was read out of, which feeds the writer of a stored discrepancy row reads, and
+            # which tables the sold union is. It also added the five commission feed CONSTANTS the
+            # registry had only ever held as literals inside `COMMISSION_CALC_FEEDS`.
+            'app/modules/commcalc/carrier_pay_drilldown.py': ('_lineage',),
             'app/modules/commcalc/dlar_sweep.py': ('_lineage',),
             'app/modules/commcalc/email_sweep.py': ('_lineage',),
             'app/modules/commcalc/epay_sweep.py': ('_lin',),

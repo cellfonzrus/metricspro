@@ -2,6 +2,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, fmt } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 
 // CARRIER EARNED vs EMPLOYEE PAID — per rep, per month (index §30).
 //
@@ -52,8 +55,9 @@ const STATE_LABEL: Record<string, string> = {
   not_reported: 'not reported',
 }
 
-function Tile({ label, value, sub, tone }: {
+function Tile({ label, value, sub, tone, children }: {
   label: string; value: string; sub?: string; tone?: 'earned' | 'paid' | 'gap' | 'plain'
+  children?: React.ReactNode
 }) {
   const color = tone === 'earned' ? '#15803d' : tone === 'paid' ? '#b45309'
     : tone === 'gap' ? 'var(--text1)' : 'var(--text1)'
@@ -62,9 +66,24 @@ function Tile({ label, value, sub, tone }: {
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: .3 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, color, marginTop: 2 }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+      {children}
     </div>
   )
 }
+
+// The extra columns the panels on THIS report carry off each drill row's own `fields` — the two sides
+// of the comparison, so a reader can see where a rep's difference came from without leaving the panel.
+// Each one declares a `sortValue`, because a drill column with no comparison is a header that does
+// nothing (harness_table_sort_lock).
+const text = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const REP_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: r => text(r, 'store') || '—', sortValue: r => text(r, 'store') },
+  { header: 'Market', get: r => text(r, 'market') || '—', sortValue: r => text(r, 'market') },
+  { header: 'State', get: r => text(r, 'detail') || '—', sortValue: r => text(r, 'detail') },
+]
 
 /** An earned cell. NEVER renders a number when the state is not_reported. */
 function Earned({ r }: { r: Row }) {
@@ -101,6 +120,13 @@ export default function CarrierVsPayPage() {
   const t: Totals | null = data?.totals || null
   const meta = data?.meta || {}
   const rows: Row[] = data?.rows || []
+  // §CORE-17.3k — the panels the server folded, one per tile figure. NO client narrowing: every
+  // filter here is a query parameter, and the strip's figures are folded over every rep whatever is
+  // selected, so narrowing a panel would make it disagree with the tile it opened from. The banner
+  // below says that out loud instead (harness_batch11_drilldown §F5 fails the build if `drill-narrow`
+  // is wired into this page).
+  const panels: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(panels)
   const markets = Array.from(new Set(rows.map(r => r.market).filter(Boolean))).sort()
   const notReported = t?.carrier_earned_reps_not_reported || 0
 
@@ -165,14 +191,53 @@ export default function CarrierVsPayPage() {
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12, marginTop: 16 }}>
             <Tile label="Carrier earned (dealer revenue)" value={fmt(t.carrier_earned_reported)} tone="earned"
-                  sub={`${t.carrier_earned_reps_reported} rep(s) reported · ${t.carrier_earned_reps_measured_zero} measured zero · ${t.carrier_earned_reps_not_reported} not reported`} />
+                  sub={`${t.carrier_earned_reps_reported} rep(s) reported · ${t.carrier_earned_reps_measured_zero} measured zero · ${t.carrier_earned_reps_not_reported} not reported`}>
+              <DrillTileLinks drills={drill.dl('carrier_earned_reported', 'the reps behind this')}
+                              open={drill.open} onToggle={drill.toggle} />
+            </Tile>
             <Tile label="Employee paid (payroll expense)" value={fmt(t.employee_paid_total)} tone="paid"
-                  sub={`${t.employee_paid_reps} rep(s) calculated`} />
+                  sub={`${t.employee_paid_reps} rep(s) calculated`}>
+              <DrillTileLinks drills={drill.dl('employee_paid_total', 'the reps behind this')}
+                              open={drill.open} onToggle={drill.toggle} />
+            </Tile>
             <Tile label="Earned minus paid" value={fmt(t.difference_over_measured_reps)} tone="gap"
-                  sub={`over ${t.difference_measured_reps} rep(s) where BOTH sides were measured`} />
+                  sub={`over ${t.difference_measured_reps} rep(s) where BOTH sides were measured`}>
+              <DrillTileLinks drills={drill.dl('difference_over_measured_reps', 'the reps behind this')}
+                              open={drill.open} onToggle={drill.toggle} />
+            </Tile>
             <Tile label="Activations sold" value={t.activations_sold.toLocaleString()}
-                  sub={`${t.activations_in_statement.toLocaleString()} found in the carrier feed · ${t.open_no_rule.toLocaleString()} unpaid with no business rule`} />
+                  sub={`${t.activations_in_statement.toLocaleString()} found in the carrier feed · ${t.open_no_rule.toLocaleString()} unpaid with no business rule`}>
+              {/* Three figures on one tile, so three links: "which rows is this?" is a different
+                  question for each of them. */}
+              <DrillTileLinks
+                drills={drill.dl('activations_sold', 'sold',
+                                 'activations_in_statement', 'in the carrier feed',
+                                 'open_no_rule', 'unpaid, no rule')}
+                open={drill.open} onToggle={drill.toggle} />
+            </Tile>
           </div>
+
+          {drill.panel && (
+            <div style={{ marginTop: 12 }}>
+              <DrillDownPanel panel={drill.panel} extraColumns={REP_DRILL_COLUMNS} />
+            </div>
+          )}
+
+          {/* THE POPULATION A TILE DESCRIBES, STATED. The endpoint narrows its ROWS under a market or
+              store filter and leaves its TOTALS over every rep — a live defect reported in
+              §CORE-17.3k. Until the fold is moved (which changes a figure and is a PR of its own)
+              the reader is told, rather than left to assume the strip follows the dropdown. */}
+          {meta.filtered && (
+            <div style={{ ...card, marginTop: 12, background: 'var(--c-bg-fffbeb)', borderColor: 'var(--c-bg-fcd34d)' }}>
+              <strong style={{ fontSize: 13 }}>The tiles above cover every rep this month, not the filter.</strong>
+              <div style={{ fontSize: 13, color: 'var(--text2)', marginTop: 4 }}>
+                The table below shows {meta.filtered.reps_shown} of {meta.filtered.reps_total} rep(s).
+                The four figures — and the rows behind them — are folded over all{' '}
+                {meta.filtered.reps_total}, so they will not change as you narrow. This is a known
+                defect in the report and it is being reported rather than hidden.
+              </div>
+            </div>
+          )}
 
           <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
             Basis: {meta.earned_shape === 'preattributed_rep'

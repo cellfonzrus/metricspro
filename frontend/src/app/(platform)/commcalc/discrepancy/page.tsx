@@ -1,10 +1,42 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { Fragment, useEffect, useState, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import DrillDownPanel, {
+  DrillToggle, DrillTileLinks, useDrillOpen, useDrillTile,
+  type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+
+// The two sides of every gap on this report, off each drill row's own `fields`. A reader chasing a
+// carrier needs to see what was expected against what arrived without leaving the panel.
+const cellText = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const cellMoney = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return typeof v === 'number' ? v : null
+}
+const LINE_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: r => cellText(r, 'store') || '—', sortValue: r => cellText(r, 'store') },
+  { header: 'Rep', get: r => cellText(r, 'rep') || '—', sortValue: r => cellText(r, 'rep') },
+  // Expected is NULL where the claim could never be sized, and it renders as "not priced" rather
+  // than $0.00 — the same refusal the gap itself makes.
+  {
+    header: 'Expected',
+    get: r => (cellMoney(r, 'expected') === null ? 'not priced' : fmt(cellMoney(r, 'expected') as number)),
+    sortValue: r => cellMoney(r, 'expected'),
+  },
+  {
+    header: 'Received',
+    get: r => (cellMoney(r, 'received') === null ? '—' : fmt(cellMoney(r, 'received') as number)),
+    sortValue: r => cellMoney(r, 'received'),
+  },
+  { header: 'Detail', get: r => cellText(r, 'detail') || '—', sortValue: r => cellText(r, 'detail') },
+]
 
 function toApiPeriod(label: string): string {
   const months = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -33,7 +65,14 @@ type Row = {
   comp_type: string; expected_amount: number; received_amount: number; gap: number; status: string
 }
 type StoreSummary = { store: string; total_gap: number; flagged_count: number; rows: Row[] }
-type DiscrepancyResp = { period: string; summary: StoreSummary[]; total_gap_usd: number; total_flagged: number }
+type DiscrepancyResp = {
+  period: string; summary: StoreSummary[]; total_gap_usd: number; total_flagged: number
+  // §CORE-17.3k. `status_totals` is the server's own fold per tab, and the headline READS IT OFF the
+  // panel below rather than re-reducing the rows here — one fold for the figure and its evidence.
+  status_totals?: Record<string, number>
+  drilldown?: Record<string, DrillPanel>
+  drilldown_store?: Record<string, Record<string, DrillPanel>>
+}
 type PhantomRow = { mdn: string; imei: string; payment_type: string; amount: number; business_address: string; payment_date: string }
 type PhantomStore = { business_address: string; total: number; count: number; rows: PhantomRow[] }
 type PhantomResp = { period: string; phantom_total: number; phantom_count: number; matched_total: number; by_store: PhantomStore[] }
@@ -137,9 +176,20 @@ export default function DiscrepancyPage() {
     return Object.values(map).sort((a, b) => b.gap - a.gap)
   }, [allRows, statusTab, isPhantom, phantom])
 
-  const tabTotal = useMemo(() =>
+  // §CORE-17.3k — ONE FOLD. The headline is the server's own per-tab total, which is the figure the
+  // panel beside it explains, so the tile and its evidence cannot drift. The client reduce survives
+  // ONLY as the fallback for a tab the server served no total for (a pre-deploy payload), and such a
+  // tile offers no drill. The two agree to the cent: a line whose gap was never sized adds nothing to
+  // a sum whether it is skipped (server) or coerced to zero (this reduce).
+  const clientTabTotal = useMemo(() =>
     allRows.filter(r => r.status === statusTab).reduce((s, r) => s + r.gap, 0),
   [allRows, statusTab])
+  const panels: Record<string, DrillPanel> = data?.drilldown || {}
+  const storePanels: Record<string, DrillPanel> = (data?.drilldown_store || {})[statusTab] || {}
+  const served = panels[`gap_${statusTab}`]?.figure?.amount
+  const tabTotal = served ?? clientTabTotal
+  const drill = useDrillTile(panels)
+  const storeDrill = useDrillOpen()
 
   const tabCount = (key: string) => {
     if (key === 'phantom') return phantom?.phantom_count || 0
@@ -249,16 +299,31 @@ export default function DiscrepancyPage() {
           <div style={{ fontSize: 28, fontWeight: 700, color: headlineColor }}>
             {isPhantom ? fmt(phantom?.phantom_total || 0) : fmt(tabTotal)}
           </div>
+          {/* The Phantom tab is a DIFFERENT endpoint over a different row shape and is deliberately
+              not claimed here (§CORE-17.3k) — so it offers no link rather than one that would open
+              the wrong rows. */}
+          {!isPhantom && (
+            <DrillTileLinks drills={drill.dl(`gap_${statusTab}`, 'the commission lines behind this')}
+                            open={drill.open} onToggle={drill.toggle} />
+          )}
         </div>
         <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, padding: 16, flex: 1 }}>
+          {/* NO DRILL, ON PURPOSE: this is the count of the rows printed in the table below, and the
+              report already shows every one of them. A panel would restate the table. */}
           <div style={{ fontSize: 13, color: 'var(--c-fg-6b7280)' }}>Line items</div>
           <div style={{ fontSize: 28, fontWeight: 700 }}>{isPhantom ? (phantom?.phantom_count || 0) : filteredRows.length}</div>
         </div>
         <div style={{ background: 'var(--c-bg-ffffff)', border: '1px solid var(--c-bg-e5e7eb)', borderRadius: 12, padding: 16, flex: 1 }}>
+          {/* NO DRILL EITHER: how MANY stores is a cardinality, not a sum over rows, and the By Store
+              table immediately below is the list it counts. */}
           <div style={{ fontSize: 13, color: 'var(--c-fg-6b7280)' }}>{isPhantom ? 'Stores' : 'Stores affected'}</div>
           <div style={{ fontSize: 28, fontWeight: 700 }}>{isPhantom ? (phantom?.by_store.length || 0) : storeSummary.length}</div>
         </div>
       </div>
+
+      {drill.panel && !isPhantom && (
+        <DrillDownPanel panel={drill.panel} extraColumns={LINE_DRILL_COLUMNS} />
+      )}
 
       {isPhantom && (
         <div style={{ background: 'var(--c-bg-faf5ff)', border: '1px solid var(--c-bg-e9d5ff)', borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: 'var(--c-fg-6b21a8)' }}>
@@ -280,14 +345,38 @@ export default function DiscrepancyPage() {
                 <th style={{ padding: '8px 16px', textAlign: 'right' }}>{statusTab === 'open' ? 'Gap' : 'Amount'}</th>
               </tr></thead>
               <tbody>
-                {storeSummary.map(s => (
-                  <tr key={s.store} onClick={() => setStoreFilter(storeFilter === s.store ? '' : s.store)}
-                    style={{ borderTop: '1px solid var(--c-bg-f3f4f6)', cursor: 'pointer', background: storeFilter === s.store ? '#eff6ff' : 'white' }}>
-                    <td style={{ padding: '8px 16px', fontWeight: 500 }}>{s.store}</td>
-                    <td style={{ padding: '8px 16px', textAlign: 'right' }}>{s.count}</td>
-                    <td style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600 }}>{fmt(s.gap)}</td>
-                  </tr>
-                ))}
+                {storeSummary.map(s => {
+                  const p = isPhantom ? undefined : storePanels[s.store]
+                  return (
+                    <Fragment key={s.store}>
+                      <tr onClick={() => setStoreFilter(storeFilter === s.store ? '' : s.store)}
+                        style={{ borderTop: '1px solid var(--c-bg-f3f4f6)', cursor: 'pointer', background: storeFilter === s.store ? '#eff6ff' : 'white' }}>
+                        <td style={{ padding: '8px 16px', fontWeight: 500 }}>
+                          {/* A store's gap is a figure a district manager acts on, so it opens to the
+                              lines it is made of. The toggle stops the click bubbling to the row's own
+                              filter — opening the evidence is not the same gesture as filtering. */}
+                          {p && (
+                            <span onClick={e => { e.stopPropagation(); storeDrill.toggle(s.store) }}>
+                              <DrillToggle open={storeDrill.isOpen(s.store)}
+                                onClick={() => storeDrill.toggle(s.store)}
+                                label="commission lines behind this store" />
+                            </span>
+                          )}
+                          {s.store}
+                        </td>
+                        <td style={{ padding: '8px 16px', textAlign: 'right' }}>{s.count}</td>
+                        <td style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600 }}>{fmt(s.gap)}</td>
+                      </tr>
+                      {p && storeDrill.isOpen(s.store) && (
+                        <tr>
+                          <td colSpan={3} style={{ padding: '0 16px' }}>
+                            <DrillDownPanel panel={p} extraColumns={LINE_DRILL_COLUMNS} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>

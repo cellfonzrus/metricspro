@@ -33983,6 +33983,111 @@ strictness on an unparseable file (§G5d). The rule is unchanged; 55 checks → 
 **No migration, no new table, no money moved** — three read-only `drilldown` payloads, one additive
 `rows` key on a pure producer, and one public rounding helper on the one home.
 
+### §CORE-17.3k A DIFFERENCE IS DRILLABLE WHEN IT IS FOLDED PER ROW (2026-10-25, batch 11)
+
+Batch 11 of the §CORE-17 audit, the COMMISSION batch (CLAUDE.md routes the module to the
+commission agent): **`/commcalc/discrepancy`** (Pay Discrepancy), **`/commcalc/carrier-vs-pay`**
+(Carrier Earned vs Employee Paid — the audit's #5 worst, *"a report whose whole subject is a
+disagreement about money, with no way to the two lines that disagree"*) and
+**`/commcalc/commission-legs`** (Commission received over M1–M12). Owed count **74 → 71**.
+Declaration: `backend/app/modules/commcalc/carrier_pay_drilldown.py`. Proof:
+`backend/harness_batch11_drilldown.py`, **97 checks**, §Z1–Z9 negative controls, wired into the
+carrier-vocab-guard lock job.
+
+**THE RULING THIS BATCH SETTLES, and it narrows two earlier ones rather than contradicting them.**
+§CORE-17.3h refuses a panel to a QUOTIENT and batch 10 extended that refusal to a figure computed as
+`A_total − B_total`: no set of records adds up to either, so a tie-out against one is a check that
+cannot fail. **Both differences on this batch's reports escape that, and the test is where the
+subtraction happens.** A discrepancy row carries its own `gap` (`expected − received`, per commission
+line, as `carrier_claim_value.claim_gap` computed it) and a carrier-vs-pay row carries its own
+`difference` (`earned − paid`, per rep). The report's total is **Σ(those rows)**, so the rows and the
+figure come from different places and CAN disagree — which is what makes the tie-out a real check.
+It is the same distinction the 3-way recon's net figures turned on (§CORE-17.3e): *a figure composed
+from two other tiles has no rows of its own; a figure folded per row does.* So: **subtract at the
+row and it drills; subtract at the total and it does not.**
+
+**ONE DECLARATION, THREE CATALOGUES — AND WHY THAT IS NOT THE SIBLING DEFECT.** The batch-10
+precedent put two reports in one file because they share a ROW GRAIN. These three do not: a
+discrepancy row is a commission LINE, a carrier-vs-pay row is a REP, a breakout row is a money
+STREAM in a MONTH. Three row shapes is three catalogues, and one declaration pretending otherwise
+would lie about two of its reports. They are in ONE module because what they share is the thing a
+drill-down exists for — *where did this carrier-money figure come from*, *which side of it was never
+reported*, and *what a snapshot can name* — and three files would be three answers to one question,
+which is the duplicate defect arriving one report at a time.
+
+| What | Where | Says |
+|---|---|---|
+| **The one declaration** | `commcalc/carrier_pay_drilldown.py` — `discrepancy_catalogue` / `discrepancy_drilldowns` / `discrepancy_store_drilldowns`, `carrier_vs_pay_catalogue` / `carrier_vs_pay_drilldowns`, `cells` / `breakout_drilldowns` | three catalogues, one provenance rule, one not-reported rule. Computes nothing: every figure is the producer's own, dereferenced |
+| **Which feeds the WRITER of a stored discrepancy row read** | `data_lineage_registry.DISCREPANCY_WRITER_FEEDS` + `discrepancy_writer_feeds(source)` | keyed on the `source` value the engine STAMPS, so a third writer is a ROW plus its derivation, never a branch (RULE TWO). Only the writer that records enough to be named is listed; an unrecognised one resolves to NOTHING and the row names the snapshot alone |
+| **Which feed a money STREAM was read out of** | `carrier_pay_drilldown.FEEDS_BY_STREAM` | keyed on `commission_received.STREAMS`' own stream keys, with the COLUMN where a stream is one column of a shared feed (`raw_mi`'s two residual columns). Locked both ways, and locked against the stream's own `source` sentence — the prose the page prints and the machine fact cannot diverge (§Y2, §Y2b, §Y2c) |
+| **Which feed a REP's earned figure answered from** | `carrier_pay_drilldown.earned_tables` | read per ROW off the row's own verdict, because four reps on one tile have four different answers: a pre-attributed tenant names the CALCULATED rep commissions (§CORE-17.3j — the snapshot, not the feed the calculation read), a rep whose activations were looked up names both statement tables, and a rep the carrier side was never looked up for names **nothing** and is reported as an origin that cannot be traced |
+| **The four feed constants that were only ever literals** | `data_lineage_registry.PAYMENT_DETAIL`, `MI_RESIDUAL`, `COMP_REPORT`, `MA_COMMISSION`, `CARRIER_STATEMENT`, `DISCREPANCY_SNAPSHOT` | named in the registry and dereferenced by `COMMISSION_CALC_FEEDS` itself, so a declaration naming a feed reads the one home instead of restating a table name at the call site |
+| **The endpoints** | `GET /commcalc/discrepancy/{period}` → `status_totals` + `drilldown` + `drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET /commcalc/commission-received-breakout` → `drilldown` | each ATTACHES the declaration's output and folds nothing (§Y9). The discrepancy endpoint also serves its per-tab total so the screen's headline READS IT OFF the panel rather than re-reducing the rows in TypeScript — one fold for the figure and its evidence (§CORE-17.3d) |
+| **No narrowing on any of the three** | `harness_batch11_drilldown.py` §Y11 | every filter that moves a figure on these screens is a QUERY PARAMETER, so the server's own fold already covers what is on screen. The lock FAILS THE BUILD if `lib/drill-narrow` is wired into any of them — the §CORE-17.3e `pickup_drilldown` posture, so a later reader cannot "fix" them into a class they were never in |
+| **The By-Store gap opens too** | `discrepancy_store_drilldowns` | a district manager acts on that number, so it has rows. The store panels PARTITION the tab's panel — a line is in exactly one of them — and a line with no store at all is kept under a stated bucket rather than dropped, which would silently shrink the figure (§A16, §A17) |
+
+**ABSENCE IS NEVER ZERO, THREE TIMES OVER, AND NOT ONE CENT MOVED.** A commission claim nobody could
+price (`claim_gap` returns **None** rather than inventing a subtraction), a rep whose carrier
+statement was never loaded, and a month a feed never delivered are all SHOWN, carry no figure, are
+NOT counted, and say why. Each contributes zero to a sum either way, which is precisely what makes
+this a change to the presentation and not to the number: §Z8 asserts that the screen's old reduce (a
+null coerced to `0`, as JavaScript does) and the served fold (which skips it) agree on **every tab,
+to the cent**, and §Z8b proves that comparison can fail.
+
+**A MEASURED ZERO AND AN ABSENCE ARE DIFFERENT ROWS ON ONE PANEL.** The informational tab's $0.00
+line and a rep the statement pays nothing against are real measurements and are counted (or, for the
+rep, shown at $0.00 and excluded from a total that only covers reported reps); the unpriced claim and
+the un-looked-up rep carry no figure at all. §Z3 plants the careless declaration that coerces the
+unpriced gap to $0.00: it ties, exactly as the honest one does, and the difference is visible only on
+the ROW — which is the whole argument for putting it there.
+
+**WHAT IS DELIBERATELY NOT CLAIMED, so nobody reads a missing link as an oversight.** The
+discrepancy screen's *Line items* and *Stores affected* counts (the table and the By-Store list
+immediately below them ARE what they count), its **Phantom** tab (a different endpoint over a
+different row shape — a panel for it would open the wrong rows), the carrier-vs-pay rep COUNTS
+(cardinalities of states every panel row already carries), the breakout's per-leg table CELLS (a
+stream's own leg total, already reachable through the group tile and the stream total), and
+commission-legs **tab 2**, which is a config surface and not a report.
+
+**THREE LIVE DEFECTS THESE REPORTS HAVE TODAY — REPORTED, NOT FIXED, AND NO FIGURE MOVED.**
+
+1. **`GET /commcalc/discrepancy/{period}` RAISES on a claim that was never priced.** The endpoint's
+   store rollup evaluates `r["gap"] > 0.50`, and `gap` is persisted **NULL** when the expected side
+   could not be measured — which is right (`carrier_claim_value.claim_gap`: *a gap is a subtraction,
+   so it cannot exist where one side does not*). `None > 0.50` is a `TypeError` in Python 3, so the
+   whole Pay Discrepancy report 500s for any period holding one, and `SOLD_NOT_IN_MI` with no
+   parseable MRC is exactly such a row written with `status='open'` — the branch that compares. NOT
+   fixed here: the repair has to decide whether an unsized open claim counts toward `total_flagged`,
+   which is a decision about money and belongs in front of the owner. §Z6 reproduces it against the
+   real producer; §Z6b proves the drill-down itself survives that payload.
+2. **The same screen counted an unsized claim as $0.00.** `tabTotal` was
+   `rows.reduce((s, r) => s + r.gap, 0)` and `null` coerces to `0` in JavaScript. Closed as a
+   presentation fix, with the figure pinned identical (§Z8).
+3. **`GET /commcalc/carrier-vs-pay/{period}` narrows its ROWS under a market or store filter and
+   leaves its TOTALS over every rep.** `rollup_by_rep` folds the totals first and the endpoint then
+   filters `out["rows"]`, reporting what it dropped in `meta.filtered` — which the page never showed.
+   So the four tiles describe the month while the table beneath them describes the selection. The
+   panels are folded over the **unfiltered** rows, because that is the population the figure they
+   explain was folded over and a panel about a different population is proof of the wrong number
+   (§CORE-17.3b); the page now SAYS so, in a banner, instead of leaving the reader to assume the
+   strip follows the dropdown. NOT fixed here: folding the totals over the kept rows moves a figure
+   the owner reads. §Z7 pins the defect so a later fix cannot land without re-pointing the panels in
+   the same breath.
+
+**AND ONE GAP THAT IS THE LEGACY ENGINE'S, NOT THIS BATCH'S.** `ma_recon` records
+`evidence.b2b.source_table` on every row it writes, so an MA-recon discrepancy row names the exact
+sales feed its activation was found in — a stored fact, read per row, never guessed. The legacy
+discrepancy engine records **no evidence at all**, and which of its two money feeds answered a given
+row depends on that row's comp type, so its rows name the snapshot alone. Closing that properly means
+the WRITER storing its provenance, which moves money-path code and is a PR of its own. A stored
+`source_table` the registry's own display union does not recognise is IGNORED rather than printed
+(§A8): a stored string is not a licence to put an arbitrary identifier on a manager's screen.
+
+**No migration, no new table, no money moved** — three read-only `drilldown` payloads, one additive
+`status_totals` key on one endpoint, six feed-name constants and one writer map on the lineage
+registry, and three reason sentences on the one home's `UNMEASURED_REASONS` whose KEYS are
+`carrier_vs_pay`'s own reason constants (locked identical, §Y1, so the two vocabularies cannot drift).
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
@@ -34057,9 +34162,21 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 - **The 93 are not built in this PR.** They are written down, ratcheted, and ordered worst-first.
 
 **Cross-ref:** §16 (`core/report_drilldown.py`, `components/DrillDownPanel.tsx`,
-`harness_drilldown_pending.txt`), §17 (`GET /closing/cash-variance` → `drilldown`), §18 ("where is
-this figure from" → `panel.sources` → `sourceLabel`), §72 (cash variance itself), §4e (the P&L drill
-this generalises), §19.38 (`sourceLabel`), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
+`frontend/src/lib/drill-narrow.ts`, `harness_drilldown_pending.txt`, and the declaration catalogues —
+`closing/cash_recon_drilldown.py`, `closing/day_recon_drilldown.py`,
+`closing/external_credit_drilldown.py`, `closing/three_way_drilldown.py`,
+`closing/pickup_drilldown.py`, `closing/recon_drilldown.py`, `closing/ops_chargeback_drilldown.py`,
+`closing/envelope_drilldown.py`, `closing/rollup_drilldown.py`, `closing/chain_drilldown.py`,
+`closing/attempts_drilldown.py`, `commcalc/tender_recon_drilldown.py`, `crm/reports_drilldown.py`,
+`helpdesk/dashboard_drilldown.py`, `account/statement_drilldown.py`,
+`account/liabilities_drilldown.py`, `commcalc/carrier_pay_drilldown.py`), §17 (`GET
+/closing/cash-variance` → `drilldown`; `GET /commcalc/discrepancy/{period}` → `status_totals` +
+`drilldown` + `drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET
+/commcalc/commission-received-breakout` → `drilldown`), §18 ("where is this figure from" →
+`panel.sources` → `sourceLabel`; "did the carrier pay what we computed, and out of which legs" →
+§CORE-17.3k), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
+(`sourceLabel`), §2 / `data_lineage_registry.py` (which table is which feed), §15 (the B2B ↔ MA
+activation recon these three reports read), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
 module graph).
 
 ## §CORE-16. A SELF-CALL CARRIES THE TENANT IT IS ACTING AS (owner report 2026-10-24)
