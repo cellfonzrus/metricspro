@@ -8,6 +8,10 @@ import { TrendChart } from '@/components/TrendChart'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { SetupNotice, setupFailed } from '@/lib/setupNotice'
+import DrillDownPanel, {
+  DrillToggle, DrillTileLinks, useDrillTile,
+  type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 
 // COMMISSION LEGS — what we made, by month-of-life (owner directives 2026-08-04 + 2026-08-05)
 //
@@ -66,6 +70,28 @@ const td: React.CSSProperties = { padding: '5px 8px', fontSize: 12.5, textAlign:
 const tdL: React.CSSProperties = { ...td, textAlign: 'left' }
 const shortP = (p: string) => (p || '').replace(/^(\w{3})\w*\s(\d{4})$/, '$1 $2')
 const legHead = (k: string) => (k === 'unsplit' ? 'Unsplit' : `M${k}`)
+
+// §CORE-17.3k — the extra columns a breakout panel carries off each cell's own `fields`: how many
+// lines the feed delivered that month, and how that month's money split. A month with no lines at all
+// is the one shown without a figure, because an absent file is not a month that paid nothing.
+const cellNum = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return typeof v === 'number' ? v : null
+}
+const cellCash = (r: DrillRow, field: string) => {
+  const v = cellNum(r, field)
+  return v === null ? '—' : fmt(v)
+}
+const CELL_DRILL_COLUMNS: DrillExtraColumn[] = [
+  {
+    header: 'Lines',
+    get: r => (r.fields?.detail == null ? '—' : String(r.fields.detail)),
+    sortValue: r => (r.fields?.detail == null ? '' : String(r.fields.detail)),
+  },
+  { header: '1st month', get: r => cellCash(r, 'm1'), sortValue: r => cellNum(r, 'm1') },
+  { header: 'M2–M12', get: r => cellCash(r, 'm2_12'), sortValue: r => cellNum(r, 'm2_12') },
+  { header: 'Unsplit', get: r => cellCash(r, 'unsplit'), sortValue: r => cellNum(r, 'unsplit') },
+]
 
 export default function CommissionLegsPage() {
   const { period } = usePeriod()
@@ -148,6 +174,12 @@ export default function CommissionLegsPage() {
     const ns = (bo?.leg_columns || []).map((n: number) => String(n))
     return streams.some(s => s.legs?.unsplit) ? [...ns, 'unsplit'] : ns
   }, [bo, streams])
+  // §CORE-17.3k — the panels the server folded: one per group-tile figure, one per stream total.
+  // NO client narrowing: the store and market filters here are query parameters, so the server's own
+  // fold already covers exactly what is on screen (harness_batch11_drilldown §Y11 fails the build if
+  // `drill-narrow` is wired in). One panel is open at a time, rendered below the tile strip.
+  const panels: Record<string, DrillPanel> = useMemo(() => bo?.drilldown || {}, [bo])
+  const drill = useDrillTile(panels)
   const refStreams = streams.filter(s => !s.in_total)
   const airtime = streams.find(s => s.key === 'ma_airtime')
   const namedUnsplit = streams.find(s => (s.meta?.unsplit_fields || []).length > 0)
@@ -290,9 +322,19 @@ export default function CommissionLegsPage() {
                     <div style={{ fontSize: 11, color: 'var(--text3)' }}>
                       1st month {fmt(g.m1)} · M2–M12 {fmt(g.m2_12)}{g.unsplit ? ` · unsplit ${fmt(g.unsplit)}` : ''}
                     </div>
+                    {/* Four figures on this tile, so four links — the unsplit one only where the
+                        server actually served a panel for it, which `dl` already decides. */}
+                    <DrillTileLinks
+                      drills={drill.dl(`group_${g.group}_total`, 'total',
+                                       `group_${g.group}_m1`, '1st month',
+                                       `group_${g.group}_m2_12`, 'M2–M12',
+                                       `group_${g.group}_unsplit`, 'unsplit')}
+                      open={drill.open} onToggle={drill.toggle} />
                   </div>
                 ))}
               </div>
+
+              {drill.panel && <DrillDownPanel panel={drill.panel} extraColumns={CELL_DRILL_COLUMNS} />}
 
               <div className="table-wrapper" style={{ border: '1px solid var(--border)', borderRadius: 10, overflowX: 'auto', marginBottom: 14 }}>
                 <table style={{ borderCollapse: 'collapse', width: '100%' }}>
@@ -311,7 +353,16 @@ export default function CommissionLegsPage() {
                       <Fragment key={g.group}>
                         {streams.filter(s => s.in_total && s.group === g.group).map(s => (
                           <tr key={s.key} style={{ borderTop: '1px solid var(--border)' }}>
-                            <td style={{ ...tdL, fontWeight: 600 }}>{s.label}</td>
+                            <td style={{ ...tdL, fontWeight: 600 }}>
+                              {/* A stream's own Total is a reported figure, so it opens to its months.
+                                  The panel renders above, below the tile strip — one open at a time. */}
+                              {panels[`stream_${s.key}_total`] && (
+                                <DrillToggle open={drill.isOpen(`stream_${s.key}_total`)}
+                                  onClick={() => drill.toggle(`stream_${s.key}_total`)}
+                                  label="months behind this total" />
+                              )}
+                              {s.label}
+                            </td>
                             <td style={{ ...tdL, color: 'var(--text3)', fontSize: 11, maxWidth: 320, whiteSpace: 'normal' }}>{s.splits_on}</td>
                             {pivot === 'legs'
                               ? legCols.map(k => (
@@ -335,6 +386,13 @@ export default function CommissionLegsPage() {
                     {refStreams.map(s => (
                       <tr key={s.key} style={{ borderTop: '2px solid var(--border)', background: 'var(--c-bg-fffbeb)' }}>
                         <td style={{ ...tdL, fontWeight: 600, color: 'var(--c-fg-92400e)' }}>
+                          {/* A cross-check row sits in no total, and its own figure still opens — a
+                              figure on the screen is a figure that opens. */}
+                          {panels[`stream_${s.key}_total`] && (
+                            <DrillToggle open={drill.isOpen(`stream_${s.key}_total`)}
+                              onClick={() => drill.toggle(`stream_${s.key}_total`)}
+                              label="months behind this total" />
+                          )}
                           {s.label} <span style={{ fontSize: 10, fontWeight: 500 }}>(cross-check — in no total)</span>
                         </td>
                         <td style={{ ...tdL, color: 'var(--text3)', fontSize: 11, maxWidth: 320, whiteSpace: 'normal' }}>{s.splits_on}</td>

@@ -72,6 +72,9 @@ const SOURCE_LABEL: Record<string, string> = {
   employees: 'employee records',
   payroll_settings: 'payroll withholding setup',
   store_lease: 'store lease & insurance setup',
+  // The commission-disagreement trail (§CORE-17.3k). A manager reads "the pay discrepancy run" —
+  // the stored result of pressing Run Detection — never the table it lands in.
+  discrepancy_results: 'the pay discrepancy run',
 }
 
 /** The plain name of a data source. An unknown table still never prints as an identifier: `raw_` is dropped and

@@ -48,6 +48,19 @@ CUSTOM_CAPTURE = "raw_custom_import"      # b2b custom sheets (Activation Detail
 EPAY_DAILY = "raw_epay_daily_tx"          # Boost ePay settlement
 MA_DAILY_TX = "raw_ma_daily_tx"           # VidaPay / Total MA daily transactions
 DAILY_CLOSING = "daily_closing"           # employee cash + tender declaration (owned by the closing module)
+# The five commission-money feeds that were only ever named as literals inside
+# `COMMISSION_CALC_FEEDS` below. Named here because the §CORE-17 drill-downs have to say WHICH table a
+# figure was read out of, and a declaration restating a table name at the call site is the copied fact
+# this registry exists to prevent (§CORE-17.3k).
+PAYMENT_DETAIL = "raw_payment_detail"     # ePay Commission Payment Detail (#50273)
+MI_RESIDUAL = "raw_mi"                    # ePay MI / ATU residual report
+COMP_REPORT = "raw_comp_report"           # ePay Comprehensive Compensation report (#100614)
+MA_COMMISSION = "raw_ma_commission"       # VidaPay / master-agent MA Commission Details
+CARRIER_STATEMENT = "carrier_commission"  # the direct-carrier statement landing (mig 065)
+#: The report snapshot the Pay Discrepancy report is READ OUT OF (mig 312's canonical DDL). It is not
+#: an ingest feed: two engines delete-then-insert their own `source` slice into it, which is why a
+#: figure on that report names this table and names a FEED only where the writer recorded one.
+DISCREPANCY_SNAPSHOT = "discrepancy_results"
 
 
 # ── WHICH TABLE A BILL-PAYMENT PROCESSOR'S FEED LANDS IN ───────────────────────────────────────
@@ -76,6 +89,39 @@ def billpay_processor_feed(source_label):
     if name.startswith("processor:"):
         name = name.split(":", 1)[1].strip()
     return BILLPAY_PROCESSOR_FEEDS.get(name)
+
+
+# ── WHICH FEEDS THE WRITER OF A DISCREPANCY ROW READ ───────────────────────────────────────────
+# The Pay Discrepancy report is read out of `discrepancy_results`, a SNAPSHOT two engines write
+# (mig 312's table comment is the one home for that fact): the legacy Boost engine
+# (`source` 'boost', NULL on pre-312 rows) and the B2B ↔ MA recon (`source` 'ma'). §CORE-17.3j says a
+# figure read out of a snapshot NAMES THE SNAPSHOT, and names a feed only where the writing code read
+# that feed unconditionally — so this maps the STORED `source` value to the feeds its writer really
+# reads for every row it writes.
+#
+# Keyed by that stored value, so a THIRD writer is a ROW here plus its derivation, never a branch in a
+# report (RULE TWO). An unknown writer resolves to an EMPTY tuple and the drill names only the
+# snapshot: a wrong provenance claim is worse than an admitted gap.
+#
+# ONLY THE WRITER THAT RECORDS ENOUGH TO BE NAMED IS LISTED, and that is deliberate. The legacy
+# engine reads three feeds but WHICH of its two money feeds answered a given row depends on that row's
+# comp type, and it records nothing about it — so it resolves to nothing here and the drill names the
+# snapshot alone, which is the truth. Naming all three on every one of its rows would be a provenance
+# claim nothing checked. The recon's rows carry their own `evidence` instead (see
+# `commcalc/carrier_pay_drilldown.evidence_tables`), which is a stored fact and is read per row.
+DISCREPANCY_WRITER_FEEDS = {
+    # The key is `ma_recon.SOURCE_MA` — the value that engine stamps on every row it writes.
+    "ma": (MA_COMMISSION, MA_DAILY_TX),
+}
+
+
+def discrepancy_writer_feeds(source):
+    """The feeds the writer named by a `discrepancy_results.source` value reads unconditionally.
+
+    An unrecognised (or absent) writer returns `()` — the drill then names the snapshot alone and the
+    row says in words that its writer recorded no provenance. PURE."""
+    return DISCREPANCY_WRITER_FEEDS.get(str(source or "").strip().lower(), ())
+
 
 # ── THE COMMISSION-PER-DEVICE FEED — which table says "the carrier paid (or clawed back) on this IMEI" ─
 # Owner 2026-09-24 (index §11b): inventory is "crashed against the sales report by invoice and the
@@ -122,9 +168,9 @@ LIVE_VS_MONTHLY_PAIRS = {
 # not listed here (the calculation would then read data whose arrival re-runs nothing).
 COMMISSION_CALC_FEEDS = (
     LIVE_SALES_FEED, MONTHLY_SALES,
-    "raw_payment_detail", "raw_mi", "raw_dlar_rep", "raw_dlar_store",
-    "carrier_commission",
-    "raw_ma_commission", MA_DAILY_TX,
+    PAYMENT_DETAIL, MI_RESIDUAL, "raw_dlar_rep", "raw_dlar_store",
+    CARRIER_STATEMENT,
+    MA_COMMISSION, MA_DAILY_TX,
 )
 # Sales tables that land BESIDE the pay basis but that the calculation does not read (index §30.13 / §32).
 # Their landers call the same hook, which answers `not_a_calc_input` — so the day the calculation starts
@@ -521,13 +567,13 @@ DATA_DATE_COLUMN_BY_TABLE = {
     "raw_sales_invoice": "trans_date",
     "raw_sales_invoice_tender": "trans_date",
     # carrier / processor money feeds
-    "raw_payment_detail": "payment_date",
-    "raw_comp_report": "begin_date",          # the statement's own coverage start
-    "raw_ma_commission": "tx_date",
+    PAYMENT_DETAIL: "payment_date",
+    COMP_REPORT: "begin_date",      # the statement's own coverage start
+    MA_COMMISSION: "tx_date",
     MA_DAILY_TX: "tx_date",
     "raw_ma_fulfillment": "date_ordered",
     # period-keyed snapshots: one snapshot per month, replaced not appended, so no row names a day
-    "raw_mi": None,
+    MI_RESIDUAL: None,
     COMMISSION_PER_DEVICE_FEED: None,
     # day-grain operational feeds
     # The B2B clock in / clock out report (mig 1073, §14z): one row per punch, and `business_date` is
@@ -664,7 +710,7 @@ def period_grain_reason(table: str):
 # `None` is a DECLARATION, not a gap: the table carries no column naming a dealer account, so money
 # from it is booked company-wide rather than guessed onto a store.
 STORE_ACCOUNT_COLUMN_BY_TABLE = {
-    "raw_ma_commission": "merchant_account_id",
+    MA_COMMISSION: "merchant_account_id",
     MA_DAILY_TX: "account_id",
     "raw_ma_fulfillment": "tspid",
 }
@@ -734,7 +780,7 @@ def is_snapshot(table: str) -> bool:
 # The default is daily, deliberately: a feed nobody thought about is better watched too keenly than not
 # at all. A slower feed says so here.
 FEED_CADENCE_BY_TABLE = {
-    "raw_mi": CADENCE_MONTHLY,                # one monthly subscriber snapshot
+    MI_RESIDUAL: CADENCE_MONTHLY,             # one monthly subscriber snapshot
     COMMISSION_PER_DEVICE_FEED: CADENCE_MONTHLY,
     "royalty_report": CADENCE_MONTHLY,        # the franchisor's monthly statement
     "ma_overview_upload": CADENCE_MONTHLY,
@@ -838,12 +884,12 @@ def unwatched_reason(table: str):
 FEED_LABEL_BY_TABLE = {
     LIVE_SALES_FEED: "Sales transactions (live feed)",
     MONTHLY_SALES: "Sales transactions (monthly reconciliation)",
-    "raw_payment_detail": "Payment detail",
-    "raw_comp_report": "Compensation report (commission basis)",
-    "raw_mi": "Subscriber base snapshot",
+    PAYMENT_DETAIL: "Payment detail",
+    COMP_REPORT: "Compensation report (commission basis)",
+    MI_RESIDUAL: "Subscriber base snapshot",
     "raw_dlar_rep": "Daily activity by rep",
     "raw_dlar_store": "Daily activity by store",
-    "raw_ma_commission": "Master-agent commission",
+    MA_COMMISSION: "Master-agent commission",
     MA_DAILY_TX: "Master-agent daily transactions",
     "raw_ma_fulfillment": "Master-agent fulfilment orders",
     "pos_tender_summary": "Register tender summary",

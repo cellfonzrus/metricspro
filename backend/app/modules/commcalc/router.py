@@ -26152,6 +26152,12 @@ def commission_received_breakout(period: str = "", months: int = 12, market: str
     out['carrier_mode'] = mode
     out['filtered'] = filtered
     out['window'] = {'period': labels[-1] if labels else period, 'months': len(labels)}
+    # §CORE-17.3k — every group tile and every stream total opens to the (stream × month) cells it was
+    # folded from, each naming the feed it was read out of. Folded over the SAME `out` the response
+    # serves, after the store/market filter has already shaped it (every filter on this report is a
+    # query parameter), so a tile and its evidence cannot describe different populations.
+    from app.modules.commcalc import carrier_pay_drilldown as _cpdd
+    out['drilldown'] = _cpdd.breakout_drilldowns(out)
     return out
 
 
@@ -29051,6 +29057,7 @@ def carrier_vs_pay_report(period: str, org_id: str = ORG_ID, authorization: str 
     require_org(org_id)
     _require_carrier_view(authorization, org_id, "carrier_vs_pay")
     from app.modules.commcalc import ma_recon, carrier_vs_pay as _cvp
+    from app.modules.commcalc import carrier_pay_drilldown as _cpdd
     from app.modules.commcalc.sale_installment_engine import _ma_gate_index
     client = sb()
 
@@ -29114,6 +29121,16 @@ def carrier_vs_pay_report(period: str, org_id: str = ORG_ID, authorization: str 
         statement_loaded=_statement_loaded, market_for=_market_for,
         preattributed_earned=_pre, earned_shape=_shape)
 
+    # §CORE-17.3k — EVERY TILE OPENS TO THE REPS BEHIND IT, folded HERE, over the UNFILTERED rows.
+    # `rollup_by_rep` folds `totals` over every rep and the market/store filter below narrows only
+    # `out["rows"]`, so the tiles describe the whole month whatever is selected (a live defect, named
+    # in `carrier_pay_drilldown`'s header and reported in §CORE-17.3k, not fixed here because folding
+    # the totals over the kept rows moves a figure the owner reads). A panel folded over the
+    # selection would therefore disagree with the tile it explains by construction, which is proof of
+    # the wrong number (§CORE-17.3b) — so it is folded over the same population as the figure, and
+    # the page says out loud that the strip is company-wide while the table is narrowed.
+    out["drilldown"] = _cpdd.carrier_vs_pay_drilldowns(out)
+
     # RULE FIVE — the filters narrow the ROWS; the payload says what it dropped, never silently.
     markets = {m.strip().upper() for m in (market or "").split(",") if m.strip()}
     stores = {s.strip().lower() for s in (store or "").split(",") if s.strip()}
@@ -29174,11 +29191,23 @@ async def get_discrepancy_results(period: str, org_id: str = ORG_ID, authorizati
             stores[store]["total_gap"] = round(stores[store]["total_gap"] + r["gap"], 2)
             stores[store]["flagged_count"] += 1
 
+    # §CORE-17.3k — EVERY HEADLINE AND EVERY BY-STORE GAP OPENS TO THE COMMISSION LINES BEHIND IT.
+    # ONE FOLD, AND ONE COPY OF IT. The screen's headline READS ITS NUMBER OFF the panel it opens
+    # (`drilldown["gap_<tab>"].figure.amount`) rather than re-reducing the rows in TypeScript, so the
+    # tile and its evidence cannot drift (§CORE-17.3d) — and the per-tab total is therefore NOT also
+    # served under a key of its own, which would be the same number twice in one payload.
+    # The number does not move: a line whose gap was never sized contributes nothing to a sum whether
+    # the server skips it or the old client reduce coerced it to zero. What changes is that the panel
+    # can now SAY which lines those were instead of folding them in at $0.00 (defect 2 in
+    # `carrier_pay_drilldown`'s header).
+    from app.modules.commcalc import carrier_pay_drilldown as _cpdd
     return {
         "period": period,
         "summary": sorted(stores.values(), key=lambda x: x["total_gap"], reverse=True),
         "total_gap_usd": round(sum(s["total_gap"] for s in stores.values()), 2),
         "total_flagged": sum(s["flagged_count"] for s in stores.values()),
+        "drilldown": _cpdd.discrepancy_drilldowns(rows),
+        "drilldown_store": _cpdd.discrepancy_store_drilldowns(rows),
     }
 
 

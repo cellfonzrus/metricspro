@@ -110,13 +110,13 @@
 /commcalc/asset/owed-weekly	owes	
 /commcalc/atu-opportunity	owes	
 /commcalc/bill-payments	owes	
-/commcalc/carrier-vs-pay	owes	
+/commcalc/carrier-vs-pay	shared	commcalc/carrier_pay_drilldown.py (§CORE-17.3k) — all four tiles open to the reps behind them: earned, paid, the per-rep difference and the three activation counts. Each row names the feed its OWN verdict says answered, or nothing where the carrier side was never looked up. REFUSES to claim: the rep-count figures (cardinalities of states every row already carries), and the panels are deliberately folded over the UNFILTERED rows because the endpoint's totals are — a reported defect, stated on the screen
 /commcalc/coaching	owes	
-/commcalc/commission-legs	owes	
+/commcalc/commission-legs	shared	commcalc/carrier_pay_drilldown.py (§CORE-17.3k) — every group tile's four figures and every money stream's own total open to the (stream × month) cells, each naming its feed and, where it is one column of a shared feed, its column. A month a feed never delivered is shown and not counted. REFUSES to claim: the per-leg cells in the table (a stream's own leg total, already reachable through the tile and the stream total) and tab 2, which is a config surface, not a report
 /commcalc/comp-trend	owes	
 /commcalc/custom-report	owes	
 /commcalc/device-line-reimbursement	owes	
-/commcalc/discrepancy	owes	
+/commcalc/discrepancy	shared	commcalc/carrier_pay_drilldown.py (§CORE-17.3k) — each tab's headline and every By-Store gap open to the commission lines behind them, naming the stored discrepancy run and, per row, the feeds its writer recorded. A claim nobody could price is shown without a figure and not counted. REFUSES to claim: the Line-items and Stores-affected counts (the table below IS the list they count), and the Phantom tab, which is a different endpoint over a different row shape	
 /commcalc/dlar-vs-platform	owes	
 /commcalc/epay-fee-recon	owes	
 /commcalc/exec	owes	

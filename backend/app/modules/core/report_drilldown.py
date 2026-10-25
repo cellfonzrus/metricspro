@@ -129,6 +129,20 @@ UNMEASURED_REASONS = {
                            "nobody recorded is not something worth $0.00",
     "feed_unresolved": "this figure's own basis is not one we know a feed for, so where it was read "
                        "out of cannot be named — an unnamed source is reported rather than guessed",
+    # The shapes the batch-11 commission reports brought with them (§CORE-17.3k). These three KEYS
+    # are `commcalc/carrier_vs_pay.EARNED_REASON_NO_FEED / _NO_DEVICE_KEY / _ABSENT` themselves — the
+    # producer's own vocabulary, not a fourth spelling of it, and `harness_batch11_drilldown.py` §Y1
+    # fails the build if the two drift apart. The sentences here are the reader-facing half; the
+    # payload's own longer explanation stays in that module's `EARNED_REASONS`.
+    "carrier_statement_not_loaded": "no carrier statement is loaded for this month, so nothing about "
+                                    "this side is known — a missing upload is reported, never "
+                                    "absorbed into the figure as $0.00",
+    "no_device_key_on_sale_row": "these activations carry no device serial, so there is no key to "
+                                 "look the carrier statement up by — nothing is known about them, "
+                                 "which is not the same as their having earned nothing",
+    "absent_from_the_loaded_statement": "the carrier side was never looked up for this one, so it "
+                                        "carries no figure at all rather than a zero somebody could "
+                                        "mistake for a measurement",
 }
 
 
