@@ -180,11 +180,24 @@ check("E5: row count still reports every AD row (nothing silently dropped)", _n,
 # activation_counts' totals rule — exec the real endpoint source under stubs and read its grand row.
 _ac_src = _fn_src("activation_counts")
 check("E6: activation_counts found in router.py", _ac_src is not None)
-_ACT_BUCKET_FIELD = {}
-for n in ast.walk(_tree):
-    if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "_ACT_BUCKET_FIELD" for t in n.targets):
-        _ACT_BUCKET_FIELD = ast.literal_eval(n.value)
-check("E7: _ACT_BUCKET_FIELD carries the hidden family", _ACT_BUCKET_FIELD.get("BYOD Upgrade"), "byod_upgrade")
+# WHICH PAYLOAD COLUMN HOLDS EACH BUCKET'S COUNT — read from THE ONE HOME, not lifted out of the
+# router. It was a dict LITERAL in `router._ACT_BUCKET_FIELD` and this file used to `literal_eval`
+# it out of the source; 2026-10-26 (index §CORE-17.3v) moved the map to `activation_bucketing`
+# beside `BUCKET_RANK` and `TOTAL_ACTIVATION_EXCLUDED`, because the drill-down has to name a figure
+# by the same column key this fold writes it under and two copies of that map is a panel that
+# silently explains the wrong number. So this proof now DEREFERENCES the one home — and E7b below
+# fails the build if the router ever re-grows a literal of its own, which is what would make the
+# dereference here vacuous.
+_ACT_BUCKET_FIELD = ab.BUCKET_FIELD
+check("E7: BUCKET_FIELD (the ONE home) carries the hidden family",
+      _ACT_BUCKET_FIELD.get("BYOD Upgrade"), "byod_upgrade")
+_abf_assigns = [n for n in ast.walk(_tree)
+                if isinstance(n, ast.Assign)
+                and any(getattr(t, "id", "") == "_ACT_BUCKET_FIELD" for t in n.targets)]
+check("E7b: the router DEREFERENCES that one home and holds no map of its own — a second copy is "
+      "the divergence the move exists to prevent",
+      len(_abf_assigns) == 1 and isinstance(_abf_assigns[0].value, ast.Attribute)
+      and _abf_assigns[0].value.attr == "BUCKET_FIELD", True)
 _g2 = {
     "require_org": (lambda org: None),
     "sb": (lambda: None),
@@ -193,15 +206,20 @@ _g2 = {
     "_norm_report_date": (lambda v: str(v or "")),
     "_ACT_BUCKET_FIELD": _ACT_BUCKET_FIELD,
     "_act_bucketing": ab,
+    # The §CORE-17 drill-down declaration the endpoint attaches a `drilldown` key through
+    # (index §CORE-17.3v). It is READ-ONLY over the payload and names no figure of its own, so this
+    # proof — which is about the BUCKETING — stubs it out rather than re-testing it here;
+    # `harness_batch22_drilldown.py` §F drives the real one against this same fold.
+    "_acdd": type("_stub", (), {"activation_drilldowns": staticmethod(lambda payload, **kw: {})}),
     "ORG_ID": "org",
 }
 exec(_ac_src, _g2)                                     # noqa: S102 — the shipped source, under test
 _res = _g2["activation_counts"]("August 2026", org_id="org")
 check("E8: total_activation excludes BOTH Upgrade families (3 = Port+New+Edge)",
-      _res["total"]["total_activation"], 3)
-check("E9: total_with_upgrade still counts every device (5)", _res["total"]["total_with_upgrade"], 5)
-check("E10: the response's upgrade column shows only the plain Upgrade", _res["total"]["upgrade"], 1)
-check("E11: the hidden family is visible as its own additive field", _res["total"]["byod_upgrade"], 1)
+      _res["total"].get("total_activation"), 3)
+check("E9: total_with_upgrade still counts every device (5)", _res["total"].get("total_with_upgrade"), 5)
+check("E10: the response's upgrade column shows only the plain Upgrade", _res["total"].get("upgrade"), 1)
+check("E11: the hidden family is visible as its own additive field", _res["total"].get("byod_upgrade"), 1)
 
 # ── F. router wiring ─────────────────────────────────────────────────────────────────────────────
 section("F. router wiring")
