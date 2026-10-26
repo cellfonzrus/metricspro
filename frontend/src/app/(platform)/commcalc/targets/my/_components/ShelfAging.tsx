@@ -23,6 +23,7 @@
 import { useEffect, useState } from 'react'
 import { api, ORG_ID, fmt } from '@/lib/client'
 import { LinkedText } from '@/components/ScreenLink'
+import { useTableSort, SortableTh } from '@/components/SortableTh'
 
 type Device = {
   imei?: string | null; device_model?: string | null; store?: string | null
@@ -61,6 +62,27 @@ function tone(d: Device) {
   return { bg: 'var(--c-bg-f0fdf4)', fg: 'var(--c-fg-166534)', label: `${d.days_left}d left` }
 }
 
+/* Click-a-header sorting reads cells through the ONE comparison home (`@/lib/table-sort`, owner
+ * directive 2026-08-10) — no asc/desc state and no comparator of our own. Module scope so the memo
+ * in `useTableSort` is stable across renders.
+ *
+ * `days_left` is returned RAW, including null: `compareValues` sorts empties last in both directions,
+ * which is the behaviour this column needs — a device with no declared deadline is not a device with
+ * zero days left, and flipping the direction must not fill the top of the table with blanks.
+ */
+function cell(d: Device, field: string): unknown {
+  switch (field) {
+    case 'days_left': return d.days_left
+    case 'device_model': return d.device_model
+    case 'imei': return d.imei
+    case 'store': return d.store_code || d.store
+    case 'received_date': return d.received_date
+    case 'days_on_shelf': return d.days_on_shelf
+    case 'unit_cost': return d.unit_cost
+    default: return null
+  }
+}
+
 export default function ShelfAging() {
   const [data, setData] = useState<Shelf | null>(null)
   const [loading, setLoading] = useState(true)
@@ -89,6 +111,11 @@ export default function ShelfAging() {
     return () => { live = false }
   }, [])
 
+  /* Sorted BEFORE the 12-row slice, never after: sorting a slice would only reorder the rows that
+   * happen to be visible and quietly hide the worst device. The initial state is null, so the
+   * server's own worst-first order is what a rep sees until they click a header. */
+  const { sorted, sort, toggle } = useTableSort(data?.devices || [], cell)
+
   if (loading) {
     return <div className="card" style={{ padding: 16, marginBottom: 18, fontSize: 13, color: 'var(--text3)' }}>
       Loading your shelf…
@@ -103,7 +130,7 @@ export default function ShelfAging() {
 
   const s = data.summary
   const win = data.windows_declared.length === 1 ? data.windows_declared[0] : null
-  const shown = showAll ? data.devices : data.devices.slice(0, 12)
+  const shown = showAll ? sorted : sorted.slice(0, 12)
   const nothing = data.devices.length === 0
 
   return (
@@ -159,13 +186,13 @@ export default function ShelfAging() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                   <thead>
                     <tr style={{ textAlign: 'left', color: 'var(--text3)' }}>
-                      <th style={{ padding: '6px 8px' }}>Days left</th>
-                      <th style={{ padding: '6px 8px' }}>Device</th>
-                      <th style={{ padding: '6px 8px' }}>IMEI</th>
-                      <th style={{ padding: '6px 8px' }}>Store</th>
-                      <th style={{ padding: '6px 8px', textAlign: 'right' }}>Received</th>
-                      <th style={{ padding: '6px 8px', textAlign: 'right' }}>On shelf</th>
-                      <th style={{ padding: '6px 8px', textAlign: 'right' }}>Cost</th>
+                      <SortableTh field="days_left" sort={sort} onSort={toggle} style={{ padding: '6px 8px' }}>Days left</SortableTh>
+                      <SortableTh field="device_model" sort={sort} onSort={toggle} style={{ padding: '6px 8px' }}>Device</SortableTh>
+                      <SortableTh field="imei" sort={sort} onSort={toggle} style={{ padding: '6px 8px' }}>IMEI</SortableTh>
+                      <SortableTh field="store" sort={sort} onSort={toggle} style={{ padding: '6px 8px' }}>Store</SortableTh>
+                      <SortableTh field="received_date" sort={sort} onSort={toggle} style={{ padding: '6px 8px', textAlign: 'right' }}>Received</SortableTh>
+                      <SortableTh field="days_on_shelf" sort={sort} onSort={toggle} style={{ padding: '6px 8px', textAlign: 'right' }}>On shelf</SortableTh>
+                      <SortableTh field="unit_cost" sort={sort} onSort={toggle} style={{ padding: '6px 8px', textAlign: 'right' }}>Cost</SortableTh>
                     </tr>
                   </thead>
                   <tbody>
