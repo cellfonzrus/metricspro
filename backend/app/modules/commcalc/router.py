@@ -33937,7 +33937,6 @@ def inventory_recon(store_code: str, period: str, max_days: int = 10, org_id: st
     inventory (inventory_aging_device) against B2B sales (raw_sales.serial_1) and reports: devices that
     left the shelf with no sale (shrink), sales with no matching received device, uncategorized sales,
     and a sold-within-N-days aging split. Reuses the app's own IMEI normalizer + bucket classifier."""
-    from datetime import timedelta
     from app.modules.commcalc import inventory_recon as _ir
     from app.modules.commcalc import gp_report as _gp
     require_org(org_id)
@@ -33945,18 +33944,11 @@ def inventory_recon(store_code: str, period: str, max_days: int = 10, org_id: st
     resolve_code = _store_code_resolver(client, org_id)
     sc = str(store_code).strip()
 
-    def _derived_received(r):
-        rd = r.get("received_date")
-        if rd:
-            return str(rd)[:10]
-        aod = _mi_parse_date(r.get("as_of_date"))
-        dis = r.get("days_in_stock")
-        if aod is not None and dis is not None:
-            try:
-                return (aod - timedelta(days=int(dis))).isoformat()
-            except (TypeError, ValueError):
-                return None
-        return None
+    # The receipt date is NOT derived here. `inventory_stock_age.received_on` is the ONE home for
+    # "when did this device arrive on the shelf" (§COMMCALC-32); this endpoint, the MI aging gate and
+    # device_history each carried their own copy of the subtraction, and one of them was stale.
+    from app.modules.commcalc import inventory_stock_age as _isa
+    _derived_received = _isa.received_on
 
     try:
         inv_rows = (client.schema("commcalc").table("inventory_aging_device")
@@ -47803,20 +47795,16 @@ def _mi_parse_date(s):
 def _mi_ever_over_days(received_date, days_in_stock, as_of_date, off_hand_as_of, m_start, m_end, max_days):
     """Did this device EVER exceed max_days in stock DURING [m_start, m_end]? Returns True/False, or None
     when the age is unknowable. This answers the period-correct question the shipped gate did not: not "is
-    it over N right now" but "did it peak over N at any point in the period." `received` falls back to
-    (as_of_date − days_in_stock) when received_date is NULL — the luxelink aging export carries age, not a
-    received date, and device_history uses the same fallback ladder. PURE / unit-tested."""
-    from datetime import timedelta
+    it over N right now" but "did it peak over N at any point in the period." The receipt date comes
+    from `inventory_stock_age.received_on` — the ONE home (§COMMCALC-32), since the luxelink aging
+    export carries age and not a received date; this gate, `/inventory-recon` and `device_history`
+    each derived it separately until that module existed. PURE / unit-tested."""
+    from app.modules.commcalc import inventory_stock_age as _isa
     ms = _mi_parse_date(m_start); me = _mi_parse_date(m_end)
-    rec = _mi_parse_date(received_date)
-    if rec is None:
-        aod = _mi_parse_date(as_of_date)
-        try:
-            dis = int(days_in_stock)
-        except (TypeError, ValueError):
-            dis = None
-        if aod is not None and dis is not None:
-            rec = aod - timedelta(days=dis)
+    # ONE home for the receipt date (§COMMCALC-32) — this gate used to derive it itself.
+    rec = _mi_parse_date(_isa.received_on({"received_date": received_date,
+                                           "as_of_date": as_of_date,
+                                           "days_in_stock": days_in_stock}))
     if rec is None or ms is None or me is None:
         return None
     off = _mi_parse_date(off_hand_as_of)
