@@ -28,6 +28,7 @@ numbers, and "unsold and payable = out of pocket" means the same thing on every 
 """
 from app.modules.commcalc import device_aging_policy as _aging
 from app.modules.payables import ledger_status as _ls
+from app.modules.payables import recovered_amount as _rec
 
 PAGE = 1000
 
@@ -143,6 +144,7 @@ def stamp_aging(rows, policies, today=None):
     the one boolean a screen reads before presenting the sum as a total.
     """
     n_oop, amt, n_unknown, n_unpriced = 0, 0.0, 0, 0
+    recovered, n_netted, n_unmeasured, unmeasured_amt = 0.0, 0, 0, 0.0
     for r in rows or []:
         pol = policy_for(policies, r.get("carrier_id"))
         held = _aging.days_held(r.get("acquired_date"), today)
@@ -165,9 +167,47 @@ def stamp_aging(rows, policies, today=None):
                 one = float(r.get("owed_to_vip") or r.get("owed") or 0)
             except (TypeError, ValueError):
                 one = 0.0
+            # WHAT THE CARRIER ALREADY RECOVERED COMES OFF THE BILL (§COMMCALC-33). Owner, 2026-10-26:
+            # "the payments for all phones automatically are done from commission and rebates
+            # received and auto adjusted". This summed the GROSS cost, so on Luxelink it headlined
+            # $544,447.78 of "your own cash" against about $38,374 genuinely unrecovered. The
+            # recovery and its basis are the ledger row's, read through the one home — never
+            # re-derived here, and never assumed to be zero because a column was blank.
+            net = _rec.out_of_pocket(one, r.get("rebate_amount"), r.get("rebate_basis"))
+            r["recovered_amount"] = net["recovered"]
+            r["recovered_basis"] = net["basis"]
+            r["recovered_measured"] = net["measured"]
+            r["recovery_netted"] = net["netted"]
+            if net["measured"]:
+                recovered += net["recovered"] or 0.0
+                if net["covered"]:
+                    n_netted += 1
+            else:
+                # The liability stays in the figure at its GROSS and is FLAGGED. Dropping it would
+                # be the same defect in the other direction — and the Boost/VIP rows carry no
+                # recovery basis at all, so dropping them would zero a real exposure.
+                n_unmeasured += 1
+                unmeasured_amt += one
+            one = net["amount"] if net["amount"] is not None else one
             amt += one
-            if not one:
+            if not one and not net["covered"]:
                 n_unpriced += 1
     return {"devices": len(rows or []), "out_of_pocket": n_oop,
             "out_of_pocket_amount": round(amt, 2), "not_measured": n_unknown,
-            "out_of_pocket_unpriced": n_unpriced, "amount_incomplete": bool(n_unpriced)}
+            "out_of_pocket_unpriced": n_unpriced,
+            # The netting, said out loud rather than silently subtracted: how much the carrier has
+            # already taken back, how many devices that settles outright, and how much nobody
+            # measured — which is NOT in `out_of_pocket_amount` and must be shown beside it.
+            "recovered_amount": round(recovered, 2), "netted_devices": n_netted,
+            "recovery_unmeasured": n_unmeasured,
+            "recovery_unmeasured_amount": round(unmeasured_amt, 2),
+            # The figure is not netted where this is set: the sentence has one home.
+            "recovery_note": (_rec.UNMEASURED_NOTE if n_unmeasured else None),
+            # TWO flags, because they are two different doubts and one boolean cannot carry both.
+            # `amount_incomplete` keeps its original meaning exactly — flagged devices with NO price,
+            # the §COMMCALC-29 defect — and `amount_not_netted` is the new one: the figure has not
+            # been reduced by what the carrier already recovered, because nothing measured it.
+            # Overloading the first would have quietly changed what every existing reader of it
+            # believes, and two of its proofs caught that when I tried.
+            "amount_not_netted": bool(n_unmeasured),
+            "amount_incomplete": bool(n_unpriced)}
