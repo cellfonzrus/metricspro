@@ -77,7 +77,8 @@ FACTS: dict[str, dict] = {
                   'harness_batch7_drilldown.py', 'harness_batch8_drilldown.py',
                   'harness_batch9_drilldown.py', 'harness_batch10_drilldown.py',
                   'harness_batch11_drilldown.py', 'harness_batch12_drilldown.py',
-                  'harness_batch13_drilldown.py', 'harness_batch14_drilldown.py'),
+                  'harness_batch13_drilldown.py', 'harness_batch14_drilldown.py',
+                  'harness_batch15_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -189,6 +190,18 @@ FACTS: dict[str, dict] = {
             # report says, and a third naming both. A side that reported nothing is shown without
             # a figure, never netted at $0.00.
             'app/modules/commcalc/processor_money_drilldown.py': ('report_drilldown',),
+            # The three ACCESSORY MONEY reports (§CORE-17.3o) — the Accessory Target Allocation,
+            # the Accessory Cost Audit and the Accessory Flags. ONE module, THREE catalogues,
+            # because a catalogue is per ROW LIST and these are three different populations (a
+            # store, a rep, a flagged sale line); EIGHT measured grains over those three rows and
+            # FIVE provenance answers — the sales display union, the monthly upload on its own, the
+            # product catalogue, the target settings row and the org's flag-rules row. Where the
+            # ruling that a PANEL EXPLAINS THE FIGURE, NOT THE TABLE is written down: two of these
+            # screens filter in the browser WITHOUT re-folding their tiles, so narrowing their
+            # panels would move a figure and `drill-narrow` is deliberately not wired to any of
+            # them. Also the first declaration whose most important figure was read out of NOTHING:
+            # a store's share of a company goal is derived on the load and stored nowhere.
+            'app/modules/commcalc/accessory_money_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -676,7 +689,7 @@ FACTS: dict[str, dict] = {
                     'derived from its own accessories-per-box history against the boxes it sells?',
         "homes": ('app/modules/commcalc/accessory_target_plan.py',),
         "index": ('61',),
-        "locks": ('harness_accessory_target_plan.py',),
+        "locks": ('harness_accessory_target_plan.py', 'harness_batch15_drilldown.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         "callers": {
@@ -1265,6 +1278,18 @@ FACTS: dict[str, dict] = {
             # registry already held — and the drill-down above reads that map for a cell's
             # provenance, which would have made it a third. The shapes dereference the registry now
             # (string-identical values, no read changed).
+            # The accessory-money drill-down asks the registry which tables the sales display
+            # union is, which two relations the PAY engine's own legacy read walks (in its own
+            # order — the monthly upload leads, which is the reverse of the display union's lead)
+            # and which table the product catalogue is (§CORE-17.3o). The target settings row and
+            # the plan-rule / flag-rules config rows are NOT registered feeds: the first is
+            # dereferenced from the targets family, the other two are named once here, the same
+            # posture `targets_drilldown` takes.
+            'app/modules/commcalc/accessory_money_drilldown.py': ('_lineage',),
+            # THE SAME FACT, ONE LAYER DOWN. `raw_catalog` was spelled as a LITERAL four times
+            # inside this registry — the ingest list, the no-month reason, the snapshot set and the
+            # cadence note — and the drill-down above would have made it a fifth copy. Re-keyed
+            # onto `PRODUCT_CATALOG` in the SAME commit, string-identical values, no read changed.
             'app/modules/commcalc/processor_ledger.py': ('_lineage',),
             'app/modules/commcalc/dlar_sweep.py': ('_lineage',),
             'app/modules/commcalc/email_sweep.py': ('_lineage',),

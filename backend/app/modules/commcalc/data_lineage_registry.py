@@ -57,6 +57,12 @@ MI_RESIDUAL = "raw_mi"                    # ePay MI / ATU residual report
 COMP_REPORT = "raw_comp_report"           # ePay Comprehensive Compensation report (#100614)
 MA_COMMISSION = "raw_ma_commission"       # VidaPay / master-agent MA Commission Details
 CARRIER_STATEMENT = "carrier_commission"  # the direct-carrier statement landing (mig 065)
+#: The product reference snapshot a per-item COST is looked up in. It was already named FOUR times in
+#: this file as a literal — in the module's ingest list, the no-month reason, the snapshot set and the
+#: cadence note — and the accessory cost audit's drill-down had to name it a fifth time to say where
+#: Option A's corrected cost came from (§CORE-17.3o). Named ONCE here and dereferenced instead:
+#: naming a fact is only half the fix, and the other half is not making a second copy of it.
+PRODUCT_CATALOG = "raw_catalog"           # the POS product catalogue (cost / SKU reference)
 #: The report snapshot the Pay Discrepancy report is READ OUT OF (mig 312's canonical DDL). It is not
 #: an ingest feed: two engines delete-then-insert their own `source` slice into it, which is why a
 #: figure on that report names this table and names a FEED only where the writer recorded one.
@@ -207,7 +213,7 @@ INGEST_TABLES_BY_MODULE = {
     # custom reports → raw_custom_import, ePay → raw_epay_daily_tx). Mirrors _TRACE_TARGET_TABLE.
     "commcalc": (
         "raw_sales", "daily_sales_feed", "raw_payment_detail", "raw_mi",
-        "raw_dlar_rep", "raw_dlar_store", "raw_catalog", "raw_categories",
+        "raw_dlar_rep", "raw_dlar_store", PRODUCT_CATALOG, "raw_categories",
         "raw_comp_report", "raw_ma_commission", "raw_ma_daily_tx", "raw_ma_fulfillment",
         "pos_tender_summary", "inventory_value", "ma_overview_upload",
         "raw_custom_import", "raw_epay_daily_tx",
@@ -752,7 +758,7 @@ NO_MONTH_COLUMN_REASONS = {
     "raw_ma_fulfillment": ("day-keyed order feed — `date_ordered` is the row's only month fact, and "
                            "the table was created without the period columns its two sibling "
                            "marketplace feeds carry"),
-    "raw_catalog": "a product snapshot, replaced whole — a catalogue row is not about a month",
+    PRODUCT_CATALOG: "a product snapshot, replaced whole — a catalogue row is not about a month",
     "raw_categories": "a payment-type → category map, replaced whole — not about a month",
     "pos_tender_summary": "one row per store close — `close_date` is the row's only month fact",
     "inventory_value": "a per-store value snapshot keyed by `as_of_date`",
@@ -790,7 +796,7 @@ def no_month_column_reason(table: str):
 # A landing table an upload replaces WHOLE for the org (a snapshot of reference data, not a stream of
 # events). Stated here because "no month columns" and "replaced whole" are two different facts, and
 # reading one as the other is how a day-keyed feed would have its entire history deleted by one file.
-SNAPSHOT_TABLES = frozenset({"raw_catalog", "raw_categories"})
+SNAPSHOT_TABLES = frozenset({PRODUCT_CATALOG, "raw_categories"})
 
 
 def is_snapshot(table: str) -> bool:
@@ -823,7 +829,7 @@ NOT_WATCHED_REASONS = {
     # would answer for whichever report arrived last and hide the one that stopped.
     CUSTOM_CAPTURE: "watched per report_key by the custom-import probe, not as one table",
     # Reference data replaced wholesale when the catalog changes. It has no cadence to be late against.
-    "raw_catalog": "reference catalog, replaced on change — no arrival cadence",
+    PRODUCT_CATALOG: "reference catalog, replaced on change — no arrival cadence",
     "raw_categories": "reference catalog, replaced on change — no arrival cadence",
     # Org setup / template uploads: they arrive when a human changes the org, not on a schedule.
     "store_mapping": "org setup upload — arrives when the org changes, not on a cadence",

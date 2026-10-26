@@ -15181,13 +15181,22 @@ def accessory_flags(start: str = None, end: str = None, store: str = None, rep: 
             _seen.add(st.lower())
             filt_stores.append({"value": st, "market": ""})
     filters = {"stores": sorted(filt_stores, key=lambda s: s["value"]), "markets": sorted(filt_markets)}
-    return {"rows": out, "threshold": threshold, "min_threshold": min_t, "default_chargeback": default_cb,
-            "total": len(out), "flagged_qty": sum(1 for x in out if x["already_flagged"]),
-            "summary": summary, "filters": filters,
-            "by_rep": _rollup(out, lambda x: x.get("rep") or "—"),
-            "by_store": _rollup(out, lambda x: x.get("store") or "—"),
-            "by_store_rep": _rollup(out, lambda x: ((x.get("store") or "—"), (x.get("rep") or "—")),
-                                    extra=lambda k: {"store": k[0], "rep": k[1]})}
+    payload = {"rows": out, "threshold": threshold, "min_threshold": min_t, "default_chargeback": default_cb,
+               "total": len(out), "flagged_qty": sum(1 for x in out if x["already_flagged"]),
+               "summary": summary, "filters": filters,
+               "by_rep": _rollup(out, lambda x: x.get("rep") or "—"),
+               "by_store": _rollup(out, lambda x: x.get("store") or "—"),
+               "by_store_rep": _rollup(out, lambda x: ((x.get("store") or "—"), (x.get("rep") or "—")),
+                                       extra=lambda k: {"store": k[0], "rep": k[1]})}
+    # WHERE THE TWO MONEY TILES CAME FROM (§CORE-17.3o). Σ of what the register rang, out of the
+    # monthly sales upload this report reads; and the chargeback exposure, which is NOT a
+    # measurement of any sale — it is the org's own default amount applied to every flagged line, so
+    # it names the flag-rules row instead. The three COUNT tiles and the three rollup cards get no
+    # panel: the table below is the list they count and re-partition. Attached AFTER the store-span
+    # filter, so a panel can never hold a sale the caller may not see.
+    from app.modules.commcalc import accessory_money_drilldown as _accdd
+    payload["drilldown"] = _accdd.flags_drilldowns(payload)
+    return payload
 
 
 @router.get("/accessory-flags/receipt")
@@ -28914,11 +28923,18 @@ def accessory_cost_audit(period: str, org_id: str = ORG_ID, c_basis: str = "pric
     """
     require_org(org_id)
     from app.modules.commcalc import accessory_cost_audit as aca
+    from app.modules.commcalc import accessory_money_drilldown as _accdd
     try:
-        return aca.audit(sb(), org_id, period, c_basis=c_basis, assume_gp_pct=assume_gp_pct,
-                         rep=(rep or None))
+        out = aca.audit(sb(), org_id, period, c_basis=c_basis, assume_gp_pct=assume_gp_pct,
+                        rep=(rep or None))
     except Exception as e:
         raise HTTPException(500, f"accessory-cost-audit failed: {type(e).__name__}: {e}")
+    # WHERE EACH OPTION TOTAL CAME FROM (§CORE-17.3o). The five option totals and the three per-rep
+    # differences open to the rep rows they were summed over, naming the two sale relations the pay
+    # engine's own read walks — plus the product catalogue on Option A, which is the one option that
+    # reads a second relation and is therefore its own grain. Attached, never folded here.
+    out['drilldown'] = _accdd.audit_drilldowns(out)
+    return out
 
 
 # ─────────────────────────────────────────────
@@ -33255,6 +33271,14 @@ def get_accessory_target_plan(period: str, today: str = "",
         'scope': {'restricted': ks is not None, 'can_edit_targets': bool(can_edit),
                   'stores_in_scope': len(src)},
     })
+    # WHERE EACH OF THESE FIGURES CAME FROM (§CORE-17.3o). ATTACHED, never folded here: the
+    # declaration reads `result`'s own rows and totals, so a panel cannot be a second opinion about
+    # a tile. Four grains on one store row — the month's accessory sales out of the sales rows, the
+    # target somebody typed, the share derived on this load and stored nowhere, and the extension
+    # that names both. Attached AFTER the scope filter, so a panel can never hold a store the
+    # caller may not see.
+    from app.modules.commcalc import accessory_money_drilldown as _accdd
+    result['drilldown'] = _accdd.plan_drilldowns(result)
     return result
 
 

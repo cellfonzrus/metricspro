@@ -2,11 +2,38 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
 import { MultiSelect } from '@/lib/multiselect'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
 
 // Accessories sold above the user-defined threshold → flag → push to the rep's chargebacks.
 // Phone model comes from the item mapping (the SU sheet). Chargeback $ is per-row editable with a
 // configurable default. Unseen items auto-add to the mapping (manage them on Item / Model Mapping).
 // Top dashboard rolls the flagged sales up per store + per rep; each row drills into the full receipt.
+//
+// WHERE THE TWO MONEY TILES CAME FROM (§CORE-17.3o). "Total rung $" opens to the flagged lines it is
+// the sum of, naming the monthly sales upload this report reads; "Chargeback exposure" opens to the
+// same lines and names the FLAG-RULES row the per-line default came out of, because that figure is
+// not a measurement of any sale — change the default and it changes with no sale changing. Declared
+// in commcalc/accessory_money_drilldown.py, folded once by core/report_drilldown.
+//
+// `lib/drill-narrow` is DELIBERATELY NOT WIRED HERE, and harness_batch15_drilldown.py §E fails the
+// build if it appears. These tiles are the SERVER's fold over the whole range, while the table below
+// is filtered in the browser — so narrowing the panels would make every tile read a different number
+// under a filter, which is a figure moved. The panel follows the figure it explains and says so in
+// its own note; the tile/table disagreement is a REPORTED defect (§CORE-17.3o), not one this batch
+// papers over. `agreesToTheCent` is still the gate, so a panel that ever stopped matching its tile
+// would withdraw the offer rather than explain the wrong number.
+const dfield = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const FLAG_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Employee', get: r => dfield(r, 'employee'), sortValue: r => dfield(r, 'employee') },
+  { header: 'Why flagged', get: r => dfield(r, 'why flagged'), sortValue: r => dfield(r, 'why flagged') },
+  { header: 'Already pushed', get: r => dfield(r, 'already pushed'), sortValue: r => dfield(r, 'already pushed') },
+]
 type Row = {
   sale_id: string; trans_id: string; trans_date: string | null; period: string | null
   store: string | null; rep: string | null; department: string | null; category: string | null
@@ -55,6 +82,11 @@ export default function AccessoryFlagsPage() {
   const [msg, setMsg] = useState('')
   const [receipt, setReceipt] = useState<Receipt | null>(null)
   const [receiptBusy, setReceiptBusy] = useState(false)
+  const [panels, setPanels] = useState<Record<string, DrillPanel>>({})
+  // The tile reads the server's own figure, and the drill is offered only where the panel agrees
+  // with it to the cent — one home for that rule (lib/drill-narrow).
+  const drill = useDrillTile(panels, (k, p) => agreesToTheCent(
+    p, k === 'chargeback_total' ? summary?.chargeback_total : summary?.total))
 
   const loadRules = useCallback(() => {
     api('/api/v1/commcalc/flag-rules').then((r: any) => {
@@ -86,6 +118,7 @@ export default function AccessoryFlagsPage() {
       setRows(rws)
       setSummary(r.summary || null); setByRep(r.by_rep || []); setByStore(r.by_store || []); setByStoreRep(r.by_store_rep || [])
       setFilterOpts(r.filters || { stores: [], markets: [] })
+      setPanels(r.drilldown || {})
       setThreshold(Number(r.threshold ?? threshold)); setDefaultCb(Number(r.default_chargeback ?? defaultCb))
       setMinThreshold(Number(r.min_threshold ?? minThreshold))
       setAmts(Object.fromEntries(rws.map(x => [x.dedupe_key, x.chargeback_amount])))
@@ -178,10 +211,13 @@ export default function AccessoryFlagsPage() {
           <Tile label="Flags" value={String(summary.flags)} sub={`${summary.txns} transaction(s)`} onClick={() => setReasonF('')} active={reasonF === ''} />
           <Tile label="Over max" value={String(summary.over)} sub={`> ${money(threshold)}`} onClick={() => setReasonF(reasonF === 'over' ? '' : 'over')} active={reasonF === 'over'} />
           <Tile label="Under min" value={String(summary.under)} sub={minThreshold > 0 ? `< ${money(minThreshold)}` : 'min off'} onClick={() => setReasonF(reasonF === 'under' ? '' : 'under')} active={reasonF === 'under'} />
-          <Tile label="Total rung $" value={money(summary.total)} sub="in flagged sales" onClick={() => setReasonF('')} active={false} />
-          <Tile label="Chargeback exposure" value={money(summary.chargeback_total)} sub="at default amounts" onClick={() => setReasonF('')} active={false} />
+          <Tile label="Total rung $" value={money(summary.total)} sub="in flagged sales" onClick={() => setReasonF('')} active={false}
+            drill={<DrillTileLinks drills={drill.dl('total', 'flagged sales behind this')} open={drill.open} onToggle={drill.toggle} />} />
+          <Tile label="Chargeback exposure" value={money(summary.chargeback_total)} sub="at default amounts" onClick={() => setReasonF('')} active={false}
+            drill={<DrillTileLinks drills={drill.dl('chargeback_total', 'flagged sales behind this')} open={drill.open} onToggle={drill.toggle} />} />
         </div>
       )}
+      {drill.panel && <div style={{ marginBottom: 14 }}><DrillDownPanel panel={drill.panel} extraColumns={FLAG_DRILL_COLUMNS} /></div>}
       {(byStore.length > 0 || byRep.length > 0) && (
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14 }}>
           <AggCard title="By store" rows={byStore} onPick={(n) => setStoreF(n === storeF ? '' : n)} active={storeF} />
@@ -244,7 +280,7 @@ export default function AccessoryFlagsPage() {
   )
 }
 
-function Tile({ label, value, sub, onClick, active }: { label: string; value: string; sub?: string; onClick?: () => void; active?: boolean }) {
+function Tile({ label, value, sub, onClick, active, drill }: { label: string; value: string; sub?: string; onClick?: () => void; active?: boolean; drill?: React.ReactNode }) {
   return (
     <div className="card" onClick={onClick} style={{ flex: '1 1 170px', minWidth: 150, padding: 14,
       cursor: onClick ? 'pointer' : 'default', border: active ? '2px solid var(--c-bg-1e3a5f)' : undefined,
@@ -252,6 +288,8 @@ function Tile({ label, value, sub, onClick, active }: { label: string; value: st
       <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{label}{active ? ' •' : ''}</div>
       <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+      {/* The card itself is a filter button, so the drill link must not also trip it. */}
+      {drill && <span onClick={e => e.stopPropagation()}>{drill}</span>}
     </div>
   )
 }

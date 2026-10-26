@@ -87,6 +87,12 @@ const SOURCE_LABEL: Record<string, string> = {
   // The commission-disagreement trail (§CORE-17.3k). A manager reads "the pay discrepancy run" —
   // the stored result of pressing Run Detection — never the table it lands in.
   discrepancy_results: 'the pay discrepancy run',
+  // The accessory money family (§CORE-17.3o). A RATE and a THRESHOLD are numbers somebody typed
+  // into a settings screen, so their plain name is the setting a manager edits — never the row it
+  // lands in. `raw_catalog` ("Product catalog") already had its name above, and the accessory
+  // target's own settings row is `targets`, named with the targets family.
+  commission_rule: 'commission plan rules',
+  flag_rules: 'accessory flag thresholds',
 }
 
 /** The plain name of a data source. An unknown table still never prints as an identifier: `raw_` is dropped and

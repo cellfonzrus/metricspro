@@ -323,6 +323,19 @@ on:
       - "backend/app/modules/commcalc/epay_fee_recon.py"
       - "frontend/src/app/(platform)/commcalc/bill-payments/page.tsx"
       - "frontend/src/app/(platform)/commcalc/epay-fee-recon/page.tsx"
+      # CORE-17.3o - the three accessory money reports: one declaration, three catalogues (one per
+      # row list), eight measured grains and five provenance answers (the sales display union, the
+      # monthly upload on its own, the product catalogue, the target settings row, the org's
+      # flag-rules row). A PANEL EXPLAINS THE FIGURE, NOT THE TABLE: two of these screens filter in
+      # the browser without re-folding their tiles, so narrowing their panels would move a figure
+      # and drill-narrow is not wired to any of the three.
+      - "backend/harness_batch15_drilldown.py"
+      - "backend/app/modules/commcalc/accessory_money_drilldown.py"
+      - "backend/app/modules/commcalc/accessory_target_plan.py"
+      - "backend/app/modules/commcalc/accessory_cost_audit.py"
+      - "frontend/src/app/(platform)/commcalc/accessory-target-plan/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/accessory-cost-audit/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/accessory-flags/page.tsx"
       - "frontend/src/app/(platform)/commcalc/processor-ledger/page.tsx"
       - "frontend/src/app/(platform)/closing/external-credit-recon/page.tsx"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
@@ -1480,6 +1493,9 @@ jobs:
       - name: Run the batch-14 drill lock (the three bill-payment / processor money reports — the family's grain count is MEASURED, and six of its seven grains are the SAME store-day row in the SAME unit separated only by PROVENANCE — what the register rang, what the processor's own report says, and a third that names both; a store-day only ONE side reported is shown WITHOUT a figure and left un-netted rather than counted at $0.00, which is the owner's own ruling on the cash-pickup netting applied to a comparison; all three differences are folded PER ROW and therefore drill (§CORE-17.3k), while every count whose list is on screen gets no key at all; the ledger's feed shapes dereference the lineage registry so a cell's provenance has ONE home, and a cell whose processor has no shape names nothing — index §CORE-17.3n)
         working-directory: backend
         run: python3 harness_batch14_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-15 drill lock (the three accessory money reports - the family's grain count is MEASURED, and the figure the owner is about to write onto 29 stores was read out of NOTHING - a share of a company goal is derived on the load and stored nowhere, so every row of it reports a stated untraceable origin; an unset accessory target is shown as unset rather than as a target of zero, and the extension computed against it is COUNTED BUT NOT TRUSTED, because the producer really did add that figure; the two goal-dependent panels are not served at all until a goal is entered (CORE-17.3m); Option A names the product catalogue and says that its total is part corrected pay and part today's pay, while the Option-A difference gets no panel because the page subtracts it at the total (CORE-17.3k); A PANEL EXPLAINS THE FIGURE, NOT THE TABLE - drill-narrow is absent from all three pages and the lock fails the build if it appears, because these tiles are the server's fold while the tables are filtered in the browser - index CORE-17.3o)
+        working-directory: backend
+        run: python3 harness_batch15_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
