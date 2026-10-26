@@ -2365,9 +2365,33 @@ FACTS: dict[str, dict] = {
                     'window from the longest an operator may hold a session, and widening it would '
                     'have made a killed worker\'s leftover row read as LIVE. That derivation now '
                     'dereferences `max_inactivity_limit`. Watching is not acting: `_note_viewer` '
-                    'never touches `_last_activity`.',
+                    'never touches `_last_activity`. AND the sixth axis of the '
+                    'same question (§COMMCALC-31), which is §COMMCALC-27 found in a SECOND place: '
+                    'the loop\'s own DETECTION sat on the operator\'s latency path too. '
+                    '`_preauth_detect` walks every frame of the page (`_classify` reads each '
+                    'frame\'s text, `_captcha_present` queries selectors), it ran on a fixed '
+                    '`_CLASSIFY_POLL_S` timer, and it ran BEFORE the input drain — so a click could '
+                    'wait a full `_pump` PLUS a whole page re-read before it was dequeued ("it is '
+                    'very slow to react", 2026-10-26, four days after the click fix shipped). The '
+                    'input drain now LEADS the tick in both loops, and `detect_due` is the ONE '
+                    'answer to "may detection run now": deferred while `operator_input_pending` — '
+                    'the same home §COMMCALC-27 already established, not a second queue peek — and '
+                    'BOUNDED by `_DETECT_DEFER_MAX_S`, because a deferral with no ceiling is how a '
+                    'captcha stops being noticed; past the ceiling it runs regardless. It is pure, '
+                    'and unreadable inputs read as DUE, so the failure mode is the old always-detect '
+                    'behaviour. AND the seventh (§COMMCALC-31 again, the reporting half): WHAT IS '
+                    'THIS SESSION DOING RIGHT NOW. `phase` + `message` are a standing INSTRUCTION '
+                    '("complete the login on the screen"), so a session grinding through a page '
+                    're-read and a session that had stopped looked identical ("it shoudl show what '
+                    'is going on it seems nothing is moving"). The step in flight is a DIFFERENT '
+                    'fact from the phase: `_note_act` is the one setter (lock-only, never touches '
+                    'the page or the row — it runs on the hot path), `activity` the one reader, and '
+                    '`state`/`frame_since` DEREFERENCE it rather than composing their own, so the '
+                    'line moves on an unchanged frame payload too. Frame age is None before the '
+                    'first frame, never a fabricated 0 that would read as "just updated".',
         "homes": ('app/modules/commcalc/live_login.py',),
-        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28', 'COMMCALC-30'),
+        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28', 'COMMCALC-30',
+                  'COMMCALC-31'),
         "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py',
                   'harness_live_session_host.py', 'harness_live_input_latency.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
