@@ -36142,8 +36142,11 @@ settings*) so a reader sees plain words.
 - The duplicate **Devices counted** chip, which is the same measurement as **incl. upgrade** under a
   second label; one figure gets one panel.
 
-**THREE LIVE DEFECTS — REPORTED, REPRODUCED, NOT REPAIRED.** Each has a regression check in the
-harness driven off the real code, and none is hidden behind a number the screen does not print:
+**EIGHT LIVE DEFECTS — REPORTED, REPRODUCED, NOT REPAIRED** (three on the rep-incentive screens,
+two on the subsidy report, three on the activations report; each is written down in its
+declaration's docstring and carries a regression check in the harness driven off the real code, and
+none is hidden behind a number the screen does not print). The three that change what a reader is
+shown:
 
 1. **The Rep Breakdown's Subtotal footer adds a never-recorded slice in as zero.** The page prints
    each rep's Subtotal **cell** as a dash where the run never itemised it, then totals the column
@@ -36158,6 +36161,29 @@ harness driven off the real code, and none is hidden behind a number the screen 
    label is blanked before it is printed. No per-market panel is served, and the grouping is **not
    re-derived beside the report**: a panel cannot name a subject the report has thrown away, and
    inventing it back would be a second fold of a figure the report itself lost.
+
+And the five the panels state rather than hide:
+
+4. **The dashboard reads the snapshot twice** — tiles from `/commissions/{period}`, panels from
+   `…/drilldown`, so a Run Calculation landing between the two requests leaves the page holding a
+   figure from one read and evidence from another. The shared `agreesToTheCent` gate makes that
+   VISIBLE instead of silent (the link is withheld); the real remedy is one read, which means giving
+   that endpoint an object shape and breaking every existing caller.
+5. **The union of the two carrier payment feeds records no tag for which side answered.**
+   `_mdf_entitlement_run` keeps the MAX per store-month — correct, because the two are two reads of
+   ONE payment — but a received store-month can therefore name only the relations the read drew rows
+   from AT ALL. The panel says so in words rather than picking one.
+6. **`GET /commcalc/mdf-entitlement-coverage` applies no per-store RBAC scope.** It takes `org_id`
+   and an optional `store` and passes no keyset. The panels disclose exactly what the report already
+   does, so this is REPORTED and the remedy is the scope — the same shape as §CORE-17.3u's defect 1
+   on `/commcalc/tax-collected`.
+7. **`incl. upgrade` and `Devices counted` are equal by construction**, on every period for every
+   tenant, and the screen prints them side by side as two findings. One figure, one panel.
+8. **A device whose dealer code resolves to no store is counted under a placeholder row** with a
+   blank market, landing in the company total, the placeholder store row and `(no market)`. Those
+   are REAL rows of this report and the panel counts them exactly as the report does, naming the
+   placeholder in its own words — dropping them would make the panel disagree with the report.
+
 
 **WHAT IS STILL OWED, HONESTLY** (three routes read and deliberately **not** reclassified):
 
