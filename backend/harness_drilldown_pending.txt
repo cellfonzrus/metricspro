@@ -40,7 +40,7 @@
 /commcalc/sales-report	own	cell to transactions to line items, names the primary feed via sourceLabel
 /failures	own	grouped count to the failure rows with detail.ref and traceback
 /accounts/journal	flat	already shows the source rows; nothing is summarised above them
-/commcalc/asset/aging	flat	already shows the source rows; nothing is summarised above them
+/commcalc/asset/aging	shared	every band and the footer total open to THAT band's own unsold devices, each row naming the store, the market, the purchase date, the days held and which of the two relations it was read out of (§CORE-17.3y, batch 25). RE-CLASSIFIED from `flat`: the 2026-10-24 audit recorded it as showing its source rows with nothing summarised above them, and the first half was true while the second was not - three band tiles, two footer totals and two alert banners are all folds. REFUSES to claim the device COUNT beside every band and Total Phones Outstanding (each is the cardinality of the money panel beside it), flagged_owed / flagged_count (composed from the three band tiles), the OUT-OF-POCKET headline (netted per device by §COMMCALC-33, so a fold over this report's own amount column would explain a different number) and age_buckets (the same bands counted, not priced)
 /commcalc/asset/aging-rebate	flat	already shows the source rows; nothing is summarised above them
 /commcalc/asset/charges/rma	flat	already shows the source rows; nothing is summarised above them
 /commcalc/asset/hotsheet-recon	flat	already shows the source rows; nothing is summarised above them

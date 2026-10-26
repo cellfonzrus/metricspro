@@ -37223,6 +37223,122 @@ Files: `backend/app/modules/storeops/payroll_hours_drilldown.py` (**new**),
 `frontend/src/app/(platform)/storeops/hours-budget/page.tsx`,
 `.github/workflows/carrier-vocab-guard.yml`, `docs/SYSTEM_DATA_FLOW_INDEX.md`.
 
+### §CORE-17.3y INVENTORY AGING, AT DEVICE GRAIN (2026-10-26, batch 25)
+
+**Route:** `/commcalc/asset/aging` (Inventory Aging). **Endpoint:** `GET /asset/aging`
+(`app/modules/asset/router.py::get_aging`). **Declaration:** `app/modules/asset/device_asset_drilldown.py`
+§8 — `aging_catalogue` / `aging_drilldowns` / `aging_totals` / `aging_rows` / `band_rows` /
+`device_tables` / `device_keys`. **Lock:** `backend/harness_batch25_drilldown.py` (79 checks).
+
+**OWNER ASK 2026-10-26, verbatim**, quoting this page's own banner: *"124 devices in the 9-12 day
+window - sell before day 12 / $29,598.76 at risk of being billed unsold. These have days left; act
+now., need a drill donw for these , whic store market date range etc"*.
+
+#### .1 THE DUPLICATE CHECK — what was searched for, and what was REUSED rather than rebuilt
+
+The build gate in `CLAUDE.md` is a search before a build, so: the index was searched for an existing
+mechanism answering *"which devices are behind this aging figure, by store and date"*, and three
+candidates were read before anything was written.
+
+| searched | found | what happened |
+|---|---|---|
+| §CORE-17 — is there a home for "the rows behind a figure"? | `core/report_drilldown.py` (`tile_panel`, `tiles`, `tie_out`, `panel`) | **REUSED whole.** No fold, no tie-out and no panel shape is written here. |
+| §CORE-17.3l — does the device-asset family already declare this report? | `asset/device_asset_drilldown.py`, SEVEN catalogues, none of them this report | **EXTENDED**, as an eighth declaration in the same module. A second module would be a second answer to "which relation was this device-asset figure read out of", which is the sibling defect §CORE-17.3l was itself written to refuse. |
+| §COMMCALC-26 / §COMMCALC-28 — who decides the band, and which feed answers "still unsold"? | `commcalc/device_aging_policy.py` (the ladder) and `payables/unsold_inventory.py` (the shape, the source and the stamp) | **DEREFERENCED, never re-derived.** The declaration reads the producer's own `_bucket` stamp; it re-applies no ladder and re-decides no source. |
+| §COMMCALC-33 — is the out-of-pocket headline Σ of this report's amount column? | No: it is that cost NET of the per-device carrier recovery | **REFUSED a panel** (see .5). |
+
+Nothing new was created but the declaration, its lock, one registry NAME constant and one label.
+
+#### .2 THE SEVENTH GRAIN, AND WHY THE SIX WERE NOT ENOUGH
+
+§CORE-17.3l measured six grains across its seven producers and every one of them is keyed by a
+**store**, a **loan** or a weekly **batch**. This report's bands are Σ over **one row per unsold
+IMEI**, and the grain is the row a figure is summed over rather than the subject the report is
+about. Stretching the store-keyed On-Inventory catalogue over it would have declared a store's
+exposure as the evidence for a device's, and `tie_out` would have said so out loud. The header's own
+grain table now carries eight rows.
+
+#### .3 ONE PANEL PER BAND, OVER THAT BAND'S OWN DEVICES
+
+This is the one place in the family that does **not** hand `tiles()` a single row list. Everywhere
+else each tile folds over the same rows, so the rows a tile does not count stay beside it as the
+context that makes the figure readable (§CORE-17.3l's own rule). A device belongs to exactly **one**
+band, so doing that here would serve the warning band a panel of 1,755 devices with 124 counted —
+and `ROW_CAP` (400) would then very likely omit the 124 the owner clicked on, which is worse than
+losing the context. So the declaration carries a `rows_of` accessor naming the band each tile is
+folded over, and `aging_drilldowns` folds each tile over its own devices. Band isolation is locked in
+**both** directions (harness §C).
+
+#### .4 TWO RELATIONS, DECIDED PER ROW — AND THE IMEI IS SPELLED TWICE
+
+Since §COMMCALC-28 this report serves two tenants off two different relations: a consignment device
+is read out of `commcalc.asset_ledger` and a device the platform owes for out of
+`commcalc.device_payable_ledger`. A panel naming one of them for every row would be wrong on every
+row of the other tenant, so `device_tables` reads the producer's own stamp per row. The keys are per
+row too, because the two relations do not spell the IMEI the same way — `esn_imei` on the
+consignment ledger and `imei` on the payable ledger — and naming one for both would hand a support
+query a column half the rows' table does not have.
+
+**ONE FACT, ONE HOME, BOTH HALVES.** `device_payable_ledger` became a NAME constant in
+`commcalc/data_lineage_registry.py` (`DEVICE_PAYABLE_LEDGER`) with a `sourceLabels.ts` entry, so no
+database name reaches a screen. The provenance stamp itself was a literal in the module that writes
+it: `payables/unsold_inventory.py` now declares `SOURCE_FIELD` and **writes through it** in the same
+commit, and the declaration dereferences both it and `SOURCE_LEDGER`. Writing a registry and leaving
+the caller on its literal is not a fix at all (§19.18, taken for the fourth time here).
+
+#### .5 THE FOUR REFUSALS, each with a ruling behind it
+
+- **The device COUNT beside every band**, and **Total Phones Outstanding**. Each is the cardinality
+  of the money panel beside it — the band's own panel lists exactly those devices and serves
+  `rows_total_count` — so a second tile proving how many there are is a tautology dressed as
+  evidence (the batch-11 `store_count` ruling). The page carries the reason in a comment where the
+  missing button would be.
+- **`flagged_owed` / `flagged_count`.** Σ of the three band tiles, so a tie-out against either could
+  not fail (§CORE-17.3h as batch 10 extended it). All three halves get panels instead.
+- **The out-of-pocket headline.** Since §COMMCALC-33 it is the cost NET of what the carrier already
+  recovered per device, and the netting is the payables module's verdict rather than a column on
+  these rows. A fold over this report's own amount column would explain a DIFFERENT number and the
+  tie-out would say so — correctly, and uselessly. It is declared in the PR that carries the
+  per-device recovery onto these rows, not guessed at here.
+- **`age_buckets`.** The same bands over the same devices, counted rather than priced — a second
+  shape of a figure already drillable, which would be two answers to one question.
+
+#### .6 A COST NOBODY RECORDED IS NOT $0.00
+
+The report's own footer reads the device cost as `float(x or 0)`, so a device whose cost was never
+recorded and a device that genuinely owes nothing enter the total identically. The declaration tells
+them apart: the unrecorded one is **shown without a figure**, carries `amount_not_recorded`, and is
+**not counted**, while the real $0.00 is counted as the measurement it is. The figure still ties,
+because a blank adds zero either way — the point is that the gap is now **visible** rather than
+averaged away, which is the §CORE-17.3i posture applied to a cost instead of to an absence.
+
+#### .7 THE ROUTE WAS RE-CLASSIFIED FROM `flat`, AND THAT IS REPORTED
+
+The 2026-10-24 audit pinned `/commcalc/asset/aging` as `flat` — *"already shows the source rows;
+nothing is summarised above them"*. The first half is true and the second never was: three band
+tiles, two footer totals and two alert banners sit above those tables, every one of them a fold the
+reader had no way into. That is exactly the state the audit existed to find, so it is REPORTED here
+rather than quietly re-pinned — a mis-classified route is how a ratchet stops ratcheting, and this
+one hid the owner's own question for two days. **`OWES_MAX` does not move** (18): a `flat` route was
+never counted as owing a drill-down, and lowering the pin here would claim a debt was paid that was
+never on the books.
+
+#### .8 ONE MORE DEFECT FIXED IN PASSING, because it is the same class
+
+The three band tiles were still printing `Under 45 Days` / `45–60 Days` / `sell before day 60` —
+one carrier's contract shown to every tenant — while the banner immediately above them had resolved
+the carrier's **declared** window since §COMMCALC-26 (owner 2026-10-22: *"it should not say sell
+before 60 days as that is boost requirement , total is sell before 12 days"*). The tiles now read
+`windowLabel`, the same resolution, so one page no longer states two windows. The drill key on each
+tile is the SERVER'S total key rather than the bucket name, so a renamed bucket cannot silently open
+another band's panel.
+
+Neighbours: §CORE-17.3l (the family this extends, and its grain rule), §COMMCALC-26 (the declared
+window), §COMMCALC-28 (which feed answers "still unsold", and the stamp), §COMMCALC-33 (the netting
+that the out-of-pocket refusal points at), §CORE-17.3h (a composed figure gets no panel),
+§CORE-17.3i (an absence is not a zero), §CORE-17.3c (the offer rule — a link only where the server
+served a panel).
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
@@ -37283,7 +37399,7 @@ has not forked, the page hand-rolls no panel, RULE TWO holds in both files.
 `backend/harness_drilldown_coverage.py` — **17 checks**, the ratchet: every report route declared
 exactly once, no ledger route has stopped existing, every excused state carries a written reason,
 every `shared` route really renders the shared panel (writing the registry without wiring the caller
-is not a fix at all — §19.18), and **`OWES_MAX`, which may only go DOWN** (**93** at the audit, **18** since §CORE-17.3x — batches 23 and 24 were built in parallel off a base of 25, so the pin is re-taken from the merged ledger, not from either side). Re-pin it downward in
+is not a fix at all — §19.18), and **`OWES_MAX`, which may only go DOWN** (**93** at the audit, **18** since §CORE-17.3x — batches 23 and 24 were built in parallel off a base of 25, so the pin is re-taken from the merged ledger, not from either side). **§CORE-17.3y leaves it at 18 deliberately**: it re-classified a route the audit had pinned `flat`, and a `flat` route was never counted as owing one, so lowering the pin there would claim a debt was paid that was never on the books. Re-pin it downward in
 the same PR that builds a drill-down; a change that raises it is a report shipped without evidence.
 
 ### §CORE-17.6 WHAT IS DELIBERATELY NOT HERE
@@ -37315,7 +37431,7 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 `GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards`, `GET /commcalc/billpay-extract/{period}`, `GET /commcalc/epay/fee-recon`, `GET /commcalc/processor-ledger`, `GET /commcalc/accessory-target-plan/{period}`, `GET /commcalc/accessory-cost-audit/{period}`, `GET /commcalc/accessory-flags`, `GET /commcalc/vip/summary`, `GET /commcalc/device-line-reimbursement`, `GET /commcalc/financing/{period}`, `GET /commcalc/exec-overview/{period}`, `GET /commcalc/exec-mtd/{period}`, `GET /commcalc/month-focus/{period}`, `GET /commcalc/comp/rep-pay-trend`, `GET /commcalc/gp/{period}`, `GET /commcalc/sales-analyzer/{period}`, `GET /commcalc/sales-comparison`, `GET /commcalc/zero-sales`, `GET /commcalc/mdf-entitlement-coverage`, `GET /activation-counts/{period}`, `GET /storeops/hours-budgets` →
 `drilldown`; `GET /storeops/payroll/drilldown` — a SIBLING endpoint, because the payroll report returns a bare JSON list every export and the approval board already iterate (§CORE-17.3x); `GET /commcalc/commissions/{period}/drilldown` — a SIBLING endpoint, because the report it explains returns a bare JSON list with nowhere to hang the key), §18 ("where is this figure from" → `panel.sources` → `sourceLabel`; "did the
 carrier pay what we computed, and out of which legs" → §CORE-17.3k; "which devices is this
-store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p; "how is the month going, against what, and is anybody being paid for it" → §CORE-17.3q; "what did we sell, at what margin, and which upload or feed actually answered for it" → §CORE-17.3r; "what did we expect the carrier to pay, what did it pay, and what is being clawed back or is missing" → §CORE-17.3s; "how are reps and stores performing, and who needs coaching" → §CORE-17.3t; "what is each rep being paid this month and what for" → §CORE-17.3v; "which store-month of this entitlement never arrived, and what was it worth" → §CORE-17.3v; "how many devices did this store activate, and which upload says so" → §CORE-17.3v; "what hours is this person being paid for this period, and what measured them" → §CORE-17.3x; "how many hours has this store scheduled this week, against its budget" → §CORE-17.3x), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
+store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "which unsold devices are in this aging band, in which store and market, and when was each one bought" → §CORE-17.3y; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p; "how is the month going, against what, and is anybody being paid for it" → §CORE-17.3q; "what did we sell, at what margin, and which upload or feed actually answered for it" → §CORE-17.3r; "what did we expect the carrier to pay, what did it pay, and what is being clawed back or is missing" → §CORE-17.3s; "how are reps and stores performing, and who needs coaching" → §CORE-17.3t; "what is each rep being paid this month and what for" → §CORE-17.3v; "which store-month of this entitlement never arrived, and what was it worth" → §CORE-17.3v; "how many devices did this store activate, and which upload says so" → §CORE-17.3v; "what hours is this person being paid for this period, and what measured them" → §CORE-17.3x; "how many hours has this store scheduled this week, against its budget" → §CORE-17.3x), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
 (`sourceLabel`), §2 / `data_lineage_registry.py` (which table is which feed), §15 (the B2B ↔ MA
 activation recon these three reports read), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
 module graph).

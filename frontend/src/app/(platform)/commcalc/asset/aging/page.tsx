@@ -6,6 +6,9 @@ import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
 import { NoLedgerData } from '../_shared/NoLedgerData'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 
 // "(no market)" bucket (2026-07-27 market-filter-dropdown fix): rows that never matched
 // store_mapping never showed under any market filter before this — this sentinel makes them an
@@ -57,12 +60,31 @@ type Aging = {
                   sell_within_days: number; warn_after_days: number; declared: boolean }[]
   }
   sources?: { asset_ledger: number; payable_ledger: number }
+  /** §CORE-17.3y — one panel per band, folded by the SERVER over that band's own device rows.
+   *  Each row names its store, market, purchase date and days held, and which of the two
+   *  relations it was read out of. */
+  drilldown?: Record<string, DrillPanel>
 }
 // Display-level variant merging (2026-07-28 owner-driven addition) — a "store" picker option can
 // represent MULTIPLE raw asset_ledger.store spelling variants ("116-36 Springfield Blvd" +
 // "11636 Springfield Blvd"); picking it expands to all its `variants` joined into the existing
 // comma-separated `store` query param (the multi-select filter already built this package).
 type StoreGroup = { key: string; display: string; variants: string[]; also_seen_as: string[]; market: string | null; row_count: number }
+
+// WHICH STORE, WHICH MARKET, WHICH DATE — the owner's three words (2026-10-26), as the columns the
+// shared panel adds off each drill row's own `fields`. Every one carries a `sortValue` so the
+// panel's own column sort orders them as numbers/dates rather than as text (harness_table_sort_lock).
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const DEVICE_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: r => dtext(r, 'market') || '—', sortValue: r => dtext(r, 'market') },
+  { header: 'Purchased', get: r => dtext(r, 'purchased') || 'not recorded', sortValue: r => dtext(r, 'purchased') },
+  { header: 'Days held', get: r => dtext(r, 'days_held') || '—', sortValue: r => Number(r.fields?.days_held ?? -1) },
+  { header: 'Model', get: r => dtext(r, 'device_model') || '—', sortValue: r => dtext(r, 'device_model') },
+  { header: 'Due', get: r => dtext(r, 'due_date') || '—', sortValue: r => dtext(r, 'due_date') },
+]
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
@@ -211,6 +233,10 @@ export default function AgingPage() {
     : windows.length > 1
       ? { warn: Math.min(...(pol!.by_carrier.map(c => c.warn_after_days))), sell: windows[0], mixed: true }
       : { warn: pol?.house.warn_after_days ?? 45, sell: pol?.house.sell_within_days ?? 60, mixed: false }
+  // §CORE-17.3y — every filter on this page is a QUERY PARAMETER, so the server's fold already
+  // covers exactly the devices on screen and `lib/drill-narrow` is deliberately not wired in.
+  const panels: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(panels)
 
   useEffect(() => {
     apiCached(`/api/v1/asset/filter-options?org_id=${ORG_ID}`, LOOKUP)
@@ -445,6 +471,12 @@ export default function AgingPage() {
               <div style={{ fontSize:13, color:'var(--c-fg-92400e)', marginTop:4 }}>
                 {fmt(data.buckets.warn.owed)} at risk of being billed unsold. These have days left; act now.
               </div>
+              {/* OWNER ASK 2026-10-26: "need a drill donw for these , whic store market date range
+                  etc" — said against this banner, so the way in is on the banner and not only on
+                  the tile. Same panel either way: one fold, one key, no second answer. */}
+              <div style={{ marginTop:2 }}>
+                <DrillTileLinks drills={drill.dl('warn_owed', 'which devices — store, market, date')} open={drill.open} onToggle={drill.toggle} />
+              </div>
             </div>
           )}
 
@@ -454,28 +486,45 @@ export default function AgingPage() {
               <div style={{ fontSize:12, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', letterSpacing:'0.05em' }}>Total Amount ({data.totals.total_amount_column === 'owed_to_vip' ? 'Owed to Distributor' : data.totals.total_amount_column})</div>
               <div style={{ fontSize:24, fontWeight:700, marginTop:6 }}>{fmt(data.totals.total_amount)}</div>
               <div style={{ fontSize:12, color:'var(--text3)', marginTop:2 }}>across every filtered unsold on-inventory device</div>
+              <DrillTileLinks drills={drill.dl('total_amount', 'the devices behind this')} open={drill.open} onToggle={drill.toggle} />
             </div>
             <div className="card" style={{ padding:'16px 20px' }}>
               <div style={{ fontSize:12, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', letterSpacing:'0.05em' }}>Total Phones Outstanding</div>
               <div style={{ fontSize:24, fontWeight:700, marginTop:6 }}>{data.totals.total_phones_outstanding.toLocaleString()}</div>
+              {/* NO drill link, deliberately: this count is the cardinality of the Total Amount
+                  panel beside it — the same devices, counted instead of priced — and a second
+                  panel proving how many there are is a tautology (batch-11 ruling, §CORE-17.3y). */}
               <div style={{ fontSize:12, color:'var(--text3)', marginTop:2 }}>unsold devices matching this filter (incl. $0 owed)</div>
             </div>
           </div>
 
           {/* Bucket cards */}
           <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:16, marginBottom:24 }}>
+            {/* THE EDGES ON THESE THREE CARDS ARE THE CARRIER'S DECLARED WINDOW, not 45/60 typed
+                here. `windowLabel` above already resolves it for the banner and the export; these
+                labels were still printing one carrier's contract to every tenant, which is the same
+                defect one surface further down the page. The drill key is the SERVER'S total key,
+                never the bucket name, so a renamed bucket cannot silently open the wrong band. */}
             {[
-              { key:'under45', label:'Under 45 Days', sub:'safe — runway remains', color:'var(--c-fg-059669)', b:data.buckets.under45 },
-              { key:'warn',    label:'45–60 Days (WARN)', sub:'sell before day 60', color:'var(--c-fg-d97706)', b:data.buckets.warn },
-              { key:'missed',  label:'Over 60 Days (MISSED)', sub:'past due — billed unsold', color:'var(--c-fg-dc2626)', b:data.buckets.missed },
+              { key:'under45', drill:'under45_owed', label:`Under ${windowLabel.warn} Days`, sub:'safe — runway remains', color:'var(--c-fg-059669)', b:data.buckets.under45 },
+              { key:'warn',    drill:'warn_owed',    label:`${windowLabel.warn}–${windowLabel.sell} Days (WARN)`, sub:`sell before day ${windowLabel.sell}`, color:'var(--c-fg-d97706)', b:data.buckets.warn },
+              { key:'missed',  drill:'missed_owed',  label:`Over ${windowLabel.sell} Days (MISSED)`, sub:'past due — billed unsold', color:'var(--c-fg-dc2626)', b:data.buckets.missed },
             ].map(c => (
               <div key={c.key} className="card" style={{ padding:'18px 22px', borderTop:`3px solid ${c.color}` }}>
                 <div style={{ fontSize:12, fontWeight:600, color:'var(--text2)', textTransform:'uppercase', letterSpacing:'0.05em' }}>{c.label}</div>
                 <div style={{ fontSize:24, fontWeight:700, color:c.color, marginTop:6 }}>{fmt(c.b.owed)}</div>
                 <div style={{ fontSize:12, color:'var(--text3)', marginTop:2 }}>{c.b.count.toLocaleString()} devices · {c.sub}</div>
+                <DrillTileLinks drills={drill.dl(c.drill, 'which devices — store, market, date')} open={drill.open} onToggle={drill.toggle} />
               </div>
             ))}
           </div>
+
+          {/* ONE panel open at a time, below the strip — the shared renderer, never a second one. */}
+          {drill.panel && (
+            <div style={{ marginBottom:24 }}>
+              <DrillDownPanel panel={drill.panel} extraColumns={DEVICE_DRILL_COLUMNS} />
+            </div>
+          )}
 
           {/* Per-model breakdown */}
           <div className="card" style={{ padding:0, marginBottom:20 }}>
@@ -533,6 +582,9 @@ export default function AgingPage() {
                    style={{ padding:'14px 18px', fontWeight:600, fontSize:14, cursor:'pointer', display:'flex', justifyContent:'space-between' }}>
                 <span>{showUnknownAge ? '▾' : '▸'} Unknown Age — no acquired date ({data.unknown_age.count})</span>
                 <span style={{ fontWeight:400, color:'var(--text3)', fontSize:12 }}>{fmt(data.unknown_age.owed)} — counted in totals, not bucketed</span>
+              </div>
+              <div style={{ padding:'0 18px 12px' }}>
+                <DrillTileLinks drills={drill.dl('unknown_age_owed', 'which devices — store, market, date')} open={drill.open} onToggle={drill.toggle} />
               </div>
               {showUnknownAge && (
                 <div style={{ borderTop:'1px solid var(--border)' }}>
