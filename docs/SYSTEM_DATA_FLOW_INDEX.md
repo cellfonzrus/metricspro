@@ -36288,7 +36288,7 @@ catalogue**; a second over that grain would be the sibling derivation the index 
 - `backend/app/modules/storeops/payroll_hours_drilldown.py` (**new**) — `/storeops/payroll` + `/storeops/reports`
 - `backend/app/modules/storeops/scheduled_hours_drilldown.py` (**new**) — `/storeops/hours-budget`
 
-Proof: `backend/harness_batch24_drilldown.py`, **104 checks**, **14 mutations / negative
+Proof: `backend/harness_batch24_drilldown.py`, **106 checks**, **16 mutations / negative
 controls**,
 both declarations driven **for real** and the grains **measured off the panels as a SET compared for
 equality** (never a `>=` bound), the equality mutation-tested with a **ghost swapped in at unchanged

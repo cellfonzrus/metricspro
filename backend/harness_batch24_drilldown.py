@@ -454,6 +454,12 @@ check("E2 A STORE NOBODY HAS SCHEDULED THIS WEEK IS SERVED NO PANEL — its 0.0 
       "tie zero against nothing and read as 'we checked, there was nothing', which is "
       "indistinguishable from a week nobody has written yet",
       "S-9" not in BD)
+ctl("E2a control: that refusal is the ZERO-over-no-counted-rows rule and not 'a store with no rows "
+    "never gets a panel' — the SAME store with a NON-ZERO figure and no rows DOES get a panel, so "
+    "the tie-out can publish the disagreement rather than the gap being hidden (§CORE-17.3o)",
+    "S-9" in shd.budget_drilldowns([{"store_code": "S-9", "used_hours": 12.0}], {"S-9": []})
+    and shd.budget_drilldowns([{"store_code": "S-9", "used_hours": 12.0}],
+                              {"S-9": []})["S-9"]["tie_out"]["ties"] is False)
 check("E3 THE PANEL IS KEYED ON THE STORE THE REPORT KEYS ITS OWN ROWS ON, and its subject names "
       "the store AND the work-week — a panel keyed on the store alone would address every week "
       "there has ever been (the §4e grain defect)",
