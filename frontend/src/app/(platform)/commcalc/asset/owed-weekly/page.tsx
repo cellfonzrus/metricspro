@@ -162,12 +162,12 @@ export default function OwedWeeklyPage() {
         // would then happily total.
         ...(onShared && report?.declared_period && !report.declared_period.error ? [
           { name:'Billing periods', rows:report.declared_period.periods||[], columns:[
-            { header:'Billing period', get:(r:any)=>r.label },
-            { header:'Covers from', get:(r:any)=>r.start||'' },
-            { header:'Covers to', get:(r:any)=>r.end||'' },
-            { header:report.declared_period.grain === 'order_line' ? 'Order lines' : 'Devices', get:(r:any)=>r.count||0, align:'right' as const },
-            { header:'Owed', get:(r:any)=> (r.measured && r.amount != null ? r.amount : 'not measured') },
-            { header:'What said so', get:(r:any)=>basisWord(r.basis) },
+            { header:'Billing period', get:(r: DeclaredPeriod)=>r.label },
+            { header:'Covers from', get:(r: DeclaredPeriod)=>r.start||'' },
+            { header:'Covers to', get:(r: DeclaredPeriod)=>r.end||'' },
+            { header:report.declared_period.grain === 'order_line' ? 'Order lines' : 'Devices', get:(r: DeclaredPeriod)=>r.count||0, align:'right' as const },
+            { header:'Owed', get:(r: DeclaredPeriod)=> (r.measured && r.amount != null ? r.amount : 'not measured') },
+            { header:'What said so', get:(r: DeclaredPeriod)=>basisWord(r.basis) },
           ]},
         ] : []),
         { name:'By Store', rows:report?.by_store||[], columns:[
