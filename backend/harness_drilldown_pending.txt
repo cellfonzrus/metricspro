@@ -22,7 +22,7 @@
 # Format: <route><TAB><state><TAB><note>. Lines starting with # are comments.
 # Audited 2026-10-24; the per-route findings are in the project folder under drilldown-audit/.
 
-# OWES: 93 of 136 report routes at the 2026-10-24 audit; 64 after batch 12 (index CORE-17.3l).
+# OWES: 93 of 136 report routes at the 2026-10-24 audit; 56 after batch 14 (index CORE-17.3n).
 
 /closing/cash-variance	shared	owner ask 2026-10-24, the first report on the shared mechanism
 /accounts	own	the reference's other half (ScopeDrillDown)
@@ -109,7 +109,7 @@
 /commcalc/asset/on-inventory	shared	every figure on the strip and in the table footer opens to the per-store rows the table prints; REFUSES to claim the store count (the table is the list of stores)	
 /commcalc/asset/owed-weekly	shared	the three KPIs open to the By-Store rows for that billing Friday; REFUSES to claim the device counts (every panel row states them) and the upcoming-Friday forecast rows (clicking one already loads that week)	
 /commcalc/atu-opportunity	owes	
-/commcalc/bill-payments	owes	
+/commcalc/bill-payments	shared	commcalc/processor_money_drilldown.py (§CORE-17.3n) — Σ extracted, the processor's own report and the per-day difference open to the store-days behind them. The sales leg names the tables the union ACTUALLY read for the period (off the read's own meta, because the merge does not tag rows), the processor leg dereferences billpay_processor_feed, and a day only ONE side carries is shown without a figure and left un-netted. REFUSES to claim: the bill-pay line count and the days-compared / sales-only / feed-only counts (the Lines and Per-store-day tabs ARE those lists), and the By-store / By-token tables, which re-partition lines printed in full with their own totals
 /commcalc/carrier-vs-pay	shared	commcalc/carrier_pay_drilldown.py (§CORE-17.3k) — all four tiles open to the reps behind them: earned, paid, the per-rep difference and the three activation counts. Each row names the feed its OWN verdict says answered, or nothing where the carrier side was never looked up. REFUSES to claim: the rep-count figures (cardinalities of states every row already carries), and the panels are deliberately folded over the UNFILTERED rows because the endpoint's totals are — a reported defect, stated on the screen
 /commcalc/coaching	owes	
 /commcalc/commission-legs	shared	commcalc/carrier_pay_drilldown.py (§CORE-17.3k) — every group tile's four figures and every money stream's own total open to the (stream × month) cells, each naming its feed and, where it is one column of a shared feed, its column. A month a feed never delivered is shown and not counted. REFUSES to claim: the per-leg cells in the table (a stream's own leg total, already reachable through the tile and the stream total) and tab 2, which is a config surface, not a report
@@ -118,7 +118,7 @@
 /commcalc/device-line-reimbursement	owes	
 /commcalc/discrepancy	shared	commcalc/carrier_pay_drilldown.py (§CORE-17.3k) — each tab's headline and every By-Store gap open to the commission lines behind them, naming the stored discrepancy run and, per row, the feeds its writer recorded. A claim nobody could price is shown without a figure and not counted. REFUSES to claim: the Line-items and Stores-affected counts (the table below IS the list they count), and the Phantom tab, which is a different endpoint over a different row shape	
 /commcalc/dlar-vs-platform	owes	
-/commcalc/epay-fee-recon	owes	
+/commcalc/epay-fee-recon	shared	commcalc/processor_money_drilldown.py (§CORE-17.3n) — the register leg, the settlement leg and the per-store-day variance open to the store-days, each leg naming only the relation it was really read out of and a side that reported NOTHING shown without a figure rather than as a measured $0.00. Panels are narrowed to the rows on screen (lib/drill-narrow) and a drill is offered only where the narrowed figure agrees with the tile to the cent. REFUSES to claim: 'store-days flagged' (the table highlights exactly those rows) and the tolerance, which is a threshold with no rows at all. Reports that the register leg reads the monthly upload ALONE, never the daily feed union
 /commcalc/exec	owes	
 /commcalc/exec/mtd	owes	
 /commcalc/expected-commission	owes	
@@ -129,7 +129,7 @@
 /commcalc/mdf-entitlement-coverage	owes	
 /commcalc/month-focus	owes	
 /commcalc/peer-comparison	owes	
-/commcalc/processor-ledger	owes	
+/commcalc/processor-ledger	shared	commcalc/processor_money_drilldown.py (§CORE-17.3n) — debits, credits AND the net open to the (processor × day × type × store) movement cells, each naming the feed FEED_SHAPES says it was read out of; a cell whose processor has no feed shape names nothing and says so. The net drills because it is folded per cell and then added up (§CORE-17.3k). Narrowed to the cells on screen (lib/drill-narrow); a range too wide for one panel is capped and the one home then refuses to narrow it, so under a filter such a range offers no drill. REFUSES to claim: the day / feed-row counts and the day × type rollup rows, which re-partition exactly these cells and print their own subtotals
 /commcalc/product-mix	owes	
 /commcalc/productivity	owes	
 /commcalc/recovery	owes	

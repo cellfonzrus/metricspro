@@ -8,6 +8,11 @@ import { MarketStorePicker, type StoreOpt } from '@/components/MarketStorePicker
 import { CheckboxDropdown } from '@/components/CheckboxDropdown'
 import { NO_MARKET_ID } from '@/lib/market-store-cascade'
 import { useReportLabels } from '@/lib/report-labels'
+import { sourceLabel } from '@/lib/sourceLabels'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanels, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 
 // Processor Daily Ledger (owner directive 2026-09-04): the org's carrier-processor money movements
 // grouped day × transaction type — DEBITS (money the processor takes/charges) and CREDITS (money it
@@ -44,15 +49,47 @@ interface Payload {
   feeds: { processor: string; source: string; rows: number; truncated: boolean; error?: string; classification: string }[]
   cells: Cell[]
   types: string[]
+  drilldown?: Record<string, DrillPanel>
   meta: { date_from: string; date_to: string; net_rule: string }
 }
 interface StoreMeta { store_code: string; store_address: string; market: string }
+
 interface Row { date: string; tx_type: string; category: string; debits: number; credits: number; net: number; rows: number; isDay?: boolean }
 
 // The server's word for "this org declared no category for this payment type"
 // (processor_ledger.NO_CATEGORY_ID). A sentinel, not a category: it is appended to the dropdown
 // only when a visible cell actually needs it, the same rule §13c keeps for "(no market)".
 const NO_CATEGORY_ID = '(not classified)'
+
+// ── WHERE EACH TILE CAME FROM (§CORE-17.3n), AND WHY THIS ONE NARROWS ───────────────────────────
+// Debits, Credits and the Net open to the CELLS they were folded from, each row naming the feed
+// `processor_ledger.FEED_SHAPES` says it was read out of — so a figure made of two processors'
+// movements says which part came from which. Declared in
+// commcalc/processor_money_drilldown.py, folded by core/report_drilldown, rendered by the one
+// shared panel.
+//
+// The NET opens like the other two because it is `credits − debits` folded PER CELL and then added
+// up: the rows and the figure are reached two different ways, so the tie-out is a real comparison
+// (§CORE-17.3k) rather than a restatement of one of them.
+//
+// WHY IT NARROWS: this page filters cells by market, store, transaction type and category on the
+// CLIENT and recomputes its totals over what survives, so the panels are narrowed to the same
+// selection (§CORE-17.3d, lib/drill-narrow is the one home). A range whose cells do not all fit in
+// one panel is CAPPED server-side, and the one home then refuses to narrow it rather than present a
+// shorter figure as the whole of one — so under a filter such a range offers no drill and says so.
+//
+// "Days · feed rows" gets no panel: two counts whose lists are the table below. Nor do the day ×
+// type rows themselves, which re-partition exactly these cells and already print their subtotals.
+const dfield = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const CELL_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: r => dfield(r, 'store'), sortValue: r => dfield(r, 'store') },
+  { header: 'Market', get: r => dfield(r, 'market'), sortValue: r => dfield(r, 'market') },
+  { header: 'Category', get: r => dfield(r, 'category') || NO_CATEGORY_ID, sortValue: r => dfield(r, 'category') },
+  { header: 'Feed rows', get: r => dfield(r, 'feed_rows'), sortValue: r => Number(r.fields?.feed_rows ?? -1) },
+]
 
 function firstOfMonth(): string {
   const t = localToday()
@@ -142,6 +179,22 @@ export default function ProcessorLedgerPage() {
     return { rows: out, totals: { ...tot, net: tot.credits - tot.debits }, dayCount: byDay.size }
   }, [cells, showDaySubtotals])
 
+  // THE PANELS, NARROWED TO THE CELLS ON SCREEN — the same selection `cells` is, matched on the row
+  // key the server served with every drill row.
+  const shownKeys = useMemo(() => new Set(cells.map(c => screenKey({
+    processor: c.processor, date: c.date, tx_type: c.tx_type, store_code: c.store_code,
+  }))), [cells])
+  const narrowed = narrowPanels(data?.drilldown || {}, (_r, k) => shownKeys.has(k))
+  // THE OFFER RULE: a drill is offered only where the panel's figure agrees with the tile to the
+  // cent — the one home's gate, not a condition this page invented (§CORE-17.3c).
+  const tileOf: Record<string, number> = {
+    debits: totals.debits, credits: totals.credits, net: totals.net,
+  }
+  const drill = useDrillTile(narrowed, (key, p) => agreesToTheCent(p, tileOf[key]))
+  // ONE FOLD PER FIGURE: the panel's own number where there is one, this page's reduce otherwise.
+  const served = (key: string, fallback: number) =>
+    agreesToTheCent(narrowed[key], tileOf[key]) ? Number(narrowed[key].figure?.amount ?? fallback) : fallback
+
   const typeOpts = useMemo(() => (data?.types || []).map(t => ({ id: t, label: t })), [data])
   // §13c: the canonical vocabulary from the endpoint (core.scope.org_market_options), with the
   // "(no market)" sentinel appended AFTER composing — and only when a cell actually needs it.
@@ -227,12 +280,18 @@ export default function ProcessorLedgerPage() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
-        <Stat label="Debits (charged)" value={fmt(totals.debits)} color="var(--c-fg-dc2626)" />
-        <Stat label="Credits (paid to you)" value={fmt(totals.credits)} color="var(--c-fg-16a34a)" />
-        <Stat label="Net (credits − debits)" value={`${totals.net >= 0 ? '+' : ''}${fmt(totals.net)}`}
-          color={totals.net >= 0 ? 'var(--c-fg-059669)' : 'var(--c-fg-dc2626)'} />
+        <Stat label="Debits (charged)" value={fmt(served('debits', totals.debits))} color="var(--c-fg-dc2626)"
+          drill={<DrillTileLinks drills={drill.dl('debits', 'movements behind this')} open={drill.open} onToggle={drill.toggle} />} />
+        <Stat label="Credits (paid to you)" value={fmt(served('credits', totals.credits))} color="var(--c-fg-16a34a)"
+          drill={<DrillTileLinks drills={drill.dl('credits', 'movements behind this')} open={drill.open} onToggle={drill.toggle} />} />
+        <Stat label="Net (credits − debits)" value={`${served('net', totals.net) >= 0 ? '+' : ''}${fmt(served('net', totals.net))}`}
+          color={totals.net >= 0 ? 'var(--c-fg-059669)' : 'var(--c-fg-dc2626)'}
+          drill={<DrillTileLinks drills={drill.dl('net', 'movements behind this')} open={drill.open} onToggle={drill.toggle} />} />
         <Stat label="Days · feed rows" value={`${dayCount} · ${totals.rows.toLocaleString()}`} />
       </div>
+
+      {/* ONE panel open at a time, below the strip — the shared renderer (§CORE-17.3n). */}
+      {drill.panel && <div style={{ marginBottom: 16 }}><DrillDownPanel panel={drill.panel} extraColumns={CELL_DRILL_COLUMNS} /></div>}
 
       <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <MarketStorePicker
@@ -329,7 +388,7 @@ export default function ProcessorLedgerPage() {
         <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 12, maxWidth: 860 }}>
           {feedsWithRows.map(f => (
             <span key={f.processor} style={{ display: 'block' }}>
-              Source <code>{f.source}</code> ({f.rows.toLocaleString()} rows): {f.classification}.
+              Source <b>{sourceLabel(f.source.split('.').pop())}</b> ({f.rows.toLocaleString()} rows): {f.classification}.
             </span>
           ))}
           Net = credits − debits at every grain; a positive net means the processor paid you more than it took that
@@ -340,9 +399,10 @@ export default function ProcessorLedgerPage() {
   )
 }
 
-function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
+function Stat({ label, value, color, drill }: { label: string; value: string; color?: string; drill?: React.ReactNode }) {
   return <div className="card" style={{ padding: '14px 16px' }}>
     <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</div>
     <div style={{ fontSize: 20, fontWeight: 700, marginTop: 4, color: color || 'var(--text1)' }}>{value}</div>
+    {drill}
   </div>
 }

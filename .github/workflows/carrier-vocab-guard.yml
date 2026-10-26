@@ -311,6 +311,19 @@ on:
       - "frontend/src/app/(platform)/commcalc/targets/accessories/page.tsx"
       - "frontend/src/app/(platform)/commcalc/targets/action-plan/page.tsx"
       - "frontend/src/app/(platform)/commcalc/targets/report-cards/page.tsx"
+      # §CORE-17.3n — the three bill-payment / processor money reports: one declaration, three
+      # catalogues (one per row list), seven measured grains and four provenance answers (the sales
+      # display union, the bill-pay settlement feed, the dealer-account payment feed, the
+      # master-agent daily-TX feed). A side that reported nothing is never netted at $0.00.
+      - "backend/harness_batch14_drilldown.py"
+      - "backend/app/modules/commcalc/processor_money_drilldown.py"
+      - "backend/app/modules/commcalc/processor_ledger.py"
+      - "backend/app/modules/commcalc/processor_ledger_api.py"
+      - "backend/app/modules/commcalc/billpay_extract.py"
+      - "backend/app/modules/commcalc/epay_fee_recon.py"
+      - "frontend/src/app/(platform)/commcalc/bill-payments/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/epay-fee-recon/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/processor-ledger/page.tsx"
       - "frontend/src/app/(platform)/closing/external-credit-recon/page.tsx"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
       # index §4e — the P&L drill path: company → market → store → line (owner report 2026-10-07)
@@ -1464,6 +1477,9 @@ jobs:
       - name: Run the batch-13 drill lock (the five targets reports — the family's grain count is MEASURED, so a scope-DAY figure opens to the days it was summed over and never to the calendar it is displayed on; a TARGET is a declared number, so a store with no settings row reads "no target set" instead of a target of zero, and a day with nothing recorded resolves to NO table rather than a guessed feed; every attainment percentage and the conversion rate get no panel at all (§CORE-17.3h), the team roll-up and the manager card roll-ups are folded ONCE on the server, and a store the org tree cannot place carries the org-chart gap in the reader's own words — index §CORE-17.3m)
         working-directory: backend
         run: python3 harness_batch13_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-14 drill lock (the three bill-payment / processor money reports — the family's grain count is MEASURED, and six of its seven grains are the SAME store-day row in the SAME unit separated only by PROVENANCE — what the register rang, what the processor's own report says, and a third that names both; a store-day only ONE side reported is shown WITHOUT a figure and left un-netted rather than counted at $0.00, which is the owner's own ruling on the cash-pickup netting applied to a comparison; all three differences are folded PER ROW and therefore drill (§CORE-17.3k), while every count whose list is on screen gets no key at all; the ledger's feed shapes dereference the lineage registry so a cell's provenance has ONE home, and a cell whose processor has no shape names nothing — index §CORE-17.3n)
+        working-directory: backend
+        run: python3 harness_batch14_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
