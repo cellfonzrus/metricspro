@@ -48,6 +48,10 @@ EXCUSED = {
         "renders its multi-month block only when the backend returns multimonth levers, which exist only for the "
         "org's ACTIVE plan_installment_schedule rows (`if (levers.length === 0) return null`)",
     "app/(platform)/commcalc/ma-upload/page.tsx": "'historical (multi-month)' is an UPLOAD mode, not a pay option",
+    "lib/sourceLabels.ts":
+        "the one home for a FEED'S PLAIN NAME (§19.38). It names the installment ladder so a drill-down "
+        "panel can say where a figure came from without printing a table name — naming a relation is not "
+        "offering a rep a pay option, and this file renders no surface at all",
 }
 P = F = 0
 
