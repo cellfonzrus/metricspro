@@ -8,6 +8,37 @@ import { TrendChart } from '@/components/TrendChart'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
 import EntityPicker from '@/components/EntityPicker'
 import { optionsFromRows } from '@/lib/standard-filters'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
+
+// WHERE THE SEVEN HEADLINE TILES CAME FROM (index §CORE-17.3r). Declaration:
+// commcalc/sales_margin_drilldown.py, folded over the SAME store rows and the SAME totals the
+// endpoint serves.
+//
+// `lib/drill-narrow` IS WIRED HERE, and harness_batch18_drilldown.py §F fails the build if it stops
+// being: this page folds every tile itself, in the browser, with
+// `COLS_BASE.forEach(c => totals[c.key] = rows.reduce(...))` over `rows` — which is `allRows` after
+// its own market and store filters. That is the §CORE-17.3d class exactly, so each panel is
+// narrowed to that same selection and each tile is READ OFF its narrowed panel rather than reduced
+// a second time. A capped panel narrows to null and the drill is then not offered at all.
+//
+// NET PROFIT DRILLS BECAUSE THE SUBTRACTION IS AT THE ROW (§CORE-17.3k): the server computes
+// revenue less rep pay, expenses and phone cost per STORE and this header is the sum of those rows.
+//
+// WHAT OFFERS NO DRILL, AND WHY: `NP Target` and its attainment (a target is a DECLARED number and
+// this report substitutes a platform default for a store nobody set one for, so no row could state
+// its provenance honestly — §CORE-17.3m); the `comp_*` columns (display-only — Total Revenue does
+// not contain them and Net Profit does not move with them); and the month-of-life ladder columns (a
+// re-partition of the very commission the two leg tiles already open). All written up in the
+// declaration's header.
+const GP_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.['market'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['market'] ?? '') },
+  { header: 'Store code', get: (r: DrillRow) => String(r.fields?.['store code'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['store code'] ?? '') },
+]
 
 const r2 = (n: number) => Math.round((n || 0) * 100) / 100
 const shortPeriod = (p: string) => {
@@ -272,6 +303,23 @@ export default function GPReportPage() {
   // Totalled over COLS_BASE (the FULL set), not the visible COLS — the leg tiles/exports must have their
   // numbers even while the 🧩 sub-columns are collapsed.
   COLS_BASE.forEach(c2 => { totals[c2.key] = rows.reduce((s, r) => s + ((r as any)[c2.key] || 0), 0) })
+  // THE PANELS, NARROWED TO THE ROWS ON SCREEN — the same selection `rows` is, matched on the row
+  // key the server served with every drill row. The key is the STORE as this page spells it, which
+  // is the key its own market/store filter acts on, so the panel and the tile are one selection.
+  const gpPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const gpKeys = new Set(rows.map(r => screenKey({ store: r.store })))
+  const gpKeep = (_r: DrillRow, k: string) => gpKeys.has(k)
+  const gpNarrowed: Record<string, DrillPanel> = {}
+  Object.keys(gpPanels).forEach(k => { const p = narrowPanel(gpPanels[k], gpKeep); if (p) gpNarrowed[k] = p })
+  // Each tile reads its number OFF its narrowed panel where the two agree to the cent, through the
+  // SHARED gate — and keeps this page's own fold where they do not, which is what happens for a
+  // store-scoped caller (the endpoint's `totals` are company-wide and are not re-folded after
+  // scoping). A disagreement therefore costs the drill link and never the number.
+  const gpTile = (k: string): number => {
+    const n = (totals as any)[k] || 0
+    return agreesToTheCent(gpNarrowed[k], n) ? Number(gpNarrowed[k]?.figure?.amount ?? n) : n
+  }
+  const gpDrill = useDrillTile(gpNarrowed, (k, p) => agreesToTheCent(p, (totals as any)[k] || 0))
   // Per-source leg decomposition of the CURRENTLY FILTERED rows. `total` is each source's own existing
   // column, unchanged; `ok` is the identity the owner asked to be able to trust — the parts must add
   // back to it. It is recomputed here from the rows on screen (not taken from the server) precisely so
@@ -482,15 +530,17 @@ export default function GPReportPage() {
           terms that subtract, so the row can be checked by eye. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(168px, 1fr))', gap: 12, marginBottom: 20 }}>
         {([
-          { label: 'Total Revenue', val: totals.total_rev, icon: '💰' },
-          { label: '1st Month Commission', val: totals.comm_m1, icon: '①', sub: 'received in the activation month' },
-          { label: 'M2–M12 Commission', val: totals.comm_m2_12, icon: '🔁', sub: 'received for an already-active number' },
-          { label: 'Phone Cost', val: totals.net_phone_cost, icon: '📱', red: true, sub: 'net of rebates and reimbursement' },
-          { label: 'Rep Incentives', val: totals.rep_pay, icon: '👥', red: true },
-          { label: 'Store Expenses', val: totals.exp_total, icon: '🏪', red: true },
-          { label: 'Net Profit', val: totals.net_profit, icon: '📊', highlight: true },
-        ] as { label: string; val: number; icon: string; sub?: string; red?: boolean; highlight?: boolean }[])
-        .map(({ label, val, icon, sub, red, highlight }) => (
+          { label: 'Total Revenue', key: 'total_rev', icon: '💰' },
+          { label: '1st Month Commission', key: 'comm_m1', icon: '①', sub: 'received in the activation month' },
+          { label: 'M2–M12 Commission', key: 'comm_m2_12', icon: '🔁', sub: 'received for an already-active number' },
+          { label: 'Phone Cost', key: 'net_phone_cost', icon: '📱', red: true, sub: 'net of rebates and reimbursement' },
+          { label: 'Rep Incentives', key: 'rep_pay', icon: '👥', red: true },
+          { label: 'Store Expenses', key: 'exp_total', icon: '🏪', red: true },
+          { label: 'Net Profit', key: 'net_profit', icon: '📊', highlight: true },
+        ] as { label: string; key: string; icon: string; sub?: string; red?: boolean; highlight?: boolean }[])
+        .map(({ label, key, icon, sub, red, highlight }) => {
+          const val = gpTile(key)
+          return (
           <div key={label} className="card">
             <div style={{ fontSize: 22 }}>{icon}</div>
             <div style={{ fontSize: 20, fontWeight: 700, marginTop: 8,
@@ -499,9 +549,12 @@ export default function GPReportPage() {
             </div>
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{label}</div>
             {sub && <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, lineHeight: 1.3 }}>{sub}</div>}
+            <DrillTileLinks drills={gpDrill.dl(key, 'rows behind this')} open={gpDrill.open} onToggle={gpDrill.toggle} />
           </div>
-        ))}
+          )
+        })}
       </div>
+      {gpDrill.panel && <DrillDownPanel panel={gpDrill.panel} extraColumns={GP_DRILL_COLUMNS} />}
 
       {/* GP bucket transparency (owner 2026-07-24: "'Other' does not detail any information"). Shows the
           departments currently landing in the 'Other' bucket — how many lines + $ — with a link to map

@@ -25,6 +25,8 @@ from app.modules.closing import external_credit_drilldown as ecd  # noqa: E402
 from app.modules.closing import external_credit_recon as ecr      # noqa: E402
 from app.modules.commcalc import device_financing_drilldown as dfd  # noqa: E402
 from app.modules.commcalc import exec_month_drilldown as emd      # noqa: E402
+from app.modules.commcalc import sales_margin_drilldown as smd    # noqa: E402
+from app.modules.commcalc.gp_report import calc_gp_report         # noqa: E402
 from app.modules.commcalc import tender_recon_drilldown as trd    # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -149,6 +151,63 @@ REP_TREND = {
 }
 
 
+# BATCH 18's new shape for the client fold (§CORE-17.3r): a panel in which SOME rows carry an
+# UNTRACEABLE ORIGIN beside a named table — the GP expenses column, where a store whose salary was
+# derived from its own payroll has no per-store record to name. Narrowing recounts
+# `untraceable_origins` as well as the sources roll-up, and without this fixture that branch of the
+# client fold was never exercised on a real panel at all. The GP page is the one page in that batch
+# whose tiles are a BROWSER fold, so it is the one whose panels the client really narrows.
+GP_SALES = []
+for _st in ("1 Main St", "2 Oak Ave"):
+    GP_SALES += [
+        {"store": _st, "salesperson": "Abid", "department": "Ondigo", "category": "Accessories",
+         "product_desc": "Case", "ext_price": 50.0, "gp": 20.0, "trans_id": _st + "T1",
+         "trans_date": "2026-09-02"},
+        {"store": _st, "salesperson": "Dee", "department": "", "category": "Plan",
+         "product_desc": "Plan X", "ext_price": 60.0, "gp": 60.0, "trans_id": _st + "T2",
+         "trans_date": "2026-09-05"},
+    ]
+GP_DECL = {"commission - month 1": "Commission", "commission - month 3": "Commission",
+           "re-imbursement": "Reimbursement"}
+
+
+def _gp_result():
+    out = calc_gp_report(
+        sales=GP_SALES,
+        pay_detail=[{"business_address": "1 Main St", "amount": 120.0,
+                     "payment_type": "Commission - Month 1"},
+                    {"business_address": "1 Main St", "amount": 70.0,
+                     "payment_type": "Commission - Month 3"},
+                    {"business_address": "2 Oak Ave", "amount": 90.0,
+                     "payment_type": "Commission - Month 1"},
+                    {"business_address": "2 Oak Ave", "amount": 25.0,
+                     "payment_type": "Re-imbursement"}],
+        mi_rows=[{"salesforce_id": "SF1", "actual_mi_payout": 15.0, "actual_atu_payout": 5.0}],
+        rep_commissions=[{"store": "1 Main St", "total_payout": 80.0,
+                          "epay_salesperson": "Abid", "storeops_name": "Abid K"},
+                         {"store": "2 Oak Ave", "total_payout": 45.0,
+                          "epay_salesperson": "Dee", "storeops_name": "Dee R"}],
+        expenses=[{"store_code": "B-1", "amount": 200.0, "expense_name": "Rent"},
+                  {"store_code": "B-2", "amount": 150.0, "expense_name": "Rent"}],
+        catalog=[],
+        store_mapping=[{"store_address": "1 Main St", "salesforce_id": "SF1", "market": "LI",
+                        "store_code": "B-1", "is_active": True},
+                       {"store_address": "2 Oak Ave", "salesforce_id": "SF2", "market": "NJ",
+                        "store_code": "B-2", "is_active": True}],
+        period="September 2026", pay_category_map=GP_DECL, carrier_declarations=GP_DECL,
+        box_departments={"box"})
+    out["sales_source"] = {"primary": "daily_sales_feed", "primary_rows": 4,
+                           "other": "raw_sales", "other_rows": 1, "filled_rows": 1}
+    # B-1's salary was derived from its own hours this month; B-2's was not — which is what gives
+    # the expenses panel one row with an untraceable origin and one without.
+    out["labour_coverage"] = {"detail": {"B-1": {"hours_basis": "actual", "measured": True},
+                                         "B-2": {"hours_basis": None, "measured": False}}}
+    return out
+
+
+GP_RESULT = _gp_result()
+
+
 def build():
     panels = {}
     for k, v in trd.drilldowns(TENDER_ROWS, TENDER_TOTALS).items():
@@ -167,6 +226,8 @@ def build():
         panels["financing." + k] = v
     for k, v in emd.rep_pay_drilldowns(REP_TREND).items():
         panels["rep_pay." + k] = v
+    for k, v in smd.gp_drilldowns(GP_RESULT).items():
+        panels["gp." + k] = v
     return {
         "_note": ("GENERATED — do not hand-edit. Real panels from the real server declarations, "
                   "regenerate with `python3 backend/harness_drill_narrow_fixtures.py --write`. "

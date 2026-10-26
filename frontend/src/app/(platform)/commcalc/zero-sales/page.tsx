@@ -3,6 +3,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
 
 // ZERO SALES — store-days and rep-days with no activation and no upgrade (owner 2026-09-22, index §15).
 //
@@ -68,11 +72,38 @@ type Payload = {
   date_from: string
   date_to: string
   scanned_rows: number
+  /** One panel per drillable tile (§CORE-17.3r) — the rows behind each figure, and where each row
+   *  came from. Absent for a payload served before this existed. */
+  drilldown?: Record<string, DrillPanel>
 }
 
 const card: React.CSSProperties = {
   border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px', background: 'var(--bg1)',
 }
+
+// WHERE EACH TILE CAME FROM (index §CORE-17.3r). Declaration:
+// commcalc/sales_margin_drilldown.py, folded over the SAME scope rows and the SAME totals this
+// endpoint serves. The rep rows beneath each store are SHOWN in every panel and deliberately not
+// counted — they are the same days one grain finer, and counting both would count every day twice.
+//
+// TWO OF THE FOUR PANELS NAME NO SOURCE AT ALL, and that is the answer rather than an omission:
+// "nothing landed for this store-day" and "the schedule says nothing about this store" are
+// ABSENCES, not rows in a relation (§CORE-17.3i). It is the same reason such a day is never a zero.
+//
+// NOT NARROWED, AND THE LOCK FAILS THE BUILD IF `narrowPanel` APPEARS HERE
+// (harness_batch18_drilldown.py §F). Every filter on this page — the date range, the markets, the
+// stores and the reps — is a QUERY PARAMETER, so the server folds again and each panel follows its
+// tile by construction. This file does carry two `reduce` calls and NEITHER is a tile fold: both
+// are inside `DigestPreview`, adding up the dry-run digest's own per-tenant counts.
+const ZS_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'State', get: (r: DrillRow) => String(r.fields?.['state'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['state'] ?? '') },
+  { header: 'Consecutive zero days',
+    get: (r: DrillRow) => String(r.fields?.['consecutive zero days'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['consecutive zero days'] ?? 0) },
+  { header: 'Trading calendar', get: (r: DrillRow) => String(r.fields?.['trading calendar'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['trading calendar'] ?? '') },
+]
 
 // The five states, their word and their colour. "not reported" is deliberately the loudest thing on
 // the screen after an alert: it is the state a reader must never mistake for a zero.
@@ -86,12 +117,18 @@ const STATE: Record<string, { word: string; bg: string; fg: string; chip: string
   rule_refused:  { word: 'rule refused',  bg: 'var(--c-bg-ede9fe)', fg: 'var(--c-fg-6d28d9)', chip: '#7c3aed' },
 }
 
-function Tile({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: string }) {
+function Tile({ label, value, sub, tone, drill, d }: {
+  label: string; value: string; sub?: string; tone?: string
+  /** The panel key this tile's figure is served under, when the server served one for it. */
+  drill?: string
+  d?: { dl: (...p: string[]) => { key: string; label: string }[]; open: string | null; toggle: (k: string) => void }
+}) {
   return (
     <div style={{ ...card }}>
       <div style={{ fontSize: 12, color: 'var(--text2)' }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color: tone || 'var(--text1)', marginTop: 2 }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>{sub}</div>}
+      {drill && d && <DrillTileLinks drills={d.dl(drill, 'rows behind this')} open={d.open} onToggle={d.toggle} />}
     </div>
   )
 }
@@ -241,6 +278,11 @@ export default function ZeroSalesPage() {
 
   const cfg = data?.config || {}
   const t = data?.totals
+  // THE OFFER RULE, ONE HOME: offered only where the server's panel agrees with the tile to the
+  // cent, through the shared gate. A figure no row carries a number for is served NO panel at all
+  // by the declaration — a 0 over zero counted rows ties against nothing and reads as measured.
+  const zsPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const zsDrill = useDrillTile(zsPanels, (k, p) => agreesToTheCent(p, (data?.totals as Record<string, number> | undefined)?.[k]))
 
   const dryRun = () => {
     setPreview({ loading: true })
@@ -304,14 +346,19 @@ export default function ZeroSalesPage() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginTop: 16 }}>
             <Tile label="Stores at or past the alert threshold" value={String(t.stores_alerting)}
                   tone="#b91c1c"
-                  sub={`${cfg.consecutive_days} or more consecutive trading days with no activation`} />
+                  sub={`${cfg.consecutive_days} or more consecutive trading days with no activation`}
+                  drill="stores_alerting" d={zsDrill} />
             <Tile label="Store-days measured zero" value={t.store_days_measured_zero.toLocaleString()}
-                  sub="the feed carried the store and it sold no activation or upgrade" />
+                  sub="the feed carried the store and it sold no activation or upgrade"
+                  drill="store_days_measured_zero" d={zsDrill} />
             <Tile label="Store-days not reported" value={t.store_days_not_reported.toLocaleString()}
-                  tone="#92400e" sub="no feed landed — never counted as a zero" />
+                  tone="#92400e" sub="no feed landed — never counted as a zero"
+                  drill="store_days_not_reported" d={zsDrill} />
             <Tile label="Stores with an unknown trading calendar" value={String(t.stores_unknown_calendar)}
-                  sub="no schedule in this window, so every day was evaluated" />
+                  sub="no schedule in this window, so every day was evaluated"
+                  drill="stores_unknown_calendar" d={zsDrill} />
           </div>
+          {zsDrill.panel && <DrillDownPanel panel={zsDrill.panel} extraColumns={ZS_DRILL_COLUMNS} />}
 
           <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
             Counted as a sale: {(cfg.count_classes || []).join(', ')} &middot; trading days from{' '}

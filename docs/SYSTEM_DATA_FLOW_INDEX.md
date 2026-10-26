@@ -3781,6 +3781,20 @@ gates.
   get no panel (ratios at the total, §CORE-17.3h) and neither does the by-account view (four
   reasons). Proof `harness_batch17_drilldown.py`.
 
+- **DRILL-DOWN (§CORE-17.3r, batch 18):** `/gp/{period}`, `/sales-analyzer/{period}`,
+  `/sales-comparison` and `/zero-sales` each return a read-only **`drilldown`** key — the GP
+  report's seven headline tiles, the Retention Analysis's nine figures over two row lists, every
+  per-item and overall figure on the comparison, and all four Zero Sales tiles — declared once in
+  `commcalc/sales_margin_drilldown.py` and rendered by the shared `DrillDownPanel`. The sales
+  provenance is resolved off each read's OWN meta through `processor_money_drilldown.sales_union_tables`,
+  never re-spelled; which carrier feed filled the GP commission column is the PRODUCER's own gate,
+  read off the payload. NET PROFIT drills (the subtraction is at the ROW, §CORE-17.3k) while every
+  comparison `Δ` does not (taken at the TOTAL, and both its sides drill). `/gp` is NARROWED in the
+  browser through `lib/drill-narrow` because it folds its own tiles; the other three are
+  server-folded. The `NP Target`, the `comp_*` columns, the ladder columns, the expense line's unit
+  columns and the whole By-Rep view get no panel. Twelve live defects reported, no figure moved.
+  Proof `harness_batch18_drilldown.py`.
+
 **Endpoints:** `/dlar-store/{period}` `10278`; `/kpi-failing/{period}` (beside it); `/carrier-kpi-metrics` `19757`; `/exec-overview/{period}`
 `20103`; `/exec-mtd/{period}` `20596`; `/productivity/{period}` `21152` + `/productivity/kpi-values/{period}`
 `21218` (mig `215_productivity_registry.sql`); `/comp/residual-trend` `17339`, `/comp/rep-pay-trend` `17357`.
@@ -7260,7 +7274,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 | endpoint | code | what it is the one home of |
 | --- | --- | --- |
-| `GET /commcalc/sales-comparison` | `commcalc/sales_comparison.build` + `expenses_effective.effective_series` / `totals_by_store` | period-over-period change per item sold in **units AND dollars**, plus the month's **store expenses** per store on the same two windows — reported beside the sales and never inside them (§COMMCALC-18); the tile row is SENDABLE through `frontend/src/lib/tile-snapshot.tileSnapshotSheet` + the one sender `SendReportButton`, and a change between two copies of ONE carried expense sheet is withheld as `change_measured: false` by `sales_comparison.expense_change_measured` rather than printed as ± 0% (§COMMCALC-19); a CARRIED month inherits the rent and never the platform's own labour — salary and rep commission come from that month's own actuals through `commcalc/labour_actuals`, with `labour_measured` saying when a month's payroll could not be read (§COMMCALC-23) |
+| `GET /commcalc/sales-comparison` | `commcalc/sales_comparison.build` + `expenses_effective.effective_series` / `totals_by_store` | period-over-period change per item sold in **units AND dollars**, plus the month's **store expenses** per store on the same two windows — reported beside the sales and never inside them (§COMMCALC-18); the tile row is SENDABLE through `frontend/src/lib/tile-snapshot.tileSnapshotSheet` + the one sender `SendReportButton`, and a change between two copies of ONE carried expense sheet is withheld as `change_measured: false` by `sales_comparison.expense_change_measured` rather than printed as ± 0% (§COMMCALC-19); a CARRIED month inherits the rent and never the platform's own labour — salary and rep commission come from that month's own actuals through `commcalc/labour_actuals`, with `labour_measured` saying when a month's payroll could not be read (§COMMCALC-23). **DRILL-DOWN §CORE-17.3r:** every per-item and overall figure opens to the rows it was folded from, and THE TWO WINDOWS OPEN SEPARATELY naming their own provenance off each read's OWN meta, because a comparison window is a different period and the union may have answered out of different tables for it (§CORE-17.3n). THREE row lists, therefore three catalogues — the store-and-item rows, the per-store summary and the expense rows, because an expense is not an item sold. Every `Change` and `Change %` gets NO panel (subtracted at the TOTAL, §CORE-17.3k, and both sides drill) and neither do the expense line's unit columns, which the producer pins at 0 because an expense has no unit. Server-folded: the pickers are query parameters. Declaration `commcalc/sales_margin_drilldown.py` (`comparison_drilldowns`), proof `harness_batch18_drilldown.py` §D |
 | `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) · the email sweep | `commcalc/router.py:_ingest_mapped_df` post-step (d) → `storeops/clock_feed.normalize` | the ONLY way the B2B clock report enters the system. A file whose rows do not tie to its own trailer total is REJECTED with both numbers, rather than landed short (§14z) |
 | `GET /storeops/payroll/clock-variances` | `storeops/clock_variance_api.py` → `clock_variance.compare` | the variance board the DM works: every (store, employee, day) of the period, each difference CLASSIFIED, with OUR basis and its sentence on every row (§14z) |
 | `POST /storeops/payroll/clock-variances/resolve` | `storeops/clock_variance_api.py` → `storeops.clock_variance_correction` | one human decision about one variance — including the DM's per-row override, which out-ranks the declared rule and is audited to `payroll_change_log` (§14z) |
@@ -7451,7 +7465,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /ma-commission/summary` — per-store MA roll-up. `by_store[].store` and the store picker name the real STORE via `ma_store_pnl.canonical_store_index` (mig 314); `spiff_by_month` is the EARNED ladder and `legs.received` the CASH ladder, both from the one home, neither with a hardcoded month count | `router.ma_commission_summary` | §4a |
 | `POST /closing/billpay-declaration-alerts/run-due` (secret-gated HOURLY cron; each tenant's own HH:MM compared in the handler) · `POST /closing/billpay-declaration-alerts/run-now?send=` (manager/admin, defaults to a DRY RUN) | `closing/router.billpay_declaration_alerts_run_due` / `_run_now` → `_run_billpay_declaration_alerts` + `_billpay_declaration_store_days` (joins `billpay_pickup.declared_billpay_in_force` with `metric_recon.pos_billpay_cash`) | §47.13 the morning declaration-exception digest (READ-ONLY; `books_to` = []) |
 | `GET /commcalc/manager-followup` (org- and span-scoped; items with NO store survive the span filter) · `POST /commcalc/manager-followup/alerts/run-due` (secret-gated HOURLY cron; each tenant's own HH:MM compared in the handler) · `POST /commcalc/manager-followup/alerts/run-now?send=` (manager/admin, defaults to a DRY RUN) | `commcalc/router.manager_followup_board` / `_run_due` / `_run_now` → `_run_manager_followup_alerts` + `_followup_items` (reads the three attributable registry queues, every store string through `_store_code_resolver`); assembly is PURE in `commcalc/manager_followup.py` | §47.14 Follow Up With Managers (READ-ONLY; `books_to` = []) |
-| `GET /commcalc/zero-sales` (`date_from`/`date_to`/`market`/`store`/`rep`) · `GET/PUT /commcalc/zero-sales-config` · `POST /commcalc/zero-sales/alerts/run-due` (secret-gated cron) · `POST /commcalc/zero-sales/alerts/run-now?send=` (defaults to a DRY RUN) | `router.zero_sales_report` / `get_zero_sales_config` / `put_zero_sales_config` / `zero_sales_alerts_run_due` / `zero_sales_alerts_run_now` → `_zero_sales_core` + `_run_zero_sales_alerts` | §15z Zero sales (READ-ONLY; `books_to` = []) |
+| `GET /commcalc/zero-sales` (`date_from`/`date_to`/`market`/`store`/`rep`) · `GET/PUT /commcalc/zero-sales-config` · `POST /commcalc/zero-sales/alerts/run-due` (secret-gated cron) · `POST /commcalc/zero-sales/alerts/run-now?send=` (defaults to a DRY RUN) | `router.zero_sales_report` / `get_zero_sales_config` / `put_zero_sales_config` / `zero_sales_alerts_run_due` / `zero_sales_alerts_run_now` → `_zero_sales_core` + `_run_zero_sales_alerts` | §15z Zero sales (READ-ONLY; `books_to` = []). **DRILL-DOWN §CORE-17.3r:** all four tiles open to the SCOPE ROWS behind them, with the rep rows SHOWN beneath each store and deliberately NOT counted (the same days one grain finer — counting both would count every day twice). TWO of the four name NO SOURCE AT ALL and that is the answer rather than an omission: "nothing landed for this store-day" and "there is no schedule for this store" are ABSENCES (§CORE-17.3i), the same reason such a day is never counted as a zero. A count no row carries a number for is served NO PANEL. The `scopes` total gets none either — it mixes store rows and rep rows, so it has no row list of one grain. Server-folded (the two `reduce` calls on that page are inside its dry-run digest preview, not tile folds). Declaration `commcalc/sales_margin_drilldown.py` (`zero_sales_drilldowns`), proof `harness_batch18_drilldown.py` §E. Defect found and REPORTED: `_zero_sales_core` was binding and DISCARDING the meta its own sales read returns, so the one fact saying where its numbers came from was thrown away every request — collected read-only now, no figure moved |
 | `GET /gp/{period}` (payload also carries `expenses_carried_from`, **`labour_coverage`** and **`labour_double_booked`** — the salary silent-zero / month-grain / double-book detectors, display-only — plus **`labour_commission_suppressed`**, the per-store record of which commission expense rows STOPPED booking and what `rep_commissions` books in their place; that one is NOT display-only, `exp_total`/`net_profit` move with it) | `14750` | §4 |
 | `GET/PUT /targets/{period}` | `19005/19071` | §5 |
 | `GET /targets/{period}/summary` | `19440` | §5 |
@@ -35041,6 +35055,172 @@ added (`OPS_CHARGEBACK`, `STORE_ROSTER`) with every existing literal copy re-key
 `UNMEASURED_REASONS` entry which is the PRODUCER's own reason key. `OWES_MAX` **49 → 45**, lowered by
 exactly the four routes served.
 
+### §CORE-17.3r THE FOUR SALES-AND-MARGIN REPORTS (2026-10-26, batch 18)
+
+**`/commcalc/gp` · `/commcalc/sales-analyzer` · `/commcalc/sales-comparison` ·
+`/commcalc/zero-sales`** — *what did we sell, and at what margin.* One family because all four are
+read for one purpose and therefore share a sales-read vocabulary, and because the SALES DISPLAY
+UNION is the one home for "which tables did this period's sales actually come from" —
+`processor_money_drilldown.sales_union_tables`, dereferenced by identity and never re-spelled.
+Declaration: `backend/app/modules/commcalc/sales_margin_drilldown.py`. Proof:
+`backend/harness_batch18_drilldown.py`, **126 checks**, **20 mutations / negative controls**, wired
+into the guard job with a paths filter naming every file it is about.
+
+**THE GRAIN COUNT, MEASURED OFF THE PRODUCERS (§CORE-17.3l).** Reading
+`gp_report.calc_gp_report`, `sales_analyzer.analyze`, `sales_comparison.build` and
+`zero_sales.build_report` gives **FOURTEEN** grains in **SIX** row shapes with **SEVEN** provenance
+answers, because a grain fixes the ROW, the UNIT **and** the PROVENANCE:
+
+| the grain | the row | why it is its own grain |
+|---|---|---|
+| a GP STORE ROW's REVENUE | one store on the Gross Profit report | money, out of the sales display union ∪ the carrier money feed ∪ the residual report. THREE figures on it — total revenue, phone cost and net profit — one fold differing only in which column holds the figure |
+| a GP STORE ROW's CARRIER COMMISSION | the SAME store row | the same unit and a provenance that is the CARRIER FEED ALONE (§CORE-17.3n) — the only figures on that page whose whole trail is one feed. TWO legs, M1 and M2–12 |
+| a GP STORE ROW's REP PAY | the same row again | the same unit and the CALCULATED rep-commission snapshot (§CORE-17.3j) — what the last Run Calculation wrote down, not the sales it read |
+| a GP STORE ROW's STORE EXPENSES | the same row a fourth time | the same unit and the ENTERED EXPENSE SHEET — plus, on a store whose salary this month was derived from its own payroll, an origin this report CANNOT NAME (defect 6) |
+| a 3MR REP ROW's COHORT | one rep on the Retention Analysis | count, out of the subscriber / residual report. THREE figures — the cohort, what churned out of it, what was retained |
+| a CHURNED SUBSCRIBER's LOST SALE | one churn row | money, out of the MONTH-END SALES ARCHIVE ALONE (defect 1). TWO figures — what the device sold for, what accessory rode with it |
+| a CHURNED SUBSCRIBER's LOST MRC | the SAME churn row | the same unit, separated **ONLY by provenance** (§CORE-17.3n): the monthly charge is the subscriber report's own column and no sale is involved in it at all |
+| a CHURNED SUBSCRIBER's LOSS VERDICT | the same row again | a different UNIT, over both relations at once (§CORE-17.3l). Three figures, one per verdict, each counting only its own and showing the rest |
+| a COMPARISON STORE-ITEM's BASE UNITS / DOLLARS | one store × item category | count and money out of the sales display union **as the BASE window's own read reports it**. Two grains on one row |
+| a COMPARISON STORE-ITEM's COMPARE UNITS / DOLLARS | the SAME row | the same two units and a DIFFERENT provenance: a different period, read separately, possibly out of different tables. The sharpest §CORE-17.3n case in the programme |
+| a COMPARISON STORE's TRANSACTIONS / REVENUE | one store on the overall strip | a different ROW LIST, therefore a different catalogue — two figures per window |
+| a COMPARISON STORE's EXPENSES | a THIRD row list | money out of the entered expense sheet. An expense is not an item sold and never enters the revenue beside it |
+| a ZERO-SALES SCOPE ROW | one store (reps shown beneath it, not counted) | count, out of the sales display union for the store-day states and the SCHEDULE for the trading days |
+| a ZERO-SALES ABSENCE | the same scope row | **out of NOTHING AT ALL** — "no feed landed" and "no schedule exists" are absences, and an absence is not read out of a relation (§CORE-17.3i) |
+
+**GROSS PROFIT IS REVENUE MINUS COST, AND HERE THE SUBTRACTION IS AT THE ROW (§CORE-17.3k).**
+`calc_gp_report` computes `net_profit = total_rev - rep_pay - exp_total - net_phone_cost` **inside
+the per-store loop**, stores it on the store row, and the header is Σ of those rows. So net profit
+DRILLS, and the panel is a real fold rather than one total minus three others. **The same ruling
+goes the other way on the Sales Comparison:** every `Δ` and every `Δ%` there is taken at the TOTAL
+from two independent window folds, so neither gets a panel — and BOTH SIDES of each one do, which is
+the whole of the answer a reader needs. The batch-17 `Δ vs prior month` precedent, applied.
+
+**THE §CORE-17.3o CALL, DECIDED PER PAGE BY READING THE PAGE, AND LOCKED IN BOTH DIRECTIONS.**
+
+| route | call | why |
+|---|---|---|
+| `/commcalc/gp` | **NARROWED** | the page builds its seven tiles with `COLS_BASE.forEach(c => totals[c.key] = rows.reduce(…))` over `allRows` **after** its own market and store filters — a client `reduce` over client-filtered rows, the §CORE-17.3d class exactly. Each panel is narrowed through `lib/drill-narrow` and each tile is READ OFF its narrowed panel |
+| `/commcalc/sales-analyzer` | **SERVER-FOLDED** | its rep box, clicked rep and loss chips narrow the two TABLES while every tile reads `data.totals` straight off the server (defect 3) |
+| `/commcalc/sales-comparison` | **SERVER-FOLDED** | its store and market pickers are QUERY PARAMETERS, so the server folds again and every panel follows its tile by construction |
+| `/commcalc/zero-sales` | **SERVER-FOLDED** | query parameters too. The page **does** carry two `reduce` calls and neither is a tile fold — both are inside `DigestPreview`, adding up the dry-run digest's per-tenant counts |
+
+That last row is why `harness_batch18_drilldown.py` §F4 asserts the GP page's fold by its **actual
+text** and §F6 locks the trap explicitly: a scan treating "this file contains `reduce(`" as "this
+page folds its tiles" would have got the call backwards. §F5 fails the build if `narrowPanel`
+appears in the CODE of any of the three server-folded pages (comments stripped, so the three pages
+can carry the rule where somebody would break it), §F3 fails it if it stops appearing on the GP
+page, and §F5b / §F8b are non-vacuity witnesses so "the text is absent" can never be confused with
+"the scan is blind".
+
+**A DESIGN FIX, WITH ITS OTHER HALF.** `shifts` was spelled as a LITERAL in TWO drill-down
+declarations and named in no registry. It is now `data_lineage_registry.SCHEDULE`, and **both copies
+were re-keyed in the same commit** (`commcalc/targets_drilldown.py`,
+`account/liabilities_drilldown.py`), asserted by **object identity** and not equal text, with §A6
+failing the build if a caller stops dereferencing and §A7 failing it if either literal returns. The
+entered expense sheet got the same treatment (`STORE_EXPENSES`) scoped to drill-down DECLARATIONS —
+deliberately NOT a rename of the twenty-odd PostgREST `.table("store_expenses")` reads, which is
+stated in the registry so the next reader does not re-derive the scope. Writing the registry without
+wiring the callers to it is not a fix at all (§19.18).
+
+**WHAT GETS NO PANEL, AND WHICH RULING SAYS SO.** Every percentage and every margin percentage —
+`3MR retention`, every `Change %`, `net_profit_attainment` — because a rate gets no panel
+(§CORE-17.3h) and the figures each one divides do drill. Every `Δ` on the comparison (the
+subtract-at-the-TOTAL ruling above). **The GP `NP Target` column and its attainment**, because the
+endpoint substitutes a code default for a store nobody set one for and keeps no flag to tell the two
+apart, so no row could state its provenance honestly (§CORE-17.3m, defect 5) — and the refusal is a
+RULE, not an accident of a fixture: §B11 serves the figure and still gets no panel. **The `comp_*`
+columns**, which are display-only: `total_rev` does not contain them and `net_profit` does not move
+with them, and the carrier panels say so in words because a reader comparing them against Total
+Revenue will not reconcile. **The commission month-of-life ladder columns** (a re-partition of the
+very commission the two leg tiles already open — the batch-16 `by_vendor` refusal). **The zero-sales
+`scopes` count** (store rows AND rep rows at once, so a cardinality over two grains with no single
+row list — defect 12). **The comparison expense line's unit columns** (pinned at 0 because an
+expense has no unit — defect 9). The comparison's `detection_status`, the zero-sales state legend
+and the digest preview. **Every figure on the GP By-Rep view**, because `rep_rows` carries no
+revenue, expense or net profit and the seven tiles are the By-Store fold whichever view is open.
+
+**ABSENCE IS NEVER ZERO.** A churned subscriber whose sale the archive does not carry is SHOWN
+WITHOUT A FIGURE, in the producer's own vocabulary (`no_sales_feed_match`), rather than as a
+fabricated $0.00 (defect 2) — and **no figure moved by a cent**, because that row contributed 0.00
+to the producer's total and contributes 0.00 here; only the ROW changes, from a measured zero into a
+stated blank, which is the entire argument for putting it there. Two of the four Zero Sales tiles
+name NO SOURCE AT ALL and that is the answer rather than an omission: "nothing landed for this
+store-day" and "there is no schedule for this store" are ABSENCES (§CORE-17.3i), which is the same
+reason such a day is never counted as a zero. **A ZERO OVER ROWS THAT ALL CARRY NO FIGURE IS THE
+ABSENCE OF A FIGURE:** where a column can be `None` on every row — the churn money on a month whose
+sale archive is empty, the alerting and unknown-calendar counts on an estate with none — NO PANEL is
+served, because a $0.00 over zero counted rows ties trivially (0 == 0, True) and would read as a
+measurement (§C12b, §E7b, §E7c). An empty report drills to nothing.
+
+**TWELVE LIVE DEFECTS, ALL REPORTED, NONE FIXED, NO FIGURE MOVED.** Each carries a regression check
+in the harness.
+
+1. **The Retention Analysis reads the MONTH-END SALES ARCHIVE ALONE.** `_sales_index` reads the
+   archive and never the display union — the exact class the Gross Profit report was repaired for on
+   2026-10-17. On a cohort month the promote step has not run on, every churn row's model, price,
+   cost, margin and accessory attach read empty and three tiles report $0.00 as though measured. NOT
+   fixed: switching the read moves figures. The panels NAME the archive so a reader sees which read
+   answered.
+2. **An unmatched sale contributes a fabricated $0.00.** With no matching sale row the producer sets
+   `sold` / `gp` / `acc` to `0.0`, indistinguishable from a device genuinely sold for nothing. The
+   panels show those rows WITHOUT a figure and do not count them; the producer's total is unchanged.
+3. **On the Retention Analysis the filters move the tables and not the tiles.** Under any filter the
+   strip and the tables below describe different populations and nothing on screen says so. Both
+   honest repairs change a figure (§CORE-17.3o).
+4. **Zero Sales was throwing away the provenance its own read returned.** `_zero_sales_core` bound
+   `prows, _meta = _sales_rows_union(...)` and never read `_meta`, so the one fact saying which
+   tables a period's sales came from was discarded every request. Collected read-only now, as a LIST
+   of metas merged by the declaration, and no figure moved.
+5. **The GP `NP Target` is a CODE LITERAL for any store nobody set one for.** `get_gp_report` falls
+   back to `10000.0` on the `TypeError`, so such a store displays $10,000.00 and its attainment is
+   measured against a number no manager chose (§CORE-17.3m). Why that column gets no panel.
+6. **The GP `−Expenses` column folds payroll-derived SALARY rows whose own record it does not name.**
+   `labour_actuals.as_expense_rows` synthesises a salary row per store from that month's payroll and
+   those rows enter `exp_total` beside the entered sheet's. Every row of the expenses panel whose
+   store had measurable hours therefore reports a stated, countable UNTRACEABLE ORIGIN beside the
+   sheet (§CORE-17.3i).
+7. **The carrier keyword ladder behind the GP carrier columns has no `carrier_id` filter.** A known,
+   already-reported defect, restated in context because it is what places an undeclared payment type
+   into a GP money column: for a dual-affiliation org one carrier's keyword rules can classify the
+   other's dollars. Not fixed here. The carrier panels say so in words when part of the period's
+   money was PLACED BY A PLATFORM GUESS, asked of the §66 allowlist that is the one home for it.
+8. **`sales_comparison.tally` computes `other_units` and nothing ever reads it.** Home-internet, SIM
+   and unclassified device sales are counted per store "for honesty" and `build` never puts them on
+   the payload, so the honesty never reaches a screen.
+9. **The comparison's expense line prints 0 units** where the right answer is that an expense has no
+   unit. This declaration serves no panel for those columns rather than a zero that ties against
+   itself.
+10. **The Retention Analysis's sale index is capped at 300,000 rows and says nothing when it
+    truncates.** Every churn past the cut then reads as "no sale matched" — a data-volume limit
+    wearing the clothes of a missing sale.
+11. **The Retention Analysis scopes the SUBSCRIBERS to a manager's stores and the SALE INDEX to the
+    whole org**, so a scoped manager can be shown another store's name and dollars on their own
+    rep's churn.
+12. **The Zero Sales `scopes` total mixes two grains** — `len(rows)` over store rows AND rep rows. It
+    reaches the API contract and no tile, and it gets no panel.
+
+A thirteenth, found while wiring and stated plainly: **the GP endpoint's `totals` are company-wide
+and are NOT re-folded after RBAC scoping.** The panels are therefore attached AFTER the scope
+filters, so a store the caller may not see is in no panel row either — and for a scoped caller the
+panel and the company-wide total then disagree, which makes the shared `agreesToTheCent` gate
+withhold the drill rather than show a figure about rows the caller cannot see. A drill-down must not
+become a disclosure.
+
+**NO FIGURE MOVED, PROVED FALSIFIABLY.** §G reproduces the GP page's own pre-batch fold
+(`COLS_BASE.forEach(c => totals[c.key] = rows.reduce(…))`) against the panel each tile now reads,
+unfiltered AND under a real market filter that drops a row, with a non-vacuity witness asserting the
+row really was dropped and **every one of the seven figures really changed** (§G3). §G6 pins the
+safety net through the SHARED `agreesToTheCent` gate — a panel that disagrees offers no drill and the
+screen keeps its own number — and §G7/§G7b the capped-panel refusal against a REAL cap. §G8/§G9b do
+the same for the three server-folded screens, including a server-side witness where one store's rows
+are removed from the READ and the total, the panel's figure and its row count all move together.
+
+**No migration, no new table, no money moved** — four read-only `drilldown` keys on four endpoints,
+four pages wired to the shared panel, no change to any producer's arithmetic, two registry constants
+added (`SCHEDULE`, `STORE_EXPENSES`) with every existing literal copy re-keyed by object identity,
+and one `sourceLabels.ts` entry. `OWES_MAX` **45 → 41**, lowered by exactly the four routes served.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
@@ -35123,17 +35303,17 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 `closing/attempts_drilldown.py`, `commcalc/tender_recon_drilldown.py`, `crm/reports_drilldown.py`,
 `helpdesk/dashboard_drilldown.py`, `account/statement_drilldown.py`,
 `account/liabilities_drilldown.py`, `commcalc/carrier_pay_drilldown.py`,
-`asset/device_asset_drilldown.py`, `commcalc/targets_drilldown.py`, `commcalc/processor_money_drilldown.py`, `commcalc/accessory_money_drilldown.py`, `commcalc/device_financing_drilldown.py`, `commcalc/exec_month_drilldown.py`), §17 (`GET
+`asset/device_asset_drilldown.py`, `commcalc/targets_drilldown.py`, `commcalc/processor_money_drilldown.py`, `commcalc/accessory_money_drilldown.py`, `commcalc/device_financing_drilldown.py`, `commcalc/exec_month_drilldown.py`, `commcalc/sales_margin_drilldown.py`), §17 (`GET
 /closing/cash-variance` → `drilldown`; `GET /commcalc/discrepancy/{period}` → `drilldown` +
 `drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET
 /commcalc/commission-received-breakout` → `drilldown`; `GET /asset/summary`, `GET
 /asset/charges-summary`, `GET /asset/on-inventory-by-store`, `GET /asset/owed-weekly`, `GET
 /asset/inventory-recon`, `GET /asset/borrowings`, `GET /commcalc/vip/paygo/summary` →
 `drilldown`; `GET /commcalc/targets/{period}/calendar`, `GET /commcalc/targets/{period}/summary`,
-`GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards`, `GET /commcalc/billpay-extract/{period}`, `GET /commcalc/epay/fee-recon`, `GET /commcalc/processor-ledger`, `GET /commcalc/accessory-target-plan/{period}`, `GET /commcalc/accessory-cost-audit/{period}`, `GET /commcalc/accessory-flags`, `GET /commcalc/vip/summary`, `GET /commcalc/device-line-reimbursement`, `GET /commcalc/financing/{period}`, `GET /commcalc/exec-overview/{period}`, `GET /commcalc/exec-mtd/{period}`, `GET /commcalc/month-focus/{period}`, `GET /commcalc/comp/rep-pay-trend` →
+`GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards`, `GET /commcalc/billpay-extract/{period}`, `GET /commcalc/epay/fee-recon`, `GET /commcalc/processor-ledger`, `GET /commcalc/accessory-target-plan/{period}`, `GET /commcalc/accessory-cost-audit/{period}`, `GET /commcalc/accessory-flags`, `GET /commcalc/vip/summary`, `GET /commcalc/device-line-reimbursement`, `GET /commcalc/financing/{period}`, `GET /commcalc/exec-overview/{period}`, `GET /commcalc/exec-mtd/{period}`, `GET /commcalc/month-focus/{period}`, `GET /commcalc/comp/rep-pay-trend`, `GET /commcalc/gp/{period}`, `GET /commcalc/sales-analyzer/{period}`, `GET /commcalc/sales-comparison`, `GET /commcalc/zero-sales` →
 `drilldown`), §18 ("where is this figure from" → `panel.sources` → `sourceLabel`; "did the
 carrier pay what we computed, and out of which legs" → §CORE-17.3k; "which devices is this
-store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p; "how is the month going, against what, and is anybody being paid for it" → §CORE-17.3q), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
+store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p; "how is the month going, against what, and is anybody being paid for it" → §CORE-17.3q; "what did we sell, at what margin, and which upload or feed actually answered for it" → §CORE-17.3r), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
 (`sourceLabel`), §2 / `data_lineage_registry.py` (which table is which feed), §15 (the B2B ↔ MA
 activation recon these three reports read), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
 module graph).

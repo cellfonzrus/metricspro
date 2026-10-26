@@ -4,6 +4,40 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
+
+// WHERE EACH TILE CAME FROM (index §CORE-17.3r). Declaration:
+// commcalc/sales_margin_drilldown.py — the rep tiles fold the By-Rep rows, the money and verdict
+// tiles fold the churn rows, and the two row lists are two sets of panels so neither can be
+// mistaken for the other.
+//
+// NOT NARROWED, AND THE LOCK FAILS THE BUILD IF `narrowPanel` APPEARS HERE
+// (harness_batch18_drilldown.py §F). The three filters on this page — the rep search box, the
+// clicked rep row and the loss-type chips — narrow the two TABLES and the tiles do not move: every
+// tile reads `data.totals`, which is the server's fold over the whole period. Narrowing the panels
+// would make them explain a figure the tile above is not showing (§CORE-17.3o). That the strip and
+// the tables describe different populations under a filter is a REPORTED defect, not one this
+// drill-down may paper over.
+//
+// WHAT OFFERS NO DRILL: `3MR retention`, a rate (§CORE-17.3h) whose two sides both drill.
+const CHURN_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: (r: DrillRow) => String(r.fields?.['store'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['store'] ?? '') },
+  { header: 'Days active', get: (r: DrillRow) => String(r.fields?.['days active'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['days active'] ?? 0) },
+  { header: 'Verdict', get: (r: DrillRow) => String(r.fields?.['verdict'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['verdict'] ?? '') },
+]
+const REP_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Cohort', get: (r: DrillRow) => String(r.fields?.['cohort'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['cohort'] ?? 0) },
+  { header: 'Churned', get: (r: DrillRow) => String(r.fields?.['churned'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['churned'] ?? 0) },
+]
+const REP_KEYS = ['cohort', 'churned', 'retained']
 
 export default function SalesAnalyzerPage() {
   const { period } = usePeriod()
@@ -43,6 +77,11 @@ export default function SalesAnalyzerPage() {
     (!selRep || c.rep_login === selRep) &&
     (!lossFilter || c.loss_type === lossFilter))
   const t = data?.totals || {}
+  // THE OFFER RULE, ONE HOME: a drill is offered only where the server's panel agrees with the tile
+  // to the cent — the shared gate, not a condition invented here. Every tile on this page IS the
+  // server's own fold, so the panels are used exactly as served and nothing is narrowed.
+  const anPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const anDrill = useDrillTile(anPanels, (k, p) => agreesToTheCent(p, data?.totals?.[k]))
 
   function buildPayload(): ExportPayload {
     return {
@@ -104,16 +143,21 @@ export default function SalesAnalyzerPage() {
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <Tile label="Cohort (acts 3mo ago)" value={t.cohort ?? 0} />
-            <Tile label="Retained to 3rd bill" value={t.retained ?? 0} />
-            <Tile label="Churned early" value={t.churned ?? 0} accent="#b91c1c" />
+            <Tile label="Cohort (acts 3mo ago)" value={t.cohort ?? 0} drill="cohort" d={anDrill} />
+            <Tile label="Retained to 3rd bill" value={t.retained ?? 0} drill="retained" d={anDrill} />
+            <Tile label="Churned early" value={t.churned ?? 0} accent="#b91c1c" drill="churned" d={anDrill} />
+            {/* NO DRILL ON PURPOSE: a retention percentage is a RATE (§CORE-17.3h), and both of
+                the figures it divides — the cohort and what churned out of it — do drill. */}
             <Tile label="3MR retention" value={`${t.retention_pct ?? 0}%`} accent={(t.retention_pct ?? 0) >= 70 ? '#15803d' : '#b45309'} />
-            <Tile label="Lost — sold value" value={fmt(t.lost_value_sold || 0)} />
-            <Tile label="Lost — monthly MRC" value={fmt(t.lost_mrc || 0)} />
-            <Tile label="Lost — accessory attach" value={fmt(t.lost_accessory || 0)} />
-            <Tile label="Employee-driven loss" value={t.employee_driven ?? 0} accent="#b45309" />
-            <Tile label="Customer-driven loss" value={t.customer_driven ?? 0} accent="#15803d" />
+            <Tile label="Lost — sold value" value={fmt(t.lost_value_sold || 0)} drill="lost_value_sold" d={anDrill} />
+            <Tile label="Lost — monthly MRC" value={fmt(t.lost_mrc || 0)} drill="lost_mrc" d={anDrill} />
+            <Tile label="Lost — accessory attach" value={fmt(t.lost_accessory || 0)} drill="lost_accessory" d={anDrill} />
+            <Tile label="Employee-driven loss" value={t.employee_driven ?? 0} accent="#b45309" drill="employee_driven" d={anDrill} />
+            <Tile label="Customer-driven loss" value={t.customer_driven ?? 0} accent="#15803d" drill="customer_driven" d={anDrill} />
           </div>
+          {anDrill.panel &&
+            <DrillDownPanel panel={anDrill.panel}
+              extraColumns={REP_KEYS.includes(anDrill.open || '') ? REP_DRILL_COLUMNS : CHURN_DRILL_COLUMNS} />}
 
           <div className="card" style={{ padding: 0, overflow: 'auto' }}>
             <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>By rep — click a row to see their churned transactions</div>
@@ -215,11 +259,17 @@ function LossPill({ type, reasons }: { type?: string; reasons?: string[] }) {
   )
 }
 
-function Tile({ label, value, accent }: { label: string; value: any; accent?: string }) {
+function Tile({ label, value, accent, drill, d }: {
+  label: string; value: any; accent?: string
+  /** The panel key this tile's figure is served under, when the server served one for it. */
+  drill?: string
+  d?: { dl: (...p: string[]) => { key: string; label: string }[]; open: string | null; toggle: (k: string) => void }
+}) {
   return (
     <div className="card" style={{ padding: '12px 16px', minWidth: 150 }}>
       <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4, color: accent || 'var(--text)' }}>{value}</div>
+      {drill && d && <DrillTileLinks drills={d.dl(drill, 'rows behind this')} open={d.open} onToggle={d.toggle} />}
     </div>
   )
 }

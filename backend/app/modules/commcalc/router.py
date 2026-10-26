@@ -37,6 +37,7 @@ from app.modules.asset import device_asset_drilldown as _asset_dd   # 2026-10-25
 from app.modules.commcalc import targets_drilldown as _targets_dd   # 2026-10-25 — THE targets family's drill declaration (index §CORE-17.3m; declaration only, pure)
 from app.modules.commcalc import device_financing_drilldown as _dfdd   # 2026-10-26 — THE device-financing family's drill declaration (index §CORE-17.3p; declaration only, pure)
 from app.modules.commcalc import exec_month_drilldown as _emdd   # 2026-10-26 — THE executive-month family's drill declaration (index §CORE-17.3q; declaration only, pure)
+from app.modules.commcalc import sales_margin_drilldown as _smdd   # 2026-10-26 — THE sales-and-margin family's drill declaration (index §CORE-17.3r; declaration only, pure)
 from app.modules.commcalc import month_focus as _mfocus   # 2026-10-09 — the month's declared focus and the weekly check-in (index §63)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
@@ -24707,6 +24708,18 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", auth
         result = {**result, 'store_rows': [r for r in result['store_rows'] if in_keyset(ks, r.get('store'), r.get('store_code'), r.get('address'))]}
     if market:
         result = {**result, 'store_rows': [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]}
+    # WHERE EACH TILE CAME FROM (§CORE-17.3r). Folded from the SAME `store_rows` this response
+    # SERVES and the SAME `totals`, by the declaration — so a panel can never be a second opinion
+    # about the tile above it, and a store this caller may not see is in no panel row either.
+    #
+    # ATTACHED AFTER THE SCOPE FILTERS, DELIBERATELY. A panel built before them would carry rows for
+    # stores outside the caller's keyset, which is a disclosure and not a drill-down. The cost is
+    # that `totals` is the company-wide fold and is NOT re-folded after scoping (a reported defect —
+    # the page survives it only because it recomputes every tile itself), so for a SCOPED caller the
+    # panel's figure and its own rows disagree and the shared agreement gate then offers no drill and
+    # leaves the screen's own number alone. That is the safety net doing its job rather than a
+    # smaller number presented as the whole of one.
+    result['drilldown'] = _smdd.gp_drilldowns(result)
     return result
 
 
@@ -27072,6 +27085,15 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
     out["markets"] = opt_markets
     out["source_meta"] = {"base": bmeta, "compare": cmeta,
                           "base_rows": len(brows), "compare_rows": len(crows)}
+    # WHERE EACH TILE CAME FROM (§CORE-17.3r). Folded from the SAME rows, the SAME per-store summary
+    # and the SAME category totals this response serves. The two windows open SEPARATELY and name
+    # their own provenance, resolved off each read's OWN meta through the one home for that question
+    # — a different period may have been answered out of different tables, which is exactly what a
+    # reader comparing two months needs to see. Every Δ and every Δ% is refused a panel: the
+    # subtraction is taken at the TOTAL from two independent window folds, and both sides drill.
+    # NOT narrowed: the store and market pickers on this page are query parameters, so the server
+    # folds again and the panels follow the tiles by construction.
+    out["drilldown"] = _smdd.comparison_drilldowns(out)
     out["org_id"] = org_id
     return out
 
@@ -30165,7 +30187,16 @@ def get_sales_analyzer(period: str, window_days: int = 90, rep: str = "",
     from app.modules.storeops.router import scope_keyset
     ks = scope_keyset(authorization, org_id)
     try:
-        return sales_analyzer.analyze(sb(), org_id, period, window_days=window_days, rep=rep, store_keys=ks)
+        out = sales_analyzer.analyze(sb(), org_id, period, window_days=window_days, rep=rep,
+                                     store_keys=ks)
+        # WHERE EACH TILE CAME FROM (§CORE-17.3r). Folded from the SAME rep rows and churn rows this
+        # response serves — two row lists, therefore two sets of panels, keyed so neither can be
+        # mistaken for the other. The two sale-side money panels name the MONTH-END SALES UPLOAD and
+        # not the daily feed union, because that is the read this report actually makes (a reported
+        # defect), and a churn whose sale it could not match carries NO figure rather than a $0.00
+        # nobody measured. NOT narrowed: this page's filters move its tables and not its tiles.
+        out["drilldown"] = _smdd.analyzer_drilldowns(out)
+        return out
     except Exception as e:
         raise HTTPException(500, f"sales-analyzer failed: {type(e).__name__}: {e}")
 
@@ -48282,9 +48313,18 @@ def _zero_sales_core(client, org_id, date_from, date_to, stores=None, markets=No
 
     # ── the SAME sales source the Sales Report displays, per month in the window ────────────────
     rows = []
+    # WHICH TABLES THIS WINDOW'S SALES ACTUALLY CAME FROM. The meta each read returns was being
+    # BOUND AND DISCARDED (`prows, _meta = ...`), so the one fact that answers "where is this number
+    # coming from" for this report was thrown away every request -- the CORE-17.3r gap that made
+    # this collection necessary, reported rather than quietly papered over. Collected here and
+    # served read-only; the union read is unchanged and NO figure moves, because `rows` is built
+    # exactly as before. One meta PER MONTH, because the union is read per month and a window's
+    # provenance is the union of what each month's read reported.
+    sales_metas = []
     for period in _zero_sales_months(date_from, date_to):
         try:
             prows, _meta = _sales_rows_union(client, org_id, period, cols=_ACTUALS_COLS)
+            sales_metas.append(_meta)
         except Exception as e:
             print(f"WARN zero-sales union read failed for {period}: {e}")
             prows = []
@@ -48394,6 +48434,15 @@ def _zero_sales_core(client, org_id, date_from, date_to, stores=None, markets=No
     report["markets"] = all_markets
     report["market_of"] = {c: resolve_market(c) or "" for c in store_scope}
     report["scanned_rows"] = len(rows)
+    report["sales_source"] = sales_metas
+    # WHERE EACH TILE CAME FROM (CORE-17.3r). Folded from the SAME scope rows and the SAME totals
+    # this response serves. The rep rows under each store are SHOWN and deliberately not counted --
+    # they are the same days one grain finer. TWO of the four figures name NO source at all, and
+    # that is the honest answer rather than an omission: "nothing landed for this store-day" and
+    # "the schedule says nothing about this store" are ABSENCES, not rows in a relation, which is
+    # also why such a day is never counted as a zero. NOT narrowed: every filter on this page is a
+    # query parameter, so the server folds again and the panels follow the tiles by construction.
+    report["drilldown"] = _smdd.zero_sales_drilldowns(report)
     return report
 
 

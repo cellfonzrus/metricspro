@@ -3607,6 +3607,903 @@
       },
       "untraceable_origins": 0
     },
+    "gp.comm_m1": {
+      "capped": false,
+      "figure": {
+        "amount": 210.0,
+        "label": "First-month carrier commission",
+        "unit": "money"
+      },
+      "note": "One row per store, exactly as the table below lists them — including a row for money no store could be matched to, which is shown under the spelling the feed actually sent rather than dropped. These rows are the selection you are viewing: the figure above is this page's own total over them, so the two are one fold. This is the carrier's own commission money and nothing else — the one figure on this page whose whole trail is a single feed. It is a DECOMPOSITION of the Commission column and adds nothing to it: the first-month leg, the trailing legs and anything whose source states no month-of-life add back to that column exactly.",
+      "rows": [
+        {
+          "amount": 120.0,
+          "fields": {
+            "market": "LI",
+            "store code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "comm_m1",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_payment_detail",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "raw_payment_detail"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 90.0,
+          "fields": {
+            "market": "NJ",
+            "store code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "comm_m1",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_payment_detail",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "raw_payment_detail"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "raw_payment_detail"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 210.0,
+        "rows_total": 210.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "gp.comm_m2_12": {
+      "capped": false,
+      "figure": {
+        "amount": 70.0,
+        "label": "Trailing-leg carrier commission",
+        "unit": "money"
+      },
+      "note": "One row per store, exactly as the table below lists them — including a row for money no store could be matched to, which is shown under the spelling the feed actually sent rather than dropped. These rows are the selection you are viewing: the figure above is this page's own total over them, so the two are one fold. This is the carrier's own commission money and nothing else — the one figure on this page whose whole trail is a single feed. It is a DECOMPOSITION of the Commission column and adds nothing to it: the first-month leg, the trailing legs and anything whose source states no month-of-life add back to that column exactly.",
+      "rows": [
+        {
+          "amount": 70.0,
+          "fields": {
+            "market": "LI",
+            "store code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "comm_m2_12",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_payment_detail",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "raw_payment_detail"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 0.0,
+          "fields": {
+            "market": "NJ",
+            "store code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "comm_m2_12",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_payment_detail",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "raw_payment_detail"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "raw_payment_detail"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 70.0,
+        "rows_total": 70.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "gp.exp_total": {
+      "capped": false,
+      "figure": {
+        "amount": 350.0,
+        "label": "Store expenses",
+        "unit": "money"
+      },
+      "note": "One row per store, exactly as the table below lists them — including a row for money no store could be matched to, which is shown under the spelling the feed actually sent rather than dropped. These rows are the selection you are viewing: the figure above is this page's own total over them, so the two are one fold. The expense figure is the sheet somebody entered for this month — or, where that month has none, the latest earlier month carried forward, exactly as the statements book it. Part of it is this month's OWN salary, worked out from the hours recorded for the store; this report does not record which payroll record that half came out of, so those rows name the sheet and report the rest as an origin that cannot be traced.",
+      "rows": [
+        {
+          "amount": 200.0,
+          "fields": {
+            "market": "LI",
+            "store code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "exp_total",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "store_expenses",
+              "traceable": true
+            },
+            {
+              "column": "exp_total",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": null,
+              "traceable": false
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "store_expenses"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 150.0,
+          "fields": {
+            "market": "NJ",
+            "store code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "exp_total",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "store_expenses",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "store_expenses"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "store_expenses"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 350.0,
+        "rows_total": 350.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 1
+    },
+    "gp.net_phone_cost": {
+      "capped": false,
+      "figure": {
+        "amount": 25.0,
+        "label": "Phone cost",
+        "unit": "money"
+      },
+      "note": "One row per store, exactly as the table below lists them — including a row for money no store could be matched to, which is shown under the spelling the feed actually sent rather than dropped. These rows are the selection you are viewing: the figure above is this page's own total over them, so the two are one fold. Phone cost is the cash the customer paid for the handset plus the carrier's reimbursement for it, so a row names the sales read and the carrier feed.",
+      "rows": [
+        {
+          "amount": 0.0,
+          "fields": {
+            "market": "LI",
+            "store code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "net_phone_cost",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            },
+            {
+              "column": "net_phone_cost",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_sales",
+              "traceable": true
+            },
+            {
+              "column": "net_phone_cost",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_payment_detail",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "daily_sales_feed",
+            "raw_payment_detail",
+            "raw_sales"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 25.0,
+          "fields": {
+            "market": "NJ",
+            "store code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "net_phone_cost",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            },
+            {
+              "column": "net_phone_cost",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_sales",
+              "traceable": true
+            },
+            {
+              "column": "net_phone_cost",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_payment_detail",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "daily_sales_feed",
+            "raw_payment_detail",
+            "raw_sales"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "daily_sales_feed"
+        },
+        {
+          "rows": 2,
+          "table": "raw_payment_detail"
+        },
+        {
+          "rows": 2,
+          "table": "raw_sales"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 25.0,
+        "rows_total": 25.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "gp.net_profit": {
+      "capped": false,
+      "figure": {
+        "amount": -15.0,
+        "label": "Net profit",
+        "unit": "money"
+      },
+      "note": "One row per store, exactly as the table below lists them — including a row for money no store could be matched to, which is shown under the spelling the feed actually sent rather than dropped. These rows are the selection you are viewing: the figure above is this page's own total over them, so the two are one fold. Net profit is revenue less rep pay, less store expenses, less phone cost — and that subtraction is done PER STORE, on the row, which is why it opens at all. A store whose expenses or payroll were never entered is a row here with the gap visible, instead of a shortfall spread invisibly across the company.",
+      "rows": [
+        {
+          "amount": 10.0,
+          "fields": {
+            "market": "LI",
+            "store code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "net_profit",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            },
+            {
+              "column": "net_profit",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_sales",
+              "traceable": true
+            },
+            {
+              "column": "net_profit",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_payment_detail",
+              "traceable": true
+            },
+            {
+              "column": "net_profit",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_mi",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "daily_sales_feed",
+            "raw_mi",
+            "raw_payment_detail",
+            "raw_sales"
+          ],
+          "subject": null
+        },
+        {
+          "amount": -25.0,
+          "fields": {
+            "market": "NJ",
+            "store code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "net_profit",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            },
+            {
+              "column": "net_profit",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_sales",
+              "traceable": true
+            },
+            {
+              "column": "net_profit",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_payment_detail",
+              "traceable": true
+            },
+            {
+              "column": "net_profit",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_mi",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "daily_sales_feed",
+            "raw_mi",
+            "raw_payment_detail",
+            "raw_sales"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "daily_sales_feed"
+        },
+        {
+          "rows": 2,
+          "table": "raw_mi"
+        },
+        {
+          "rows": 2,
+          "table": "raw_payment_detail"
+        },
+        {
+          "rows": 2,
+          "table": "raw_sales"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": -15.0,
+        "rows_total": -15.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "gp.rep_pay": {
+      "capped": false,
+      "figure": {
+        "amount": 125.0,
+        "label": "Rep incentives",
+        "unit": "money"
+      },
+      "note": "One row per store, exactly as the table below lists them — including a row for money no store could be matched to, which is shown under the spelling the feed actually sent rather than dropped. These rows are the selection you are viewing: the figure above is this page's own total over them, so the two are one fold. Each figure was read out of what the last commission calculation WROTE DOWN for this month, not out of the sales and statement rows that calculation read — so the trail stops at the stored run, and re-running it is what changes these numbers.",
+      "rows": [
+        {
+          "amount": 80.0,
+          "fields": {
+            "market": "LI",
+            "store code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "rep_pay",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "rep_commissions",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "rep_commissions"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 45.0,
+          "fields": {
+            "market": "NJ",
+            "store code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "rep_pay",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "rep_commissions",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "rep_commissions"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "rep_commissions"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 125.0,
+        "rows_total": 125.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "gp.total_rev": {
+      "capped": false,
+      "figure": {
+        "amount": 485.0,
+        "label": "Total revenue",
+        "unit": "money"
+      },
+      "note": "One row per store, exactly as the table below lists them — including a row for money no store could be matched to, which is shown under the spelling the feed actually sent rather than dropped. These rows are the selection you are viewing: the figure above is this page's own total over them, so the two are one fold. Revenue on this report is what the sales feed rang plus what the carrier paid plus the residuals, so each row names all three. The Comp columns in the table are NOT part of it and net profit does not move with them.",
+      "rows": [
+        {
+          "amount": 290.0,
+          "fields": {
+            "market": "LI",
+            "store code": "B-1"
+          },
+          "in_figure": true,
+          "label": "1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "total_rev",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            },
+            {
+              "column": "total_rev",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_sales",
+              "traceable": true
+            },
+            {
+              "column": "total_rev",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_payment_detail",
+              "traceable": true
+            },
+            {
+              "column": "total_rev",
+              "keys": {
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_mi",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "1 Main St"
+          },
+          "sources": [
+            "daily_sales_feed",
+            "raw_mi",
+            "raw_payment_detail",
+            "raw_sales"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 195.0,
+          "fields": {
+            "market": "NJ",
+            "store code": "B-2"
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "total_rev",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            },
+            {
+              "column": "total_rev",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_sales",
+              "traceable": true
+            },
+            {
+              "column": "total_rev",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_payment_detail",
+              "traceable": true
+            },
+            {
+              "column": "total_rev",
+              "keys": {
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_mi",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "daily_sales_feed",
+            "raw_mi",
+            "raw_payment_detail",
+            "raw_sales"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 2,
+      "rows_total_count": 2,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 2,
+          "table": "daily_sales_feed"
+        },
+        {
+          "rows": 2,
+          "table": "raw_mi"
+        },
+        {
+          "rows": 2,
+          "table": "raw_payment_detail"
+        },
+        {
+          "rows": 2,
+          "table": "raw_sales"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 2,
+        "difference": 0.0,
+        "figure": 485.0,
+        "rows_total": 485.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 2 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
     "rep_pay.latest": {
       "capped": false,
       "figure": {

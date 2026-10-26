@@ -52,6 +52,7 @@ table has (it shows the company-wide line whatever is selected).
 framework import, no clock, no org / carrier / tenant / product name (RULE TWO).
 Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §CORE-17.3j.
 """
+from app.modules.commcalc import data_lineage_registry as _lineage
 from app.modules.core import report_drilldown
 
 #: WHICH FEED THE RESOLVED DISTRIBUTOR-PAYABLE BASIS READ. Keyed on the stored config value
@@ -70,7 +71,10 @@ EMPLOYEES = "employees"
 #: The three places HOURS can come from, named only where they answered for that person.
 TIMELOG = "timelog"
 MANUAL_HOURS = "manual_hours"
-SHIFTS = "shifts"
+#: The schedule. DEREFERENCED from the lineage registry (`SCHEDULE`), which is the one home
+#: for "which relation records a store's scheduled day" — this file and
+#: `commcalc/targets_drilldown` each held a literal copy until batch 18 re-keyed both.
+SHIFTS = _lineage.SCHEDULE
 #: What decides the withheld half of the tax estimate.
 PAYROLL_SETTINGS = "payroll_settings"
 #: Where a store's rent and its insurance premium are recorded.
