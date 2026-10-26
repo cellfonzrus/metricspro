@@ -42,7 +42,8 @@ def ok(c, w):
 
 
 from app.modules.commcalc import device_aging_policy as ap                     # noqa: E402
-from app.modules.payables import unsold_inventory as ui                        # noqa: E402
+from app.modules.payables import unsold_inventory as ui
+from app.modules.payables import recovered_amount as _rec                        # noqa: E402
 from app.modules.payables import vendor_invoice as vi                          # noqa: E402
 
 TODAY = date(2026, 10, 22)
@@ -136,12 +137,22 @@ summ = ui.stamp_aging(ROWS, POL, TODAY)
 # The two honesty keys arrived with §COMMCALC-29: both out-of-pocket rows here carry a price, so
 # nothing is unpriced and the amount is a real total. The whole dict is compared on purpose — a new
 # key appearing unannounced is exactly the drift this harness exists to catch.
+# §COMMCALC-33 added the netting keys. These fixtures carry no recovery basis, so the exposure is
+# UNCHANGED at 579.0 and merely flagged as not netted — which is the regression this comparison
+# catches: an earlier draft of that change dropped unmeasured devices from the total and would have
+# zeroed Boost's real exposure here.
 ok(summ == {"devices": 5, "out_of_pocket": 2, "out_of_pocket_amount": 579.0, "not_measured": 1,
-            "out_of_pocket_unpriced": 0, "amount_incomplete": False},
+            "out_of_pocket_unpriced": 0, "recovered_amount": 0.0, "netted_devices": 0,
+            "recovery_unmeasured": 2, "recovery_unmeasured_amount": 579.0,
+            "recovery_note": _rec.UNMEASURED_NOTE,
+            "amount_not_netted": True, "amount_incomplete": False},
    "E1 the exposure is counted AND priced, and the unjudgeable row is reported apart from both")
 ok(ui.stamp_aging([dict(ROWS[0], owed_to_vip=None)], POL, TODAY) ==
    {"devices": 1, "out_of_pocket": 1, "out_of_pocket_amount": 0.0, "not_measured": 0,
-    "out_of_pocket_unpriced": 1, "amount_incomplete": True},
+    "out_of_pocket_unpriced": 1, "recovered_amount": 0.0, "netted_devices": 0,
+    "recovery_unmeasured": 1, "recovery_unmeasured_amount": 0.0,
+    "recovery_note": _rec.UNMEASURED_NOTE,
+    "amount_not_netted": True, "amount_incomplete": True},
    "E1b ...and a flagged device with NO price makes the amount say it is incomplete, rather than "
    "presenting $0.00 as a total (§COMMCALC-29, the 2026-10-23 defect)")
 ok(ROWS[0]["out_of_pocket"] is True and ROWS[1]["out_of_pocket"] is False,

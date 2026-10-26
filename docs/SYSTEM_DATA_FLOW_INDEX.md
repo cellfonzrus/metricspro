@@ -155,6 +155,7 @@ Primary code homes:
 | COMMCALC-30 | **A human who is watching is not idle** | His live session was not failing, it was being closed on him: "Live session closed after inactivity", eight minutes into a captcha he was working through. Only commands reset the activity clock; the frame and state polls never did. Which question is that clock actually answering, and which budget had no business being applied to a person who is demonstrably there? |
 | COMMCALC-31 | **Detection is off the operator's input path too, and the session says what it is doing** | "It does not go past it, it is very slow to react" — and "it should show what is going on, it seems nothing is moving", four days after the click fix shipped. The loop stops every 1.2s to re-read every frame of the page, and it did so BEFORE servicing the human's clicks. What else was left on the latency path the last fix cleared, and what fact does a standing instruction fail to tell the person watching? |
 | COMMCALC-32 | **A line that bought no device is not a device payable** | "product not available , it shoudl show the product" — every payables row read Product Not Available, two of them as `discrepancy`, the status that means he is carrying a handset cost. 869 of those lines are the customer's own phone, and the carrier feed declares it. Which blank means "I could not price this", which means "nothing was bought", and what does a ledger keyed on ACTIVATIONS assume about purchases? |
+| COMMCALC-33 | **What the carrier already recovered is read, and a placeholder is not a measurement** | "the payments for all phones automatically are done from commission and rebates received and auto adjusted" — said to a banner billing him $544,447.78 of his own cash. The deductions were on the row the build already read, −$834,234.25 of them, and the engine wrote `rebate_amount = 0.0` as a placeholder. What does a zero assert that an unwired source has no right to, and which way should the default point when being wrong deletes a liability? |
 
 ---
 
@@ -7512,6 +7513,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /payables/payables` | `payables/router.py` `list_payables` (`start`/`end` window `due_date`, defaulting to today→+3 via `commcalc/date_window.ahead_window` unless `all_dates`; `undated_excluded` and `no_device_excluded` reported; non-payable statuses excluded through `payables/ledger_status.exclude_non_payable`) | §15 (module 095), §COMMCALC-25, §COMMCALC-32 |
 | `GET /payables/owed-by-date` | `payables/router.py` `owed_by_date` — net owed per `due_date`, each date row carrying its own per-store split (`by_store`, keyed on the §64 store identity) so the right account is debited; `market` accepts a comma-separated list through `_market_by_store`/`_market_of` (RULE FIVE); unresolved money reported as `unassigned_owed`; source named `device_ledger` or `vendor_feed` | §15 (module 095), §COMMCALC-25, §COMMCALC-32 |
 | `GET /payables/due` | `payables/router.py` `due_payables` (same window home; non-payable statuses excluded) | §15 (module 095), §COMMCALC-32 |
+| `POST /payables/rebuild` (the ledger it writes) | `payables/engine.py` → `device_payable_ledger`: `rebate_amount` + `rebate_basis` through `payables/recovered_amount.py` (the one home for what the carrier already recovered, under the sign declared on `payable_source_map.reimbursement_sign`); an unwired source stores NULL and is FLAGGED, never 0.00 | §15 (module 095), §COMMCALC-33 |
 | `GET /payables/filter-options` | `payables/router.py` `payables_filter_options` (canonical §13c; every option carries `store_key`) | §15 (module 095), §COMMCALC-25 |
 | `POST /payables/rebuild` | `payables/router.py` → `engine.build_ledger` | §15 (module 095) |
 | `GET /plan-installments` | `10726` | §8 |
@@ -26074,6 +26076,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-30 | commcalc |
 | COMMCALC-31 | commcalc |
 | COMMCALC-32 | commcalc |
+| COMMCALC-33 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -33701,6 +33704,167 @@ excluded-count note crosses). Still open and NOT fixed here: **Weekly Owed to Di
 `commcalc.asset_ledger` and `billing_friday`, which are Boost-only, so it is blank for every Total
 tenant — it must roll up each carrier's own declared cadence off the SAME daily owed home as
 `/payables/owed-by-date`, not derive the money a second way.
+
+---
+
+## §COMMCALC-33. WHAT THE CARRIER ALREADY RECOVERED IS READ, AND A PLACEHOLDER IS NOT A MEASUREMENT (owner report 2026-10-26)
+
+**What he said.** Against a banner reading *"2656 unsold devices must be paid OUT OF POCKET —
+$544,447.78 … These are past their payment due date and still unsold, so the invoice is funded from
+your own cash rather than from the sale"*:
+
+> *"the payments for all phones automatically are done from commission and rebates received and auto
+> adjusted"*
+
+**He was right, and the netting was never missing.** It sits on the row the build already reads:
+`commcalc.raw_ma_commission.rebate` is **negative on 3,442 of 4,495** Luxelink lines, totalling
+**−$834,234.25** — the device cost deducted from his commission, line by line. Measured 2026-10-26
+against the live ledger, on the very 2,656 devices the banner named:
+
+| | devices | amount |
+| --- | --- | --- |
+| fully deducted already | 1,070 | $228,779.70 |
+| partly deducted | 957 | owed $305,380.43 vs $277,294.00 deducted |
+| no deduction found | 37 | $10,287.65 |
+
+So roughly **$38,374** is genuinely unrecovered where the screen said **$544,447.78** — an
+overstatement of about fourteen times, in the direction that tells an owner he is short half a
+million dollars of cash. (The $28,086 shortfall inside the partly-deducted group compares two
+sources — the ordering sheet's price against the statement's deduction — so part of it will be price
+differences or a deduction landing on a later statement. That caveat is published with the figure
+rather than filed off it.)
+
+### COMMCALC-33.1 THE CLASS, and it is not "we forgot to read a column"
+
+`payables/engine.py` held this, for every carrier whose recovery is matched by IMEI:
+
+```python
+elif rebate_source == "imei_match":
+    mt = cfg.get("reimbursement_match_table")
+    if mt:   # pending until a Total reimbursement report exists -> stays 0 when unset
+        rebate_amount = 0.0
+```
+
+**A placeholder that returns a NUMBER is a claim.** `0.0` does not say "not wired yet"; it says
+*nothing was recovered against this device*, and it said it in all 4,495 rows of the ledger. Every
+reader downstream believed it: 1,400 lines went to `discrepancy` — the status whose own legend says
+the dealer is still carrying the cost — and the out-of-pocket banner presented the gross as cash. The
+honest value for an unwired source is **unknown**, and unknown must be labelled, never billed.
+
+The single float could not hold the three states the question actually has, which is why the fix is a
+type and not a line:
+
+| state | what it means | what a surface may say |
+| --- | --- | --- |
+| **recovered** | measured, amount known | already settled by the carrier |
+| **uncovered** | measured, recovery falls short | THIS is out of pocket |
+| **unmeasured** | nothing wired, or the declared source could not be read | the figure is NOT NETTED — never "$0.00 recovered" |
+
+### COMMCALC-33.2 DUPLICATE CHECK (the build gate) — what was REUSED, not rebuilt
+
+| the question | who already answered it | what this change did |
+| --- | --- | --- |
+| is a basis evidence, or a last resort? | `commcalc/carrier_dollar_class.py::component_is_evidence` (§66) | **REUSED as doctrine** — `is_measured` is the same allowlist shape, so an unruled basis is not evidence |
+| a declared source that cannot be READ | `payables/declared_source.py` (§COMMCALC-29) | **REUSED** — `source_unreadable` stays distinguishable from "nothing declared", which is that section's whole lesson |
+| which ledger rows are payable at all | `payables/ledger_status.py` (§COMMCALC-32) | **REUSED** unchanged; a no-device line never reaches this arithmetic |
+| the selling window and the out-of-pocket verdict | `commcalc/device_aging_policy.py` (§COMMCALC-26) | **REUSED** — the verdict is independent of the recovery and was not touched |
+| the ePay and Boost/VIP recovery reads | `_epay_reimb_amount`, `_classify_rma` | **REUSED**, now folded through the same home so all three sources answer in one vocabulary |
+
+Nothing new was created to answer a question already answered. What is new is the vocabulary for
+*"do we know what was recovered?"*, which existed nowhere.
+
+### COMMCALC-33.3 ONE FACT, ONE HOME, DEREFERENCED
+
+`backend/app/modules/payables/recovered_amount.py` — PURE, standard library only.
+
+- `MEASURED_BASES` + `is_measured(basis)` — the ALLOWLIST. **Fail-CLOSED**, deliberately the opposite
+  of `ledger_status.is_payable`: there an unknown status must stay payable so money cannot vanish
+  from a total; here an unknown basis must not count as proof, because a wrong "measured" **deletes a
+  real liability**. The two live side by side and their defaults point opposite ways on purpose.
+- `sign_of(cfg)` / `from_value` / `from_row` — **the sign is declared, never guessed.** On the MA
+  statement a recovery is a deduction and arrives negative; on Boost/VIP and ePay a reimbursement
+  arrives positive. `abs()` would turn a charge into a credit; `> 0` reads a deduction as nothing,
+  which is exactly how $834,234.25 went unseen. So it is config
+  (`payable_source_map.reimbursement_sign`), and an undeclared sign keeps the historic meaning
+  rather than inventing one.
+- `resolve(amount, basis)` — an absent amount forces the basis back to unmeasured, so no stale basis
+  survives on a row behind it, and an amount cannot smuggle in a basis nobody ruled.
+- `out_of_pocket(owed, recovered, basis)` / `split(rows)` — ONE convention for the arithmetic.
+- `UNMEASURED_NOTE`, `RECOVERED_NOTE` — one wording, so "deducted from commission" and "not netted"
+  read the same on every screen.
+
+Callers wired in the same PR: `payables/engine.py` (all three recovery sources; writes
+`rebate_basis`, and `rebate_amount` as **NULL** where nothing measured it) and
+`payables/unsold_inventory.py::stamp_aging` (the exposure figure every surface headlines).
+
+### COMMCALC-33.4 THE HALF I GOT WRONG FIRST, recorded because the next person will reach for it too
+
+The first draft **dropped** unmeasured devices from the exposure total — "unknown is not a bill".
+That is the same defect reversed: a second claim nobody measured. Worse, it was a cross-tenant
+regression. The Boost/VIP aging rows carry **no recovery basis at all**, so they would all have read
+as unmeasured and **Boost's real exposure would have gone to $0.00** — the identical shape to the
+2026-10-23 defect in §COMMCALC-29, introduced by the fix for it.
+
+Two existing proofs caught it (`harness_device_aging_policy.py` §E1/§E1b and
+`harness_payables_declared_source.py` §C6, which compare the WHOLE summary dict precisely so that
+unannounced drift fails the build). The corrected rule:
+
+> **An unnetted liability is reported IN FULL and flagged. It is never silently settled, and never
+> silently dropped.**
+
+A second lesson from the same pass: `amount_incomplete` already meant "flagged devices with no
+price". Overloading it with "not netted" quietly changed what every existing reader believed, so the
+new doubt got its **own** flag, `amount_not_netted`. Two doubts, two booleans.
+
+### COMMCALC-33.5 WHAT A SURFACE MAY NOW SAY
+
+`stamp_aging` returns `recovered_amount`, `netted_devices`, `recovery_unmeasured`,
+`recovery_unmeasured_amount`, `recovery_note`, `amount_not_netted`. `out_of_pocket_amount` is the
+whole liability — the GAP where the recovery was measured, the GROSS where it was not — and
+`recovery_unmeasured_amount` says how much of that figure has never been netted. A screen can
+therefore state exactly what it knows instead of choosing a side.
+
+`discrepancy` now requires a MEASUREMENT: sold, and something measured that no rebate came back. An
+unchecked rebate is no longer an accusation.
+
+### COMMCALC-33.6 LOCKED SO IT CANNOT UN-WIRE
+
+`backend/harness_payables_recovered_amount.py` — **66 passed, 0 failed**, DB-free. §A the sign
+convention (A8: no number at all is unmeasured, never a recovery of 0.00). §B the allowlist (B4 an
+unruled basis is not measured; B8 unreadable stays distinguishable from absent). §C the arithmetic
+(C3 the corrected unmeasured rule; C4 a MEASURED zero IS out of pocket in full — the distinction the
+whole section exists for). §D the split. §E the live 2026-10-26 shapes. §F the RATCHET: **no
+`rebate_amount = 0.0` may survive in the engine**, every source must fold through `resolve`, the
+basis must be WRITTEN to the row, an unmeasured recovery must be stored NULL, `discrepancy` must
+require `rebate_measured`, nothing may `abs()` a recovery value, and the recovery path may name no
+carrier column.
+
+### COMMCALC-33.7 WHAT IS OWNER-GATED, AND ONE DEFECT REPORTED NOT FIXED
+
+- `database/migrations/1094_payable_recovery_sign_and_basis.sql` — additive, nullable
+  (`payable_source_map.reimbursement_sign`, `device_payable_ledger.rebate_basis`), COMMENTs,
+  `-- REVERT:` block, both grants restated. Applying it moves no money; the ledger re-statuses only
+  on the owner's next **Rebuild ledger** press.
+- The one-Run config SQL: `reimbursement_field = 'rebate'` and
+  `reimbursement_sign = 'negative_is_recovery'` on the two Total / MA rows. Until it is run, the
+  banner keeps its $544,447.78 — but now says that figure is **not netted**, which is the honest
+  version of the same screen.
+- **REPORTED, not repaired here (pre-existing RULE TWO violation).** `payables/engine.py` reads the
+  table name `raw_ma_commission` **literally** in the store-account fallback (the mig-314 index
+  path), which is a carrier feed name in code. It predates this change and sits in a different code
+  path; widening a money fix to reach it is how a PR stops being reviewable. The new ratchet
+  therefore binds the recovery path, and this line is named here so it is not lost.
+
+### COMMCALC-33.8 Cross-references
+
+Same home, other axes: §COMMCALC-32 (the no-device status, whose rows never reach this arithmetic),
+§COMMCALC-29 (a declared source that cannot be read — the sibling whose vocabulary is reused),
+§COMMCALC-26 (the declared window and cost source), §COMMCALC-25 (the filters on the same screen).
+Same class: §66 (a last-resort placement read as evidence), §19.18 (a mechanism written and its
+callers left unwired), §COMMCALC-29.1 (an empty result standing in for a broken declaration).
+Neighbours: §11 (the aging report this exposure figure headlines), §64 (the store identity the same
+rebuild stamps). Still open and NOT fixed here: **Weekly Owed to Distributor** reads
+`commcalc.asset_ledger` and `billing_friday`, both Boost-only, so it is blank for every Total tenant.
 
 ---
 
