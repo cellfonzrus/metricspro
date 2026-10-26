@@ -66,14 +66,18 @@ PAYABLE_BASIS_FEEDS = {
 }
 
 #: Where a person's pay rate and their identity live. Named on every payroll row: the gross cannot be
-#: computed without it.
-EMPLOYEES = "employees"
+#: computed without it. DEREFERENCED from the lineage registry (`EMPLOYEE_ROSTER`), which is the one
+#: home for that name — this file held a literal copy of it until batch 24 re-keyed it, exactly as
+#: batch 20 re-keyed the time clock and batch 18 the schedule below.
+EMPLOYEES = _lineage.EMPLOYEE_ROSTER
 #: The three places HOURS can come from, named only where they answered for that person. The TIME
 #: CLOCK is DEREFERENCED from the lineage registry (`TIME_CLOCK`), which is the one home for "which
 #: relation records an hour somebody actually worked" — this file held a literal copy of it until
 #: batch 20 re-keyed it, exactly as batch 18 re-keyed the schedule two lines below.
 TIMELOG = _lineage.TIME_CLOCK
-MANUAL_HOURS = "manual_hours"
+#: Hand-entered hours. DEREFERENCED from the lineage registry (`MANUAL_HOURS`) as of batch 24, for
+#: the same reason as the two names around it.
+MANUAL_HOURS = _lineage.MANUAL_HOURS
 #: The schedule. DEREFERENCED from the lineage registry (`SCHEDULE`), which is the one home
 #: for "which relation records a store's scheduled day" — this file and
 #: `commcalc/targets_drilldown` each held a literal copy until batch 18 re-keyed both.

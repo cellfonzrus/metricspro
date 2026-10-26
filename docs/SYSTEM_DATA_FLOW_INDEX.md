@@ -153,8 +153,9 @@ Primary code homes:
 | COMMCALC-27 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks, and the page sent one web request per character typed. What is the operator's keystroke charged for before it runs, and what work has no business on the latency path of their next action? |
 | COMMCALC-28 | **A poll's cadence is a gap between responses, never a timer rate** | "It is very laggy" — said after the input fix had shipped and deployed. The live view asked for a new frame every 300ms on a fixed timer, across three hops that take longer than that, and fanned out three more requests per click. What happens to a poll whose request outlives its own interval, and whose connection budget is it spending? |
 | COMMCALC-30 | **A human who is watching is not idle** | His live session was not failing, it was being closed on him: "Live session closed after inactivity", eight minutes into a captcha he was working through. Only commands reset the activity clock; the frame and state polls never did. Which question is that clock actually answering, and which budget had no business being applied to a person who is demonstrably there? |
-| COMMCALC-31 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
-| COMMCALC-32 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
+| COMMCALC-31 | **Detection is off the operator's input path too, and the session says what it is doing** | "It does not go past it, it is very slow to react" — and "it should show what is going on, it seems nothing is moving", four days after the click fix shipped. The loop stops every 1.2s to re-read every frame of the page, and it did so BEFORE servicing the human's clicks. What else was left on the latency path the last fix cleared, and what fact does a standing instruction fail to tell the person watching? |
+| COMMCALC-32 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
+| COMMCALC-33 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
 
 ---
 
@@ -6749,6 +6750,17 @@ Proof: `backend/harness_payroll_hours_basis.py` — sections A–I, **R the regr
 the schedule while a punch measured the day), **O the owner ruling** (§14z), **P + Q** (§14y.1 below),
 Z an armed negative control. Lock: `backend/harness_payroll_hours_basis_lock.py`, EIGHT axes, CI job
 in `carrier-vocab-guard.yml`.
+
+- **DRILL-DOWN (§CORE-17.3x, batch 24):** the basis is now a REPORT'S PROVENANCE as well as its
+  reason. `storeops/payroll_hours_drilldown.py` keys a basis→relation map on THIS module's own basis
+  constants (`BASIS_RELATIONS`, with `PAYING_BASES` / `MEASURED_BASES` dereferenced by identity), so
+  `/storeops/payroll` and `/storeops/reports` can tell a reader, per person, whether the hours above
+  came out of the time clock, out of the schedule, or out of nothing at all — and the build fails if
+  a basis added here has no provenance there. `NOT_MEASURED_UNPAID` and `PUNCH_UNUSABLE` are the
+  reason words a drill row carries, with reader-facing sentences in
+  `core/report_drilldown.UNMEASURED_REASONS`; this module's own longer explanations stay here. This
+  module is also a `module_graph` fact of its own now (`payroll_hours_basis`), with its eleven
+  callers named by hand.
 
 
 #### 14y.1 THE ONE HOME ANSWERED, BUT FOUR CALLERS ASKED IT WITH NOTHING (owner ruling 2026-10-12, mig `1076`)
@@ -26064,6 +26076,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-30 | commcalc |
 | COMMCALC-31 | commcalc |
 | COMMCALC-32 | commcalc |
+| COMMCALC-33 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -30349,7 +30362,7 @@ a browser without `color-mix()` keeps today's nav rather than rendering somethin
 
 | Lock | What fails the build |
 | --- | --- |
-| `frontend/prove_nav_accents.mjs` (**86 checks**, CI job *Sidebar colour proof*) | reads the REAL `globals.css` and `layout.tsx`: the palette is declared once with contiguous slots; `NAV_ACCENT_SLOTS` equals that count; the rows dereference `var(--nav-accent-N)` and spell no colour; neighbours never share a slot; the icon chip is a painted BOX with a size of its own and **not** a `color` on the glyph (the invisible-change regression); **per-slot contrast computed** for resting / hover / active, the chip's standoff from the rail, and the active row's filled background and thicker bar; the `@supports` fallback is intact; §H for the headings — every group and every report category declares an icon, `groupIcon` answers from the declaration, the fallback covers a tenant-created group, `applyNavLayout` carries the icon through (driven against the REAL `rbac.ts`), and the heading is bolder, larger, left-aligned and contrast-checked per slot; nine negative controls (a gap in the palette, a count disagreement, a literal colour, a label with no white left, a tinted chip, two adjacent rows sharing a slot, a one-colour palette) |
+| `frontend/prove_nav_accents.mjs` (**67 checks**, CI job *Sidebar colour proof*) | reads the REAL `globals.css` and `layout.tsx`: the palette is declared once with contiguous slots; `NAV_ACCENT_SLOTS` equals that count; the rows dereference `var(--nav-accent-N)` and spell no colour; neighbours never share a slot, and consecutive slots are at least **90° apart in HUE** so the alternation is visible and not merely numbered; the icon chip is a painted BOX with a size of its own and **not** a `color` on the glyph (the invisible-change regression); **per-slot contrast computed** for resting / hover / active, the chip's standoff from the rail, and the active row's filled background and thicker bar; the `@supports` fallback is intact; §H for the headings — every group and every report category declares an icon, `groupIcon` answers from the declaration, the fallback covers a tenant-created group, `applyNavLayout` carries the icon through (driven against the REAL `rbac.ts`), and the heading is bolder, larger, left-aligned and contrast-checked per slot; nine negative controls (a gap in the palette, a count disagreement, a literal colour, a label with no white left, a tinted chip, two adjacent rows sharing a slot, a one-colour palette, two slots a shade apart in one hue) |
 
 ### §CORE-14.5 THE GROUP HEADINGS (owner ask 2026-10-21)
 
@@ -30368,6 +30381,28 @@ the rail the colour had not reached.
 Every heading colour is computed against the rail exactly as the rows are (5.0:1 – 7.4:1). The
 sidebar spells **no icon of its own**: it renders what the nav hands it, which is why a group that
 nobody declared gets a folder rather than a gap where its neighbours have an icon.
+
+### §CORE-14.6 TWO COLOURS, NOT SIX (owner ask 2026-10-26)
+
+Owner, with the six-colour rotation live: *"too many colors just stick to 2 colors blue and orange
+alternating"*.
+
+Nothing about the mechanism changed, which is the point of §CORE-14.2: the palette is the ONE home
+and the cycle length is **derived from its size**, so the whole ask is two lines — the list goes from
+six entries to two (`--nav-accent-1: #60a5fa` logo blue, `--nav-accent-2: #fb923c` orange) and
+`NAV_ACCENT_SLOTS` follows it from 6 to 2. No row, no heading and no stylesheet rule names a colour,
+so none of them needed touching, and with two slots the rotation IS a strict alternation.
+
+**The class the new lock answers.** "Two colours" decays in one specific way: a later change adds a
+second *blue*. It alternates by slot number and not to the eye, and the old checks would all have
+passed it — "no two adjacent rows share a slot" is about slot numbers, not about colour. So the
+alternation bar is now a HUE distance: consecutive slots must sit **at least 90° apart on the colour
+wheel**, computed from the real declared values (the shipped pair is **174° apart**, nearly
+opposite), with a negative control that the two logo blues `#60a5fa` / `#38bdf8` are rejected.
+Both colours re-clear the contrast bars unchanged (resting label 5.26:1 and 5.73:1 on the navy).
+
+The retired green, amber, pink and violet slots were nav-only values; no other surface dereferenced
+them (checked across `src/`), so nothing else restates or loses a colour.
 
 ### §CORE-14.4 WHAT IS NOT DONE HERE
 
@@ -33427,7 +33462,104 @@ Neighbours: §COMMCALC-10 (the progress budgets this sits beside), §COMMCALC-11
 
 ---
 
-## §COMMCALC-31. A DEVICE'S ARRIVAL ON THE SHELF HAS ONE DATE (owner ask 2026-10-26)
+
+---
+
+## §COMMCALC-31. DETECTION IS OFF THE OPERATOR'S INPUT PATH TOO, AND THE SESSION SAYS WHAT IT IS DOING (owner report 2026-10-26)
+
+Two sentences from the owner on the UPS Team Portal login, four days after §COMMCALC-27 shipped and
+deployed: *"it does not go past it , it is very slow to react"* and *"also it shoudl show what is
+going on it seems nothing is moving"*. His 18:06 UTC attempt is on the row — the start path is
+healthy; the window he was given was not.
+
+### COMMCALC-31.1 THE CLASS — the same sentence, a second place
+
+§COMMCALC-27 established the rule and fixed ONE site of it:
+
+> **Work that only makes sense once the operator has STOPPED must never sit on the latency path of
+> their next action, and their input must never wait behind a frame tick.**
+
+It took the click's ~750ms VERIFICATION off that path. It left the loop's own DETECTION on it.
+`_preauth_detect` is not cheap: `_classify` reads the text of **every frame** of the page and
+`_captcha_present` queries selectors across all of them. On a heavy portal that costs far more than a
+frame tick — and the order of the tick was `_pump` → (every `_CLASSIFY_POLL_S`) detect → **then**
+drain the operator's input. So the first click of a burst was charged for a pump PLUS a whole page
+re-read before it was even dequeued. The fix named the class correctly and then stopped at the
+instance, which is precisely what the 2026-09-20 directive forbids.
+
+### COMMCALC-31.2 ONE FACT, ONE HOME, DEREFERENCED
+
+- **The input drain LEADS the tick**, in `_preauth_loop` and `_post_auth_loop` alike — ahead of the
+  pump and ahead of the detect, not after them. That is what makes the rule true of the first click
+  of a burst and not only the rest of it.
+- **`detect_due(now, last_detect, input_pending)`** is THE one answer to *may detection run on this
+  tick*. Pure, and it never raises: unreadable inputs read as **DUE**, so the failure mode is the old
+  always-detect behaviour, never a session that silently stops noticing a captcha.
+- **It reads the home §COMMCALC-27 already established** — `operator_input_pending` — rather than
+  peeking at the queue a second time. One reader of "still acting", as it was before.
+- **`_DETECT_DEFER_MAX_S` (4s)** is the ceiling, and it is load-bearing: *defer while they are
+  acting* with no ceiling is exactly how a captcha appearing mid-burst would stop being seen. Past
+  the ceiling detection runs regardless of input.
+
+### COMMCALC-31.3 THE REPORTING HALF — a standing instruction does not move
+
+`phase` and `message` are an INSTRUCTION ("complete the login on the screen"), not a report of
+progress. They are identical for a session grinding through a page re-read and a session that has
+stopped, which is why *"nothing is moving"* was a reasonable reading and not a display preference.
+The step in flight is a **different fact** from the phase, so it gets its own home:
+
+- **`_note_act(doing)`** is the one setter. Lock-only — it never touches the page or the row, because
+  it runs on the hot path.
+- **`activity()`** is the one reader: the step, how long it has been in flight, and the age of the
+  newest frame. Ages are **None** before the first frame, never a fabricated `0` that would read as
+  "a frame just arrived".
+- **`state()` and `frame_since()` dereference it.** Neither composes its own answer, and the
+  *unchanged* frame payload carries it too — so the line moves even when the picture does not, which
+  is the whole point.
+- The modal renders it only when the backend sent one. There is no client-side "working…".
+
+What it buys beyond comfort: *"it does not go past it"* is still undiagnosed, and this is the
+instrument that will say which step the next attempt sits on instead of leaving it to memory.
+
+### COMMCALC-31.4 THE SIBLINGS, CHECKED
+
+| other path that answers the same question | verdict |
+| --- | --- |
+| `_post_auth_loop` (the same operator typing into the same single-threaded loop) | **FIXED in this PR** — its drain leads its tick too |
+| `vidapay_sweep`'s `_classify` call sites (the unattended sweeps) | **excused with the reason**: no operator is waiting on them, so nothing of theirs is on a latency path |
+| `_drive`'s single pre-loop classify | **excused**: it runs before any input queue exists |
+| `_do_click`'s post-click re-classify | **already fixed** by §COMMCALC-27 and untouched here |
+
+### COMMCALC-31.5 DUPLICATE CHECK (the build gate) — what was REUSED, not rebuilt
+
+| question | existing home | this PR |
+| --- | --- | --- |
+| is the operator still acting | `operator_input_pending` (§COMMCALC-27) | **reused, untouched** — the deferral reads it |
+| how promptly does input reach the page | §COMMCALC-27 | **EXTENDED to the detect path — not joined by a sibling** |
+| how often may state be re-detected | `_CLASSIFY_POLL_S` | **folded into `detect_due`; the loop no longer compares against it inline** |
+| how long may a phase go without input | `inactivity_limit` (§COMMCALC-10, §COMMCALC-30) | reused, untouched |
+| is a human watching | `viewer_present` (§COMMCALC-30) | reused, untouched |
+| how often does the client ask for a frame | §COMMCALC-28 | reused, untouched — the activity line rides that same poll |
+| what phase is this session in | `phase` / `message` | reused, untouched — deliberately NOT conflated with the step in flight |
+
+### COMMCALC-31.6 LOCKED
+
+`harness_live_input_latency.py` §J and §K — 151 checks in the file now, DB-free, browser-free, in the
+job that already ran it. It fails the build if the drain stops leading either tick, if the loop
+re-decides the poll interval itself instead of dereferencing `detect_due`, if the deferral loses its
+ceiling (an unbounded deferral is an armed negative control), if `detect_due` stops reading
+`operator_input_pending`, if detection is removed rather than deferred, if a surface reads the raw
+activity field instead of `activity()`, if `_note_act` grows a page or row write, or if the frontend
+invents a step the backend never sent.
+
+### COMMCALC-31.7 Cross-references
+
+Same home, other axes: §COMMCALC-27 (the rule this applies in its second place), §COMMCALC-28 (the
+poll that carries the activity line), §COMMCALC-30 (who is there), §COMMCALC-13 (what a finished
+session leaves on the row), §COMMCALC-24 (which process may answer at all). Neighbours:
+§COMMCALC-10 (the no-progress budgets), §COMMCALC-11 (the human check), §COMMCALC-07 (the UPS pull
+this login exists to feed).
+## §COMMCALC-32. A DEVICE'S ARRIVAL ON THE SHELF HAS ONE DATE (owner ask 2026-10-26)
 
 Owner, verbatim: *"invenotry aging in luxeliunk shodul say sell within 10 days of receiving the
 phones in stock and it should be on every sales reps daSHBOARDS WHEN TEHY LOG IN"*.
@@ -33436,9 +33568,9 @@ phones in stock and it should be on every sales reps daSHBOARDS WHEN TEHY LOG IN
 `backend/app/modules/commcalc/device_history.py` (`build_aging_inventory`, the caller that disagreed)
 **Lock:** `backend/harness_inventory_stock_age.py` — 36 checks · and
 `backend/harness_inventory_stock_age_guard.py` — the build gate, run by `carrier-vocab-guard.yml`
-**Migration:** none. The window itself is a config ROW (§COMMCALC-31.6).
+**Migration:** none. The window itself is a config ROW (§COMMCALC-32.6).
 
-### COMMCALC-31.1 THE CLASS, NOT THE INSTANCE
+### COMMCALC-32.1 THE CLASS, NOT THE INSTANCE
 
 The ask looks like a number change. It is not: it names a fact the platform had no single answer for
 — **the date a handset was received into stock.** `commcalc.inventory_aging_device.received_date`
@@ -33460,7 +33592,7 @@ other two reported **102**. The MI gate's own comment already recorded the share
 luxelink aging export carries age, not a received date"* — beside its own private copy of it, which
 is the §19.18 shape this index has now logged four times.
 
-### COMMCALC-31.2 THE ONE HOME
+### COMMCALC-32.2 THE ONE HOME
 
 `backend/app/modules/commcalc/inventory_stock_age.py` — PURE, standard library plus
 `device_aging_policy`. No DB, no I/O.
@@ -33480,18 +33612,18 @@ is the §19.18 shape this index has now logged four times.
   `device_history` crossed.
 - `days_left(row, policy, today)` — the window minus the age. Negative is RETURNED, not clamped:
   "4 days over" and "due today" are different conversations.
-- `resolve_window(carrier_id, policies, maps)` → `(policy | None, reason | None)` — §COMMCALC-31.4.
+- `resolve_window(carrier_id, policies, maps)` → `(policy | None, reason | None)` — §COMMCALC-32.4.
 - `shelf_row` / `summarise` — the render shape and its headline.
 
-### COMMCALC-31.3 THE AGE IS NEVER THE FILE'S AGE
+### COMMCALC-32.3 THE AGE IS NEVER THE FILE'S AGE
 
 Stated separately because it is the half most likely to be undone by a well-meaning edit. A reader
 that wants "days in stock" will find the column sitting right there, already an integer, already
 named for the question. It answers only for the day the file was pulled. Every surface asking a rep
-or a manager to act TODAY must count to today, and the guard (§COMMCALC-31.5) fails the build on the
+or a manager to act TODAY must count to today, and the guard (§COMMCALC-32.5) fails the build on the
 one assignment that re-introduces it.
 
-### COMMCALC-31.4 AN UNESTABLISHED DEADLINE IS NOT THE HOUSE DEFAULT
+### COMMCALC-32.4 AN UNESTABLISHED DEADLINE IS NOT THE HOUSE DEFAULT
 
 `resolve_window` deliberately does **not** fall back to the house 60 days the way
 `unsold_inventory.policy_for` does:
@@ -33508,7 +33640,7 @@ rep's card, where printing "45 days left" over a 10-day carrier's phone is the e
 §COMMCALC-26 was opened for. Two callers, two needs, one window resolver that is explicit about
 which it is serving.
 
-### COMMCALC-31.5 Locked so it cannot un-wire
+### COMMCALC-32.5 Locked so it cannot un-wire
 
 `backend/harness_inventory_stock_age_guard.py` — the build gate. Three axes:
 
@@ -33534,7 +33666,7 @@ stated as arithmetic (a unit received 16 days ago reads **6 days over** a declar
 **4 over** the previous 12, so the CONFIG ROW moves the number and no literal in code does) and the
 stale-snapshot defect stated as a measurement (102, not 9).
 
-### COMMCALC-31.6 What is owner-gated
+### COMMCALC-32.6 What is owner-gated
 
 `/mnt/project-files/inventory-aging-window/RUN_luxelink_sell_within_10_2026-10-26.sql` — one Run, one
 column, one row: `payable_source_map.sell_within_days` 12 → 10 on the Luxelink Total/MA map. No code
@@ -33543,32 +33675,32 @@ rows, which writes a disjoint column set, so neither reverts the other.
 
 ---
 
-## §COMMCALC-32. A REP'S SHELF, ON THE SCREEN A REP LANDS ON (owner ask 2026-10-26)
+## §COMMCALC-33. A REP'S SHELF, ON THE SCREEN A REP LANDS ON (owner ask 2026-10-26)
 
-Owner, verbatim, same sentence as §COMMCALC-31: the selling deadline *"should be on every sales reps
+Owner, verbatim, same sentence as §COMMCALC-32: the selling deadline *"should be on every sales reps
 daSHBOARDS WHEN TEHY LOG IN"*.
 
 **Module:** `backend/app/modules/commcalc/router.py` (`GET /commcalc/my-shelf`) ·
 `frontend/src/app/(platform)/commcalc/targets/my/_components/ShelfAging.tsx`
-**Lock:** the pure logic is §COMMCALC-31's two harnesses; the endpoint composes them and owns no
+**Lock:** the pure logic is §COMMCALC-32's two harnesses; the endpoint composes them and owns no
 arithmetic of its own.
 **Migration:** none.
 
-### COMMCALC-32.1 WHY THAT SCREEN
+### COMMCALC-33.1 WHY THAT SCREEN
 
 `/commcalc/targets/my` is the configured `home` for the `sales_rep` role (mig `015`), so it is the
 first screen after sign-in rather than a page a rep would have to find. Management Overview reports
 are dashboard TILES and a new sidebar row is where reports go to be unfound (the 2026-10-08 ruling),
 so the deadline goes on the landing screen itself.
 
-### COMMCALC-32.2 FOUR FACTS, FOUR EXISTING HOMES
+### COMMCALC-33.2 FOUR FACTS, FOUR EXISTING HOMES
 
 Nothing is derived in the endpoint. It composes:
 
 | fact | home |
 | --- | --- |
 | which stores does this login reach | `storeops.router.scope_keyset` (§14x — evidence: scheduled or clocked in) |
-| when did this unit arrive, is it still here | `commcalc/inventory_stock_age.py` (§COMMCALC-31) |
+| when did this unit arrive, is it still here | `commcalc/inventory_stock_age.py` (§COMMCALC-32) |
 | how long may it sit | `commcalc/device_aging_policy.py` over declared `payable_source_map` (§COMMCALC-26) |
 | is this a device at all | `asset/inventory_buckets.inv_bucket` (§11a — the ONE classifier) |
 | which store is this address | `account/store_identity` via `_store_code_resolver` (§13a) |
@@ -33577,7 +33709,7 @@ The span being EVIDENCE-based is load-bearing, not incidental: **9 of Luxelink's
 carry no `store_code`** (measured 2026-10-26), and the card sits above the targets and OUTSIDE that
 page's "no store assigned" early return so those reps still see their shelf.
 
-### COMMCALC-32.3 THE POS SNAPSHOT, NOT THE PAYABLE LEDGER
+### COMMCALC-33.3 THE POS SNAPSHOT, NOT THE PAYABLE LEDGER
 
 `commcalc.device_payable_ledger` is the carrier's PAYMENT story. Measured 2026-10-26: its Luxelink
 unsold set (**3,095** units) and the POS on-hand set (**888**) overlap by **twelve**, and for several
@@ -33585,13 +33717,15 @@ IMEIs its `invoice_date` equals the snapshot date on which the POS flipped the u
 it is the activation/transaction date (`raw_ma_commission.tx_date`), independently confirmed by the
 payables thread the same day. Counting a SELLING window from it would be wrong twice over: wrong
 anchor, wrong population. A rep asked what is on their shelf is told what is on their shelf. The
-card never reads the ledger, which is also why it cannot disagree with the BYOP exclusion
-(§COMMCALC-31) landing on another branch.
+card never reads the ledger, which is also why it cannot disagree with the dealer-owned-device
+(BYOP) exclusion landing on another branch (PR #561 — deliberately unnumbered here, because that
+branch is itself renumbering after #559 took §COMMCALC-31; whoever lands second supplies the
+reference).
 
-### COMMCALC-32.4 WHAT IT REFUSES TO INVENT
+### COMMCALC-33.4 WHAT IT REFUSES TO INVENT
 
 - A unit whose carrier cannot be identified shows its AGE and names why the deadline is missing
-  (§COMMCALC-31.4). It never inherits the house 60.
+  (§COMMCALC-32.4). It never inherits the house 60.
 - A unit with no age is counted as `undated`, apart from both "overdue" and "fine"; `no_window` is
   counted apart from `undated`, because an unknown age and an unknown deadline are different gaps
   with different fixes (a feed versus a config row).
@@ -33602,12 +33736,12 @@ card never reads the ledger, which is also why it cannot disagree with the BYOP 
   BYOT SIM Kit" (7) — so no handset is lost to the filter, and they were drowning the real signal:
   **442 of the 689 overdue rows, carrying $1,326 of the $71,268**.
 - "Received" is labelled on the card as derived from the POS age in stock, because no vendor receipt
-  date exists in this platform (§COMMCALC-31.1). Calling it a receipt date would be the quiet
+  date exists in this platform (§COMMCALC-32.1). Calling it a receipt date would be the quiet
   overstatement the house rules treat as a defect.
 - An empty card prints the server's REASON — no snapshot, no span, no devices, or no declared window
   — never a zero (the §29.12 "never blank" rule).
 
-### COMMCALC-32.5 Verified against production, not only in a harness
+### COMMCALC-33.5 Verified against production, not only in a harness
 
 Driving the real pure modules over the real rows at the 2026-10-26 snapshot: **446** phones,
 tablets, watches and hotspots on hand at Luxelink, **247** already past a 10-day window
@@ -36731,6 +36865,251 @@ Files: `backend/app/modules/account/device_billing_drilldown.py` (**new**),
 `frontend/src/app/(platform)/accounts/recon/page.tsx`,
 `.github/workflows/carrier-vocab-guard.yml`, `docs/SYSTEM_DATA_FLOW_INDEX.md`.
 
+### §CORE-17.3x THE PAYROLL AND WORKFORCE SET (2026-10-26, batch 24)
+
+**`/storeops/payroll` · `/storeops/reports` · `/storeops/hours-budget`** — three of the ten
+`/storeops/*` and `/hr/*` report routes, served; the other **seven were read and deliberately left
+owed**, with the reason for each written down below. **TWO declarations, not one**, and the reason is
+the grain rule (§CORE-17.3l) rather than taste: a **person over a PAY PERIOD**, whose hours may come
+out of the time clock, out of the schedule or out of nothing at all, is not a **store over a
+WORK-WEEK**, whose hours come out of the schedule alone. The two payroll screens **do** share a grain
+— the same endpoint, the same merged per-employee rows, the same four figures — so they share **ONE
+catalogue**; a second over that grain would be the sibling derivation the index rules forbid.
+
+- `backend/app/modules/storeops/payroll_hours_drilldown.py` (**new**) — `/storeops/payroll` + `/storeops/reports`
+- `backend/app/modules/storeops/scheduled_hours_drilldown.py` (**new**) — `/storeops/hours-budget`
+
+Proof: `backend/harness_batch24_drilldown.py`, **106 checks**, **16 mutations / negative
+controls**,
+both declarations driven **for real** and the grains **measured off the panels as a SET compared for
+equality** (never a `>=` bound), the equality mutation-tested with a **ghost swapped in at unchanged
+size** — the control that distinguishes an equality check from the bound it replaced.
+
+**WHAT WAS WORKED NAMES THE TIME CLOCK; WHAT WAS PLANNED NAMES THE SCHEDULE — PER ROW, OFF THE
+PRODUCER'S OWN WORD.** Batch 20 settled that an hour worked names the closed punch and never the
+schedule (`UNIT_HOURS`, §CORE-17.3t). This is the report where that bites, because `Actual Hours`
+here is **not** "hours worked" on every row: `payroll_hours_basis.py` (the one home, §14y) decides
+per (person, day) which evidence answered, and its own measurement is why — `shifts.actual_hours`
+carries a figure on **7 of 7,740** rows, so payroll's pre-2026-10-10 `actual_hours or
+scheduled_hours` fell through to the plan on effectively every row and nobody was told. So each drill
+row names the relation that basis word says answered: the time clock for a punched day, the schedule
+for a day paid from the plan **and** for a manager's correction (which is typed onto
+`shifts.actual_hours` on this read), and **nothing at all** where nothing was measured. The map is
+`BASIS_RELATIONS`, keyed on the engine's **own basis constants**; the harness fails the build if the
+one home grows a basis the map has no entry for, so a blank can only ever mean "measured nothing" and
+never "nobody taught the panel about this basis".
+
+**THE FIVE GRAINS, MEASURED.** Two row shapes, and the first pair is the sharpest §CORE-17.3n case
+in the workforce module so far — same row, same unit, and the only difference is which relation
+answered:
+
+| # | row shape | unit | provenance |
+|---|---|---|---|
+| 1 | person × pay period | hours | the schedule alone — what was PLANNED |
+| 2 | person × pay period | hours | **the same row, same unit** — the time clock where a punch closed, the schedule where the period was paid from the plan, and NOTHING NAMEABLE where nothing was measured |
+| 3 | person × pay period | money | the schedule + the employee record the rate was read from |
+| 4 | person × pay period | money | the hours' own relation per row + the employee record |
+| 5 | store × work-week | hours | the schedule alone |
+
+Grains 1 and 5 are the same unit out of the same relation and are told apart by the **ROW ALONE** —
+which is exactly why these are two declarations and not one.
+
+**ABSENCE IS NEVER ZERO (§CORE-17.3i), IN THREE SHAPES.**
+
+- A person for whom **nothing was measured** and who is not ticked to be paid from the schedule is
+  shown **without a figure**, names **no relation**, and is **not counted**. A `0.0 h` there reads as
+  *this person worked and produced nothing*, which in a payroll context is an accusation with nothing
+  behind it. Such a row carries 0 in the payload, so the report's own total is unchanged and the
+  tie-out still holds to the cent — the honest blank and the correct figure are compatible rather
+  than a choice.
+- A person whose **only punch is open or auto-closed** carries the engine's own `punch_unusable`
+  instead. The two blanks are **different facts** and the panel keeps them apart: one says a punch
+  exists and the company's own rule refuses to count it, which is a thing to go and fix. The router
+  drops a zero-hour basis before naming a row's dominant one — correctly, since it is naming where
+  the HOURS came from — so the reason reads the engine's tally **unfiltered**, which is the only
+  place that word survives. The precedence is declared, not accidental.
+- A **store nobody has scheduled this week** is served **no panel at all**: its `0.0 h` over no rows
+  would tie zero against nothing and read as *we checked, there was nothing*, which is
+  indistinguishable from a week nobody has written yet (the one home's own `served_tiles` rule,
+  dereferenced, never copied).
+
+**THIN PUNCH COVERAGE IS SURFACED, NEVER SMOOTHED.** House punch coverage is partial and measured
+read-only on production — roughly **54%** (Jul), **52%** (Aug), **66%** (Sep), **62%** (Oct), and
+**June 2026 has none at all**; a Cellfonz October salary figure was ruled NOT MEASURABLE at 49%. A
+figure folded over such a month is still the figure people are paid by, so it is not changed — but
+three things let the reader see how little of it rests on a measurement, and none of them is
+arithmetic of the declaration's own: every row carries the basis word **and the producer's own
+sentence for it**, every row carries the producer's `hours_by_basis` tally **verbatim** (so a
+fortnight of punched and planned days is not collapsed to one word), and the panel's **`sources`**
+list counts the rows per relation — *"the schedule · 3"* beside *"our own time clock · 2"* is
+readable without opening anything. Every hours panel's note says the shortfall in words.
+
+**PAY VISIBILITY IS THE REPORT'S OWN GATE, ASKED AGAIN (agent rule 4, mig `434`).** Pay-per-hour,
+gross pay and salary are hidden below market manager, per-org configurable, and `GET
+/storeops/payroll` STRIPS those keys server-side. The new sibling endpoint asks the **same**
+`pay_visibility.can_see_pay` and applies the **same** `strip_pay`, and a gated caller is served the
+two HOURS panels and **neither money panel** — not a panel of `$0.00`s, which is what folding
+stripped rows would produce. Measured, not assumed: there is a second line of defence, because over
+stripped rows the money figures have no counted row at all and the one home's own refusal catches
+them even if the gate were bypassed. The hours panels are served either way, because a gated caller
+still runs hours corrections.
+
+**THE FIX IS AT THE READ, NOT IN THE DECLARATION (§CORE-17.3c, taken again).**
+`router._store_week_hours` summed a store's week of shifts and returned a float: **which rows, and
+which column of each**, was a fact that read knew and every caller threw away — which is why the
+Hours Budget screen printed a figure with no way to the rows behind it. It now has a sourced form,
+`_store_week_hours_sourced(...) -> (total, rows)`, with the plain one a thin wrapper over it so the
+over-budget projection check is byte-identical, and the per-row fact travels on the row under the
+field names the declaration declares (`drill_hours`, `drill_basis` — dereferenced by the router,
+never spelled there). A shift with no stored `scheduled_hours` had its hours worked out from
+`start_time`/`end_time`, so it names **no column** rather than an empty one.
+
+**ONE FACT, ONE HOME — AND THE OTHER HALF OF IT, IN THE SAME COMMIT.** The **employee record** and
+**hand-entered hours** became `data_lineage_registry.EMPLOYEE_ROSTER` / `.MANUAL_HOURS`, and the one
+pre-existing literal copy of each (`account/liabilities_drilldown.EMPLOYEES` / `.MANUAL_HOURS`) was
+**deleted** and dereferences the constant now, string-identical, no read changed — naming a fact is
+half a design fix and deleting every copy is the half that has been skipped three times here
+(§19.18). The time clock and the schedule are dereferenced, not re-named. **No new feed registry
+entry**: both names are NAME constants beside `STORE_ROSTER`, because an employee record is a config
+row with no arrival cadence for the feed watchdog to measure (the `targets_drilldown.TARGETS`
+posture). The **paid-hours basis** finally has a `module_graph` block of its own
+(`payroll_hours_basis`), with its **eleven pre-existing callers named by hand** for the first time —
+batch 22's `rep_pay_snapshot` posture, taken again.
+
+**THE ONE HOME GAINED ONE ADDITIVE THING.** `tile_panel`'s `column` now takes a **callable of the
+row**, exactly as `tables` already did, because the column a figure was read out of genuinely differs
+per row here (a punch's own hours column for one person, the schedule's for the next) and naming one
+for both would name the wrong column on half the rows. A plain string behaves exactly as before, and
+the harness pins both forms.
+
+**A PANEL EXPLAINS THE FIGURE, NOT THE TABLE (§CORE-17.3o), DECIDED BY READING EACH PAGE.**
+
+- `/storeops/payroll` and `/storeops/reports` fold their own tiles **in the browser** over the rows
+  their filter bar leaves on screen, so their panels **are narrowed** (`lib/drill-narrow`), matched on
+  the person-and-store key the server serves with every drill row, and each figure is read **off its
+  narrowed panel only when that panel agrees to the cent** — a disagreement costs the link, never the
+  figure.
+- `/storeops/hours-budget` is the negative, and it has a browser filter too: every figure on it is
+  **one store's own server-folded number**, so filtering hides whole rows and changes no figure.
+  `drill-narrow` is deliberately absent from it. The call is not "does this page filter", it is "does
+  this page fold a figure over a population the server did not" (batch 22's reading, from the other
+  side). Both directions are locked off each page's own text.
+
+**WHAT IS REFUSED, AND WHICH RULING SAYS SO.**
+
+- **`Employees`** on the StoreOps Reports strip — a cardinality, not Σ(a field), whose count the
+  panel's own header already states (the "Reps Calculated" ruling).
+- **`Net (Actual − Sched)`** and its `▲/▼` cue — a difference whose two halves each drill
+  (§CORE-17.3k, as batch 10 extended §CORE-17.3h).
+- **`Pay Rate`** — a leaf: one column of one employee record, and a rate besides (§CORE-17.3h). It is
+  named as the PROVENANCE of the money figures instead, which is where it belongs.
+- **The weekly hours budget and the DM override** — a figure somebody typed and a recorded decision,
+  neither folded from rows (§CORE-17.3h's leaf extension, §CORE-17.3m). They get plain-words labels,
+  not panels.
+- **The By-Store view's rows** — the page regroups the very rows these panels hold, under a store key
+  those rows already carry, so the narrowed tile panel answers that question exactly.
+- **The PTO accrual and chargeback panels** on `/storeops/payroll` — a month-keyed ledger at another
+  grain, with its own producers, and the page already says in words that it is keyed to the calendar
+  month. Left to its own family rather than stretched into this one.
+
+**TWO LIVE DEFECTS — REPORTED, REPRODUCED, NOT REPAIRED, NO FIGURE MOVED.**
+
+1. **`storeops.manual_hours` NEVER REACHES THIS REPORT'S FIGURE.** 569 hand-entered correction rows
+   exist (37 house, 532 Luxelink) and `GET /storeops/payroll` deliberately does not read that table
+   (§14y records it, and the router says so in its own comment). A correction a manager typed on the
+   Time Clock screen is therefore invisible to the Payroll Report — so this family **never names that
+   relation**, because naming it would be a provenance claim about a read that did not happen. The gap
+   is written down in the declaration, in the registry constant's own docstring, and here; the harness
+   fails the build if a panel starts naming it.
+2. **A MANAGER'S CORRECTION IS INDISTINGUISHABLE FROM THE SCHEDULE IT WAS TYPED OVER.** On this read
+   a `clocked_corrected` day is a `shifts.actual_hours` edit — the same relation a `schedule_opt_in`
+   day comes out of — so the two bases name ONE table and are told apart only by the basis word
+   travelling on the row. Stated rather than hidden: the row's fields carry the basis and its
+   sentence, and the relation named is the one the figure was really read from.
+
+**WHAT IS STILL OWED, HONESTLY** (seven routes read, classified and deliberately **not**
+reclassified — a wrongly reclassified report is hidden from the programme, which is worse than the
+debt):
+
+- `/storeops/timeclock` — a real report, and the one closest to this batch: its badges (`n punches`,
+  `n hrs`, the auto-lunch total, `n clocked in`) fold the punch rows themselves. Its row is a PUNCH,
+  not a person-period, so it is a **third family** needing its own declaration and a sibling endpoint
+  (the list read is a bare array). Next, not padded into this PR.
+- `/storeops/schedule` — the week grid's per-row, per-day and grand totals, plus the 8-week
+  hours-trend total. Same SUBJECT as the Hours Budget (planned hours out of the schedule) at a
+  **different row** (employee × week, and a per-day column), and its grid folds a bare `/shifts`
+  array with nowhere to hang a key. Deserves the hours-budget declaration **extended**, which is a
+  page-and-endpoint change of its own rather than a corner of this one.
+- `/storeops/payroll-tax` — its only printed figures (`Gross`, `Net`) are computed **in the browser**
+  by `lib/payroll-tax.computePay` from raw hours, a rate and a W-4. There is no server fold to open,
+  and moving a withholding engine server-side is a **money-touching change surfaced for the owner**,
+  not a drill-down PR. The §CORE-17.3b class, written down rather than half-served.
+- `/hr` — the HR total-comp strip is server-folded (`GET /hr/compensation` serves its own `totals`),
+  so it is the easiest of the seven; but base salary + commission − chargebacks is a **different
+  provenance** on the person row (the commission snapshot joins it), which is its own family and
+  touches the commission module's amounts. Named, not grabbed.
+- `/hr/payroll-expenses` — the audit's own worst-first entry in this module: a store × month of
+  employer tax and burden items. Its own grain, its own producer, and `labour_vocabulary` plus the
+  carried-expense-month rule (§COMMCALC-23) must be dereferenced rather than re-derived. A family of
+  its own, and the next one worth doing properly.
+- `/storeops/visits/plan` — the DM quota monitor's `completed of required` and its per-DM counts: a
+  visit-compliance grain, where `required` is a **declared** config figure (§CORE-17.3m) and
+  `completed` is folded from visit rows. A store-visit family, not a payroll one.
+- `/storeops/team` — `<TeamSnapshot>`'s headline tiles are the **targets engine's** own snapshot at
+  the store/rep-target grain, which `commcalc/targets_drilldown` (§CORE-17.3m) already owns. A second
+  catalogue over it would be two paths answering one question; converging the shared component onto
+  that declaration is the right PR and is not this one.
+
+#### §16–18 CROSS-REFERENCES
+
+Registered in `app/modules/core/module_graph.py` as callers of three facts — `report_drilldown`
+(home `app/modules/core/report_drilldown.py`), `feed_lineage` (home
+`commcalc/data_lineage_registry.py`) and the fact this batch gave a home block for the first time,
+`payroll_hours_basis` (home `storeops/payroll_hours_basis.py`, eleven pre-existing callers named by
+hand) — every edge **hand-written, never `--bless`** (§50), including the re-keyed
+`account/liabilities_drilldown.py`. Depends on: §CORE-17 (the one home and the shared panel), §14y
+(which hours a person is paid for, and on what basis), §14 (employees and scheduling), §13a (the
+canonical store key), mig `434` / `pay_visibility` (who may see pay), mig `087` (the hours budget and
+its overrides), §19.38 (a feed's plain name). Feeds: §CORE-17.4 (the audit ledger — `OWES_MAX`
+**21 → 18**). Neighbours: §CORE-17.3t (the family that settled `UNIT_HOURS` and that the clock alone
+names a worked hour), §CORE-17.3c (the fix belongs at the read), §CORE-17.3d (one fold for a figure
+and its evidence under a screen filter), §CORE-17.3i (an absence is not a zero), §CORE-17.3m (a
+declared figure is not a measured one), §19.18 (writing a registry without wiring the callers is not
+a fix).
+
+Endpoints: `GET /storeops/hours-budgets` → `drilldown` (a `drilldown` key on the existing payload, so
+**no new route**), and `GET /storeops/payroll/drilldown` — a **sibling** endpoint, because `GET
+/storeops/payroll` returns a bare JSON array that the exports, the approval board, the harnesses and
+the mobile client all iterate, and giving it an object shape would break every one of them. It calls
+the **same shared producer** the report calls, in process, with the caller's own authorization and the
+same range precedence, so a panel holds exactly the rows that caller was served.
+
+CI: `carrier-vocab-guard`, step *Run the batch-24 drill lock*, with a paths filter naming every file
+it is about. `harness_db_resilience.py` §I0 pins the app's leaf route count exactly, so the **one**
+route this batch adds and the **zero** it removes advance the pin **1801 → 1802** with a dated note
+naming `GET /storeops/payroll/drilldown`; the exact match is untouched and §I0b needs no re-pin.
+
+**No migration, no new table, no money moved** — one read-only `drilldown` key on an existing
+payload, one read-only sibling endpoint, two registry NAME constants with their copies deleted, one
+read given a sourced form whose plain wrapper is byte-identical, and one additive extension to the
+shared fold. Each producer's rows were **deep-compared before and after the declaration runs over
+them and are byte-identical** (§H1). `OWES_MAX` **21 → 18**, lowered by exactly the three routes
+served. (Built in parallel with batch 23 off a shared base of 25, so the pin was re-taken from the
+MERGED ledger — 25 − 4 − 3 = 18 — rather than from either side's own count.)
+
+Files: `backend/app/modules/storeops/payroll_hours_drilldown.py` (**new**),
+`backend/app/modules/storeops/scheduled_hours_drilldown.py` (**new**),
+`backend/app/modules/storeops/router.py`, `backend/app/modules/core/report_drilldown.py`,
+`backend/app/modules/core/module_graph.py`,
+`backend/app/modules/commcalc/data_lineage_registry.py`,
+`backend/app/modules/account/liabilities_drilldown.py`,
+`backend/harness_batch24_drilldown.py` (**new**), `backend/harness_drilldown_coverage.py`,
+`backend/harness_drilldown_pending.txt`, `backend/harness_db_resilience.py`,
+`frontend/src/app/(platform)/storeops/payroll/page.tsx`,
+`frontend/src/app/(platform)/storeops/reports/page.tsx`,
+`frontend/src/app/(platform)/storeops/hours-budget/page.tsx`,
+`.github/workflows/carrier-vocab-guard.yml`, `docs/SYSTEM_DATA_FLOW_INDEX.md`.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
@@ -36791,7 +37170,7 @@ has not forked, the page hand-rolls no panel, RULE TWO holds in both files.
 `backend/harness_drilldown_coverage.py` — **17 checks**, the ratchet: every report route declared
 exactly once, no ledger route has stopped existing, every excused state carries a written reason,
 every `shared` route really renders the shared panel (writing the registry without wiring the caller
-is not a fix at all — §19.18), and **`OWES_MAX`, which may only go DOWN** (**93** at the audit, **21** since §CORE-17.3w). Re-pin it downward in
+is not a fix at all — §19.18), and **`OWES_MAX`, which may only go DOWN** (**93** at the audit, **18** since §CORE-17.3x — batches 23 and 24 were built in parallel off a base of 25, so the pin is re-taken from the merged ledger, not from either side). Re-pin it downward in
 the same PR that builds a drill-down; a change that raises it is a report shipped without evidence.
 
 ### §CORE-17.6 WHAT IS DELIBERATELY NOT HERE
@@ -36813,17 +37192,17 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 `closing/attempts_drilldown.py`, `commcalc/tender_recon_drilldown.py`, `crm/reports_drilldown.py`,
 `helpdesk/dashboard_drilldown.py`, `account/statement_drilldown.py`,
 `account/liabilities_drilldown.py`, `commcalc/carrier_pay_drilldown.py`,
-`asset/device_asset_drilldown.py`, `commcalc/targets_drilldown.py`, `commcalc/processor_money_drilldown.py`, `commcalc/accessory_money_drilldown.py`, `commcalc/device_financing_drilldown.py`, `commcalc/exec_month_drilldown.py`, `commcalc/sales_margin_drilldown.py`, `commcalc/rep_incentive_drilldown.py`, `commcalc/entitlement_coverage_drilldown.py`, `commcalc/activation_count_drilldown.py`, `account/device_billing_drilldown.py`, `account/inventory_value_drilldown.py`, `account/memo_recon_drilldown.py`), §17 (`GET
+`asset/device_asset_drilldown.py`, `commcalc/targets_drilldown.py`, `commcalc/processor_money_drilldown.py`, `commcalc/accessory_money_drilldown.py`, `commcalc/device_financing_drilldown.py`, `commcalc/exec_month_drilldown.py`, `commcalc/sales_margin_drilldown.py`, `commcalc/rep_incentive_drilldown.py`, `commcalc/entitlement_coverage_drilldown.py`, `commcalc/activation_count_drilldown.py`, `account/device_billing_drilldown.py`, `account/inventory_value_drilldown.py`, `account/memo_recon_drilldown.py`, `storeops/payroll_hours_drilldown.py`, `storeops/scheduled_hours_drilldown.py`), §17 (`GET
 /closing/cash-variance` → `drilldown`; `GET /commcalc/discrepancy/{period}` → `drilldown` +
 `drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET
 /commcalc/commission-received-breakout` → `drilldown`; `GET /asset/summary`, `GET
 /asset/charges-summary`, `GET /asset/on-inventory-by-store`, `GET /asset/owed-weekly`, `GET
 /asset/inventory-recon`, `GET /asset/borrowings`, `GET /commcalc/vip/paygo/summary` →
 `drilldown`; `GET /commcalc/targets/{period}/calendar`, `GET /commcalc/targets/{period}/summary`,
-`GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards`, `GET /commcalc/billpay-extract/{period}`, `GET /commcalc/epay/fee-recon`, `GET /commcalc/processor-ledger`, `GET /commcalc/accessory-target-plan/{period}`, `GET /commcalc/accessory-cost-audit/{period}`, `GET /commcalc/accessory-flags`, `GET /commcalc/vip/summary`, `GET /commcalc/device-line-reimbursement`, `GET /commcalc/financing/{period}`, `GET /commcalc/exec-overview/{period}`, `GET /commcalc/exec-mtd/{period}`, `GET /commcalc/month-focus/{period}`, `GET /commcalc/comp/rep-pay-trend`, `GET /commcalc/gp/{period}`, `GET /commcalc/sales-analyzer/{period}`, `GET /commcalc/sales-comparison`, `GET /commcalc/zero-sales`, `GET /commcalc/mdf-entitlement-coverage`, `GET /activation-counts/{period}` →
-`drilldown`; `GET /commcalc/commissions/{period}/drilldown` — a SIBLING endpoint, because the report it explains returns a bare JSON list with nowhere to hang the key), §18 ("where is this figure from" → `panel.sources` → `sourceLabel`; "did the
+`GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards`, `GET /commcalc/billpay-extract/{period}`, `GET /commcalc/epay/fee-recon`, `GET /commcalc/processor-ledger`, `GET /commcalc/accessory-target-plan/{period}`, `GET /commcalc/accessory-cost-audit/{period}`, `GET /commcalc/accessory-flags`, `GET /commcalc/vip/summary`, `GET /commcalc/device-line-reimbursement`, `GET /commcalc/financing/{period}`, `GET /commcalc/exec-overview/{period}`, `GET /commcalc/exec-mtd/{period}`, `GET /commcalc/month-focus/{period}`, `GET /commcalc/comp/rep-pay-trend`, `GET /commcalc/gp/{period}`, `GET /commcalc/sales-analyzer/{period}`, `GET /commcalc/sales-comparison`, `GET /commcalc/zero-sales`, `GET /commcalc/mdf-entitlement-coverage`, `GET /activation-counts/{period}`, `GET /storeops/hours-budgets` →
+`drilldown`; `GET /storeops/payroll/drilldown` — a SIBLING endpoint, because the payroll report returns a bare JSON list every export and the approval board already iterate (§CORE-17.3x); `GET /commcalc/commissions/{period}/drilldown` — a SIBLING endpoint, because the report it explains returns a bare JSON list with nowhere to hang the key), §18 ("where is this figure from" → `panel.sources` → `sourceLabel`; "did the
 carrier pay what we computed, and out of which legs" → §CORE-17.3k; "which devices is this
-store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p; "how is the month going, against what, and is anybody being paid for it" → §CORE-17.3q; "what did we sell, at what margin, and which upload or feed actually answered for it" → §CORE-17.3r; "what did we expect the carrier to pay, what did it pay, and what is being clawed back or is missing" → §CORE-17.3s; "how are reps and stores performing, and who needs coaching" → §CORE-17.3t; "what is each rep being paid this month and what for" → §CORE-17.3v; "which store-month of this entitlement never arrived, and what was it worth" → §CORE-17.3v; "how many devices did this store activate, and which upload says so" → §CORE-17.3v), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
+store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p; "how is the month going, against what, and is anybody being paid for it" → §CORE-17.3q; "what did we sell, at what margin, and which upload or feed actually answered for it" → §CORE-17.3r; "what did we expect the carrier to pay, what did it pay, and what is being clawed back or is missing" → §CORE-17.3s; "how are reps and stores performing, and who needs coaching" → §CORE-17.3t; "what is each rep being paid this month and what for" → §CORE-17.3v; "which store-month of this entitlement never arrived, and what was it worth" → §CORE-17.3v; "how many devices did this store activate, and which upload says so" → §CORE-17.3v; "what hours is this person being paid for this period, and what measured them" → §CORE-17.3x; "how many hours has this store scheduled this week, against its budget" → §CORE-17.3x), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
 (`sourceLabel`), §2 / `data_lineage_registry.py` (which table is which feed), §15 (the B2B ↔ MA
 activation recon these three reports read), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
 module graph).

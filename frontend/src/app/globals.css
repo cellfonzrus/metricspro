@@ -101,17 +101,14 @@ tr:hover td { background: var(--surface2); }
   border-right: 1px solid rgba(0, 0, 0, 0.25);
 
   /* NAV ACCENT PALETTE (owner 2026-10-19: "make the colors of the side menu alternate ... switch
-     between logo colors so it stands out"). The ONE home for the rotation: layout.tsx sets
+     between logo colors so it stands out"; narrowed 2026-10-26: "too many colors just stick to 2
+     colors blue and orange alternating"). The ONE home for the rotation: layout.tsx sets
      `--mp-accent: var(--nav-accent-N)` per row and names no colour of its own, so the palette is
-     changed here and nowhere else. Every entry is a light variant of a colour the brand already
-     uses (the logo blues --accent/--accent2 and the status hues --green/--amber/--red, plus the
-     chart violet), lifted to >=4.5:1 on this navy so a tinted label stays readable. */
+     changed here and nowhere else — and it is the SIZE of this list, not a number in the component,
+     that decides how long the cycle is. Two slots mean strict alternation: blue, orange, blue.
+     Both are lifted to >=4.5:1 on this navy so a tinted label stays readable. */
   --nav-accent-1: #60a5fa;   /* logo blue */
-  --nav-accent-2: #38bdf8;   /* logo blue, lighter/cooler */
-  --nav-accent-3: #34d399;   /* brand green */
-  --nav-accent-4: #fbbf24;   /* brand amber */
-  --nav-accent-5: #f472b6;   /* brand red, lifted to pink */
-  --nav-accent-6: #a78bfa;   /* chart violet */
+  --nav-accent-2: #fb923c;   /* orange */
 }
 
 /* Small ghost control: collapse chevrons, clear-search, the rail's search button. */

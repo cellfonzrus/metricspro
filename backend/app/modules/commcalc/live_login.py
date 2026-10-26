@@ -213,11 +213,44 @@ _FRAME_GUARANTEE_S = 1.5       # even in CDP mode, force a screenshot if no fram
 _INPUT_DRAIN_MAX = 32          # service at most this many queued human inputs per tick (bounded: the idle
                                # check and the frame pump must still run even under a flood)
 _CLASSIFY_POLL_S = 1.2         # pre-auth: how often to re-DETECT state (captcha / auth / proxy) for the status
+# §COMMCALC-31 — detection is the SAME work §COMMCALC-27 took off the operator's latency path, in a
+# second place. `_preauth_detect` walks every frame of the page (`_classify` reads the text of each,
+# `_captcha_present` queries selectors), which on a heavy portal costs far more than a frame tick, and
+# it ran on a fixed timer AHEAD of the input drain — so a click could wait a pump plus a whole page
+# re-read before it was dequeued. It is now deferred while the operator is still acting, BOUNDED: once
+# this long has passed since the last detect it runs regardless, so deferral can never become
+# starvation (a captcha appearing mid-burst is still noticed within one ceiling).
+_DETECT_DEFER_MAX_S = 4.0      # the longest detection may be deferred by a run of operator input
 
 _B2B_PROCESSORS = ("b2bsoft", "b2b")
 # The master-agent portal under both the names its connector registry row carries. Spelled HERE and
 # read by _preauth_login_url, so the bot-wall fallback belongs to the portal it is for.
 _VIDAPAY_PROCESSORS = ("vidapay", "total_access")
+
+
+def detect_due(now, last_detect, input_pending,
+               poll_s=_CLASSIFY_POLL_S, defer_max_s=_DETECT_DEFER_MAX_S):
+    """THE one answer to "may state detection run on this tick" (§COMMCALC-31). Pure, and it never
+    raises: unreadable inputs read as DUE, so the failure mode is the old always-detect behaviour
+    rather than a session that silently stops noticing a captcha.
+
+    Due when `poll_s` has passed since the last detect AND the operator is not mid-action — except
+    once `defer_max_s` has passed, when it is due regardless, so a flood cannot starve detection."""
+    try:
+        since = float(now) - float(last_detect)
+    except (TypeError, ValueError):
+        return True
+    try:
+        if since >= float(defer_max_s):
+            return True
+    except (TypeError, ValueError):
+        return True
+    try:
+        if since < float(poll_s):
+            return False
+    except (TypeError, ValueError):
+        return True
+    return not bool(input_pending)
 
 
 def _takes_stop(fn):
@@ -490,6 +523,13 @@ class LiveLoginSession:
         self._updated_at = datetime.now(timezone.utc).isoformat()
         self._last_activity = time.time()
         self._last_seen_at = 0.0                  # wall time an operator surface last asked (§COMMCALC-30)
+        # §COMMCALC-31 — what the session is DOING right now, written by the one setter `_note_act`
+        # and read by the one reader `activity()`. The owner's 2026-10-26 report was "it should show
+        # what is going on, it seems nothing is moving": a phase ('login') and a standing instruction
+        # ('complete the login on the screen') do not move, so a stalled session and a working one
+        # looked identical. This is NOT a second copy of `phase`/`message` — it is the step in flight.
+        self._act = "Starting up"
+        self._act_at = time.time()
         self._finished_at = None
         self._thread = None
         self._watchdog = None                     # the no-progress watchdog thread (see _watch)
@@ -516,6 +556,25 @@ class LiveLoginSession:
     def _touch(self):
         with self._lock:
             self._last_activity = time.time()
+
+    def _note_act(self, doing):
+        """THE setter for "what is this session doing right now" (§COMMCALC-31). Cheap and lock-only —
+        it is called on the hot path, so it never touches the page or the row."""
+        with self._lock:
+            self._act = str(doing)[:80]
+            self._act_at = time.time()
+
+    def activity(self):
+        """THE reader of the same fact, for every operator surface: the step in flight, how long it has
+        been in flight, and the age of the newest frame. Dereferenced by `state()` and `frame_since()`
+        so no surface composes its own answer. Ages are seconds, rounded, and None before the first
+        frame — never a fabricated 0 that would read as "a frame just arrived"."""
+        now = time.time()
+        with self._lock:
+            doing, since, frame_at = self._act, self._act_at, self._last_frame_at
+        return {"doing": doing,
+                "doing_age_s": round(max(0.0, now - since), 1) if since else None,
+                "frame_age_s": round(max(0.0, now - frame_at), 1) if frame_at else None}
 
     def _note_viewer(self):
         """Record that an operator surface just asked about this session (§COMMCALC-30). Called by the
@@ -601,6 +660,7 @@ class LiveLoginSession:
 
     def state(self):
         self._note_viewer()                       # answering about the session IS a sighting (§COMMCALC-30)
+        act = self.activity()                     # §COMMCALC-31 — taken BEFORE the lock below (it locks too)
         with self._lock:
             pr = self.pull_result
             return {
@@ -625,6 +685,7 @@ class LiveLoginSession:
                          {"ran": False, "delivered": None, "rows": None, "status": "", "reason": None,
                           "options": []}),
                 "auto_pull": self.auto_pull,
+                "activity": act,
             }
 
     def frame_since(self, since):
@@ -635,12 +696,14 @@ class LiveLoginSession:
             since = int(since)
         except Exception:
             since = 0
+        act = self.activity()                     # §COMMCALC-31 — every tick, whether or not a frame moved
         with self._lock:
             seq, phase, message, shot = self._seq, self.phase, self.message, self._shot
         if shot and seq > since:
-            return {"seq": seq, "phase": phase, "message": message, "changed": True,
+            return {"seq": seq, "phase": phase, "message": message, "changed": True, "activity": act,
                     "shot": "data:image/jpeg;base64," + shot}
-        return {"seq": seq, "phase": phase, "message": message, "changed": False, "shot": None}
+        return {"seq": seq, "phase": phase, "message": message, "changed": False, "activity": act,
+                "shot": None}
 
     def is_terminal(self):
         with self._lock:
@@ -899,6 +962,7 @@ class LiveLoginSession:
         vp = _vp()
         browser = None
         try:
+            self._note_act("Opening the browser")
             browser = vp._launch(p)
             ctx = vp._new_context(browser, proxy=vp._proxy_arg(self.proxy_url))
             page = ctx.new_page()
@@ -918,6 +982,7 @@ class LiveLoginSession:
                 self._capture(page)
                 return
             try:
+                self._note_act("Loading the portal login page")
                 vp._goto_login(page, base, login_url=self._preauth_login_url(vp))
             except Exception as e:
                 # BROAD by design. _goto_login already converts a CONNECTION-CLASS proxy drop into a
@@ -1169,10 +1234,26 @@ class LiveLoginSession:
             self._loop_entered = True     # the inactivity rule owns the session from here
         last_poll = 0.0
         while True:
+            # Service EVERY queued human input FIRST (§COMMCALC-27, ordering §COMMCALC-31). Servicing one
+            # per iteration charged each click a full `_pump` (80ms on CDP, 300ms without) plus the
+            # previous click's settle, so a burst drained at a few events a second and the window felt
+            # frozen. Draining here — ahead of the pump and the page re-read, not after them — is what
+            # makes that true of the FIRST click of a burst as well as the rest of it. Bounded by
+            # `_INPUT_DRAIN_MAX` so the idle check and the pump still run.
+            drained = 0
+            while drained < _INPUT_DRAIN_MAX:
+                ev = self._next_input()
+                if ev is None:
+                    break
+                drained += 1
+                self._do_input(page, ctx, vp, ev)
+                if self.snapshot_phase() == "authenticated":
+                    return self._post_auth_loop(page, ctx, vp)   # a human click finished sign-in
+            self._note_act("Streaming the live screen")
             self._pump(page)
-            now = time.time()
-            if now - last_poll >= _CLASSIFY_POLL_S:
-                last_poll = now
+            if detect_due(time.time(), last_poll, self.operator_input_pending()):
+                last_poll = time.time()
+                self._note_act("Checking the page")
                 self._preauth_detect(page, ctx, vp)
                 ph = self.snapshot_phase()
                 if ph == "authenticated":
@@ -1186,19 +1267,6 @@ class LiveLoginSession:
             if idle > limit:
                 self._set(phase="cancelled", message="Live session closed after inactivity.")
                 return
-            # Service EVERY queued human input before the next frame tick (§COMMCALC-27). Servicing one
-            # per iteration charged each click a full `_pump` (80ms on CDP, 300ms without) plus the
-            # previous click's settle, so a burst drained at a few events a second and the window felt
-            # frozen. Bounded by `_INPUT_DRAIN_MAX` so the idle check and the pump still run.
-            drained = 0
-            while drained < _INPUT_DRAIN_MAX:
-                ev = self._next_input()
-                if ev is None:
-                    break
-                drained += 1
-                self._do_input(page, ctx, vp, ev)
-                if self.snapshot_phase() == "authenticated":
-                    return self._post_auth_loop(page, ctx, vp)   # a human click finished sign-in
             cmd = self._next_cmd()
             if cmd is None:
                 continue
@@ -1311,6 +1379,17 @@ class LiveLoginSession:
             else:
                 self._handle_pull(page, vp, None)
         while True:
+            # The same drain as pre-auth, in the same place in the tick (§COMMCALC-27 + §COMMCALC-31) —
+            # "take control" on an authenticated session is the same operator typing into the same
+            # single-threaded loop, so their input leads the tick here too.
+            drained = 0
+            while drained < _INPUT_DRAIN_MAX:
+                ev = self._next_input()
+                if ev is None:
+                    break
+                drained += 1
+                self._do_input(page, ctx, vp, ev)
+            self._note_act("Streaming the live screen")
             self._pump(page)
             with self._lock:
                 idle = time.time() - self._last_activity
@@ -1320,15 +1399,6 @@ class LiveLoginSession:
             if idle > _POST_AUTH_IDLE_SECONDS:
                 self._set(phase="cancelled", message="Live session closed after inactivity (post-login).")
                 return
-            # The same drain as pre-auth (§COMMCALC-27) — "take control" on an authenticated session is
-            # the same operator typing into the same single-threaded loop.
-            drained = 0
-            while drained < _INPUT_DRAIN_MAX:
-                ev = self._next_input()
-                if ev is None:
-                    break
-                drained += 1
-                self._do_input(page, ctx, vp, ev)
             cmd = self._next_cmd()
             if cmd is None:
                 continue
@@ -1368,6 +1438,7 @@ class LiveLoginSession:
         operator can pull again. Best-effort — a pull failure is reported, never crashes the session."""
         self._set(phase="pulling",
                   message="Signed in — fetching this login's reports on the live session…")
+        self._note_act("Fetching the reports")
         self._capture(page)
         res = None
         try:
@@ -1409,8 +1480,10 @@ class LiveLoginSession:
         events (so form-validation listeners fire); scroll uses the wheel."""
         et = (ev or {}).get("type")
         if et in ("click", "dblclick"):
+            self._note_act("Delivering your click")
             self._do_click(page, ctx, vp, ev.get("x"), ev.get("y"), double=(et == "dblclick"))
             return
+        self._note_act("Delivering your typing" if et in ("type", "key") else "Delivering your input")
         try:
             if et == "type":
                 txt = str(ev.get("text") or "")
@@ -1459,6 +1532,7 @@ class LiveLoginSession:
         # lost: the LAST click of a burst has nothing pending behind it and still settles in full.
         if self.operator_input_pending():
             return
+        self._note_act("Waiting for the page to respond to your click")
         for _ in range(3):
             try:
                 page.wait_for_timeout(250)
@@ -1505,6 +1579,7 @@ class LiveLoginSession:
         persist the durable session and stop. On failure, KEEP the page open on the verification screen
         (phase back to awaiting_code) so a fresh code can be entered — never re-run the login."""
         self._set(phase="verifying", message="Verifying the code…")
+        self._note_act("Submitting the code")
         self._capture(page)
         code_el, code_fr = None, None
         for fr in vp._frames(page):

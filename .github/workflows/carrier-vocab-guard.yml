@@ -462,6 +462,26 @@ on:
       # slice as zero, two tabs meaning different things by installment, and a per-market fold whose
       # own assembly destroys the market label before it prints.
       - "backend/harness_batch22_drilldown.py"
+      # BATCH 24 (index CORE-17.3x) - the PAYROLL and WORKFORCE set: the Payroll Report, StoreOps
+      # Reports - Hours & Payroll, and the Hours Budget. TWO declarations, because a PERSON over a
+      # PAY PERIOD and a STORE over a WORK-WEEK are two row shapes; the two payroll screens share one
+      # grain exactly and so share ONE catalogue. What was WORKED names the time clock and what was
+      # PLANNED names the schedule, read off the payroll engine's OWN basis word per row, so a
+      # reader can see how much of an hours figure rests on a measurement and how much on a plan -
+      # which matters because punch coverage is partial and every hours panel says so. A person
+      # nothing measured is shown WITHOUT a figure and is not counted. A pay-gated caller is served
+      # NEITHER money panel, not a panel of zeros. The employee record and hand-entered hours became
+      # registry NAME constants with their pre-existing literal copies re-keyed in the SAME commit.
+      - "backend/harness_batch24_drilldown.py"
+      - "backend/app/modules/storeops/payroll_hours_drilldown.py"
+      - "backend/app/modules/storeops/scheduled_hours_drilldown.py"
+      - "backend/app/modules/storeops/payroll_hours_basis.py"
+      - "backend/app/modules/storeops/pay_visibility.py"
+      - "backend/app/modules/storeops/router.py"
+      - "backend/app/modules/account/liabilities_drilldown.py"
+      - "frontend/src/app/(platform)/storeops/payroll/page.tsx"
+      - "frontend/src/app/(platform)/storeops/reports/page.tsx"
+      - "frontend/src/app/(platform)/storeops/hours-budget/page.tsx"
       - "backend/app/modules/commcalc/rep_incentive_drilldown.py"
       - "backend/app/modules/commcalc/entitlement_coverage_drilldown.py"
       - "backend/app/modules/commcalc/activation_count_drilldown.py"
@@ -1356,7 +1376,7 @@ on:
       - "backend/harness_payables_declared_source.py"
       - "backend/app/modules/payables/declared_source.py"
       - "frontend/src/lib/owed-source.ts"
-      # index COMMCALC-31 - A DEVICE'S ARRIVAL ON THE SHELF HAS ONE DATE. The one home, its proof and
+      # index COMMCALC-32 - A DEVICE'S ARRIVAL ON THE SHELF HAS ONE DATE. The one home, its proof and
       # the build gate that stops a second copy of the receipt-date derivation appearing. device_history
       # and the commcalc router are already named above, so a change to either collapsed caller re-runs
       # both proofs too - which is the point: the gate exists to catch a caller un-wiring itself.
@@ -1733,6 +1753,9 @@ jobs:
       - name: Run the batch-23 drill lock (the FINANCE set - what the distributor BILLED us for devices, what of it is still UNPAID, what the stock on the shelf is WORTH, and whether the money that ARRIVED matches what the residual report says was EARNED; THREE declarations and not one and not four, because the two device reports fold the units the distributor billed at the SAME store row out of the SAME two relations and the payable report already imports the voided-invoice rule from the purchases one, while the inventory and credit-memo families share no relation with them or with each other; every importable producer is driven FOR REAL in this file - the two device aggregations through the real store placer, void rule and derived coverage window, and the real inventory reconciliation - and the FOURTEEN grains in three row shapes are MEASURED off the panels as a SET compared for EQUALITY, with a ghost swapped in at unchanged size to prove the comparison is stricter than the bound it replaces; NINE of the fourteen are separated from a sibling by PROVENANCE ALONE, among them an EFFECTIVE inventory value whose relation is decided PER ROW by a precedence rule and read off the producer's own basis word, with a store that has neither source shown WITHOUT a figure and its origin reported as one that cannot be traced; A PANEL EXPLAINS THE FIGURE, NOT THE TABLE is settled both ways off the pages' own text - the two device reports fold their tiles in the browser and are narrowed, the inventory and recon pages have no such filter and are not; AN ACCUSATION NAMES ITS EVIDENCE, since the credit-memo recon prints underpaid in dollars and writes those findings to the flag stream, and its earned side carries ONE MORE ROW for the money no rep name placed so the panels tie against what the screen prints rather than being short by exactly what nobody could attribute; five relation names MOVED into the feed registry and every literal copy that file held - seven of one and one of another - was DELETED in the same commit, which is the half of a design fix that has been skipped three times here; EIGHT live defects are REPORTED and not hidden, among them an inventory grid whose effective rule ignores the configured basis so one page prints two columns under one header computed by two different rules, and a silent fifteen-row cap on the evidence behind an accusation - index CORE-17.3w)
         working-directory: backend
         run: python3 harness_batch23_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-24 drill lock (the payroll-and-workforce set - the Payroll Report, StoreOps Reports Hours and Payroll, and the Hours Budget; TWO declarations and not one, because a PERSON over a PAY PERIOD whose hours may come out of the clock, the plan or nothing is not a STORE over a WORK-WEEK whose hours come out of the plan alone, while the two payroll screens share that grain exactly and therefore share ONE catalogue rather than a sibling derivation; both declarations are driven FOR REAL in this file and the five grains in two row shapes are MEASURED off the panels as a SET compared for EQUALITY, with a ghost swapped in at unchanged size to prove the comparison is stricter than the bound it replaces; what was WORKED names the time clock and what was PLANNED names the schedule, decided per row by the payroll engine's OWN basis word rather than by reading the number beside it, which is how a reader sees that two grains here share a row and a unit and differ only in which relation answered (CORE-17.3n); a person nothing measured is shown WITHOUT a figure, names NO relation and is not counted, never as somebody who worked and produced nothing, and a person whose only punch is OPEN or auto-closed carries the engine's own word for that instead, because a punch that exists and may not be counted is a thing to go and fix (CORE-17.3i); thin punch coverage is SURFACED rather than smoothed - every hours panel carries the measured shortfall in words and the panel's own sources list counts the rows per relation, so a month that rests mostly on the plan says so; PAY VISIBILITY is the report's own gate asked again, so a gated caller is served the two HOURS panels and NEITHER money panel, never a panel of zeros folded out of stripped rows; the fix for the store-week figure is AT THE READ - the week read now returns the shifts it summed and says which column of each answered, the plain form is a thin wrapper so the over-budget check is byte-identical, and a shift whose hours were worked out from its start and end times names NO column rather than an empty one; the EMPLOYEE RECORD and HAND-ENTERED HOURS became registry NAME constants and the pre-existing literal copies were DELETED in the same commit, which is the half of a design fix that has been skipped three times here; the shared fold learned additively that the COLUMN a figure was read out of can differ per row; the paid-hours basis finally has a graph block of its own with its eleven pre-existing callers named by hand; TWO live defects are REPORTED and not coded around - hand-entered hours never reach this report's figure so the panels deliberately never name that relation, and a manager's correction is indistinguishable from the schedule it was typed over; A PANEL EXPLAINS THE FIGURE, NOT THE TABLE decided by READING each page - the two payroll screens fold their own tiles in the browser and read each off its narrowed panel, the hours budget prints one store's own server fold and drill-narrow is absent from it, and the lock fails the build in BOTH directions - index CORE-17.3x)
+        working-directory: backend
+        run: python3 harness_batch24_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -2417,12 +2440,12 @@ jobs:
       # consumers. Two steps, deliberately: the first proves the arithmetic (including the owner's
       # 10-day regression and the stale-snapshot defect device_history shipped), the second is the
       # BUILD GATE that fails if any caller stops dereferencing the shared fact or a fourth copy of
-      # `as_of_date - days_in_stock` appears. Both DB-free, seconds. Index COMMCALC-31.
-      - name: Run the shelf-age proof (a device's receipt date has ONE derivation and its age is counted to TODAY, never read off the snapshot file - index COMMCALC-31)
+      # `as_of_date - days_in_stock` appears. Both DB-free, seconds. Index COMMCALC-32.
+      - name: Run the shelf-age proof (a device's receipt date has ONE derivation and its age is counted to TODAY, never read off the snapshot file - index COMMCALC-32)
         working-directory: backend
         shell: bash
         run: python3 harness_inventory_stock_age.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the shelf-age BUILD GATE (no second copy of the receipt-date derivation, and every collapsed caller still dereferences the one home - index COMMCALC-31.5)
+      - name: Run the shelf-age BUILD GATE (no second copy of the receipt-date derivation, and every collapsed caller still dereferences the one home - index COMMCALC-32.5)
         working-directory: backend
         shell: bash
         run: python3 harness_inventory_stock_age_guard.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

@@ -4,6 +4,18 @@ import { api } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel,
+} from '@/components/DrillDownPanel'
+
+// WHAT A READER NEEDS BESIDE EACH SHIFT IN A PANEL (§CORE-17.3x) — off the row's own `fields`, which
+// the server composed. "Hours from" is the read's own answer to which column held the figure: a shift
+// with no stored scheduled-hours figure had its hours worked out from its start and end times.
+const BUDGET_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'From', get: r => (r.fields?.from as string) || '—' },
+  { header: 'To', get: r => (r.fields?.to as string) || '—' },
+  { header: 'Hours from', get: r => (r.fields?.['hours from'] as string) || '—' },
+]
 
 // Per-store weekly hours BUDGET + DM-approved overrides (mig 087). A manager sets each store's
 // weekly hours budget; the scheduler blocks going over it and shows an alert here; to exceed, a
@@ -23,9 +35,17 @@ export default function HoursBudgetPage() {
   // deviation documented in the handoff) with `market` now returned by the backend. Period stays the
   // existing native "week" date control above (not substituted).
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  // §CORE-17.3x — the shifts each store-week figure was added up from, served beside it by the SAME
+  // read that folded it (`storeops/scheduled_hours_drilldown`). Keyed on the store code this report
+  // keys its own rows on, so a panel can never hold a different week than the row it opened from.
+  // DELIBERATELY NOT NARROWED (§CORE-17.3o): every figure on this page is one store's own
+  // server-folded number, so the store/market filter hides whole rows and changes no figure. There is
+  // therefore no `narrowPanel` call anywhere here, and the batch-24 lock fails the build if one
+  // appears — narrowing would be the identity, and a fold that is the identity is not a fold.
+  const [drill, setDrill] = useState<Record<string, DrillPanel>>({})
 
   const load = useCallback(() => {
-    api(`/api/v1/storeops/hours-budgets${week ? `?week=${week}` : ''}`).then((r: any) => { setRows(r.budgets || []); setWeekStart(r.week_start || '') }).catch((e: any) => setMsg('❌ ' + (e?.message || e)))
+    api(`/api/v1/storeops/hours-budgets${week ? `?week=${week}` : ''}`).then((r: any) => { setRows(r.budgets || []); setWeekStart(r.week_start || ''); setDrill((r.drilldown || {}) as Record<string, DrillPanel>) }).catch((e: any) => setMsg('❌ ' + (e?.message || e)))
     api('/api/v1/storeops/budget-overrides').then((r: any) => setOvs(r.overrides || [])).catch(() => {})
   }, [week])
   useEffect(() => { load() }, [load])
@@ -72,6 +92,10 @@ export default function HoursBudgetPage() {
   }
 
   const pending = visibleOvs.filter(o => o.status === 'pending')
+  // One panel open at a time, and a store is offered a link only where the server actually served
+  // one — a week nobody has scheduled has no rows behind its 0.0h and gets no link rather than a
+  // panel that ties zero against nothing.
+  const budgetDrill = useDrillTile(drill)
   const inp: React.CSSProperties = { width: 90, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
   // RULE FOUR (§3c): export the visible rows for each table — no PII in either.
@@ -128,6 +152,11 @@ export default function HoursBudgetPage() {
                   </td>
                   <td style={{ padding: '7px 9px', fontWeight: 700, color: r.over ? 'var(--c-fg-dc2626)' : 'var(--text1)' }}>
                     {r.used_hours}h{r.weekly_hours != null && <span style={{ fontWeight: 400, color: 'var(--text3)' }}> / {r.weekly_hours}h</span>}
+                    {/* The shifts this figure was added up from — rows this screen does not show.
+                        The budget beside it is a figure somebody typed, not one folded from rows, so
+                        it has no panel of its own (§CORE-17.3x). */}
+                    <DrillTileLinks drills={budgetDrill.dl(r.store_code, 'the shifts behind these hours')}
+                      open={budgetDrill.open} onToggle={budgetDrill.toggle} />
                   </td>
                   <td style={{ padding: '7px 9px' }}>
                     {r.over && !r.override && <span style={{ padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: 'var(--c-fg-991b1b)', background: 'var(--c-bg-fee2e2)' }}>⚠ Over budget</span>}
@@ -142,6 +171,8 @@ export default function HoursBudgetPage() {
           </tbody>
         </table>
         {visibleRows.length === 0 && <div style={{ fontSize: 13, color: 'var(--text3)', padding: 8 }}>No stores found.</div>}
+        {/* ONE renderer for whichever store's hours are open — the one home's panel, never ours. */}
+        {budgetDrill.panel && <DrillDownPanel panel={budgetDrill.panel} extraColumns={BUDGET_DRILL_COLUMNS} />}
       </div>
 
       <div className="card" style={{ padding: 16 }}>

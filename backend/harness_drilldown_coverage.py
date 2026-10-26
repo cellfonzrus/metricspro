@@ -43,7 +43,12 @@ STATES = ("shared", "own", "flat", "not_report", "owes")
 #: THE RATCHET. The count of report routes that still owe a drill-down, measured 2026-10-24 by the
 #: three-way audit. IT MAY ONLY GO DOWN. Lower it in the same PR that builds one; a change that
 #: RAISES it is a report shipped without evidence, which is what this file exists to refuse.
-OWES_MAX = 21
+#: 2026-10-26: batches 23 (the finance set, -4) and 24 (payroll & workforce, -3) were built in
+#: parallel off a base of 25 and each lowered this pin against that base, so neither number was the
+#: whole reduction. The ledger merged cleanly to 18 owed routes and this pin is re-taken from the
+#: MERGED ledger rather than from either side: 25 - 4 - 3 = 18, and §C1 fails the build if the two
+#: ever disagree again.
+OWES_MAX = 18
 
 #: Routes whose page file lives somewhere the path rule below does not reach, or which are rendered
 #: by a shared component rather than their own page. Named rather than skipped silently.

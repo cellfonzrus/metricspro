@@ -462,7 +462,7 @@ def build_aging_inventory(inv_row, sale_sold_date, today):
         else → today for a device still unsold;
       • else honest 'no aging date' note.
 
-    FIXED 2026-10-26 (§COMMCALC-31). This function used to fall back to `days_in_stock` READ OFF THE
+    FIXED 2026-10-26 (§COMMCALC-32). This function used to fall back to `days_in_stock` READ OFF THE
     FILE when `received_date` was NULL — which it is on all 10,525 rows house-wide, so that fallback
     was the normal path, and it reported the age ON THE DAY THE FILE WAS PULLED. A device last seen in
     a July snapshot therefore showed its July age in October, while `/inventory-recon` and the

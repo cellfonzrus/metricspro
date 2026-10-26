@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """DB-FREE proof for `commcalc/inventory_stock_age.py` — the ONE home for "when did this device
-arrive on the shelf, and how long has it sat there" (§COMMCALC-31).
+arrive on the shelf, and how long has it sat there" (§COMMCALC-32).
 
 Pins, in order:
   A. The receipt date: the feed's own date wins; otherwise `as_of_date − days_in_stock`; otherwise

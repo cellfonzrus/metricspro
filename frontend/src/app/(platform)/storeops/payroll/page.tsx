@@ -8,6 +8,10 @@ import PtoAccrualPanel from './PtoAccrualPanel'
 import PayrollChargebacksPanel from './PayrollChargebacksPanel'
 import ActualHoursDrilldown from './ActualHoursDrilldown'
 import StandardFilterBar from '@/components/StandardFilterBar'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { currentPeriodFromSettingsResponse, isFullCalendarMonth, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
 import { PAY_BASIS_LABEL, type PayBasis } from '../lib/pay-basis'
@@ -40,6 +44,21 @@ const BASIS_LABEL: Record<string, string> = {
   punch_unusable: 'Punch unusable — reported',
 }
 
+// WHAT A READER NEEDS BESIDE EACH PERSON IN A PANEL — read off the row's own `fields`, which the
+// server composed (§CORE-17.3x). The basis sentence is the payroll engine's own words, so this
+// screen and the API cannot state different reasons for the same hours.
+const PAYROLL_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: r => (r.fields?.store as string) || '—',
+    sortValue: r => (r.fields?.store as string) || '' },
+  { header: 'Hours basis', get: r => {
+      const b = r.fields?.['hours basis'] as string | undefined
+      if (!b) return '—'
+      const label = BASIS_LABEL[b] || String(b).replace(/_/g, ' ')
+      return r.fields?.['mixed basis'] ? `${label} · mixed` : label
+    }, sortValue: r => (r.fields?.['hours basis'] as string) || '' },
+  { header: 'Why these hours', get: r => (r.fields?.['why these hours'] as string) || '—' },
+]
+
 export default function PayrollPage() {
   // RULE FIVE (§3d) period filter: an arbitrary date RANGE (owner 2026-07-25: "need time range to
   // create payroll for the employees universally" — biweekly/semimonthly/custom periods), defaulted
@@ -66,6 +85,9 @@ export default function PayrollPage() {
   const [overAlone, setOverAlone] = useState<Set<string>>(new Set())
   const [overStores, setOverStores] = useState<Set<string>>(new Set())
   const [editedEmpIds, setEditedEmpIds] = useState<Set<string>>(new Set())
+  // §CORE-17.3x — the people behind each tile, folded server-side over the SAME rows this report
+  // serves (`storeops/payroll_hours_drilldown`), served beside the bare-list payroll read.
+  const [panels, setPanels] = useState<Record<string, DrillPanel>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -104,6 +126,13 @@ export default function PayrollPage() {
     api(`/api/v1/storeops/payroll-change-log?start=${start}&end=${end}`).then((r: any) => {
       setEditedEmpIds(new Set<string>((r?.items || []).map((it: any) => it.employee_id).filter(Boolean)))
     }).catch(() => setEditedEmpIds(new Set()))
+    // The rows behind the four tiles (§CORE-17.3x). Its own request, because /payroll is a bare
+    // array with nowhere to hang a `drilldown` key; a failure here costs the drill links and never
+    // the report. A pay-gated caller is served the two HOURS panels only — the server withholds the
+    // money ones rather than folding stripped rows into $0.00.
+    api(`/api/v1/storeops/payroll/drilldown?start=${start}&end=${end}`)
+      .then((d: { drilldown?: Record<string, DrillPanel> }) => setPanels(d?.drilldown || {}))
+      .catch(() => setPanels({}))
   }
 
   useEffect(() => {
@@ -158,6 +187,35 @@ export default function PayrollPage() {
   const totalActual    = visibleRows.reduce((s, r) => s + r.actual_hours, 0)
   const totalPayScheduled = visibleRows.reduce((s, r) => s + (r.scheduled_pay || 0), 0)
   const totalPayActual    = visibleRows.reduce((s, r) => s + (r.actual_pay || 0), 0)
+
+  // ── §CORE-17.3d/§CORE-17.3x — THE TILES AND THEIR EVIDENCE ARE ONE FOLD ───────────────────────
+  // This page filters its rows in the BROWSER (store / market / employee) and then reduces over what
+  // survives, so a server-folded panel would explain a population the screen is not showing. Each
+  // panel is therefore NARROWED to the rows on screen, matched on the person-and-store key the
+  // server served with every drill row and built here with the SAME shared helper, and each tile
+  // READS ITS NUMBER OFF its narrowed panel wherever the two agree to the cent. A disagreement costs
+  // the drill link, never the figure: the page keeps its own reduce as the fallback.
+  const shownPeople = useMemo(
+    () => new Set(visibleRows.map(r => screenKey({ employee_id: r.employee_id, store: r.store }))),
+    [visibleRows])
+  const narrowed = useMemo(() => {
+    const out: Record<string, DrillPanel> = {}
+    Object.keys(panels).forEach(k => {
+      const p = narrowPanel(panels[k], (_r: DrillRow, key: string) => key === '' || shownPeople.has(key))
+      if (p) out[k] = p
+    })
+    return out
+  }, [panels, shownPeople])
+  const folded: Record<string, number> = {
+    scheduled_hours: totalScheduled, actual_hours: totalActual,
+    scheduled_pay: totalPayScheduled, actual_pay: totalPayActual,
+  }
+  const tileValue = (k: string): number => {
+    const n = folded[k] || 0
+    return agreesToTheCent(narrowed[k], n) ? Number(narrowed[k]?.figure?.amount ?? n) : n
+  }
+  const payrollDrill = useDrillTile(
+    narrowed, (k, p) => !(k in folded) || agreesToTheCent(p, folded[k] || 0))
 
   const periodName = rangeLabel(filt.period || '', filt.periodTo || '')
 
@@ -302,22 +360,32 @@ export default function PayrollPage() {
       {/* Summary — pay tiles are DROPPED (not zeroed) for a pay-gated caller. */}
       <div style={{ display: 'grid', gridTemplateColumns: `repeat(${canSeePay ? 4 : 2}, 1fr)`, gap: 12, marginBottom: 20 }}>
         {[
-          { label: 'Scheduled Hours', val: totalScheduled.toFixed(1), unit: 'hrs', icon: '📅' },
-          { label: 'Actual Hours', val: totalActual.toFixed(1), unit: 'hrs', icon: '⏱️' },
+          { key: 'scheduled_hours', label: 'Scheduled Hours', val: tileValue('scheduled_hours').toFixed(1), unit: 'hrs', icon: '📅', drill: 'the shifts behind these hours' },
+          { key: 'actual_hours', label: 'Actual Hours', val: tileValue('actual_hours').toFixed(1), unit: 'hrs', icon: '⏱️', drill: 'the people behind these hours, and what measured them' },
           ...(canSeePay ? [
-            { label: 'Scheduled Pay', val: fmt(totalPayScheduled), icon: '💵' },
-            { label: 'Actual Pay', val: fmt(totalPayActual), icon: '💰' },
+            { key: 'scheduled_pay', label: 'Scheduled Pay', val: fmt(tileValue('scheduled_pay')), icon: '💵', drill: 'the people behind this pay' },
+            { key: 'actual_pay', label: 'Actual Pay', val: fmt(tileValue('actual_pay')), icon: '💰', drill: 'the people behind this pay' },
           ] : []),
-        ].map(({ label, val, unit, icon }: any) => (
+        ].map(({ key, label, val, unit, icon, drill: drillLabel }: any) => (
           <div key={label} className="card">
             <div style={{ fontSize: 20 }}>{icon}</div>
             <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent)', marginTop: 8 }}>
               {val}{unit && <span style={{ fontSize: 13, color: 'var(--text3)', marginLeft: 4 }}>{unit}</span>}
             </div>
             <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{label}</div>
+            {/* The rows this figure was folded from, and which relation each one came out of. */}
+            <DrillTileLinks drills={payrollDrill.dl(key, drillLabel)}
+              open={payrollDrill.open} onToggle={payrollDrill.toggle} />
           </div>
         ))}
       </div>
+
+      {/* ONE renderer for whichever figure is open — the one home's panel, never a shape of ours. */}
+      {payrollDrill.panel && (
+        <div style={{ marginBottom: 20 }}>
+          <DrillDownPanel panel={payrollDrill.panel} extraColumns={PAYROLL_DRILL_COLUMNS} />
+        </div>
+      )}
 
       {/* 2026-07-25 owner guidance: chargebacks/PTO stay calendar-month-keyed, not range-prorated —
           say so plainly whenever the selected range ISN'T EXACTLY that one calendar month (Gate-1
