@@ -817,6 +817,46 @@ FACTS: dict[str, dict] = {
             'app/modules/payables/unsold_inventory.py': ('_rec',),
         },
     },
+    'payable_billing_period': {
+        "question": 'Which BILLING PERIOD does this dated payable money fall in, and WHAT SAID SO - '
+                    'a period the carrier stamped, a declared weekly rhythm, or no rhythm at all?',
+        "homes": ('app/modules/payables/billing_period.py',),
+        "index": ('COMMCALC-34',),
+        "locks": ('harness_billing_period.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04, and rewrote 51 of them on 2026-10-26). The lock verifies it against the
+        # real import graph.
+        "callers": {
+            # `Weekly Owed to Distributor` (§COMMCALC-34). The report used to BE the answer: it read
+            # one carrier's weekly consignment column and nothing else, so a tenant whose carrier
+            # raises an invoice per order saw a sum over an empty set. It now dereferences the
+            # cadence — `resolve_cadence` / `week_window` / `roll_up` — and derives no rhythm of its
+            # own. A carrier's stamped period still WINS through this home, never recomputed.
+            'app/modules/asset/router.py': ('_bp',),
+        },
+    },
+    'payable_dated_owed': {
+        "question": 'What is OWED, on which date, at which grain, and which source said so - the '
+                    'per-device payable ledger or the processor\'s own dated feed?',
+        "homes": ('app/modules/payables/owed_read.py',),
+        "index": ('COMMCALC-34',),
+        "locks": ('harness_billing_period.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04, and rewrote 51 of them on 2026-10-26). The lock verifies it against the
+        # real import graph.
+        "callers": {
+            # The DAILY surface, `/payables/owed-by-date`. Its own ledger query and its own vendor
+            # fallback are DELETED, not left beside this one — a dead second reader is a future
+            # divergence that compiles (§19.18). All that remains of it here is the grouping by date.
+            'app/modules/payables/router.py': ('_owed',),
+            # The WEEKLY roll-up, which groups the SAME rows by billing period instead. Giving the
+            # weekly report its own read was the obvious repair and would have been the duplicate
+            # defect the house rules gate on: two paths answering "what do I owe", free to disagree
+            # the moment either learned something the other did not. §F13 of the lock fails the
+            # build if a second definition of the read appears anywhere in the triangle.
+            'app/modules/asset/router.py': ('_owed_r',),
+        },
+    },
     'kpi_column_meaning': {
         "question": 'Which column carries which KPI actual at each grain, and what does the carrier\'s '
                     'port-in rate MEAN \u2014 which direction is good and what scale is it on?',
@@ -1500,6 +1540,11 @@ FACTS: dict[str, dict] = {
             # constants and re-keyed every map that had spelled `asset_ledger` or
             # `vip_paygo_payments` as a literal, because naming a fact is only half the fix.
             'app/modules/asset/device_asset_drilldown.py': ('_lineage',),
+            # §COMMCALC-34 — the ONE dated-owed read names the processor's feed through the
+            # registry rather than spelling it: the read it absorbed carried that table name as a
+            # LITERAL, and naming a fact is only half the fix (§19.18), so the copy went in the same
+            # commit. `harness_billing_period.py` §H2 fails the build if the literal reappears.
+            'app/modules/payables/owed_read.py': ('_lineage',),
             # The targets drill-down asks the registry WHICH TABLES the sales feeds and the
             # daily closing are, so a target-vs-actual panel never spells a relation name of
             # its own (§CORE-17.3m). The four relations it names that are NOT registered
