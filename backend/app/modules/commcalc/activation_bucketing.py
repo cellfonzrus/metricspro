@@ -53,6 +53,19 @@ BUCKET_RANK = {"Home Internet": 6, "Edge": 6, "Tablet": 6, "BYOD": 4, "Port": 3,
 # The families excluded from b2b's Total Activation (everything else sums into it).
 TOTAL_ACTIVATION_EXCLUDED = ("Upgrade", "BYOD Upgrade")
 
+# WHICH PAYLOAD COLUMN HOLDS EACH BUCKET'S COUNT — the one home, added 2026-10-26 (index
+# §CORE-17.3v). This map was spelled as a LITERAL inside `commcalc/router._ACT_BUCKET_FIELD`, and the
+# §CORE-17 drill-down for the Activations report has to name the figure a reader opened by the same
+# column key the fold writes it under. Two copies of one name is the divergence the house rule
+# forbids, so it lives HERE — beside `BUCKET_RANK` and `TOTAL_ACTIVATION_EXCLUDED`, which are the
+# same vocabulary — and the router's copy was re-keyed onto it in the same commit (string-identical
+# values, not one fold changed). `harness_batch22_drilldown.py` §A fails the build if the literal
+# returns. The KEYS are `activation_details_bucket`'s own bucket names; a bucket with no entry here
+# folds into `other`, which is the behaviour the router's `.get(bucket, "other")` already had.
+BUCKET_FIELD = {"New Activation": "activation", "Port": "port", "BYOD": "byod", "Tablet": "tablet",
+                "Home Internet": "home_internet", "Edge": "edge", "Upgrade": "upgrade",
+                "BYOD Upgrade": "byod_upgrade", "Other": "other"}
+
 
 def _norm_tokens(value, default):
     """A config token list, lowercased/trimmed; None/absent → default; junk entries dropped."""

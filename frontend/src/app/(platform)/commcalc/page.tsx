@@ -6,7 +6,38 @@ import { useAuth } from '@/lib/auth-context'
 import { carrierMode, payoutRefused } from '@/lib/rbac'
 import { buttonState, isError, isRunning, settleStatus, nextPollDelay, POLL_GIVE_UP_MS } from '@/lib/job-run'
 import StatTile from '@/components/StatTile'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 import { GoogleRatingChips, useGoogleRatings } from './_lib/googleRatings'
+
+// WHERE EACH OF THESE TILES CAME FROM (index §CORE-17.3v). The server serves a panel per figure it
+// can stand behind, from commcalc/rep_incentive_drilldown.py, folded over the SAME rep rows this
+// page lists below — one row per person the month's calculation wrote down, out of the calculated
+// rep-commission snapshot. `GET /commissions/{period}` is a bare JSON list with nowhere to hang a
+// `drilldown` key, so the panels come from `…/drilldown` beside it.
+//
+// THIS PAGE IS SERVER-FOLDED AND IS DELIBERATELY *NOT* NARROWED, AND IT IS THE INTERESTING CASE OF
+// THE BATCH. It does reduce its tiles in the browser — but it has NO FILTER AT ALL, so the reduce
+// runs over exactly the rows the server folded and narrowing would be the identity. The call is not
+// "does this page add anything up", it is "does this page fold a figure over a population the server
+// did not" (§CORE-17.3o). `lib/drill-narrow` must not appear in this file;
+// `harness_batch22_drilldown.py` §G fails the build in BOTH directions if that changes.
+//
+// WHAT GETS NO LINK, AND WHY. TOTAL ACTIVATIONS is premium + BYOD added here, at the total, from two
+// of the report's own counts — a figure composed from two totals has no rows of its own
+// (§CORE-17.3k), so the tile offers BOTH HALVES instead. REPS CALCULATED is a cardinality rather
+// than Σ of a field, and so is every tier count beside a bar whose width is a share of them
+// (§CORE-17.3h) — the same refusal the Daily Closing dashboard's `days` tile and comp-trend's
+// "Reps paid" already carry.
+const DASH_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: (r: DrillRow) => String(r.fields?.store ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.store ?? '') },
+  { header: 'Tier', get: (r: DrillRow) => String(r.fields?.tier ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.tier ?? 0) },
+  { header: 'Payout', get: (r: DrillRow) => String(r.fields?.payout ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.payout ?? 0) },
+]
 
 interface RepRow {
   epay_salesperson: string
@@ -57,6 +88,7 @@ export default function CommCalcDashboard() {
   // matching does not hand its lines to anything else. Read-only; never blocks anything.
   const [calcWarn, setCalcWarn] = useState<any>(null)
   const [calcNotices, setCalcNotices] = useState<CalcNotice[]>([])   // mig 247 — what the calc did NOT pay
+  const [drill, setDrill] = useState<Record<string, DrillPanel>>({})   // §CORE-17.3v — the rows behind each tile
   // WHEN THIS PAGE STARTED A RUN (owner report 2026-10-06, index §6q). `job-run.ts` is the ONE home
   // for what the control shows; this ref is only the local fact it needs — the epoch ms of OUR press,
   // so a status read that PREDATES the press cannot downgrade it back to "not calculated yet". That
@@ -98,11 +130,15 @@ export default function CommCalcDashboard() {
     setLoading(true)
     try {
       const enc = encodeURIComponent(period)
-      const [comms, status] = await Promise.all([
+      const [comms, status, dd] = await Promise.all([
         api(`/api/v1/commcalc/commissions/${enc}?org_id=${ORG_ID}`),
         api(`/api/v1/commcalc/calc-status/${enc}?org_id=${ORG_ID}`),
+        // The rows behind the tiles (§CORE-17.3v). Its own request because the commissions read is
+        // a bare list; a failure here costs the drill links and never the report.
+        api(`/api/v1/commcalc/commissions/${enc}/drilldown?org_id=${ORG_ID}`).catch(() => null),
       ])
       setReps(comms || [])
+      setDrill((dd?.drilldown || {}) as Record<string, DrillPanel>)
       // ONE rule for reconciling our press with the server's word (job-run.settleStatus): a read
       // that is not strictly later than the press may not contradict it.
       setCalcStatus(settleStatus(status?.calc_status, { pressedAt: pressedAt.current, readAt: Date.now() }))
@@ -156,11 +192,22 @@ export default function CommCalcDashboard() {
     tierCounts[t] = (tierCounts[t] || 0) + 1
   })
 
+  // THE SERVER'S FOLD, printed as served. The shared offer gate carries NO extra condition here:
+  // this page applies no filter, so a tile and its panel are the same population by construction.
+  const tileDrill = useDrillTile(drill)
+
   const KPI_CARDS = [
-    { label: 'Total Incentive Payout', value: fmt(totalPayout), color: 'var(--accent)', icon: '💰', hero: true },
-    { label: 'Total Activations', value: totalActs.toLocaleString(), color: 'var(--green)', icon: '📱' },
-    { label: 'Total Upgrades', value: totalUpgrades.toLocaleString(), color: 'var(--c-fg-7c3aed)', icon: '🔄' },
-    { label: 'Reps Calculated', value: reps.length.toLocaleString(), color: 'var(--amber)', icon: '👥' },
+    { label: 'Total Incentive Payout', value: fmt(totalPayout), color: 'var(--accent)', icon: '💰', hero: true,
+      drills: tileDrill.dl('total_payout', 'the people behind this payout') },
+    // NO LINK FOR THE FIGURE ITSELF (§CORE-17.3k): this is premium + BYOD added at the TOTAL from two
+    // of the report's own counts, so it has no rows of its own — both halves open instead.
+    { label: 'Total Activations', value: totalActs.toLocaleString(), color: 'var(--green)', icon: '📱',
+      drills: tileDrill.dl('premium_acts', 'the premium half', 'byod_acts', 'the BYOD half') },
+    { label: 'Total Upgrades', value: totalUpgrades.toLocaleString(), color: 'var(--c-fg-7c3aed)', icon: '🔄',
+      drills: tileDrill.dl('upgrade_acts', 'the people behind this count') },
+    // A CARDINALITY GETS NO PANEL: this counts the rows every panel's own header already states.
+    { label: 'Reps Calculated', value: reps.length.toLocaleString(), color: 'var(--amber)', icon: '👥',
+      drills: [] as { key: string; label: string }[] },
   ]
 
   return (
@@ -310,10 +357,15 @@ export default function CommCalcDashboard() {
 
       {/* KPI tiles — bento layout: the payout headline reads as the hero, the counts support it. */}
       <div className="stat-grid" style={{ marginBottom: 24 }}>
-        {KPI_CARDS.map(({ label, value, color, icon, hero }) => (
-          <StatTile key={label} label={label} value={value} icon={icon} accent={color} hero={hero} />
+        {KPI_CARDS.map(({ label, value, color, icon, hero, drills }) => (
+          <StatTile key={label} label={label} value={value} icon={icon} accent={color} hero={hero}
+            sub={<DrillTileLinks drills={drills} open={tileDrill.open} onToggle={tileDrill.toggle} />} />
         ))}
       </div>
+
+      {/* ONE renderer for whichever figure is open — the rows that figure was folded from, each
+          naming the stored month it was read out of. */}
+      {tileDrill.panel && <DrillDownPanel panel={tileDrill.panel} extraColumns={DASH_DRILL_COLUMNS} />}
 
       {/* Tier Distribution + Top Reps */}
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16, marginBottom: 24 }}>

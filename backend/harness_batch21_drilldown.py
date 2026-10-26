@@ -1056,10 +1056,23 @@ check("J5 and each note names THIS batch's index section and the declaration tha
           for r in MY_ROUTES))
 ctl("J4b control: the clause scan is NOT vacuous — a note without the clause is caught",
     "REFUSES TO CLAIM" not in "a note that declines to say what it declined")
+#: THE FACT, NOT THE STATE IT HAPPENED TO BE IN. This asserted `/commcalc` is still `owes`, which
+#: is the right INTENT written against the wrong thing: the claim is that a row this PR did not
+#: serve was not quietly DELETED, and a later batch SERVING that route is exactly what the
+#: programme is for. §CORE-17.3v served it on 2026-10-26 and this check went red although nothing
+#: it cares about had changed. Rewritten to assert the row still EXISTS and carries a declared
+#: state — true whether it is still owed or has since been served — which is the same shape of hole
+#: §CORE-17.3v found in `harness_activation_bucketing.py` §E7: a lock reading the FORM of the tree
+#: rather than the fact it is asserting (and the gate's own §A/§C already fail the build on a route
+#: that has stopped existing or carries an undeclared state).
+_j6_state, _j6_note = _state(LEDGER_TXT, "/commcalc")
 check("J6 THE SIBLING ROUTES THIS PR DID NOT WIDEN TO ARE STILL ON THE LEDGER, honestly marked. A "
       "batch that quietly removed a row it had not served would shrink the ratchet without serving "
-      "anybody",
-      _state(LEDGER_TXT, "/commcalc")[0] == "owes")
+      "anybody — so the assertion is that the ROW IS STILL THERE with a declared state, not that "
+      "it is still owed: a later batch serving it is the programme working",
+      _j6_state in ("owes", "shared", "own", "flat", "not_report"), str(_j6_state))
+ctl("J6b control: that scan is NOT vacuous — a route with no row at all is caught",
+    _state(LEDGER_TXT, "/commcalc/a-route-nobody-declared")[0] is None)
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

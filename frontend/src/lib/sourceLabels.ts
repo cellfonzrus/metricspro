@@ -94,6 +94,10 @@ const SOURCE_LABEL: Record<string, string> = {
   target_line: 'target settings (declared category)',
   closing_metric_line: 'declared daily counts',
   stores: 'store setup',
+  // The subsidy-entitlement report (§CORE-17.3v). A store's first entitled month, how many months
+  // the term runs and what one month is worth are numbers somebody typed into company settings, so
+  // the plain name is the screen they were entered on — never the row they land in.
+  commission_org_config: 'company commission settings',
   // The commission-disagreement trail (§CORE-17.3k). A manager reads "the pay discrepancy run" —
   // the stored result of pressing Run Detection — never the table it lands in.
   discrepancy_results: 'the pay discrepancy run',

@@ -4,6 +4,38 @@ import { api, getActiveOrg } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useReportLabels } from '@/lib/report-labels'
 import { useReportKinds, notApplicableCopy } from '@/lib/report-kinds'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+
+// WHERE EACH OF THESE COUNTS CAME FROM (index §CORE-17.3v). The server serves a panel per figure it
+// can stand behind, from commcalc/activation_count_drilldown.py, folded over the SAME store rows the
+// By Store table prints — ONE grain, a store row of DISTINCT DEVICES out of the custom-import
+// capture the Activation Details export lands in.
+//
+// THIS PAGE IS SERVER-FOLDED AND IS DELIBERATELY *NOT* NARROWED. It prints the server's own total
+// object as served and folds nothing: the upgrade toggle is a query parameter, the tab chooses which
+// of two server-folded lists to print, and that is every control it has. `lib/drill-narrow` must not
+// appear in this file; `harness_batch22_drilldown.py` §G fails the build in BOTH directions.
+//
+// WHAT GETS NO LINK, AND WHY. DEVICES COUNTED is the same measurement as Incl. Upgrade printed under
+// a second label — the producer increments both once per counted device, unconditionally — so it
+// links to the one panel rather than two panels existing for one figure. EVERY ROW OF THE BY MARKET
+// TABLE gets none either, and that one is a reported defect rather than a ruling: the producer blanks
+// each market row's own market before serving it, which is why this tab shows a dash where the market
+// name belongs, and a panel cannot name a subject the report has thrown away. The reconciliation
+// panel below compares this report against the sales-derived count from a different endpoint, and its
+// per-store rows are printed in full underneath it.
+const ACT_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.market ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.market ?? '') },
+  { header: 'Total activation', get: (r: DrillRow) => String(r.fields?.['total activation'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['total activation'] ?? 0) },
+  { header: 'Incl. upgrade', get: (r: DrillRow) => String(r.fields?.['incl. upgrade'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['incl. upgrade'] ?? 0) },
+  { header: 'Upgrades', get: (r: DrillRow) => String(r.fields?.upgrades ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.upgrades ?? 0) },
+]
 
 // Activations report — the POS "Activation Details" basis of truth (owner 2026-08-26). One row per distinct
 // device (Serial#); Total Activation EXCLUDES Upgrade (POS-consistent, LuxeLink 687 / Nova 250), with a
@@ -90,6 +122,10 @@ export default function ActivationsPage() {
   const totalKey = inclUpg ? 'total_with_upgrade' : 'total_activation'
   const rows: Row[] = (tab === 'market' ? data?.markets : data?.stores) || []
   const grand = data?.total || {}
+  // The server's fold, printed as served. The shared offer gate carries NO extra condition: figure
+  // and panel came out of the same fold over the same store rows.
+  const actPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const actDrill = useDrillTile(actPanels)
   const onAD = !!(srcCfg && srcCfg.enabled && srcCfg.source === 'activation_details')
 
   // Carrier-aware column labels (owner 2026-09-02, mig 945): resolved tenant override > house carrier
@@ -152,12 +188,27 @@ export default function ActivationsPage() {
       {/* Grand total chips */}
       {!loading && !data?.note && (
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
-          <Chip label="Total Activation (excl. Upgrade)" value={int(grand.total_activation)} strong />
-          <Chip label="Incl. Upgrade" value={int(grand.total_with_upgrade)} />
-          <Chip label="Upgrades" value={int(grand.upgrade)} />
-          <Chip label="Devices counted" value={int(data?.counted)} />
+          <Chip label="Total Activation (excl. Upgrade)" value={int(grand.total_activation)} strong
+            links={<DrillTileLinks drills={actDrill.dl('total_activation', 'the stores behind this count')}
+              open={actDrill.open} onToggle={actDrill.toggle} />} />
+          <Chip label="Incl. Upgrade" value={int(grand.total_with_upgrade)}
+            links={<DrillTileLinks drills={actDrill.dl('total_with_upgrade', 'the stores behind this count')}
+              open={actDrill.open} onToggle={actDrill.toggle} />} />
+          <Chip label="Upgrades" value={int(grand.upgrade)}
+            links={<DrillTileLinks drills={actDrill.dl('upgrade', 'the stores behind this count')}
+              open={actDrill.open} onToggle={actDrill.toggle} />} />
+          {/* THE SAME MEASUREMENT AS THE CHIP TWO ALONG, under a second label — the producer counts
+              both once per device, unconditionally. It links to that one panel rather than a second
+              panel existing for one figure. */}
+          <Chip label="Devices counted" value={int(data?.counted)}
+            links={<DrillTileLinks drills={actDrill.dl('total_with_upgrade', 'the same stores, same count')}
+              open={actDrill.open} onToggle={actDrill.toggle} />} />
         </div>
       )}
+
+      {/* ONE renderer for whichever figure is open — the store rows it was folded from, each naming
+          the upload it was read out of. */}
+      {actDrill.panel && <DrillDownPanel panel={actDrill.panel} extraColumns={ACT_DRILL_COLUMNS} />}
 
       {/* Breakdown table */}
       {!loading && !data?.note && (
@@ -184,7 +235,11 @@ export default function ActivationsPage() {
                 <td style={{ ...tdL, fontWeight: 800, borderTop: '2px solid var(--border)' }}>TOTAL</td>
                 {tab === 'store' && <td style={{ ...tdL, borderTop: '2px solid var(--border)' }} />}
                 {COLS.map(c => (
-                  <td key={String(c.key)} style={{ ...td, fontWeight: 800, borderTop: '2px solid var(--border)' }}>{int((grand as any)[c.key])}</td>
+                  <td key={String(c.key)} style={{ ...td, fontWeight: 800, borderTop: '2px solid var(--border)' }}>
+                    {int((grand as any)[c.key])}
+                    <DrillTileLinks drills={actDrill.dl(String(c.key), 'the stores behind this count')}
+                      open={actDrill.open} onToggle={actDrill.toggle} />
+                  </td>
                 ))}
               </tr>
             </tbody>
@@ -259,12 +314,14 @@ export default function ActivationsPage() {
   )
 }
 
-function Chip({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+function Chip({ label, value, strong, links }:
+  { label: string; value: string; strong?: boolean; links?: React.ReactNode }) {
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '8px 14px', minWidth: 120,
       background: strong ? 'var(--c-bg-eff6ff)' : 'var(--surface)' }}>
       <div style={{ fontSize: 11, color: 'var(--text3)' }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 800 }}>{value}</div>
+      {links}
     </div>
   )
 }

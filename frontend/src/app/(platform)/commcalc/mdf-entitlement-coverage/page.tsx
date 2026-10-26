@@ -4,6 +4,38 @@ import { api, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import { MultiSelect } from '@/lib/multiselect'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+
+// WHERE EACH OF THESE TILES CAME FROM (index §CORE-17.3v). The server serves a panel per figure it
+// can stand behind, from commcalc/entitlement_coverage_drilldown.py, folded over the SAME
+// store-month rows the table below prints. THREE grains on one row: the verdict COUNTS, the money
+// that ARRIVED, and what an ABSENT month is worth — the last two in the same unit on the same row,
+// separated only by where the number came from, because a gap is priced from an amount somebody
+// DECLARED (§CORE-17.3m / §CORE-17.3n).
+//
+// THIS PAGE IS SERVER-FOLDED AND IS DELIBERATELY *NOT* NARROWED. Every tile reads `data.totals` as
+// served and this page folds nothing; its store picker is a query parameter the server filters on
+// before it folds, and the verdict tick list narrows the TABLE and touches no tile. A panel explains
+// the FIGURE, not the table (§CORE-17.3o), so narrowing here would make every panel disagree with
+// the tile it was opened from. `lib/drill-narrow` must not appear in this file;
+// `harness_batch22_drilldown.py` §G fails the build in BOTH directions if that changes.
+//
+// WHAT GETS NO LINK, AND WHY. The store counts — "across N stores" and "N stores have no declared
+// first entitled month" — are cardinalities of a STORE set, not sums over the store-month rows this
+// report folds, so a panel for one would be a row list at a different grain from the figure it
+// claimed to explain. The report's own verdict sentence is a verdict, not a figure.
+const COVERAGE_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Verdict', get: (r: DrillRow) => String(r.fields?.verdict ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.verdict ?? '') },
+  { header: 'Month of term', get: (r: DrillRow) => String(r.fields?.['month of term'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['month of term'] ?? '') },
+  { header: 'Monthly amount', get: (r: DrillRow) => String(r.fields?.['monthly amount'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['monthly amount'] ?? 0) },
+  { header: 'Amount basis', get: (r: DrillRow) => String(r.fields?.['amount basis'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['amount basis'] ?? '') },
+]
 
 // SUBSIDY MONTHS MISSING — owner instruction 2026-10-10: *"mdf / ramp up subsidy is being finsihed it
 // is inly for 12 months, if we did not get for 12 months for each store it should be flagged and the
@@ -83,11 +115,18 @@ export default function MdfEntitlementCoveragePage() {
     { header: 'Why not measured', get: r => r.reason_label || '' },
   ]), [])
 
-  const Tile = ({ label, value, sub, warn }: { label: string; value: string; sub?: string; warn?: boolean }) => (
+  // The server's fold, printed as served. The shared offer gate carries NO extra condition: figure
+  // and panel came out of the same fold over the same rows.
+  const panels: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(panels)
+
+  const Tile = ({ label, value, sub, warn, links }:
+    { label: string; value: string; sub?: string; warn?: boolean; links?: React.ReactNode }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 200 }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? 'var(--c-fg-991b1b)' : 'var(--text1)' }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+      {links}
     </div>
   )
 
@@ -150,16 +189,43 @@ export default function MdfEntitlementCoveragePage() {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <Tile label="Missing store-months" value={(totals.missing_store_months || 0).toLocaleString()}
                 sub={`${money(totals.missing_amount)}${totals.unpriced_missing_store_months ? ` · ${totals.unpriced_missing_store_months} nothing can price` : ''}`}
-                warn={!!totals.missing_store_months} />
+                warn={!!totals.missing_store_months}
+                links={<DrillTileLinks
+                  drills={drill.dl('missing_store_months', 'which store-months',
+                                   'missing_amount', 'what they are worth',
+                                   'unpriced_missing_store_months', 'the ones nothing can price')}
+                  open={drill.open} onToggle={drill.toggle} />} />
           <Tile label="No payment reached us" value={(totals.unconfirmed_missing_store_months || 0).toLocaleString()}
-                sub={`${money(totals.unconfirmed_missing_amount)} — our feed, not the carrier. Counted apart.`} />
+                sub={`${money(totals.unconfirmed_missing_amount)} — our feed, not the carrier. Counted apart.`}
+                links={<DrillTileLinks
+                  drills={drill.dl('unconfirmed_missing_store_months', 'which store-months',
+                                   'unconfirmed_missing_amount', 'what they are worth')}
+                  open={drill.open} onToggle={drill.toggle} />} />
           <Tile label="Named, not measured" value={(totals.undeclared_absence_store_months || 0).toLocaleString()}
-                sub={`${money(totals.undeclared_absence_amount_at_observed_rate)} at the store’s own monthly amount — not a claim`} />
+                sub={`${money(totals.undeclared_absence_amount_at_observed_rate)} at the store’s own monthly amount — not a claim`}
+                links={<DrillTileLinks
+                  drills={drill.dl('undeclared_absence_store_months', 'which store-months',
+                                   'undeclared_absence_amount_at_observed_rate', 'what they would be worth')}
+                  open={drill.open} onToggle={drill.toggle} />} />
+          {/* NO LINK ON THE STORE COUNT IN THE SUB-LINE: it is a cardinality of a STORE set, not a
+              sum over the store-month rows this report folds. */}
           <Tile label="Received" value={(totals.received_store_months || 0).toLocaleString()}
-                sub={`${fmt(totals.received_total || 0)} across ${totals.stores || 0} store${totals.stores === 1 ? '' : 's'}`} />
+                sub={`${fmt(totals.received_total || 0)} across ${totals.stores || 0} store${totals.stores === 1 ? '' : 's'}`}
+                links={<DrillTileLinks
+                  drills={drill.dl('received_store_months', 'which store-months',
+                                   'received_total', 'the money that arrived')}
+                  open={drill.open} onToggle={drill.toggle} />} />
           <Tile label="Still to come" value={(totals.not_due_store_months || 0).toLocaleString()}
-                sub={`of ${(totals.store_months_judged || 0).toLocaleString()} store-months in a declared term`} />
+                sub={`of ${(totals.store_months_judged || 0).toLocaleString()} store-months in a declared term`}
+                links={<DrillTileLinks
+                  drills={drill.dl('not_due_store_months', 'which store-months',
+                                   'store_months_judged', 'everything in a declared term')}
+                  open={drill.open} onToggle={drill.toggle} />} />
         </div>}
+
+      {/* ONE renderer for whichever figure is open — the store-months it was folded from, each
+          naming the records it was read out of or saying plainly that there were none. */}
+      {drill.panel && <DrillDownPanel panel={drill.panel} extraColumns={COVERAGE_DRILL_COLUMNS} />}
 
       {/* The report's own verdict, in its own words — never re-worded here. */}
       {!loading && !data?.error && data?.reason &&

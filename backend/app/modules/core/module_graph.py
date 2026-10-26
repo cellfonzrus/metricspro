@@ -83,7 +83,8 @@ FACTS: dict[str, dict] = {
                   'harness_batch18_drilldown.py',
                   'harness_batch19_drilldown.py',
                   'harness_batch20_drilldown.py',
-                  'harness_batch21_drilldown.py'),
+                  'harness_batch21_drilldown.py',
+                  'harness_batch22_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -281,6 +282,25 @@ FACTS: dict[str, dict] = {
             # copy of and now dereferences by identity. `harness_batch21_drilldown.py` §A3 fails
             # the build if either stops dereferencing it.
             'app/modules/commcalc/sales_outcome_drilldown.py': ('report_drilldown',),
+            # The last four COMMCALC reports (§CORE-17.3v) — the commission dashboard, the Rep
+            # Breakdown tab, the subsidy-coverage report and the activation counts. THREE
+            # declarations, not one, because they share no row grain: a rep-per-store row of
+            # payout, a store-month of entitlement and a store row of counted devices are three
+            # different subjects. The dashboard and the breakdown DO share one, so they share one
+            # catalogue — a second one over the same grain is the sibling derivation the index
+            # rules forbid. Where the §CORE-17.3o call is made BOTH ways inside one catalogue: the
+            # dashboard prints the server's fold and is not narrowed, the breakdown folds the
+            # reader's own rep+store filter in the browser and is. SIX grains over three row
+            # shapes, two of them separated by PROVENANCE ALONE (§CORE-17.3n) — what an absent
+            # entitlement month was worth, priced from a declared rate or observed from the
+            # store's own payments. Also the batch that REPORTED three live defects rather than
+            # coding around them: a footer that sums a never-recorded slice as zero, two tabs
+            # meaning different things by `installment`, and a per-market fold whose own assembly
+            # destroys the market label before it prints — which is why no per-market panel is
+            # served at all.
+            'app/modules/commcalc/rep_incentive_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/entitlement_coverage_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/activation_count_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -894,6 +914,10 @@ FACTS: dict[str, dict] = {
         # real import graph rather than regenerating it.
         "callers": {
             'app/modules/commcalc/router.py': ('_ec',),
+            # §CORE-17.3v. The coverage drill-down reads the producer's OWN verdict words, config
+            # column and migration name rather than restating any of them, so a verdict renamed
+            # here reaches the panel with no second edit.
+            'app/modules/commcalc/entitlement_coverage_drilldown.py': ('_ec',),
         },
     },
     'declared_metric_catalog': {
@@ -1473,6 +1497,17 @@ FACTS: dict[str, dict] = {
             # `processor_money_drilldown.sales_union_tables`, which that PR extended to answer for a
             # multi-month RANGE read as well, in the ONE resolver rather than a second beside it.
             'app/modules/commcalc/sales_outcome_drilldown.py': ('_lineage',),
+            # §CORE-17.3v. The subsidy-coverage drill-down asks the registry which relations the
+            # CARRIER PAYMENT DETAIL and the COMPENSATION STATEMENT are, and the activation
+            # drill-down which one the MONTH-END UPLOAD is. All three are constants earlier batches
+            # named: no new registry entry was needed and none was added, because a second name for
+            # a relation already in here is the divergence this registry exists to prevent. The
+            # company commission settings these panels also name are deliberately NOT a registry
+            # entry — a config row somebody typed is not an external feed and does not belong in
+            # the feed watchdog's population, which is the posture `targets_drilldown.TARGETS`
+            # already takes.
+            'app/modules/commcalc/entitlement_coverage_drilldown.py': ('_lineage',),
+            'app/modules/commcalc/activation_count_drilldown.py': ('_lineage',),
             'app/modules/account/statement_drilldown.py': ('_lineage',),
             'app/modules/account/liabilities_drilldown.py': ('_lineage',),
             'app/modules/commcalc/processor_ledger.py': ('_lineage',),
@@ -1576,6 +1611,53 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/sales_comparison.py': ('_lc',),
             'app/modules/commcalc/zero_sales.py': ('_lc',),
             'app/modules/core/plan_sources.py': ('_lc',),
+        },
+    },
+    'rep_pay_snapshot': {
+        "question": 'Which relation holds the CALCULATED rep-commission snapshot — the stored '
+                    'result of a commission run, as opposed to anything a carrier reported? A '
+                    'figure read out of it is a figure this platform computed and saved, so a '
+                    'panel over it must name THAT and never a carrier feed. The name is '
+                    'deliberately not a `data_lineage_registry` constant: the snapshot is written '
+                    'by this platform, not fed to it, and a second spelling in the feed registry '
+                    'would be the divergence that registry exists to prevent (§CORE-17.3t).',
+        "homes": ('app/modules/commcalc/carrier_pay_drilldown.py',),
+        "index": ('CORE-17',),
+        "locks": ('harness_batch22_drilldown.py',),
+        # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
+        "callers": {
+            # §CORE-17.3v. The commission dashboard and the Rep Breakdown tab fold the same
+            # snapshot, so they dereference its name here rather than spelling it a third time.
+            'app/modules/commcalc/rep_incentive_drilldown.py': ('_cpd',),
+            # The siblings this fact was already true for, named here for the first time because
+            # the fact itself had no home block until §CORE-17.3v needed one. Nothing about their
+            # wiring changed: each already dereferenced `REP_COMMISSIONS` rather than spelling it.
+            'app/modules/commcalc/exec_month_drilldown.py': ('_cpd',),
+            'app/modules/commcalc/performance_coaching_drilldown.py': ('_cpd',),
+            'app/modules/commcalc/sales_margin_drilldown.py': ('_cpd',),
+            'app/modules/commcalc/targets_drilldown.py': ('_cpd',),
+            'app/modules/commcalc/router.py': ('_cpdd',),
+        },
+    },
+    'activation_bucket_column': {
+        "question": 'Which payload column holds each activation bucket\'s count? The bucket '
+                    'vocabulary, which families are excluded from the headline activation total '
+                    'and which column each bucket is written under are ONE fact: a fold writes a '
+                    'bucket under a column key and a drill-down has to name that figure by the '
+                    'same key, so a second copy of the mapping is a panel that silently explains '
+                    'the wrong number. It was a literal map inside `commcalc/router` until '
+                    '§CORE-17.3v moved it here and deleted that copy in the same commit.',
+        "homes": ('app/modules/commcalc/activation_bucketing.py',),
+        "index": ('CORE-17',),
+        "locks": ('harness_batch22_drilldown.py',),
+        # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
+        "callers": {
+            'app/modules/commcalc/activation_count_drilldown.py': ('_act',),
+            # THE OTHER HALF OF THE MOVE, registered in the same commit: the router no longer holds
+            # its own `_ACT_BUCKET_FIELD` map and dereferences the one home. A hand-written edge for
+            # the new home without one for the file that stopped spelling the literal is half a
+            # registration, and half a design fix is what §19.18 is a list of.
+            'app/modules/commcalc/router.py': ('_ab', '_ab_cats', '_ab_pol', '_act_bucketing'),
         },
     },
     'boost_payout_terms': {
@@ -1716,6 +1798,11 @@ FACTS: dict[str, dict] = {
             # which a manager would read as "nothing to discuss". Both the predicate and the field
             # name are bound by object identity, locked by `harness_batch20_drilldown.py` §A6.
             'app/modules/commcalc/performance_coaching_drilldown.py': ('_pse',),
+            # §CORE-17.3v. The same ruling one report along: a rep whose payout slices the run never
+            # itemised is shown WITHOUT a figure and is not counted, in this module's own basis
+            # word — never as a rep who earned $0.00, which is what reading the raw column would
+            # print beside a correct total.
+            'app/modules/commcalc/rep_incentive_drilldown.py': ('_pse',),
         },
     },
     'commission_ledger_identity': {
