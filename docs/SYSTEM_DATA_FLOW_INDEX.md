@@ -7487,8 +7487,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /commcalc/accessory-flags` (`?start=&end=&store=&rep=&period=&threshold=&min_threshold=`) · `GET /commcalc/accessory-flags/receipt?trans_id=` · `POST /commcalc/accessory-flags/push` | `commcalc/router.accessory_flags` / `accessory_receipt` / `accessory_flags_push` | §18 + §CORE-17.3o Accessory Flags — accessories rung out over the max threshold or under the allowed minimum, store-span gated, with the full receipt behind any row and a push into the seller's chargebacks.  Serves `drilldown` (§CORE-17.3o): the two MONEY tiles open to the flagged sale lines; the chargeback exposure names the org's FLAG-RULES row, because it is not a measurement of any sale. **Reported defects:** it reads `raw_sales` ALONE while the page opens on the open month, so a feed-led tenant's flagged accessories can be missing entirely; and the five tiles and three rollup cards are the server's fold over the whole range while the table below is filtered in the browser |
 | `GET /commcalc/processor-ledger` | `commcalc/processor_ledger_api.py` | §15 Processor Daily Debits & Credits — day × transaction type, DEBITS/CREDITS/NET; store-span gated; serves the canonical §13c `market_options`. `categories=` filters by the org's own declared pay category, with `NO_CATEGORY_ID` for money whose payment type it never mapped — §57.2  Serves `drilldown` (§CORE-17.3n). **Reported defect:** the `markets=` filter has no escape for a market-less cell while the page folds one under "(no market)", so that pick returns an empty report through a deep link or a scheduled send |
 | `GET /commcalc/financing/{period}` (· `GET|PUT /commcalc/financing/targets/{period}` · the `/financing/vendors*` registry endpoints) — **THE FINANCING REPORT** (owner directive 2026-08-04): financed UNITS and financed DOLLARS by vendor x store x rep for a month, against each store's monthly financing target, plus the distinct tender values actually present so mapping a vendor is pick-don't-type. READ-ONLY; it recomputes no payout and is called from no pay path. NEVER REGISTERED HERE UNTIL 2026-10-26 (§CORE-17.3p) although it has shipped since August | `commcalc/router.financing_report` → pure `commcalc/financing_report.build` over `router._sales_rows_union`, `financing_registry.resolve_vendors` (detection is CONFIG — a vendor with no usable matcher claims NOTHING and the page says 'not configured' rather than showing a zero that reads as a business fact) and `financing_tiers.load_targets`; UNITS are collapsed to DEVICES through `plan_pay_gate.select_paying_lines(..., 'per_device', ...)`, the payout's own collapse, so report units and paid units cannot drift | §CORE-17.3p; page `commcalc/financing/page.tsx`.  Serves `drilldown` (§CORE-17.3p): the two whole-report figures open to the (vendor x store x rep) rows, narrowed on the page through `lib/drill-narrow` because the page folds those tiles itself. **Reported defects:** the per-vendor tiles beside them are the server's own fold and do NOT move under the filter bar, so one strip holds both §CORE-17.3o classes; and when the payout's device collapse is unavailable the units are counted per TRANSACTION and `unit_notes` says so to the payload and to nobody — the page renders it nowhere |
-| `GET /account/device-purchases` (`from_period`/`to_period` = 'YYYY-MM', inclusive; default = the current calendar year) | `account/router.device_purchases` → `account/device_purchases.compute` (pure core `aggregate`) | §23y Device Purchases from the distributor — device spend BILLED in a window, by company × store. PURCHASES, **not** COGS (`account/device_cogs`), and it books nothing |
-| `GET /account/device-payable` (`as_at` = 'YYYY-MM-DD', DAY granularity; default = today) | `account/router.device_payable` → `account/device_payable.compute` (pure core `aggregate`) | §23z Device Payable as at a date — of the units BILLED on or before `as_at`, those whose per-unit payment date falls after it or is absent, by company × store. A **backdated** payable, which `GET /account/liabilities-due` and the BS `owed_vip` (§4/§23n — current state off the ledger STATUS column, which cannot be backdated) structurally cannot answer. Coverage is derived from the data; an `as_at` outside it returns `coverage.state='not_measured'` with `payable_amount: null`, never $0.00. Non-device items are a separate, billed-basis section. Books nothing, writes nothing |
+| `GET /account/device-purchases` (`from_period`/`to_period` = 'YYYY-MM', inclusive; default = the current calendar year) | `account/router.device_purchases` → `account/device_purchases.compute` (pure core `aggregate`) | §23y Device Purchases from the distributor — device spend BILLED in a window, by company × store. PURCHASES, **not** COGS (`account/device_cogs`), and it books nothing. **DRILL-DOWN §CORE-17.3w:** a read-only `drilldown` key — the device spend and the serialised-unit count open to the STORE ROWS the By store table prints (the money naming the invoice LINES, the count naming the SERIALISED unit rows: two grains on one row), the non-device money to its own item rows and the unresolved spend to the locations nothing matched. The distinct invoice count and the unit-reconciliation block get no panel. NARROWED through `lib/drill-narrow`, each figure read off its narrowed panel only where the two agree to the cent. DEFECT REPORTED: the company-not-mapped rows under `unresolved` are the SAME objects `by_store` already serves, so the page prints one population twice. Declaration `account/device_billing_drilldown.py` (shared with Device Payable — ONE family), proof `harness_batch23_drilldown.py` §B/§C |
+| `GET /account/device-payable` (`as_at` = 'YYYY-MM-DD', DAY granularity; default = today) | `account/router.device_payable` → `account/device_payable.compute` (pure core `aggregate`) | §23z Device Payable as at a date — of the units BILLED on or before `as_at`, those whose per-unit payment date falls after it or is absent, by company × store. A **backdated** payable, which `GET /account/liabilities-due` and the BS `owed_vip` (§4/§23n — current state off the ledger STATUS column, which cannot be backdated) structurally cannot answer. Coverage is derived from the data; an `as_at` outside it returns `coverage.state='not_measured'` with `payable_amount: null`, never $0.00. Non-device items are a separate, billed-basis section. Books nothing, writes nothing. **DRILL-DOWN §CORE-17.3w:** a read-only `drilldown` key — the payable and the unpaid-unit count open to the STORE ROWS, each row naming BOTH relations (which units were billed from the serialised invoice rows; the amount owed and the day it settled from the unit LEDGER), which is the same row and unit as the purchase money separated by PROVENANCE ALONE (§CORE-17.3n). The match RATE gets no panel (§CORE-17.3h) and an `as_at` outside coverage serves no figure and therefore none either (§CORE-17.3i). DEFECT REPORTED: the paid total is dashed rather than narrowed while the payable beside it narrows. Declaration `account/device_billing_drilldown.py`, proof `harness_batch23_drilldown.py` §D |
 | `GET /sales-report` | `15792` | §3 |
 | `GET /ma-commission/summary` — per-store MA roll-up. `by_store[].store` and the store picker name the real STORE via `ma_store_pnl.canonical_store_index` (mig 314); `spiff_by_month` is the EARNED ladder and `legs.received` the CASH ladder, both from the one home, neither with a hardcoded month count | `router.ma_commission_summary` | §4a **DRILL-DOWN §CORE-17.3s:** five tiles open to the PROCESSOR ACCOUNT ROWS the roll-up folded them from — THREE grains on one account row: the statement's money, the same row's activation COUNT (one UNIT apart, §CORE-17.3l) and the airtime margin, whose whole trail is the DAILY TRANSACTION feed ALONE (§CORE-17.3n). An account the airtime feed named but the commission statement carries no line for is SHOWN WITHOUT A FIGURE in the producer's own words, never as a $0.00 (§CORE-17.3i). The SUMMARY LEGS get no panel — computed org-wide with no per-account figure to fold, and the leg split and the roll-up are already two paths answering one question. Server-folded (the pickers are query parameters); the airtime tile prints an em-dash under a rep filter and the offer gate reads the figure the SCREEN shows, so no panel is served for a number the reader cannot see. Declaration `commcalc/carrier_owed_drilldown.py` (`ma_drilldowns`), proof `harness_batch19_drilldown.py` §C |
 | `POST /closing/billpay-declaration-alerts/run-due` (secret-gated HOURLY cron; each tenant's own HH:MM compared in the handler) · `POST /closing/billpay-declaration-alerts/run-now?send=` (manager/admin, defaults to a DRY RUN) | `closing/router.billpay_declaration_alerts_run_due` / `_run_now` → `_run_billpay_declaration_alerts` + `_billpay_declaration_store_days` (joins `billpay_pickup.declared_billpay_in_force` with `metric_recon.pos_billpay_cash`) | §47.13 the morning declaration-exception digest (READ-ONLY; `books_to` = []) |
@@ -7577,7 +7577,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET/PUT /account/centers` · `DELETE /account/centers/{type}/{code}` · `PUT /account/centers/store-map` · `PUT /account/centers/line-tag` · `GET /account/centers/pl/{period}?profit_center=` (→ `statement_engine.statement`, scope `profit_center:<code>`) · `GET /account/centers/cost-view/{period}` (→ `centers.cost_center_view`) | `account/royalty_router.py` | §37.1 |
 | `GET /account/pl-sales-map?period=` · `PUT /account/pl-sales-map` — the unclaimed-sale-line rules and the scan's unbooked / mapped / suppressed tally (every tenant). Since 2026-10-20 the GET also offers `amount_bases` + `blank_value` and the scan carries `unbooked_gp_total`, so a department whose money IS its margin is visible; the PUT validates the basis against the one vocabulary and refuses a non-default basis before mig `1090` | `account/router.py` → `coa.build_inputs` side entry `_unbooked_sales` | §37.4, §37.11 |
 | `GET /account/cash-flow/{period}` (stored derived Cash Flow snapshot, statement_type `cash_flow`) | `account/router.py` (`get_cf`) | §4 statement engine |
-| `GET /account/inventory-recon` (per-store emailed-report ↔ unsold-phone-ledger ↔ manual ↔ effective tie-out + ghost counts) | `account/router.py` (`inventory_recon` → `statement_engine.inventory_reconciliation`) | §4 balance-sheet truths |
+| `GET /account/inventory-recon` (per-store emailed-report ↔ unsold-phone-ledger ↔ manual ↔ effective tie-out + ghost counts) | `account/router.py` (`inventory_recon` → `statement_engine.inventory_reconciliation`) | §4 balance-sheet truths. **DRILL-DOWN §CORE-17.3w:** a read-only `drilldown` key — the report total, the device total, the phone count and the per-store DELTA each open to their own rows, the delta naming BOTH relations because the disagreement is between them (§CORE-17.3k). Its sibling `GET /account/inventory-values` gains one too, for the effective total, whose relation is named PER ROW off the producer's own basis word and is reported as untraceable where the store has no value at all. DEFECT REPORTED: that sibling's effective rule ignores the configured inventory basis, so the two tabs print one header under two rules. Declaration `account/inventory_value_drilldown.py`, proof `harness_batch23_drilldown.py` §E |
 | `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02). run-due is SELF-SCHEDULED since mig `940`: pg_cron job `account-recompute-run-due` (every 2h) via `commcalc.ensure_account_recompute_cron`, re-registered on every backend boot (`main.py` startup → `router._ensure_account_recompute_cron`) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
 | `POST /notify/send` / `run-due` → report key `account_pl_range` (the P&L by month, any scope / store / market filter, xlsx / pdf) | `notify/finance_reports.py` (`_account_pl_range` → `account/router.get_pl_range`, ships its `sheets`) | §4c |
 | `POST /notify/send` / `run-due` → report key `financial_statement` (fresh P&L+BS+CF at send time, any period/scope) | `notify/finance_reports.py` (`_financial_statement` → `statement_engine.statement`) | §4 statement engine |
@@ -36274,6 +36274,273 @@ its one home with the copy deleted in the same commit. Each producer's payload w
 **deep-compared before and after the declaration runs over it and is byte-identical** (§H1).
 `OWES_MAX` **29 → 25**, lowered by exactly the four routes served.
 
+### §CORE-17.3w THE FINANCE SET — WHAT WE WERE BILLED, WHAT IS ON THE SHELF, AND WHAT ARRIVED (2026-10-26, batch 23)
+
+**`/accounts/device-purchases` · `/accounts/device-payable` · `/accounts/inventory` ·
+`/accounts/recon`** — four of the eleven `/accounts/*` routes that still owed a drill-down, read
+page by page and endpoint by endpoint. **THREE declarations, not one, and not four**, and the reason
+is the grain rule (§CORE-17.3l / §CORE-17.3n) rather than the menu:
+
+- `backend/app/modules/account/device_billing_drilldown.py` (**new**) — `/accounts/device-purchases`
+  **and** `/accounts/device-payable`. **ONE family over two screens**: a reader works them through in
+  sequence to answer ONE question — *what did we buy from the distributor, and what of it do we still
+  owe?* — both fold the units the distributor billed at the same STORE ROW, and the payable report
+  already **imports the voided-invoice rule from the purchases one** so the two can never disagree
+  about which invoices count. A second module over that grain would be the sibling derivation the
+  index rules forbid.
+- `backend/app/modules/account/inventory_value_drilldown.py` (**new**) — `/accounts/inventory`, both
+  of its endpoints. Deliberately **not** folded through `account/statement_drilldown.py`: that one
+  owns the figure the Balance Sheet reads **out of** the stored snapshot (§CORE-17.3j), while these
+  are the live per-store sources that line is computed **from**. Folding them there would claim the
+  snapshot produced a figure the aging report produced.
+- `backend/app/modules/account/memo_recon_drilldown.py` (**new**) — `/accounts/recon`. Deliberately
+  **not** folded through `commcalc/carrier_pay_drilldown.py`: that family compares what a CARRIER
+  earned against what a REP was PAID out of the commission snapshot (§CORE-17.3k); this one compares
+  what the DISTRIBUTOR CREDITED against what the RESIDUAL REPORT earned, and the relations have
+  nothing in common.
+
+Proof: `backend/harness_batch23_drilldown.py`, **114 checks**, **21 mutations / negative controls**,
+every importable producer driven **for real** — `device_purchases.aggregate`,
+`device_payable.aggregate` through the real `store_placer` / `voided_invoice_set` /
+`coverage_scan` / `coverage_state`, and `balance_sheet.device_inventory_cells` /
+`inventory_recon_rows` — and the grains **measured off the panels as a SET compared for equality**
+(never a `>=` bound), with a **ghost swapped in at unchanged size** as the decisive control.
+
+**AN ACCUSATION NAMES ITS EVIDENCE** (§CORE-17.3f). `/accounts/recon` prints the word *underpaid*
+beside a dollar figure per store **and writes those findings into the platform's flag stream**. It was
+the one route in this set whose output is an accusation, and a figure that carries that word and
+cannot name its rows is the shape §CORE-17 exists to end.
+
+**THE FOURTEEN GRAINS, MEASURED.** Three row shapes over sixteen panels, and NINE of the fourteen
+separated from a sibling by **provenance alone** (§CORE-17.3n):
+
+| # | row shape | unit | provenance |
+|---|---|---|---|
+| 1 | store | money | the distributor's invoice **LINES** — what was billed |
+| 2 | store | count | the **SERIALISED unit rows** — one row per unit that arrived with a serial, which is a different count from the quantity a line declares |
+| 3 | store | money | **the same row, same unit as 1** — the serialised units judged against the **unit LEDGER**'s own per-unit amount and payment date. What was BILLED is the invoice's money; what is still OWED is the ledger's, and a reader is owed that distinction because only one of them is the invoice we were sent |
+| 4 | store | count | the same two relations — the unpaid UNITS rather than their money |
+| 5 | billed item | money | the invoice lines — the non-device items, under a basis the payload names itself |
+| 6 | billed location | money | the invoice lines — the spend whose location no store vocabulary matched, a real row of this report |
+| 7 | store | money | the **emailed value snapshot**, or **NOTHING NAMEABLE** per row — the EFFECTIVE inventory value, whose source is decided PER ROW by a precedence rule and read off the producer's own basis word |
+| 8 | store | money | **the same row, same unit** — the emailed report's own per-store total |
+| 9 | store | money | **the same row, same unit** — the **per-device aging rows**, the other claim about the same shelf |
+| 10 | store | count | the per-device aging rows — the phones themselves |
+| 11 | store | money | **BOTH**, because the per-store DELTA is a disagreement between them |
+| 12 | store | money | the **scraped credit memos** — what arrived |
+| 13 | store | money | **the same row, same unit** — the **residual report**, what was earned |
+| 14 | store | money | **BOTH** — the per-store difference |
+
+Grains 7–11 are the sharpest §CORE-17.3n case the finance module has reached: one store row, one
+unit, and **which relation answered decided per ROW** rather than per figure — a manual override a
+human typed, else the emailed snapshot, else the device rows — read off `effective_source` and never
+guessed. A store with neither source is shown **without a figure** and is not counted
+(§CORE-17.3i), and its origin is reported as one that **cannot be traced** rather than attributed to
+a guess.
+
+**A DIFFERENCE DRILLS WHEN IT IS FOLDED PER ROW** (§CORE-17.3k), and both of this batch's
+differences are: the inventory delta and the credit-memo difference each carry their own figure on
+every row, so the panel explains the figure instead of re-deriving it, and each row names BOTH
+relations because the disagreement is between them.
+
+**THE ROW THE CREDIT-MEMO REPORT'S OWN FIGURE NEEDS.** Its company-wide earned figure counts **every**
+residual row, while its per-store rows count only the rows whose rep name reached a store — the
+report says so itself and calls that side best-effort. A panel folded over the store rows alone would
+therefore come back NOT TIED by exactly the money nobody could attribute. That money is a REAL row of
+this report, already folded and already printed, so the panel carries it as **ONE MORE ROW** taken
+from the payload's own `mi_unattributed` — dereferenced, never re-derived — naming the residual
+report with **no store key**, because there is no store to key it on. On the difference panel the
+same row is counted **NEGATIVE**, exactly as `statement_drilldown` counts the second side of the
+balance sheet's imbalance. It is handed to the one home **with the other rows**, not patched onto a
+built panel: editing a folded panel would put a declaration in charge of a capped list it cannot
+honestly re-total. `harness_batch23_drilldown.py` §F7a proves the row is load-bearing by removing it
+and measuring the shortfall against the report's own figure.
+
+**A PANEL EXPLAINS THE FIGURE, NOT THE TABLE — settled BOTH ways, by READING each page**
+(§CORE-17.3o):
+
+- `/accounts/device-purchases` and `/accounts/device-payable` fold their own tiles in the browser
+  over the rows the standard filter bar left on screen, so their store-keyed panels **are narrowed**
+  (`lib/drill-narrow`) and each figure is read **off its narrowed panel only when that panel agrees
+  to the cent** — a disagreement costs the link, never the figure. The figures those pages themselves
+  refuse to narrow (they print `—` under a filter) keep the server's own panel, offered only while
+  nothing is selected: the page's own rule honoured rather than a second one invented.
+- `/accounts/inventory` and `/accounts/recon` are **server-folded and NOT narrowed**. Inventory
+  Values has no store, market or period filter at all — override inputs, a connector form and a save
+  — and the recon's controls are a tolerance, a recompute, an analyze and two writes. `drill-narrow`
+  must not appear in either page.
+
+Both directions are **locked off the pages' own text**: the lock fails the build if a server-folded
+page grows a `narrowPanel(` call or a narrowed one loses it, and it matches the **`<DrillDownPanel`
+ELEMENT** rather than the identifier, because an unused import satisfies an identifier check.
+
+**ONE FACT, ONE HOME — and the other half of it, in the same commit.** Five relation names these
+panels must say out loud were literals: the distributor's invoice **LINES** and **SERIALISED UNITS**,
+its **CREDIT MEMOS**, the **emailed inventory-value snapshot** and the **same report at device
+grain**. All five are now NAME constants in `commcalc/data_lineage_registry.py` (the
+`DISTRIBUTOR_INVOICES` shape — none is a new ingest edge, so none joins
+`INGEST_TABLES_BY_MODULE`), and **every literal copy that file itself held was deleted in the same
+commit**: `inventory_value` appeared in SEVEN of its own maps and `vip_credit_memos` in one, and all
+eight dereference now with string-identical values and no map changed. Naming a fact is half a design
+fix; deleting every copy is the half that has been skipped three times here (§19.18).
+`harness_batch23_drilldown.py` §A2 fails the build if either name is re-declared in that file.
+
+What is **not** renamed is the PostgREST `.table("…")` / `_fetch_all(…)` reads across the finance
+module: a read is not a second statement about where a FIGURE came from, and re-pointing them is a
+finance-module change rather than a drill-down one — the posture `ASSET_LEDGER` keeps for its own 74
+reads and `FINANCIAL_STATEMENTS` states for the statement engine's.
+
+**AND THE BASIS VOCABULARY IS DEREFERENCED TOO, which is what stopped a false provenance.** Which
+relation an inventory figure came out of is decided by the org's configured basis, and the words for
+those bases live in `balance_sheet.INVENTORY_BASES`. `inventory_value_drilldown.SOURCE_RELATION` is
+keyed on that vocabulary **plus the two words that are not bases** — a human's manual override, and
+the grid endpoint's own older spelling of the report basis — and §E9b compares its key set against
+the shared tuple for **EQUALITY**, so a new basis fails the build here instead of silently resolving
+to no relation at all. One of those config words happens to read like a table name and is
+deliberately NOT dereferenced from the feed registry: it is a basis, not a relation, and the relation
+it maps to is the per-device aging rows.
+
+**ONE ADDITIVE EXTENSION TO THE ONE HOME, for a fact that is genuinely per row.**
+`report_drilldown.tile_panel` already took a CALLABLE for `tables`, because one store-day's
+provenance differs from the next one's. It now takes one for `column` as well, for the same reason:
+one store's effective value came out of the override column a person typed and the next store's out
+of the **swept column of the same relation**, and a panel that named one column for both would be
+wrong on half its rows. A plain string behaves exactly as before, so no existing declaration changes
+and `harness_report_drilldown.py` stays at 61/61.
+
+**WHAT IS REFUSED, AND WHY.**
+
+- **"Devices matched to the unit ledger"** and **"per-store attribution %"** — RATES (§CORE-17.3h).
+  The counts and the figures each divides are offered instead.
+- **"Invoices in window"** — a DISTINCT COUNT of invoice numbers, not Σ(a field) over the report's
+  rows. The store rows carry no invoice count to add up, so a panel would have to count something the
+  report did not.
+- **The unit-reconciliation block** on the purchases report, and **"payable including voided"**, the
+  five `excluded_voided_*` figures and `distinct_device_payable_*` on the payable one — every one is
+  taken at the TOTAL (§CORE-17.3k). The counted halves drill; the excluded halves are the payload's
+  own per-invoice list printed directly underneath.
+- **The excluded-ghost chip**, the **sweep status line**, the **status badge** (a verdict against a
+  tolerance the reader chooses) and the **unmatched-rep list** — not folded figures, or already the
+  rows.
+- **The reconciliation tab's `effective` total** — that tab prints no such total, and a panel for a
+  figure a screen does not print would be evidence for nothing.
+- **A 0 over zero counted rows**, through the one home's own `served_tiles` rule: such a panel ties 0
+  against 0 and reads as *"nothing was there, and here is the proof"*. A NON-zero figure over no
+  counted rows KEEPS its panel so the tie-out publishes the disagreement.
+
+**EIGHT LIVE DEFECTS — REPORTED, REPRODUCED, NOT REPAIRED.** Each is written down in its
+declaration's docstring and carries a regression check driven off the real code or pinned to the
+producer's own source text, and none is hidden behind a number the screen does not print.
+
+1. **THE INVENTORY GRID'S "EFFECTIVE (ON BS)" COLUMN AND ITS TOTAL IGNORE THE ORG'S CONFIGURED
+   INVENTORY BASIS, so on two of the three bases the page prints a number the Balance Sheet does not
+   use.** `GET /account/inventory-values` computes `effective` inline as *manual override, else the
+   swept report value*, while the Balance Sheet goes through `balance_sheet.apply_inventory_basis`,
+   whose precedence is *manual, else the CONFIGURED basis, else the other source* — and under the
+   `asset_ledger` basis the emailed report is not a source at all. **The same page's reconciliation
+   tab prints the TRUE effective value under a column with the SAME HEADER**: two columns, one
+   header, two rules, one screen. §E10 reproduces the disagreement from both sources. The panel's
+   note says so in the reader's own words; the repair changes a displayed finance figure and is
+   surfaced for the owner rather than slipped into a read-only drill-down PR.
+2. **THAT ENDPOINT'S PER-ROW PROVENANCE IS A THIRD VOCABULARY FOR THE SAME FACT** — it writes the
+   product name of the portal it swept from where the shared basis resolver writes `report`,
+   `devices`, `asset_ledger` and `manual`. The declaration reads each payload's own word through one
+   keyed table, so a new basis is a ROW and never a branch (RULE TWO), and a word neither endpoint
+   has served resolves to NO relation and says it cannot be traced.
+3. **AN UNPLACED OR SUPERSEDED AGING ROW IS EXCLUDED FROM THE CELLS AND REPORTED ONLY AS A CHIP**, so
+   the device side is legitimately short of the ledger's own sum. The panels count exactly what the
+   report counts and the note names the exclusion in the report's own words — a panel that quietly
+   added those rows back would disagree with the figure above it.
+4. **THE PURCHASES REPORT'S COMPANY ROLL-UP PRINTS ONE POPULATION TWICE.**
+   `device_purchases.aggregate` emits the company-not-mapped rows under `unresolved` as the **SAME
+   dict objects** it already serves in `by_store` (§C9 proves the identity), and the page renders both
+   tables, so that money reads as two findings. The panels count the store population ONCE, exactly
+   as the tiles do, and the unresolved table's own figures get no panel.
+5. **"ALREADY PAID BY THIS DATE" IS DASHED RATHER THAN NARROWED** while the payable beside it
+   narrows, although both are Σ over the same store rows — the asymmetry is the page's, not the
+   producer's. The panel is offered for it only on the unfiltered view, which makes the asymmetry
+   visible instead of papering over it with a narrowed figure the tile does not print.
+6. **THE CREDIT-MEMO REPORT NAMES ONLY THE FIFTEEN LARGEST UNATTRIBUTED REP NAMES, with no count and
+   no remainder beside them — a silent row cap on the evidence behind an accusation.** The
+   unattributed TOTAL is served whole, so the panel's figure is complete and its single row carries
+   that total; the note says the report names only the largest few behind it. Re-deriving the full
+   list beside the report would be a second fold of a figure the report itself truncated.
+7. **A CREDIT MEMO WHOSE STORE RESOLVES NOWHERE IS BUCKETED UNDER A PLACEHOLDER ROW**, so it lands in
+   the company total and in that row. Those are REAL rows of this report and the panels count them
+   exactly as the report does, naming the placeholder in the report's own words. Dropping them would
+   make the panel disagree with the figure above it.
+8. **THE FLAGS THAT REPORT ARE WRITTEN FROM A TOLERANCE A TEXT BOX ON THE SCREEN SUPPLIES.**
+   `recon.sync_flags` re-runs the reconciliation with whatever tolerance the request carried, so the
+   same month can be flagged differently per request. The panels explain the FIGURE and never the
+   verdict, so nothing here depends on it; it is written down because a drill-down that showed the
+   figure while the verdict moved underneath it would be evidence for the wrong thing.
+
+**WHAT IS STILL OWED, HONESTLY — seven finance routes read and deliberately NOT reclassified.** Each
+**is** a report, so calling it `flat` or `not_report` would hide it from the programme, which is worse
+than leaving it owed. The reasons live here and **not** in the ledger, because a note on an `owes`
+row reads as an excuse (the coverage gate's §C4):
+
+- **`/accounts/analysis`** and **`/accounts/trends`** — real reports whose figures are read out of the
+  stored statement snapshots and three COMMCALC-owned trend endpoints. The statement-snapshot grain is
+  `account/statement_drilldown.py`'s and the month grain is `commcalc/exec_month_drilldown.py`'s, so a
+  catalogue here would be a second derivation over one or both; the three trend endpoints are another
+  module's surface besides. Their headline margins are rates (§CORE-17.3h) and their projection and
+  valuation blocks are declared or assumed numbers (§CORE-17.3m). A pass of their own.
+- **`/accounts/cost-centers`** and **`/accounts/profit-centers`** — both regroup the P&L the statement
+  engine already assembled, and `/accounts/pl`'s own TypeScript drill (§4e) is the excused `own` path
+  over that very grain. Serving them before that one converges would be the sibling derivation this
+  programme is about; converging §4e is a PR of its own, as §CORE-17.2 already says.
+- **`/accounts/royalty`** and **`/accounts/royalty/recon`** — a real family of their own (the
+  franchisor's own printed report, stored as printed, against the daily sales landings). They share no
+  grain with anything in this batch and deserve the whole pass rather than a corner of one.
+- **`/accounts/residual-per-sub`** — a real report whose figures are a store × month MATRIX rather
+  than a tile over rows, with an aggregate row that is the server's own company line when unfiltered
+  and Σ(the visible stores) when filtered. That provenance switch is the interesting part and needs
+  its own measurement, not a hurried catalogue.
+
+**No migration, no new table, no money moved** — five read-only `drilldown` keys attached to existing
+payloads, **no new endpoint and therefore no route-count re-pin** (`harness_db_resilience.py` §I0
+stays at **1801**; `grep -cE '^\+.*@router\.'` = 0 and `'^-.*@router\.'` = 0), four pages wired to
+the shared panel, **no change to any producer's arithmetic**, and one additive callable on the one
+home. Each producer's payload is **deep-compared before and after the declaration runs over it and
+is byte-identical** (§H1). `OWES_MAX` **25 → 21**, lowered by exactly the four routes served.
+
+#### §16–18 CROSS-REFERENCES
+
+Registered in `app/modules/core/module_graph.py` as callers of two facts — `report_drilldown` (home
+`app/modules/core/report_drilldown.py`) and `feed_lineage` (home
+`commcalc/data_lineage_registry.py`) — every edge **hand-written, never `--bless`** (§50). Depends
+on: §CORE-17 (the one home and the shared panel), §23y / §23z (the two device-billing producers),
+§4 (the balance-sheet inventory truths and the reconciliation producer), §10 / §21 (the credit-memo
+reconciliation), §13 / §13a / §13b (the shared store and company resolvers these reports book
+through), §19.38 (a feed's plain name), §19.43 (which relation is which feed). Feeds: §CORE-17.4 (the
+audit ledger — `OWES_MAX` **25 → 21**). Neighbours: §CORE-17.3j (the stored-statement family, whose
+grain this batch deliberately did not re-derive), §CORE-17.3k (a difference folded per row),
+§CORE-17.3n (provenance alone separating grains — nine times here), §CORE-17.3f (an accusation names
+its evidence), §19.18 (writing a registry without wiring the callers is not a fix).
+
+Endpoints: `GET /account/device-purchases`, `GET /account/device-payable`,
+`GET /account/inventory-values`, `GET /account/inventory-recon` and
+`GET /account/recon/{period}` each gain a read-only `drilldown` key, attached where the payload is
+BUILT so a drill-down cannot exist on one read and go missing on another.
+
+CI: `carrier-vocab-guard`, step *Run the batch-23 drill lock*, with a paths filter naming every file
+it is about.
+
+Files: `backend/app/modules/account/device_billing_drilldown.py` (**new**),
+`backend/app/modules/account/inventory_value_drilldown.py` (**new**),
+`backend/app/modules/account/memo_recon_drilldown.py` (**new**),
+`backend/app/modules/account/router.py`,
+`backend/app/modules/commcalc/data_lineage_registry.py`,
+`backend/app/modules/core/report_drilldown.py`, `backend/app/modules/core/module_graph.py`,
+`backend/harness_batch23_drilldown.py` (**new**), `backend/harness_drilldown_coverage.py`,
+`backend/harness_drilldown_pending.txt`, `frontend/src/lib/sourceLabels.ts`,
+`frontend/src/app/(platform)/accounts/device-purchases/page.tsx`,
+`frontend/src/app/(platform)/accounts/device-payable/page.tsx`,
+`frontend/src/app/(platform)/accounts/inventory/page.tsx`,
+`frontend/src/app/(platform)/accounts/recon/page.tsx`,
+`.github/workflows/carrier-vocab-guard.yml`, `docs/SYSTEM_DATA_FLOW_INDEX.md`.
+
 ### §CORE-17.3x THE PAYROLL AND WORKFORCE SET (2026-10-26, batch 24)
 
 **`/storeops/payroll` · `/storeops/reports` · `/storeops/hours-budget`** — three of the ten
@@ -36480,7 +36747,7 @@ hand) — every edge **hand-written, never `--bless`** (§50), including the re-
 (which hours a person is paid for, and on what basis), §14 (employees and scheduling), §13a (the
 canonical store key), mig `434` / `pay_visibility` (who may see pay), mig `087` (the hours budget and
 its overrides), §19.38 (a feed's plain name). Feeds: §CORE-17.4 (the audit ledger — `OWES_MAX`
-**25 → 22**). Neighbours: §CORE-17.3t (the family that settled `UNIT_HOURS` and that the clock alone
+**21 → 18**). Neighbours: §CORE-17.3t (the family that settled `UNIT_HOURS` and that the clock alone
 names a worked hour), §CORE-17.3c (the fix belongs at the read), §CORE-17.3d (one fold for a figure
 and its evidence under a screen filter), §CORE-17.3i (an absence is not a zero), §CORE-17.3m (a
 declared figure is not a measured one), §19.18 (writing a registry without wiring the callers is not
@@ -36502,8 +36769,9 @@ naming `GET /storeops/payroll/drilldown`; the exact match is untouched and §I0b
 payload, one read-only sibling endpoint, two registry NAME constants with their copies deleted, one
 read given a sourced form whose plain wrapper is byte-identical, and one additive extension to the
 shared fold. Each producer's rows were **deep-compared before and after the declaration runs over
-them and are byte-identical** (§H1). `OWES_MAX` **25 → 22**, lowered by exactly the three routes
-served.
+them and are byte-identical** (§H1). `OWES_MAX` **21 → 18**, lowered by exactly the three routes
+served. (Built in parallel with batch 23 off a shared base of 25, so the pin was re-taken from the
+MERGED ledger — 25 − 4 − 3 = 18 — rather than from either side's own count.)
 
 Files: `backend/app/modules/storeops/payroll_hours_drilldown.py` (**new**),
 `backend/app/modules/storeops/scheduled_hours_drilldown.py` (**new**),
@@ -36578,7 +36846,7 @@ has not forked, the page hand-rolls no panel, RULE TWO holds in both files.
 `backend/harness_drilldown_coverage.py` — **17 checks**, the ratchet: every report route declared
 exactly once, no ledger route has stopped existing, every excused state carries a written reason,
 every `shared` route really renders the shared panel (writing the registry without wiring the caller
-is not a fix at all — §19.18), and **`OWES_MAX`, which may only go DOWN** (**93** at the audit, **22** since §CORE-17.3x). Re-pin it downward in
+is not a fix at all — §19.18), and **`OWES_MAX`, which may only go DOWN** (**93** at the audit, **18** since §CORE-17.3x — batches 23 and 24 were built in parallel off a base of 25, so the pin is re-taken from the merged ledger, not from either side). Re-pin it downward in
 the same PR that builds a drill-down; a change that raises it is a report shipped without evidence.
 
 ### §CORE-17.6 WHAT IS DELIBERATELY NOT HERE
@@ -36600,7 +36868,7 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 `closing/attempts_drilldown.py`, `commcalc/tender_recon_drilldown.py`, `crm/reports_drilldown.py`,
 `helpdesk/dashboard_drilldown.py`, `account/statement_drilldown.py`,
 `account/liabilities_drilldown.py`, `commcalc/carrier_pay_drilldown.py`,
-`asset/device_asset_drilldown.py`, `commcalc/targets_drilldown.py`, `commcalc/processor_money_drilldown.py`, `commcalc/accessory_money_drilldown.py`, `commcalc/device_financing_drilldown.py`, `commcalc/exec_month_drilldown.py`, `commcalc/sales_margin_drilldown.py`, `commcalc/rep_incentive_drilldown.py`, `commcalc/entitlement_coverage_drilldown.py`, `commcalc/activation_count_drilldown.py`, `storeops/payroll_hours_drilldown.py`, `storeops/scheduled_hours_drilldown.py`), §17 (`GET
+`asset/device_asset_drilldown.py`, `commcalc/targets_drilldown.py`, `commcalc/processor_money_drilldown.py`, `commcalc/accessory_money_drilldown.py`, `commcalc/device_financing_drilldown.py`, `commcalc/exec_month_drilldown.py`, `commcalc/sales_margin_drilldown.py`, `commcalc/rep_incentive_drilldown.py`, `commcalc/entitlement_coverage_drilldown.py`, `commcalc/activation_count_drilldown.py`, `account/device_billing_drilldown.py`, `account/inventory_value_drilldown.py`, `account/memo_recon_drilldown.py`, `storeops/payroll_hours_drilldown.py`, `storeops/scheduled_hours_drilldown.py`), §17 (`GET
 /closing/cash-variance` → `drilldown`; `GET /commcalc/discrepancy/{period}` → `drilldown` +
 `drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET
 /commcalc/commission-received-breakout` → `drilldown`; `GET /asset/summary`, `GET

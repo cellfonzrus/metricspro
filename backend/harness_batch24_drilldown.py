@@ -734,7 +734,12 @@ MY_ROUTES = ("/storeops/payroll", "/storeops/reports", "/storeops/hours-budget")
 #: which is worse than the debt. The reasons are in §CORE-17.3x.
 STILL_OWED = ("/storeops/payroll-tax", "/storeops/schedule", "/storeops/timeclock",
               "/storeops/team", "/storeops/visits/plan", "/hr", "/hr/payroll-expenses")
-OWES_AFTER = 22
+#: 2026-10-26: batches 23 (the finance set, -4) and 24 (payroll & workforce, -3) were built in
+#: PARALLEL off a shared base of 25, so neither side's own number was the whole reduction and each
+#: would have asserted a pin the other had already moved. This is re-taken from the MERGED ledger —
+#: 25 - 4 - 3 = 18 — and the assertion below stays EQUALITY, not a bound: a pin left above the real
+#: count is a gate that has stopped biting.
+OWES_AFTER = 18
 
 
 def _pin(src):
@@ -784,8 +789,8 @@ check("J6 and none of the seven was given a NOTE — the gate's own §C4 says an
       all(len([p for p in next((ln for ln in LEDGER_TXT.splitlines()
                                 if ln.split("\t")[0].strip() == r), "").split("\t")
                if p.strip()]) == 2 for r in STILL_OWED))
-check("J7 THE PIN MAY ONLY SHRINK, and this batch lowered it by exactly the routes it served",
-      _pin(GATE) == 25 - len(MY_ROUTES))
+check("J7 THE PIN MAY ONLY SHRINK, and the base of 25 came down by exactly this batch's three\n      routes and the parallel batch 23's four — stated as the arithmetic rather than a literal",
+      _pin(GATE) == 25 - len(MY_ROUTES) - 4 == OWES_AFTER)
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

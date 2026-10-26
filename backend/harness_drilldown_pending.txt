@@ -26,7 +26,8 @@
 # (index CORE-17.3o); 49 after batch 16 (index CORE-17.3p); 45 after batch 17
 # (index CORE-17.3q); 41 after batch 18 (index CORE-17.3r); 37 after batch 19
 # (index CORE-17.3s); 33 after batch 20 (index CORE-17.3t); 29 after batch 21
-# (index CORE-17.3u).
+# (index CORE-17.3u); 25 after batch 22 (index CORE-17.3v); 21 after batch 23
+# (index CORE-17.3w).
 
 /closing/cash-variance	shared	owner ask 2026-10-24, the first report on the shared mechanism
 /accounts	own	the reference's other half (ScopeDrillDown)
@@ -75,12 +76,12 @@
 /accounts/balance-sheet	shared	every section subtotal, every line, Liabilities + Equity and the imbalance drill (account/statement_drilldown.py); a figure read out of a stored snapshot NAMES that snapshot, a feed only where the booking code reads the line from it unconditionally, and a line whose feed is per-org config says which basis chose it; no BS_SPEC line records a breakdown, so such a line's panel says so and refuses to claim a tie -- index CORE-17.3j	
 /accounts/cash-flow	shared	the three section subtotals and the implied change in cash drill to their own lines (account/statement_drilldown.py, shared with the Balance Sheet -- one grain, one row shape); a LINE is the leaf and the tie-out delta is a difference, so both offer the side that has a panel instead of one that cannot fail -- index CORE-17.3j	
 /accounts/cost-centers	owes	
-/accounts/device-payable	owes	
-/accounts/device-purchases	owes	
-/accounts/inventory	owes	
+/accounts/device-payable	shared	the payable and unpaid-unit tiles drill to the store rows, and the non-device items to their own rows (account/device_billing_drilldown.py, shared with Device Purchases); every payable row names BOTH relations -- which units were billed from the serialised invoice rows, the amount owed and the day it settled from the unit ledger -- so it is the same row and unit as the purchase money separated by PROVENANCE ALONE; the match rate gets no panel (CORE-17.3h) and an as-at date the ledger does not cover serves no figure and so no panel -- index CORE-17.3w	
+/accounts/device-purchases	shared	the device-spend and serialised-unit tiles drill to the store rows the By store table prints, the non-device money to its own item rows and the unresolved spend to the locations nothing matched (account/device_billing_drilldown.py, ONE declaration shared with Device Payable -- one family, because both fold the units the distributor billed at the same store row out of the same two relations); the money names the invoice LINES and the unit count names the SERIALISED rows, which is why they are two grains on one row; a rate and a distinct invoice count get no panel, panels narrowed client-side and each narrowed figure read off its own panel -- index CORE-17.3w	
+/accounts/inventory	shared	the effective total drills to the store rows with the relation that actually answered named PER ROW from the producer's own basis word, and the reconciliation's report, device, phone-count and per-store DELTA figures each drill to their own rows (account/inventory_value_drilldown.py); one row shape, four grains, three of them separated by PROVENANCE ALONE; a store with no value at all is shown WITHOUT a figure and not counted, and the grid's effective rule disagreeing with the Balance Sheet's configured basis is REPORTED in the panel's own note -- index CORE-17.3w	
 /accounts/liabilities-due	shared	all six tiles drill (account/liabilities_drilldown.py): the stores behind the distributor figures naming the feed the RESOLVED basis read, one row per person behind payroll and its tax estimate naming the hours table that actually answered, and the leases behind rents and premiums with an unset rent shown and never counted; panels narrowed client-side and each tile reads its number off its own narrowed panel -- index CORE-17.3j	
 /accounts/profit-centers	owes	
-/accounts/recon	owes	
+/accounts/recon	shared	the credited, earned and difference figures each drill to the store rows the By store table prints (account/memo_recon_drilldown.py) -- an accusation names its evidence (CORE-17.3f), since this report prints 'underpaid' in dollars and writes those findings to the flag stream; the earned side and the difference carry ONE MORE ROW for the earned money no rep name placed, dereferenced from the report's own figure and counted NEGATIVE on the difference, so the panels tie against what the screen prints; the attribution percentage is a rate and gets none -- index CORE-17.3w	
 /accounts/residual-per-sub	owes	
 /accounts/royalty	owes	
 /accounts/royalty/recon	owes	

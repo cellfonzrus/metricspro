@@ -123,6 +123,39 @@ PAYGO_BATCHES = "vip_paygo_payments"       # one row per weekly distributor lend
 #: same posture `ASSET_LEDGER` keeps for its own 74.
 DISTRIBUTOR_INVOICES = "vip_invoices"      # one row per distributor invoice (sweep / workbook)
 
+# ── THE FIVE RELATIONS THE FINANCE DEVICE-BILLING AND INVENTORY FAMILIES HAVE TO NAME ────────────
+# (§CORE-17.3w, batch 23.) Same reason as every block above it: a drill-down must tell the reader
+# WHICH relation a figure was read out of, and a declaration restating a table name at its own call
+# site is the copied fact this registry exists to prevent. None of the five is a new ingest edge, so
+# all five are NAME constants — the `DISTRIBUTOR_INVOICES` / `DISCREPANCY_SNAPSHOT` shape — and not
+# entries in `INGEST_TABLES_BY_MODULE`.
+#
+# WHAT WAS RE-KEYED, AND WHAT DELIBERATELY WAS NOT. Naming a fact is half a design fix and deleting
+# every copy is the other half (§19.18), so every literal copy THIS FILE held is re-keyed onto these
+# constants in the same commit: `inventory_value` appeared in SEVEN maps below and
+# `vip_credit_memos` in one, and all eight now dereference (string-identical values, no map changed).
+# The three invoice/device-level names held no copy here at all. What is NOT renamed is the
+# PostgREST `.table("…")` / `_fetch_all(…)` reads across the finance module: a read is not a second
+# statement about where a FIGURE came from, and re-pointing them is a finance-module change rather
+# than a drill-down one — the posture `ASSET_LEDGER` keeps for its own 74 reads and
+# `FINANCIAL_STATEMENTS` states for the statement engine's.
+#: The distributor's invoice LINES — what was billed, with the money on it. The device-purchase
+#: figure is read out of this relation and nothing else.
+DISTRIBUTOR_INVOICE_LINES = "vip_invoice_lines"
+#: The SERIALISED units on those invoices — one row per unit that actually arrived with a serial on
+#: it. The unit COUNT comes from here and the money does not, which is why the two are two grains.
+DISTRIBUTOR_INVOICE_UNITS = "vip_invoice_devices"
+#: The distributor's scraped "Weekly Incentive Credit" memos — the money that ARRIVED, which the
+#: credit-memo reconciliation measures the residual report against.
+DISTRIBUTOR_CREDIT_MEMOS = "vip_credit_memos"
+#: The emailed inventory-aging VALUE snapshot, per store: the swept total and any manual override a
+#: human typed over it. Both the balance-sheet inventory line and its reconciliation read it.
+INVENTORY_VALUE_SNAPSHOT = "inventory_value"
+#: The same aging report at DEVICE grain — the unsold phones on the shelf, one row per device type
+#: per store. The reconciliation's "devices" side; the UNIT sibling of it is
+#: `POS_INVENTORY_SNAPSHOT` above.
+INVENTORY_AGING_DEVICES = "inventory_aging_device"
+
 # ── THE TWO STORED RELATIONS THE EXECUTIVE-MONTH FAMILY HAS TO NAME (§CORE-17.3q, batch 17) ──────
 # Same reason as the four above: a drill-down must say WHICH relation a figure was read out of, and a
 # declaration restating a table name at the call site is the copied fact this registry exists to
@@ -368,7 +401,7 @@ INGEST_TABLES_BY_MODULE = {
         "raw_sales", "daily_sales_feed", "raw_payment_detail", "raw_mi",
         DLAR_REP, DLAR_STORE, PRODUCT_CATALOG, "raw_categories",
         "raw_comp_report", "raw_ma_commission", "raw_ma_daily_tx", "raw_ma_fulfillment",
-        "pos_tender_summary", "inventory_value", "ma_overview_upload",
+        "pos_tender_summary", INVENTORY_VALUE_SNAPSHOT, "ma_overview_upload",
         "raw_custom_import", "raw_epay_daily_tx",
         # Merchant-processor portal scrape (owner 2026-09-04, migs 955/956). The daily pull from the
         # three card-processor portals — PayAnywhere/Payments Hub (the EXTERNAL credit-card terminal
@@ -480,7 +513,7 @@ FRESHNESS_COLUMN_BY_TABLE = {
     # moves on re-write, so it is the same trap as daily_sales_feed — declared here rather than left
     # implicit in the one list that happened to know about it.
     PAYGO_BATCHES: "swept_at",
-    "vip_credit_memos": "swept_at",
+    DISTRIBUTOR_CREDIT_MEMOS: "swept_at",
     # THESE THREE TABLES HAVE NO `created_at` AT ALL (measured against the live schema 2026-10-03), so
     # the default left `last_ingest_at` None and the watchdog could only ever say "stopped arriving" —
     # the §19.18 discriminator dead again, on three more feeds. Found the moment the watchdog began
@@ -488,7 +521,7 @@ FRESHNESS_COLUMN_BY_TABLE = {
     # arrival time to explain whether the file had stopped or its content had frozen.
     ASSET_LEDGER: "uploaded_at",
     "pos_tender_summary": "updated_at",
-    "inventory_value": "updated_at",
+    INVENTORY_VALUE_SNAPSHOT: "updated_at",
     # The B2B clock report (mig 1073): rows are replaced per slice on a re-send, so `created_at` moves
     # on a re-write — exactly the daily_sales_feed trap. `arrived_at` is stamped once, when the row
     # first lands, and is the only honest answer to "is the clock report still arriving?".
@@ -764,7 +797,7 @@ DATA_DATE_COLUMN_BY_TABLE = {
     DLAR_REP: "as_of_date",
     DLAR_STORE: "as_of_date",
     "pos_tender_summary": "close_date",
-    "inventory_value": "as_of_date",
+    INVENTORY_VALUE_SNAPSHOT: "as_of_date",
     ASSET_LEDGER: "acquired_date",          # when the distributor booked the unit to us
     # Unpopulated on every org in this deployment, so no data-date column is declared from a real row.
     # Watched on arrival; add the column here the day one lands (the lock makes that a conscious change).
@@ -815,7 +848,7 @@ PERIOD_GRAIN_REASONS = {
 # Tables whose data-date column is declared but which this upload path never reaches (no file_type
 # maps to them), stated so the lock can tell "not an upload" apart from "forgotten".
 NOT_UPLOADED_TABLES = (
-    "raw_sales_invoice", "raw_sales_invoice_tender", "pos_tender_summary", "inventory_value",
+    "raw_sales_invoice", "raw_sales_invoice_tender", "pos_tender_summary", INVENTORY_VALUE_SNAPSHOT,
     ASSET_LEDGER,
 )
 
@@ -914,7 +947,7 @@ NO_MONTH_COLUMN_REASONS = {
     PRODUCT_CATALOG: "a product snapshot, replaced whole — a catalogue row is not about a month",
     "raw_categories": "a payment-type → category map, replaced whole — not about a month",
     "pos_tender_summary": "one row per store close — `close_date` is the row's only month fact",
-    "inventory_value": "a per-store value snapshot keyed by `as_of_date`",
+    INVENTORY_VALUE_SNAPSHOT: "a per-store value snapshot keyed by `as_of_date`",
     # FOUND BY THE LOCK, not by hand (2026-10-12): the §M re-measurement over the migrations named
     # these four the moment it was written, and each was confirmed against the live schema. None is
     # reached by the manual-upload handler today, which is exactly why nobody noticed — the same
@@ -965,7 +998,7 @@ FEED_CADENCE_BY_TABLE = {
     "royalty_report": CADENCE_MONTHLY,        # the franchisor's monthly statement
     "ma_overview_upload": CADENCE_MONTHLY,
     "raw_ma_fulfillment": CADENCE_WEEKLY,
-    "inventory_value": CADENCE_WEEKLY,        # an aging snapshot, not a transaction stream
+    INVENTORY_VALUE_SNAPSHOT: CADENCE_WEEKLY,  # an aging snapshot, not a transaction stream
 }
 DEFAULT_FEED_CADENCE = CADENCE_DAILY
 
@@ -1073,7 +1106,7 @@ FEED_LABEL_BY_TABLE = {
     MA_DAILY_TX: "Master-agent daily transactions",
     "raw_ma_fulfillment": "Master-agent fulfilment orders",
     "pos_tender_summary": "Register tender summary",
-    "inventory_value": "Inventory aging snapshot",
+    INVENTORY_VALUE_SNAPSHOT: "Inventory aging snapshot",
     ASSET_LEDGER: "Asset lending ledger (device cost)",
     COMMISSION_PER_DEVICE_FEED: "Per-device rebate history",
     EPAY_DAILY: "Settlement transactions",

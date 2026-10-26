@@ -310,6 +310,22 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/rep_incentive_drilldown.py': ('report_drilldown',),
             'app/modules/commcalc/entitlement_coverage_drilldown.py': ('report_drilldown',),
             'app/modules/commcalc/activation_count_drilldown.py': ('report_drilldown',),
+            # BATCH 23 (§CORE-17.3w) — the FINANCE set. THREE declarations over three questions a
+            # reader asks separately: what the distributor BILLED us for devices and what of it is
+            # still owed (ONE family over two screens, because both fold the units the distributor
+            # billed at the same store row, out of the same two relations, and the payable report
+            # already imports the voided-invoice rule from the purchases one); what the stock on the
+            # shelf is WORTH and whether the two sources that claim to know agree; and whether the
+            # money the distributor CREDITED matches what the residual report says was EARNED. The
+            # inventory family is the sharpest §CORE-17.3n case in finance so far — one store row,
+            # one unit, and the relation that answered decided PER ROW by a precedence rule, read
+            # off the producer's own basis word and never guessed. It is also the batch that
+            # REPORTED eight live defects rather than coding around them, among them a page that
+            # prints two columns under one header computed by two different rules, and a silent
+            # fifteen-row cap on the evidence behind an accusation.
+            'app/modules/account/device_billing_drilldown.py': ('report_drilldown',),
+            'app/modules/account/inventory_value_drilldown.py': ('report_drilldown',),
+            'app/modules/account/memo_recon_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1561,6 +1577,17 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/activation_count_drilldown.py': ('_lineage',),
             'app/modules/account/statement_drilldown.py': ('_lineage',),
             'app/modules/account/liabilities_drilldown.py': ('_lineage',),
+            # THE SAME REASON, two batches on (§CORE-17.3w): the finance device-billing, inventory
+            # and credit-memo declarations each have to say WHICH relation a figure was read out of,
+            # so they ask the registry rather than spelling a table name at the call site. Between
+            # them they added the five NAME constants it had only ever held as literals inside its
+            # own maps -- the distributor's invoice LINES and SERIALISED UNITS, its credit memos,
+            # the emailed inventory-value snapshot and the same report at device grain -- and every
+            # literal copy this file itself held (seven of one, one of another) was re-keyed onto
+            # them in the SAME commit, which is the half of a design fix §19.18 says gets skipped.
+            'app/modules/account/device_billing_drilldown.py': ('_lineage',),
+            'app/modules/account/inventory_value_drilldown.py': ('_lineage',),
+            'app/modules/account/memo_recon_drilldown.py': ('_lineage',),
             'app/modules/commcalc/processor_ledger.py': ('_lineage',),
             'app/modules/commcalc/dlar_sweep.py': ('_lineage',),
             'app/modules/commcalc/email_sweep.py': ('_lineage',),

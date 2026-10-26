@@ -76,6 +76,13 @@ const SOURCE_LABEL: Record<string, string> = {
   journal_entries: 'manual journal entries',
   asset_ledger: 'device asset landing ledger',
   vip_invoices: 'distributor invoices',
+  // The finance device-billing and credit-memo families (§CORE-17.3w). A reader opening a device
+  // purchase or a payable sees what the distributor billed and what it credited, never a table —
+  // and never the distributor's name either, which keeps these plain names tenant-neutral
+  // (RULE TWO): the tenant's own word for its distributor comes from the report-label registry.
+  vip_invoice_lines: 'distributor invoice lines',
+  vip_invoice_devices: 'distributor invoice units',
+  vip_credit_memos: 'distributor incentive credit memos',
   vip_paygo_payments: 'distributor device-financing payments',
   store_borrowings: 'inter-store borrowing record',
   // The device-asset family (§CORE-17.3l). An operator reads "the register's inventory count", never
