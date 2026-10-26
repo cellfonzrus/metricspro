@@ -39,7 +39,7 @@ import { MultiSelect } from '@/lib/multiselect'
 // pay type, the band cut-offs and the market picker — is a QUERY PARAMETER (see `load` below), so the
 // server folds again on every change and each panel follows its figure by construction. There is no
 // browser fold here and `lib/drill-narrow` must not appear in this file;
-// `harness_batch21_drilldown.py` §F fails the build in BOTH directions if that changes.
+// `harness_batch21_drilldown.py` §G fails the build in BOTH directions if that changes.
 
 const orgParam = () => { const o = getActiveOrg(); return o ? `&org_id=${encodeURIComponent(o)}` : '' }
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }

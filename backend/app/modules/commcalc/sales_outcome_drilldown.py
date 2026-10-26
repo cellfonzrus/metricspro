@@ -26,7 +26,7 @@ HOW MANY GRAINS THIS FAMILY REALLY HAS — MEASURED OFF THE PRODUCERS, NOT ASSUM
 Driving `peer_comparison.build` / `lagging`, `product_mix.build` (`rep_rows` / `rank` /
 `store_rollup`), `spiff_impact.build` (`store_money` / `profit_effect`) and
 `tax_collected.aggregate` gives the triples below, because a grain fixes the ROW, the UNIT **and**
-the PROVENANCE. `harness_batch21_drilldown.py` §H measures them off the panels as a SET and compares
+the PROVENANCE. `harness_batch21_drilldown.py` §I measures them off the panels as a SET and compares
 for EQUALITY, so the number in the index is read off the harness rather than asserted here:
 
    1. a PEER STORE ROW, counted                count, out of whichever sales relations the period's
@@ -83,7 +83,7 @@ This family splits THREE AND ONE, and the split was found by reading each page:
     company rows, the tender rows and each store's own DAY rows — so one predicate narrows all
     three row shapes.
 
-`harness_batch21_drilldown.py` §F locks all four decisions in BOTH directions off each page's own
+`harness_batch21_drilldown.py` §G locks all four decisions in BOTH directions off each page's own
 text, with a non-vacuity witness for every scan.
 
 WHAT ELSE GETS NO PANEL HERE, AND WHICH RULING SAYS SO

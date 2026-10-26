@@ -18,7 +18,7 @@ import { narrowPanel, agreesToTheCent } from '@/lib/drill-narrow'
 // and market pickers leave on screen (lib/drill-narrow, index §CORE-17.3d) and each tile reads its
 // number off its narrowed panel through the shared `agreesToTheCent` gate — the tile and its
 // evidence are one fold by construction. ONE predicate narrows all three row shapes, because every
-// row of every panel here carries its STORE in its row key. `harness_batch21_drilldown.py` §F fails
+// row of every panel here carries its STORE in its row key. `harness_batch21_drilldown.py` §G fails
 // the build if that stops being true, in both directions.
 //
 // WHAT GETS NO LINK, AND WHY. The effective tax rate is a rate (§CORE-17.3h) and the two figures it

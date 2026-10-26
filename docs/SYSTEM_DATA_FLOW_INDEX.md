@@ -35792,7 +35792,7 @@ shapes** (a store row, and that store's DAY rows) rather than being forced into 
 also the report batch 20 handed forward: its defect 11 was that a RANGE read could name no relation
 at all, and this batch is the one that had to fix it to serve this report honestly. Declaration:
 `backend/app/modules/commcalc/sales_outcome_drilldown.py`. Proof:
-`backend/harness_batch21_drilldown.py`, **154 checks**, **22 mutations / negative
+`backend/harness_batch21_drilldown.py`, **156 checks**, **24 mutations / negative
 controls**, wired into the guard job with a paths filter naming every file it is about.
 
 **WHY THE ABSENCES CARRY THE WEIGHT HERE.** Every figure in this family is an **accusation about a
@@ -35976,6 +35976,24 @@ while the paths filter still named this one). The two shapes batch 20 found — 
 the CALL or the ELEMENT was meant**, and a **paths-filter mention standing in for a `run:` line** —
 were written into this file's locks from the first draft as a result, with §G1e and §K7b as their
 non-vacuity witnesses.
+
+**A WEAKNESS IN THIS HARNESS WAS CAUGHT BY A LOCK THAT BELONGS TO SOMEBODY ELSE, WHICH IS THE
+SYSTEM WORKING — THE SECOND BATCH RUNNING TO BE CAUGHT BY THIS ONE.**
+`harness_subject_set_lock.py` **§B1** refuses a harness that asserts a bare LOWER BOUND on a set it
+derived from the code, and four checks in this file's first draft did exactly that:
+`len(PEER_PAYLOAD["rows"]) == 3 and len(PEER_PAYLOAD["bands"]) >= 2`, `len(_floor) >= 1`,
+`len(SPIFF_PAYLOAD["rows"]) >= 3` and `len(_nosnap) >= 1`. The point of the refusal is precise: a
+`>=` stays **green while a subject silently LEAVES the set and another takes its place** — the guard
+goes blind and nothing says so. All four now declare the expected SUBJECTS at module level and
+compare for **equality**, printing `extra` and `missing` both ways. For `_floor` and `_nosnap` that
+matters doubly: the whole content of those two checks is **WHICH** rep or store was withheld, and a
+count cannot say which. The replacement was mutation-tested the way batch 20's was — **one member of
+the derived set swapped for a ghost at UNCHANGED SIZE**, where the old bound stays green: **§C1**
+went red naming `extra=['S9'] missing=['S3']`, and **§E4** went red naming `extra=['S3']
+missing=['S1']`. §C1b and §E4d are the two in-file witnesses that the equality really is stricter
+than the bound it replaced. Neither `harness_subject_set_lock.py` nor
+`harness_subject_set_pending.txt` was touched — that list is a ratchet pinned at 50 against a ceiling
+of 50, so adding a row would be a relaxation and would fail anyway.
 
 **AND THE LINT RATCHET WAS MEASURED, NOT GUESSED.** `node tools/eslint-ratchet.mjs` **in this
 container**: 5583 findings against a pin of 5583 — equal, not below, because the gate exits 1 on an

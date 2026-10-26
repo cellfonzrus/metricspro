@@ -35,7 +35,7 @@ import { MultiSelect } from '@/lib/multiselect'
 // server's own basis, all of them computed over every rep either way. A panel explains the FIGURE,
 // not the table (§CORE-17.3o), so narrowing these panels to the ticked subset would make each one
 // disagree with the number it was opened from. `lib/drill-narrow` must not appear in this file;
-// `harness_batch21_drilldown.py` §F fails the build in BOTH directions if that changes. Every other
+// `harness_batch21_drilldown.py` §G fails the build in BOTH directions if that changes. Every other
 // filter — the month, the price cut-offs, the market picker — is a query parameter, so the server
 // folds figure and panel together on each change.
 //

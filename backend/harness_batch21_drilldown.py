@@ -381,9 +381,32 @@ PEER_PAYLOAD["lagging"] = peer.lagging(PEER_PAYLOAD, metric=peer.DEFAULT_GAP_MET
 PEER_PAYLOAD["source_meta"] = {"sales": META, "rows": 1020, "cells": len(CELLS)}
 PD = dd.peer_drilldowns(PEER_PAYLOAD)
 
-check("C1 the real producer was driven and banded three stores",
-      len(PEER_PAYLOAD["rows"]) == 3 and len(PEER_PAYLOAD["bands"]) >= 2,
-      str([(b["band"], b["stores"]) for b in PEER_PAYLOAD["bands"]]))
+#: WHO THE PEER REPORT REALLY BANDED, DECLARED AS A SET AND COMPARED FOR EQUALITY. A `>=` on a set
+#: derived from the code stays GREEN while a subject silently LEAVES it and another takes its place
+#: — the guard goes blind, which is the shape `harness_subject_set_lock.py` §B1 refuses. Every set in
+#: this file that the producers derive is therefore declared here and compared with `==`, printing
+#: `extra` and `missing` both ways so a subject that disappears NAMES ITSELF.
+_EXPECTED_PEER_STORES = {"S1", "S2", "S3"}
+_EXPECTED_PEER_BANDS = {0, 2}
+_MEASURED_PEER_STORES = {str(r.get("store") or "") for r in PEER_PAYLOAD["rows"]}
+_MEASURED_PEER_BANDS = {b.get("band") for b in PEER_PAYLOAD["bands"]}
+check("C1 the real producer was driven, and the STORES it banded and the BANDS it opened are "
+      "exactly the declared sets — not 'at least three', which would stay green while a store "
+      "vanished and another took its place",
+      _MEASURED_PEER_STORES == _EXPECTED_PEER_STORES
+      and _MEASURED_PEER_BANDS == _EXPECTED_PEER_BANDS,
+      "stores extra=%s missing=%s · bands extra=%s missing=%s"
+      % (sorted(_MEASURED_PEER_STORES - _EXPECTED_PEER_STORES),
+         sorted(_EXPECTED_PEER_STORES - _MEASURED_PEER_STORES),
+         sorted(_MEASURED_PEER_BANDS - _EXPECTED_PEER_BANDS),
+         sorted(_EXPECTED_PEER_BANDS - _MEASURED_PEER_BANDS)))
+ctl("C1b control: the equality is STRICTER THAN THE BOUND IT REPLACED — swapping one real store for "
+    "a ghost at UNCHANGED SIZE leaves a `>=` green and makes the set comparison red, naming the "
+    "ghost in `extra` and the real store in `missing`",
+    len((_MEASURED_PEER_STORES - {"S3"}) | {"S9"}) >= 3
+    and ((_MEASURED_PEER_STORES - {"S3"}) | {"S9"}) != _EXPECTED_PEER_STORES
+    and sorted(((_MEASURED_PEER_STORES - {"S3"}) | {"S9"}) - _EXPECTED_PEER_STORES) == ["S9"]
+    and sorted(_EXPECTED_PEER_STORES - ((_MEASURED_PEER_STORES - {"S3"}) | {"S9"})) == ["S3"])
 check("C2 ONE panel per band plus the lagging count — and nothing else, because every other column "
       "on this report is a rate, an order statistic or a distinct-transaction set",
       dd.PEER_BEHIND_KEY in PD
@@ -442,12 +465,18 @@ check("D2 the two COMPANY figures the page prints a count for are served, and th
 for _k in sorted(MD):
     check(f"D3[{_k}] the panel's figure IS the producer's own and its counted rows add up to it",
           MD[_k]["tie_out"]["ties"] is True, str(MD[_k]["tie_out"]["words"]))
-_floor = [r for r in MD["flagged_reps"]["rows"] if r["reason"] == dd.REASON_BELOW_FLOOR]
-check("D4 THE REP BELOW THE BOX FLOOR REACHES NO VERDICT, AND THE PANEL SAYS SO — he comes back "
-      "unmeasured with `below_ranking_floor`, never counted as having passed. A rate per box over "
-      "four boxes is an accusation with nothing behind it",
-      len(_floor) >= 1 and all(r["measured"] is False and r["amount"] is None for r in _floor),
-      str([(r["label"], r["measured"], r["reason"]) for r in MD["flagged_reps"]["rows"]]))
+#: WHICH SALESPEOPLE THE REPORT WITHHELD A VERDICT ABOUT — the SUBJECTS, not a count. A count cannot
+#: say WHO was withheld, and the whole content of this check is who.
+_EXPECTED_BELOW_FLOOR = {"Ben"}
+_floor = {r["label"] for r in MD["flagged_reps"]["rows"] if r["reason"] == dd.REASON_BELOW_FLOOR}
+check("D4 THE REP BELOW THE BOX FLOOR REACHES NO VERDICT, AND THE PANEL NAMES HIM — exactly the "
+      "declared set comes back unmeasured with `below_ranking_floor`, never counted as having "
+      "passed. A rate per box over four boxes is an accusation with nothing behind it",
+      _floor == _EXPECTED_BELOW_FLOOR
+      and all(r["measured"] is False and r["amount"] is None
+              for r in MD["flagged_reps"]["rows"] if r["label"] in _floor),
+      "extra=%s missing=%s" % (sorted(_floor - _EXPECTED_BELOW_FLOOR),
+                               sorted(_EXPECTED_BELOW_FLOOR - _floor)))
 ctl("D4b control: the floor row is the PRODUCER'S refusal, read off the row, not this file's — the "
     "producer really does give that rep no verdict",
     any(not r.get("verdict") for r in MIX_PAYLOAD["reps"]))
@@ -519,10 +548,17 @@ SPIFF_PAYLOAD = spiff.build(SPIFF_MONEY, PEER_FOR_SPIFF,
 SPIFF_PAYLOAD["source_meta"] = {"sales": META, "comp_rows": len(COMP)}
 SD = dd.spiff_drilldowns(SPIFF_PAYLOAD)
 
+#: WHICH STORES THE SPIFF REPORT ROWED, DECLARED AS A SET. S9 is on the carrier's statement and in
+#: no sales read — a real shape, and the reason this is a set rather than a count.
+_EXPECTED_SPIFF_STORES = {"S1", "S2", "S3", "S9"}
+_MEASURED_SPIFF_STORES = {str(r.get("store") or "") for r in SPIFF_PAYLOAD["rows"]}
 check("E1 the real producer chain was driven end to end — pay-type options, the default selection, "
-      "the per-store money, the per-100-box rate and the estate build",
-      SPIFF_SEL and len(SPIFF_PAYLOAD["rows"]) >= 3
-      and SPIFF_PAYLOAD["estate"]["spiff_amount"] is not None)
+      "the per-store money, the per-100-box rate and the estate build — and the STORES it rowed are "
+      "exactly the declared set, including the one the carrier paid that no sales read ever saw",
+      bool(SPIFF_SEL) and SPIFF_PAYLOAD["estate"]["spiff_amount"] is not None
+      and _MEASURED_SPIFF_STORES == _EXPECTED_SPIFF_STORES,
+      "extra=%s missing=%s" % (sorted(_MEASURED_SPIFF_STORES - _EXPECTED_SPIFF_STORES),
+                               sorted(_EXPECTED_SPIFF_STORES - _MEASURED_SPIFF_STORES)))
 for _k in sorted(SD):
     check(f"E2[{_k}] the panel's figure IS the producer's own estate figure, to the cent",
           SD[_k]["tie_out"]["ties"] is True, str(SD[_k]["tie_out"]["words"]))
@@ -539,14 +575,26 @@ check("E3b and the statements are separated from the statement by PROVENANCE ALO
       SD["spiff_amount"]["figure"]["unit"] == SD["net_income"]["figure"]["unit"] == rd.UNIT_MONEY
       and {s["table"] for s in SD["spiff_amount"]["sources"]}
       != {s["table"] for s in SD["net_income"]["sources"]})
-_nosnap = [r for r in SD["net_income"]["rows"] if r["reason"] == dd.REASON_NO_SNAPSHOT]
-check("E4 THE STORE WITH NO STORED P&L IS A BLANK WITH A REASON, NEVER A ZERO PROFIT — it is "
-      "unmeasured, out of the figure, and carries the vocabulary's own sentence. A store that was "
-      "not computed has not broken even",
-      len(_nosnap) >= 1
+#: WHICH STORES THE STATEMENT RUN NEVER COMPUTED — again the SUBJECTS. S3 sells and has no stored
+#: P&L; S9 the carrier paid and the platform has no store row for at all. Two different absences,
+#: and a count would hide which of them went missing.
+_EXPECTED_NO_SNAPSHOT = {"S3", "S9"}
+_nosnap = {r["label"] for r in SD["net_income"]["rows"] if r["reason"] == dd.REASON_NO_SNAPSHOT}
+check("E4 THE STORES WITH NO STORED P&L ARE BLANKS WITH A REASON AND ARE NAMED, NEVER ZERO PROFITS "
+      "— exactly the declared set is unmeasured, out of the figure, and carries the vocabulary's own "
+      "sentence. A store that was not computed has not broken even",
+      _nosnap == _EXPECTED_NO_SNAPSHOT
       and all(r["measured"] is False and r["amount"] is None and r["in_figure"] is False
-              for r in _nosnap),
-      str([(r["label"], r["measured"], r["reason"]) for r in SD["net_income"]["rows"]]))
+              for r in SD["net_income"]["rows"] if r["label"] in _nosnap),
+      "extra=%s missing=%s" % (sorted(_nosnap - _EXPECTED_NO_SNAPSHOT),
+                               sorted(_EXPECTED_NO_SNAPSHOT - _nosnap)))
+ctl("E4d control: this equality is STRICTER THAN THE BOUND IT REPLACED TOO — swapping one withheld "
+    "store for another at UNCHANGED SIZE leaves a `>=` green and makes the set comparison red, "
+    "naming both sides",
+    len((_nosnap - {"S3"}) | {"S1"}) >= 1
+    and ((_nosnap - {"S3"}) | {"S1"}) != _EXPECTED_NO_SNAPSHOT
+    and sorted(((_nosnap - {"S3"}) | {"S1"}) - _EXPECTED_NO_SNAPSHOT) == ["S1"]
+    and sorted(_EXPECTED_NO_SNAPSHOT - ((_nosnap - {"S3"}) | {"S1"})) == ["S3"])
 check("E4b and the profit panels NAME THE SNAPSHOT and stop there (§CORE-17.3j) — what the statement "
       "run itself read is that run's business, not this panel's claim",
       [s["table"] for s in SD["net_income"]["sources"]] == [dd.FINANCIAL_STATEMENTS])

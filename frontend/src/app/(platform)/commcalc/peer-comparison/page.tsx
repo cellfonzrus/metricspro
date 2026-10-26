@@ -27,7 +27,7 @@ import { MultiSelect } from '@/lib/multiselect'
 // ranked metric, the band cut-offs and the market picker — is a QUERY PARAMETER (see `load` below),
 // so the server folds again on every change and each panel follows its figure by construction. There
 // is no browser fold here and `lib/drill-narrow` must not appear in this file;
-// `harness_batch21_drilldown.py` §F fails the build in BOTH directions if that changes.
+// `harness_batch21_drilldown.py` §G fails the build in BOTH directions if that changes.
 //
 // WHAT IS REFUSED A PANEL, AND WHY. Boxes per bill payment, accessory $ per box and family plan % are
 // RATES (§CORE-17.3h). The band's best, median and leader are order statistics over the band, not a
