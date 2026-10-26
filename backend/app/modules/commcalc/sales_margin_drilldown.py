@@ -154,7 +154,7 @@ against itself and reads as measured.
 AN EMPTY REPORT DRILLS TO NOTHING. Every entry point below returns an empty mapping when the producer
 folded its totals over no rows at all.
 
-LIVE DEFECTS THESE FOUR REPORTS HAVE TODAY — NONE FIXED, TWELVE REPORTED, NO FIGURE MOVED
+LIVE DEFECTS THESE FOUR REPORTS HAVE TODAY — THIRTEEN REPORTED, NO FIGURE MOVED
 ─────────────────────────────────────────────────────────────────────────────────────────
  1. **The Retention Analysis reads the MONTH-END SALES ARCHIVE ALONE.** `sales_analyzer._sales_index`
     reads `raw_sales` and never the display union, which is the exact class the Gross Profit report
@@ -210,6 +210,25 @@ LIVE DEFECTS THESE FOUR REPORTS HAVE TODAY — NONE FIXED, TWELVE REPORTED, NO F
 12. **The Zero Sales `scopes` total mixes two grains.** It is `len(rows)` over store rows AND rep
     rows, so "scopes" is a number with no row list of one grain behind it. It reaches the API
     contract and no tile. REPORTED, and it gets no panel.
+
+13. **A SAFETY LOCK'S OWN PARSER HAS AN APOSTROPHE BLIND SPOT — REPORTED, NOT FIXED.**
+    `harness_inner_component_inputs.py` finds a component declaration's end by BRACKET BALANCE over
+    `strip_noise(line)`, and `strip_noise` treats `'` as a string delimiter line by line. So a
+    two-line JSX comment whose closing `*/}` shares its line with an apostrophe — `window's` — has
+    that `*/}` swallowed as string content, the opening `{` is never matched, and the declaration's
+    computed extent RUNS TO THE END OF THE FILE. This batch hit it: a drill-link note inside the
+    comparison page's nested `Tile` made the lock compute `Tile` as 229 lines instead of 44 and
+    report three `<input>`s that are nowhere inside it. Both halves were put right HERE — the note
+    is reworded without possessives, and `Tile` is HOISTED to module scope, which removes the
+    nesting hazard the lock exists for rather than stepping around it. The PARSER is reported: an
+    over-long extent can MASK a real offender by merging two declarations exactly as easily as it
+    invented one here. Measured over `frontend/src` on 2026-10-26 with the harness's own
+    `strip_noise`: **96 lines in 68 files** lose a closing `*/}` this way (191 lines in 124 files if
+    every block-comment closer is counted, not only the JSX ones) — and **zero** nested declarations
+    currently have a runaway extent, so the blind spot is latent today rather than active. NOT fixed
+    here: teaching `strip_noise` about JSX comments changes a safety lock across every one of those
+    sites and would surface genuine nested-component offenders that are other work. Same disposition
+    batch 14 took with `harness_carrier_vocab_guard._TABLE_FIELD`.
 
 💰 MOVES NO MONEY. Read-only presentation of figures the producers already computed. Books nothing,
 pays nothing, writes nothing, and computes no business figure of its own: every amount it carries was

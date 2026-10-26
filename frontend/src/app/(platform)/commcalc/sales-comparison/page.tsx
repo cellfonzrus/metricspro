@@ -42,6 +42,68 @@ function pctColor(pct: number | null, current: number): string {
   return 'var(--text3)'
 }
 
+// A per-ITEM comparison tile. HOISTED TO MODULE SCOPE 2026-10-26: it used to be declared inside
+// the page body, which makes it a new component TYPE on every render, so React unmounts and
+// remounts its whole subtree instead of updating it (`react-hooks/static-components`, owner
+// report 2026-10-21 — the keystroke that did not arrive). Wiring the drill links into it put a
+// typed control within reach of that remount, which `harness_inner_component_inputs.py` refuses
+// outright and may never ratchet. The only page value it closed over was the drill handle, so
+// that is now an explicit prop and the hazard is gone rather than stepped around — `OverTile`
+// above was hoisted for the same reason.
+function Tile({ c, d }: {
+  c: any
+  /** The page's drill handle — `useDrillTile`'s return, passed in rather than closed over. */
+  d: {
+    dl: (...a: string[]) => { key: string; label: string }[]
+    open: string | null
+    toggle: (k: string) => void
+  }
+}) {
+  // Metric-aware per the owner spec: units rows headline the count; Accessories headlines $; Financing
+  // shows BOTH the financed-unit count and the financed $.
+  const metric: string = c.metric || 'units'
+  const isDollars = metric === 'dollars'
+  const isBoth = metric === 'both'
+  const bigVal = isDollars ? fmt(c.current_rev || 0) : c.current
+  const bigPct = isDollars ? c.rev_pct : c.pct
+  const bigCur = isDollars ? (c.current_rev || 0) : c.current
+  return (
+    <div className="card" style={{ padding: '12px 16px', minWidth: 150 }}>
+      <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, display: 'flex', gap: 6, alignItems: 'center' }}>
+        {c.label}
+        {c.financing && c.detection_status && c.detection_status !== 'configured' &&
+          <span title="Financing detection is not fully mapped — see the Financing report settings" style={{ color: 'var(--c-fg-b45309)' }}>⚠︎</span>}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
+        <div style={{ fontSize: 22, fontWeight: 700 }}>{bigVal}</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(bigPct, bigCur) }}>{pctLabel(bigPct, bigCur)}</div>
+      </div>
+      {isBoth &&
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>{fmt(c.current_rev || 0)}</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: pctColor(c.rev_pct, c.current_rev || 0) }}>{pctLabel(c.rev_pct, c.current_rev || 0)}</div>
+        </div>}
+      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
+        {isDollars
+          ? <>was {fmt(c.previous_rev || 0)} · {c.current} units</>
+          : isBoth
+            ? <>was {c.previous} units · {fmt(c.previous_rev || 0)}</>
+            : <>was {c.previous} · {fmt(c.current_rev || 0)}</>}
+      </div>
+      {/* One link per FIGURE, never one per tile: "which rows is this?" is a different question
+          for the units and the dollars of each of the two windows. */}
+      <DrillTileLinks
+        drills={d.dl(
+          `item.${c.key}.current`, 'units, this window',
+          `item.${c.key}.current_rev`, '$, this window',
+          `item.${c.key}.previous`, 'units, compared',
+          `item.${c.key}.previous_rev`, '$, compared')}
+        open={d.open} onToggle={d.toggle} />
+    </div>
+  )
+}
+
+
 // An overall comparison tile. It closes over nothing, so it lives at MODULE scope — a component
 // defined inside the page body is re-created on every render (react-hooks/static-components).
 // `invert` is for a COST: spending more is not the green that selling more is, so the colour of the
@@ -243,50 +305,6 @@ export default function SalesComparisonPage() {
   }), [baseLbl, cmpLbl, data, filtered, snapshotTiles])
 
 
-  const Tile = ({ c }: { c: any }) => {
-    // Metric-aware per the owner spec: units rows headline the count; Accessories headlines $; Financing
-    // shows BOTH the financed-unit count and the financed $.
-    const metric: string = c.metric || 'units'
-    const isDollars = metric === 'dollars'
-    const isBoth = metric === 'both'
-    const bigVal = isDollars ? fmt(c.current_rev || 0) : c.current
-    const bigPct = isDollars ? c.rev_pct : c.pct
-    const bigCur = isDollars ? (c.current_rev || 0) : c.current
-    return (
-      <div className="card" style={{ padding: '12px 16px', minWidth: 150 }}>
-        <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, display: 'flex', gap: 6, alignItems: 'center' }}>
-          {c.label}
-          {c.financing && c.detection_status && c.detection_status !== 'configured' &&
-            <span title="Financing detection is not fully mapped — see the Financing report settings" style={{ color: 'var(--c-fg-b45309)' }}>⚠︎</span>}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>{bigVal}</div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(bigPct, bigCur) }}>{pctLabel(bigPct, bigCur)}</div>
-        </div>
-        {isBoth &&
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 1 }}>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>{fmt(c.current_rev || 0)}</div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: pctColor(c.rev_pct, c.current_rev || 0) }}>{pctLabel(c.rev_pct, c.current_rev || 0)}</div>
-          </div>}
-        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
-          {isDollars
-            ? <>was {fmt(c.previous_rev || 0)} · {c.current} units</>
-            : isBoth
-              ? <>was {c.previous} units · {fmt(c.previous_rev || 0)}</>
-              : <>was {c.previous} · {fmt(c.current_rev || 0)}</>}
-        </div>
-        {/* One link per FIGURE, never one per tile: "which rows is this?" is a different question
-            for this window's units, this window's dollars and each of the comparison window's. */}
-        <DrillTileLinks
-          drills={cmpDrill.dl(
-            `item.${c.key}.current`, 'units, this window',
-            `item.${c.key}.current_rev`, '$, this window',
-            `item.${c.key}.previous`, 'units, compared',
-            `item.${c.key}.previous_rev`, '$, compared')}
-          open={cmpDrill.open} onToggle={cmpDrill.toggle} />
-      </div>
-    )
-  }
 
   return (
     <div>
@@ -360,7 +378,7 @@ export default function SalesComparisonPage() {
       {/* per-item tiles */}
       {!loading && !data?.error && cats.length > 0 &&
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-          {cats.map(c => <Tile key={c.key} c={c} />)}
+          {cats.map(c => <Tile key={c.key} c={c} d={cmpDrill} />)}
         </div>}
 
       {/* overall tiles. Store expenses sit HERE, not with the per-item tiles: an expense is not an

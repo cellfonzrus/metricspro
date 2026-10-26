@@ -316,10 +316,12 @@ export default function GPReportPage() {
   // store-scoped caller (the endpoint's `totals` are company-wide and are not re-folded after
   // scoping). A disagreement therefore costs the drill link and never the number.
   const gpTile = (k: string): number => {
-    const n = (totals as any)[k] || 0
+    // `totals` is this page's own fold and is already loosely typed, so no cast is needed here —
+    // and a redundant one would add to the `no-explicit-any` debt the frontend ratchet pins.
+    const n = totals[k] || 0
     return agreesToTheCent(gpNarrowed[k], n) ? Number(gpNarrowed[k]?.figure?.amount ?? n) : n
   }
-  const gpDrill = useDrillTile(gpNarrowed, (k, p) => agreesToTheCent(p, (totals as any)[k] || 0))
+  const gpDrill = useDrillTile(gpNarrowed, (k, p) => agreesToTheCent(p, totals[k] || 0))
   // Per-source leg decomposition of the CURRENTLY FILTERED rows. `total` is each source's own existing
   // column, unchanged; `ok` is the identity the owner asked to be able to trust — the parts must add
   // back to it. It is recomputed here from the rows on screen (not taken from the server) precisely so

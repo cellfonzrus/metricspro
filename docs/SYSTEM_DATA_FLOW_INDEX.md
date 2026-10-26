@@ -35207,6 +35207,26 @@ panel and the company-wide total then disagree, which makes the shared `agreesTo
 withhold the drill rather than show a figure about rows the caller cannot see. A drill-down must not
 become a disclosure.
 
+A fourteenth, found by this batch's own CI and reported rather than repaired: **the
+`harness_inner_component_inputs.py` lock has an apostrophe blind spot in its extent parser.** It ends
+a component declaration by bracket balance over `strip_noise(line)`, which treats `'` as a string
+delimiter line by line — so a two-line JSX comment whose closing `*/}` shares its line with a
+possessive apostrophe loses that `*/}`, the opening `{` is never matched, and the declaration's
+computed extent runs to the END OF THE FILE. This batch tripped it: a drill-link note inside the
+comparison page's nested `Tile` made the lock compute `Tile` as 229 lines rather than 44 and report
+three `<input>`s that are nowhere inside it. Both halves were put right in this PR — the note is
+reworded without possessives, and **`Tile` is hoisted to module scope**, which removes the remount
+hazard the lock exists for rather than stepping around it (it closed over exactly one page value, the
+drill handle, now an explicit prop; `OverTile` beside it was hoisted for the same reason). The PARSER
+is REPORTED: an over-long extent can **mask** a real offender by merging two declarations exactly as
+easily as it invented one here. Measured over `frontend/src` with the harness's own `strip_noise`:
+**96 lines in 68 files** lose a closing `*/}` this way — 191 lines in 124 files if every
+block-comment closer is counted — and **zero** nested declarations currently have a runaway extent,
+so the blind spot is latent rather than active today. Not fixed here because teaching `strip_noise`
+about JSX comments changes a non-ratchetable safety lock across all of those sites and would surface
+genuine nested-component offenders that are other work; the same disposition batch 14 took with
+`harness_carrier_vocab_guard._TABLE_FIELD`.
+
 **NO FIGURE MOVED, PROVED FALSIFIABLY.** §G reproduces the GP page's own pre-batch fold
 (`COLS_BASE.forEach(c => totals[c.key] = rows.reduce(…))`) against the panel each tile now reads,
 unfiltered AND under a real market filter that drops a row, with a non-vacuity witness asserting the
