@@ -30342,7 +30342,7 @@ a browser without `color-mix()` keeps today's nav rather than rendering somethin
 
 | Lock | What fails the build |
 | --- | --- |
-| `frontend/prove_nav_accents.mjs` (**86 checks**, CI job *Sidebar colour proof*) | reads the REAL `globals.css` and `layout.tsx`: the palette is declared once with contiguous slots; `NAV_ACCENT_SLOTS` equals that count; the rows dereference `var(--nav-accent-N)` and spell no colour; neighbours never share a slot; the icon chip is a painted BOX with a size of its own and **not** a `color` on the glyph (the invisible-change regression); **per-slot contrast computed** for resting / hover / active, the chip's standoff from the rail, and the active row's filled background and thicker bar; the `@supports` fallback is intact; §H for the headings — every group and every report category declares an icon, `groupIcon` answers from the declaration, the fallback covers a tenant-created group, `applyNavLayout` carries the icon through (driven against the REAL `rbac.ts`), and the heading is bolder, larger, left-aligned and contrast-checked per slot; nine negative controls (a gap in the palette, a count disagreement, a literal colour, a label with no white left, a tinted chip, two adjacent rows sharing a slot, a one-colour palette) |
+| `frontend/prove_nav_accents.mjs` (**67 checks**, CI job *Sidebar colour proof*) | reads the REAL `globals.css` and `layout.tsx`: the palette is declared once with contiguous slots; `NAV_ACCENT_SLOTS` equals that count; the rows dereference `var(--nav-accent-N)` and spell no colour; neighbours never share a slot, and consecutive slots are at least **90° apart in HUE** so the alternation is visible and not merely numbered; the icon chip is a painted BOX with a size of its own and **not** a `color` on the glyph (the invisible-change regression); **per-slot contrast computed** for resting / hover / active, the chip's standoff from the rail, and the active row's filled background and thicker bar; the `@supports` fallback is intact; §H for the headings — every group and every report category declares an icon, `groupIcon` answers from the declaration, the fallback covers a tenant-created group, `applyNavLayout` carries the icon through (driven against the REAL `rbac.ts`), and the heading is bolder, larger, left-aligned and contrast-checked per slot; nine negative controls (a gap in the palette, a count disagreement, a literal colour, a label with no white left, a tinted chip, two adjacent rows sharing a slot, a one-colour palette, two slots a shade apart in one hue) |
 
 ### §CORE-14.5 THE GROUP HEADINGS (owner ask 2026-10-21)
 
@@ -30361,6 +30361,28 @@ the rail the colour had not reached.
 Every heading colour is computed against the rail exactly as the rows are (5.0:1 – 7.4:1). The
 sidebar spells **no icon of its own**: it renders what the nav hands it, which is why a group that
 nobody declared gets a folder rather than a gap where its neighbours have an icon.
+
+### §CORE-14.6 TWO COLOURS, NOT SIX (owner ask 2026-10-26)
+
+Owner, with the six-colour rotation live: *"too many colors just stick to 2 colors blue and orange
+alternating"*.
+
+Nothing about the mechanism changed, which is the point of §CORE-14.2: the palette is the ONE home
+and the cycle length is **derived from its size**, so the whole ask is two lines — the list goes from
+six entries to two (`--nav-accent-1: #60a5fa` logo blue, `--nav-accent-2: #fb923c` orange) and
+`NAV_ACCENT_SLOTS` follows it from 6 to 2. No row, no heading and no stylesheet rule names a colour,
+so none of them needed touching, and with two slots the rotation IS a strict alternation.
+
+**The class the new lock answers.** "Two colours" decays in one specific way: a later change adds a
+second *blue*. It alternates by slot number and not to the eye, and the old checks would all have
+passed it — "no two adjacent rows share a slot" is about slot numbers, not about colour. So the
+alternation bar is now a HUE distance: consecutive slots must sit **at least 90° apart on the colour
+wheel**, computed from the real declared values (the shipped pair is **174° apart**, nearly
+opposite), with a negative control that the two logo blues `#60a5fa` / `#38bdf8` are rejected.
+Both colours re-clear the contrast bars unchanged (resting label 5.26:1 and 5.73:1 on the navy).
+
+The retired green, amber, pink and violet slots were nav-only values; no other surface dereferenced
+them (checked across `src/`), so nothing else restates or loses a colour.
 
 ### §CORE-14.4 WHAT IS NOT DONE HERE
 

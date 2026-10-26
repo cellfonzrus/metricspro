@@ -58,6 +58,19 @@ const contrast = (x, y) => {
   const [a, b] = [lum(x), lum(y)].sort((m, n) => n - m)
   return (a + 0.05) / (b + 0.05)
 }
+// The HUE of a colour, in degrees. Alternation is only visible if consecutive slots are different
+// HUES — two blues one shade apart alternate on paper and look like one colour on the rail, which is
+// how "too many colours" creeps back in as "two colours that look the same".
+const hueOf = rgb => {
+  const [r, g, b] = rgb.map(c => c / 255)
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min
+  if (d === 0) return null                                  // grey has no hue
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4
+  return ((h * 60) + 360) % 360
+}
+// The shortest way round the colour wheel between two hues.
+const hueGap = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d }
+
 // An accent painted at `p` opacity over `bg` (what `background: color-mix(… p%, transparent)` gives).
 const over = (fg, bg, p) => mix(fg, bg, p)
 const WHITE = [255, 255, 255]
@@ -113,6 +126,21 @@ const rows = Array.from({ length: 40 }, (_, i) => slotOf(i))
 ck('no two adjacent rows share a slot', rows.every((s, i) => i === 0 || s !== rows[i - 1]))
 ck(`the cycle repeats every ${N} rows and no sooner`,
   rows.slice(0, N).every((s, i) => s === i + 1) && rows[N] === rows[0])
+
+// Owner 2026-10-26: "too many colors just stick to 2 colors blue and orange alternating". Two slots
+// make the rotation a strict alternation, and what makes an alternation READ is that consecutive
+// slots are different hues. A row's colour and its neighbour's must therefore sit at least a quarter
+// of the wheel apart — which also fails the build if someone adds a third near-identical blue back.
+const HUE_APART = 90
+const hues = slots.map(s => ({ n: s.n, hex: s.hex, h: hueOf(hex(s.hex)) }))
+ck('every slot has a hue of its own (a grey cannot alternate with anything)',
+  hues.every(s => s.h !== null), hues)
+for (let i = 0; i < hues.length; i++) {
+  const a = hues[i], b = hues[(i + 1) % hues.length]
+  const gap = hueGap(a.h, b.h)
+  ck(`slot ${a.n} ${a.hex} and its neighbour ${b.n} ${b.hex} are ${gap.toFixed(0)}° apart (>= ${HUE_APART}°)`,
+    gap >= HUE_APART, gap)
+}
 
 // ── E. contrast, computed from the real values ───────────────────────────────────────────────────
 console.log('\nE. every state clears WCAG AA (4.5:1) on both ends of the navy gradient')
@@ -204,6 +232,14 @@ ck('G5b a tinted icon chip is rejected — an emoji would ignore it',
 const sameSlot = [1, 1, 2]
 ck('G5 two adjacent rows sharing a slot is rejected', !sameSlot.every((s, i) => i === 0 || s !== sameSlot[i - 1]))
 ck('G6 a palette of one colour is rejected', !([{ n: 1 }].length >= 2))
+// The realistic way "two colours" decays: a second slot that is another blue. It alternates by slot
+// number and not to the eye, which is the defect the hue bar exists to catch.
+ck('G7 two slots a shade apart in the same hue are rejected',
+  hueGap(hueOf(hex('#60a5fa')), hueOf(hex('#38bdf8'))) < HUE_APART,
+  hueGap(hueOf(hex('#60a5fa')), hueOf(hex('#38bdf8'))))
+ck('G8 …while the blue and the orange actually shipped clear it',
+  hueGap(hueOf(hex('#60a5fa')), hueOf(hex('#fb923c'))) >= HUE_APART,
+  hueGap(hueOf(hex('#60a5fa')), hueOf(hex('#fb923c'))))
 
 // ── H. the group HEADINGS (owner ask 2026-10-21) ────────────────────────────────────────────────
 console.log('\nH. a heading is bolder, coloured from the same palette, and carries its icon')
