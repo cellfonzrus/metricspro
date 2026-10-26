@@ -1070,7 +1070,7 @@ on:
       - "backend/harness_clock_feed.py"
       - "backend/harness_clock_variance.py"
       - "backend/harness_clock_variance_api.py"
-      # index §COMMCALC-34 — Hours Approval: a typed figure saves on its own and a save states its
+      # index §STOREOPS-01 — Hours Approval: a typed figure saves on its own and a save states its
       # cost first. The harness names itself (same §13e reason as above), plus the three files whose
       # change must re-run it: the board's write path, the pure preview the dialog and the request
       # are BOTH built from, and the screen that renders them.
@@ -1806,9 +1806,6 @@ jobs:
       - name: Run the paid-hours basis proof (the shipped default IS today, the owner ruling's three readings pinned to the measured day, and the regression that reproduces payroll computed from the schedule — index §14y)
         working-directory: backend
         run: python3 harness_payroll_hours_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the hours-approval save proof (a typed figure saves without signing anything, a correction can be taken back, an HR approval survives a DM save, the person filter matches a NAME, and the corrections the figure does not contain move no money — index §COMMCALC-34)
-        working-directory: backend
-        run: python3 harness_payroll_approval_save.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the clock-report feed proof (the eleven measured shape traps, the trailer checksum, and a file that does not tie to its own total is rejected rather than landed short — index §14z)
         working-directory: backend
         run: python3 harness_clock_feed.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -2130,7 +2127,7 @@ jobs:
       - name: Run the Account-hub expenses-column proof (the display contract behind the Expenses column)
         working-directory: frontend
         run: node prove_accounts_expenses_column.mjs | tee -a "$GITHUB_STEP_SUMMARY"
-      # THE HOURS-APPROVAL SAVE CONFIRMATION (index §COMMCALC-34). Here, not in a prove job that
+      # THE HOURS-APPROVAL SAVE CONFIRMATION (index §STOREOPS-01). Here, not in a prove job that
       # installs nothing, because it transpiles the real src/lib/hours-approval-preview.ts with the
       # repo's own tsc — the same reason the two proofs above live in this job.
       - name: Prove the hours-approval save confirmation (the dialog states the save that actually goes, over the live figures, and refuses the writes the server would)
@@ -2365,6 +2362,12 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_deposit_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      # THE HOURS-APPROVAL SAVE PROOF (index §STOREOPS-01). HERE, not in the lock job, because it
+      # imports app/modules/storeops/payroll_approval.py, which imports fastapi —
+      # harness_ci_pipefail_lock names exactly this class of step and this is the fix it asks for.
+      - name: Run the hours-approval save proof (a typed figure saves without signing anything, a correction can be taken back, an HR approval survives a DM save, the person filter matches a NAME, and the corrections the figure does not contain move no money)
+        working-directory: backend
+        run: python3 harness_payroll_approval_save.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the DM-Verify parity proof (the real /closing/summary over the in-memory client — filters, range mode, the era-aware ePay breakdown, and the named cash figures in both column eras — owner 2026-07-28 / 2026-10-02, index §47.9)
         working-directory: backend
         shell: bash
