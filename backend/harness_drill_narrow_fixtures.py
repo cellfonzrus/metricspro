@@ -23,6 +23,7 @@ from app.modules.closing import cash_recon_drilldown as crd       # noqa: E402
 from app.modules.closing import day_recon_drilldown as drd        # noqa: E402
 from app.modules.closing import external_credit_drilldown as ecd  # noqa: E402
 from app.modules.closing import external_credit_recon as ecr      # noqa: E402
+from app.modules.commcalc import device_financing_drilldown as dfd  # noqa: E402
 from app.modules.commcalc import tender_recon_drilldown as trd    # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -104,6 +105,27 @@ CASH_ROWS = [
 CASH_TOTALS = {"cash_declared": 520.0, "credit_declared": 100.0,
                "mgmt_short_amount": -20.0, "mgmt_over_amount": 30.0}
 
+# THE TWO SHAPES NO OTHER FIXTURE CARRIED, and the one page batch 16 narrows (§CORE-17.3p): a panel
+# whose unit is a COUNT rather than money, and a row addressed by a THREE-PART natural key. The
+# client fold has to be the identity on both, and `prove_drill_narrow.mjs` asserts exactly that over
+# every panel in this file — so without these two the count unit and the composite key were never
+# tested on the client at all.
+FIN_ROWS = [
+    {"vendor_key": "plan-a", "store_code": "s1", "store": "1 Main St", "market": "LI",
+     "rep": "Abid", "units": 2, "amount": 800.0, "transactions": 2,
+     "first_date": "2026-09-02", "last_date": "2026-09-11"},
+    {"vendor_key": "plan-a", "store_code": "s2", "store": "2 Oak Ave", "market": "NJ",
+     "rep": "Sam", "units": 1, "amount": 300.0, "transactions": 1,
+     "first_date": "2026-09-05", "last_date": "2026-09-05"},
+    # The same store and rep under a SECOND vendor, which is why the key needs all three parts.
+    {"vendor_key": "plan-b", "store_code": "s1", "store": "1 Main St", "market": "LI",
+     "rep": "Abid", "units": 1, "amount": 450.0, "transactions": 1,
+     "first_date": "2026-09-09", "last_date": "2026-09-09"},
+]
+FIN_RESULT = {"rows": FIN_ROWS, "totals": {"units": 4, "amount": 1550.0, "transactions": 4},
+              "source": {"meta": {"primary": "daily_sales_feed", "primary_rows": 90,
+                                  "other": "raw_sales", "other_rows": 12, "filled_rows": 3}}}
+
 
 def build():
     panels = {}
@@ -119,6 +141,8 @@ def build():
         panels["card." + k] = v
     for k, v in crd.drilldowns(CASH_ROWS, CASH_TOTALS, 1.0).items():
         panels["cash." + k] = v
+    for k, v in dfd.financing_drilldowns(FIN_RESULT).items():
+        panels["financing." + k] = v
     return {
         "_note": ("GENERATED — do not hand-edit. Real panels from the real server declarations, "
                   "regenerate with `python3 backend/harness_drill_narrow_fixtures.py --write`. "

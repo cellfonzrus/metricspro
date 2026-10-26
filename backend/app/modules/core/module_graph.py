@@ -78,7 +78,7 @@ FACTS: dict[str, dict] = {
                   'harness_batch9_drilldown.py', 'harness_batch10_drilldown.py',
                   'harness_batch11_drilldown.py', 'harness_batch12_drilldown.py',
                   'harness_batch13_drilldown.py', 'harness_batch14_drilldown.py',
-                  'harness_batch15_drilldown.py'),
+                  'harness_batch15_drilldown.py', 'harness_batch16_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -202,6 +202,17 @@ FACTS: dict[str, dict] = {
             # them. Also the first declaration whose most important figure was read out of NOTHING:
             # a store's share of a company goal is derived on the load and stored nowhere.
             'app/modules/commcalc/accessory_money_drilldown.py': ('report_drilldown',),
+            # The four DEVICE-FINANCING reports (§CORE-17.3p). SIX measured grains over FOUR row
+            # shapes, two of which are the SAME device row in the SAME unit separated only by which
+            # relation answered — the distributor's CLAIM against the carrier's PAYMENT, which is the
+            # dispute the report exists to settle. Where the §CORE-17.3o call is made FOUR WAYS in
+            # one batch: three of these screens print the server's own fold and their panels are
+            # deliberately not narrowed, while the financing report folds its two tiles in the
+            # browser and therefore is. Also the batch whose duplicate check found the grain ALREADY
+            # DECLARED: the weekly lending batches are the device-asset family's catalogue, bound by
+            # identity rather than re-written, and the defect was that the PayGo page threw away a
+            # panel its own endpoint had been serving since batch 12.
+            'app/modules/commcalc/device_financing_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -719,7 +730,8 @@ FACTS: dict[str, dict] = {
         "homes": ('app/modules/commcalc/device_reimb_recon.py',),
         "index": ('19.53', '65'),
         "locks": ('harness_device_reimb_recon.py',
-                  'harness_device_line_reimbursement.py'),
+                  'harness_device_line_reimbursement.py',
+                  'harness_batch16_drilldown.py'),
         # SNAPSHOT — written BY HAND, multi-line, not blessed. `--bless` silently deleted 11 of 12
         # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
         # real import graph rather than regenerating it.
@@ -728,6 +740,12 @@ FACTS: dict[str, dict] = {
             # The COST side (§69) reads this fact's own verdict reader to place a handset's cost on
             # the activating store. One reconciliation, two readers, never two derivations.
             'app/modules/account/device_cogs.py': ('_drr',),
+            # The DRILL-DOWN (§CORE-17.3p) reads this fact's own VERDICTS and REASON KEYS so its two
+            # unpaid buckets count exactly the devices the recon reached those verdicts about, and a
+            # device shown without a figure names the absence in the producer's own vocabulary. It
+            # forms no opinion of its own about any device: it declares which column each figure was
+            # read out of and which relation held it.
+            'app/modules/commcalc/device_financing_drilldown.py': ('_drr',),
         },
     },
     'device_cost_store': {
@@ -1286,6 +1304,15 @@ FACTS: dict[str, dict] = {
             # dereferenced from the targets family, the other two are named once here, the same
             # posture `targets_drilldown` takes.
             'app/modules/commcalc/accessory_money_drilldown.py': ('_lineage',),
+            # The device-financing drill-down asks the registry which relation the distributor's
+            # INVOICE feed is (`DISTRIBUTOR_INVOICES`, added by batch 16 — this file held no literal
+            # copy of it, so there was nothing to re-key), which one its UNIT LEDGER is, and which
+            # one the carrier's PER-LINE feed is. Those last two are what separate its two device
+            # grains, so a copied name there would be a provenance claim nothing checks. The weekly
+            # lending batches are dereferenced from the device-asset family, which named them once
+            # already, and the sales provenance is not a constant at all: it is resolved off the
+            # read's own meta through `processor_money_drilldown.sales_union_tables` (§CORE-17.3p).
+            'app/modules/commcalc/device_financing_drilldown.py': ('_lineage',),
             # THE SAME FACT, ONE LAYER DOWN. `raw_catalog` was spelled as a LITERAL four times
             # inside this registry — the ingest list, the no-month reason, the snapshot set and the
             # cadence note — and the drill-down above would have made it a fifth copy. Re-keyed

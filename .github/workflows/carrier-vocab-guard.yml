@@ -338,6 +338,24 @@ on:
       - "frontend/src/app/(platform)/commcalc/accessory-flags/page.tsx"
       - "frontend/src/app/(platform)/commcalc/processor-ledger/page.tsx"
       - "frontend/src/app/(platform)/closing/external-credit-recon/page.tsx"
+      # CORE-17.3p - the four device-financing reports: one declaration, three catalogues plus a
+      # FOURTH grain reused from the device-asset family rather than re-declared; six measured grains
+      # over four row shapes and five provenance answers (the distributor invoice feed, its unit
+      # ledger, the carrier's per-line feed, the weekly lending batches, and the sales display union
+      # resolved off the read's own meta). Two of those grains are the SAME device row in the SAME
+      # unit separated only by which relation answered. The CORE-17.3o call is made four ways: three
+      # pages print the server's fold and are NOT narrowed, the financing report folds its own tiles
+      # and IS - both directions locked, each with a non-vacuous witness.
+      - "backend/harness_batch16_drilldown.py"
+      - "backend/app/modules/commcalc/device_financing_drilldown.py"
+      - "backend/app/modules/commcalc/device_reimb_recon.py"
+      - "backend/app/modules/commcalc/financing_report.py"
+      - "backend/app/modules/commcalc/vip_invoice_filter.py"
+      - "backend/app/modules/asset/device_asset_drilldown.py"
+      - "frontend/src/app/(platform)/commcalc/vip/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/vip/paygo/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/device-line-reimbursement/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/financing/page.tsx"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
       # index §4e — the P&L drill path: company → market → store → line (owner report 2026-10-07)
       - "frontend/prove_pl_drill_path.mjs"
@@ -1496,6 +1514,9 @@ jobs:
       - name: Run the batch-15 drill lock (the three accessory money reports - the family's grain count is MEASURED, and the figure the owner is about to write onto 29 stores was read out of NOTHING - a share of a company goal is derived on the load and stored nowhere, so every row of it reports a stated untraceable origin; an unset accessory target is shown as unset rather than as a target of zero, and the extension computed against it is COUNTED BUT NOT TRUSTED, because the producer really did add that figure; the two goal-dependent panels are not served at all until a goal is entered (CORE-17.3m); Option A names the product catalogue and says that its total is part corrected pay and part today's pay, while the Option-A difference gets no panel because the page subtracts it at the total (CORE-17.3k); A PANEL EXPLAINS THE FIGURE, NOT THE TABLE - drill-narrow is absent from all three pages and the lock fails the build if it appears, because these tiles are the server's fold while the tables are filtered in the browser - index CORE-17.3o)
         working-directory: backend
         run: python3 harness_batch15_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-16 drill lock (the four device-financing reports - the family's grain count is MEASURED, and two of its six grains are the SAME device row in the SAME unit separated only by WHICH RELATION ANSWERED: what the distributor CLAIMED against what the carrier PAID, which is the dispute the report exists to settle, so the two are never pooled into one panel; a device the carrier's feed never named carries NO figure and names NO table rather than a $0.00 somebody could mistake for a measurement, and with no device-financing routing declared the paid panels are not served at all; the FOURTH grain was already declared by the device-asset family and is REUSED by identity, because the defect was that the PayGo page threw away a panel its own endpoint had been serving since batch 12; a total ADDED at the total gets no panel while the five buckets it is composed of each drill (CORE-17.3k); A PANEL EXPLAINS THE FIGURE, NOT THE TABLE decided four ways in one batch - three pages print the server's fold and drill-narrow is absent from all three, the financing report folds its own tiles and reads each off its narrowed panel, and the lock fails the build in BOTH directions - index CORE-17.3p)
+        working-directory: backend
+        run: python3 harness_batch16_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

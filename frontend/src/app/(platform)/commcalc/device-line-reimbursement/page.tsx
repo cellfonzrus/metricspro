@@ -5,6 +5,10 @@ import { api, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import { MultiSelect } from '@/lib/multiselect'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
 
 // EQUIPMENT REIMBURSEMENT PER LINE — owner ask 2026-10-09: *"i was checking the p&l for 652 , the
 // equipment rebate is almost 5000 less than the equipment reimbursement, we need to check what is
@@ -24,6 +28,33 @@ function thisMonth() { return new Date().toISOString().slice(0, 7) }
 function money(v: number | null | undefined): string {
   return v === null || v === undefined ? '—' : fmt(v)
 }
+
+// WHERE EACH TILE'S FIGURE CAME FROM (index §CORE-17.3p, batch 16). TWO GRAINS on one device row,
+// separated only by PROVENANCE (§CORE-17.3n): the CLAIM legs — what the distributor claims, what the
+// device cost, what the store charged, and the two unpaid buckets — are read out of the distributor's
+// unit ledger, while the two PAID legs are read out of the carrier's own per-line feed. Pooling them
+// would make the panel evidence for neither side of the dispute the report exists to settle.
+// Declaration: commcalc/device_financing_drilldown.py, folded once by core/report_drilldown.
+//
+// `lib/drill-narrow` is DELIBERATELY NOT WIRED HERE and harness_batch16_drilldown.py §E fails the
+// build if it appears. The VERDICT picker below filters the table IN THE BROWSER while every tile is
+// the server's own fold over the whole month, so narrowing these panels would make each tile read a
+// different number under a filter — a figure moved. That disagreement is a REPORTED defect, stated
+// on the panels themselves, not papered over by re-folding one of the two.
+//
+// THE COUNTS GET NO LINK: the verdict picker already prints each one and the table below IS the list.
+// Neither does the unidentified-carrier-money banner — that money is reported precisely BECAUSE it
+// could not be placed on a device, so at this grain it has no rows.
+const DEVICE_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Verdict', get: (r: DrillRow) => String(r.fields?.['verdict'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['verdict'] ?? '') },
+  { header: 'Sold by', get: (r: DrillRow) => String(r.fields?.['sold by'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['sold by'] ?? '') },
+  { header: 'Claimed', get: (r: DrillRow) => money(r.fields?.['claimed'] as number | null),
+    sortValue: (r: DrillRow) => Number(r.fields?.['claimed'] ?? 0) },
+  { header: 'Paid here', get: (r: DrillRow) => money(r.fields?.['paid here'] as number | null),
+    sortValue: (r: DrillRow) => Number(r.fields?.['paid here'] ?? 0) },
+]
 
 const STATUS_STYLE: Record<string, { bg: string; fg: string; icon: string; title: string }> = {
   paid: { bg: 'var(--surface2)', fg: 'var(--text2)', icon: '✓', title: 'Paid to this store' },
@@ -45,6 +76,12 @@ export default function DeviceLineReimbursementPage() {
   const [statuses, setStatuses] = useState<string[]>(transferredView ? ['paid_to_other_store'] : [])
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  // THE OFFER RULE, ONE HOME: the tile IS the `totals` entry its panel was folded against, and the
+  // drill is offered only where the two agree to the cent (lib/drill-narrow, never a local copy).
+  // The panels are read THROUGH `data?.totals` rather than off a local `data?.totals || {}` — a
+  // fresh object every render is a dependency the lint ratchet is right to object to.
+  const panels: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(panels, (k, p) => agreesToTheCent(p, data?.totals?.[k]))
 
   const load = useCallback(() => {
     setLoading(true)
@@ -84,11 +121,14 @@ export default function DeviceLineReimbursementPage() {
     { header: 'Why not measured', get: r => r.reason_label || '' },
   ]), [])
 
-  const Tile = ({ label, value, sub, warn }: { label: string; value: string; sub?: string; warn?: boolean }) => (
+  const Tile = ({ label, value, sub, warn, drills }: { label: string; value: string; sub?: string; warn?: boolean; drills?: string[][] }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 190 }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? 'var(--c-fg-991b1b)' : 'var(--text1)' }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+      {/* A tile carrying TWO figures offers both: "which devices is this?" is a different question
+          for the claim and for the cost, even though one card prints them together. */}
+      <DrillTileLinks drills={drill.dl(...(drills || []).flat())} open={drill.open} onToggle={drill.toggle} />
     </div>
   )
 
@@ -151,19 +191,30 @@ export default function DeviceLineReimbursementPage() {
       {!loading && !data?.error && allRows.length > 0 &&
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <Tile label="Reimbursement claimed" value={fmt(totals.distributor_claimed || 0)}
-                sub={`${(totals.devices || 0).toLocaleString()} devices · cost ${fmt(totals.device_cost || 0)}`} />
+                sub={`${(totals.devices || 0).toLocaleString()} devices · cost ${fmt(totals.device_cost || 0)}`}
+                drills={[['distributor_claimed', 'devices behind the claim'], ['device_cost', 'devices behind the cost']]} />
           <Tile label="Carrier paid this store" value={fmt(totals.carrier_paid_here || 0)}
-                sub={`${(counts.paid || 0).toLocaleString()} devices`} />
+                sub={`${(counts.paid || 0).toLocaleString()} devices`}
+                drills={[['carrier_paid_here', 'devices behind this']]} />
           <Tile label="Paid to a DIFFERENT store" value={fmt(totals.carrier_paid_other_total || 0)}
                 sub={`${(counts.paid_to_other_store || 0).toLocaleString()} devices — this store carries the cost`}
-                warn={!!totals.carrier_paid_other_total} />
+                warn={!!totals.carrier_paid_other_total}
+                drills={[['carrier_paid_other_total', 'devices behind this']]} />
           <Tile label="Not paid anywhere" value={fmt(totals.not_paid_total || 0)}
                 sub={`${(counts.not_paid || 0).toLocaleString()} devices, on a complete month`}
-                warn={!!totals.not_paid_total} />
+                warn={!!totals.not_paid_total}
+                drills={[['not_paid_total', 'devices behind this']]} />
           <Tile label="Could not be measured" value={fmt(totals.not_measured_total || 0)}
-                sub={`${(counts.not_measured || 0).toLocaleString()} devices — reason on the row`} />
+                sub={`${(counts.not_measured || 0).toLocaleString()} devices — reason on the row`}
+                drills={[['not_measured_total', 'devices behind this']]} />
           <Tile label="Charged in store" value={fmt(totals.store_device_payment || 0)}
-                sub={`${(totals.store_payment_not_recorded || 0).toLocaleString()} of ${(totals.devices || 0).toLocaleString()} devices record no price`} />
+                sub={`${(totals.store_payment_not_recorded || 0).toLocaleString()} of ${(totals.devices || 0).toLocaleString()} devices record no price`}
+                drills={[['store_device_payment', 'devices behind this']]} />
+        </div>}
+
+      {!loading && !data?.error && drill.panel &&
+        <div style={{ marginBottom: 14 }}>
+          <DrillDownPanel panel={drill.panel} extraColumns={DEVICE_DRILL_COLUMNS} />
         </div>}
 
       {/* Device-financing money the carrier paid with no device on the line — reported so the paid

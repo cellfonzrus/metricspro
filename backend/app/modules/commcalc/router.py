@@ -35,6 +35,7 @@ from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ON
 from app.modules.commcalc import tender_recon_drilldown as _tender_recon_drilldown   # 2026-10-24 — THE X-report-vs-closing tile drill (index §CORE-17.3a; declaration only, pure)
 from app.modules.asset import device_asset_drilldown as _asset_dd   # 2026-10-25 — THE device-asset family's drill declaration (index §CORE-17.3l; declaration only, pure)
 from app.modules.commcalc import targets_drilldown as _targets_dd   # 2026-10-25 — THE targets family's drill declaration (index §CORE-17.3m; declaration only, pure)
+from app.modules.commcalc import device_financing_drilldown as _dfdd   # 2026-10-26 — THE device-financing family's drill declaration (index §CORE-17.3p; declaration only, pure)
 from app.modules.commcalc import month_focus as _mfocus   # 2026-10-09 — the month's declared focus and the weekly check-in (index §63)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
@@ -3209,7 +3210,14 @@ async def vip_summary(org_id: str = ORG_ID, period: str = "", location: str = ""
         sb(), org_id, period=period, location=location, status=status,
         date_from=date_from, date_to=date_to, stores=stores, markets=markets,
         cols=_vip_filter.SUMMARY_COLS)
-    return _vip_filter.summarize(kept, unresolved)
+    out = _vip_filter.summarize(kept, unresolved)
+    # WHERE EACH OF THESE FIGURES CAME FROM (§CORE-17.3p). Attached OVER the producer's own output,
+    # which is handed to the declaration unchanged: every panel's figure is one of `totals`' own
+    # entries, so a panel cannot be a second opinion about the tile above it. "Fees (all types)" gets
+    # none — the producer adds the five buckets at the TOTAL and folds no per-store figure for it, so
+    # there are no rows to open (§CORE-17.3k) and the five that DO drill are offered instead.
+    out["drilldown"] = _dfdd.invoice_drilldowns(out)
+    return out
 
 
 @router.get("/vip/invoices")
@@ -11887,7 +11895,14 @@ def device_line_reimbursement(period: str = "", store: str = "", org_id: str = O
     require_org(org_id)
     if not period:
         raise HTTPException(400, "period required")
-    return _device_line_reimb_run(sb(), org_id, period, store)
+    res = _device_line_reimb_run(sb(), org_id, period, store)
+    # WHERE EACH OF THESE FIGURES CAME FROM (§CORE-17.3p). TWO grains on one device row, separated
+    # only by provenance: the CLAIM legs name the distributor's unit ledger and the PAID legs name
+    # the carrier's own per-line feed, with a device that feed never named shown WITHOUT a figure
+    # rather than at a $0.00 somebody could mistake for a measurement. Attached over the producer's
+    # own output, which is handed in unchanged.
+    res["drilldown"] = _dfdd.reimb_drilldowns(res)
+    return res
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -46904,6 +46919,12 @@ def financing_report(period: str, org_id: str = ORG_ID):
     out["vendors_running_on_defaults"] = sum(
         1 for v in vendors if v.get("detection_status") == "inherited_default")
     out["ready"] = True
+    # WHERE THE TWO WHOLE-REPORT FIGURES CAME FROM (§CORE-17.3p). The sales provenance is resolved
+    # off the read's OWN meta through the one home for that question, so the panel names the tables
+    # the display union actually walked for this period rather than the pair it could have. The page
+    # folds these two tiles itself over the rows the reader has filtered to, so it NARROWS these
+    # panels to that same selection and reads each tile off its own narrowed panel (§CORE-17.3d).
+    out["drilldown"] = _dfdd.financing_drilldowns(out)
     return out
 
 

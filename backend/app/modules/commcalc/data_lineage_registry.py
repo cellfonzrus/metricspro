@@ -88,6 +88,15 @@ POS_INVENTORY_SNAPSHOT = "b2b_inventory"
 STORE_BORROWINGS = "store_borrowings"              # one row per inter-store loan (mig 018)
 STORE_BORROWING_PAYMENTS = "store_borrowing_payments"   # its paybacks, by `borrowing_id`
 PAYGO_BATCHES = "vip_paygo_payments"       # one row per weekly distributor lending batch
+#: The distributor's INVOICE feed — one row per invoice raised against the dealer account, landed by
+#: the portal sweep or by the workbook import on `/commcalc/vip`. Named here because the
+#: device-financing drill-downs have to say which relation an invoice figure was read out of
+#: (§CORE-17.3p, batch 16), and a declaration restating the name at the call site is the copied fact
+#: this registry exists to prevent. Like the four constants above it is a NAME constant and not an
+#: entry in `INGEST_TABLES_BY_MODULE`: this file held NO literal copy of it before, so there is
+#: nothing here to re-key — the `.table(...)` reads that address it are PostgREST call sites, the
+#: same posture `ASSET_LEDGER` keeps for its own 74.
+DISTRIBUTOR_INVOICES = "vip_invoices"      # one row per distributor invoice (sweep / workbook)
 
 
 # ── WHICH TABLE A BILL-PAYMENT PROCESSOR'S FEED LANDS IN ───────────────────────────────────────

@@ -3227,6 +3227,386 @@
       },
       "untraceable_origins": 0
     },
+    "financing.amount": {
+      "capped": false,
+      "figure": {
+        "amount": 1550.0,
+        "label": "Financed amount",
+        "unit": "money"
+      },
+      "note": "One row per store and salesperson for each financing vendor, as the detail tab lists them — the vendor is deliberately not named in this panel, because the page relabels vendors under a dual-carrier lens and this panel is not behind that lens. Each figure is the Ext Price of the financed device line, which is a LABELLED STAND-IN: the export's own financed-amount column is not stored, so this is the price of the thing financed rather than the amount financed. These rows are the selection you are viewing.",
+      "rows": [
+        {
+          "amount": 800.0,
+          "fields": {
+            "first": "2026-09-02",
+            "last": "2026-09-11",
+            "market": "LI",
+            "transactions": 2
+          },
+          "in_figure": true,
+          "label": "1 Main St · Abid",
+          "measured": true,
+          "origins": [
+            {
+              "column": "ext_price",
+              "keys": {
+                "rep": "Abid",
+                "store_code": "s1",
+                "vendor_key": "plan-a"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            },
+            {
+              "column": "ext_price",
+              "keys": {
+                "rep": "Abid",
+                "store_code": "s1",
+                "vendor_key": "plan-a"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_sales",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "rep": "Abid",
+            "store_code": "s1",
+            "vendor_key": "plan-a"
+          },
+          "sources": [
+            "daily_sales_feed",
+            "raw_sales"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 300.0,
+          "fields": {
+            "first": "2026-09-05",
+            "last": "2026-09-05",
+            "market": "NJ",
+            "transactions": 1
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave · Sam",
+          "measured": true,
+          "origins": [
+            {
+              "column": "ext_price",
+              "keys": {
+                "rep": "Sam",
+                "store_code": "s2",
+                "vendor_key": "plan-a"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            },
+            {
+              "column": "ext_price",
+              "keys": {
+                "rep": "Sam",
+                "store_code": "s2",
+                "vendor_key": "plan-a"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_sales",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "rep": "Sam",
+            "store_code": "s2",
+            "vendor_key": "plan-a"
+          },
+          "sources": [
+            "daily_sales_feed",
+            "raw_sales"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 450.0,
+          "fields": {
+            "first": "2026-09-09",
+            "last": "2026-09-09",
+            "market": "LI",
+            "transactions": 1
+          },
+          "in_figure": true,
+          "label": "1 Main St · Abid",
+          "measured": true,
+          "origins": [
+            {
+              "column": "ext_price",
+              "keys": {
+                "rep": "Abid",
+                "store_code": "s1",
+                "vendor_key": "plan-b"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            },
+            {
+              "column": "ext_price",
+              "keys": {
+                "rep": "Abid",
+                "store_code": "s1",
+                "vendor_key": "plan-b"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_sales",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "rep": "Abid",
+            "store_code": "s1",
+            "vendor_key": "plan-b"
+          },
+          "sources": [
+            "daily_sales_feed",
+            "raw_sales"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_sales_feed"
+        },
+        {
+          "rows": 3,
+          "table": "raw_sales"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 3,
+        "difference": 0.0,
+        "figure": 1550.0,
+        "rows_total": 1550.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 3 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
+    "financing.units": {
+      "capped": false,
+      "figure": {
+        "amount": 4.0,
+        "label": "Financed units",
+        "unit": "count"
+      },
+      "note": "One row per store and salesperson for each financing vendor. Each figure counts DEVICES, not receipt lines, collapsed by the same rule the payout uses — so this count and the count that pays agree by construction. These rows are the selection you are viewing.",
+      "rows": [
+        {
+          "amount": 2.0,
+          "fields": {
+            "first": "2026-09-02",
+            "last": "2026-09-11",
+            "market": "LI",
+            "transactions": 2
+          },
+          "in_figure": true,
+          "label": "1 Main St · Abid",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "rep": "Abid",
+                "store_code": "s1",
+                "vendor_key": "plan-a"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "rep": "Abid",
+                "store_code": "s1",
+                "vendor_key": "plan-a"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_sales",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "rep": "Abid",
+            "store_code": "s1",
+            "vendor_key": "plan-a"
+          },
+          "sources": [
+            "daily_sales_feed",
+            "raw_sales"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 1.0,
+          "fields": {
+            "first": "2026-09-05",
+            "last": "2026-09-05",
+            "market": "NJ",
+            "transactions": 1
+          },
+          "in_figure": true,
+          "label": "2 Oak Ave · Sam",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "rep": "Sam",
+                "store_code": "s2",
+                "vendor_key": "plan-a"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "rep": "Sam",
+                "store_code": "s2",
+                "vendor_key": "plan-a"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_sales",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "rep": "Sam",
+            "store_code": "s2",
+            "vendor_key": "plan-a"
+          },
+          "sources": [
+            "daily_sales_feed",
+            "raw_sales"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 1.0,
+          "fields": {
+            "first": "2026-09-09",
+            "last": "2026-09-09",
+            "market": "LI",
+            "transactions": 1
+          },
+          "in_figure": true,
+          "label": "1 Main St · Abid",
+          "measured": true,
+          "origins": [
+            {
+              "column": null,
+              "keys": {
+                "rep": "Abid",
+                "store_code": "s1",
+                "vendor_key": "plan-b"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "daily_sales_feed",
+              "traceable": true
+            },
+            {
+              "column": null,
+              "keys": {
+                "rep": "Abid",
+                "store_code": "s1",
+                "vendor_key": "plan-b"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "raw_sales",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "rep": "Abid",
+            "store_code": "s1",
+            "vendor_key": "plan-b"
+          },
+          "sources": [
+            "daily_sales_feed",
+            "raw_sales"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 3,
+      "rows_total_count": 3,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 3,
+          "table": "daily_sales_feed"
+        },
+        {
+          "rows": 3,
+          "table": "raw_sales"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 3,
+        "difference": 0.0,
+        "figure": 4.0,
+        "rows_total": 4.0,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 3 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
     "tender.card_variance": {
       "capped": false,
       "figure": {
