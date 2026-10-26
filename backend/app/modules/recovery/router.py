@@ -99,24 +99,32 @@ def rebuild(org_id: str = ORG_ID):
 @router.get("/ledger")
 def ledger(status: str = "", org_id: str = ORG_ID):
     """The recovery ledger + bucket totals. Optional ?status= filters the returned rows; buckets always
-    reflect ALL statuses. Recoverable/expired rows carry a carrier-facing rebuttal."""
+    reflect ALL statuses. Recoverable/expired rows carry a carrier-facing rebuttal.
+
+    DRILL-DOWN §CORE-17.3s: the four bucket figures open to the DEVICES behind them — two grains on
+    one stored snapshot row (dollars and devices), each figure counting only its own bucket and
+    SHOWING the other three. The panels are folded over the WHOLE ledger, which is the population
+    those four figures are, and deliberately not the one bucket `?status=` narrows the table to: a
+    panel over the filtered rows would explain a figure three quarters smaller. Those are the same
+    rows this endpoint serves the moment the reader clicks the tile, and it applies no scope narrower
+    than the organisation, so the panel discloses nothing the report does not (§CORE-17.3s defect 11).
+    Declaration `commcalc/carrier_owed_drilldown.py`; the bucket fold itself now lives in
+    `engine.bucket_totals` so the figure and its evidence have ONE home."""
     client = sb()
     rows_all = (client.schema("commcalc").table("appeal_recovery").select("*")
                 .eq("org_id", org_id).limit(20000).execute().data) or []
-    buckets = {}
-    for r in rows_all:
-        b = buckets.setdefault(r.get("status") or "unknown", {"count": 0, "owed": 0.0})
-        b["count"] += 1
-        b["owed"] += engine._safe_float(r.get("owed_amount"))
-    for k in buckets:
-        buckets[k]["owed"] = round(buckets[k]["owed"], 2)
+    buckets = engine.bucket_totals(rows_all)
     rows = [r for r in rows_all if (not status or r.get("status") == status)]
     rows.sort(key=lambda r: -engine._safe_float(r.get("owed_amount")))
     for r in rows:
         if r.get("status") in ("recoverable", "expired"):
             r["rebuttal"] = engine.rebuttal_for(r)
+    from app.modules.commcalc import carrier_owed_drilldown as _cod
     return {"rows": rows[:2000], "buckets": buckets,
-            "recoverable_amount": buckets.get("recoverable", {}).get("owed", 0.0)}
+            "recoverable_amount": buckets.get("recoverable", {}).get("owed", 0.0),
+            # READ-ONLY, and attached last: the panels are folded over `rows_all` — the population
+            # the four bucket figures are Σ over — never over the status-filtered, capped slice above.
+            "drilldown": _cod.recovery_drilldowns({"rows": rows_all, "buckets": buckets})}
 
 
 def _generate_claim(client, org_id, cfg, today):

@@ -3,13 +3,47 @@ import { useState, useEffect, useCallback, Fragment } from 'react'
 import { api } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import { setupFailed } from '@/lib/setupNotice'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
 
 // Denied-Appeal Commission Recovery. A denied appeal is RECOVERABLE when the line paid/activated after
 // the denial → claim the commission back from the carrier (within the claw-back window). Rebuild the
 // ledger, review the buckets, and roll recoverable devices into a weekly claim with rebuttals.
+// WHERE EACH TILE CAME FROM (index CORE-17.3s). Declaration:
+// commcalc/carrier_owed_drilldown.recovery_drilldowns, folded over the SAME appeal-ledger rows the
+// buckets were folded from. EVERY TILE HERE CARRIES TWO FIGURES — a device COUNT and a dollar
+// amount — so it offers TWO panels: one row shape and one provenance separated only by UNIT
+// (CORE-17.3l). Each row names the appeal ledger plus whichever evidence relation the row itself
+// cites for the payment it disputes; a row whose evidence source the registry does not know names
+// nothing rather than putting an identifier on an owner's screen.
+//
+// THE BUCKET FOLD WAS MOVED out of the router into recovery.engine.bucket_totals so that the figure
+// and its explanation read the same code — one fact, one home, dereferenced rather than copied.
+//
+// NOT NARROWED, AND THE LOCK FAILS THE BUILD IF `narrowPanel` APPEARS HERE
+// (harness_batch19_drilldown.py section F). The bucket figures are the server's own over EVERY row,
+// while the table below is a status query parameter the server re-folds — so each panel follows its
+// tile by construction. REPORTED, NOT FIXED: the endpoint returns its row list capped at 2000 with
+// no flag saying it truncated, so a large period's TABLE is short while its tiles are whole. The
+// panels are fed the UNCAPPED row set the buckets came from, which is what makes the tie-out real
+// and leaves the silent cap visible instead of hiding it behind a short panel.
 const TONE: Record<string, string> = {
   recoverable: 'badge-green', expired: 'badge-red', not_recoverable: 'badge-slate', needs_data: 'badge-amber',
 }
+const REC_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Denied', get: (r: DrillRow) => String(r.fields?.['denied'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['denied'] ?? '') },
+  { header: 'Why it was denied',
+    get: (r: DrillRow) => String(r.fields?.['why it was denied'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['why it was denied'] ?? '') },
+  { header: 'What proved it', get: (r: DrillRow) => String(r.fields?.['proof'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['proof'] ?? '') },
+  { header: 'Proof dated', get: (r: DrillRow) => String(r.fields?.['proof dated'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['proof dated'] ?? '') },
+]
+
 const money = (n: any) => '$' + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 export default function RecoveryPage() {
@@ -77,6 +111,15 @@ export default function RecoveryPage() {
   ]
 
   const b = data?.buckets || {}
+  // THE OFFER RULE, ONE HOME: offered only where the server's panel agrees with the tile to the
+  // cent, through the shared gate. A bucket nothing landed in is served NO panel by the declaration
+  // — a $0.00 over zero counted rows ties against nothing and would read as measured.
+  const recPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const recDrill = useDrillTile(recPanels, (k, panel) => {
+    const [kind, bucket] = k.split('.')
+    const bk = (data?.buckets || {})[bucket]
+    return agreesToTheCent(panel, kind === 'owed' ? bk?.owed : bk?.count)
+  })
   const tiles = [
     { k: 'recoverable', label: 'Recoverable', sub: money(b.recoverable?.owed) },
     { k: 'expired', label: 'Expired (missed window)', sub: money(b.expired?.owed) },
@@ -155,6 +198,17 @@ export default function RecoveryPage() {
           </button>
         ))}
       </div>
+      {/* The drill links sit OUTSIDE each tile: the tile is itself a button that sets the status
+          filter, and a button inside a button is not valid markup. Two keys per bucket, because the
+          tile prints two figures. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 8 }}>
+        {tiles.map(t => (
+          <DrillTileLinks key={t.k}
+            drills={recDrill.dl(`devices.${t.k}`, 'devices behind this', `owed.${t.k}`, 'the dollars behind this')}
+            open={recDrill.open} onToggle={recDrill.toggle} />
+        ))}
+      </div>
+      {recDrill.panel && <DrillDownPanel panel={recDrill.panel} extraColumns={REC_DRILL_COLUMNS} />}
 
       <div style={card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>

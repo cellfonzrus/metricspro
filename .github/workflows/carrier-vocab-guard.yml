@@ -398,6 +398,43 @@ on:
       # of those three contains reduce( twice inside its dry-run digest preview, so the lock
       # asserts the narrowed page's fold by its ACTUAL TEXT rather than by the word.
       - "backend/harness_batch18_drilldown.py"
+      # BATCH 19 (index CORE-17.3s) - what the carrier OWES against what it PAID, and what is being
+      # clawed back or is missing. ONE declaration for four reports that answer that from four
+      # angles, with NINE grains in FOUR row shapes, all four producers driven FOR REAL in the
+      # harness and the grain count MEASURED off them as a SET rather than counted. EARNED and
+      # EXPECTED are two grains on ONE installment-month row separated only by PROVENANCE
+      # (CORE-17.3n) - what the carrier PROVED against what the ladder DECLARES - and each earned
+      # row names the relation the producer's own gate stamped onto it rather than one on a guess.
+      # Expected-not-yet-earned DRILLS because the subtraction is done PER MONTH on the row, while
+      # the comparison's Agree and Attributed get NO panel because theirs is taken at the TOTAL and
+      # all four figures they are composed of already drill - including the cells that DIFFER, which
+      # has no tile anywhere on that page and is offered as a link (CORE-17.3k). A month proved by
+      # the sale itself reports a stated countable UNTRACEABLE ORIGIN, because the engine's sale read
+      # does not record which of the two sales relations answered (CORE-17.3i). An account the
+      # airtime feed named but the commission statement carries no line for is SHOWN WITHOUT A
+      # FIGURE in the producer's own words, never as a $0.00 somebody could mistake for a
+      # measurement, and a bucket nothing landed in is served NO panel because a zero over zero
+      # counted rows ties against nothing. A recovery bucket's dollars and its devices are ONE row
+      # and ONE provenance separated only by UNIT (CORE-17.3l). The bucket fold MOVED out of the
+      # router into the recovery engine so the figure and its explanation read the same code. The
+      # CORE-17.3o call was made by READING each page - all four print the server's own fold, none
+      # is narrowed, and the lock fails the build in BOTH directions off each page's own text.
+      - "backend/harness_batch19_drilldown.py"
+      - "backend/app/modules/commcalc/carrier_owed_drilldown.py"
+      - "backend/app/modules/commcalc/expected_commission.py"
+      - "backend/app/modules/commcalc/sale_installment_engine.py"
+      - "backend/app/modules/commcalc/dlar_vs_platform.py"
+      - "backend/app/modules/commcalc/data_lineage_registry.py"
+      - "backend/app/modules/recovery/engine.py"
+      - "backend/app/modules/recovery/router.py"
+      - "backend/app/modules/core/report_drilldown.py"
+      - "backend/harness_drilldown_coverage.py"
+      - "backend/harness_drilldown_pending.txt"
+      - "frontend/src/lib/sourceLabels.ts"
+      - "frontend/src/app/(platform)/commcalc/expected-commission/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/ma-commission/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/recovery/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/dlar-vs-platform/page.tsx"
       - "backend/app/modules/commcalc/sales_margin_drilldown.py"
       - "backend/app/modules/commcalc/gp_report.py"
       - "backend/app/modules/commcalc/sales_analyzer.py"
@@ -1576,6 +1613,9 @@ jobs:
       - name: Run the batch-18 drill lock (the four sales-and-margin reports, the family that answers what did we sell and at what margin - the family's grain count is MEASURED off the real producers, which are all four driven for real in this file; NET PROFIT DRILLS because `calc_gp_report` does the subtraction INSIDE its per-store loop and the header is the sum of those rows, while every Change on the Sales Comparison is refused a panel because that one is taken at the TOTAL from two independent window folds and BOTH its sides already drill (CORE-17.3k); the two comparison WINDOWS name their own provenance separately, resolved off each read's OWN meta through the one home for that question, because a different period may have been answered out of different tables (CORE-17.3n); two of the Zero Sales tiles name NO SOURCE AT ALL and say so countably, because nothing landed for this store-day and there is no schedule for this store are ABSENCES rather than rows in a relation (CORE-17.3i); a churn whose sale the archive does not carry is SHOWN WITHOUT A FIGURE with the producer's own reason instead of a fabricated zero, and no figure moved; a count no row carries a number for is served NO PANEL, because a zero over zero counted rows ties against nothing; rep pay names the CALCULATED SNAPSHOT and says the trail stops at the stored run (CORE-17.3j); the NP target gets no panel because this report substitutes a platform default and keeps no flag to tell the two apart (CORE-17.3m); the carrier panels say so in words when part of this period's carrier money was PLACED BY A PLATFORM GUESS, asked of the one allowlist home for it (section 66); A PANEL EXPLAINS THE FIGURE, NOT THE TABLE decided by READING each page - the GP page folds its seven tiles in the browser and reads each off its narrowed panel, the other three print the server's fold and drill-narrow is absent from all three, the lock fails the build in BOTH directions, and one of those three contains reduce( twice inside its dry-run digest preview so the narrowed page's fold is asserted by its ACTUAL TEXT - index CORE-17.3r)
         working-directory: backend
         run: python3 harness_batch18_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-19 drill lock (the carrier-owes-versus-carrier-paid family - what did we expect the carrier to pay, what did it pay, and what is being clawed back or is missing, answered by four reports from four angles with ONE declaration; all four producers are driven FOR REAL in this file and the family's nine grains in four row shapes are MEASURED off the panels as a SET rather than counted, with the two accidents that make nine-for-nine a coincidence stated rather than leaned on; EARNED and EXPECTED are two grains on ONE installment-month row separated only by PROVENANCE - what the carrier PROVED against what the ladder DECLARES - and each earned row names the relation the producer's own gate stamped onto it rather than one on a guess, a distinction the endpoint had been discarding; expected-not-yet-earned DRILLS because the subtraction is done PER MONTH on the row, while the comparison's Agree and Attributed get NO panel because theirs is taken at the TOTAL and all four figures they are composed of already drill, including the cells that DIFFER which has no tile anywhere on that page and is offered as a link (CORE-17.3k); a month proved by the sale itself reports a stated countable UNTRACEABLE ORIGIN because the engine's sale read does not record which of the two sales relations answered (CORE-17.3i); an account the airtime feed named but the commission statement carries no line for is SHOWN WITHOUT A FIGURE in the producer's own words rather than a $0.00 somebody could mistake for a measurement, and a bucket nothing landed in is served NO panel because a zero over zero counted rows ties against nothing; a recovery bucket's dollars and its devices are ONE row and ONE provenance separated only by UNIT (CORE-17.3l); the two carrier activity reports became registry constants and the registry's own five literal copies were re-keyed to them in the same commit, which is the half of a design fix that has been skipped three times here; the bucket fold MOVED out of the router into the recovery engine so the figure and its explanation read the same code; A PANEL EXPLAINS THE FIGURE, NOT THE TABLE decided by READING each page - all four print the server's own fold, none is narrowed, and the lock fails the build in BOTH directions off each page's own text - index CORE-17.3s)
+        working-directory: backend
+        run: python3 harness_batch19_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

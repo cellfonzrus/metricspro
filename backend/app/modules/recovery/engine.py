@@ -179,6 +179,29 @@ def build_recovery_ledger(client, org_id, cfg, today):
     return summary
 
 
+def bucket_totals(rows):
+    """PURE: the recovery ledger's per-bucket {count, owed} — the four figures the report's tiles ARE.
+
+    MOVED HERE, UNCHANGED, SO THE FIGURE AND ITS EVIDENCE HAVE ONE HOME. This fold used to sit inline
+    in `recovery/router.ledger`, where nothing outside the framework could drive it — so the batch-19
+    drill-down (§CORE-17.3s) could only have compared its panels against a SECOND copy of the
+    arithmetic, which is the sibling derivation the index rules forbid. The expression is
+    byte-for-byte what the router ran (`setdefault` on the row's own `status`, `"unknown"` for a row
+    that carries none, `_safe_float` on the owed amount, each bucket rounded to cents at the end),
+    and the router now dereferences this instead of holding it.
+
+    It computes no business figure of its own: it adds up what the last rebuild wrote down.
+    """
+    buckets = {}
+    for r in (rows or []):
+        b = buckets.setdefault((r or {}).get("status") or "unknown", {"count": 0, "owed": 0.0})
+        b["count"] += 1
+        b["owed"] += _safe_float((r or {}).get("owed_amount"))
+    for k in buckets:
+        buckets[k]["owed"] = round(buckets[k]["owed"], 2)
+    return buckets
+
+
 def rebuttal_for(row):
     """The carrier-facing justification for one recoverable device — why the commission is owed."""
     ev = row.get("evidence") or {}

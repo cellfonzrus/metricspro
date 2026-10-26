@@ -183,6 +183,14 @@ UNMEASURED_REASONS = {
                                    "arrive is a floor — a shortfall here may BE the missing day, "
                                    "and calling the device unpaid would be an accusation the feed "
                                    "cannot support",
+    # The one new shape the batch-19 CARRIER-OWED reports brought with them (§CORE-17.3s). A row
+    # that is on a report only because a SECOND feed named the same account, whose figures from the
+    # FIRST feed the producer then initialised at zero, is the absence-is-not-zero defect at account
+    # grain rather than at day grain.
+    "no_commission_rows_for_account": "the commission statement carries no line for this account at "
+                                      "all — it is on this report because the airtime feed named "
+                                      "it, so its commission is unknown rather than zero, and a "
+                                      "$0.00 here would be a number nobody measured",
     "no_dm_in_org_tree": "the org chart does not say which district manager owns this store, so "
                          "this figure cannot be attributed to any of them — it is unattributable "
                          "rather than zero, and assigning the store in the org chart is what puts "

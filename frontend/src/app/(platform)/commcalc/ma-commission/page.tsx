@@ -7,15 +7,45 @@ import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-fi
 import { type EntityOption } from '@/lib/entity-picker-core'
 import { useAuth } from '@/lib/auth-context'
 import { hasDataGrant } from '@/lib/rbac'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
 
 // Total Processor (VidaPay / Total Access) commission report — the MA Commission Details + MA Daily
 // Tx roll-up (mig 083). Sign-flipped: positive = money the dealer RECEIVES. Org-scoped: shows the
 // data uploaded into THIS tenant (Data Imports → MA cards, or the mailbox rules). Read-only.
 
+// WHERE EACH TILE CAME FROM (index CORE-17.3s). Declaration:
+// commcalc/carrier_owed_drilldown.ma_drilldowns, folded over the SAME processor-account rows and the
+// SAME totals this endpoint serves. THREE GRAINS ON ONE ACCOUNT ROW: the statement's money, the
+// same row's activation COUNT (one UNIT apart, CORE-17.3l) and the airtime margin, whose whole
+// trail is the DAILY TRANSACTION feed alone and not the statement (CORE-17.3n).
+//
+// AN ACCOUNT THE AIRTIME FEED NAMED BUT THE COMMISSION STATEMENT CARRIES NO LINE FOR keeps its own
+// panel row, UNMEASURED in the producer's own words: its commission is unknown rather than zero,
+// and a $0.00 there would be a number nobody measured (CORE-17.3i).
+//
+// NOT NARROWED, AND THE LOCK FAILS THE BUILD IF `narrowPanel` APPEARS HERE
+// (harness_batch19_drilldown.py section F). Every filter on this page is a QUERY PARAMETER, so the
+// server folds again and each panel follows its tile by construction. The airtime tile is the one
+// figure the server does NOT narrow by rep, which is why it prints an em-dash under a rep filter —
+// and the offer gate below reads the figure the SCREEN is showing, so no panel is offered for a
+// number the reader cannot see.
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const tile: React.CSSProperties = { flex: 1, minWidth: 150, border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px' }
 const th: React.CSSProperties = { textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }
 const td: React.CSSProperties = { padding: '5px 8px', fontSize: 13 }
+
+const MA_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Processor account', get: (r: DrillRow) => String(r.fields?.['processor account'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['processor account'] ?? '') },
+  { header: 'Store', get: (r: DrillRow) => String(r.fields?.['store'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['store'] ?? '') },
+  { header: 'Activations on the statement',
+    get: (r: DrillRow) => String(r.fields?.['activations on the statement'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['activations on the statement'] ?? 0) },
+]
 
 function currentPeriod() {
   const d = new Date()
@@ -105,6 +135,21 @@ export default function MaCommissionPage() {
              { k: 'Unsplit', v: d.legs?.unsplit || 0 }, { k: 'Total payable', v: d.legs?.total || 0 }] },
   ] : []
 
+  // THE OFFER RULE, ONE HOME: a drill is offered only where the server's panel agrees TO THE CENT
+  // with the figure THIS SCREEN IS SHOWING, through the shared gate. The summary payload is nested,
+  // so each panel key's own tile figure is named here rather than guessed from the key — and
+  // `margin` deliberately resolves to undefined under a rep filter, because that is when the tile
+  // prints an em-dash instead of a number. A panel about a figure the reader cannot see would be a
+  // drill-down explaining nothing.
+  const maPanels: Record<string, DrillPanel> = d?.drilldown || {}
+  const maDrill = useDrillTile(maPanels, (k, panel) => agreesToTheCent(panel, ({
+    total_payable: d?.total_payable,
+    rebates: d?.components?.rebates,
+    spiffs_total: d?.components?.spiffs_total,
+    activations: d?.activations?.total,
+    margin: repFilterActive ? undefined : d?.airtime?.margin,
+  } as Record<string, unknown>)[k]))
+
   return (
     <div style={{ maxWidth: 1020 }}>
       <div style={{ marginBottom: 14 }}>
@@ -145,14 +190,18 @@ export default function MaCommissionPage() {
       {d?.ready && !d.note && <>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
           <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Total payable</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--c-fg-059669)' }}>{fmt(d.total_payable)}</div></div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--c-fg-059669)' }}>{fmt(d.total_payable)}</div>
+            <DrillTileLinks drills={maDrill.dl('total_payable', 'accounts behind this')} open={maDrill.open} onToggle={maDrill.toggle} /></div>
           <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Activations</div>
             <div style={{ fontSize: 22, fontWeight: 800 }}>{d.activations.total}</div>
-            <div style={{ fontSize: 12, color: 'var(--text3)' }}>{d.activations.new} new · {d.activations.add} add · {d.activations.byop} BYOP</div></div>
+            <div style={{ fontSize: 12, color: 'var(--text3)' }}>{d.activations.new} new · {d.activations.add} add · {d.activations.byop} BYOP</div>
+            <DrillTileLinks drills={maDrill.dl('activations', 'accounts behind this')} open={maDrill.open} onToggle={maDrill.toggle} /></div>
           <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Rebates</div>
-            <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(d.components.rebates)}</div></div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(d.components.rebates)}</div>
+            <DrillTileLinks drills={maDrill.dl('rebates', 'accounts behind this')} open={maDrill.open} onToggle={maDrill.toggle} /></div>
           <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Spiffs (M1–M6)</div>
-            <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(d.components.spiffs_total)}</div></div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(d.components.spiffs_total)}</div>
+            <DrillTileLinks drills={maDrill.dl('spiffs_total', 'accounts behind this')} open={maDrill.open} onToggle={maDrill.toggle} /></div>
           <div style={tile}><div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700, textTransform: 'uppercase' }}>Airtime margin</div>
             {repFilterActive ? (<>
               <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text3)' }}>—</div>
@@ -160,8 +209,10 @@ export default function MaCommissionPage() {
             </>) : (<>
               <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(d.airtime.margin)}</div>
               <div style={{ fontSize: 12, color: 'var(--text3)' }}>{d.airtime.orders} top-ups · {fmt(d.airtime.retail)} retail</div>
+              <DrillTileLinks drills={maDrill.dl('margin', 'accounts behind this')} open={maDrill.open} onToggle={maDrill.toggle} />
             </>)}</div>
         </div>
+        {maDrill.panel && <DrillDownPanel panel={maDrill.panel} extraColumns={MA_DRILL_COLUMNS} />}
 
         {/* COMMISSION LEGS (owner 2026-08-04) — the SAME total_payable above, split into the leg of
             the activation's life it belongs to. Identical rules and identical wording as the Gross

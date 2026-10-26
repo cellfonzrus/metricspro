@@ -43,7 +43,7 @@ STATES = ("shared", "own", "flat", "not_report", "owes")
 #: THE RATCHET. The count of report routes that still owe a drill-down, measured 2026-10-24 by the
 #: three-way audit. IT MAY ONLY GO DOWN. Lower it in the same PR that builds one; a change that
 #: RAISES it is a report shipped without evidence, which is what this file exists to refuse.
-OWES_MAX = 41
+OWES_MAX = 37
 
 #: Routes whose page file lives somewhere the path rule below does not reach, or which are rendered
 #: by a shared component rather than their own page. Named rather than skipped silently.

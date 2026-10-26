@@ -60,6 +60,11 @@ const SOURCE_LABEL: Record<string, string> = {
   shifts: 'the schedule',
   clock_variance_correction: 'recorded clock corrections',
   clock_feed_login_link: 'approved clock-report logins',
+  // What the carrier OWES against what it PAID (§CORE-17.3s). A reader sees what each record is for
+  // — an appeal, a ladder, an approval — never the table it sits in.
+  appeal_recovery: 'denied appeal recovery ledger',
+  plan_installment_schedule: 'multi-month installment ladder',
+  installment_promote: 'approved expected-to-earned moves',
   // The finance statements and the liabilities composition (§CORE-17.3j). An owner reads "the
   // computed financial statements", never the table the snapshot sits in.
   account_statements: 'computed financial statements',
