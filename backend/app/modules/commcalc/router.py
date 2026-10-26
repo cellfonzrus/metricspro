@@ -2713,10 +2713,18 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
     if _meta.get('truncated'):
         note = ((note + " ") if note else "") + ("The range spans more than 24 months; only the most "
                                                  "recent 24 were read.")
-    return {'period': period, 'start': s0, 'end': s1, 'window': window,
-            'periods_read': periods_read, 'rows_in_window': in_window,
-            'stores': out, 'markets': all_markets,
-            'totals': agg['totals'],
+    # WHERE EVERY FIGURE ON THIS SCREEN CAME FROM (§CORE-17.3u). The range read's meta is carried so
+    # the panels can NAME the relations this window was answered out of — which that meta could not
+    # say at all until this batch (batch 20's defect 11, fixed in the ONE resolver, see
+    # `_sales_rows_union_txn_range`). The drill-down is attached LAST, over the payload this request
+    # is serving; this endpoint applies NO per-store RBAC scope (reported as defect 1 in
+    # `commcalc/sales_outcome_drilldown`), and a panel discloses exactly what the report already does.
+    from app.modules.commcalc import sales_outcome_drilldown as _sod
+    _payload = {'period': period, 'start': s0, 'end': s1, 'window': window,
+                'periods_read': periods_read, 'rows_in_window': in_window,
+                'stores': out, 'markets': all_markets, 'totals': agg['totals'],
+                'source_meta': {'sales': _meta}}
+    return {**_payload, 'drilldown': _sod.tax_drilldowns(_payload),
             # The store labels this read canonicalized, with their dollars. `suspect` marks a rename
             # whose STREET NUMBER changed — not a spelling variant, so a human should look.
             'store_renames': agg['meta']['renamed'],
@@ -27306,6 +27314,13 @@ def peer_comparison(period: str = "", bands: str = "", markets: str = "", metric
     out["stores"] = opt_stores
     out["markets"] = opt_markets
     out["source_meta"] = {"sales": meta, "rows": len(rows), "cells": len(cells)}
+    # WHERE EVERY FIGURE ON THIS SCREEN CAME FROM (§CORE-17.3u). Attached LAST, over the payload this
+    # request is actually serving — after the RBAC keyset and the market filter above — so a panel can
+    # only ever fold rows the caller was already served. The declaration is pure and takes nothing but
+    # this response; the band best, the band median and every ratio get NO panel, each for a stated
+    # reason in `commcalc/sales_outcome_drilldown`.
+    from app.modules.commcalc import sales_outcome_drilldown as _sod
+    out["drilldown"] = _sod.peer_drilldowns(out)
     out["org_id"] = org_id
     return out
 
@@ -27518,6 +27533,11 @@ def product_mix(period: str = "", markets: str = "", bands: str = "", store: str
     out["store_options"] = opt_stores
     out["markets"] = opt_markets
     out["source_meta"] = {"sales": meta, "rows": len(rows), "cells": len(cells)}
+    # WHERE EVERY FIGURE ON THIS SCREEN CAME FROM (§CORE-17.3u) — attached LAST, after the scope
+    # keyset and the market filter, so a panel folds only rows the caller was already served. The
+    # medians, the shares and the two correlations get NO panel; the figures they divide do.
+    from app.modules.commcalc import sales_outcome_drilldown as _sod
+    out["drilldown"] = _sod.product_mix_drilldowns(out)
     out["org_id"] = org_id
     return out
 
@@ -27699,11 +27719,24 @@ def spiff_impact(period: str = "", spiff: str = "", bands: str = "", markets: st
     # run is not the same as no store being behind" (§59.7's §K6 rule, same posture here).
     out["peer_meta"] = {"ran": bool(peer_out), "error": peer_err,
                         "band_cuts": (peer_out or {}).get("band_cuts")}
+    # WHICH RELATIONS THE BOXES CAME OUT OF — carried, not discarded. The sales read above returns
+    # `(rows, meta)` and this handler bound the meta and never read it, so the one fact saying which
+    # sales relations answered for this period was thrown away every request (§CORE-17.3u, defect 3 —
+    # the same shape batch 20 reported on /atu-opportunity and batch 19 twice before that). Read-only:
+    # nothing on this report moves, and the drill-down below is what needed it.
+    out["source_meta"] = {"sales": (smeta if peer_out else None)}
     out["markets"] = sorted({m for m in ([resolve_market(store_of(r.get("business_address")))
                                           for r in comp_rows] + list(all_markets)) if m})
     out["pl_line"] = pl_line
-    out["source_meta"] = {"comp_rows": len(comp_rows), "pay_types": len(options),
-                          "pl_stores": len(pl_by_store)}
+    out["source_meta"].update({"comp_rows": len(comp_rows), "pay_types": len(options),
+                               "pl_stores": len(pl_by_store)})
+    # WHERE EVERY FIGURE ON THIS SCREEN CAME FROM (§CORE-17.3u) — attached LAST, after the scope
+    # keyset and the market filter. THREE provenances sit on one store row here: the carrier's own
+    # compensation statement, the stored financial statements, and whichever sales relations the
+    # period's union read. Every percentage gets NO panel and the estate profit base gets none either
+    # (it is composed at the total, and understated — see that module's defect 5).
+    from app.modules.commcalc import sales_outcome_drilldown as _sod
+    out["drilldown"] = _sod.spiff_drilldowns(out)
     out["org_id"] = org_id
     return out
 
@@ -30805,6 +30838,17 @@ def _sales_rows_union_txn_range(client, org_id, period, start, end, cols=_SALES_
     meta = {k: sum(int(m.get(k) or 0) for m in metas)
             for k in ('primary_rows', 'other_rows', 'feed_rows', 'raw_rows',
                       'other_only_rows', 'shown_rows', 'primary_trans')}
+    # WHICH RELATIONS THIS RANGE WAS ACTUALLY ANSWERED OUT OF — carried, never summed away. The
+    # comprehension above sums the NUMERIC keys and therefore drops `primary` and `other`, which are
+    # the first two things `processor_money_drilldown.sales_union_tables` reads, so a range read named
+    # NO SOURCE AT ALL however many rows it returned (batch 20 reported this as its defect 11; latent
+    # until now because this function's one caller bound the meta and discarded it). The per-month
+    # metas are already in hand, so they are CARRIED and the ONE home resolves the union over them —
+    # never a second resolver beside it, and never a single carried pair, because two months of one
+    # range may be led by different relations (open month feed-led, closed month raw-led) and one pair
+    # would have named one month's leader for the whole range. Read-only: no figure on any report
+    # changes, and a caller that ignores the key reads exactly as before.
+    meta['per_period'] = metas
     meta['periods_read'] = periods
     meta['truncated'] = len(periods) < len(wanted)
     return rows, meta

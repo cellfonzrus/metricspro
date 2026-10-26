@@ -5,6 +5,37 @@ import { usePeriod } from '@/lib/period-context'
 import { ReportExportBar } from '@/components/ReportExportBar'
 import { MultiSelect } from '@/lib/multiselect'
 import SalesTaxRateLink from '@/components/SalesTaxRateLink'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanel, agreesToTheCent } from '@/lib/drill-narrow'
+
+// WHERE EVERY FIGURE CAME FROM (index §CORE-17.3u). The server serves a panel per measured figure
+// from commcalc/sales_outcome_drilldown.py, folded over the SAME store rows this page prints, plus
+// one per tender bucket and one per store over that store's own DAY rows.
+//
+// THIS PAGE FOLDS ITS OWN TILES IN THE BROWSER, so every panel is NARROWED to the stores its store
+// and market pickers leave on screen (lib/drill-narrow, index §CORE-17.3d) and each tile reads its
+// number off its narrowed panel through the shared `agreesToTheCent` gate — the tile and its
+// evidence are one fold by construction. ONE predicate narrows all three row shapes, because every
+// row of every panel here carries its STORE in its row key. `harness_batch21_drilldown.py` §F fails
+// the build if that stops being true, in both directions.
+//
+// WHAT GETS NO LINK, AND WHY. The effective tax rate is a rate (§CORE-17.3h) and the two figures it
+// divides are the ones that open. NON-TAXABLE SALES has no panel at all: the server takes that
+// company figure as a subtraction between two totals rather than folding it from these rows
+// (§CORE-17.3k), the two it is the difference of both open, and the per-tender non-taxable figures —
+// which the producer does fold per row — open from the tender table below.
+const TAX_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.market ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.market ?? '') },
+  { header: 'Taxable sales', get: (r: DrillRow) => String(r.fields?.['taxable sales'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['taxable sales'] ?? 0) },
+  { header: 'Non-taxable sales', get: (r: DrillRow) => String(r.fields?.['non-taxable sales'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['non-taxable sales'] ?? 0) },
+  { header: 'Return lines', get: (r: DrillRow) => String(r.fields?.['return lines'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['return lines'] ?? 0) },
+]
 
 // Tax Collected — per-store drill-down with a date-range + store multi-select + market multi-select.
 // Tax is sourced from the UNIFIED sales set (raw_sales ∪ daily_sales_feed deduped by trans_id) on the
@@ -91,6 +122,40 @@ export default function TaxCollectedPage() {
   // inputs happen to show mid-edit.
   const rangeLabel = data?.window || (start || end ? `${start || '…'} → ${end || '…'}` : period)
 
+  // THE PANELS, NARROWED TO THE STORES ON SCREEN — matched on the STORE in the row key the server
+  // served with every drill row. The company rows are per store, the tender rows are per store, and
+  // each store's own panel holds its DAY rows: all three carry `store`, so one predicate narrows
+  // every one of them and a day row is never orphaned by a key it does not have.
+  const taxPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const shownStores = new Set(rows.map(r => r.store))
+  const taxNarrowed: Record<string, DrillPanel> = {}
+  Object.keys(taxPanels).forEach(k => {
+    const p = narrowPanel(taxPanels[k], (r: DrillRow) => {
+      const st = String(r.row_key?.store ?? '')
+      return st === '' ? true : shownStores.has(st)
+    })
+    if (p) taxNarrowed[k] = p
+  })
+  // THIS PAGE'S OWN FOLD, per panel key — what the gate compares each panel against. A figure the
+  // page does not fold is not in here and is simply not offered, rather than offered ungated.
+  const folded: Record<string, number> = { tax, revenue, taxable_revenue: taxable }
+  tender.forEach(t => {
+    folded[`tender.${t.key}.sales`] = t.sales
+    folded[`tender.${t.key}.taxable_revenue`] = t.taxable
+    folded[`tender.${t.key}.untaxed_revenue`] = t.untaxed
+    folded[`tender.${t.key}.tax`] = t.tax
+  })
+  rows.forEach(r => { folded[`store.${r.store}.tax`] = r.tax || 0 })
+  // Each tile reads its number off its narrowed panel where the two agree to the cent, through the
+  // SHARED gate, and keeps this page's own fold where they do not. A disagreement costs the drill
+  // link, never the number.
+  const taxTile = (k: string): number => {
+    const n = folded[k] || 0
+    return agreesToTheCent(taxNarrowed[k], n) ? Number(taxNarrowed[k]?.figure?.amount ?? n) : n
+  }
+  const taxDrill = useDrillTile(
+    taxNarrowed, (k, p) => !(k in folded) || agreesToTheCent(p, folded[k] || 0))
+
   // RULE FOUR §3c: export the CURRENTLY-VISIBLE (filtered) rows to Excel/PDF/Print + Send (email/WhatsApp).
   const dayRows = rows.flatMap(s => s.days.map(d => ({ store: s.store, market: s.market, ...d })))
   const exportSheets = [
@@ -175,12 +240,24 @@ export default function TaxCollectedPage() {
           {data?.note && <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 13, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fffbeb)', borderLeft: '3px solid var(--c-bg-f59e0b)' }}>⚠️ {data.note}</div>}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12, marginBottom: 16 }}>
-            <Stat label="Total tax collected" value={fmt(tax)} color="var(--accent)" />
-            <Stat label="Total sales (all)" value={fmt(revenue)} />
-            <Stat label="Taxable sales" value={fmt(taxable)} color="var(--c-fg-16a34a)" />
+            <Stat label="Total tax collected" value={fmt(taxTile('tax'))} color="var(--accent)"
+                  links={<DrillTileLinks drills={taxDrill.dl('tax', 'the stores behind this',
+                    'tax_net', 'net of refunds')} open={taxDrill.open} onToggle={taxDrill.toggle} />} />
+            <Stat label="Total sales (all)" value={fmt(taxTile('revenue'))}
+                  links={<DrillTileLinks drills={taxDrill.dl('revenue', 'the stores behind this')}
+                    open={taxDrill.open} onToggle={taxDrill.toggle} />} />
+            <Stat label="Taxable sales" value={fmt(taxTile('taxable_revenue'))} color="var(--c-fg-16a34a)"
+                  links={<DrillTileLinks drills={taxDrill.dl('taxable_revenue', 'the stores behind this')}
+                    open={taxDrill.open} onToggle={taxDrill.toggle} />} />
+            {/* NO LINK HERE ON PURPOSE: the server takes this company figure as a subtraction
+                between two totals rather than folding it from these rows (§CORE-17.3k), and both
+                totals it is the difference of open from the two tiles beside it. */}
             <Stat label="Non-taxable sales" value={fmt(untaxed)} color="var(--text2)" />
+            {/* A RATE GETS NO PANEL (§CORE-17.3h) — the two figures it divides are the ones that do. */}
             <Stat label="Effective tax rate" value={`${effRate.toFixed(2)}%`} color="var(--c-fg-16a34a)" />
           </div>
+          {!taxDrill.open?.startsWith('store.') && taxDrill.panel &&
+            <DrillDownPanel panel={taxDrill.panel} extraColumns={TAX_DRILL_COLUMNS} />}
           <div style={{ fontSize: 12, color: 'var(--text3)', margin: '-6px 0 16px' }}>
             Rate is tax ÷ <strong>taxable</strong> sales. Taxable + non-taxable = total sales; a line counts
             as taxable when it actually carried tax, so bill payments, set-up fees and the like fall on the
@@ -209,7 +286,14 @@ export default function TaxCollectedPage() {
                       <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(t.sales)}</td>
                       <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(t.taxable)}</td>
                       <td style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--text2)' }}>{fmt(t.untaxed)}</td>
-                      <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>{fmt(t.tax)}</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>
+                        {fmt(t.tax)}
+                        <DrillTileLinks
+                          drills={taxDrill.dl(`tender.${t.key}.tax`, 'the stores behind this',
+                            `tender.${t.key}.sales`, 'its sales',
+                            `tender.${t.key}.untaxed_revenue`, 'its non-taxable sales')}
+                          open={taxDrill.open} onToggle={taxDrill.toggle} />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -242,12 +326,21 @@ export default function TaxCollectedPage() {
                             <span style={{ color: 'var(--text3)', marginRight: 6 }}>{isOpen ? '▾' : '▸'}</span>{r.store}
                           </td>
                           <td style={{ padding: '9px 14px', fontSize: 13, color: 'var(--text2)' }}>{r.market || '—'}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, fontWeight: 700 }}>{fmt(r.tax)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, fontWeight: 700 }}>
+                            {fmt(r.tax)}
+                            <DrillTileLinks drills={taxDrill.dl(`store.${r.store}.tax`, 'the days behind this')}
+                              open={taxDrill.open} onToggle={taxDrill.toggle} />
+                          </td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13 }}>{fmt(r.revenue)}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, color: 'var(--c-fg-16a34a)' }}>{fmt(r.taxable_revenue)}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, color: 'var(--text2)' }}>{fmt(r.untaxed_revenue)}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', fontSize: 13, color: 'var(--text2)' }}>{r.effective_rate}%</td>
                         </tr>
+                        {taxDrill.isOpen(`store.${r.store}.tax`) && taxDrill.panel && (
+                          <tr><td colSpan={7} style={{ padding: '4px 14px 10px' }}>
+                            <DrillDownPanel panel={taxDrill.panel} extraColumns={TAX_DRILL_COLUMNS} />
+                          </td></tr>
+                        )}
                         {isOpen && r.days.map(d => (
                           <tr key={r.store + d.date} style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)' }}>
                             <td style={{ padding: '6px 14px 6px 34px', fontSize: 12, color: 'var(--text2)' }}>{d.date}</td>
@@ -272,9 +365,11 @@ export default function TaxCollectedPage() {
   )
 }
 
-function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
+function Stat({ label, value, color, links }:
+  { label: string; value: string; color?: string; links?: React.ReactNode }) {
   return <div className="card" style={{ padding: '14px 16px' }}>
     <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</div>
     <div style={{ fontSize: 20, fontWeight: 700, marginTop: 4, color: color || 'var(--text1)' }}>{value}</div>
+    {links}
   </div>
 }

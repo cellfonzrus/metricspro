@@ -200,6 +200,16 @@ UNMEASURED_REASONS = {
     "kpi_not_reported": "no value was published for this KPI at this grain, so nothing here can be "
                         "said to be failing it — a metric with no recorded value is reported, "
                         "never counted as a failure against anybody",
+    # The two shapes the batch-21 SALES-OUTCOME reports brought with them (§CORE-17.3u). Both are
+    # the same kind of absence: a COMPARISON the report refused to make, which is not the same as a
+    # comparison it made and the subject passed. Each is the producer's own refusal, read off its
+    # own row rather than re-derived.
+    "no_peer_in_band": "this store is the only one in its traffic band, so there is nobody for it "
+                       "to be behind — being alone in a band is not a result, and a gap invented "
+                       "from a single store would be an accusation with no peer behind it",
+    "below_ranking_floor": "this person sold too few boxes in the window for a per-box rate to "
+                           "mean anything, so the report reaches no verdict about them at all — "
+                           "they are shown without one rather than counted as having passed",
     "no_dm_in_org_tree": "the org chart does not say which district manager owns this store, so "
                          "this figure cannot be attributed to any of them — it is unattributable "
                          "rather than zero, and assigning the store in the org chart is what puts "
@@ -506,6 +516,60 @@ def tile_panel(figure_label, amount, rows, *, value, tables, row_label=None, key
         ))
     return panel(figure_label, amount, out, subject=subject, subject_kind=subject_kind,
                  unit=unit, note=note, cap=cap)
+
+
+def served_tiles(catalogue, rows, totals, cap=None):
+    """PURE: every tile in a catalogue WHOSE FIGURE CAN BE READ AS A MEASUREMENT.
+
+    `tiles` above answers "what is the panel for this figure". This answers the question that comes
+    first — "is this figure one a panel can honestly explain at all" — and it lives HERE, once,
+    because it is a RULE rather than a per-report accessor. It arrived with the batch-20 family and
+    a second declaration needed it immediately (batch 21); two copies of a refusal rule is two
+    chances to get a refusal wrong, which is the sibling-derivation defect the index rules forbid.
+    `commcalc/performance_coaching_drilldown` dereferences this function by identity and holds no
+    copy of it (§CORE-17.3u, and `harness_batch21_drilldown.py` §A locks both halves).
+
+    TWO REFUSALS, AND THEY ARE NOT THE SAME ONE.
+
+    · A FIGURE THE REPORT DID NOT PRODUCE gets nothing: a total key absent from `totals`, or present
+      and None, has no rows behind it and inventing $0.00 would assert one.
+    · A ZERO OVER ROWS NONE OF WHICH WERE COUNTED gets nothing either, and that is the subtle one.
+      Such a panel ties 0 against 0 — True by accident — and would read to the owner as "nothing was
+      there, and here is the proof". A store nobody was clocked at, a period a file names nobody in,
+      a metric nothing is failing: each gets no panel rather than a reassuring tie.
+
+    AND THE OPPOSITE CASE KEEPS ITS PANEL. A figure that is NOT zero over rows none of which were
+    counted is the report asserting a number its own rows cannot account for, so the panel IS served
+    and the tie-out says so in words. Refusing that one would hide the very disagreement the tie-out
+    exists to publish (§CORE-17.3o).
+
+    Returns {} when nothing survives — an empty report drills to nothing.
+    """
+    keep, amounts = [], {}
+    for spec in catalogue or ():
+        total_key = spec.get("total")
+        if total_key not in (totals or {}) or (totals or {}).get(total_key) is None:
+            continue
+        if not _any_counted(rows, spec.get("value"), spec.get("in_figure")) \
+                and money((totals or {}).get(total_key)) == money(0):
+            continue
+        keep.append(spec)
+        amounts[total_key] = (totals or {}).get(total_key)
+    if not keep:
+        return {}
+    return tiles(tuple(keep), rows, amounts, cap=cap or ROW_CAP)
+
+
+def _any_counted(rows, value, in_figure=None):
+    """PURE: would a panel over these rows COUNT any of them? A figure whose every row is shown
+    without a number ties against nothing (0 == 0, True) and would read as a measurement."""
+    read = value if callable(value) else _reader(value)
+    for r in rows or ():
+        if read(r) is None:
+            continue
+        if in_figure is None or in_figure(r):
+            return True
+    return False
 
 
 def tiles(catalogue, rows, totals, *, schema=None, cap=ROW_CAP):

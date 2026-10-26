@@ -67,11 +67,19 @@ line, a label or a dollar.
 no clock, no org / carrier / tenant / product name (RULE TWO).
 Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §CORE-17.3j.
 """
+from app.modules.commcalc import data_lineage_registry as _lineage
 from app.modules.core import report_drilldown
 
 #: THE table both reports read. Every row in every panel here names it, because that is where the
-#: figure was read out of — the endpoints select one `account_statements` row and render its payload.
-SNAPSHOT = "account_statements"
+#: figure was read out of — the endpoints select one stored-statement row and render its payload.
+#:
+#: A REGISTRY NAME AS OF BATCH 21 (§CORE-17.3u), dereferenced by object identity rather than spelled.
+#: This was the only literal copy of that relation's name in any drill-down declaration, and a second
+#: declaration needed the same fact — the spiff report's profit figures are read out of this same
+#: snapshot — so the name moved to its one home instead of being copied (§19.18: writing the registry
+#: without wiring the callers to it is not a fix at all). Value unchanged, no read changed, and
+#: `harness_batch21_drilldown.py` §A fails the build if the literal reappears here.
+SNAPSHOT = _lineage.FINANCIAL_STATEMENTS
 
 #: The schema that table lives in.
 SCHEMA = "commcalc"

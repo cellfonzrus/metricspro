@@ -154,6 +154,26 @@ def sales_union_tables(meta):
     arbitrary identifier on an owner's screen. Nothing resolvable ⇒ `()`, and the panel then reports
     an origin it could not trace."""
     meta = meta if isinstance(meta, dict) else {}
+    # A RANGE READ ANSWERS THROUGH THIS SAME FUNCTION, ONCE PER MONTH IT TOUCHED (added 2026-10-26,
+    # batch 21). `router._sales_rows_union_txn_range` calls the transaction-grain union once per month
+    # and concatenates; its own meta SUMS the numeric keys, which drops `primary` and `other` -- the
+    # first two things this function reads -- so a range read named NO SOURCE AT ALL however many rows
+    # it returned (batch 20 reported this as its defect 11, latent because the one caller discarded
+    # the meta). The range now carries the per-month metas it already had in hand under `per_period`,
+    # and the answer is the UNION of this function's own answers over them. That is why the fix is
+    # here and not a second resolver beside this one: two months of one range may be LED BY DIFFERENT
+    # RELATIONS -- an open month is feed-led and a closed one raw-led -- so a single carried
+    # `primary` / `other` pair would have named one month's leader for the whole range and
+    # under-reported the other's. A day or single-month meta carries no `per_period` at all, so every
+    # existing caller is byte-identical (asserted by `harness_batch21_drilldown.py` §A2b).
+    per_period = meta.get("per_period")
+    if isinstance(per_period, (list, tuple)) and per_period:
+        union = []
+        for m in per_period:
+            for t in sales_union_tables(m):
+                if t not in union:
+                    union.append(t)
+        return tuple(union)
     out = []
     primary = str(meta.get("primary") or "").strip()
     other = str(meta.get("other") or "").strip()

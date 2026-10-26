@@ -3,6 +3,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 import { MultiSelect } from '@/lib/multiselect'
 
 // SPIFF IMPACT — owner ask 2026-10-08: *"create a report for management review to assess the affect of
@@ -15,6 +18,28 @@ import { MultiSelect } from '@/lib/multiselect'
 // per-store P&L, and "behind its traffic band" is the peer comparison's own verdict. This page renders
 // and never computes — in particular it never fills a blank with a 0, because a blank here means
 // "cannot be answered", which the caveats explain, and a 0 would read as a result.
+//
+// WHERE THE MEASURED FIGURES CAME FROM (index §CORE-17.3u). The server serves a panel per measured
+// estate figure from commcalc/sales_outcome_drilldown.py, folded over the SAME per-store rows the
+// table below prints — and the panels do not all come out of one place. The spiff dollars, its paid
+// units, its P&L line total and all carrier dollars are the CARRIER'S OWN COMPENSATION STATEMENT;
+// net profit, revenue and the count of stores with no profit base are the STORED FINANCIAL
+// STATEMENTS, named as the snapshot they are (§CORE-17.3j); the boxes are the sales relations the
+// month's read actually answered out of. Each panel says which, because "where did this come from"
+// has three different answers on this one screen.
+//
+// EVERY TILE ON THIS PAGE PRINTS A RATE, AND A RATE GETS NO PANEL (§CORE-17.3h). So each tile offers
+// the MEASURED FIGURES IT DIVIDES instead: the share of the line opens the line total, the profit
+// lift opens the profit it is a lift of, the percentage of revenue opens the revenue, and the units
+// per 100 boxes opens the boxes. The profit lift is additionally a subtraction composed at the TOTAL
+// (profit with it minus profit without it), which does not drill (§CORE-17.3k) — what opens beneath
+// it is the profit, not the difference.
+//
+// THIS PAGE IS SERVER-FOLDED AND IS DELIBERATELY *NOT* NARROWED. Every filter on it — the month, the
+// pay type, the band cut-offs and the market picker — is a QUERY PARAMETER (see `load` below), so the
+// server folds again on every change and each panel follows its figure by construction. There is no
+// browser fold here and `lib/drill-narrow` must not appear in this file;
+// `harness_batch21_drilldown.py` §F fails the build in BOTH directions if that changes.
 
 const orgParam = () => { const o = getActiveOrg(); return o ? `&org_id=${encodeURIComponent(o)}` : '' }
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -35,6 +60,21 @@ function pct(v: number | null | undefined, digits = 1): string {
   if (v === null || v === undefined) return '—'
   return `${v.toFixed(digits)}%`
 }
+
+// What a store's row carries beside the figure being explained, in the producer's own words. The
+// "stored P&L" column is why a blank profit row cannot be mistaken for a zero one.
+const SPIFF_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.market ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.market ?? '') },
+  { header: 'Traffic band', get: (r: DrillRow) => String(r.fields?.['traffic band'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['traffic band'] ?? '') },
+  { header: 'Paid units', get: (r: DrillRow) => String(r.fields?.['paid units'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['paid units'] ?? 0) },
+  { header: 'Boxes', get: (r: DrillRow) => String(r.fields?.boxes ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.boxes ?? 0) },
+  { header: 'Stored P&L', get: (r: DrillRow) => String(r.fields?.['stored P&L'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['stored P&L'] ?? '') },
+]
 
 const SEV_STYLE: Record<string, { bg: string; fg: string; icon: string }> = {
   different_line: { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)', icon: '⚑' },
@@ -106,11 +146,18 @@ export default function SpiffImpactPage() {
 
   const marketOpts: string[] = data?.markets || []
 
-  const Tile = ({ label, value, sub, warn }: { label: string; value: string; sub?: string; warn?: boolean }) => (
+  // The server's fold, printed as served. The shared offer gate carries NO extra condition: figure
+  // and panel came out of the same fold over the same rows, so a link appears for exactly the
+  // figures a row list exists for — and nothing appears for a figure whose feed never resolved.
+  const spiffPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const spiffDrill = useDrillTile(spiffPanels)
+
+  const Tile = ({ label, value, sub, warn, links }: { label: string; value: string; sub?: string; warn?: boolean; links?: React.ReactNode }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 190 }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? 'var(--c-fg-92400e)' : 'var(--text1)' }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+      {links}
     </div>
   )
 
@@ -182,21 +229,41 @@ export default function SpiffImpactPage() {
       {!loading && !data?.error && rows.length > 0 &&
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <Tile label="This spiff paid" value={fmt(estate.spiff_amount || 0)}
-                sub={`${(estate.spiff_units || 0).toLocaleString()} paid units · ${estate.stores || 0} stores`} />
+                sub={`${(estate.spiff_units || 0).toLocaleString()} paid units · ${estate.stores || 0} stores`}
+                links={<DrillTileLinks
+                  drills={spiffDrill.dl('spiff_amount', 'the dollars per store',
+                                        'spiff_units', 'the paid units')}
+                  open={spiffDrill.open} onToggle={spiffDrill.toggle} />} />
           <Tile label={data?.pl_line === data?.commission_line ? 'Share of commission revenue' : 'Share of its own P&L line'}
                 value={pct(estate.share_of_line_pct, 2)}
                 sub={`of ${fmt(estate.line_total || 0)} on ${data?.pl_line || '—'}`}
-                warn={data?.pl_line !== data?.commission_line} />
+                warn={data?.pl_line !== data?.commission_line}
+                links={<DrillTileLinks
+                  drills={spiffDrill.dl('line_total', 'the line this is a share of',
+                                        'carrier_total', 'everything the carrier paid')}
+                  open={spiffDrill.open} onToggle={spiffDrill.toggle} />} />
           <Tile label="Net profit lift" value={pct(estate.profit_lift_pct, 1)}
                 sub={estate.profit_lift_pct === null
                   ? 'no positive profit base — see below'
                   : `${fmt(estate.net_income || 0)} with it vs ${fmt(estate.net_income_ex_spiff || 0)} without`}
-                warn={estate.profit_lift_pct === null} />
+                warn={estate.profit_lift_pct === null}
+                links={<DrillTileLinks
+                  drills={spiffDrill.dl('net_income', 'the profit this lifts',
+                                        'stores_at_a_loss', 'the stores with no base to lift')}
+                  open={spiffDrill.open} onToggle={spiffDrill.toggle} />} />
           <Tile label="Worth, as % of revenue" value={pct(estate.margin_points, 2)}
-                sub={`of ${fmt(estate.revenue || 0)} revenue`} />
+                sub={`of ${fmt(estate.revenue || 0)} revenue`}
+                links={<DrillTileLinks drills={spiffDrill.dl('revenue', 'the revenue it is measured against')}
+                                       open={spiffDrill.open} onToggle={spiffDrill.toggle} />} />
           <Tile label="Paid units per 100 boxes" value={num(estate.spiff_per_100_boxes, 1)}
-                sub={`${(estate.boxes || 0).toLocaleString()} boxes sold`} />
+                sub={`${(estate.boxes || 0).toLocaleString()} boxes sold`}
+                links={<DrillTileLinks drills={spiffDrill.dl('boxes', 'the boxes behind the rate')}
+                                       open={spiffDrill.open} onToggle={spiffDrill.toggle} />} />
         </div>}
+
+      {/* ONE renderer for whichever measured figure is open, under the tile strip it was opened
+          from. */}
+      {spiffDrill.panel && <DrillDownPanel panel={spiffDrill.panel} extraColumns={SPIFF_DRILL_COLUMNS} />}
 
       {!loading && !data?.error && entry &&
         <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 12 }}>

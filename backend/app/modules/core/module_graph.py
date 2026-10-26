@@ -82,7 +82,8 @@ FACTS: dict[str, dict] = {
                   'harness_batch17_drilldown.py',
                   'harness_batch18_drilldown.py',
                   'harness_batch19_drilldown.py',
-                  'harness_batch20_drilldown.py'),
+                  'harness_batch20_drilldown.py',
+                  'harness_batch21_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -270,6 +271,16 @@ FACTS: dict[str, dict] = {
             # of RATES, so it refuses a lot (§CORE-17.3h) and every refusal names the two figures
             # it offers instead.
             'app/modules/commcalc/performance_coaching_drilldown.py': ('report_drilldown',),
+            # §CORE-17.3u — the four SALES-OUTCOME reports (peer comparison, product mix, spiff
+            # impact, tax collected): one question worked through in sequence over ONE month of the
+            # SAME retail sales lines. ELEVEN grains, three of them on a single spiff store row
+            # separated by PROVENANCE ALONE (§CORE-17.3n), and two row shapes inside the tax report
+            # because a store figure folds store rows while a store's OWN figure folds its days.
+            # It extended the one home ADDITIVELY in that PR with `served_tiles` — 'which figures
+            # can be explained at all' — which batch 20's declaration had been holding a private
+            # copy of and now dereferences by identity. `harness_batch21_drilldown.py` §A3 fails
+            # the build if either stops dereferencing it.
+            'app/modules/commcalc/sales_outcome_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -698,6 +709,12 @@ FACTS: dict[str, dict] = {
             # its endpoint borrows `with_extra_metric` / `peer_items_by_store` for the store plan, so a
             # rep and their store are judged behind by one rule.
             'app/modules/commcalc/product_mix.py': ('_pc',),
+            # §CORE-17.3u — the sales-outcome drill-down reads this home's OWN threshold and its own
+            # default ranked metric (`BAND_MIN_PEERS`, `DEFAULT_GAP_METRIC`) so a panel's NOTE can
+            # say what the report refused and why in the report's own numbers. It compares nothing
+            # against either and re-bands nothing; `harness_batch21_drilldown.py` §A7 fails the
+            # build if it stops dereferencing them.
+            'app/modules/commcalc/sales_outcome_drilldown.py': ('_peer',),
         },
     },
     'device_price_band': {
@@ -716,6 +733,12 @@ FACTS: dict[str, dict] = {
             # description means — `product_class_of` / `product_breakup` beside `model_of`, so a
             # tablet is one thing on the platform. §COMMCALC-03.21.
             'app/modules/commcalc/prospect_eval.py': ('_pm',),
+            # §CORE-17.3u — the sales-outcome drill-down reads this home's own BOX FLOOR and its own
+            # VERDICT WORDS rather than re-testing a rep against two medians: 'low on both signals'
+            # is `VERDICTS[0][0]`, read off the row the producer already judged. The declaration
+            # spells no verdict and holds no floor; `harness_batch21_drilldown.py` §A7/§A8c fail the
+            # build if either becomes a literal there again.
+            'app/modules/commcalc/sales_outcome_drilldown.py': ('_pmix',),
         },
     },
     'kpi_column_meaning': {
@@ -758,6 +781,11 @@ FACTS: dict[str, dict] = {
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         "callers": {
             'app/modules/commcalc/router.py': ('_spiffimp',),
+            # §CORE-17.3u — the sales-outcome drill-down reads this home's own METRIC KEY so the
+            # per-100-box rate it refuses a panel to is named in the producer's own word. THREE
+            # provenances sit on one store row of this report, and the declaration says which of
+            # them answered for each figure rather than pooling them.
+            'app/modules/commcalc/sales_outcome_drilldown.py': ('_spiff',),
         },
     },
     'accessory_target_allocation': {
@@ -1433,6 +1461,19 @@ FACTS: dict[str, dict] = {
             # (`carrier_pay_drilldown.REP_COMMISSIONS` is its one home), and the sales provenance is
             # resolved off the read's own meta through `processor_money_drilldown`.
             'app/modules/commcalc/performance_coaching_drilldown.py': ('_lineage',),
+            # §CORE-17.3u. The STORED FINANCIAL STATEMENTS became a registry constant in that PR —
+            # and `account_statements` was already spelled as a LITERAL in a drill-down declaration
+            # (`account/statement_drilldown`), which is the divergence this registry exists to
+            # prevent. It dereferences the constant now, string-identical value, no read changed:
+            # naming the fact here is half the fix and deleting the copy in the same commit is the
+            # other half, and `harness_batch21_drilldown.py` §A4b/§A5b fail the build if the literal
+            # returns to any declaration or that caller stops dereferencing. The carrier's own
+            # compensation statement is the registry's existing name. The sales provenance is NOT
+            # asked of the registry here: it is resolved off the read's own meta through
+            # `processor_money_drilldown.sales_union_tables`, which that PR extended to answer for a
+            # multi-month RANGE read as well, in the ONE resolver rather than a second beside it.
+            'app/modules/commcalc/sales_outcome_drilldown.py': ('_lineage',),
+            'app/modules/account/statement_drilldown.py': ('_lineage',),
             'app/modules/account/liabilities_drilldown.py': ('_lineage',),
             'app/modules/commcalc/processor_ledger.py': ('_lineage',),
             'app/modules/commcalc/dlar_sweep.py': ('_lineage',),
