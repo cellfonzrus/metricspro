@@ -10310,13 +10310,31 @@ checks, was 49.
 **THE SERIOUS HALF WAS THE SECOND FACT, and it is much larger than one file.** Measured: **400 harnesses on disk, 65
 run by a workflow, 335 run by nothing.** A harness no workflow runs is not a gate, it is a file — the §19.25 class in
 its third direction, beside *a failing harness must fail CI* (§19.25) and *a harness CI runs must be able to import in
-its job* (§19.25b). All three now live in `backend/harness_ci_pipefail_lock.py`. The third is a **RATCHET**, not a hard
+its job* (§19.25b). All three live in `backend/harness_ci_pipefail_lock.py`. The third is a **RATCHET**, not a hard
 gate, because wiring 335 harnesses into CI in one change would multiply the build and is the owner's call, not a
 lock's: `backend/harness_unrun_pending.txt` is the debt list, a NEW harness must be run by some workflow, the list may
 only SHRINK, and a name that becomes run (or stops existing) must be de-registered or the build fails — a debt list
 that does not shrink when the debt is paid stops measuring anything. Same shape as `frontend/table_sort_pending.txt`.
 Pinned at **334**: this change wires `harness_activation_bucketing.py` into `carrier-vocab-guard.yml` (stdlib job —
 its placement checked by the §19.25b rule), so the list shrinks by one on the very change that introduces it.
+
+
+**THE FOURTH DIRECTION, SAME CLASS — A WORKFLOW THAT DOES NOT PARSE RUNS NOTHING (2026-10-26, batch
+16).** A step name was written unquoted with a colon-space inside it (`... WHICH RELATION ANSWERED:
+what ...`). In YAML a plain scalar may not contain `": "`, so **the whole file failed to parse** and
+GitHub ran **zero of `carrier-vocab-guard.yml`'s 38 jobs** — the vocabulary guard, the fifteen batch
+drill locks and the pipefail lock itself, all unenforced — while reporting ONE red check with no job
+under it, which is indistinguishable from a single failing lock and would have been "fixed" by a push
+that changed nothing. Rules one to three judge the STEP; **the fourth judges the FILE**, because a
+gate whose file cannot parse takes every other gate in that file down with it. It lives in
+`harness_ci_pipefail_lock.py` and not in the batch harness that surfaced it for the reason that makes
+it work at all: **ten workflows run this lock**, so a file broken tomorrow is caught by the nine that
+still parse — something a lock living inside the broken file could never do. Stdlib only, so there is
+no YAML parser to lean on: the detector is NARROW and says so, flagging a plain scalar after `name:`
+or `run:` that carries a colon-space, with five negative controls — the exact line that broke the
+build goes RED, a `run:` carrying one goes RED, the QUOTED and BLOCK forms stay green, and a
+colon-space injected into **each** workflow on disk is caught, so the scan is not blind. 47 → **53
+checks**.
 
 **Ratchet 325 → 324, 2026-10-08 (owner: "do it").** `harness_db_resilience.py` is de-registered and now runs in the
 `db-resilience-proof` job of `carrier-vocab-guard.yml` (pip-install job — it imports the app and inspects the installed
@@ -34790,7 +34808,7 @@ the row KEY, where it addresses the row, and no panel label or field names it (�
 house's own carrier-vocabulary posture applied to a drill-down, and it is the first time this
 programme has met it.
 
-**LIVE DEFECTS — ONE FIXED, TEN REPORTED, NO FIGURE MOVED** (plus one defect in the batch locks
+**LIVE DEFECTS — ONE FIXED, TEN REPORTED, NO FIGURE MOVED** (plus two defects in the batch locks
 themselves, fixed as a class — below).
 
 1. **The PayGo page rendered no drill-down although its own endpoint had been serving two panels
@@ -34836,7 +34854,7 @@ themselves, fixed as a class — below).
     so** (§E8, §Z12), which is the half a drill-down can honestly fix; the screen's own silence is
     REPORTED.
 
-**AND ONE DEFECT IN THE LOCKS THEMSELVES, FIXED AS A CLASS.** Batch 15's §E9 asserted the ratchet's
+**AND TWO DEFECTS IN THE LOCKS THEMSELVES, EACH FIXED AS A CLASS.** *(one)* Batch 15's §E9 asserted the ratchet's
 VALUE (`"OWES_MAX = 53" in COV`, and the owed line-count `== 53`), so it went RED the moment this
 batch correctly lowered the pin to 49. That is not bad luck: batch 10 pinned `== 74` and went red on
 batch 11, batch 11 rewrote both as `<=`, and batch 12 wrote the ruling down in prose — *"SHRINK-ONLY,
@@ -34850,6 +34868,15 @@ pin passes without touching the file, and a ratchet whose pin cannot be read at 
 than absent (§E9b–d, §F10b–d). Batch 15's harness goes 92 → 95 checks and batch 16's 103 → 106, and
 nothing was skipped, disabled or loosened to get there: "never rises, ever" is strictly stronger than
 an equality that only ever held for one batch.
+
+*(two)* **The run step this batch added to `carrier-vocab-guard.yml` carried an unquoted step name
+with a colon-space in it, and a plain YAML scalar may not contain `": "` — so the FILE did not parse
+and GitHub ran ZERO of that workflow's 38 jobs** while reporting one red check with no job under it.
+Every lock in that file was unenforced for one push, and the failure looks exactly like a single
+failing lock. The name is fixed, and the CLASS is locked in the one home that can see it: **the fourth
+rule in `harness_ci_pipefail_lock.py`** (§19.25, 47 → 53 checks), which ten workflows run — so a file
+broken tomorrow is caught by the nine that still parse, which a lock inside the broken file never
+could be. Five negative controls, including a colon-space injected into EACH workflow on disk.
 
 **NO FIGURE MOVED, PROVED FALSIFIABLY.** §G reproduces each screen's own pre-batch fold — the
 invoices' `totals` and `fees_by_type`, the per-line report's `totals`, the financing page's own
