@@ -33994,7 +33994,12 @@ def my_shelf(as_of: str = "", authorization: str = Header(default=""), org_id: s
     try:
         rows = list(_feed_read.read_all(_make))
     except Exception as e:
-        raise HTTPException(500, f"inventory_aging_device unreadable: {e}")
+        # BUSINESS WORDS, not the table's name (§19.38 — a tenant must not be shown the platform's
+        # internals, and the boundary only rewrites RUNTIME database errors, not a sentence we typed).
+        # The technical cause still reaches the server log, which is where the platform admin reads it.
+        print(f"ERROR my_shelf inventory read failed (org {org_id}): {e}")
+        raise HTTPException(500, "The stock-on-hand records could not be read just now. "
+                                 "Nothing on your shelf has changed — try again in a moment.")
 
     snapshot = _isa.current_snapshot(rows)
     shelf_rows = [r for r in rows if _isa.on_shelf(r, snapshot)]
