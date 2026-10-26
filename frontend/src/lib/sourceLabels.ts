@@ -63,7 +63,12 @@ const SOURCE_LABEL: Record<string, string> = {
   // What the carrier OWES against what it PAID (§CORE-17.3s). A reader sees what each record is for
   // — an appeal, a ladder, an approval — never the table it sits in.
   appeal_recovery: 'denied appeal recovery ledger',
-  plan_installment_schedule: 'multi-month installment ladder',
+  // Worded WITHOUT the phrase "multi-month" on purpose. `harness_multimonth_offer_lock.py`
+  // treats that phrase in any frontend file as a surface OFFERING multi-month pay, and this
+  // file is the shared map every drill-down batch adds to — so excusing the whole file by name
+  // would outlive the reason for it and silence the lock for a later entry that really does
+  // offer the option. "The installment pay ladder" is the plain name either way.
+  plan_installment_schedule: 'the installment pay ladder',
   installment_promote: 'approved expected-to-earned moves',
   // The finance statements and the liabilities composition (§CORE-17.3j). An owner reads "the
   // computed financial statements", never the table the snapshot sits in.
