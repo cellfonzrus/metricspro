@@ -2,6 +2,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, getActiveOrg } from '@/lib/client'
 import { useTableSort, SortableTh } from '@/components/SortableTh'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 
 // MANAGER REPORT CARDS — owner directive 2026-10-08: "create a report card for the Dm based on all the
 // items assigned to them per store and a check off by the system if those targets were met or not, the
@@ -20,6 +23,9 @@ function thisMonth() { return new Date().toISOString().slice(0, 7) }
 
 interface Tally { met: number; missed: number; no_target: number; checked: number; score_pct: number | null }
 interface Item { key: string; label: string; unit: string; state: string; target: number | null; achieved: number | null; detail?: string | null; severity?: string }
+/** One category's roll-up figure as the server folded it (§CORE-17.3m): the declaration serves
+ *  the same three keys for a store-month everywhere, so the page names the shape once. */
+interface RollupCat { monthly?: number | null; achieved_mtd?: number | null; need?: number | null }
 interface StoreRow { store_code: string; store: string; market: string | null; district: string | null; items: Item[]; tally: Tally }
 interface Card {
   kind: string; employee_id: string; name: string; email?: string | null; level?: string | null
@@ -27,6 +33,8 @@ interface Card {
   store_rows?: StoreRow[]
   dm_rows?: { employee_id: string; name: string; stores: number; tally: Tally }[]
   collective?: any
+  /** §CORE-17.3m — this card's own roll-up, opened to the stores (or the DMs) behind it. */
+  drilldown?: Record<string, DrillPanel>
 }
 interface Resp {
   period?: string; today?: string
@@ -35,6 +43,9 @@ interface Resp {
   coverage?: Record<string, number>
   coverage_note?: string | null
   items?: { key: string; label: string; unit: string; source: string }[]
+  /** §CORE-17.3m — the stores the org tree cannot place, and what they add up to. */
+  drilldown?: Record<string, DrillPanel>
+  unassigned_collective?: { categories?: Record<string, RollupCat> }
   errors?: string[]
   error?: string
   setup_hint?: string | null
@@ -54,6 +65,64 @@ function fmtVal(v: number | null, unit: string): string {
   if (unit === 'money') return '$' + v.toLocaleString(undefined, { maximumFractionDigits: 0 })
   if (unit === 'pct') return v.toFixed(1) + '%'
   return String(Math.round(v * 100) / 100)
+}
+
+// ── WHAT WAS ASSIGNED, AND WHERE EACH NUMBER CAME FROM (§CORE-17.3m) ───────────────────────────
+// A card's roll-up opens to the STORES on it: what each achieved and out of which feed, and what
+// was ASSIGNED to it and which settings row somebody typed it into. A store with no target for an
+// item is the check-off's own `no target` state and carries NO figure here either — it is counted in
+// nothing, because nobody set it rather than the store having failed it.
+//
+// The SCORE gets no panel: no set of records sums to a quotient (§CORE-17.3h). Neither do the
+// met / missed / no-target tallies or the store count — the table on the card IS what they count.
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const CARD_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: r => dtext(r, 'store') || '—', sortValue: r => dtext(r, 'store') },
+  { header: 'Market', get: r => dtext(r, 'market') || '—', sortValue: r => dtext(r, 'market') },
+  { header: 'District', get: r => dtext(r, 'district') || '—', sortValue: r => dtext(r, 'district') },
+  { header: 'Why', get: r => dtext(r, 'why') || '', sortValue: r => dtext(r, 'why') },
+]
+
+/** One card's "what was assigned" strip: the roll-up figures already on the payload, each with the
+ *  rows behind it. Rendering is all this does — every figure is the server's own. */
+function AssignedStrip({ collective, items, panels, prefix, title }: {
+  collective?: { categories?: Record<string, RollupCat> }
+  items: { key: string; label: string; unit: string }[]
+  panels?: Record<string, DrillPanel>
+  prefix: string
+  title: string
+}) {
+  const drill = useDrillTile(panels || {})
+  const cats = collective?.categories || {}
+  const shown = items.filter(i => cats[i.key])
+  if (!shown.length) return null
+  return (
+    <div style={{ padding: '10px 14px', borderTop: '1px solid var(--border)' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>{title}</div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        {shown.map(i => {
+          const m: RollupCat = cats[i.key] || {}
+          return (
+            <div key={i.key} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '6px 10px', minWidth: 130 }}>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>{i.label}</div>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>
+                {fmtVal(m.achieved_mtd ?? null, i.unit)}
+                <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}> / {fmtVal(m.monthly ?? null, i.unit)}</span>
+              </div>
+              <DrillTileLinks
+                drills={drill.dl(`${prefix}achieved_${i.key}`, 'the rows behind the achieved',
+                                 `${prefix}target_${i.key}`, 'the rows behind what was assigned')}
+                open={drill.open} onToggle={drill.toggle} />
+            </div>
+          )
+        })}
+      </div>
+      {drill.panel && <div style={{ marginTop: 8 }}><DrillDownPanel panel={drill.panel} extraColumns={CARD_DRILL_COLUMNS} /></div>}
+    </div>
+  )
 }
 
 function Score({ t }: { t: Tally }) {
@@ -244,9 +313,13 @@ export default function ManagerReportCardsPage() {
                   <span style={{ marginLeft: 'auto' }}><Score t={c.tally} /></span>
                 </button>
                 {isOpen && (
-                  <div style={{ overflowX: 'auto', borderTop: '1px solid var(--border)' }}>
-                    <DmStoreTable rows={c.store_rows || []} items={items} />
-                  </div>
+                  <>
+                    <AssignedStrip collective={c.collective} items={items} panels={c.drilldown}
+                      prefix="" title={`Assigned across these ${c.stores} store(s)`} />
+                    <div style={{ overflowX: 'auto', borderTop: '1px solid var(--border)' }}>
+                      <DmStoreTable rows={c.store_rows || []} items={items} />
+                    </div>
+                  </>
                 )}
               </div>
             )
@@ -265,6 +338,8 @@ export default function ManagerReportCardsPage() {
                   </span>
                   <span style={{ marginLeft: 'auto' }}><Score t={c.tally} /></span>
                 </div>
+                <AssignedStrip collective={c.collective} items={items} panels={c.drilldown}
+                  prefix="by_dm_" title={`Across your ${c.dms} district manager(s)`} />
                 <MgrDmTable rows={c.dm_rows || []} />
               </div>
             ))}
@@ -282,6 +357,12 @@ export default function ManagerReportCardsPage() {
               <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
                 These stores have items and results, but the org tree does not say who owns them.
               </div>
+              {/* THE ORG-CHART GAP, IN THE OWNER'S OWN UNITS. The note above says how many stores;
+                  this says how much of the month's work is on nobody's card, with the stores behind
+                  it. It is a setup gap to fix in the org chart, not a defect in these numbers. */}
+              <AssignedStrip collective={data?.unassigned_collective} items={items}
+                panels={data?.drilldown} prefix=""
+                title="On nobody's card — what these stores were assigned, and achieved" />
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: 'var(--surface2, var(--c-bg-f9fafb))' }}>

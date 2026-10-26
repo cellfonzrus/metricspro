@@ -34,6 +34,7 @@ from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-0
 from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
 from app.modules.commcalc import tender_recon_drilldown as _tender_recon_drilldown   # 2026-10-24 — THE X-report-vs-closing tile drill (index §CORE-17.3a; declaration only, pure)
 from app.modules.asset import device_asset_drilldown as _asset_dd   # 2026-10-25 — THE device-asset family's drill declaration (index §CORE-17.3l; declaration only, pure)
+from app.modules.commcalc import targets_drilldown as _targets_dd   # 2026-10-25 — THE targets family's drill declaration (index §CORE-17.3m; declaration only, pure)
 from app.modules.commcalc import month_focus as _mfocus   # 2026-10-09 — the month's declared focus and the weekly check-in (index §63)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
@@ -32603,6 +32604,11 @@ def get_target_calendar(
         rep_conv['below_store'] = rep_conv['rate'] < store_conv['rate']
         conv['rep'] = rep_conv
     result['conversion'] = conv
+    # WHERE THIS SCOPE'S ACHIEVED FIGURES CAME FROM (§CORE-17.3m) — the declaration opens each
+    # category's achieved-MTD, and the scheduled hours, to the DAYS they were summed over, naming
+    # the feed (or the store's own daily closing, for a declared category) per panel. It folds no
+    # figure of its own: every amount is this result's own.
+    result['drilldown'] = _targets_dd.scope_drilldowns(result, catalog)
     return result
 
 
@@ -32909,6 +32915,11 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
         if market_sel and mkt.lower() not in market_sel:
             continue
         trow = tgt_by_code.get(code.upper())
+        # WHICH RELATION THIS STORE'S TARGET WAS TYPED INTO is a fact this loop knows and nothing
+        # downstream could recover: a store with no `targets` row of its own seeds its accessory
+        # target from the ROSTER's own monthly_target instead. Recorded so the drill-down names the
+        # row that exists rather than the one it would have guessed (§CORE-17.3m).
+        _has_target_row = bool(trow)
         if not trow:
             trow = {targets_engine.BUILTIN_TARGET_COLUMN['accessories']:
                     safe_float(s.get('monthly_target'))}
@@ -32963,6 +32974,7 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
             'acc_sales_ex_setup': safe_float(trend.get('acc_sales')),
             'setup_fee_mtd_exec': safe_float(trend.get('setup_fee')),
             'trending_box': int(trend.get('trending_box') or 0),
+            'has_target_row': _has_target_row,
             'reps': reps_out,
         })
     out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
@@ -33075,9 +33087,15 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
         'can_edit_targets': bool(can_edit_targets),
         'editable_store_codes': ([s.get('store_code') for s in out] if can_edit_targets else []),
     }
+    # WHERE THE AREA TOTAL CAME FROM (§CORE-17.3m) — the `collective` block opened to the STORES it
+    # is the sum of: what each one achieved and out of which feed, what was ASSIGNED to it and in
+    # which config row somebody typed it, and the per-store gap that names both. The declaration
+    # folds nothing: every figure is `aggregate_stores`' own, so a panel cannot be a second opinion
+    # about the total above it. An attainment PERCENTAGE gets no panel at all (§CORE-17.3h).
     return {'period': period, 'today': today.isoformat(), 'stores': out,
             'filters': filters, 'applied': applied, 'trending': trend_meta,
-            'setup_hint': setup_hint, 'collective': collective, 'scope': scope_block}
+            'setup_hint': setup_hint, 'collective': collective, 'scope': scope_block,
+            'drilldown': _targets_dd.area_drilldowns(out, collective, catalog)}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -33400,8 +33418,22 @@ async def get_manager_report_cards(period: str, today: str = "",
                           # home, and handed in.
                           axis=targets_engine.target_axis(_target_catalog(sb(), org_id)))
     note = _mrcard.coverage_note(cards.get('coverage'))
+    # WHAT WAS ASSIGNED, AND WHERE EACH NUMBER CAME FROM (§CORE-17.3m). Each card's own roll-up
+    # opens to the stores ON that card; a market manager's opens to the DMs beneath them, with the
+    # stores the org tree places under none of them listed WITHOUT a figure (unattributable is not
+    # zero); and the stores on nobody's card get a roll-up of their own, so the org-chart gap the
+    # coverage note describes in words also has a number. The check-off tallies and the score get no
+    # panel: a tally's list is the table on the card, and a score is a quotient (§CORE-17.3h).
+    _per_card, _nobody, _nobody_coll = _targets_dd.report_card_drilldowns(
+        cards, rows, _target_catalog(client, org_id))
+    for _c in list(cards.get('dm_cards') or ()) + list(cards.get('manager_cards') or ()):
+        _p = _per_card.get(str(_c.get('employee_id') or ''))
+        if _p:
+            _c['drilldown'] = _p
     return {'period': summary.get('period', period), 'today': summary.get('today'),
             **cards,
+            'drilldown': _nobody,
+            'unassigned_collective': _nobody_coll,
             'coverage_note': note,
             'errors': [e for e in (chain_error, peer_error) if e],
             'filters': summary.get('filters'), 'applied': summary.get('applied'),
@@ -37534,6 +37566,9 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
         if ks is not None and not in_keyset(ks, code, s.get('address')):
             continue   # outside the signed-in manager's span
         trow = by_code.get(code.upper())
+        # Same fact, same reason as `get_targets_summary`'s own copy of this seeding (§CORE-17.3m):
+        # the drill-down must name the config row that exists, not the one it would have assumed.
+        _has_target_row = bool(trow)
         if not trow:
             trow = {targets_engine.BUILTIN_TARGET_COLUMN['accessories']:
                     safe_float(s.get('monthly_target'))}
@@ -37647,6 +37682,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
             'store_code': code, 'address': s.get('address'), 'market': s.get('market'),
             'conversion': store_conv, 'metrics': metrics, 'items': store_items,
             'reps': rep_plans, 'commission_at_risk': store_at_risk,
+            'has_target_row': _has_target_row,
             'counts': {'critical': c, 'warning': w},
         })
 
@@ -37675,11 +37711,25 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
                 f"because this plan only covers stores with a monthly target set and inside your span: "
                 f"{', '.join(_missed[:6])}{' …' if len(_missed) > 6 else ''}. "
                 f"Set a target for them, or see the full list on Peer Sales Comparison.")
+    # THE TEAM TOTAL, FOLDED ONCE (§CORE-17.3m). The page reduced this in TypeScript, so the figure
+    # had no server-folded evidence at all and nothing could check it; it is now folded by
+    # `targets_engine.aggregate_stores` — the one home the area roll-up and every report card
+    # already use — over these same rows, and the page reads it. Identical to the cent (§Z).
+    _team = _targets_dd.team_totals(out, catalog)
+    # AND THE EVIDENCE: the team total opened to the stores, and "commission at risk" to the REPS.
+    # A rep whose subtotal the calculation never worked out is shown WITHOUT a figure; a total the
+    # endpoint deliberately suppressed for a self-scoped caller gets no panel at all, because a
+    # figure that was not measured has no rows behind it (live defects 1 and 2).
+    _drill = dict(_targets_dd.team_drilldowns(out, _team, catalog))
+    _drill.update(_targets_dd.at_risk_drilldowns(out, round(tot_at_risk, 2),
+                                                 rolled_up=rep_keys is None))
     return {'period': period, 'today': today.isoformat(),
             'summary': {'critical': tot_crit, 'warning': tot_warn, 'stores': len(out),
                         'commission_at_risk': round(tot_at_risk, 2)},
             'setup_hint': setup_hint,
             'peer': peer_meta,
+            'team_total': _team,
+            'drilldown': _drill,
             'stores': out}
 
 

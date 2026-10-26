@@ -77,6 +77,13 @@ const SOURCE_LABEL: Record<string, string> = {
   employees: 'employee records',
   payroll_settings: 'payroll withholding setup',
   store_lease: 'store lease & insurance setup',
+  // The targets family (§CORE-17.3m). A TARGET is a number somebody typed into a settings screen,
+  // so its plain name is the screen a manager sets it on — never the row it lands in. The declared
+  // half of a store's daily counts is the same fact one table along (mig 1072).
+  targets: 'monthly target settings',
+  target_line: 'target settings (declared category)',
+  closing_metric_line: 'declared daily counts',
+  stores: 'store setup',
   // The commission-disagreement trail (§CORE-17.3k). A manager reads "the pay discrepancy run" —
   // the stored result of pressing Run Detection — never the table it lands in.
   discrepancy_results: 'the pay discrepancy run',

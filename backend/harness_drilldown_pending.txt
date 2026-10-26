@@ -138,11 +138,11 @@
 /commcalc/sales-comparison	owes	
 /commcalc/spiff-impact	owes	
 /commcalc/store-takeover	owes	
-/commcalc/targets	owes	
-/commcalc/targets/accessories	owes	
-/commcalc/targets/action-plan	owes	
-/commcalc/targets/my	owes	
-/commcalc/targets/report-cards	owes	
+/commcalc/targets	shared	per-category 'Achieved so far' and the scheduled-hours line drill to the DAYS they were summed over (commcalc/targets_drilldown.py, scope-day grain), each day naming the sales feeds or the declared-closing tables it was read from, or NO table when nothing was recorded there; REFUSES to claim a tie for any attainment %, pace, today's target or the monthly target itself -- a rate gets no panel (index CORE-17.3h) and a declared target is a leaf config row, not a measurement
+/commcalc/targets/accessories	shared	the four roll-up tiles (target, achieved, remaining, trending) drill to the STORES behind them, narrowed to the stores on screen through lib/drill-narrow.ts because the page filters rows the server already folded; REFUSES to claim a tie where the panel's figure does not agree with the tile to the cent (the one home's gate decides, not the page), and the set-up-fee split and % to goal get no panel -- both halves are printed in the table beside them
+/commcalc/targets/action-plan	shared	the team roll-up per category and the commission-at-risk total drill to the store rows (and the reps) behind them, every row naming where the number came from; REFUSES to claim a tie for the at-risk tile a rep sees, which is zeroed by design because a store-wide figure is cross-rep -- no panel is served for it, and a rep whose subtotal was never computed is shown as unmeasured rather than folded in at $0.00
+/commcalc/targets/my	shared	the rep's own achieved tiles drill to the days behind them and the area cards drill to the stores behind achieved/target/remaining (commcalc/targets_drilldown.py); REFUSES to claim a tie for any attainment % and for a store the org has set no target row for -- such a store is shown as 'no target set' rather than counted as a target of zero
+/commcalc/targets/report-cards	shared	every card's assigned roll-up drills to the stores on that card, a market manager's drills to the DISTRICT MANAGERS under them, and the 'on nobody's card' block drills to the unplaced stores (commcalc/targets_drilldown.py); REFUSES to claim a tie for the check-off score (a rate, index CORE-17.3h) or for a store the org tree places under two managers, and a store with no DM carries the org-chart gap in the reader's own words instead of being dropped or scored zero
 /commcalc/tax-collected	owes	
 /commcalc/vip	owes	
 /commcalc/vip/paygo	owes	

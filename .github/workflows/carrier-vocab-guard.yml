@@ -296,6 +296,21 @@ on:
       - "frontend/src/app/(platform)/commcalc/asset/inventory-recon/page.tsx"
       - "frontend/src/app/(platform)/commcalc/asset/borrowed/page.tsx"
       - "frontend/src/app/(platform)/commcalc/asset/lending/page.tsx"
+      # §CORE-17.3m — the five targets reports: one declaration, six catalogues, six measured
+      # grains and four provenance answers (the sales feeds, the declared closing counts, the
+      # target settings rows, the shift schedule). A target is a declared number, not a
+      # measurement, so an unset one is never folded in as zero.
+      - "backend/harness_batch13_drilldown.py"
+      - "backend/app/modules/commcalc/targets_drilldown.py"
+      - "backend/app/modules/commcalc/targets_engine.py"
+      - "backend/app/modules/commcalc/manager_report_card.py"
+      - "backend/app/modules/commcalc/router.py"
+      - "frontend/src/app/(platform)/commcalc/targets/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/targets/my/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/targets/my/_components/AreaTargets.tsx"
+      - "frontend/src/app/(platform)/commcalc/targets/accessories/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/targets/action-plan/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/targets/report-cards/page.tsx"
       - "frontend/src/app/(platform)/closing/external-credit-recon/page.tsx"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
       # index §4e — the P&L drill path: company → market → store → line (owner report 2026-10-07)
@@ -1446,6 +1461,9 @@ jobs:
       - name: Run the batch-12 drill lock (the seven device-asset reports — the family's grain count is MEASURED, so six row shapes get six catalogues and a figure never opens to a population it was not folded over; the POS recon names its side(s) PER ROW, so a store the POS file never mentioned names only the ledger; the ledger devices that classify into none of the five types are counted into nothing and SHOWN, which is the silent drop surfaced rather than fixed; a composed total, a leaf and a count whose list is on screen get no panel at all; the RMA net-loss rule and the On-Inventory predicate have ONE home each, dereferenced by the endpoints that used to spell them — index §CORE-17.3l)
         working-directory: backend
         run: python3 harness_batch12_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-13 drill lock (the five targets reports — the family's grain count is MEASURED, so a scope-DAY figure opens to the days it was summed over and never to the calendar it is displayed on; a TARGET is a declared number, so a store with no settings row reads "no target set" instead of a target of zero, and a day with nothing recorded resolves to NO table rather than a guessed feed; every attainment percentage and the conversion rate get no panel at all (§CORE-17.3h), the team roll-up and the manager card roll-ups are folded ONCE on the server, and a store the org tree cannot place carries the org-chart gap in the reader's own words — index §CORE-17.3m)
+        working-directory: backend
+        run: python3 harness_batch13_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

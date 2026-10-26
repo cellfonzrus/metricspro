@@ -2064,6 +2064,15 @@ scoping, MTD projection, and action items.
 `21334`; `/coaching/{period}` `19800`. **Frontend:** `commcalc/targets/page.tsx`, `targets/accessories`,
 `targets/action-plan`, `targets/my`, `targets/rep-map`, `targets/settings`.
 
+- **WHERE A TARGET FIGURE CAME FROM (§CORE-17.3m, batch 13):**
+  `backend/app/modules/commcalc/targets_drilldown.py` is the ONE declaration for all five target
+  reports — six measured grains, four provenance answers (the sales feeds, the store's own daily
+  closing for a declared category, the target settings rows, the shift schedule). The four
+  endpoints `/calendar`, `/summary`, `/action-plan` and `/report-cards` attach its `drilldown` and
+  fold nothing of their own. A TARGET is a declared number, so a store with no settings row reads
+  "no target set" rather than a target of zero; every attainment percentage gets no panel at all.
+  Proof `backend/harness_batch13_drilldown.py` (122 checks, §Z1–Z14 negative controls).
+
 ---
 
 ## 6. Rep commission (Boost)
@@ -34237,6 +34246,147 @@ same loop as the totals it accompanies), five table-name constants on the lineag
 pre-existing literals re-keyed to them, and no new entry in `UNMEASURED_REASONS` at all — the one
 reason this batch emits (`amount_not_recorded`) is batch 10's own.
 
+### §CORE-17.3m A TARGET IS A DECLARED NUMBER, NOT A MEASUREMENT (2026-10-26, batch 13)
+
+Batch 13 of the §CORE-17 audit, the TARGETS family (commission agent): **`/commcalc/targets`** (Daily
+Targets), **`/commcalc/targets/accessories`** (Accessory Sales Targets),
+**`/commcalc/targets/action-plan`** (Daily Action Plan), **`/commcalc/targets/my`** (My Targets, with
+the DM's area roll-up) and **`/commcalc/targets/report-cards`** (Manager Report Cards, PR #420). Owed
+count **64 → 59**. Declaration: `backend/app/modules/commcalc/targets_drilldown.py`. Proof:
+`backend/harness_batch13_drilldown.py`, **122 checks**, §Z1–Z14 negative controls, wired into the
+carrier-vocab-guard lock job.
+
+**THE RULING THIS BATCH SETTLES.** §CORE-17.3l said a grain fixes the ROW, the UNIT and the
+PROVENANCE, and that sharing a catalogue needs all three to agree. This family is where the third one
+does the work on its own. The batch was handed over as *"expect fewer grains than routes — but prove
+it either way"*; reading the four producers (`targets_engine.compute_scope`, `aggregate_stores`,
+`GET /targets/{period}/action-plan`, `manager_report_card.build`) gives **six**:
+
+| grain | the report folded over it | why it is not one of the others |
+|---|---|---|
+| a SCOPE-DAY's ACHIEVEMENT | the Daily Targets tiles, My Targets | one calendar day of one store or one rep; counts or dollars; the sales feeds — or, for a DECLARED category, the store's own daily closing |
+| a SCOPE-DAY's SCHEDULED HOURS | the same two | the same row in HOURS, out of the schedule — and a day the schedule does not reach yet has NO source at all, because its hours were ESTIMATED from the scope's weekly pattern (§CORE-17.3i) |
+| a STORE-MONTH's ACHIEVEMENT | the summary, the accessory tiles, the action plan's team total, a report card's roll-up | one store row of the period summary; the feeds |
+| a STORE-MONTH's DECLARED TARGET | the same tiles | the same row in the same unit, and a completely different provenance: **the config row somebody typed it into** |
+| a STORE-MONTH's GAP | "Remaining" on the same tiles | the same row again, naming BOTH of the above, so it can disagree with either (§CORE-17.3k) |
+| a REP's COMMISSION AT RISK | the action plan | one stored commission row per rep; money; the calculated-commissions snapshot (§CORE-17.3j) |
+| a DISTRICT MANAGER's roll-up | a market manager's report card | not a store row at all: the market manager's figure is folded over the DMs under them, so its panel really compares two groupings instead of restating one |
+
+**Three of those are keyed by the SAME store row in the SAME unit and are still three grains**, which
+is the lesson: *one is a measurement of what was sold, one is a number a manager typed into a settings
+screen, and the third names both*. A single catalogue over them would have to claim the sales feed
+produced a target — exactly the lie the tie-out would then assert on our behalf. **A TARGET IS A
+DECLARED NUMBER, NOT A MEASUREMENT: its origin is a config row, and an unset one is reported as unset,
+never folded in as a target of zero** (§Z4 plants the careless declaration that does: it ties, just as
+the honest one does, and only the ROW tells the reader the store has no target rather than a target it
+is failing).
+
+**ONE MODULE, SIX CATALOGUES, AND WHY THAT IS NOT THE SIBLING DEFECT.** What the five reports share is
+not a row shape but the thing a drill-down exists for — *which stored relation was this
+target-vs-actual figure read out of* — and there are exactly FOUR answers in the family: the sales
+feeds, the store's own daily closing, the target settings rows, and the shift schedule. Five files
+would be five answers to one question.
+
+| What | Where | Says |
+|---|---|---|
+| **The one declaration** | `commcalc/targets_drilldown.py` — `scope_day_catalogue`/`scope_drilldowns`, `store_month_catalogue`/`area_drilldowns`, `team_totals`/`team_drilldowns`, `at_risk_drilldowns`, `card_catalogue`/`card_drilldowns`, `manager_card_drilldowns`, `unassigned_drilldowns`, `report_card_drilldowns` | six catalogues, four provenance answers, one "an empty report drills to nothing" rule. Every figure is the producer's own, dereferenced |
+| **WHICH relation answered, per ROW** | `targets_drilldown.achieved_sources`, `target_origin`, `_achieved_tables`, `_hours_tables`, `target_tables` | read off the producer's own stored facts — the category's `source` (`SOURCE_SALES_FEED` / `SOURCE_DECLARED`), the row's own `has_actual`, `scheduled`/`projected`, and whether a target row exists at all. A day with nothing recorded resolves to **no table**, which the panel reports as a countable untraceable origin rather than a guessed feed (§Z8, §Z8b) |
+| **The ONE fold for the action plan's team total** | `targets_drilldown.team_totals` → `targets_engine.aggregate_stores` | the page used to `reduce` the store rows itself, so its figure had no server-folded evidence anything could check (§CORE-17.3b). It is the area roll-up's own home that folds it now; the page's reduce is gone and the figure is identical (§E4, §D10) |
+| **Where the arithmetic stays** | `targets_engine.aggregate_stores` / `target_axis` / `target_store` / `BUILTIN_TARGET_COLUMN`, dereferenced | the declaration owns no arithmetic and no axis of its own — §Y13 fails the build if it grows one |
+| **Narrowing on exactly ONE of the five** | `frontend/src/lib/drill-narrow.ts` on `targets/accessories` | that page filters stores the server already folded (it shows a store only with an accessory target or accessory sales), so its panels are narrowed to the rows on screen and a drill is OFFERED only where the narrowed figure agrees with the tile to the cent — the one home's gate, not a condition the page invented. §Y10 fails the build if narrowing appears on any of the other four, and §Y10b proves the scan is not vacuous |
+| **The four table names in the reader's words** | `frontend/src/lib/sourceLabels.ts` — `targets`, `target_line`, `closing_metric_line`, `stores` | a settings row has to read as "monthly target settings", not as a schema path (§19.38) |
+| **The three new reasons** | `report_drilldown.UNMEASURED_REASONS` — `target_not_set`, `day_not_yet_reached`, `no_dm_in_org_tree` | full sentences in the one home's vocabulary, so a reader is never shown a bare field name (§Y12, §Y12b) |
+| **The endpoints** | `GET /commcalc/targets/{period}/calendar`, `/summary`, `/action-plan`, `/report-cards` → `drilldown` | each ATTACHES the declaration's output and folds no panel of its own (§Y1, §Y1b) |
+
+**THE ORG-CHART GAP, SAID IN THE READER'S WORDS RATHER THAN SWALLOWED.** The tree resolves a district
+manager for only a small minority of stores (**6 of 29** Cellfonz, **0 of 20** Luxelink). That is an
+org-chart SETUP gap for the owner, not a code defect — so a store with no DM is neither dropped from
+the report-card roll-up nor scored as a zero: it appears on the "on nobody's card" panel carrying
+`no_dm_in_org_tree` verbatim, and the figure it is not counted into says how many rows it could not
+measure.
+
+**WHAT IS DELIBERATELY NOT CLAIMED, so nobody reads a missing link as an oversight.** Five refusals,
+each an existing ruling applied:
+
+- **EVERY ATTAINMENT PERCENTAGE.** `% to goal`, the area card's `attainment_pct`, the report card's
+  `score_pct` and the conversion rate serve **no key at all** — no set of records sums to a quotient
+  (§CORE-17.3h). Both halves of each are offered instead, and the conversion rate already prints its
+  own numerator and denominator beside it on every screen that shows it.
+- **`need`, `today_target` and `pace` FOR ONE SCOPE.** `need` is `monthly − achieved_mtd` with both
+  sides that scope's own totals — subtracted at the TOTAL, so it does not drill (§CORE-17.3k).
+  `today_target` is composed and `pace` is a quotient. **The AREA `need` DOES drill**, because there
+  the subtraction happens per store and the rows are the stores: the same test, the opposite answer.
+- **A MONTHLY TARGET FOR ONE SCOPE.** A leaf: one column of one stored config row (for BYOD, that
+  column times a percentage on the same row). Batch 10's leaf ruling. The AREA target drills, being Σ
+  over the stores.
+- **A COUNT WHOSE LIST IS ON SCREEN.** The action plan's critical / warning / store counts and the
+  report card's met / missed / no-target tallies and store count (batch 11 precedent).
+- **A PER-STORE ROW ON A LIST REPORT.** The summary's own cells and a report card's per-store check-off
+  are rows, not roll-ups, and each one's **View →** already opens that store's own calendar, where the
+  day-level panels live. A second answer beside an existing one is the defect, not the fix — and it
+  keeps a 29-store payload from carrying 145 day-level panels nobody asked for.
+
+**THE CALENDAR IS NOT THE EVIDENCE — the trap this batch nearly fell into.** `achieved_mtd` is summed
+over the days the scope actually sold on, which INCLUDES days it was not scheduled, while the calendar
+the page renders is the schedule. A panel folded over the calendar would therefore have been short on
+exactly the stores that worked an unscheduled day — so `compute_scope` now records an additive
+`achieved_days` list **in the same loop as the total**, and the panel is folded over that. §Z2 drops
+one such day and shows the tie-out going red, which is what the calendar version would have done
+silently.
+
+**FIVE LIVE DEFECTS THESE REPORTS HAVE TODAY — FOUR REPORTED, ONE FIXED AT THE MECHANISM, AND NO
+FIGURE MOVED.**
+
+1. **A rep whose commission subtotal was never computed is folded into "commission at risk" as
+   $0.00.** `get_action_plan.rep_commission` returns `at_risk: 0.0` when `payout_slice_evidence` says
+   the subtotal is not known (§COMMCALC-09 — a slice nobody computed is not $0.00 earned), so
+   "nothing at risk" and "we never worked out what was at risk" print identically. The panel shows
+   such a rep WITHOUT a figure and does not count them; a null adds zero either way, so the tile is
+   identical to the cent and only the row changes (§Z3).
+2. **For a self-scoped rep the "commission at risk" tile reads $0 by design and says so nowhere.**
+   The endpoint deliberately zeroes the STORE roll-up for a rep (a store-wide figure is a cross-rep
+   figure), but the tile still renders `$0`, which reads as "nothing is at risk". NOT fixed: what that
+   tile should say is a decision about a figure the owner reads. The honest half is that a
+   deliberately suppressed total has no rows behind it, so NO panel is served for it (§Z12).
+3. **The Manager Report Cards page prints a table NAME into its column tooltips.**
+   `manager_report_card.ITEMS[*]["source"]` is prose ending "commcalc.targets vs the period's
+   actuals" and the page puts it in the `title` of every item column — a database name on a manager's
+   screen, which §19.38 exists to prevent. NOT fixed here: that string is the card module's own
+   declared vocabulary and rewording it is a copy change across three surfaces. The panels this batch
+   serves name the same relations through `sourceLabel()` instead (§Z10, §Z10b).
+4. **An unparseable `trans_date` counts toward a scope's conversion and toward NOTHING else.**
+   `scope_conversion` keeps such a row (`if d and d > today`) while `scope_actuals_by_day` drops it
+   (`if not d: continue`), so it moves the conversion rate and no per-day figure. Reported, not fixed:
+   making the two agree moves a figure — and it is why the conversion numerator and denominator are
+   not folded per day here (§Z11).
+5. **FIXED AT THE MECHANISM — `aggregate_stores` raised `KeyError` for any DECLARED category.** It
+   asked the BUILT-IN unit map how many decimals to round to (`UNITS[cat]`), so a tenant with a
+   category declared on Count Fields (§76) took down the whole area roll-up **and every manager report
+   card**, which rolls up through the same function. It asks the unit THESE ROWS reported now, which is
+   where `compute_scope` read it from in the first place. For every built-in category the old map and
+   the new reader give the same unit and the roll-up is byte-identical (§Z13, §Z13b, §Z13c) — the fix
+   is to the class ("a roll-up must not assume the built-in axis"), not to the tenant that surfaced it.
+
+**STATED, NOT CLAIMED.** A store the org tree places under TWO district managers is counted twice in
+the market manager's roll-up AND twice across the rows, so that panel ties and cannot surface it. The
+card module already reports that case as `coverage.store_card_placements`; this panel is not a second
+answer to it (§Z14).
+
+**ALSO FOUND, NOT IN SCOPE.** `backend/harness_area_targets.py` §D ("degenerate inputs") is already
+RED on `main`: its fixture expects `aggregate_stores([])` to return the four built-in categories,
+while the function has taken its axis from the rows it was handed since before batch 13. It is wired
+into no workflow, so nothing green went red. A stale fixture, not a product defect — left for its
+owner rather than "fixed" by loosening it.
+
+**No migration, no new table, no money moved** — four read-only `drilldown` payloads, three additive
+keys on existing pure producers (`achieved_days` and the calendar's `hours_raw` on `compute_scope`,
+`_has_target_row` on the summary and plan rows, each folded in the same loop as the totals it
+accompanies), three new `UNMEASURED_REASONS` sentences, four `sourceLabels` entries, and the one
+mechanism fix above. No new lineage-registry constant: the four relations this family reads that are
+not registered feeds are config rows and the schedule, and adding them to the ingest registry would put
+them in the watchdog population (`harness_feed_watchdog` §F8); `REP_COMMISSIONS` is dereferenced from
+batch 11's declaration rather than re-spelled.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
@@ -34319,15 +34469,17 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 `closing/attempts_drilldown.py`, `commcalc/tender_recon_drilldown.py`, `crm/reports_drilldown.py`,
 `helpdesk/dashboard_drilldown.py`, `account/statement_drilldown.py`,
 `account/liabilities_drilldown.py`, `commcalc/carrier_pay_drilldown.py`,
-`asset/device_asset_drilldown.py`), §17 (`GET
+`asset/device_asset_drilldown.py`, `commcalc/targets_drilldown.py`), §17 (`GET
 /closing/cash-variance` → `drilldown`; `GET /commcalc/discrepancy/{period}` → `drilldown` +
 `drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET
 /commcalc/commission-received-breakout` → `drilldown`; `GET /asset/summary`, `GET
 /asset/charges-summary`, `GET /asset/on-inventory-by-store`, `GET /asset/owed-weekly`, `GET
 /asset/inventory-recon`, `GET /asset/borrowings`, `GET /commcalc/vip/paygo/summary` →
+`drilldown`; `GET /commcalc/targets/{period}/calendar`, `GET /commcalc/targets/{period}/summary`,
+`GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards` →
 `drilldown`), §18 ("where is this figure from" → `panel.sources` → `sourceLabel`; "did the
 carrier pay what we computed, and out of which legs" → §CORE-17.3k; "which devices is this
-store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
+store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
 (`sourceLabel`), §2 / `data_lineage_registry.py` (which table is which feed), §15 (the B2B ↔ MA
 activation recon these three reports read), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
 module graph).

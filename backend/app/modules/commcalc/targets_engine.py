@@ -435,6 +435,14 @@ def compute_scope(
             return round(v, 1)
         return round(v, 2)
 
+    # WHICH DAYS `achieved_mtd` IS THE SUM OF — recorded in the SAME loop that sums it, at full
+    # precision (the `base_raw` reasoning below, for the same reason). ADDITIVE and read-only: the
+    # drill-down (§CORE-17.3m) opens an achieved figure to these days, and the evidence has to be
+    # the days the figure was ACTUALLY summed over — which is not the calendar, because the calendar
+    # is the scope's OPEN days while this counts every day with sales, scheduled or not. Folding it
+    # anywhere else would be a second answer to "which days is this".
+    _evidence: dict = {}
+
     categories = {}
     for cat in _axis:
         monthly = float(monthly_by_cat.get(cat, 0) or 0)
@@ -454,7 +462,9 @@ def compute_scope(
         achieved_mtd = 0.0
         for d in actuals_by_day:
             if d <= today:
-                achieved_mtd += achieved_on(cat, d)
+                _a = achieved_on(cat, d)
+                achieved_mtd += _a
+                _evidence.setdefault(d, {})[cat] = _a
 
         need = max(0.0, monthly - achieved_mtd)
         days_left = sum(1 for d in open_days if d >= today)
@@ -489,6 +499,9 @@ def compute_scope(
         row = {
             'date': d.isoformat(),
             'hours': round(eff_hours.get(d, 0.0), 2),
+            # FULL PRECISION, same reasoning as `base_raw` below: the hours drill-down (§CORE-17.3m)
+            # adds these up against `scheduled_hours_total`, which is one round over the raw sum.
+            'hours_raw': eff_hours.get(d, 0.0),
             'is_today': d == today,
             'is_past': d < today,
             'projected': d in projected,  # estimated from the weekly pattern, not yet scheduled
@@ -523,6 +536,12 @@ def compute_scope(
         'today': today.isoformat(),
         'categories': categories,
         'calendar': calendar,
+        # ADDITIVE (§CORE-17.3m): the days `achieved_mtd` was summed over, per category, at full
+        # precision. Recorded by the same loop, so it cannot be a different set of days.
+        'achieved_days': [{'date': d.isoformat(),
+                           'scheduled': d in eff_hours,
+                           'cats': dict(_evidence[d])}
+                          for d in sorted(_evidence)],
     }
 
 
@@ -878,7 +897,15 @@ def aggregate_stores(store_rows: list[dict]) -> dict:
                 acc['stores_with_target'] += 1
                 if achieved >= monthly:
                     acc['stores_on_track'] += 1
-        dec = 1 if UNITS[cat] == 'count' else 2
+        # HOW MANY DECIMALS, asked of the unit THESE ROWS reported (`_agg_units`, resolved above)
+        # rather than of the built-in map. This line was `UNITS[cat]`, and `UNITS` is the BUILT-IN
+        # axis — so a tenant with a category declared on Count Fields raised `KeyError` here and
+        # took the whole area roll-up with it (and with it every manager report card, which rolls up
+        # through this same function). Found 2026-10-25 by §CORE-17.3m, whose team-total fold calls
+        # this for the declared axis too. NO FIGURE MOVES for a built-in: `_agg_units[cat]` IS
+        # `BUILTIN_UNITS[cat]` for all four, because that is where `compute_scope` read it from —
+        # asserted by harness_batch13_drilldown §Z13.
+        dec = 1 if _agg_units.get(cat, 'count') == 'count' else 2
         for k in ('monthly', 'achieved_mtd', 'need', 'today_target', 'pace', 'base_today'):
             acc[k] = round(acc[k], dec)
         acc['setup_fee_mtd'] = round(acc['setup_fee_mtd'], 2)
