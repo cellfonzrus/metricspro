@@ -14,6 +14,7 @@ from app.core.schemas import LaxModel
 from app.modules.asset.router import _norm_imei, _vip_invoice_map, _epay_payments_map
 from app.modules.commcalc import date_window
 from app.modules.payables import engine
+from app.modules.payables import ledger_status as _ls
 
 router = APIRouter()
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -332,7 +333,7 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
 # ── Part B — payables + offsets + due ─────────────────────────────────────────
 @router.get("/payables")
 def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit: int = 500,
-                  start: str = "", end: str = "", org_id: str = ORG_ID):
+                  start: str = "", end: str = "", all_dates: bool = False, org_id: str = ORG_ID):
     """The per-IMEI ledger, optionally narrowed to a DUE-DATE window (`start`/`end`, both ends
     inclusive — the shared filter bar's date range) and to one store.
 
@@ -347,7 +348,7 @@ def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit
     `limit` still means "this many rows I can see" rather than "this many before filtering".
     """
     client = sb()
-    win = date_window.resolve_window(start, end, 0) if (start or end) else None
+    win = _due_window(start, end, all_dates)
     skey = _store_key_resolver(client, org_id)
     want_store = _store_selected(skey, store)
     q = (client.schema("commcalc").table("device_payable_ledger").select("*").eq("org_id", org_id))
@@ -355,6 +356,11 @@ def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit
         q = q.eq("carrier_id", carrier_id)
     if status:
         q = q.eq("status", status)
+    else:
+        # A line that bought no device is not a payable in any state (§COMMCALC-32). Excluded through
+        # the one home, so adding a second non-payable status reaches every reader at once. An
+        # EXPLICIT status filter is honoured as asked, so the rows stay reachable for an audit.
+        q = _ls.exclude_non_payable(q)
     if win:
         q = date_window.apply_window(q, "due_date", win)
     scan = max(limit, 5000) if want_store else limit
@@ -386,7 +392,41 @@ def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit
             "window": win,
             # Fail-closed rows the window could not judge, SAID OUT LOUD (see the docstring).
             "undated_excluded": undated,
+            # And the lines left out because no device was bought on them — COUNTED, never silently
+            # dropped (§COMMCALC-32). The note names no feed or column, so it is safe on any screen.
+            "no_device_excluded": _no_device_count(client, org_id, carrier_id) if not status else 0,
+            "no_device_note": _ls.EXCLUDED_NOTE,
             "unassigned_store": sum(1 for r in rows if not (r.get("store") or "").strip())}
+
+
+def _no_device_count(client, org_id, carrier_id=""):
+    """How many ledger lines bought no device — the number the screen SAYS instead of the rows it
+    leaves out. ADAPTIVE: any failure reports None, which a screen renders as "not measured" rather
+    than as a confident zero."""
+    try:
+        q = (client.schema("commcalc").table("device_payable_ledger").select("imei", count="exact")
+             .eq("org_id", org_id).eq("status", _ls.STATUS_NO_DEVICE).limit(1))
+        if carrier_id:
+            q = q.eq("carrier_id", carrier_id)
+        return q.execute().count
+    except Exception as e:                                        # pragma: no cover - defensive
+        print(f"WARN payables no_device count failed: {e}")
+        return None
+
+
+def _due_window(start="", end="", all_dates=False):
+    """WHICH DAYS A PAYMENT SCREEN OPENS ON — one answer, through the window home (§COMMCALC-32).
+
+    Owner 2026-10-26: the screen should pick today through three days ahead by itself. So an absent
+    date range is no longer "every row ever": it is the default ahead window, which the response
+    RETURNS so the pickers render what was actually applied instead of holding a second copy of the
+    default. An explicit range is honoured as given, and `all_dates=true` is the escape that asks for
+    no window at all — without it there would be no way back to the full list."""
+    if all_dates:
+        return None
+    if start or end:
+        return date_window.resolve_window(start, end, 0)
+    return date_window.ahead_window(datetime.now(timezone.utc).date())
 
 
 @router.get("/filter-options")
@@ -491,6 +531,9 @@ def offsets(imei: str, org_id: str = ORG_ID):
     return {
         "imei": n, "store": row.get("store"), "device_model": row.get("device_model"),
         "status": row.get("status"), "owed": row.get("owed"), "owed_source": row.get("owed_source"),
+        # The drill-down is an AUDIT view and deliberately still answers for a line the lists leave
+        # out, saying which it is rather than 404-ing on it (§COMMCALC-32).
+        "is_payable": _ls.is_payable(row.get("status")),
         "primary_rebate": {"amount": row.get("rebate_amount"), "date": row.get("rebate_date"),
                            "source": row.get("rebate_source")},
         "epay_crosscheck": {"amount": row.get("epay_rebate_amount"), "mismatch": row.get("rebate_mismatch"),
@@ -509,9 +552,10 @@ def due(as_of: str = "", store: str = "", carrier_id: str = "", org_id: str = OR
     if not as_of:
         raise HTTPException(400, "as_of=<billing friday YYYY-MM-DD> required")
     client = sb()
-    q = (client.schema("commcalc").table("device_payable_ledger")
-         .select("store,bill_path,owed,imei,device_model,due_date")
-         .eq("org_id", org_id).eq("billing_friday", as_of))
+    q = _ls.exclude_non_payable(                       # §COMMCALC-32, same reason as the list above
+        client.schema("commcalc").table("device_payable_ledger")
+        .select("store,bill_path,owed,imei,device_model,due_date")
+        .eq("org_id", org_id).eq("billing_friday", as_of))
     if carrier_id:
         q = q.eq("carrier_id", carrier_id)
     # SIBLING OF THE SAME DEFECT (2026-10-22). This endpoint narrowed by store with a string equality
@@ -599,7 +643,8 @@ def _owed_from_vendor_feed(client, org_id, win):
 
 
 @router.get("/owed-by-date")
-def owed_by_date(start: str = "", end: str = "", store: str = "", org_id: str = ORG_ID):
+def owed_by_date(start: str = "", end: str = "", store: str = "", all_dates: bool = False,
+                 market: str = "", org_id: str = ORG_ID):
     """Consolidated daily owed: net_owed grouped by due_date.
 
     Two possible sources, and the response always names which one answered:
@@ -610,11 +655,19 @@ def owed_by_date(start: str = "", end: str = "", store: str = "", org_id: str = 
     client = sb()
     # The window is the SAME one home every other surface here reads, so "both ends inclusive" is
     # stated once (date_window) instead of three times as a gte/lte pair.
-    win = date_window.resolve_window(start, end, 0) if (start or end) else None
+    win = _due_window(start, end, all_dates)
     skey = _store_key_resolver(client, org_id)
     want_store = _store_selected(skey, store)
-    q = (client.schema("commcalc").table("device_payable_ledger")
-         .select("due_date,net_owed,owed,store").eq("org_id", org_id))
+    # The market half of the same filter bar, through the SAME market home the list uses (RULE FIVE),
+    # so "North" means one thing on both surfaces.
+    mmap = _market_by_store(client, org_id)
+    # The bar's market half is MULTI-select (StandardFilterValue.markets is a list), so this accepts a
+    # comma-separated list and matches ANY of them. One value is just a list of one — there is no
+    # second single-market code path to drift from.
+    want_markets = {m.strip().lower() for m in str(market or "").split(",") if m.strip()} or None
+    q = _ls.exclude_non_payable(                       # §COMMCALC-32
+        client.schema("commcalc").table("device_payable_ledger")
+        .select("due_date,net_owed,owed,store,imei,device_model,status").eq("org_id", org_id))
     if win:
         q = date_window.apply_window(q, "due_date", win)
     rows = q.limit(50000).execute().data or []
@@ -622,20 +675,42 @@ def owed_by_date(start: str = "", end: str = "", store: str = "", org_id: str = 
     for r in rows:
         if want_store and not want_store(r.get("store")):   # canonical identity, not a string eq
             continue
+        if want_markets and str(_market_of(mmap, r.get("store")) or "").lower() not in want_markets:
+            continue
         d = r.get("due_date")
         if not d:
             continue
         amt = r.get("net_owed")
         if amt is None:
             amt = r.get("owed") or 0
-        e = by_date.setdefault(d, {"due_date": d, "count": 0, "owed": 0.0})
+        e = by_date.setdefault(d, {"due_date": d, "count": 0, "owed": 0.0, "_by_store": {}})
         e["count"] += 1
         e["owed"] += float(amt or 0)
-    out = [dict(v, owed=round(v["owed"], 2)) for v in by_date.values()]
+        # WHO OWES WHAT ON THIS DATE (owner 2026-10-26: "who owes what for eveyr date mentioned on
+        # that list , to make sure thee correct account is debited"). A date total cannot answer that
+        # — the money is paid per store, so the per-store split rides WITH the date rather than
+        # needing a second request that could be filtered differently and disagree.
+        st = (r.get("store") or "").strip()
+        skey_v = _store_key(skey, st)
+        b = e["_by_store"].setdefault(skey_v or "", {
+            "store": st or None, "store_key": skey_v, "market": _market_of(mmap, st),
+            "count": 0, "owed": 0.0})
+        b["count"] += 1
+        b["owed"] += float(amt or 0)
+    out = []
+    for v in by_date.values():
+        stores = sorted(v.pop("_by_store").values(), key=lambda x: -x["owed"])
+        out.append(dict(v, owed=round(v["owed"], 2),
+                        by_store=[dict(b, owed=round(b["owed"], 2)) for b in stores],
+                        stores=len(stores)))
     out.sort(key=lambda x: x["due_date"])
     if out:
         return {"rows": out, "total_owed": round(sum(x["owed"] for x in out), 2),
-                "source": "device_ledger", "grain": "device", "window": win}
+                "source": "device_ledger", "grain": "device", "window": win,
+                # The unattributed money, said out loud: a store the build could not resolve cannot
+                # be debited, so it is never folded into another store's figure.
+                "unassigned_owed": round(sum(b["owed"] for x in out for b in x["by_store"]
+                                             if not b["store"]), 2)}
 
     # The ledger produced nothing — which for a Total/MA tenant is not "you owe nothing", it is "no
     # device carries an amount". Fall back to the processor's own dated amounts and SAY so, including

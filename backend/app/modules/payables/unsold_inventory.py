@@ -27,6 +27,7 @@ THE WINDOW AND THE VERDICT ARE NOT DECIDED HERE either — they are `device_agin
 numbers, and "unsold and payable = out of pocket" means the same thing on every screen that shows it.
 """
 from app.modules.commcalc import device_aging_policy as _aging
+from app.modules.payables import ledger_status as _ls
 
 PAGE = 1000
 
@@ -81,10 +82,14 @@ def fetch_unsold_from_ledger(client, org_id, carrier_ids=(), date_from="", date_
         # A FRESH builder per page (postgrest builders carry their last range), and the paging
         # order is applied by the one home — an unordered paged read serves some rows twice and
         # others never (§19.48 / core/feed_read.py).
-        q = (client.schema("commcalc").table("device_payable_ledger")
-             .select("imei,store,device_model,carrier_id,owed,net_owed,invoice_date,due_date,"
-                     "sold_flag,sold_date,status,owed_source,due_source")
-             .eq("org_id", org_id).eq("sold_flag", False))
+        # A line that bought no device is not unsold INVENTORY — there is no device to hold, so it
+        # can never age and can never be paid out of pocket (§COMMCALC-32). Excluded through the one
+        # home, the same filter the payables list makes.
+        q = _ls.exclude_non_payable(
+            client.schema("commcalc").table("device_payable_ledger")
+            .select("imei,store,device_model,carrier_id,owed,net_owed,invoice_date,due_date,"
+                    "sold_flag,sold_date,status,owed_source,due_source")
+            .eq("org_id", org_id).eq("sold_flag", False))
         if carrier_ids:
             q = q.in_("carrier_id", list(carrier_ids))
         if date_from or date_to:

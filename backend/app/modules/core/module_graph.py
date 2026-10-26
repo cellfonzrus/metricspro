@@ -766,8 +766,8 @@ FACTS: dict[str, dict] = {
         "question": 'What price band did the CUSTOMER pay for this device, which model was it, and is '
                     'this rep low on accessory $ per box AND on port-ins at the same time?',
         "homes": ('app/modules/commcalc/product_mix.py',),
-        "index": ('62',),
-        "locks": ('harness_product_mix.py',),
+        "index": ('62', 'COMMCALC-32'),
+        "locks": ('harness_product_mix.py', 'harness_payables_device_rows.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         "callers": {
@@ -784,6 +784,12 @@ FACTS: dict[str, dict] = {
             # spells no verdict and holds no floor; `harness_batch21_drilldown.py` §A7/§A8c fail the
             # build if either becomes a literal there again.
             'app/modules/commcalc/sales_outcome_drilldown.py': ('_pmix',),
+            # §COMMCALC-32 — the payables ledger asks this home whether the line sold a DEVICE AT ALL
+            # (`no_device_declared`, the declared-basis half of `product_class_of`) instead of
+            # inferring it from a missing product name. A line the feed declares as the customer's own
+            # phone is not a device payable, and `harness_payables_device_rows.py` §A9/§D2 fail the
+            # build if that question is answered here again by a literal token or a blank-name guess.
+            'app/modules/payables/engine.py': ('_pm',),
         },
     },
     'kpi_column_meaning': {

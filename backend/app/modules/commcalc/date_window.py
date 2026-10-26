@@ -152,3 +152,33 @@ def undated(rows, field: str) -> int:
     fail-closed means those rows vanish from every range and a reader would otherwise read their
     absence as "nothing is owed" rather than "nothing is dated"."""
     return sum(1 for r in rows if not day(r.get(field) if hasattr(r, "get") else None))
+
+# ── THE DEFAULT WINDOW A PAYMENT SCREEN OPENS ON (owner report 2026-10-26) ────────────────────────
+# Owner, verbatim: *"should auaomatically pick teh dates from today and 3 days ahead ... the month and
+# date shoudl not be entered manually it should picked for otehr dates"*. A screen whose job is "who
+# do I pay in the next few days" should not need a date typed into it before it says anything.
+#
+# IT LIVES HERE, not in the page, because the page and the endpoint would otherwise each hold a
+# default and drift — which is the whole reason this module exists (§COMMCALC-25). The endpoint
+# computes it and RETURNS it, and the pickers render what came back, so there is exactly one answer
+# to "which days am I looking at".
+DEFAULT_AHEAD_DAYS = 3
+BASIS_AHEAD_DEFAULT = "default_ahead"
+
+
+def ahead_window(today, days=DEFAULT_AHEAD_DAYS):
+    """PURE: today through `days` days ahead, both ends INCLUSIVE — the same inclusivity every other
+    window here uses, so a payment due on the last day is in the window rather than one day out of it.
+
+    `days=0` is honoured and means today alone. A negative `days` is clamped to 0 rather than
+    returning a backwards window that silently matches nothing.
+    """
+    d = day(today)
+    try:
+        n = max(0, int(days))
+    except (TypeError, ValueError):
+        n = DEFAULT_AHEAD_DAYS
+    end = date.fromisoformat(d) + timedelta(days=n)
+    w = resolve_window(d, end.isoformat(), 0)
+    w["basis"] = BASIS_AHEAD_DEFAULT
+    return w
