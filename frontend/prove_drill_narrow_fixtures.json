@@ -3607,6 +3607,422 @@
       },
       "untraceable_origins": 0
     },
+    "rep_pay.latest": {
+      "capped": false,
+      "figure": {
+        "amount": 2345.75,
+        "label": "Commission paid in the newest month",
+        "unit": "money"
+      },
+      "note": "One row per person per month per store — the window's own attribution points, which is the grain the table and its filter bar work at, so a person who moved between stores reads as one row for each month they worked at each. The figure is the commission this business pays them, never the compensation a carrier pays us. Each figure here was read out of what the last commission calculation WROTE DOWN for this month, not out of the sales and statement rows that calculation read — so the trail stops at the stored run. Re-running the calculation is what changes these numbers. These rows are the selection you are viewing. Only the newest month's rows are COUNTED in this figure; every earlier month is shown beside them with its own number, because which months are NOT in it is most of what makes it readable.",
+      "rows": [
+        {
+          "amount": 1100.0,
+          "fields": {
+            "market": "LI"
+          },
+          "in_figure": false,
+          "label": "Abid · July 2026 · 1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "total_payout",
+              "keys": {
+                "period": "July 2026",
+                "rep": "Abid",
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "rep_commissions",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "period": "July 2026",
+            "rep": "Abid",
+            "store": "1 Main St"
+          },
+          "sources": [
+            "rep_commissions"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 1240.5,
+          "fields": {
+            "market": "LI"
+          },
+          "in_figure": true,
+          "label": "Abid · August 2026 · 1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "total_payout",
+              "keys": {
+                "period": "August 2026",
+                "rep": "Abid",
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "rep_commissions",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "period": "August 2026",
+            "rep": "Abid",
+            "store": "1 Main St"
+          },
+          "sources": [
+            "rep_commissions"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 300.0,
+          "fields": {
+            "market": "NJ"
+          },
+          "in_figure": true,
+          "label": "Abid · August 2026 · 2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "total_payout",
+              "keys": {
+                "period": "August 2026",
+                "rep": "Abid",
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "rep_commissions",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "period": "August 2026",
+            "rep": "Abid",
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "rep_commissions"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 640.0,
+          "fields": {
+            "market": "NJ"
+          },
+          "in_figure": false,
+          "label": "Dee · July 2026 · 2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "total_payout",
+              "keys": {
+                "period": "July 2026",
+                "rep": "Dee",
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "rep_commissions",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "period": "July 2026",
+            "rep": "Dee",
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "rep_commissions"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 805.25,
+          "fields": {
+            "market": "NJ"
+          },
+          "in_figure": true,
+          "label": "Dee · August 2026 · 2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "total_payout",
+              "keys": {
+                "period": "August 2026",
+                "rep": "Dee",
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "rep_commissions",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "period": "August 2026",
+            "rep": "Dee",
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "rep_commissions"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 5,
+      "rows_total_count": 5,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 5,
+          "table": "rep_commissions"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 3,
+        "difference": 0.0,
+        "figure": 2345.75,
+        "rows_total": 2345.75,
+        "shown_not_counted": 2,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 3 row(s) behind this figure add up to it exactly; 2 further row(s) are shown for context and are deliberately not counted in it"
+      },
+      "untraceable_origins": 0
+    },
+    "rep_pay.window": {
+      "capped": false,
+      "figure": {
+        "amount": 4085.75,
+        "label": "Commission paid over the window",
+        "unit": "money"
+      },
+      "note": "One row per person per month per store — the window's own attribution points, which is the grain the table and its filter bar work at, so a person who moved between stores reads as one row for each month they worked at each. The figure is the commission this business pays them, never the compensation a carrier pays us. Each figure here was read out of what the last commission calculation WROTE DOWN for this month, not out of the sales and statement rows that calculation read — so the trail stops at the stored run. Re-running the calculation is what changes these numbers. These rows are the selection you are viewing. The figure itself is the total of the MONTHS this report served, while the rows are folded per person, month and store — two folds of the same stored run, which is what makes the check below a real one rather than a sum compared against itself.",
+      "rows": [
+        {
+          "amount": 1100.0,
+          "fields": {
+            "market": "LI"
+          },
+          "in_figure": true,
+          "label": "Abid · July 2026 · 1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "total_payout",
+              "keys": {
+                "period": "July 2026",
+                "rep": "Abid",
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "rep_commissions",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "period": "July 2026",
+            "rep": "Abid",
+            "store": "1 Main St"
+          },
+          "sources": [
+            "rep_commissions"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 1240.5,
+          "fields": {
+            "market": "LI"
+          },
+          "in_figure": true,
+          "label": "Abid · August 2026 · 1 Main St",
+          "measured": true,
+          "origins": [
+            {
+              "column": "total_payout",
+              "keys": {
+                "period": "August 2026",
+                "rep": "Abid",
+                "store": "1 Main St"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "rep_commissions",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "period": "August 2026",
+            "rep": "Abid",
+            "store": "1 Main St"
+          },
+          "sources": [
+            "rep_commissions"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 300.0,
+          "fields": {
+            "market": "NJ"
+          },
+          "in_figure": true,
+          "label": "Abid · August 2026 · 2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "total_payout",
+              "keys": {
+                "period": "August 2026",
+                "rep": "Abid",
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "rep_commissions",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "period": "August 2026",
+            "rep": "Abid",
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "rep_commissions"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 640.0,
+          "fields": {
+            "market": "NJ"
+          },
+          "in_figure": true,
+          "label": "Dee · July 2026 · 2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "total_payout",
+              "keys": {
+                "period": "July 2026",
+                "rep": "Dee",
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "rep_commissions",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "period": "July 2026",
+            "rep": "Dee",
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "rep_commissions"
+          ],
+          "subject": null
+        },
+        {
+          "amount": 805.25,
+          "fields": {
+            "market": "NJ"
+          },
+          "in_figure": true,
+          "label": "Dee · August 2026 · 2 Oak Ave",
+          "measured": true,
+          "origins": [
+            {
+              "column": "total_payout",
+              "keys": {
+                "period": "August 2026",
+                "rep": "Dee",
+                "store": "2 Oak Ave"
+              },
+              "note": null,
+              "schema": "commcalc",
+              "table": "rep_commissions",
+              "traceable": true
+            }
+          ],
+          "present": true,
+          "reason": null,
+          "reason_label": null,
+          "row_key": {
+            "period": "August 2026",
+            "rep": "Dee",
+            "store": "2 Oak Ave"
+          },
+          "sources": [
+            "rep_commissions"
+          ],
+          "subject": null
+        }
+      ],
+      "rows_shown": 5,
+      "rows_total_count": 5,
+      "schema": 1,
+      "sources": [
+        {
+          "rows": 5,
+          "table": "rep_commissions"
+        }
+      ],
+      "subject": null,
+      "subject_kind": null,
+      "tie_out": {
+        "counted_rows": 5,
+        "difference": 0.0,
+        "figure": 4085.75,
+        "rows_total": 4085.75,
+        "shown_not_counted": 0,
+        "ties": true,
+        "unmeasured_rows": 0,
+        "words": "the 5 row(s) behind this figure add up to it exactly"
+      },
+      "untraceable_origins": 0
+    },
     "tender.card_variance": {
       "capped": false,
       "figure": {

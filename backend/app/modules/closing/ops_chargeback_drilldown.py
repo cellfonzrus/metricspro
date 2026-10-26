@@ -21,6 +21,7 @@ there, once, and this declaration reads the same two statuses off the same rows 
 chargeback is forgiven and counted in neither. Composing it on the screen from two other tiles would
 have produced a figure with no rows of its own.
 """
+from app.modules.commcalc import data_lineage_registry as _lineage
 from app.modules.core import report_drilldown
 
 #: One incident's address. The chargeback's own id, because the (person, store, day, reason) key it
@@ -28,8 +29,10 @@ from app.modules.core import report_drilldown
 #: and the screen both use.
 ROW_KEYS = ("id",)
 
-#: The one table that holds a chargeback's amount, status and decision.
-CHARGEBACK = ("ops_chargeback",)
+#: The one table that holds a chargeback's amount, status and decision — DEREFERENCED from the one
+#: feed registry (§CORE-17.3q). It was spelled here as a literal, and spelled again in
+#: `envelope_drilldown`, which is the second copy the registry exists to prevent.
+CHARGEBACK = (_lineage.OPS_CHARGEBACK,)
 
 #: The statuses "to be foregone" covers: pending has not been taken yet, posted already has, and a
 #: waived one is forgiven. Read off here once so the figure and its rows cannot disagree.

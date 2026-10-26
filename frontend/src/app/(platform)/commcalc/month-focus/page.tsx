@@ -5,6 +5,10 @@ import { usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import { canDeclareMonthFocus } from '@/lib/rbac'
 import Link from 'next/link'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
 
 // THIS MONTH'S FOCUS (index §63, owner ask 2026-10-09) — "in the beginning of the month Market manager
 // or above when they log in should define the focus for the month … the notification will come every
@@ -50,11 +54,30 @@ type Payload = {
   declaration_window_end: string | null
   targets: { stores_total: number | null; with_saved_target: number | null
     without_saved_target: string[] }
+  drilldown?: Record<string, DrillPanel>
   initiative_options: Opt[]
   signal_meta: Record<string, any>
   may_declare?: boolean
   ready: boolean; hint: string | null
 }
+
+// WHERE THE TWO TARGET COUNTS CAME FROM (index §CORE-17.3q). Declaration:
+// commcalc/exec_month_drilldown.py. Two grains on one store row in one unit, separated only by which
+// relation answered: the roster says how many stores exist, the target settings say how many carry a
+// goal somebody saved, and a store with no saved row carries NO figure and names NO source at all —
+// an unset target is not a target of zero (§CORE-17.3m).
+//
+// `lib/drill-narrow` IS DELIBERATELY NOT WIRED HERE, and harness_batch17_drilldown.py §F fails the
+// build if it appears (§CORE-17.3o): this page carries no filter control at all.
+//
+// NOTHING ELSE ON THIS PAGE OFFERS A DRILL, and each refusal has a ruling behind it — the spiff
+// margin is a per-unit rate, the initiative dollars are a picker option whose fold is §60's own, the
+// reconciliation lines are name lists that are their own evidence, and the due list and the plays
+// are a work queue and a set of rules each already carrying its own measured figure.
+const FOCUS_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Target saved', get: (r: DrillRow) => String(r.fields?.['target saved'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['target saved'] ?? '') },
+]
 
 const SEV: Record<string, { bg: string; fg: string; icon: string }> = {
   error: { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)', icon: '⚑' },
@@ -94,6 +117,11 @@ export default function MonthFocusPage() {
   const [msg, setMsg] = useState('')
   const [checkNote, setCheckNote] = useState('')
   const [changes, setChanges] = useState('')
+  // THE OFFER RULE, ONE HOME: a count whose panel does not agree with it offers no drill and the
+  // sentence keeps its own number. The figure is read THROUGH `data?.targets?.[k]` rather than
+  // through a local object, which would be a fresh object on every render.
+  const drill = useDrillTile((data?.drilldown || {}) as Record<string, DrillPanel>,
+    (k, p) => agreesToTheCent(p, data?.targets?.[k as 'stores_total' | 'with_saved_target']))
 
   const load = useCallback(async () => {
     setErr(''); setMsg('')
@@ -496,6 +524,15 @@ export default function MonthFocusPage() {
                 <b>No saved target:</b> {data.targets.without_saved_target.join(', ')}
               </div>
             )}
+            {/* WHERE THE TWO COUNTS CAME FROM — the roster stores behind "14 of 22", each saying
+                whether a manager actually saved a goal for it. */}
+            <DrillTileLinks
+              drills={[...drill.dl('with_saved_target', 'the stores with a saved target'),
+                       ...drill.dl('stores_total', 'every store on the roster')]}
+              open={drill.open} onToggle={drill.toggle} />
+            {drill.panel && <div style={{ margin: '10px 0' }}>
+              <DrillDownPanel panel={drill.panel} extraColumns={FOCUS_DRILL_COLUMNS} />
+            </div>}
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <Link style={{ fontSize: 12.5, color: "var(--c-fg-1d4ed8)" }} href="/commcalc/targets">Assign targets</Link>
               <Link style={{ fontSize: 12.5, color: "var(--c-fg-1d4ed8)" }} href="/commcalc/accessory-target-plan">

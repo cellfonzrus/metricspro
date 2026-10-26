@@ -356,6 +356,30 @@ on:
       - "frontend/src/app/(platform)/commcalc/vip/paygo/page.tsx"
       - "frontend/src/app/(platform)/commcalc/device-line-reimbursement/page.tsx"
       - "frontend/src/app/(platform)/commcalc/financing/page.tsx"
+      # CORE-17.3q - the four executive-month reports, the surfaces the owner looks at most. One
+      # declaration, five catalogues (one per row list), eleven measured grains over five row shapes
+      # and six provenance answers - the calculated rep-commission snapshot, the recorded chargeback,
+      # the sales display union resolved off the read's own meta, the target settings, the store
+      # roster, and one relation this platform CANNOT name because no migration creates it, which is
+      # reported as a stated countable untraceable origin rather than guessed. Two of its grains are
+      # the SAME roster store row in the SAME unit separated only by which relation answered. The
+      # CORE-17.3o call is made both ways - three pages print the server's fold and are NOT narrowed,
+      # the compensation trend's by-rep view folds its own tiles and IS - both directions locked with
+      # a non-vacuous witness. Also the batch that refused a whole VIEW a panel, with four reasons.
+      - "backend/harness_batch17_drilldown.py"
+      - "backend/app/modules/commcalc/exec_month_drilldown.py"
+      - "backend/app/modules/commcalc/comp_trend.py"
+      - "backend/app/modules/commcalc/exec_metric_defs.py"
+      - "backend/app/modules/commcalc/month_focus.py"
+      - "backend/app/modules/commcalc/carrier_pay_drilldown.py"
+      - "backend/app/modules/commcalc/targets_drilldown.py"
+      - "backend/app/modules/closing/ops_chargeback_drilldown.py"
+      - "backend/app/modules/closing/envelope_drilldown.py"
+      - "frontend/src/app/(platform)/commcalc/exec/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/exec/mtd/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/month-focus/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/comp-trend/page.tsx"
+      - "frontend/src/components/DataGrid.tsx"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
       # index §4e — the P&L drill path: company → market → store → line (owner report 2026-10-07)
       - "frontend/prove_pl_drill_path.mjs"
@@ -1517,6 +1541,9 @@ jobs:
       - name: Run the batch-16 drill lock (the four device-financing reports - the family's grain count is MEASURED, and two of its six grains are the SAME device row in the SAME unit separated only by WHICH RELATION ANSWERED - what the distributor CLAIMED against what the carrier PAID, which is the dispute the report exists to settle, so the two are never pooled into one panel; a device the carrier's feed never named carries NO figure and names NO table rather than a $0.00 somebody could mistake for a measurement, and with no device-financing routing declared the paid panels are not served at all; the FOURTH grain was already declared by the device-asset family and is REUSED by identity, because the defect was that the PayGo page threw away a panel its own endpoint had been serving since batch 12; a total ADDED at the total gets no panel while the five buckets it is composed of each drill (CORE-17.3k); A PANEL EXPLAINS THE FIGURE, NOT THE TABLE decided four ways in one batch - three pages print the server's fold and drill-narrow is absent from all three, the financing report folds its own tiles and reads each off its narrowed panel, and the lock fails the build in BOTH directions - index CORE-17.3p)
         working-directory: backend
         run: python3 harness_batch16_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-17 drill lock (the four executive-month reports, the surfaces the owner looks at most - the family's grain count is MEASURED, and two of its eleven grains are the SAME roster store row in the SAME unit separated only by WHICH RELATION ANSWERED, because how many stores exist and how many carry a goal somebody saved are two questions and a store missing from the second is not missing from the first; an unset target is SHOWN without a figure, names NO table and says why in the targets family's own words (CORE-17.3m); three of the four reports read a figure out of what the last commission calculation WROTE DOWN rather than the sales it read, and say so (CORE-17.3j); the chargeback behind three Owner-Overview figures comes out of a relation NO migration here creates, so every row of those panels reports a stated countable UNTRACEABLE ORIGIN rather than a guessed feed (CORE-17.3i); the MTD columns take their unit off the configured bucket's OWN declared basis and the two ratios on the total row get no panel (CORE-17.3h), while a set-up-fee percentage nobody has stated serves no panel at all rather than a dollar-zero that ties by accident; the compensation trend's by-rep panels open to ATTRIBUTION POINTS and not to people, because that is the grain its filter bar works at; A PANEL EXPLAINS THE FIGURE, NOT THE TABLE decided by READING each page - three print the server's fold and drill-narrow is absent from all three, the by-rep trend folds its own tiles and reads each off its narrowed panel, and the lock fails the build in BOTH directions - index CORE-17.3q)
+        working-directory: backend
+        run: python3 harness_batch17_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

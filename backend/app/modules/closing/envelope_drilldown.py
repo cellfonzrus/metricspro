@@ -40,6 +40,7 @@ home in `envelope_report.basis_options`, and a second copy here would be the div
 rules forbid.
 """
 from app.modules.closing import envelope_report as _envelope_report
+from app.modules.commcalc import data_lineage_registry as _lineage
 from app.modules.core import report_drilldown
 
 #: One envelope's address — the closing row's own id (see the module docstring).
@@ -51,7 +52,9 @@ DECLARED = ("daily_closing",)
 #: has counted — the absence is the `not_counted` reason, not a zero.
 COUNTED = ("envelope_count",)
 #: Where a chargeback's amount and decision live. Reached through the count row's `chargeback_id`.
-CHARGEBACK = ("ops_chargeback",)
+#: DEREFERENCED from the one feed registry (§CORE-17.3q) — this was the SECOND literal copy of that
+#: relation name across the drill-down declarations, and a copy is a future divergence.
+CHARGEBACK = (_lineage.OPS_CHARGEBACK,)
 
 #: The statuses a counted envelope can land on. Read off `envelope_report.STATUSES` so a status
 #: added there cannot leave a tile here counting the wrong rows.
