@@ -13,6 +13,12 @@ from app.modules.core import portal_secret as _psec   # THE credential-column re
 from app.modules.account import coa, engine, autocompute, report_gates, statement_engine, analysis
 from app.modules.account import _period   # the ONE spelling a month is stored under (index §19.47)
 from app.modules.account import sales_line_map   # the unclaimed-sale-line map: fields, bases, blank label (§37.11)
+# THE THREE BATCH-23 DECLARATIONS (§CORE-17.3w) — which rows a figure on these five reads was
+# folded from, and which relation those rows came out of. Each is PURE and read-only over the
+# payload it is handed, so a `drilldown` key can never move a figure.
+from app.modules.account import device_billing_drilldown as _dev_drill
+from app.modules.account import inventory_value_drilldown as _inv_drill
+from app.modules.account import memo_recon_drilldown as _memo_drill
 # Settings/imports audit (2026-07-26): importing this module REGISTERS the finance domain's checks with
 # platform-core's admin-attention feed (GET /core/attention). It is read-only diagnostics and is fully
 # guarded internally — if core.import_health is unavailable the import is inert, so finance never breaks
@@ -283,8 +289,14 @@ def list_inventory_values(org_id: str = ORG_ID):
             sweep["has_credentials"] = bool(cfg.get("portal_user"))
     except Exception:
         pass
-    return {"rows": out, "sweep": sweep,
-            "total_effective": round(sum(coa.safe_float(r["effective"]) for r in out), 2)}
+    payload = {"rows": out, "sweep": sweep,
+               "total_effective": round(sum(coa.safe_float(r["effective"]) for r in out), 2)}
+    # WHICH ROWS IS THIS FIGURE? (§CORE-17.3w) The declaration is read-only over the payload above
+    # and the panel's figure is `total_effective` DEREFERENCED, so the drill-down cannot be a second
+    # opinion about the total — including where that total follows a precedence the Balance Sheet
+    # does not (reported as defect 1 in the declaration's docstring).
+    payload["drilldown"] = _inv_drill.value_drilldowns(payload)
+    return payload
 
 
 class PutInventoryValuesIn(LaxModel):
@@ -891,9 +903,14 @@ async def inventory_recon(org_id: str = ORG_ID):
     ghost row can never hide. Read-only; feeds the reconciliation tab."""
     require_org(org_id)
     try:
-        return await run_in_threadpool(statement_engine.inventory_reconciliation, sb(), org_id)
+        payload = await run_in_threadpool(statement_engine.inventory_reconciliation, sb(), org_id)
     except Exception as e:
         raise HTTPException(500, f"inventory recon failed: {type(e).__name__}: {e}")
+    # WHICH ROWS IS THIS FIGURE? (§CORE-17.3w) Four panels over the SAME rows this payload already
+    # carries, including the per-store delta — a difference drills because the producer folds it per
+    # ROW (§CORE-17.3k).
+    payload["drilldown"] = _inv_drill.recon_drilldowns(payload)
+    return payload
 
 
 def _liabilities_due_impl(authorization, org_id, today_iso=""):
@@ -1361,8 +1378,15 @@ async def get_recon(period: str, tolerance: float = 1.0, date_col: str = "mi_act
     # SEV-1 2026-07-30 — reconcile() is blocking (bulk Supabase reads; with analyze=true also one
     # Claude missed-days call). On the event loop, `?analyze=true` could freeze the whole backend for
     # up to ~30 min. Worker thread: identical sync code, identical output.
-    return await run_in_threadpool(recon.reconcile, sb(), org_id, period, tolerance, date_col,
-                                   analyze=analyze)
+    payload = await run_in_threadpool(recon.reconcile, sb(), org_id, period, tolerance, date_col,
+                                      analyze=analyze)
+    # WHICH ROWS IS THIS FIGURE? (§CORE-17.3w) An accusation names its evidence (§CORE-17.3f): this
+    # report prints "underpaid" in dollars per store and writes those findings into the flag stream.
+    # The earned side and the difference carry ONE MORE ROW for the money no rep name placed — the
+    # payload's own `mi_unattributed`, dereferenced — so the panels tie against the figures the
+    # screen prints instead of being short by exactly what nobody could attribute.
+    payload["drilldown"] = _memo_drill.recon_drilldowns(payload)
+    return payload
 
 
 @router.post("/recon/{period}/sync-flags")
@@ -1460,9 +1484,14 @@ async def device_purchases(from_period: str = "", to_period: str = "",
     if abs(b[0] - a[0]) > 10:
         raise HTTPException(400, "window too wide (max 10 calendar years)")
     try:
-        return await run_in_threadpool(dp.compute, sb(), org_id, (a, b))
+        payload = await run_in_threadpool(dp.compute, sb(), org_id, (a, b))
     except Exception as e:
         raise HTTPException(500, f"device purchases failed: {type(e).__name__}: {e}")
+    # WHICH ROWS IS THIS FIGURE? (§CORE-17.3w) Three row shapes, folded by the shared declaration
+    # this report shares with Device Payable — one family, one module, because both fold the units
+    # the distributor billed at the same store row.
+    payload["drilldown"] = _dev_drill.purchase_drilldowns(payload)
+    return payload
 
 
 # ── device payable AS AT a date (owner directive 2026-09-11) ──────────────────────────────────
@@ -1496,9 +1525,14 @@ async def device_payable(as_at: str = "", org_id: str = ORG_ID):
     from app.modules.account import device_payable as dpay
     d = dpay.as_date(as_at) or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
-        return await run_in_threadpool(dpay.compute, sb(), org_id, d)
+        payload = await run_in_threadpool(dpay.compute, sb(), org_id, d)
     except Exception as e:
         raise HTTPException(500, f"device payable failed: {type(e).__name__}: {e}")
+    # WHICH ROWS IS THIS FIGURE? (§CORE-17.3w) An as-at date the per-unit ledger does not cover
+    # serves no figure at all, and therefore drills to {} — through the one home's own refusal rule
+    # rather than a branch, because an absence is not a zero (§CORE-17.3i).
+    payload["drilldown"] = _dev_drill.payable_drilldowns(payload)
+    return payload
 
 
 # ── financial analysis (chart-ready series from the stored snapshots — roadmap Phase 3) ───────

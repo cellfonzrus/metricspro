@@ -4,6 +4,33 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+
+// WHERE EACH OF THESE THREE FIGURES CAME FROM (index §CORE-17.3w). The server serves a panel per
+// figure, from account/memo_recon_drilldown.py, folded over the SAME store rows the By store table
+// prints — ONE row shape and THREE grains on it, separated by PROVENANCE ALONE: what the
+// distributor CREDITED, what the residual report says was EARNED, and their per-store difference.
+// AN ACCUSATION NAMES ITS EVIDENCE (§CORE-17.3f): this report prints "underpaid" in dollars and
+// writes those findings into the flag stream, so every one of its figures opens to its rows.
+//
+// THE EARNED FIGURE AND THE DIFFERENCE CARRY ONE MORE ROW than the table below them — the earned
+// money no rep name placed on a store, which the report folds and prints beside the attribution
+// percentage. Without it the panels would come back short by exactly that money.
+//
+// THIS PAGE IS SERVER-FOLDED AND IS DELIBERATELY *NOT* NARROWED. Its controls are a tolerance, a
+// recompute, an analyze and two writes; it folds nothing in the browser and prints the company-wide
+// object as served, so `lib/drill-narrow` has no place here. `harness_batch23_drilldown.py` §G
+// fails the build in both directions off this page's own text.
+const RECON_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Status', get: (r: DrillRow) => String(r.fields?.status ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.status ?? '') },
+  { header: 'Memos', get: (r: DrillRow) => String(r.fields?.memos ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.memos ?? 0) },
+  { header: 'Rep names listed', get: (r: DrillRow) => String(r.fields?.['rep names the report lists'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['rep names the report lists'] ?? 0) },
+]
 
 const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const badge = (s: string) => ({
@@ -46,6 +73,9 @@ export default function ReconPage() {
   }
 
   const cw = data?.company_wide
+  // ONE open panel at a time, through the shared hook — the offer rule is the one home's, so a
+  // figure the server served no panel for shows no link rather than a link to an empty panel.
+  const drill = useDrillTile((data?.drilldown || {}) as Record<string, DrillPanel>)
   function buildPayload(): ExportPayload {
     return {
       title: `Distributor Credit-Memo Reconciliation — ${period}`,
@@ -101,6 +131,15 @@ export default function ReconPage() {
                 <Tile label="Difference" v={cw.diff} signed />
                 <span style={{ fontSize: 13, padding: '4px 12px', borderRadius: 999, fontWeight: 600, background: badge(cw.status).bg, color: badge(cw.status).c }}>{badge(cw.status).t}</span>
               </div>
+              {/* A link per figure in the strip. The STATUS chip gets none: it is a verdict against
+                  the tolerance in the box above, not a folded figure (§CORE-17.3h's neighbour), and
+                  the figure it judges is the difference, which does drill. */}
+              <DrillTileLinks
+                drills={drill.dl('memo_total', 'the stores behind the credit memos',
+                  'mi_atu_total', 'the stores behind MI + ATU earned',
+                  'diff', 'the stores behind the difference')}
+                open={drill.open} onToggle={drill.toggle} />
+              {drill.panel && <DrillDownPanel panel={drill.panel} extraColumns={RECON_DRILL_COLUMNS} />}
               {cw.attributed_pct != null && (
                 <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
                   Per-store attribution: <strong style={{ color: cw.attributed_pct >= 90 ? 'var(--c-fg-166534)' : cw.attributed_pct >= 70 ? 'var(--c-fg-854d0e)' : 'var(--c-fg-991b1b)' }}>{cw.attributed_pct}%</strong> of MI+ATU $ attributed to a store by rep name

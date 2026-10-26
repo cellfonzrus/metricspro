@@ -21,6 +21,10 @@ import ReportExportBar from '@/components/ReportExportBar'
 import StatTile from '@/components/StatTile'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import type { ExportSheet } from '@/lib/export'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 
 const th: React.CSSProperties = { textAlign: 'left', padding: '7px 10px', fontSize: 12, color: 'var(--text2)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }
 const thr: React.CSSProperties = { ...th, textAlign: 'right' }
@@ -51,6 +55,29 @@ function Card({ title, note, children }: { title: string; note?: React.ReactNode
     </div>
   )
 }
+
+// WHERE EACH OF THESE FIGURES CAME FROM (index §CORE-17.3w). The server serves a panel per figure
+// it can stand behind, from account/device_billing_drilldown.py — the declaration this report SHARES
+// with Device Payable, because both fold the units the distributor billed at the same store row out
+// of the same two relations, which is one family and not two.
+//
+// THIS PAGE FOLDS ITS OWN TILES IN THE BROWSER, so the store-keyed panels are NARROWED through
+// `lib/drill-narrow` to the rows the standard filter bar left on screen, and each figure is read OFF
+// its narrowed panel through the SHARED `agreesToTheCent` gate — figure and evidence are one fold by
+// construction. The three figures this page itself refuses to narrow (it prints `—` for them under
+// any filter) keep the server's own unnarrowed panel, offered only while nothing is selected: that
+// is the page's own rule honoured, not a second one invented here.
+// `harness_batch23_drilldown.py` §G locks both directions off this page's text.
+const PURCHASE_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Company', get: (r: DrillRow) => String(r.fields?.company ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.company ?? '') },
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.market ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.market ?? '') },
+  { header: 'Invoice lines', get: (r: DrillRow) => String(r.fields?.['invoice lines'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['invoice lines'] ?? 0) },
+]
+//: The figures whose panels this page narrows, because it folds them itself over the filtered rows.
+const NARROWED_KEYS = ['device_amount', 'serialised_units']
 
 const firstOfYear = () => `${new Date().getFullYear()}-01-01`
 const today = () => new Date().toISOString().slice(0, 10)
@@ -119,6 +146,33 @@ export default function DevicePurchasesPage() {
   const cascade = useMemo(() => [...new Map(stores
     .filter(r => r.store !== STORE_NOT_MAPPED)
     .map(r => [r.store, { id: r.store, label: r.store, market: r.market || '' }])).values()], [stores])
+
+  // THE PANELS, NARROWED WITH THE SAME PREDICATE THE TABLES ARE FILTERED BY. A row whose key the
+  // screen is not showing leaves the panel, and a row that carries no store key at all (the
+  // item-level and location-level lists) is kept — those figures are not narrowed by this page.
+  const served = useMemo(
+    () => (data?.drilldown || {}) as Record<string, DrillPanel>, [data])
+  const shown = useMemo(
+    () => new Set(rows.map(r => screenKey({ store: r.store, company: r.company }))), [rows])
+  const panels = useMemo(() => {
+    const out: Record<string, DrillPanel> = {}
+    for (const k of Object.keys(served)) {
+      if (!NARROWED_KEYS.includes(k)) { if (!narrowed) out[k] = served[k]; continue }
+      const p = narrowPanel(served[k], (_r: DrillRow, key: string) => key === '' || shown.has(key))
+      if (p) out[k] = p
+    }
+    return out
+  }, [served, shown, narrowed])
+  // Each figure reads OFF its panel where the two agree to the cent, through the shared gate, and
+  // keeps this page's own fold where they do not — a disagreement costs the link, never the figure.
+  const tileValue: Record<string, number> = {
+    device_amount: deviceTotal, serialised_units: unitTotal,
+  }
+  const drill = useDrillTile(panels, (k, p) => !(k in tileValue) || agreesToTheCent(p, tileValue[k]))
+  /** The figure a tile prints: its narrowed panel's own total where the two agree to the cent, else
+   *  this page's fold. One expression, so the tile and the panel beneath it cannot drift. */
+  const drillFigure = (k: string, own: number) =>
+    agreesToTheCent(panels[k], own) ? Number(panels[k]?.figure?.amount ?? own) : own
 
   const unmapped: any[] = data?.unresolved?.store_not_mapped || []
   const noCompany: any[] = (data?.unresolved?.company_not_mapped || []).filter((r: any) => r.store !== STORE_NOT_MAPPED)
@@ -207,12 +261,22 @@ export default function DevicePurchasesPage() {
       {data && !loading && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10, marginBottom: 14 }}>
-            <StatTile label="Device purchases" value={money(deviceTotal)} />
-            <StatTile label="Units billed (serialised)" value={num(unitTotal)} />
+            <StatTile label="Device purchases" value={money(drillFigure('device_amount', deviceTotal))} />
+            <StatTile label="Units billed (serialised)" value={num(drillFigure('serialised_units', unitTotal))} />
+            {/* A DISTINCT COUNT of invoice numbers, not a sum over the rows below — the store rows
+                carry no invoice count to add up, so this one gets no panel at all. */}
             <StatTile label="Invoices in window" value={narrowed ? '—' : num(data.totals?.invoices)} />
             <StatTile label="Not devices (reported, excluded)" value={narrowed ? '—' : money(data.totals?.non_device_amount)} />
             <StatTile label="Unresolved location spend" value={narrowed ? '—' : money(unmapped.reduce((a, r) => a + (r.amount || 0), 0))} />
           </div>
+          {/* One link per figure a row list exists for, then ONE renderer for whichever is open. */}
+          <DrillTileLinks
+            drills={drill.dl('device_amount', 'the stores behind this spend',
+              'serialised_units', 'the stores behind this unit count',
+              'non_device_amount', 'the items behind this figure',
+              'unresolved_amount', 'the locations behind this spend')}
+            open={drill.open} onToggle={drill.toggle} />
+          {drill.panel && <DrillDownPanel panel={drill.panel} extraColumns={PURCHASE_DRILL_COLUMNS} />}
 
           <Card title="By company"
                 note={<>Company comes from the store&rsquo;s company assignment through the same
