@@ -5923,7 +5923,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **Expenses** | mig `024`,`205`,`206`,`506` | `/expenses/{period}` `21604-21951` |
 | **Flags** | `commcalc.flags` (mig `002:148`,`285-287`) | `flags.py`, `flag_store_resolver.py`; `/flags/{period}` `10299`, `/flag-rules` `7697` |
 | **Agency (inter-dealer)** | mig `220-222` | `agency.py`; `/agency/*` `26021-26259` |
-| **Financing** | mig `272`,`273` | `financing_tiers.py`; `/financing/*` `28058-28313` |
+| **Financing** | mig `272`,`273` | `financing_tiers.py`, `financing_registry.py`, `financing_report.py` (the report — §CORE-17.3p), `device_financing_drilldown.py` (its drill-down); `/financing/*` `28058-28313` |
 | **Accrual / payout ledger** | mig `267_daily_accrual_payout_ledger.sql`, `071` | `payout_accrual.py`; `/payout/*` `27772-28015` |
 | **Setup-fee / activation-fee pay** (§6a) | mig `217` (recognition keywords), `263` (`commission_org_config.setup_fee_pay` JSONB — the 2026-09-17 `by_market`/`all_markets` layer needs NO migration), `204`/`962` (the SECOND recognition: the Exec-MTD `activation_fee` bucket, which can disagree with the keyword list) | `setup_fee_pay.py` (`resolve_for_scope` MARKET > CARRIER > default; `market_enabled`/`any_enabled`; `employee_pay` NULL≠0); consumed by `commission_engine` (rules basis) and `router._commission_mtd_result` + `_override_plan_by_rep_with_mtd` (exec_mtd basis — the hard-coded `0.0` defect, fixed 2026-09-17); Boost's own older path is `calculator.py` × `payout_config.setup_fee_rate`; `/setup-fee/*` `13011-13172`. Proofs `harness_setup_fee_market_scope.py`, `scratchpad/setup_fee_monetization_proof.py` |
 | **Custom reports** | mig `099`,`211` | `/custom-report*` `25771-25962` |
@@ -7303,7 +7303,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `POST /storeops/employees` · `POST /storeops/employees/bulk` · `POST /hr/employees` — pay fields pass the ONE pay-write gate: dropped and named in `pay_fields_ignored` for a caller who may not see pay (people still added), 403 for a non-manager sending pay; the StoreOps create echo is pay-stripped | `storeops/router.py::create_employee` / `bulk_create_employees` (now take `authorization`), `hr/router.py::hr_create_employee` → `gate_pay_write` | §19.44 |
 | `POST /storeops/employees/bulk-payscale` — was manager-only; now also refused (403 `PAY_WRITE_REFUSED`) for a manager below the org's pay line · `PATCH /storeops/employees/{id}` — same policy, now from the shared gate | `storeops/router.py::bulk_payscale` / `update_employee` → `gate_pay_write` | §19.44 |
 | `DELETE /storeops/manual-hours/{mid}` — a repeat delete of an entry already gone logs nothing (reply unchanged) · every payroll change-log write (no route added) builds its identity from the stored employee | `storeops/router.py::delete_manual_hours`, `_log_payroll_change` → `payroll_log_identity.resolve_log_identity` | §19.45 |
-| `GET /commcalc/vip/summary` · `GET /commcalc/vip/invoices` (DISTRIBUTOR INVOICES) — additive `date_from` / `date_to` (inclusive days over `created_on`) + `stores` / `markets` (PIPE-separated); both now read ONE selector, so the table always adds up to the tiles; `/summary` also serves `unresolved` (the invoices a store/market selection could not bind) | `commcalc/router.vip_summary` / `vip_invoices_list` → `router._vip_select` → pure `commcalc/vip_invoice_filter.py` + `account.statement_filter.resolve_store_matcher` | §15v |
+| `GET /commcalc/vip/summary` · `GET /commcalc/vip/invoices` (DISTRIBUTOR INVOICES) — additive `date_from` / `date_to` (inclusive days over `created_on`) + `stores` / `markets` (PIPE-separated); both now read ONE selector, so the table always adds up to the tiles; `/summary` also serves `unresolved` (the invoices a store/market selection could not bind) | `commcalc/router.vip_summary` / `vip_invoices_list` → `router._vip_select` → pure `commcalc/vip_invoice_filter.py` + `account.statement_filter.resolve_store_matcher` | §15v.  `/summary` serves `drilldown` (§CORE-17.3p): the invoiced subtotal, the grand total and each of the five fee buckets open to the STORE SPELLINGS the table prints. NOT narrowed — every filter is a query parameter. **Refuses to claim** 'Fees (all types)', which the summary adds at the TOTAL with no per-store fold to open. **Reported defects:** the rollup is keyed on the DISTRIBUTOR's own spelling, so one physical store spelled two ways is two rows, and an invoice with no location at all is one em-dash row |
 | `GET /commcalc/vip/filter-options` — additionally serves `markets` (`core.scope.org_market_options`) and `stores` (`org_store_options`, one option per physical store + only the distributor spellings the matcher cannot bind, via `statement_filter.unbound_spellings`) | `commcalc/router.vip_filter_options` | §15v, §13c, §13e |
 | *(no endpoint added)* — `POST /commcalc/epay/sweep/run-due` / `run` are unchanged in shape; the run's `success` is now decided on `rows_landed` rather than on the status word, so an unverified zero records an ATTEMPT instead of advancing `last_run_at` | `router._do_epay_sweep` → `epay_sweep.run_epay_sweep` (ledger settled before reporting) | §19.41 |
 | *(no endpoint added)* — `GET /commcalc/data-freshness`, its auto-monitor and the run-now button are unchanged in shape; their feed SET is now derived from the registry rather than three names at the call site, and each row gains `cadence_days` (plus `stale_basis: "arrival"` on a feed with no data-date column). ⚠ **No notification channel is wired to this report** — a tenant still has to look; routing a stale-feed alarm into the digest is NOT in §19.43 | `router._data_freshness_report` → `_lineage.watched_feeds()` / `feed_cadence_days()` / `feed_label()` | §19.43 |
@@ -7434,6 +7434,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /commcalc/accessory-cost-audit/{period}` (`?c_basis=&assume_gp_pct=&rep=`) | `commcalc/router.accessory_cost_audit` → `commcalc/accessory_cost_audit.audit` over `commission_engine.preview(detail=True)` | §18 + §CORE-17.3o Accessory Cost Audit — what a %-of-GP payout is computed FROM, and what the period would have paid under each of the owner's five options. READ-ONLY, recomputes no payout.  Serves `drilldown` (§CORE-17.3o): the five option totals and the three per-rep differences open to the REP rows; Option A is its own grain because it reads the product catalogue as well. **Reported defects:** it calls `preview` with NO `source_mode`, so a tenant configured for the mig-306 `union` universe is AUDITED on the legacy one while being PAID on the union; and Option A's total folds in today's pay for every line the catalogue is silent about |
 | `GET /commcalc/accessory-flags` (`?start=&end=&store=&rep=&period=&threshold=&min_threshold=`) · `GET /commcalc/accessory-flags/receipt?trans_id=` · `POST /commcalc/accessory-flags/push` | `commcalc/router.accessory_flags` / `accessory_receipt` / `accessory_flags_push` | §18 + §CORE-17.3o Accessory Flags — accessories rung out over the max threshold or under the allowed minimum, store-span gated, with the full receipt behind any row and a push into the seller's chargebacks.  Serves `drilldown` (§CORE-17.3o): the two MONEY tiles open to the flagged sale lines; the chargeback exposure names the org's FLAG-RULES row, because it is not a measurement of any sale. **Reported defects:** it reads `raw_sales` ALONE while the page opens on the open month, so a feed-led tenant's flagged accessories can be missing entirely; and the five tiles and three rollup cards are the server's fold over the whole range while the table below is filtered in the browser |
 | `GET /commcalc/processor-ledger` | `commcalc/processor_ledger_api.py` | §15 Processor Daily Debits & Credits — day × transaction type, DEBITS/CREDITS/NET; store-span gated; serves the canonical §13c `market_options`. `categories=` filters by the org's own declared pay category, with `NO_CATEGORY_ID` for money whose payment type it never mapped — §57.2  Serves `drilldown` (§CORE-17.3n). **Reported defect:** the `markets=` filter has no escape for a market-less cell while the page folds one under "(no market)", so that pick returns an empty report through a deep link or a scheduled send |
+| `GET /commcalc/financing/{period}` (· `GET|PUT /commcalc/financing/targets/{period}` · the `/financing/vendors*` registry endpoints) — **THE FINANCING REPORT** (owner directive 2026-08-04): financed UNITS and financed DOLLARS by vendor x store x rep for a month, against each store's monthly financing target, plus the distinct tender values actually present so mapping a vendor is pick-don't-type. READ-ONLY; it recomputes no payout and is called from no pay path. NEVER REGISTERED HERE UNTIL 2026-10-26 (§CORE-17.3p) although it has shipped since August | `commcalc/router.financing_report` → pure `commcalc/financing_report.build` over `router._sales_rows_union`, `financing_registry.resolve_vendors` (detection is CONFIG — a vendor with no usable matcher claims NOTHING and the page says 'not configured' rather than showing a zero that reads as a business fact) and `financing_tiers.load_targets`; UNITS are collapsed to DEVICES through `plan_pay_gate.select_paying_lines(..., 'per_device', ...)`, the payout's own collapse, so report units and paid units cannot drift | §CORE-17.3p; page `commcalc/financing/page.tsx`.  Serves `drilldown` (§CORE-17.3p): the two whole-report figures open to the (vendor x store x rep) rows, narrowed on the page through `lib/drill-narrow` because the page folds those tiles itself. **Reported defects:** the per-vendor tiles beside them are the server's own fold and do NOT move under the filter bar, so one strip holds both §CORE-17.3o classes; and when the payout's device collapse is unavailable the units are counted per TRANSACTION and `unit_notes` says so to the payload and to nobody — the page renders it nowhere |
 | `GET /account/device-purchases` (`from_period`/`to_period` = 'YYYY-MM', inclusive; default = the current calendar year) | `account/router.device_purchases` → `account/device_purchases.compute` (pure core `aggregate`) | §23y Device Purchases from the distributor — device spend BILLED in a window, by company × store. PURCHASES, **not** COGS (`account/device_cogs`), and it books nothing |
 | `GET /account/device-payable` (`as_at` = 'YYYY-MM-DD', DAY granularity; default = today) | `account/router.device_payable` → `account/device_payable.compute` (pure core `aggregate`) | §23z Device Payable as at a date — of the units BILLED on or before `as_at`, those whose per-unit payment date falls after it or is absent, by company × store. A **backdated** payable, which `GET /account/liabilities-due` and the BS `owed_vip` (§4/§23n — current state off the ledger STATUS column, which cannot be backdated) structurally cannot answer. Coverage is derived from the data; an `as_at` outside it returns `coverage.state='not_measured'` with `payable_amount: null`, never $0.00. Non-device items are a separate, billed-basis section. Books nothing, writes nothing |
 | `GET /sales-report` | `15792` | §3 |
@@ -7628,7 +7629,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Is this rep selling, or just handing out the cheap phone — and does it cost us the accessory sale?** Two signals, never blended: accessory $ per box and port-ins per box, each against the median of the reps in view, with `both` the only flagged verdict. The device mix is banded on what the CUSTOMER paid, over the SAME lines the box count is tallied from, and a box-department line the activation predicate classifies as nothing is counted and reported rather than banded as a cheap phone. Two independent floors (10 boxes to rank, 10 classified device lines to make a mix claim) and the relationship is MEASURED every run | `commcalc.daily_sales_feed` ∪ `commcalc.raw_sales` rolled up by `router._sales_cell_agg` (`box_count`, `accessory_rev`, `_port`, and the new `price_cfg` extension's `_dev_bands` / `_dev_models` / `_dev_lines`) × `commcalc.raw_dlar_store.port_pct` through `kpi_failing.port_in_rate` | ONE home `commcalc/product_mix.py` (`resolve_price_cuts` / `band_of_price` / `band_labels` / `model_of` / `cell_price_cfg` / `rep_rows` / `rank` / `rep_prompt` / `correlations` / `store_rollup` / `model_rollup` / `build`), wired by `router._product_mix_payload` → `GET /commcalc/product-mix`; defines no ratio, median or severity cut of its own (all §59's, AST-locked) and imports no router or database; module-graph facts `device_price_band` + `kpi_column_meaning`; lock `harness_product_mix.py` (104 checks) — §62. Live September 2026, re-measured 2026-10-09 on the corrected box basis (house org, 29 reps clearing both floors): cheap-device share vs accessory $ per box **r = −0.18**, free share **r = −0.10**, port share vs accessory $ per box **r = +0.12** — the two signals are INDEPENDENT, which is why the verdict needs both and never blends them — while the two lagging behaviours travel together at **r = +0.50** |
 | **The equipment rebate on a store's P&L is thousands below the equipment reimbursement — which devices account for it, and was anything actually not paid?** Per device: the claim, the cost, what the store charged, who sold it, and which store the carrier paid. "The carrier paid a DIFFERENT store" is its own verdict and never "we were never paid"; nothing paid anywhere on a short-statement month is `not_measured` with the missing days named | `commcalc.asset_ledger` (claim, cost, sale price, device id) × `commcalc.raw_payment_detail` (the carrier's per-LINE feed — `imei`, `amount`, `payment_type`, `rep_username`), both keyed through §64 `coa.store_resolver` | the DEVICE-GRAIN layer of the §19.53 one home `commcalc/device_reimb_recon.py` (`carrier_line_side` / `device_lines` / the four `LINE_*` verdicts), wired by `router._device_line_reimb_run` → `GET /commcalc/device-line-reimbursement`; module-graph fact `device_reimbursement_paid_vs_claimed`; lock `harness_device_line_reimbursement.py` (74 checks) — §65. Live September 2026, house org: store `652 Communipaw Avenue` claims $15,274.91, the carrier paid it $10,314.93 and paid **another store $5,004.98** on 15 of its devices, and **$0.00** was unpaid anywhere; estate-wide 140 devices and $43,568.83 sit on one store's cost with another store's money |
 | **An entitlement is a COUNT OF MONTHS per store — did every one of them arrive, and which store-month did not?** The missing store-month is NAMED, store and month, and only when the month's payment run demonstrably arrived for other stores; a month no payment reached us for at all is its own bucket (our ingest, never the carrier); a month that has not finished is not owed; and a store whose FIRST entitled month is not declared is `not_measured` with that reason — never accused of its whole term, because nothing in any feed says when a store's entitlement began | `commcalc.raw_payment_detail` ∪ `commcalc.raw_comp_report` (the carrier's two records of ONE payment, UNIONED so a feed that lags is never read as an absence), the entitlement types from `commcalc.payment_categories` through §57 `payment_category.load_map`, every store key through §64 `coa.store_resolver`, the window from `commcalc.commission_org_config.mdf_entitlement_config` (mig `1068`) | ONE home `commcalc/entitlement_coverage.py` (`entitlement_store_months` — **THE "expected but absent" home at store × month grain; dereference it rather than growing a second** — plus `entitlement_window` / `entitlement_type_matcher` / `normalize_config` / `config_from_rows` and the five `ROW_*` statuses), wired by `router._mdf_entitlement_run` → `GET /commcalc/mdf-entitlement-coverage`; the calendar is `feed_period.month_state` / `period_month_year` and the tri-state verdict is `pay_data_quality.VERDICT_*`, IMPORTED so the strings cannot drift; lock `harness_mdf_entitlement_coverage.py` (96 checks) — §68. Live 2026-10-10, house org: 6 stores, 44 payments, **$287,500.00** from March 2026; **`3565 Broadway` ($7,300/mo) stops after July** and **`103 Fulton Ave` ($5,000/mo) after September** — 4 store-months NAMED and reported `not_measured`, because no store's start month is declared yet |
-| **The equipment rebate on a store's P&L is thousands below the equipment reimbursement — which devices account for it, and was anything actually not paid?** Per device: the claim, the cost, what the store charged, who sold it, and which store the carrier paid. "The carrier paid a DIFFERENT store" is its own verdict and never "we were never paid"; nothing paid anywhere on a short-statement month is `not_measured` with the missing days named | `commcalc.asset_ledger` (claim, cost, sale price, device id) × `commcalc.raw_payment_detail` (the carrier's per-LINE feed — `imei`, `amount`, `payment_type`, `rep_username`), both keyed through §64 `coa.store_resolver` | the DEVICE-GRAIN layer of the §19.53 one home `commcalc/device_reimb_recon.py` (`carrier_line_side` / `device_lines` / the four `LINE_*` verdicts), wired by `router._device_line_reimb_run` → `GET /commcalc/device-line-reimbursement`; module-graph fact `device_reimbursement_paid_vs_claimed`; lock `harness_device_line_reimbursement.py` (89 checks) — §65. Live September 2026, house org: store `652 Communipaw Avenue` claims $15,274.91, the carrier paid it $10,314.93 and paid **another store $5,004.98** on 15 of its devices, and **$0.00** was unpaid anywhere; estate-wide 135 devices and $41,548.83 sit on one store's cost with another store's money |
+| **The equipment rebate on a store's P&L is thousands below the equipment reimbursement — which devices account for it, and was anything actually not paid?** Per device: the claim, the cost, what the store charged, who sold it, and which store the carrier paid. "The carrier paid a DIFFERENT store" is its own verdict and never "we were never paid"; nothing paid anywhere on a short-statement month is `not_measured` with the missing days named | `commcalc.asset_ledger` (claim, cost, sale price, device id) × `commcalc.raw_payment_detail` (the carrier's per-LINE feed — `imei`, `amount`, `payment_type`, `rep_username`), both keyed through §64 `coa.store_resolver` | the DEVICE-GRAIN layer of the §19.53 one home `commcalc/device_reimb_recon.py` (`carrier_line_side` / `device_lines` / the four `LINE_*` verdicts), wired by `router._device_line_reimb_run` → `GET /commcalc/device-line-reimbursement`; module-graph fact `device_reimbursement_paid_vs_claimed`; locks `harness_device_line_reimbursement.py` (89 checks) and `harness_batch16_drilldown.py` — §65.  **DRILL-DOWN §CORE-17.3p:** TWO GRAINS on one device row separated only by PROVENANCE (§CORE-17.3n) — the claim, the cost, the price the store charged and the two unpaid buckets out of the unit ledger, what the carrier paid HERE and at a DIFFERENT store out of its own per-line feed. A device the feed never named carries no figure and names NO table; with no routing declared the two paid panels are not served at all. NOT narrowed: the verdict picker filters the table in the browser while the tiles are the server's fold — reported. Declaration `commcalc/device_financing_drilldown.py`. Live September 2026, house org: store `652 Communipaw Avenue` claims $15,274.91, the carrier paid it $10,314.93 and paid **another store $5,004.98** on 15 of its devices, and **$0.00** was unpaid anywhere; estate-wide 135 devices and $41,548.83 sit on one store's cost with another store's money |
 | **Which store should carry a handset's cost when the ledger stocked it at one door and the carrier paid another?** The store the carrier PAID, for the devices the per-device reconciliation proved; everything it could not measure stays on the distributor ledger's store and is reported. Per-store only — the company total never moves | `commcalc.asset_ledger` (the cost and its stocking store) × §65's per-device verdict, declared per org by `commcalc.account_config.device_cost_store_basis` (mig 1069) | `account/device_cogs.cost_store` — the ONE placement — over `resolve_device_cost_store_basis` / `load_activation_index` → `device_reimb_recon.activation_store_moves`; the identity side is `store_identity.shared_identity_pairs` / `.may_be_one_store` via `coa.shared_store_identity_pairs`; called by `device_cogs._vip_sold_cost`, period handed down by `coa.build_inputs`; module-graph fact `device_cost_store`; lock `harness_device_inventory_cogs.py` §H (89 checks) — §70. Live Jun–Oct 2026, house org: **468 devices, $195,155.32** across 100 store pairs, netting to **$0.00** company-wide. OFF until declared |
 | **What does a store-day DECLARE, what was it worth, and which employee generated the most of it?** — folded across the two physical stores, with every catalog metric present (zeros and `declared: False`) so "declared nothing" is distinguishable from "has no such category"; a store-level figure is NEVER attributed to a person, and the submitter is never credited with the store's day | `commcalc.closing_count_field_def` (mig `501` + `1072`: `value_kind` / `declared_by` / `unit_price` / `in_revenue`) × `commcalc.daily_closing.counts` + the three physical columns × `commcalc.closing_metric_line` (mig `1072`) × `commcalc.closing_tender_def` (mig `111`, read-only) | ONE home `closing/metric_catalog.py` (`build` / `storage_for` / `declared` / `by_employee` / `gross_revenue` / `employee_revenue` / `revenue_keys` — pure, DB-free) → `GET /closing/metric-catalog`, `GET /closing/declared/{date}`, `PUT /closing/metric-lines`, the closing form and the Count Fields editor; lock `harness_metric_catalog_lock.py` (38) — §76. `gross_revenue` is THE definition of a day's sales, so a target and a payout rule cannot disagree about it |
 | **What does a day's declared categories PAY each employee?** — three shapes only (`per_unit`, `percent_of_amount`, `threshold_pool`); every rule, category, rate, threshold and split is a CONFIG ROW, so no tenant vocabulary reaches the code (asserted over the stripped executable text). A gate that cannot be VERIFIED fails CLOSED, an unresolved input is zero production, and **a pool whose split cannot be measured is returned `unallocated` with a reason rather than split evenly** | `commcalc.incentive_rule` + `incentive_rule_assignment` (mig `1072`) × the declared store-day above × `storeops.shifts` (actual hours where recorded, else scheduled) | ONE home `commcalc/daily_incentive.py` (`compute_day` / `measure` / `split_pool` — pure) → `GET /commcalc/daily-incentive/{date}`; scope precedence REUSES `management_incentive.resolve_plan`, never a second ladder; screen `/commcalc/incentive-rules`; proof `harness_daily_incentive.py` (83, the owner's six live rules replayed as config) — §76.4. **Computes only — persisting and paying is not this endpoint's** |
@@ -7656,6 +7657,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Which month does this feed row belong to, and what does this upload replace?** — the row's OWN data date, and the DAYS the file covers; never the period an operator picked or the month a sweep ran in. All or nothing: a row that cannot prove its day keeps the period replace | `data_lineage_registry.day_keyed_date_columns()` (+ `PERIOD_GRAIN_REASONS` for the archives) | ONE parser `commcalc/feed_period.py` (`period_of_day` / `month_spread` / `day_stamp`); dereferenced by the manual upload and the nightly sweep; lock `harness_feed_day_grain.py` (85) — §19.46. Live 2026-10-05: 80,614 payment-detail rows / $579,926.24 were filed under the wrong month, October reading 28x its own $15,460.69 |
 | **Is this background job running, and may its control be pressed?** — a press is a request; the job runs until the SERVER says otherwise, so a run in flight disables its own button | `job-run.isRunning` / `buttonState` / `settleStatus` / `nextPollDelay` | every job control dereferences it (⚡ Run Calculation, the daily-closing and connector Run-now buttons, the auto-calc notice); `commcalc.router._calc_status_pick` decides WHICH `calc_status` row is the month's; lock `frontend/prove_job_run.mjs` (87) — §6q. Live 2026-10-06: the August run took 56s while the page asked once at 2s and the button never disabled, so a second press earned the single-flight 409 |
 | **Is this processor line commission or a rebate?** — the org's own declared category for the payment type, with "never mapped" kept as its own answer rather than folded into either | `commcalc.payment_categories` (the tenant's map) × the processor feed's own `payment_type` | `payment_category.category_of` → `processor_ledger.assemble` → `GET /commcalc/processor-ledger` (`categories=`), Category column + filter on the page; proof `harness_payment_category.py` (30), lock `harness_payment_category_home_lock.py` — §57 |
+| **How many devices did each store finance this month, for how much, and against what target?** A financed sale rings MANY lines carrying one tender (the handset, the plan, the case, the fees), so counting lines would report one financed phone as eight financings. This counts DEVICES, through the payout's own per-device collapse, so the report's count and the count that pays agree by construction. The AMOUNT is labelled rather than guessed: the export's own financed-amount column is not stored (populated on 1 of 12,988 rows on a real 78-column export), so the figure is the Ext Price of the financed device line and the page says so | the display sales union via `router._sales_rows_union` x `commcalc.financing_vendor` + `financing_detection_rule` (mig `272`, the per-org detection rules — never a branch) x `commcalc.financing_target` (mig `273`) | pure `commcalc/financing_report.build` → `GET /commcalc/financing/{period}`; detection resolved by `financing_registry.resolve_vendors`, units by `plan_pay_gate`, targets by `financing_tiers`; page `commcalc/financing/page.tsx` under the active-carrier lens (`lib/carrier-scope.financingVendorLabel`), which is why the drill-down carries the vendor in the row KEY and never in its words.  **DRILL-DOWN §CORE-17.3p:** financed dollars and financed units open to the (vendor x store x rep) rows — one row and one provenance in two UNITS, therefore two grains (§CORE-17.3l) — with the sales provenance resolved off the read's OWN meta through `processor_money_drilldown.sales_union_tables`, and a read that resolves to nothing reporting an origin it could not trace. NARROWED through `lib/drill-narrow`, each tile read OFF its narrowed panel. Declaration `commcalc/device_financing_drilldown.py`, proof `harness_batch16_drilldown.py` |
 | **WHAT IS THE % ACTUALLY BEING PAID ON, and what would each of the owner's options have paid?** The owner's 2026-07 report (a $24.99 screen protector paying $0.00 beside a $14.99 pair of headphones paying $0.90) is two INPUT problems, not a payout bug: `raw_sales` carries no cost column, so cost is IMPLIED as `ext_price − gp` and an item whose catalogue cost equals its retail price has GP $0.00 by arithmetic; and `commission_rule.pct` is a FRACTION with no clamp on save, so a rate typed as a whole percent pays 100× | the sale lines the live plan engine matched (`commission_engine.preview(detail=True)` over `_read_sales`) × `commcalc.commission_rule.pct` × `commcalc.raw_catalog.cost` for Option A | `commcalc/accessory_cost_audit.audit` → `GET /commcalc/accessory-cost-audit/{period}`; RECOMPUTES NOTHING — `current` is read out of the very function the calculate path pays from, and every option is a linear re-base of the same per-line numbers.  **DRILL-DOWN §CORE-17.3o:** the five option totals and the three per-rep differences open to the rep rows; Option A is its own grain because it reads the catalogue as well, and the Option-A difference gets no panel because the page subtracts it at the TOTAL. Declaration `commcalc/accessory_money_drilldown.py`, proof `harness_batch15_drilldown.py`. **Reported:** the audit calls `preview` with no `source_mode`, so a mig-306 `union` tenant is audited on the legacy sales universe while being paid on the union |
 | **WHICH ACCESSORY SALES ARE PRICED WRONG, AND WHAT IS THE CHARGEBACK EXPOSURE?** Accessories rung out ABOVE the org's max threshold or BELOW its allowed minimum (underselling), per store and per employee, with the whole receipt behind any row so the line can be read in context before anybody is charged | `commcalc.raw_sales` ALONE (not the display union — reported), classified through `commcalc.item_mapping` with a department/category guess as the fallback, thresholds and the default amount from `commcalc.flag_rules` | `router.accessory_flags` → `GET /commcalc/accessory-flags`, its `/receipt` sibling and the gated `/push` into `chargeback_review`.  **DRILL-DOWN §CORE-17.3o:** the two MONEY tiles open to the flagged lines; the rung-out total names the monthly upload and the exposure names the flag-rules row, because one is a measurement of a sale and the other is a setting applied to it. The counts and the three rollup cards get no panel — the table below is the list they count and re-partition |
 | **Did this pay figure account for every dollar the carrier paid?** — placed in a pay bucket, or reported unplaced with a reason; never silently dropped. The reasons are `unmapped_payment_type`, `unhandled_category`, `unresolved_rep`, `no_rep_named` | `commcalc.payment_categories` (the org's OWN map, never copied) × the logins that rang a sale in the period | `pay_data_quality.reconcile_pay_feed` → `GET /commcalc/pay-feed-balance`; `balances` is the proof `placed + unplaced == feed_total`; lock `harness_pay_feed_balance.py` (107) — §19.48. Live 2026-10-06: August's feed held $408,989.99 and the engine placed $68,479.60 — $288,813.11 unmapped, $16,952.28 on 73 unreachable logins |
@@ -10308,13 +10310,31 @@ checks, was 49.
 **THE SERIOUS HALF WAS THE SECOND FACT, and it is much larger than one file.** Measured: **400 harnesses on disk, 65
 run by a workflow, 335 run by nothing.** A harness no workflow runs is not a gate, it is a file — the §19.25 class in
 its third direction, beside *a failing harness must fail CI* (§19.25) and *a harness CI runs must be able to import in
-its job* (§19.25b). All three now live in `backend/harness_ci_pipefail_lock.py`. The third is a **RATCHET**, not a hard
+its job* (§19.25b). All three live in `backend/harness_ci_pipefail_lock.py`. The third is a **RATCHET**, not a hard
 gate, because wiring 335 harnesses into CI in one change would multiply the build and is the owner's call, not a
 lock's: `backend/harness_unrun_pending.txt` is the debt list, a NEW harness must be run by some workflow, the list may
 only SHRINK, and a name that becomes run (or stops existing) must be de-registered or the build fails — a debt list
 that does not shrink when the debt is paid stops measuring anything. Same shape as `frontend/table_sort_pending.txt`.
 Pinned at **334**: this change wires `harness_activation_bucketing.py` into `carrier-vocab-guard.yml` (stdlib job —
 its placement checked by the §19.25b rule), so the list shrinks by one on the very change that introduces it.
+
+
+**THE FOURTH DIRECTION, SAME CLASS — A WORKFLOW THAT DOES NOT PARSE RUNS NOTHING (2026-10-26, batch
+16).** A step name was written unquoted with a colon-space inside it (`... WHICH RELATION ANSWERED:
+what ...`). In YAML a plain scalar may not contain `": "`, so **the whole file failed to parse** and
+GitHub ran **zero of `carrier-vocab-guard.yml`'s 38 jobs** — the vocabulary guard, the fifteen batch
+drill locks and the pipefail lock itself, all unenforced — while reporting ONE red check with no job
+under it, which is indistinguishable from a single failing lock and would have been "fixed" by a push
+that changed nothing. Rules one to three judge the STEP; **the fourth judges the FILE**, because a
+gate whose file cannot parse takes every other gate in that file down with it. It lives in
+`harness_ci_pipefail_lock.py` and not in the batch harness that surfaced it for the reason that makes
+it work at all: **ten workflows run this lock**, so a file broken tomorrow is caught by the nine that
+still parse — something a lock living inside the broken file could never do. Stdlib only, so there is
+no YAML parser to lean on: the detector is NARROW and says so, flagging a plain scalar after `name:`
+or `run:` that carries a colon-space, with five negative controls — the exact line that broke the
+build goes RED, a `run:` carrying one goes RED, the QUOTED and BLOCK forms stay green, and a
+colon-space injected into **each** workflow on disk is caught, so the scan is not blind. 47 → **53
+checks**.
 
 **Ratchet 325 → 324, 2026-10-08 (owner: "do it").** `harness_db_resilience.py` is de-registered and now runs in the
 `db-resilience-proof` job of `carrier-vocab-guard.yml` (pip-install job — it imports the app and inspects the installed
@@ -34538,7 +34558,9 @@ Batch 15 of the §CORE-17 audit, the ACCESSORY MONEY family (commission agent):
 **`/commcalc/accessory-cost-audit`** (Accessory Cost Audit) and **`/commcalc/accessory-flags`**
 (Accessory Flags). Owed count **56 → 53**. Declaration:
 `backend/app/modules/commcalc/accessory_money_drilldown.py`. Proof:
-`backend/harness_batch15_drilldown.py`, **92 checks**, §Z1–§Z12 negative controls, wired into the
+`backend/harness_batch15_drilldown.py`, **95 checks** (92 at batch 15; its §E9 ratchet lock was
+re-written SHRINK-ONLY with three negative controls by batch 16 — §CORE-17.3p), §Z1–§Z12 negative
+controls, wired into the
 carrier-vocab-guard lock job.
 
 Chosen as one family because the three of them answer one owner question in three parts: *what
@@ -34688,6 +34710,196 @@ DERIVED target has two ways of being absent that an unset target does not), and 
 `sourceLabels` entries (`commission_rule`, `flag_rules`) for the two config relations a figure here
 names.
 
+### §CORE-17.3p TWO GRAINS ON ONE ROW, AND THE ONE WHOSE CATALOGUE ALREADY EXISTED (2026-10-26, batch 16)
+
+Batch 16 of the §CORE-17 audit, the DEVICE-FINANCING family (commission agent):
+**`/commcalc/vip`** (Distributor Invoices), **`/commcalc/vip/paygo`** (Distributor Asset Lending),
+**`/commcalc/device-line-reimbursement`** (Equipment Reimbursement per Line) and
+**`/commcalc/financing`** (Financing report). Owed count **53 → 49**. Declaration:
+`backend/app/modules/commcalc/device_financing_drilldown.py`. Proof:
+`backend/harness_batch16_drilldown.py`, **106 checks**, §Z1–§Z15 mutations, wired into the
+carrier-vocab-guard lock job.
+
+Chosen as one family because all four answer one owner question in four parts: *what did financing a
+device cost us, what did the distributor bill for it, what did the carrier reimburse, and on which
+lines.*
+
+**THE SETTLED RULINGS THIS BATCH DOES NOT RE-ARGUE.** Carrier promo / offer / upgrade money is device
+REIMBURSEMENT and not commission, and the distributor's figure is a CLAIM about that same payment
+rather than a second payment (owner, 2026-10-08, §19.52 / §65). The declaration carries that posture
+through; it does not restate it and it decides nothing about any dollar.
+
+**THE GRAIN COUNT, MEASURED OFF THE PRODUCERS (§CORE-17.3l).** Reading
+`vip_invoice_filter.summarize`, the PayGo summary fold, `device_reimb_recon.device_lines` and
+`financing_report.build` gives **SIX** grains in **FOUR** row shapes and **TWO** units:
+
+| grain | row | why it is its own |
+|---|---|---|
+| a DISTRIBUTOR STORE SPELLING's invoiced money | the invoice rollup's own row | money, out of the distributor invoice feed. SEVEN figures on it — the subtotal, the grand total and each of the five fee buckets — because all seven are the same fold differing only in which column held the figure |
+| a WEEKLY LENDING BATCH's billed amount | one approved batch | money, out of the weekly batches — **and this grain was already declared**, by §CORE-17.3l's `asset/device_asset_drilldown.lending_catalogue`. See the reuse note below |
+| a DEVICE's CLAIM | one ledger row per handset | money, out of the distributor's unit ledger. FIVE figures: the claim, the cost, what the store charged, and the two unpaid buckets, which are the same claim column under two verdict predicates |
+| a DEVICE's CARRIER PAYMENT | the SAME device row | the same unit as the one above and a completely different provenance — the carrier's own per-line feed (§CORE-17.3n) |
+| a (VENDOR × STORE × REP) row's FINANCED DOLLARS | the financing detail row | money, out of the sales display union as THE READ ITSELF reports it |
+| the same row's FINANCED UNITS | the same row | the same provenance in a different UNIT, and not cosmetically: the dollars are an Ext Price stand-in while the units are the payout's own device collapse, so the two are trustworthy to different degrees and the notes say which |
+
+**Grains 3 and 4 are the same device row in the same unit and are still two grains.** That is
+§CORE-17.3n's ruling, and this family is where it bites hardest: the reader is being asked to dispute
+a carrier, and a panel that pooled "what we claimed" with "what arrived" would be evidence for
+neither side of that dispute. §Z7 mutates exactly that — one panel naming both relations on every row
+— and it comes back red.
+
+**THE DUPLICATE CHECK FOUND A CATALOGUE THAT ALREADY EXISTED, AND THAT IS THE INTERESTING HALF.**
+`GET /commcalc/vip/paygo/summary` has attached `lending_drilldowns` since batch 12, for
+`/commcalc/asset/lending`, which reads the SAME endpoint. The PayGo page read that endpoint and threw
+the panels away. So "Lifetime billed" was one figure with evidence on one screen and none on the
+other, and the coverage ledger recorded `/commcalc/vip/paygo` as owing a drill-down **that was
+already in its own payload**. The fix was therefore the WIRING, and this batch wrote no second
+catalogue over those rows: `device_financing_drilldown.PAYGO_CATALOGUE` is bound to the device-asset
+family's function BY IDENTITY, and §A11 / §Z15 fail the build if a local copy appears. Two folds of
+one figure would have been two numbers hoping to agree.
+
+**THE §CORE-17.3o CALL, MADE FOUR WAYS IN ONE BATCH AND LOCKED IN BOTH DIRECTIONS.**
+
+| route | call | why |
+|---|---|---|
+| `/commcalc/vip` | NOT narrowed | every filter is a QUERY PARAMETER, so the server folds the tiles, the fees panel, the per-store table and the panels over one selection. The invoice search box narrows that one table and moves no tile |
+| `/commcalc/vip/paygo` | NOT narrowed | no client-side filter exists at all |
+| `/commcalc/device-line-reimbursement` | NOT narrowed | the VERDICT multi-select filters the table in the BROWSER while all six tiles are the server's fold. Narrowing would make each tile read a different number under a filter — a figure moved. REPORTED (defect 7) |
+| `/commcalc/financing` | **NARROWED** | the page already recomputes financed units and financed dollars in TypeScript from the filtered rows, which is the §CORE-17.3d class. Both panels are narrowed to that selection and each tile is READ OFF its narrowed panel |
+
+`harness_batch16_drilldown.py` §F5 fails the build if `drill-narrow` appears on any of the three, §F6
+fails it if it stops being wired into the fourth **or if that page stops reading its tiles off the
+narrowed panels**, and §F6b proves neither scan is vacuous — the text really is found on a page in
+that class and really is absent from one outside it. A later reader can move neither page into a
+class it was never in.
+
+**WHAT GETS NO PANEL, AND WHICH RULING SAYS SO.**
+
+- **"Fees (all types)" on the invoices.** `summarize` adds the five buckets at the TOTAL and folds no
+  per-store fees figure, so there are no rows behind it — the §CORE-17.3k test with the answer it
+  usually gives a difference, applied to a sum. The five it is composed of each DO drill, and the
+  per-store table prints all five per store. §Z9 shows what a panel for it would assert.
+- **Every count whose list is on screen.** The invoice count, the weeks of history, the per-verdict
+  device counts (the verdict picker prints each one) and the financing transaction count.
+- **The open lending week's two figures.** Two columns of ONE stored batch row — batch 10's leaf
+  ruling, already written into the catalogue this batch reuses.
+- **"Stores hitting target".** Two counts printed as a ratio, over targets that are declared numbers
+  rather than measurements (§CORE-17.3h + §CORE-17.3m).
+- **The per-vendor financing tiles.** A re-partition of exactly the rows the two served panels open
+  to, and the Vendors tab prints each vendor's own units and amount as its own total.
+- **Carrier money with no device on it.** Reported in its own banner precisely BECAUSE it could not
+  be placed on a device, so at a per-DEVICE grain it has no rows at all.
+- **One invoice's contents.** `GET /commcalc/vip/invoice/{id}` already opens any invoice to its line
+  items and its devices, and the table links it from the row.
+
+**ABSENCE IS NEVER ZERO, AND THE PAID PANELS ARE NOT SERVED WHEN NOTHING IS DECLARED.** A device the
+ledger records no sale price for, and a device the carrier's feed never named at all, are SHOWN and
+NOT counted — the second naming **no table**, which the panel reports as a countable untraceable
+origin (§CORE-17.3i). A device the feed DID name keeps its measured $0.00 at this store, because it
+really was paid at another one: the LOOKUP is the question, not the amount. And with no
+device-financing routing declared at all, the two paid panels are not served, because a $0.00 figure
+over rows every one of which carries no number is the absence of a figure rather than a figure
+(§D13, §Z6 — the shape batch 15's own control was written to catch).
+
+**THE VENDOR IS IN THE KEY AND NEVER IN THE WORDS.** The financing page relabels every vendor
+generically under a dual-carrier lens (`lib/carrier-scope.financingVendorLabel`) so a brand never
+reaches a screen it should not, and the shared panel is not behind that lens. So the vendor travels in
+the row KEY, where it addresses the row, and no panel label or field names it (§E7). That is the
+house's own carrier-vocabulary posture applied to a drill-down, and it is the first time this
+programme has met it.
+
+**LIVE DEFECTS — ONE FIXED, TEN REPORTED, NO FIGURE MOVED** (plus two defects in the batch locks
+themselves, fixed as a class — below).
+
+1. **The PayGo page rendered no drill-down although its own endpoint had been serving two panels
+   since batch 12.** **FIXED** by wiring, and by reusing the catalogue (see above).
+2. **A SECOND pending lending batch vanishes from every figure AND from the table.** The fold takes
+   `max(pending, key=created_on)` as "current" and the page renders `current + history`, where
+   history is the APPROVED batches alone. Where two batches are pending, the older one is in no tile,
+   no total and no row: money owed that nothing on the page carries. NOT fixed — the repair changes
+   what the endpoint returns — and §C5/§C6 pin it as a regression so it cannot be "fixed" by a change
+   that hides it instead.
+3. **`lifetime_paid` coerces a NULL batch amount to $0.00**, so a week nobody was billed for and a
+   week whose amount the portal never reported are identical in the total. The row-level half was
+   already fixed by the reused catalogue; the total itself stays REPORTED (§C4).
+4. **"Fees (all types)" is added at the TOTAL** — see the refusals above.
+5. **The distributor invoices are rolled up per the DISTRIBUTOR's OWN SPELLING of a store address,
+   not per physical store.** `summarize` keys `by_store` on `location`, so one store under two
+   spellings is two rows in the table and two rows in every panel — measured by the module itself (29
+   spellings, 26 bindable). The market / store FILTER does resolve spellings through the org
+   vocabulary, which is why the two can disagree about how many stores there are. NOT fixed:
+   re-keying that rollup moves every row and every figure in the table.
+6. **An invoice with no location at all folds into one row labelled with an em dash**, naming the
+   invoice feed and no store. True, and reported rather than tidied away (§B7).
+7. **The per-line report's six tiles are the server's fold while the verdict filter narrows the table
+   in the browser** — this section's ruling, applied. NOT fixed, for the §CORE-17.3o reason.
+8. **Device-financing money the carrier paid on a line carrying no device identifier is in no
+   per-store figure.** Correctly so, and already reported in its own banner; stated here so the
+   absence of a panel is never read as an oversight (§D11).
+9. **`device_cost` coerces an unrecorded cost to $0.00 with no recorded-flag.** The sale price has
+   `store_payment_recorded` and the cost has no equivalent, so a device whose cost the ledger never
+   carried is indistinguishable from a free one and the cost total is silently light. NOTHING IN THE
+   PAYLOAD distinguishes the two and inventing the distinction here would be a guess — the batch-15
+   defect-7 precedent. REPORTED (§D10).
+10. **On the financing strip, two tiles move under a filter and two do not.** Financed units and
+    dollars are recomputed in the browser; the per-vendor tiles beside them are the server's own
+    `by_vendor` fold. So ONE STRIP holds both §CORE-17.3o classes at once. The two client-folded tiles
+    are narrowed and read off their panels; the per-vendor tiles are served no panel, and the
+    disagreement is REPORTED rather than resolved by moving one of them.
+11. **The financing report tells the payload, and nobody, when it counted units the FALLBACK way.**
+    `_collapse_units` falls back to a per-TRANSACTION collapse when the payout's own device gate is
+    unavailable and records `unit_fallback_per_transaction` in `unit_notes` — which the page declares
+    in its response type and renders nowhere. So the one circumstance in which the report's units are
+    NOT the payout's units is invisible. **The units panel's note now says so when the payload says
+    so** (§E8, §Z12), which is the half a drill-down can honestly fix; the screen's own silence is
+    REPORTED.
+
+**AND TWO DEFECTS IN THE LOCKS THEMSELVES, EACH FIXED AS A CLASS.** *(one)* Batch 15's §E9 asserted the ratchet's
+VALUE (`"OWES_MAX = 53" in COV`, and the owed line-count `== 53`), so it went RED the moment this
+batch correctly lowered the pin to 49. That is not bad luck: batch 10 pinned `== 74` and went red on
+batch 11, batch 11 rewrote both as `<=`, and batch 12 wrote the ruling down in prose — *"SHRINK-ONLY,
+and it must not be re-tightened to `==`"* — which batch 15 then re-tightened anyway. **A ratchet lock
+asserts the DIRECTION, never the value**, because a lock that expires on the next correct change
+trains the next reader to edit the number, and that is how a ratchet becomes decoration. Fixed for
+the CLASS and not for the batch that surfaced it: batch 15's §E9 and batch 16's §F10 are both now
+`_owes_max(...) <= <own number>`, with the pin and the ledger's owed line-count required to AGREE,
+each with three negative controls — a pin ABOVE the batch's own number is red, a LATER batch's lower
+pin passes without touching the file, and a ratchet whose pin cannot be read at all is red rather
+than absent (§E9b–d, §F10b–d). Batch 15's harness goes 92 → 95 checks and batch 16's 103 → 106, and
+nothing was skipped, disabled or loosened to get there: "never rises, ever" is strictly stronger than
+an equality that only ever held for one batch.
+
+*(two)* **The run step this batch added to `carrier-vocab-guard.yml` carried an unquoted step name
+with a colon-space in it, and a plain YAML scalar may not contain `": "` — so the FILE did not parse
+and GitHub ran ZERO of that workflow's 38 jobs** while reporting one red check with no job under it.
+Every lock in that file was unenforced for one push, and the failure looks exactly like a single
+failing lock. The name is fixed, and the CLASS is locked in the one home that can see it: **the fourth
+rule in `harness_ci_pipefail_lock.py`** (§19.25, 47 → 53 checks), which ten workflows run — so a file
+broken tomorrow is caught by the nine that still parse, which a lock inside the broken file never
+could be. Five negative controls, including a colon-space injected into EACH workflow on disk.
+
+**NO FIGURE MOVED, PROVED FALSIFIABLY.** §G reproduces each screen's own pre-batch fold — the
+invoices' `totals` and `fees_by_type`, the per-line report's `totals`, the financing page's own
+`shown.reduce` — and compares them to the panel each tile now reads, unfiltered AND under a real
+filter that drops rows, with a non-vacuity witness asserting rows really were dropped (§G1b, §G2b,
+§G3b). §G3e pins the refusal: a capped panel cannot be narrowed honestly, so no drill is offered and
+the screen keeps its own number. §G4 pins the safety net — a panel ONE CENT away from its tile offers
+no drill — through the SHARED `agreesToTheCent` gate on all four pages (§G5). §Z1–§Z15 then tamper
+with one side at a time: a one-cent total, a dropped row, a blank folded in at $0.00 nobody recorded,
+a counted row with no number, a dollar the org never declared as device money read as evidence, a
+paid panel served with nothing declared, the two grains pooled, a narrowed panel on a server-folded
+screen, a composed total given a panel, a tampered carrier line, a tile not read off its panel, a
+units note that does not follow the payload, and the two un-wire / dereference controls. **Each one
+comes back red.**
+
+**No migration, no new table, no money moved** — three read-only `drilldown` keys plus one page wired
+to a panel that already existed, no change to any producer's arithmetic, one registry constant added
+(`DISTRIBUTOR_INVOICES`, which this registry held no literal copy of, so there was nothing to re-key)
+and four new `UNMEASURED_REASONS` entries in the ONE home, which are the PRODUCER's own reason keys
+(`device_reimb_recon.REASON_NO_RULE` / `_DEVICE_UNIDENTIFIED` / `_STORE_AMBIGUOUS` /
+`_COVERAGE_INCOMPLETE`) carrying the reader-facing half only — the batch-11 posture, with §A8/§A10
+failing the build if the keys drift apart or the producer's own wording is copied.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
@@ -34770,17 +34982,17 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 `closing/attempts_drilldown.py`, `commcalc/tender_recon_drilldown.py`, `crm/reports_drilldown.py`,
 `helpdesk/dashboard_drilldown.py`, `account/statement_drilldown.py`,
 `account/liabilities_drilldown.py`, `commcalc/carrier_pay_drilldown.py`,
-`asset/device_asset_drilldown.py`, `commcalc/targets_drilldown.py`, `commcalc/processor_money_drilldown.py`, `commcalc/accessory_money_drilldown.py`), §17 (`GET
+`asset/device_asset_drilldown.py`, `commcalc/targets_drilldown.py`, `commcalc/processor_money_drilldown.py`, `commcalc/accessory_money_drilldown.py`, `commcalc/device_financing_drilldown.py`), §17 (`GET
 /closing/cash-variance` → `drilldown`; `GET /commcalc/discrepancy/{period}` → `drilldown` +
 `drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET
 /commcalc/commission-received-breakout` → `drilldown`; `GET /asset/summary`, `GET
 /asset/charges-summary`, `GET /asset/on-inventory-by-store`, `GET /asset/owed-weekly`, `GET
 /asset/inventory-recon`, `GET /asset/borrowings`, `GET /commcalc/vip/paygo/summary` →
 `drilldown`; `GET /commcalc/targets/{period}/calendar`, `GET /commcalc/targets/{period}/summary`,
-`GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards`, `GET /commcalc/billpay-extract/{period}`, `GET /commcalc/epay/fee-recon`, `GET /commcalc/processor-ledger`, `GET /commcalc/accessory-target-plan/{period}`, `GET /commcalc/accessory-cost-audit/{period}`, `GET /commcalc/accessory-flags` →
+`GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards`, `GET /commcalc/billpay-extract/{period}`, `GET /commcalc/epay/fee-recon`, `GET /commcalc/processor-ledger`, `GET /commcalc/accessory-target-plan/{period}`, `GET /commcalc/accessory-cost-audit/{period}`, `GET /commcalc/accessory-flags`, `GET /commcalc/vip/summary`, `GET /commcalc/device-line-reimbursement`, `GET /commcalc/financing/{period}` →
 `drilldown`), §18 ("where is this figure from" → `panel.sources` → `sourceLabel`; "did the
 carrier pay what we computed, and out of which legs" → §CORE-17.3k; "which devices is this
-store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
+store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
 (`sourceLabel`), §2 / `data_lineage_registry.py` (which table is which feed), §15 (the B2B ↔ MA
 activation recon these three reports read), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
 module graph).

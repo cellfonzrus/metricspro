@@ -334,6 +334,46 @@ def _load():
             for f in os.listdir(WORKFLOWS) if f.endswith((".yml", ".yaml"))}
 
 
+
+# ── THE FOURTH RULE — A WORKFLOW THAT DOES NOT PARSE RUNS NOTHING ────────────────────────────────
+# THE FOURTH DEFECT, SAME CLASS (found 2026-10-26, batch 16). A step name was written unquoted with
+# a colon-space in it:
+#
+#     - name: Run the batch-16 drill lock (... separated only by WHICH RELATION ANSWERED: what ...)
+#
+# In YAML a plain (unquoted) scalar may not contain `": "` — the colon re-opens a mapping — so the
+# WHOLE FILE failed to parse. GitHub then ran **zero jobs** out of `carrier-vocab-guard.yml`'s 38
+# and reported one red check with no job under it. Every lock in that file — the vocabulary guard,
+# the fifteen batch drill locks, this one — was unenforced, and the red check looks exactly like a
+# single failing lock, which is how it would have been "fixed" by a push that changed nothing.
+#
+# That is this file's own thesis one level up: **a gate that cannot run is not a gate**, and a gate
+# whose FILE cannot parse takes every other gate in the file down with it. Rules one to three judge
+# the step; this one judges the file. It is in THIS file, and not in the batch harness that surfaced
+# it, because ten workflows run this lock: a file broken tomorrow is caught by the nine that still
+# parse, which is exactly what a lock living inside the broken file could never do.
+#
+# Stdlib only, so there is no YAML parser here to lean on. The detector is therefore NARROW and
+# states what it covers: a plain scalar after `name:` or `run:` that contains `": "`, which is the
+# construct that actually broke, measured over every workflow in the repo. It fails CLOSED on the
+# class it claims and claims nothing more. The negative controls prove it fires on the exact line
+# that broke the build and stays silent on the quoted and block forms that are legal.
+_PLAIN = re.compile(r"""^\s*(?:-\s+)?(name|run):[ \t]+(?!['"|>&*{\[])(.*\S)\s*$""")
+
+
+def unparseable(files):
+    """Workflow lines whose plain scalar carries a `": "` — the file will not parse at all."""
+    out = []
+    for fname in sorted(files):
+        for n, line in enumerate(files[fname].split("\n"), 1):
+            m = _PLAIN.match(line)
+            if m and ": " in m.group(2):
+                out.append("%s:%d — plain `%s:` scalar contains a colon-space, so the FILE does not "
+                           "parse and every job in it is skipped: %s"
+                           % (fname, n, m.group(1), m.group(2)[:90]))
+    return out
+
+
 def main():
     passed = failed = 0
 
@@ -363,6 +403,27 @@ def main():
     check("the declared default → green", violations({"x.yml": "defaults:\n  run:\n    shell: bash\n\n" + gate}) == [])
     check("a workflow that runs no harness needs nothing → green",
           violations({"d.yml": "jobs:\n  d:\n    steps:\n      - run: echo hi | tee x\n"}) == [])
+
+    # ── THE FOURTH RULE ───────────────────────────────────────────────────────────────────────────
+    broken = unparseable(files)
+    for v in broken:
+        print("  ✗ " + v)
+    check("every workflow FILE parses — a plain `name:`/`run:` scalar carrying a colon-space takes "
+          "every job in its file down with it, and the red check looks like one failing lock",
+          broken == [])
+    _BROKE = ("      - name: Run the batch-16 drill lock (separated only by WHICH RELATION "
+              "ANSWERED: what the distributor CLAIMED)\n")
+    check("NEGATIVE CONTROL — the exact line that broke the build on 2026-10-26 → RED",
+          bool(unparseable({"x.yml": _BROKE})))
+    check("NEGATIVE CONTROL — a `run:` step whose plain scalar carries a colon-space → RED",
+          bool(unparseable({"x.yml": "      - run: echo the answer is: 42\n"})))
+    check("NEGATIVE CONTROL — the QUOTED form of the same name → green",
+          unparseable({"x.yml": '      - name: "ANSWERED: what the distributor CLAIMED"\n'}) == [])
+    check("NEGATIVE CONTROL — a block scalar may carry anything → green",
+          unparseable({"x.yml": "      - run: |\n          echo the answer is: 42\n"}) == [])
+    check("NEGATIVE CONTROL — FAIL CLOSED: the detector really reads every workflow on disk, so a "
+          "colon-space injected into any single one of them is caught",
+          bool(files) and all(bool(unparseable({f: t + _BROKE})) for f, t in files.items()))
 
     # ── THE SECOND RULE ───────────────────────────────────────────────────────────────────────────
     read = _reader(HERE)

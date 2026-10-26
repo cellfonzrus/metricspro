@@ -10,6 +10,10 @@ import EntityPicker from '@/components/EntityPicker'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { financingVendorLabel, vendorServesCarrier } from '@/lib/carrier-scope'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 
 // FINANCING REPORT — owner directive 2026-08-04: "need another report for tracking the financing, edge in
 // case of total and acima in case of boost … should have assignable target for each store in target area".
@@ -52,7 +56,36 @@ type Data = {
   vendors_running_on_defaults?: number
   amount_note: string; attainment_note: string
   source: any
+  drilldown?: Record<string, DrillPanel>
 }
+
+// WHERE THESE TWO FIGURES CAME FROM (index §CORE-17.3p, batch 16). Two grains on ONE row — the same
+// vendor x store x rep row, the same provenance, and two UNITS: the dollars are the Ext Price of the
+// financed device line (a labelled stand-in, see the header) while the units are the payout's own
+// device collapse. Declaration: commcalc/device_financing_drilldown.py.
+//
+// `lib/drill-narrow` IS WIRED HERE, and harness_batch16_drilldown.py §E fails the build if it stops
+// being: this page folds those two tiles ITSELF, in TypeScript, over the rows the reader has filtered
+// down to (§CORE-17.3d). So each panel is narrowed to that same selection and each tile is read OFF
+// its narrowed panel rather than reduced a second time — one fold for the figure and its evidence.
+// It is the ONE page of this batch in that class; the other three print the server's own fold and
+// narrowing them would move a figure.
+//
+// THE PER-VENDOR TILES ARE SERVED NO PANEL. They are the server's `by_vendor` fold, they do NOT move
+// under the filter bar beside them (a reported defect), and they re-partition exactly the rows these
+// two panels open to while the Vendors tab prints each vendor's own units and amount as its own
+// total. "Stores hitting target" gets none either: two counts printed as a ratio, over targets that
+// are declared numbers rather than measurements (§CORE-17.3h + §CORE-17.3m).
+const FINANCING_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.['market'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['market'] ?? '') },
+  { header: 'Transactions', get: (r: DrillRow) => String(r.fields?.['transactions'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['transactions'] ?? 0) },
+  { header: 'First', get: (r: DrillRow) => String(r.fields?.['first'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['first'] ?? '') },
+  { header: 'Last', get: (r: DrillRow) => String(r.fields?.['last'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['last'] ?? '') },
+]
 
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const tile: React.CSSProperties = { flex: '1 1 180px', minWidth: 170, border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px', background: 'var(--surface)' }
@@ -157,9 +190,35 @@ export default function FinancingReportPage() {
       })
   }, [d, shown, filt, vendorSel, multi])
 
-  const t = useMemo(() => shown.reduce((a, r) => ({
+  // The page's own fold over the rows it is showing — kept as the FALLBACK for a payload carrying no
+  // panel, and as the figure a panel that cannot be narrowed honestly (a capped row list) leaves in
+  // place. Where a panel IS served, the tile below reads the panel's number instead, so the figure
+  // and its evidence are one fold.
+  const reduced = useMemo(() => shown.reduce((a, r) => ({
     units: a.units + r.units, amount: a.amount + r.amount,
   }), { units: 0, amount: 0 }), [shown])
+  // THE PANELS, NARROWED TO THE ROWS ON SCREEN — the same selection `shown` is, matched on the row
+  // key the server served with every drill row. A capped panel narrows to null and the drill is then
+  // not offered at all, rather than a smaller number presented as the whole of one.
+  const shownKeys = new Set(shown.map(r =>
+    screenKey({ vendor_key: r.vendor_key, store_code: r.store_code, rep: r.rep })))
+  const keep = (_r: DrillRow, k: string) => shownKeys.has(k)
+  const narrowedAmount = narrowPanel(d?.drilldown?.['amount'], keep)
+  const narrowedUnits = narrowPanel(d?.drilldown?.['units'], keep)
+  const t = {
+    units: agreesToTheCent(narrowedUnits || undefined, reduced.units)
+      ? Number(narrowedUnits?.figure?.amount ?? reduced.units) : reduced.units,
+    amount: agreesToTheCent(narrowedAmount || undefined, reduced.amount)
+      ? Number(narrowedAmount?.figure?.amount ?? reduced.amount) : reduced.amount,
+  }
+  // THE OFFER RULE, ONE HOME: a drill is offered only where the narrowed panel agrees with the tile
+  // to the cent — the shared gate, not a condition this page invented.
+  const narrowed: Record<string, DrillPanel> = {
+    ...(narrowedAmount ? { amount: narrowedAmount } : {}),
+    ...(narrowedUnits ? { units: narrowedUnits } : {}),
+  }
+  const drill = useDrillTile(narrowed, (k, p) =>
+    agreesToTheCent(p, k === 'units' ? t.units : t.amount))
 
   const withTarget = shownStores.filter(s => (s.target_units || 0) > 0)
   const hitting = withTarget.filter(s => (s.attainment_pct || 0) >= 100).length
@@ -215,11 +274,13 @@ export default function FinancingReportPage() {
             <div style={tileCap}>Financed units</div>
             <div style={{ fontSize: 24, fontWeight: 800 }}>{t.units}</div>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>{shown.length} vendor · store · rep rows</div>
+            <DrillTileLinks drills={drill.dl('units', 'rows behind this')} open={drill.open} onToggle={drill.toggle} />
           </div>
           <div style={tile}>
             <div style={tileCap}>Financed amount</div>
             <div style={{ fontSize: 24, fontWeight: 800 }}>{fmt(t.amount)}</div>
             <div style={{ fontSize: 12, color: 'var(--text3)' }}>device price basis</div>
+            <DrillTileLinks drills={drill.dl('amount', 'rows behind this')} open={drill.open} onToggle={drill.toggle} />
           </div>
           <div style={tile}>
             <div style={tileCap}>Stores hitting target</div>
@@ -237,6 +298,10 @@ export default function FinancingReportPage() {
           ))}
         </div>
       )}
+
+      {drill.panel && <div style={{ marginBottom: 14 }}>
+        <DrillDownPanel panel={drill.panel} extraColumns={FINANCING_DRILL_COLUMNS} />
+      </div>}
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
         {(['stores', 'detail', 'vendors'] as const).map(k => (

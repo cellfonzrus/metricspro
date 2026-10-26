@@ -630,9 +630,37 @@ check("E8 all three routes are flipped in the coverage ledger, each with a note 
       and re.search(r"^/commcalc/accessory-target-plan\tshared\t.{200,}REFUSES TO CLAIM",
                     LEDGER, re.M))
 COV = read("backend/harness_drilldown_coverage.py")
-check("E9 THE RATCHET SHRANK BY EXACTLY THE THREE ROUTES THIS BATCH SERVED, and never upward",
-      "OWES_MAX = 53" in COV and len(re.findall(r"\towes\t", LEDGER)) == 53,
-      str(len(re.findall(r"\towes\t", LEDGER))))
+def _owes_max(src):
+    """THE RATCHET'S PIN, or None when it cannot be read at all.
+
+    **SHRINK-ONLY — and it must never be re-tightened to `==`.** The rule the ratchet states is
+    *"may only shrink"*, and `<=` IS that rule. A lock that asserts the VALUE goes red the moment a
+    later batch correctly lowers the pin, and the next reader's reflex when it goes red is to edit
+    the number, which is how a ratchet quietly becomes decoration. Batch 10 pinned `== 74` and went
+    red on batch 11; batch 11 rewrote both as `<=` and batch 12 wrote the ruling down; batch 15 then
+    re-tightened to `== 53` anyway and went red on batch 16's correct shrink to 49. That is the
+    CLASS, fixed here for every batch lock that reads this ratchet rather than for the one batch
+    that surfaced it (batch 16, 2026-10-26).
+
+    It still FAILS CLOSED: a pin ABOVE this batch's own number is red, and a pin that cannot be read
+    at all is red rather than absent."""
+    m = re.search(r"(?m)^OWES_MAX\s*=\s*(\d+)\s*$", src or "")
+    return int(m.group(1)) if m else None
+
+
+_pin = _owes_max(COV)
+_owes = len(re.findall(r"\towes\t", LEDGER))
+check("E9 THE RATCHET SHRANK BY THE THREE ROUTES THIS BATCH SERVED, and has never been pushed back "
+      "up past this batch's 53 — the DIRECTION, not the value",
+      _pin is not None and _pin <= 53 and _owes <= 53 and _owes == _pin,
+      "pin=%s owes=%s" % (_pin, _owes))
+check("E9b NEGATIVE CONTROL — a pin ABOVE 53 is caught, so the ratchet cannot be loosened by "
+      "editing the number", _owes_max("OWES_MAX = 54\n") > 53)
+check("E9c NEGATIVE CONTROL — a LATER batch's lower pin passes without touching this file, which is "
+      "the whole point of asserting the direction instead of the value",
+      _owes_max("OWES_MAX = 53\n") <= 53 and _owes_max("OWES_MAX = 49\n") <= 53)
+check("E9d NEGATIVE CONTROL — FAIL CLOSED: a ratchet with no readable pin is not a pass",
+      _owes_max("# the pin was deleted\n") is None and _owes_max("OWES_MAX = many\n") is None)
 GRAPH = read("backend/app/modules/core/module_graph.py")
 check("E10 the declaration and this lock are written into the module graph BY HAND, under both "
       "facts it dereferences",

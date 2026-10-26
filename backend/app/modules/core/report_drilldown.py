@@ -162,6 +162,27 @@ UNMEASURED_REASONS = {
                             "rate and no boxes to multiply one by — so no share of the goal can be "
                             "derived for it; its target is left exactly as it is rather than "
                             "written down as $0.00",
+    # The shapes the batch-16 DEVICE-FINANCING reports brought with them (§CORE-17.3p). These four
+    # KEYS are `commcalc/device_reimb_recon.REASON_NO_RULE / _DEVICE_UNIDENTIFIED / _STORE_AMBIGUOUS
+    # / _COVERAGE_INCOMPLETE` themselves — the producer's own vocabulary, exactly the batch-11
+    # posture, and `harness_batch16_drilldown.py` §A fails the build if the two drift apart. The
+    # sentences here are the reader-facing half; the producer's own longer explanation stays in its
+    # `REASON_LABELS` / `LINE_REASON_LABELS` and is NOT copied here.
+    "no_device_financing_rule_configured": "nothing is declared as device-financing money for this "
+                                           "organisation, so no device can be said to have been "
+                                           "paid or not paid — the blank is a missing declaration, "
+                                           "never a carrier that paid nothing",
+    "device_not_identified_on_claim": "this claim carries no device serial, so there is no key to "
+                                      "look the carrier's own line up by — nothing is known about "
+                                      "it, which is not the same as its never having been paid",
+    "store_identity_ambiguous": "every address the carrier paid may be this same store under "
+                                "another name, so 'a different store was paid' cannot be told from "
+                                "'the same store twice' — the money is shown and the verdict "
+                                "withheld",
+    "carrier_coverage_incomplete": "this month's carrier feed arrived missing days, so what did "
+                                   "arrive is a floor — a shortfall here may BE the missing day, "
+                                   "and calling the device unpaid would be an accusation the feed "
+                                   "cannot support",
     "no_dm_in_org_tree": "the org chart does not say which district manager owns this store, so "
                          "this figure cannot be attributed to any of them — it is unattributable "
                          "rather than zero, and assigning the store in the org chart is what puts "

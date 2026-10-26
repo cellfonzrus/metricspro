@@ -7,6 +7,31 @@ import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
+
+// WHERE EACH OF THESE FIGURES CAME FROM (index §CORE-17.3p, batch 16). Seven figures on one grain —
+// the invoiced subtotal, the grand total and each of the five fee buckets — all folded over the SAME
+// store-spelling rows the table below prints, by one declaration
+// (commcalc/device_financing_drilldown.py) through core/report_drilldown.
+//
+// `lib/drill-narrow` is DELIBERATELY NOT WIRED HERE and harness_batch16_drilldown.py §E fails the
+// build if it appears: every filter on this page is a QUERY PARAMETER, so the server folds the
+// tiles, the fees panel, the per-store table AND the panels again over the same selection. The
+// invoice search box below narrows that one table and moves no tile.
+//
+// TWO FIGURES GET NO LINK, each for a ruling. "Invoices" is a COUNT whose list is the per-store
+// table (which prints it per store) and the invoice table under it. "Fees (all types)" is the five
+// buckets ADDED AT THE TOTAL — the summary folds no per-store fees figure, so there are no rows
+// behind that tile (§CORE-17.3k) and the five that do drill are offered instead.
+const INVOICE_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Invoices', get: (r: DrillRow) => String(r.fields?.['invoices'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['invoices'] ?? 0) },
+  { header: 'Grand total', get: (r: DrillRow) => (r.fields?.['grand total'] == null ? '—' : fmt(Number(r.fields['grand total']))),
+    sortValue: (r: DrillRow) => Number(r.fields?.['grand total'] ?? 0) },
+]
 
 // RULE FIVE (§3d) retrofit, owner request 2026-10-03: "add date range and market with standard filters
 // for distributor invoices". The shared <StandardFilterBar> is ADOPTED — period as a DATE RANGE plus the
@@ -38,7 +63,10 @@ type StoreRow = {
 // server REPORTS them rather than folding them into the totals, so a store missing from the mapping
 // reads as a row to add, never as money that is not there.
 type Unresolved = { invoices: number; grand_total: number; locations: string[] }
-type Summary = { totals: Totals; fees_by_type: Record<string, number>; by_store: StoreRow[]; unresolved?: Unresolved }
+type Summary = {
+  totals: Totals; fees_by_type: Record<string, number>; by_store: StoreRow[]
+  unresolved?: Unresolved; drilldown?: Record<string, DrillPanel>
+}
 type Invoice = {
   vip_id: number; invoice_number: string; order_number: string | null; location: string
   status: string; created_on: string | null; due_date: string | null
@@ -358,11 +386,16 @@ export default function VipInvoicesPage() {
   }
 
   const t = summary?.totals
+  // THE OFFER RULE, ONE HOME: a drill is offered only where the panel's figure agrees with the tile
+  // to the cent, and the tile IS the `totals` entry the panel was folded against — so the two are
+  // one fold by construction and the gate is the safety net, not the mechanism.
+  const drill = useDrillTile(summary?.drilldown || {},
+    (k, p) => agreesToTheCent(p, summary?.totals?.[k as keyof Totals]))
   const tiles = t ? [
-    { label: 'Invoices', val: t.invoices.toLocaleString(), color: 'var(--accent)' },
-    { label: 'Subtotal', val: fmt(t.sub_total), color: 'var(--c-fg-0369a1)' },
-    { label: 'Fees (all types)', val: fmt(t.fees_total), color: 'var(--c-fg-d97706)' },
-    { label: 'Grand Total', val: fmt(t.grand_total), color: 'var(--c-fg-059669)' },
+    { label: 'Invoices', val: t.invoices.toLocaleString(), color: 'var(--accent)', drill: '' },
+    { label: 'Subtotal', val: fmt(t.sub_total), color: 'var(--c-fg-0369a1)', drill: 'sub_total' },
+    { label: 'Fees (all types)', val: fmt(t.fees_total), color: 'var(--c-fg-d97706)', drill: '' },
+    { label: 'Grand Total', val: fmt(t.grand_total), color: 'var(--c-fg-059669)', drill: 'grand_total' },
   ] : []
 
   // Invoice list: add a per-row fees total, free-text search, and click-to-sort.
@@ -467,11 +500,13 @@ export default function VipInvoicesPage() {
               <div key={c.label} className="card" style={{ padding: '18px 22px', borderTop: `3px solid ${c.color}` }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{c.label}</div>
                 <div style={{ fontSize: 24, fontWeight: 700, color: c.color, marginTop: 6 }}>{c.val}</div>
+                {c.drill && <DrillTileLinks drills={drill.dl(c.drill, 'stores behind this')}
+                                            open={drill.open} onToggle={drill.toggle} />}
               </div>
             ))}
           </div>
 
-          {/* Fees by type */}
+          {/* Fees by type — each bucket opens to the store spellings it was summed over. */}
           <div className="card" style={{ marginBottom: 20 }}>
             <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>Fees by Type</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12 }}>
@@ -479,10 +514,16 @@ export default function VipInvoicesPage() {
                 <div key={k} style={{ padding: '12px 14px', background: 'var(--surface2)', borderRadius: 8 }}>
                   <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>{FEE_LABELS[k]}</div>
                   <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>{fmt(summary.fees_by_type[k] || 0)}</div>
+                  <DrillTileLinks drills={drill.dl(k, 'stores behind this')}
+                                  open={drill.open} onToggle={drill.toggle} />
                 </div>
               ))}
             </div>
           </div>
+
+          {drill.panel && <div style={{ marginBottom: 20 }}>
+            <DrillDownPanel panel={drill.panel} extraColumns={INVOICE_DRILL_COLUMNS} />
+          </div>}
 
           {/* Per-store fees */}
           <div className="card" style={{ padding: 0, marginBottom: 20 }}>
