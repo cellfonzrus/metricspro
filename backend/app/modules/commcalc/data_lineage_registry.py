@@ -115,6 +115,27 @@ OPS_CHARGEBACK = "ops_chargeback"          # commcalc.ops_chargeback (mig 504) �
 #: provenance and has to be nameable. Note the SCHEMA differs from every other constant in this
 #: block, which is why a panel naming it carries its schema explicitly.
 STORE_ROSTER = "stores"
+#: THE SCHEDULE (`storeops.shifts`, mig 003). A figure whose rows are store-DAYS has to say which
+#: days it even looked at, and for a trading-day question that is the schedule — so "which relation
+#: records a store's scheduled day" is a fact a drill-down dereferences rather than spells.
+#:
+#: `shifts` WAS ALREADY SPELLED TWICE, in `account/liabilities_drilldown.SHIFTS` and
+#: `commcalc/targets_drilldown.SHIFTS`, which is the divergence this registry forbids — the same
+#: shape `OPS_CHARGEBACK` had one batch ago. Both dereference this constant now (string-identical
+#: value, no read changed), and `harness_batch18_drilldown.py` §A fails the build if either literal
+#: returns. Naming a fact here is half the fix; deleting every copy in the same commit is the other.
+SCHEDULE = "shifts"
+#: THE ENTERED EXPENSE SHEET (`commcalc.store_expenses`, mig 002). The relation a store's monthly
+#: expenses are typed into, and therefore the provenance of every "−Expenses" figure.
+#:
+#: SCOPE, STATED SO THE NEXT READER DOES NOT RE-DERIVE IT. This constant is the one home for the
+#: PROVENANCE NAME — what a drill-down tells a reader a figure was read out of. It is deliberately
+#: NOT a rename of the twenty-odd PostgREST `.table("store_expenses")` reads across the expense
+#: writers and readers: a read is an I/O call, not a second statement about where a figure came
+#: from, and re-pointing them is an expense-module change rather than a drill-down one. What IS
+#: forbidden, and locked by `harness_batch18_drilldown.py` §A, is a second copy of this name inside
+#: a drill-down DECLARATION — which is where the divergence this registry exists to stop happens.
+STORE_EXPENSES = "store_expenses"
 
 
 # ── WHICH TABLE A BILL-PAYMENT PROCESSOR'S FEED LANDS IN ───────────────────────────────────────

@@ -79,7 +79,8 @@ FACTS: dict[str, dict] = {
                   'harness_batch11_drilldown.py', 'harness_batch12_drilldown.py',
                   'harness_batch13_drilldown.py', 'harness_batch14_drilldown.py',
                   'harness_batch15_drilldown.py', 'harness_batch16_drilldown.py',
-                  'harness_batch17_drilldown.py'),
+                  'harness_batch17_drilldown.py',
+                  'harness_batch18_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -229,6 +230,26 @@ FACTS: dict[str, dict] = {
             # Also the batch that declined a whole VIEW: every figure on the by-account compensation
             # trend is refused a panel, with four distinct reasons.
             'app/modules/commcalc/exec_month_drilldown.py': ('report_drilldown',),
+            # The four SALES-AND-MARGIN reports (§CORE-17.3r) — the Gross Profit Report, the
+            # Retention Analysis, the Sales Comparison and Zero Sales, which together answer *what
+            # did we sell, and at what margin*. FOURTEEN measured grains over SIX row shapes and
+            # SEVEN provenance answers — the sales display union resolved off each read's OWN meta,
+            # the month-end upload on its own, the carrier payment feed (or the MA statement pair,
+            # whichever the producer's own gate says filled the column), the subscriber residual
+            # report, the calculated rep-commission snapshot, the entered expense sheet and the
+            # shift schedule. Where NET PROFIT is shown to be drillable because the producer does
+            # the subtraction INSIDE its per-store loop and the header is Σ of those rows, while
+            # every Δ on the Sales Comparison is refused because that one is taken at the TOTAL from
+            # two independent window folds and BOTH its sides drill. Also where the two comparison
+            # WINDOWS name their own provenance separately, because a different period may have been
+            # answered out of different tables — the sharpest §CORE-17.3n case in the programme.
+            # Two of the Zero Sales tiles name NO SOURCE AT ALL and say so countably: 'nothing landed
+            # for this store-day' is an absence, not a row in a relation. The §CORE-17.3o call is
+            # made BOTH ways: the GP page folds its seven tiles in the browser and is therefore
+            # narrowed, while the other three print the server's own fold and are deliberately not —
+            # and one of those three contains `reduce(` twice, inside its dry-run digest preview, so
+            # the lock asserts the narrowed page's fold by its ACTUAL TEXT rather than by the word.
+            'app/modules/commcalc/sales_margin_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1016,6 +1037,14 @@ FACTS: dict[str, dict] = {
             # the pay category — which disagreed with the P&L by $418,922.21 on the same 11,114
             # August 2026 rows. It now dereferences this home and states no ruling of its own.
             'app/modules/commcalc/gp_report.py': ('_cdc',),
+            # The SALES-AND-MARGIN drill-down (§CORE-17.3r). A panel over the GP report's two
+            # commission legs has to say whether this period's carrier dollars were PLACED by the
+            # company's own declaration or by a last-resort keyword rule, because a figure resting
+            # on a guess is not the same claim as one resting on a fact. It asks
+            # `component_is_evidence(basis)` — the ALLOWLIST that is the one home for that question
+            # (§66) — and states no ruling of its own: a basis nobody has ruled on reads as NOT
+            # evidence, so a last-resort basis added later cannot start presenting itself as a fact.
+            'app/modules/commcalc/sales_margin_drilldown.py': ('_cdc',),
             'app/modules/commcalc/router.py': ('_cdc', '_cdc_gp', '_cdc_leg'),
         },
     },
@@ -1345,6 +1374,19 @@ FACTS: dict[str, dict] = {
             # inside this registry — the ingest list, the no-month reason, the snapshot set and the
             # cadence note — and the drill-down above would have made it a fifth copy. Re-keyed
             # onto `PRODUCT_CATALOG` in the SAME commit, string-identical values, no read changed.
+            # The sales-and-margin drill-down asks the registry which relation the ENTERED
+            # EXPENSE SHEET is and which one the SHIFT SCHEDULE is (§CORE-17.3r). Both are NAME
+            # constants added by batch 18 — and `shifts` was already spelled as a LITERAL in TWO
+            # drill-down declarations (`commcalc/targets_drilldown` and
+            # `account/liabilities_drilldown`), which is the divergence this registry exists to
+            # prevent. Both dereference it now, string-identical values, no read changed: naming
+            # the fact here is half the fix and deleting every copy in the same commit is the other
+            # half, and `harness_batch18_drilldown.py` §A6/§A7 fail the build if either literal
+            # returns or a caller stops dereferencing. The sales display UNION is NOT asked of the
+            # registry here — it is dereferenced from `processor_money_drilldown`, which is the one
+            # home for the question 'which tables did this period's sales actually come from'.
+            'app/modules/commcalc/sales_margin_drilldown.py': ('_lineage',),
+            'app/modules/account/liabilities_drilldown.py': ('_lineage',),
             'app/modules/commcalc/processor_ledger.py': ('_lineage',),
             'app/modules/commcalc/dlar_sweep.py': ('_lineage',),
             'app/modules/commcalc/email_sweep.py': ('_lineage',),

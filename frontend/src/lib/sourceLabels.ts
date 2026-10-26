@@ -92,6 +92,10 @@ const SOURCE_LABEL: Record<string, string> = {
   // lands in. `raw_catalog` ("Product catalog") already had its name above, and the accessory
   // target's own settings row is `targets`, named with the targets family.
   commission_rule: 'commission plan rules',
+  // The sales-and-margin family (§CORE-17.3r). The month's expenses are a sheet somebody types
+  // into, so the plain name is the sheet a manager edits — never the row it lands in. The schedule
+  // ('the schedule') and the store roster ('store setup') already have their names above.
+  store_expenses: 'the expenses sheet',
   flag_rules: 'accessory flag thresholds',
 }
 

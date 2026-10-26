@@ -405,9 +405,14 @@ f = MG.FACTS.get(FACT) or {}
 ok("K1 the fact is registered in the module graph", bool(f), sorted(MG.FACTS))
 ok("K2 its home is this module", f.get("homes") == (HOME_REL,), f.get("homes"))
 ok("K3 every caller is named in the snapshot (the GROSS PROFIT engine joined them in §58.7: it "
-   "carried two private classifications that disagreed with the P&L by $418,922.21)",
+   "carried two private classifications that disagreed with the P&L by $418,922.21; the "
+   "SALES-AND-MARGIN drill-down joined them in §CORE-17.3r, because a panel over the GP report's "
+   "two commission legs has to say whether this period's carrier dollars were PLACED by the "
+   "company's own declaration or by a last-resort keyword rule — it ASKS `component_is_evidence` "
+   "and states no ruling of its own)",
    set((f.get("callers") or {})) == {"app/modules/account/coa.py",
                                      "app/modules/commcalc/gp_report.py",
+                                     "app/modules/commcalc/sales_margin_drilldown.py",
                                      "app/modules/commcalc/router.py"}, f.get("callers"))
 ok("K4 this lock is the fact's lock", "harness_carrier_dollar_class.py" in (f.get("locks") or ()))
 ok("K5 the index section it points at exists",
@@ -419,6 +424,13 @@ ok("K7 the index records the measured restatement, so the figure is not only in 
 ok("K8 `connected()` answers 'what else answers this question' for both callers",
    FACT in MG.connected("app/modules/account/coa.py")
    and FACT in MG.connected("app/modules/commcalc/router.py"))
+# ADDED, NOT SUBSTITUTED (2026-10-26, §CORE-17.3r). K8 above is left exactly as it was; this is a
+# further assertion for the fourth caller, so a reader who reaches the sales-and-margin drill-down
+# is told this question has one home — and so the edge cannot be quietly dropped to make K3 quiet,
+# which is the un-wiring this programme exists to stop (CLAUDE.md §19.18).
+ok("K8b and for the SALES-AND-MARGIN drill-down, which asks it whether a carrier dollar's "
+   "placement is evidence at all before a panel presents the figure as a fact",
+   FACT in MG.connected("app/modules/commcalc/sales_margin_drilldown.py"))
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 print(f"\n{'=' * 78}")

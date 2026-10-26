@@ -138,8 +138,10 @@ TARGETS = "targets"                 # commcalc.targets (mig 006) — a built-in'
 TARGET_LINE = "target_line"         # commcalc.target_line (mig 1074) — a declared category's row
 STORE_ROSTER = "stores"             # storeops.stores — the accessory target a store row seeds
 
-#: The schedule the whole weighting is spread over.
-SHIFTS = "shifts"                   # storeops.shifts
+#: The schedule the whole weighting is spread over. DEREFERENCED from the lineage registry
+#: (`SCHEDULE`), the one home for "which relation records a store's scheduled day" — this file and
+#: `account/liabilities_drilldown` each held a literal copy of it until batch 18 re-keyed both.
+SHIFTS = _lineage.SCHEDULE
 
 #: The calculated-commission snapshot the action plan's at-risk figure is read out of. DEREFERENCED
 #: from the commission batch's own declaration (§CORE-17.3k) rather than spelled a second time —

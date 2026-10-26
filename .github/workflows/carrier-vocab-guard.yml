@@ -381,6 +381,35 @@ on:
       - "frontend/src/app/(platform)/commcalc/comp-trend/page.tsx"
       - "frontend/src/components/DataGrid.tsx"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
+      # CORE-17.3r - the four sales-and-margin reports, the family that answers what did we sell
+      # and at what margin. One declaration, six catalogues (one per row list), fourteen measured
+      # grains over six row shapes and seven provenance answers - the sales display union resolved
+      # off each read's OWN meta, the month-end upload alone, the carrier payment feed (or the MA
+      # statement pair, whichever the producer's own gate says filled the column), the subscriber
+      # residual report, the calculated rep-commission snapshot, the entered expense sheet and the
+      # shift schedule. NET PROFIT drills because the producer subtracts INSIDE its per-store loop
+      # and the header is the sum of those rows, while every Change on the Sales Comparison is
+      # refused because that one is taken at the TOTAL and both its sides drill (CORE-17.3k). The
+      # two comparison WINDOWS name their provenance separately, because a different period may
+      # have been answered out of different tables (CORE-17.3n). Two Zero Sales tiles name NO
+      # source at all and say so countably, because an absence is not a row in a relation
+      # (CORE-17.3i). The CORE-17.3o call is made both ways - the GP page folds its seven tiles in
+      # the browser and IS narrowed, the other three print the server's fold and are NOT - and one
+      # of those three contains reduce( twice inside its dry-run digest preview, so the lock
+      # asserts the narrowed page's fold by its ACTUAL TEXT rather than by the word.
+      - "backend/harness_batch18_drilldown.py"
+      - "backend/app/modules/commcalc/sales_margin_drilldown.py"
+      - "backend/app/modules/commcalc/gp_report.py"
+      - "backend/app/modules/commcalc/sales_analyzer.py"
+      - "backend/app/modules/commcalc/sales_comparison.py"
+      - "backend/app/modules/commcalc/zero_sales.py"
+      - "backend/app/modules/commcalc/processor_money_drilldown.py"
+      - "backend/app/modules/commcalc/carrier_dollar_class.py"
+      - "backend/app/modules/account/liabilities_drilldown.py"
+      - "frontend/src/app/(platform)/commcalc/gp/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/sales-analyzer/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/sales-comparison/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/zero-sales/page.tsx"
       # index §4e — the P&L drill path: company → market → store → line (owner report 2026-10-07)
       - "frontend/prove_pl_drill_path.mjs"
       # index §4e — the labour double-count (ONE home for the platform's labour-row vocabulary)
@@ -1544,6 +1573,9 @@ jobs:
       - name: Run the batch-17 drill lock (the four executive-month reports, the surfaces the owner looks at most - the family's grain count is MEASURED, and two of its eleven grains are the SAME roster store row in the SAME unit separated only by WHICH RELATION ANSWERED, because how many stores exist and how many carry a goal somebody saved are two questions and a store missing from the second is not missing from the first; an unset target is SHOWN without a figure, names NO table and says why in the targets family's own words (CORE-17.3m); three of the four reports read a figure out of what the last commission calculation WROTE DOWN rather than the sales it read, and say so (CORE-17.3j); the chargeback behind three Owner-Overview figures comes out of a relation NO migration here creates, so every row of those panels reports a stated countable UNTRACEABLE ORIGIN rather than a guessed feed (CORE-17.3i); the MTD columns take their unit off the configured bucket's OWN declared basis and the two ratios on the total row get no panel (CORE-17.3h), while a set-up-fee percentage nobody has stated serves no panel at all rather than a dollar-zero that ties by accident; the compensation trend's by-rep panels open to ATTRIBUTION POINTS and not to people, because that is the grain its filter bar works at; A PANEL EXPLAINS THE FIGURE, NOT THE TABLE decided by READING each page - three print the server's fold and drill-narrow is absent from all three, the by-rep trend folds its own tiles and reads each off its narrowed panel, and the lock fails the build in BOTH directions - index CORE-17.3q)
         working-directory: backend
         run: python3 harness_batch17_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-18 drill lock (the four sales-and-margin reports, the family that answers what did we sell and at what margin - the family's grain count is MEASURED off the real producers, which are all four driven for real in this file; NET PROFIT DRILLS because `calc_gp_report` does the subtraction INSIDE its per-store loop and the header is the sum of those rows, while every Change on the Sales Comparison is refused a panel because that one is taken at the TOTAL from two independent window folds and BOTH its sides already drill (CORE-17.3k); the two comparison WINDOWS name their own provenance separately, resolved off each read's OWN meta through the one home for that question, because a different period may have been answered out of different tables (CORE-17.3n); two of the Zero Sales tiles name NO SOURCE AT ALL and say so countably, because nothing landed for this store-day and there is no schedule for this store are ABSENCES rather than rows in a relation (CORE-17.3i); a churn whose sale the archive does not carry is SHOWN WITHOUT A FIGURE with the producer's own reason instead of a fabricated zero, and no figure moved; a count no row carries a number for is served NO PANEL, because a zero over zero counted rows ties against nothing; rep pay names the CALCULATED SNAPSHOT and says the trail stops at the stored run (CORE-17.3j); the NP target gets no panel because this report substitutes a platform default and keeps no flag to tell the two apart (CORE-17.3m); the carrier panels say so in words when part of this period's carrier money was PLACED BY A PLATFORM GUESS, asked of the one allowlist home for it (section 66); A PANEL EXPLAINS THE FIGURE, NOT THE TABLE decided by READING each page - the GP page folds its seven tiles in the browser and reads each off its narrowed panel, the other three print the server's fold and drill-narrow is absent from all three, the lock fails the build in BOTH directions, and one of those three contains reduce( twice inside its dry-run digest preview so the narrowed page's fold is asserted by its ACTUAL TEXT - index CORE-17.3r)
+        working-directory: backend
+        run: python3 harness_batch18_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

@@ -7,6 +7,10 @@ import { tileSnapshotSheet, type SnapshotTile } from '@/lib/tile-snapshot'
 import ReportShell from '@/components/ReportShell'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { MultiSelect } from '@/lib/multiselect'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
 
 // Sales Comparison — period-over-period % change per item sold (Phones, BYOD, Accessories, Tablets,
 // Financing), across all stores. The backend does the two-window math; this page picks the scenario
@@ -38,11 +42,80 @@ function pctColor(pct: number | null, current: number): string {
   return 'var(--text3)'
 }
 
+// A per-ITEM comparison tile. HOISTED TO MODULE SCOPE 2026-10-26: it used to be declared inside
+// the page body, which makes it a new component TYPE on every render, so React unmounts and
+// remounts its whole subtree instead of updating it (`react-hooks/static-components`, owner
+// report 2026-10-21 — the keystroke that did not arrive). Wiring the drill links into it put a
+// typed control within reach of that remount, which `harness_inner_component_inputs.py` refuses
+// outright and may never ratchet. The only page value it closed over was the drill handle, so
+// that is now an explicit prop and the hazard is gone rather than stepped around — `OverTile`
+// above was hoisted for the same reason.
+function Tile({ c, d }: {
+  c: any
+  /** The page's drill handle — `useDrillTile`'s return, passed in rather than closed over. */
+  d: {
+    dl: (...a: string[]) => { key: string; label: string }[]
+    open: string | null
+    toggle: (k: string) => void
+  }
+}) {
+  // Metric-aware per the owner spec: units rows headline the count; Accessories headlines $; Financing
+  // shows BOTH the financed-unit count and the financed $.
+  const metric: string = c.metric || 'units'
+  const isDollars = metric === 'dollars'
+  const isBoth = metric === 'both'
+  const bigVal = isDollars ? fmt(c.current_rev || 0) : c.current
+  const bigPct = isDollars ? c.rev_pct : c.pct
+  const bigCur = isDollars ? (c.current_rev || 0) : c.current
+  return (
+    <div className="card" style={{ padding: '12px 16px', minWidth: 150 }}>
+      <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, display: 'flex', gap: 6, alignItems: 'center' }}>
+        {c.label}
+        {c.financing && c.detection_status && c.detection_status !== 'configured' &&
+          <span title="Financing detection is not fully mapped — see the Financing report settings" style={{ color: 'var(--c-fg-b45309)' }}>⚠︎</span>}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
+        <div style={{ fontSize: 22, fontWeight: 700 }}>{bigVal}</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(bigPct, bigCur) }}>{pctLabel(bigPct, bigCur)}</div>
+      </div>
+      {isBoth &&
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>{fmt(c.current_rev || 0)}</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: pctColor(c.rev_pct, c.current_rev || 0) }}>{pctLabel(c.rev_pct, c.current_rev || 0)}</div>
+        </div>}
+      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
+        {isDollars
+          ? <>was {fmt(c.previous_rev || 0)} · {c.current} units</>
+          : isBoth
+            ? <>was {c.previous} units · {fmt(c.previous_rev || 0)}</>
+            : <>was {c.previous} · {fmt(c.current_rev || 0)}</>}
+      </div>
+      {/* One link per FIGURE, never one per tile: "which rows is this?" is a different question
+          for the units and the dollars of each of the two windows. */}
+      <DrillTileLinks
+        drills={d.dl(
+          `item.${c.key}.current`, 'units, this window',
+          `item.${c.key}.current_rev`, '$, this window',
+          `item.${c.key}.previous`, 'units, compared',
+          `item.${c.key}.previous_rev`, '$, compared')}
+        open={d.open} onToggle={d.toggle} />
+    </div>
+  )
+}
+
+
 // An overall comparison tile. It closes over nothing, so it lives at MODULE scope — a component
 // defined inside the page body is re-created on every render (react-hooks/static-components).
 // `invert` is for a COST: spending more is not the green that selling more is, so the colour of the
 // change is flipped while the number and the sign are untouched.
-function OverTile({ label, cur, prev, pct, money, invert, measured }: { label: string; cur: number; prev: number; pct: number | null; money?: boolean; invert?: boolean; measured?: boolean }) {
+function OverTile({ label, cur, prev, pct, money, invert, measured, drills, open, onToggle }: {
+  label: string; cur: number; prev: number; pct: number | null; money?: boolean; invert?: boolean; measured?: boolean
+  /** One link per FIGURE this tile shows — this window's and the comparison window's. The change
+   *  between them gets none: it is taken at the TOTAL and both sides drill (§CORE-17.3k). */
+  drills?: { key: string; label: string }[]
+  open?: string | null
+  onToggle?: (k: string) => void
+}) {
   return (
     <div className="card" style={{ padding: '12px 16px', minWidth: 150, background: 'var(--surface2)' }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
@@ -53,9 +126,35 @@ function OverTile({ label, cur, prev, pct, money, invert, measured }: { label: s
         </div>
       </div>
       <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>was {money ? fmt(prev) : prev}</div>
+      {drills && drills.length > 0 && onToggle &&
+        <DrillTileLinks drills={drills} open={open ?? null} onToggle={onToggle} />}
     </div>
   )
 }
+
+// WHERE EACH TILE CAME FROM (index §CORE-17.3r). Declaration:
+// commcalc/sales_margin_drilldown.py, folded over the SAME store-and-item rows, the SAME per-store
+// summary and the SAME category totals this endpoint serves.
+//
+// THE TWO WINDOWS OPEN SEPARATELY, and that is not a cosmetic split: a comparison window is a
+// DIFFERENT PERIOD, so the sales read may have answered out of different tables for it, and each
+// window's provenance is resolved off its OWN read's meta (§CORE-17.3n). Seeing which read
+// answered for which month is most of what a reader comparing two months needs.
+//
+// NOT NARROWED, AND THE LOCK FAILS THE BUILD IF `narrowPanel` APPEARS HERE
+// (harness_batch18_drilldown.py §F). The store and market pickers here are QUERY PARAMETERS
+// (`qs.set('stores', ...)`), so the server folds again and every tile follows by construction;
+// this page reduces nothing.
+//
+// WHAT OFFERS NO DRILL: every `Change` and every `Change %`. The subtraction is taken at the TOTAL
+// from two independent window folds (§CORE-17.3k) and the percentage is its quotient
+// (§CORE-17.3h) — and BOTH SIDES of each one drill, which is the whole of the answer. The expense
+// line's unit columns get none either: the producer pins them at 0 because an expense has no unit,
+// and a panel over them would be a zero that ties against nothing.
+const CMP_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.['market'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['market'] ?? '') },
+]
 
 const MODES = [
   { key: 'mom', label: 'Month over month' },
@@ -127,6 +226,25 @@ export default function SalesComparisonPage() {
     { header: '$ Change %', get: r => pctLabel(r.rev_pct, r.current_rev), align: 'right' },
   ], [baseLbl, cmpLbl])
 
+  // THE OFFER RULE, ONE HOME: offered only where the server's panel agrees with the tile to the
+  // cent, through the shared gate rather than a condition invented here.
+  const cmpPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  // The figure a panel key belongs to, read out of the SAME two objects the tiles render from —
+  // `item.<category>.<field>`, `expenses.<field>` and `overall.<field>`, which is how the server
+  // keys them. No second fold: this only looks a number up.
+  const cmpFig = (k: string): number | undefined => {
+    const parts = k.split('.')
+    if (parts[0] === 'overall') {
+      return (data?.overall as Record<string, number> | undefined)?.[parts[1]]
+    }
+    const catKey = parts[0] === 'item' ? parts[1] : parts[0]
+    const field = parts[parts.length - 1]
+    const cats = (data?.totals_by_category || []) as Record<string, number | string | boolean>[]
+    const c = cats.find(x => x.key === catKey)
+    return c === undefined ? undefined : Number(c[field])
+  }
+  const cmpDrill = useDrillTile(cmpPanels, (k, p) => agreesToTheCent(p, cmpFig(k)))
+
   const storeOpts: string[] = data?.stores || []
   const marketOpts: string[] = data?.markets || []
   const filtered = selStores.length > 0 || selMarkets.length > 0
@@ -187,41 +305,6 @@ export default function SalesComparisonPage() {
   }), [baseLbl, cmpLbl, data, filtered, snapshotTiles])
 
 
-  const Tile = ({ c }: { c: any }) => {
-    // Metric-aware per the owner spec: units rows headline the count; Accessories headlines $; Financing
-    // shows BOTH the financed-unit count and the financed $.
-    const metric: string = c.metric || 'units'
-    const isDollars = metric === 'dollars'
-    const isBoth = metric === 'both'
-    const bigVal = isDollars ? fmt(c.current_rev || 0) : c.current
-    const bigPct = isDollars ? c.rev_pct : c.pct
-    const bigCur = isDollars ? (c.current_rev || 0) : c.current
-    return (
-      <div className="card" style={{ padding: '12px 16px', minWidth: 150 }}>
-        <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, display: 'flex', gap: 6, alignItems: 'center' }}>
-          {c.label}
-          {c.financing && c.detection_status && c.detection_status !== 'configured' &&
-            <span title="Financing detection is not fully mapped — see the Financing report settings" style={{ color: 'var(--c-fg-b45309)' }}>⚠︎</span>}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>{bigVal}</div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(bigPct, bigCur) }}>{pctLabel(bigPct, bigCur)}</div>
-        </div>
-        {isBoth &&
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 1 }}>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>{fmt(c.current_rev || 0)}</div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: pctColor(c.rev_pct, c.current_rev || 0) }}>{pctLabel(c.rev_pct, c.current_rev || 0)}</div>
-          </div>}
-        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
-          {isDollars
-            ? <>was {fmt(c.previous_rev || 0)} · {c.current} units</>
-            : isBoth
-              ? <>was {c.previous} units · {fmt(c.previous_rev || 0)}</>
-              : <>was {c.previous} · {fmt(c.current_rev || 0)}</>}
-        </div>
-      </div>
-    )
-  }
 
   return (
     <div>
@@ -295,19 +378,30 @@ export default function SalesComparisonPage() {
       {/* per-item tiles */}
       {!loading && !data?.error && cats.length > 0 &&
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-          {cats.map(c => <Tile key={c.key} c={c} />)}
+          {cats.map(c => <Tile key={c.key} c={c} d={cmpDrill} />)}
         </div>}
 
       {/* overall tiles. Store expenses sit HERE, not with the per-item tiles: an expense is not an
           item sold, and it is never added into the revenue beside it. */}
       {!loading && !data?.error && data?.overall &&
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
-          <OverTile label="Transactions" cur={data.overall.current_txns} prev={data.overall.previous_txns} pct={data.overall.txns_pct} />
-          <OverTile label="Revenue" cur={data.overall.current_rev} prev={data.overall.previous_rev} pct={data.overall.rev_pct} money />
+          <OverTile label="Transactions" cur={data.overall.current_txns} prev={data.overall.previous_txns} pct={data.overall.txns_pct}
+                    drills={cmpDrill.dl('overall.current_txns', 'rows behind this', 'overall.previous_txns', 'rows behind the comparison')}
+                    open={cmpDrill.open} onToggle={cmpDrill.toggle} />
+          <OverTile label="Revenue" cur={data.overall.current_rev} prev={data.overall.previous_rev} pct={data.overall.rev_pct} money
+                    drills={cmpDrill.dl('overall.current_rev', 'rows behind this', 'overall.previous_rev', 'rows behind the comparison')}
+                    open={cmpDrill.open} onToggle={cmpDrill.toggle} />
           {data?.expenses_meta?.measured &&
             <OverTile label="Store expenses" cur={data.overall.current_exp || 0} prev={data.overall.previous_exp || 0}
                       pct={data.overall.exp_pct} money invert
-                      measured={data.expenses_meta.change_measured !== false} />}
+                      measured={data.expenses_meta.change_measured !== false}
+                      drills={cmpDrill.dl('expenses.current_rev', 'rows behind this', 'expenses.previous_rev', 'rows behind the comparison')}
+                      open={cmpDrill.open} onToggle={cmpDrill.toggle} />}
+        </div>}
+
+      {!loading && !data?.error && cmpDrill.panel &&
+        <div style={{ marginBottom: 18 }}>
+          <DrillDownPanel panel={cmpDrill.panel} extraColumns={CMP_DRILL_COLUMNS} />
         </div>}
 
       {/* An expense month the tenant has not re-entered is CARRIED FORWARD — the same rule the P&L
