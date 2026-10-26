@@ -18099,6 +18099,10 @@ def get_dlar_vs_platform(period: str, authorization: str = Header(default=""), o
     # ── the PLATFORM side: Executive MTD's own cells, not a second pass ──────────────────────────
     acfg = _accessory_config(client, org_id)
     ckey = _canonical_store_key_fn(client, org_id)
+    # `_umeta` is the ONE fact that says which tables this period's sales were actually read out of,
+    # and this endpoint used to bind and DISCARD it (§CORE-17.3s defect 3) — the third report in two
+    # batches with that exact shape. Kept, served read-only as `sales_source`, and resolved by the
+    # one home for that question (`processor_money_drilldown.sales_union_tables`) in the declaration.
     rows, _umeta = _sales_rows_union(client, org_id, cperiod, cols=_ACTUALS_COLS)
     cells = _sales_cell_agg(rows, acfg, store_key=ckey)
     src_meta = _apply_activation_basis(client, org_id, cperiod, cells, ckey)
@@ -18209,7 +18213,8 @@ def get_dlar_vs_platform(period: str, authorization: str = Header(default=""), o
             excluded_units={'activations': {'ineligible': len(_inel.get((_dvp.GRAIN_STORE, k)) or ())},
                             'upgrades': {'swap': p.get('swap_in_upgrades', 0)}},
             vintage=v_store))
-    return {
+    from app.modules.commcalc import carrier_owed_drilldown as _cod
+    _dvp_out = {
         "period": cperiod,
         "reps": out_reps, "stores": out_stores,
         "summary": _dvp.summarize(out_reps + out_stores, period=cperiod, vintage=vint,
@@ -18225,7 +18230,23 @@ def get_dlar_vs_platform(period: str, authorization: str = Header(default=""), o
         "new_activation_rule": {**_lc.HOUSE_RULES["new_activation"], **(line_rules.get("new_activation") or {}),
                                 "sentence": _lc.NEW_ACTIVATION_SENTENCE},
         "feed_vintage": vint,
+        # WHICH TABLES THE PLATFORM SIDE'S SALES READ ANSWERED OUT OF — the meta this endpoint used
+        # to discard (defect 3). Read-only; no figure depends on it.
+        "sales_source": _umeta,
     }
+    # DRILL-DOWN §CORE-17.3s, attached LAST and read-only, AFTER the `in_keyset` scope filter above
+    # so a panel can never carry an entity this caller may not see. The four served figures open to
+    # the ENTITY COMPARISON ROWS they were folded from — the per-rep rows AND the per-store rows
+    # together, which is what they are Σ over and what every note says plainly. Each row names the
+    # carrier's own report at its grain beside whichever basis produced the platform side, and only
+    # the side that actually answered: an entity one side never mentioned was not read out of a
+    # relation on that side at all (§CORE-17.3i). The `Agree` and `Attributed` tiles get NO panel —
+    # the page subtracts both at the TOTAL (§CORE-17.3k) — and `cells_differing`, which is on no tile,
+    # IS served so that both sides of `Agree` can be opened. Every rate metric gets none
+    # (§CORE-17.3h), and neither do the `entities*` counts, which mix the two grains.
+    # Declaration `commcalc/carrier_owed_drilldown.py`.
+    _dvp_out["drilldown"] = _cod.comparison_drilldowns(_dvp_out)
+    return _dvp_out
 
 
 def _platform_side(p, feed_row=None):
@@ -20139,6 +20160,12 @@ def expected_commission_report(period: str, rep: str = "", store: str = "",
             "promoted_at": r.get("promoted_at"), "promote_reason": r.get("promote_reason"),
             "promote_id": r.get("promote_id"), "promote_stale": bool(r.get("promote_stale")),
             "promotable": bool(in_win and not r.get("paid_gate_met")),
+            # WHICH FEED PROVED THIS MONTH, carried through read-only (§CORE-17.3s defect 2). The
+            # engine stamps `gate_source` on every master-agent-gated row precisely so a surface can
+            # tell "the statement paid it" from "the statement and the daily transactions together
+            # paid it", and this row builder was dropping it — so the drill-down could not have named
+            # the relation without guessing. Adds a key; moves no figure.
+            "gate_source": r.get("gate_source"),
         })
         k = str(r.get("epay_salesperson") or "")
         b = by_rep.setdefault(k, {"rep": k, "store": r.get("store"), "expected": 0.0, "earned": 0.0,
@@ -20152,7 +20179,8 @@ def expected_commission_report(period: str, rep: str = "", store: str = "",
             b["promoted_months"] += 1
     rows.sort(key=lambda x: (-(x["unearned"] or 0), str(x["rep"] or ""), x["month_index"] or 0))
     xg = res.get("expected_guard") or {}
-    return {
+    from app.modules.commcalc import carrier_owed_drilldown as _cod
+    out = {
         "period": period, "org_id": org_id,
         "config": {k: v for k, v in cfg.items() if not k.startswith("_")},
         "can_promote": allowed, "can_promote_reason": why,
@@ -20176,6 +20204,18 @@ def expected_commission_report(period: str, rep: str = "", store: str = "",
         "ready": res.get("schedules", 0) > 0,
         "note": res.get("note"),
     }
+    # DRILL-DOWN §CORE-17.3s, attached LAST and read-only: the four tiles open to the INSTALLMENT
+    # MONTHS they were folded from — three grains on one row, separated only by what proved each
+    # figure. EARNED names whichever gate released it, row by row; EXPECTED names the declared ladder
+    # alone, because an expected dollar is config multiplied by a sale and no carrier feed is
+    # involved in it; a month a PERSON moved across names that approval. Folded over `rows`, which is
+    # already narrowed by this endpoint's own `rep` / `store` parameters, so the panel can never
+    # carry a row the response does not. Those parameters narrow `rows` and NOT `totals` (a latent
+    # defect this report already had — the page filters in the browser and never sends them), so a
+    # filtered call makes the tie-out STATE the disagreement rather than hide it, which is the
+    # intended outcome. Declaration `commcalc/carrier_owed_drilldown.py`.
+    out["drilldown"] = _cod.expected_drilldowns(out)
+    return out
 
 
 # ── PARAMETRIZED schedule EDIT/DELETE — REGISTERED LAST ON PURPOSE (routing bug fixed 2026-07-27).
@@ -42917,7 +42957,8 @@ def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", or
     spiff_by_month = {("m%s" % k): _earned_months[k]
                       for k in sorted(_earned_months, key=lambda x: (x == "unknown", _int_or(x)))}
     dates = [d for d in dates if d]
-    return {"ready": True, "period": period or "all",
+    from app.modules.commcalc import carrier_owed_drilldown as _cod
+    _ma_out = {"ready": True, "period": period or "all",
             "rows": len(comm), "date_range": ([min(dates), max(dates)] if dates else None),
             "store_options": store_options, "rep_options": rep_options,
             "activations": acts,
@@ -42943,6 +42984,20 @@ def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", or
             "note": None if comm or tx else
             "No MA rows for this period yet — upload the MA reports on Data Imports (no period needed) "
             "or add mailbox rules (*Commission*Details* → MA Commission Details)."}
+    # DRILL-DOWN §CORE-17.3s, attached LAST and read-only: the five tiles open to the PROCESSOR
+    # ACCOUNT rows they were folded from — THREE grains on one account row. The three money figures
+    # and the activation count come out of the commission statement; the AIRTIME MARGIN comes out of
+    # the daily transactions alone and is not part of the payable, which is what makes it its own
+    # grain (§CORE-17.3n). An account the statement carries no line for is SHOWN WITHOUT A FIGURE
+    # for all four statement figures rather than as $0.00 of commission nobody measured — the
+    # producer's totals are unchanged, because such a row contributed zero to them. Folded over
+    # `by_store`, which this endpoint has already narrowed server-side by `stores` / `reps`, so the
+    # panel and the tile are one fold and the panel can carry no row the response does not. The leg
+    # split and the spiff-by-month ladder get NO panel: both are re-partitions of the payable worked
+    # out from the org-wide component totals, with no per-account figure on this payload to open.
+    # Declaration `commcalc/carrier_owed_drilldown.py`.
+    _ma_out["drilldown"] = _cod.ma_drilldowns(_ma_out)
+    return _ma_out
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

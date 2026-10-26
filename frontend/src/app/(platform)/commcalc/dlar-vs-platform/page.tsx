@@ -19,6 +19,24 @@
 // a measurement (§19.28: a fabricated zero is what this whole family of defects was).
 // RULE FIVE: <StandardFilterBar> core set filtering client-side over the already-span-scoped payload.
 // Sorting through useTableSort / SortableTh (the one comparison home).
+//
+// WHERE EACH TILE CAME FROM (index CORE-17.3s). Declaration:
+// commcalc/carrier_owed_drilldown.comparison_drilldowns, folded over the SAME entity comparison rows
+// and the SAME summary this endpoint serves. This report counts the CELLS the other three reports'
+// money is computed on, so it keeps its own catalogue and its own grain rather than being forced
+// into theirs.
+//
+// AGREE AND ATTRIBUTED GET NO PANEL, DELIBERATELY: both are a subtraction done at the TOTAL rather
+// than on a row, so there is no row list either could open to (CORE-17.3k). Every figure they are
+// composed of DOES drill — including CELLS DIFFERING, which has no tile of its own and is offered
+// as a link beside them.
+//
+// NOT NARROWED, AND THE LOCK FAILS THE BUILD IF `narrowPanel` APPEARS HERE
+// (harness_batch19_drilldown.py section F). REPORTED, NOT FIXED: this page filters its table in the
+// browser while the five tiles keep reading the SERVER's summary, so a filtered view shows tiles
+// that do not describe the rows beneath them. Narrowing the panels would hide that divergence
+// behind a figure the screen never prints; the remedy is for the page to fold its own tiles or for
+// the filters to become query parameters, and it is recorded in the index rather than patched here.
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -27,6 +45,11 @@ import StatTile from '@/components/StatTile'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
 import type { ExportSheet } from '@/lib/export'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
+import { sourceLabel } from '@/lib/sourceLabels'
 
 const th: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', fontSize: 12, color: 'var(--text2)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '8px 10px', fontSize: 13, borderBottom: '1px solid var(--border)', verticalAlign: 'top' }
@@ -72,6 +95,24 @@ const EXPORT_COLS = [
   { header: 'Feed as of', get: (r: any) => r.as_of },
 ]
 
+const DVP_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Grain', get: (r: DrillRow) => String(r.fields?.['grain'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['grain'] ?? '') },
+  { header: 'Store', get: (r: DrillRow) => String(r.fields?.['store'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['store'] ?? '') },
+  { header: 'Metrics compared', get: (r: DrillRow) => String(r.fields?.['metrics compared'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['metrics compared'] ?? 0) },
+  { header: 'The carrier does not report',
+    get: (r: DrillRow) => String(r.fields?.['metrics the carrier does not report'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['metrics the carrier does not report'] ?? 0) },
+  { header: 'Our transactions cannot speak to',
+    get: (r: DrillRow) => String(r.fields?.['metrics our transactions cannot speak to'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['metrics our transactions cannot speak to'] ?? 0) },
+  { header: 'Carrier report as of',
+    get: (r: DrillRow) => String(r.fields?.['carrier report as of'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['carrier report as of'] ?? '') },
+]
+
 function thisMonth() { return new Date().toISOString().slice(0, 7) }
 
 export default function DlarVsPlatformPage() {
@@ -102,6 +143,11 @@ export default function DlarVsPlatformPage() {
   const { sorted, sort, toggle } = useTableSort(rows, getCell, { field: 'unattributed', dir: 'desc' })
 
   const s = data?.summary
+  // THE OFFER RULE, ONE HOME: offered only where the server's panel agrees with the tile to the
+  // cent (here, to the cell), through the shared gate. `cells_differing` has no tile of its own and
+  // is gated against the summary's own figure just the same.
+  const dvpPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const dvpDrill = useDrillTile(dvpPanels, (k, panel) => agreesToTheCent(panel, (data?.summary as Record<string, number> | undefined)?.[k]))
   const sheets: ExportSheet[] = useMemo(() => [{
     name: 'Feed vs transactions',
     columns: EXPORT_COLS,
@@ -144,19 +190,36 @@ export default function DlarVsPlatformPage() {
           border: '1px solid color-mix(in srgb, goldenrod 40%, var(--border))' }}>
           <b>Our stored slice of the feed does not reach the end of this period.</b>{' '}
           {Object.entries(s.vintage.grains).map(([k, g]: any) =>
-            `${k.replace('raw_dlar_', '')} as of ${g.as_of}${g.days_short ? ` (${g.days_short} day(s) short)` : ''}`).join(' · ')}
+            `${sourceLabel(k)} as of ${g.as_of}${g.days_short ? ` (${g.days_short} day(s) short)` : ''}`).join(' · ')}
           . Differences on those rows are marked <i>undecidable</i> — they are not counting disputes and
           re-pulling the report is what settles them.
         </div>
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10 }}>
-        <StatTile label="Compared" value={s?.cells_compared ?? '—'} sub="metric cells both sides carry" />
-        <StatTile label="Agree" value={s ? s.cells_compared - s.cells_differing : '—'} />
-        <StatTile label="Attributed" value={s ? s.cells_differing - s.cells_unattributed - s.cells_undecidable : '—'} sub="a counting definition explains it, exactly" />
-        <StatTile label="Undecidable" value={s?.cells_undecidable ?? '—'} sub="our feed slice is older than the period — re-pull to settle" />
-        <StatTile label="To look at" value={s?.cells_unattributed ?? '—'} sub="the feed slice is complete and nothing explains the gap" />
+        <StatTile label="Compared" value={s?.cells_compared ?? '—'} sub={<>
+          metric cells both sides carry
+          <DrillTileLinks drills={dvpDrill.dl('cells_compared', 'rows behind this')} open={dvpDrill.open} onToggle={dvpDrill.toggle} />
+        </>} />
+        {/* AGREE and ATTRIBUTED are subtractions done at the TOTAL, so neither opens to a row list
+            of its own (CORE-17.3k). Each offers the figures it is composed of instead — which is
+            where CELLS DIFFERING, a figure with no tile anywhere on this page, is served. */}
+        <StatTile label="Agree" value={s ? s.cells_compared - s.cells_differing : '—'} sub={
+          <DrillTileLinks drills={dvpDrill.dl('cells_compared', 'every cell compared', 'cells_differing', 'the cells that differ')} open={dvpDrill.open} onToggle={dvpDrill.toggle} />} />
+        <StatTile label="Attributed" value={s ? s.cells_differing - s.cells_unattributed - s.cells_undecidable : '—'} sub={<>
+          a counting definition explains it, exactly
+          <DrillTileLinks drills={dvpDrill.dl('cells_differing', 'the cells that differ', 'cells_unattributed', 'the ones nothing explains', 'cells_undecidable', 'the ones still waiting on a pull')} open={dvpDrill.open} onToggle={dvpDrill.toggle} />
+        </>} />
+        <StatTile label="Undecidable" value={s?.cells_undecidable ?? '—'} sub={<>
+          our feed slice is older than the period — re-pull to settle
+          <DrillTileLinks drills={dvpDrill.dl('cells_undecidable', 'rows behind this')} open={dvpDrill.open} onToggle={dvpDrill.toggle} />
+        </>} />
+        <StatTile label="To look at" value={s?.cells_unattributed ?? '—'} sub={<>
+          the feed slice is complete and nothing explains the gap
+          <DrillTileLinks drills={dvpDrill.dl('cells_unattributed', 'rows behind this')} open={dvpDrill.open} onToggle={dvpDrill.toggle} />
+        </>} />
       </div>
+      {dvpDrill.panel && <DrillDownPanel panel={dvpDrill.panel} extraColumns={DVP_DRILL_COLUMNS} />}
 
       <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 6 }}>

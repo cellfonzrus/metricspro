@@ -80,7 +80,8 @@ FACTS: dict[str, dict] = {
                   'harness_batch13_drilldown.py', 'harness_batch14_drilldown.py',
                   'harness_batch15_drilldown.py', 'harness_batch16_drilldown.py',
                   'harness_batch17_drilldown.py',
-                  'harness_batch18_drilldown.py'),
+                  'harness_batch18_drilldown.py',
+                  'harness_batch19_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -250,6 +251,13 @@ FACTS: dict[str, dict] = {
             # and one of those three contains `reduce(` twice, inside its dry-run digest preview, so
             # the lock asserts the narrowed page's fold by its ACTUAL TEXT rather than by the word.
             'app/modules/commcalc/sales_margin_drilldown.py': ('report_drilldown',),
+            # WHAT THE CARRIER OWES vs WHAT IT PAID (§CORE-17.3s) — one declaration for the four
+            # reports that answer that from four angles: the multi-month expected/earned ladder, the
+            # processor roll-up, the denied-appeal claw-back, and the cell COUNT the other three's
+            # money is computed on. Nine grains in four row shapes. All four pages print the
+            # SERVER's own fold and none is narrowed, which `harness_batch19_drilldown.py` §F locks
+            # in both directions off each page's own text.
+            'app/modules/commcalc/carrier_owed_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1386,6 +1394,14 @@ FACTS: dict[str, dict] = {
             # registry here — it is dereferenced from `processor_money_drilldown`, which is the one
             # home for the question 'which tables did this period's sales actually come from'.
             'app/modules/commcalc/sales_margin_drilldown.py': ('_lineage',),
+            # §CORE-17.3s. The two CARRIER ACTIVITY REPORTS became registry constants in that PR and
+            # the registry's own five literal copies of their names were re-keyed to them in the
+            # same commit — the other half of the fix, which `harness_batch19_drilldown.py` §A3
+            # fails the build over if a second copy ever reappears. The APPROVED EXPECTED-TO-EARNED
+            # MOVES are deliberately NOT a constant here: `expected_commission.TABLE` is already
+            # that fact's one home and this declaration dereferences THAT, because a second copy in
+            # the registry would be the very defect the registry exists to prevent.
+            'app/modules/commcalc/carrier_owed_drilldown.py': ('_lineage',),
             'app/modules/account/liabilities_drilldown.py': ('_lineage',),
             'app/modules/commcalc/processor_ledger.py': ('_lineage',),
             'app/modules/commcalc/dlar_sweep.py': ('_lineage',),

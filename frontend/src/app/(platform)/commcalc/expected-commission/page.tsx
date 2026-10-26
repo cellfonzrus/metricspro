@@ -7,6 +7,10 @@ import type { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import { multimonthOffered, useMultimonthStatus } from '../_lib/multimonth'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
 
 // EXPECTED vs EARNED — multi-month commission, months 2..6 (configurable).
 //
@@ -20,6 +24,25 @@ import { multimonthOffered, useMultimonthStatus } from '../_lib/multimonth'
 // automatically the moment the dealer is shown paid, or because someone with permission promoted it and
 // recorded why. Promotions survive every recompute and are never paid at a stale figure.
 
+// WHERE EACH TILE CAME FROM (index CORE-17.3s). Declaration:
+// commcalc/carrier_owed_drilldown.expected_drilldowns, folded over the SAME ledger rows and the
+// SAME totals this endpoint serves. EARNED and EXPECTED are two grains on ONE installment-month row
+// separated only by PROVENANCE (CORE-17.3n): what the carrier PROVED against what the ladder
+// DECLARES. "Expected, not yet earned" drills because the subtraction is done PER MONTH on the row
+// (CORE-17.3k).
+//
+// A MONTH PROVED BY THE SALE ITSELF NAMES NO RELATION, and that is the honest answer rather than an
+// omission: the engine's sale read does not record which of the two sales relations answered, so
+// the panel states a countable untraceable origin instead of guessing a feed (CORE-17.3i).
+//
+// NOT NARROWED, AND THE LOCK FAILS THE BUILD IF `narrowPanel` APPEARS HERE
+// (harness_batch19_drilldown.py section F). Every tile here reads the SERVER's own total and this
+// page re-folds none of them, so a narrowed panel would explain a figure the tile is not showing.
+// REPORTED, NOT FIXED: the table below IS filtered in the browser while the tiles keep reading
+// those server totals, so a filtered view shows tiles that do not describe the rows beneath them.
+// Narrowing the panels would HIDE that divergence behind a figure the screen never prints; the
+// remedy is for the page to fold its own tiles or for the filters to become query parameters, and
+// it is recorded in the index rather than papered over here.
 type Row = {
   rep: string; store: string; label: string; device_category: string
   trans_id: string; mdn: string; imei: string
@@ -38,6 +61,9 @@ type Data = {
   by_rep: { rep: string; store: string; expected: number; earned: number; unearned: number; months: number; promoted_months: number }[]
   totals: { earned: number; expected_in_window: number; expected_not_yet_earned: number; promoted_amount: number; promotes_applied: number }
   expected_guard: any
+  /** One panel per drillable tile (index CORE-17.3s) — the installment months behind each figure,
+   *  and which relation proved each one. Absent for a payload served before this existed. */
+  drilldown?: Record<string, DrillPanel>
   warnings: any[]
   money_note: string; ready: boolean; note: string | null
 }
@@ -87,12 +113,35 @@ const AUDIT_COLS: ExportColumn[] = [
   { header: 'Revoked at', get: r => r.revoked_at, type: 'date' },
 ]
 
-function Tile({ label, value, tone, sub }: { label: string; value: string; tone?: string; sub?: string }) {
+/** The panel key this tile's figure is served under, plus the shared offer gate's own handle. A
+ *  tile whose figure the server served no panel for simply shows no link. */
+type TileDrill = {
+  dl: (...p: string[]) => { key: string; label: string }[]
+  open: string | null
+  toggle: (k: string) => void
+}
+
+const XC_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Month', get: (r: DrillRow) => String(r.fields?.['month'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['month'] ?? 0) },
+  { header: 'Sold in', get: (r: DrillRow) => String(r.fields?.['sold in'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['sold in'] ?? '') },
+  { header: 'Device / plan', get: (r: DrillRow) => String(r.fields?.['device / plan'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['device / plan'] ?? '') },
+  { header: 'Carrier proved it', get: (r: DrillRow) => String(r.fields?.['proved'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['proved'] ?? '') },
+]
+
+function Tile({ label, value, tone, sub, drill, d }: {
+  label: string; value: string; tone?: string; sub?: string
+  drill?: string; d?: TileDrill
+}) {
   return (
     <div className="card" style={{ flex: '1 1 190px', minWidth: 180 }}>
       <div style={{ fontSize: 11.5, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: .4 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, color: tone || 'var(--text)' }}>{value}</div>
       {sub && <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>{sub}</div>}
+      {drill && d && <DrillTileLinks drills={d.dl(drill, 'months behind this')} open={d.open} onToggle={d.toggle} />}
     </div>
   )
 }
@@ -158,6 +207,12 @@ export default function ExpectedCommissionPage() {
   const shownReps = useMemo(() => filterRows(data?.by_rep || [], filt, acc), [data, filt, acc])
   const opts = useMemo(() => optionsFromRows(data?.rows || [], acc), [data, acc])
   const t = data?.totals
+  // THE OFFER RULE, ONE HOME: a drill is offered only where the server's panel agrees with the tile
+  // to the cent, through the shared gate. A figure no row carries a number for is served NO panel
+  // at all by the declaration — a $0.00 over zero counted rows ties against nothing and would read
+  // as measured.
+  const xcPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const xcDrill = useDrillTile(xcPanels, (k, p) => agreesToTheCent(p, (data?.totals as Record<string, number> | undefined)?.[k]))
 
   return (
     <div>
@@ -189,14 +244,17 @@ export default function ExpectedCommissionPage() {
         <>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
             <Tile label="Earned this period" value={fmt(t?.earned || 0)} tone="var(--green)"
-                  sub="what actually pays" />
+                  sub="what actually pays" drill="earned" d={xcDrill} />
             <Tile label="Expected (months in window)" value={fmt(t?.expected_in_window || 0)}
-                  sub="a column — pays nobody" />
+                  sub="a column — pays nobody" drill="expected_in_window" d={xcDrill} />
             <Tile label="Expected, not yet earned" value={fmt(t?.expected_not_yet_earned || 0)}
-                  tone="var(--amber)" sub="waiting on the carrier" />
+                  tone="var(--amber)" sub="waiting on the carrier"
+                  drill="expected_not_yet_earned" d={xcDrill} />
             <Tile label="Manually promoted" value={fmt(t?.promoted_amount || 0)}
-                  sub={`${t?.promotes_applied || 0} month(s), each with a named approver`} />
+                  sub={`${t?.promotes_applied || 0} month(s), each with a named approver`}
+                  drill="promoted_amount" d={xcDrill} />
           </div>
+          {xcDrill.panel && <DrillDownPanel panel={xcDrill.panel} extraColumns={XC_DRILL_COLUMNS} />}
 
           <div className="card" style={{ marginBottom: 14, fontSize: 12.5, borderLeft: '4px solid var(--blue)' }}>
             {data?.money_note}

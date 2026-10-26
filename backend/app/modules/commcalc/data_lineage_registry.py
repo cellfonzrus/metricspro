@@ -57,6 +57,31 @@ MI_RESIDUAL = "raw_mi"                    # ePay MI / ATU residual report
 COMP_REPORT = "raw_comp_report"           # ePay Comprehensive Compensation report (#100614)
 MA_COMMISSION = "raw_ma_commission"       # VidaPay / master-agent MA Commission Details
 CARRIER_STATEMENT = "carrier_commission"  # the direct-carrier statement landing (mig 065)
+#: THE CARRIER'S OWN DAILY-ACTIVITY REPORTS, at the two grains it publishes them at. Both were
+#: already spelled as LITERALS inside this very file — in `COMMISSION_CALC_FEEDS`, in
+#: `INGEST_TABLES_BY_MODULE`, in `REQUIRED_CONTENT_COLUMNS`, in `DATA_DATE_COLUMN_BY_TABLE` and in
+#: `FEED_LABEL_BY_TABLE`: five copies of one name in the registry whose whole job is to hold it once.
+#: Named here and dereferenced at all five sites in the same commit (string-identical values, no
+#: read and no label changed), because the feed-vs-transactions drill-down has to say which relation
+#: a carrier's claim was read out of and a sixth copy at that call site is the divergence this file
+#: exists to stop. `harness_batch19_drilldown.py` §A fails the build if a literal returns.
+DLAR_REP = "raw_dlar_rep"                 # the carrier's daily activity report, per advocate
+DLAR_STORE = "raw_dlar_store"             # the same report, per door
+#: THE STORED DENIED-APPEAL RECOVERY RUN (`commcalc.appeal_recovery`, mig 098). Not an ingest feed:
+#: the recovery engine delete-then-inserts its own snapshot into it, which is why a figure on the
+#: Appeal Recovery report names THIS relation and names an evidence feed only where the snapshot
+#: row recorded one (§CORE-17.3j, the `DISCREPANCY_SNAPSHOT` posture one report along).
+RECOVERY_LEDGER = "appeal_recovery"
+#: THE MULTI-MONTH INSTALLMENT LADDER (`commcalc.plan_installment_schedule` + its month lines, mig
+#: 201). A DECLARED number rather than a measurement: what a month WOULD pay is config somebody
+#: saved, so the provenance of an EXPECTED figure is the ladder and not any carrier feed
+#: (§CORE-17.3m's posture, applied to a payout schedule rather than to a target).
+INSTALLMENT_SCHEDULE = "plan_installment_schedule"
+#: NO CONSTANT IS ADDED HERE FOR THE APPROVED EXPECTED-TO-EARNED MOVES, and that is deliberate.
+#: `commcalc.installment_promote` (mig 258) ALREADY has one home — `expected_commission.TABLE`, the
+#: module that owns the promote — so the drill-down declaration dereferences THAT by identity. A
+#: constant here would be a second copy of a name this repo already keeps once, which is the defect
+#: this file exists to prevent rather than an instance of the cure (§19.18).
 #: The product reference snapshot a per-item COST is looked up in. It was already named FOUR times in
 #: this file as a literal — in the module's ingest list, the no-month reason, the snapshot set and the
 #: cadence note — and the accessory cost audit's drill-down had to name it a fifth time to say where
@@ -243,7 +268,7 @@ LIVE_VS_MONTHLY_PAIRS = {
 # not listed here (the calculation would then read data whose arrival re-runs nothing).
 COMMISSION_CALC_FEEDS = (
     LIVE_SALES_FEED, MONTHLY_SALES,
-    PAYMENT_DETAIL, MI_RESIDUAL, "raw_dlar_rep", "raw_dlar_store",
+    PAYMENT_DETAIL, MI_RESIDUAL, DLAR_REP, DLAR_STORE,
     CARRIER_STATEMENT,
     MA_COMMISSION, MA_DAILY_TX,
 )
@@ -261,7 +286,7 @@ INGEST_TABLES_BY_MODULE = {
     # custom reports → raw_custom_import, ePay → raw_epay_daily_tx). Mirrors _TRACE_TARGET_TABLE.
     "commcalc": (
         "raw_sales", "daily_sales_feed", "raw_payment_detail", "raw_mi",
-        "raw_dlar_rep", "raw_dlar_store", PRODUCT_CATALOG, "raw_categories",
+        DLAR_REP, DLAR_STORE, PRODUCT_CATALOG, "raw_categories",
         "raw_comp_report", "raw_ma_commission", "raw_ma_daily_tx", "raw_ma_fulfillment",
         "pos_tender_summary", "inventory_value", "ma_overview_upload",
         "raw_custom_import", "raw_epay_daily_tx",
@@ -418,14 +443,14 @@ FRESHNESS_COLUMN_BY_TABLE = {
 REQUIRED_CONTENT_COLUMNS = {
     # the advocate (rep) DLAR: the door identity the store roll-down joins on, and the prepaid split the
     # Boost App attach rate is measured against.
-    "raw_dlar_rep": ("store", "ga_prepaid", "gross_adds", "atu_pct"),
+    DLAR_REP: ("store", "ga_prepaid", "gross_adds", "atu_pct"),
     # the store DLAR: the join key, the three KPIs that are ONLY published at store grain, and — added
     # 2026-10-16 — the UNIT COUNTS. Those three were not declared, so when the store report stopped
     # sending them in October 2026 the sweep's status line said nothing about the store grain at all:
     # 28 stores filed 0 activations, 0 upgrades and 0 total activity beside populated attach rates
     # under a green "OK". A count is as much a declared column as a rate (index §COMMCALC-16).
-    "raw_dlar_store": ("address", "family_plan_pct", "tmr3", "aal_conversion",
-                       "gross_adds", "total_upgrades", "total_acts"),
+    DLAR_STORE: ("address", "family_plan_pct", "tmr3", "aal_conversion",
+                 "gross_adds", "total_upgrades", "total_acts"),
 }
 
 
@@ -656,8 +681,8 @@ DATA_DATE_COLUMN_BY_TABLE = {
     # The distinction is load-bearing here: the file arrives at 08:00 for the PREVIOUS day, so the two
     # dates are never equal and a watchdog reading arrival would call a current feed a day stale.
     "storeops.raw_clock_punch": "business_date",
-    "raw_dlar_rep": "as_of_date",
-    "raw_dlar_store": "as_of_date",
+    DLAR_REP: "as_of_date",
+    DLAR_STORE: "as_of_date",
     "pos_tender_summary": "close_date",
     "inventory_value": "as_of_date",
     ASSET_LEDGER: "acquired_date",          # when the distributor booked the unit to us
@@ -962,8 +987,8 @@ FEED_LABEL_BY_TABLE = {
     PAYMENT_DETAIL: "Payment detail",
     COMP_REPORT: "Compensation report (commission basis)",
     MI_RESIDUAL: "Subscriber base snapshot",
-    "raw_dlar_rep": "Daily activity by rep",
-    "raw_dlar_store": "Daily activity by store",
+    DLAR_REP: "Daily activity by rep",
+    DLAR_STORE: "Daily activity by store",
     MA_COMMISSION: "Master-agent commission",
     MA_DAILY_TX: "Master-agent daily transactions",
     "raw_ma_fulfillment": "Master-agent fulfilment orders",
