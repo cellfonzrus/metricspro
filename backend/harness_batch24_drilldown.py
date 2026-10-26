@@ -387,9 +387,15 @@ print("\n== D. PAY VISIBILITY — a gated caller is served NO money panel, not a
 STRIPPED = [{k: v for k, v in r.items()
              if k not in ("pay_rate", "scheduled_pay", "actual_pay", "salary_period_pay")}
             for r in PAY_ROWS]
-GATED = phd.payroll_drilldowns(STRIPPED, can_see_pay=False)
-check("D1 BUILD LOCK — a pay-gated caller is served the two HOURS panels and NEITHER money panel. "
-      "Compared as a SET for equality, so a money panel that starts being served names itself",
+#: MEASURED OVER ROWS THAT DO CARRY THEIR MONEY, DELIBERATELY. Folded over STRIPPED rows the money
+#: figures have no counted row at all and the one home's own refusal withholds them anyway — so a
+#: lock measured there would stay GREEN with the gate deleted, which is the "lock that reads the form
+#: and not the fact" hole every batch of this programme has had to close. Mutation-tested: removing
+#: the gate from the catalogue fires D1.
+GATED = phd.payroll_drilldowns(PAY_ROWS, can_see_pay=False)
+check("D1 BUILD LOCK — a pay-gated caller is served the two HOURS panels and NEITHER money panel, "
+      "measured over rows that DO carry their money so the GATE is the only thing that can withhold "
+      "them. Compared as a SET for equality, so a money panel that starts being served names itself",
       set(GATED) == set(phd.HOURS_KEYS),
       "extra=%s missing=%s" % (sorted(set(GATED) - set(phd.HOURS_KEYS)),
                                sorted(set(phd.HOURS_KEYS) - set(GATED))))
@@ -402,6 +408,11 @@ check("D1b AND THERE IS A SECOND LINE OF DEFENCE, measured rather than assumed: 
       "the money figures fold to nothing counted at all, so even a caller who bypassed the gate "
       "would be served no panel of $0.00s — the one home's own refusal catches it",
       not (set(phd.payroll_drilldowns(STRIPPED, can_see_pay=True)) & set(phd.MONEY_KEYS)))
+check("D1c and the CATALOGUE ITSELF holds no money spec for a gated caller — the figures are absent "
+      "rather than served and then hidden, which is the same posture `strip_pay` takes on the "
+      "report's own columns",
+      {c["key"] for c in phd.catalogue(can_see_pay=False)} == set(phd.HOURS_KEYS)
+      and {c["key"] for c in phd.catalogue(can_see_pay=True)} == set(phd.SERVED_KEYS))
 check("D2 and the HOURS panels are unchanged for a gated caller — they still tie, still name the "
       "clock and the plan per row, because a gated caller still runs hours corrections",
       GATED["actual_hours"]["tie_out"]["ties"] is True
