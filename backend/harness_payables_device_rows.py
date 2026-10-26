@@ -156,8 +156,20 @@ ck("D7 such a row carries NO amount — a device nobody bought cannot be owed fo
 for name, src in (("the payables list", RTR), ("the unsold-inventory read", UNS)):
     ck(f"D8 {name} excludes non-payables through the one home",
        "_ls.exclude_non_payable(" in src, True)
-ck("D9 every ledger read in the payables router is filtered or explicitly single-row",
-   RTR.count("_ls.exclude_non_payable(") >= 3, True)
+# §COMMCALC-34 — one of those three reads MOVED. The daily and the weekly owed surfaces now share
+# ONE read (`payables/owed_read.py`) so the week cannot total what the day disagrees with, and the
+# gate moved WITH it rather than being left behind. The ratchet still counts three, across both
+# files, so a read that loses its gate still fails here wherever it lives.
+ORD = open(os.path.join(ROOT, "app", "modules", "payables", "owed_read.py")).read()
+ck("D9 every ledger read in the payables router is filtered or explicitly single-row — counted "
+   "across the router AND the shared read the daily surface now goes through",
+   RTR.count("_ls.exclude_non_payable(") + ORD.count("_ls.exclude_non_payable(") >= 3, True)
+ck("D9a ...and the SHARED read gates its own ledger query, so a line that bought no device never "
+   "reaches the arithmetic on either surface rather than on only the one that kept the gate",
+   "_ls.exclude_non_payable(" in ORD, True)
+ck("D9b ...and the router kept no ungated ledger select of its own: every `.table` call on the "
+   "ledger there is either gated on the next lines or an explicit count / single-row lookup",
+   RTR.count('table("device_payable_ledger")'), 4)
 ck("D10 the count of what was left out is REPORTED, never silently dropped",
    '"no_device_excluded"' in RTR, True)
 ck("D11 the drill-down still answers for such a line, saying which it is (an audit view)",
