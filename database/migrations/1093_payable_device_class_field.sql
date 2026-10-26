@@ -12,7 +12,7 @@
 --        leave the payable totals entirely, while staying listed and auditable.
 --        RULE TWO: the column NAME and the tokens are config, so no carrier name enters code.
 --        The tokens themselves have ONE home (commcalc/product_mix.HOUSE_NO_DEVICE_TOKENS), which
---        this column overrides rather than copies. Index §COMMCALC-31.
+--        this column overrides rather than copies. Index §COMMCALC-32.
 -- SAFE : additive and nullable. Left NULL (every pre-existing row, including both Total rows until
 --        the config runbook is applied) behaviour is EXACTLY as before — the question is simply not
 --        asked. No amount is recomputed by applying this file; the next ledger rebuild is what

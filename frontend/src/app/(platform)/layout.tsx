@@ -34,9 +34,9 @@ import { searchableRoutes } from '@/lib/route-index'
 import { SCREENS } from '@/components/ScreenLink'
 
 // How many colours the sidebar rotation cycles through. The colours themselves live in
-// globals.css (.mp-sidebar --nav-accent-1..6); this must match how many are declared there,
+// globals.css (.mp-sidebar --nav-accent-1..N); this must match how many are declared there,
 // and prove_nav_accents.mjs fails the build if the two ever disagree.
-const NAV_ACCENT_SLOTS = 6
+const NAV_ACCENT_SLOTS = 2
 
 
 // Reports-directory category names ('Reports · Sales', …). tileOnly filtering (below) never applies

@@ -160,6 +160,15 @@ FACTS: dict[str, dict] = {
             # row per person with the hours table that answered for them, and an unset rent shown
             # without a figure and never counted.
             'app/modules/account/liabilities_drilldown.py': ('report_drilldown',),
+            # The PAYROLL-AND-WORKFORCE family (§CORE-17.3x) — the Payroll Report, StoreOps Reports
+            # — Hours & Payroll, and the Hours Budget. TWO modules, not one, and the reason is the
+            # grain rule: a PERSON over a PAY PERIOD whose hours may come out of the clock, the plan
+            # or nothing, against a STORE over a WORK-WEEK whose hours come out of the plan alone.
+            # The two payroll screens share one grain exactly, so they share ONE catalogue; a second
+            # over it would be the sibling derivation the index rules forbid. Also where the shared
+            # fold learned that the COLUMN a figure was read out of can differ per row, additively.
+            'app/modules/storeops/payroll_hours_drilldown.py': ('report_drilldown',),
+            'app/modules/storeops/scheduled_hours_drilldown.py': ('report_drilldown',),
             # The three commission DISAGREEMENT reports (§CORE-17.3k) — Pay Discrepancy,
             # Carrier Earned vs Employee Paid and Commission received over M1–M12. ONE module, THREE
             # catalogues, because they do NOT share a row grain (a commission line, a rep, a money
@@ -757,7 +766,7 @@ FACTS: dict[str, dict] = {
         "question": 'What price band did the CUSTOMER pay for this device, which model was it, and is '
                     'this rep low on accessory $ per box AND on port-ins at the same time?',
         "homes": ('app/modules/commcalc/product_mix.py',),
-        "index": ('62', 'COMMCALC-31'),
+        "index": ('62', 'COMMCALC-32'),
         "locks": ('harness_product_mix.py', 'harness_payables_device_rows.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
@@ -775,7 +784,7 @@ FACTS: dict[str, dict] = {
             # spells no verdict and holds no floor; `harness_batch21_drilldown.py` §A7/§A8c fail the
             # build if either becomes a literal there again.
             'app/modules/commcalc/sales_outcome_drilldown.py': ('_pmix',),
-            # §COMMCALC-31 — the payables ledger asks this home whether the line sold a DEVICE AT ALL
+            # §COMMCALC-32 — the payables ledger asks this home whether the line sold a DEVICE AT ALL
             # (`no_device_declared`, the declared-basis half of `product_class_of`) instead of
             # inferring it from a missing product name. A line the feed declares as the customer's own
             # phone is not a device payable, and `harness_payables_device_rows.py` §A9/§D2 fail the
@@ -1401,6 +1410,40 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/dlar_sweep.py': ('_cell',),
         },
     },
+    'payroll_hours_basis': {
+        "question": 'Which hours is this person paid for on this day, and on what BASIS — a closed '
+                    'punch, a human correction, a measured zero, the schedule they are ticked to be '
+                    'paid from, or nothing at all? It was `actual_hours or scheduled_hours` in six '
+                    'places over a column effectively nothing writes (7 of 7,740 shift rows), so the '
+                    '`or` fell through to the schedule on effectively every row and no reader was '
+                    'ever told. The hours and the REASON they are those hours are ONE fact: a caller '
+                    'that wants the number takes the basis with it (§14y). §CORE-17.3x made that '
+                    'basis a drill-down\'s provenance — which relation answered for a figure — so a '
+                    'second copy of the vocabulary would be a panel naming the wrong table.',
+        "homes": ('app/modules/storeops/payroll_hours_basis.py',),
+        "index": ('14y',),
+        "locks": ('harness_payroll_hours_basis.py', 'harness_payroll_hours_basis_lock.py'),
+        # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
+        # The eleven pre-existing callers are named here for the FIRST time, beside the drill-down
+        # that needed the fact registered: batch 22's posture for `rep_pay_snapshot`, taken again.
+        "callers": {
+            'app/modules/account/coa.py': ('_hours_basis',),
+            'app/modules/commcalc/labour_coverage.py': ('_hours_basis',),
+            'app/modules/hr/router.py': ('_hours_basis',),
+            'app/modules/storeops/clock_feed.py': ('_basis',),
+            'app/modules/storeops/clock_variance.py': ('_basis',),
+            'app/modules/storeops/clock_variance_api.py': ('_hb',),
+            'app/modules/storeops/payroll_evidence.py': ('_hb',),
+            # §CORE-17.3x — the payroll drill-down reads the basis VOCABULARY (the bases, the paying
+            # allowlist and the measured set) to answer which relation a person's hours came out of,
+            # and keys its basis→relation map on those constants rather than on words of its own.
+            'app/modules/storeops/payroll_hours_drilldown.py': ('_hb',),
+            'app/modules/storeops/pto_accrual.py': ('_hours_basis',),
+            'app/modules/storeops/router.py': ('_hours_basis',),
+            'app/modules/storeops/salary_expense.py': ('_hb',),
+            'app/modules/storeops/salary_owed.py': ('_hours_basis',),
+        },
+    },
     'feed_lineage': {
         "question": "Which table is the LIVE feed for this item, and which column means 'arrived'?",
         "homes": ('app/modules/commcalc/data_lineage_registry.py',),
@@ -1438,6 +1481,14 @@ FACTS: dict[str, dict] = {
             # feeds are, so no panel on these three reports spells a relation name of its own
             # (§CORE-17.3n). `billpay_processor_feed` is dereferenced rather than re-mapped.
             'app/modules/commcalc/processor_money_drilldown.py': ('_lineage',),
+            # §CORE-17.3x — the PAYROLL and WORKFORCE declarations ask the registry which relation
+            # records a worked hour (the closed punch), which one records a PLANNED one (the
+            # schedule), and which one holds a person's pay rate. The last of those, and
+            # hand-entered hours beside it, became registry NAME constants in this batch with their
+            # one pre-existing literal copy (`account/liabilities_drilldown`) re-keyed in the SAME
+            # commit — naming a fact is half a design fix (§19.18).
+            'app/modules/storeops/payroll_hours_drilldown.py': ('_lineage',),
+            'app/modules/storeops/scheduled_hours_drilldown.py': ('_lineage',),
             # THE SAME FACT, ONE LAYER DOWN. `processor_ledger.FEED_SHAPES` spelled the payment
             # and daily-TX table names as LITERALS, which were a second copy of two constants the
             # registry already held — and the drill-down above reads that map for a cell's
@@ -2398,9 +2449,33 @@ FACTS: dict[str, dict] = {
                     'window from the longest an operator may hold a session, and widening it would '
                     'have made a killed worker\'s leftover row read as LIVE. That derivation now '
                     'dereferences `max_inactivity_limit`. Watching is not acting: `_note_viewer` '
-                    'never touches `_last_activity`.',
+                    'never touches `_last_activity`. AND the sixth axis of the '
+                    'same question (§COMMCALC-31), which is §COMMCALC-27 found in a SECOND place: '
+                    'the loop\'s own DETECTION sat on the operator\'s latency path too. '
+                    '`_preauth_detect` walks every frame of the page (`_classify` reads each '
+                    'frame\'s text, `_captcha_present` queries selectors), it ran on a fixed '
+                    '`_CLASSIFY_POLL_S` timer, and it ran BEFORE the input drain — so a click could '
+                    'wait a full `_pump` PLUS a whole page re-read before it was dequeued ("it is '
+                    'very slow to react", 2026-10-26, four days after the click fix shipped). The '
+                    'input drain now LEADS the tick in both loops, and `detect_due` is the ONE '
+                    'answer to "may detection run now": deferred while `operator_input_pending` — '
+                    'the same home §COMMCALC-27 already established, not a second queue peek — and '
+                    'BOUNDED by `_DETECT_DEFER_MAX_S`, because a deferral with no ceiling is how a '
+                    'captcha stops being noticed; past the ceiling it runs regardless. It is pure, '
+                    'and unreadable inputs read as DUE, so the failure mode is the old always-detect '
+                    'behaviour. AND the seventh (§COMMCALC-31 again, the reporting half): WHAT IS '
+                    'THIS SESSION DOING RIGHT NOW. `phase` + `message` are a standing INSTRUCTION '
+                    '("complete the login on the screen"), so a session grinding through a page '
+                    're-read and a session that had stopped looked identical ("it shoudl show what '
+                    'is going on it seems nothing is moving"). The step in flight is a DIFFERENT '
+                    'fact from the phase: `_note_act` is the one setter (lock-only, never touches '
+                    'the page or the row — it runs on the hot path), `activity` the one reader, and '
+                    '`state`/`frame_since` DEREFERENCE it rather than composing their own, so the '
+                    'line moves on an unchanged frame payload too. Frame age is None before the '
+                    'first frame, never a fabricated 0 that would read as "just updated".',
         "homes": ('app/modules/commcalc/live_login.py',),
-        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28', 'COMMCALC-30'),
+        "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28', 'COMMCALC-30',
+                  'COMMCALC-31'),
         "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py',
                   'harness_live_session_host.py', 'harness_live_input_latency.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real

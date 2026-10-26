@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """DB-FREE PROOF — a payables row is a DEVICE THE DEALER BOUGHT, and the screen opens on the days it
-is meant to measure (owner reports 2026-10-26, index §COMMCALC-31).
+is meant to measure (owner reports 2026-10-26, index §COMMCALC-32).
 
 OWNER, verbatim: *"product not available , it shoudl show the product"*. There is no product to show.
 Measured on the live Luxelink feed the same day: `activation_type2` declares `branded` on 3,567 rows

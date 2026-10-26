@@ -9,6 +9,36 @@ import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterVa
 import { currentPeriodFromSettingsResponse, monthRange, rangeLabel, stepPeriod, type PayPeriodSettings } from '../lib/pay-period'
 import { PAY_BASIS_LABEL, type PayBasis } from '../lib/pay-basis'
 import ActualHoursDrilldown from '../payroll/ActualHoursDrilldown'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
+
+// The hours basis words, shown as the human phrase — the SAME display map the Payroll Report uses,
+// over the SAME server-composed basis. The decision and the sentence are the server's (§14y).
+const BASIS_LABEL: Record<string, string> = {
+  clocked: 'Clocked in',
+  clocked_corrected: 'Corrected by hand',
+  clocked_reconciled: 'Clock records reconciled',
+  clocked_override: 'Overridden, with a reason',
+  measured_zero: 'Measured — nothing worked',
+  schedule_opt_in: 'From the schedule (ticked)',
+  not_measured_unpaid: 'Not measured — unpaid',
+  punch_unusable: 'Punch unusable — reported',
+}
+
+// WHAT A READER NEEDS BESIDE EACH PERSON IN A PANEL (§CORE-17.3x) — off the row's own `fields`.
+const PAYROLL_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: r => (r.fields?.store as string) || '—',
+    sortValue: r => (r.fields?.store as string) || '' },
+  { header: 'Hours basis', get: r => {
+      const b = r.fields?.['hours basis'] as string | undefined
+      if (!b) return '—'
+      const label = BASIS_LABEL[b] || String(b).replace(/_/g, ' ')
+      return r.fields?.['mixed basis'] ? `${label} · mixed` : label
+    }, sortValue: r => (r.fields?.['hours basis'] as string) || '' },
+  { header: 'Why these hours', get: r => (r.fields?.['why these hours'] as string) || '—' },
+]
 
 const chip: React.CSSProperties = { padding: '5px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)', cursor: 'pointer' }
 
@@ -30,6 +60,9 @@ export default function StoreOpsReportsPage() {
   const [overAlone, setOverAlone] = useState<Set<string>>(new Set())
   const [overStores, setOverStores] = useState<Set<string>>(new Set())
   const [editedEmpIds, setEditedEmpIds] = useState<Set<string>>(new Set())
+  // §CORE-17.3x — the people behind each tile, folded server-side over the SAME rows this report
+  // serves, from the SAME declaration the Payroll Report's tiles open (one grain, one catalogue).
+  const [panels, setPanels] = useState<Record<string, DrillPanel>>({})
 
   // Owner directive 2026-07-25: default the range to the tenant's OWN pay period (migration 085
   // config, resolved server-side — never re-derived here, see ../lib/pay-period.ts). Degrades to the
@@ -74,6 +107,11 @@ export default function StoreOpsReportsPage() {
     api(`/api/v1/storeops/payroll-change-log?start=${start}&end=${end}`).then((r: any) => {
       setEditedEmpIds(new Set<string>((r?.items || []).map((it: any) => it.employee_id).filter(Boolean)))
     }).catch(() => setEditedEmpIds(new Set()))
+    // The rows behind the tiles (§CORE-17.3x) — /payroll is a bare array, so the panels come from
+    // the sibling `…/payroll/drilldown` beside it. A pay-gated caller gets the hours panels only.
+    api(`/api/v1/storeops/payroll/drilldown?start=${start}&end=${end}`)
+      .then((d: { drilldown?: Record<string, DrillPanel> }) => setPanels(d?.drilldown || {}))
+      .catch(() => setPanels({}))
   }
   useEffect(() => {
     if (!rangeReady || !filt.period || !filt.periodTo) return
@@ -116,6 +154,33 @@ export default function StoreOpsReportsPage() {
     sh: t.sh + (r.scheduled_hours || 0), ah: t.ah + (r.actual_hours || 0),
     sp: t.sp + (r.scheduled_pay || 0), ap: t.ap + (r.actual_pay || 0),
   }), { sh: 0, ah: 0, sp: 0, ap: 0 })
+
+  // ── §CORE-17.3d/§CORE-17.3x — THE TILES AND THEIR EVIDENCE ARE ONE FOLD ───────────────────────
+  // This page filters in the BROWSER and reduces over what survives (and regroups the same rows per
+  // store in the By-Store view), so each panel is NARROWED to the people on screen on the
+  // person-and-store key the server served, and each tile READS ITS NUMBER OFF its narrowed panel
+  // wherever the two agree to the cent. The `Employees` tile is deliberately NOT drillable: it is a
+  // count of the rows a panel's own header already states, never Σ(a field).
+  const shownPeople = useMemo(
+    () => new Set(visibleRows.map(r => screenKey({ employee_id: r.employee_id, store: r.store }))),
+    [visibleRows])
+  const narrowed = useMemo(() => {
+    const out: Record<string, DrillPanel> = {}
+    Object.keys(panels).forEach(k => {
+      const p = narrowPanel(panels[k], (_r: DrillRow, key: string) => key === '' || shownPeople.has(key))
+      if (p) out[k] = p
+    })
+    return out
+  }, [panels, shownPeople])
+  const folded: Record<string, number> = {
+    scheduled_hours: tot.sh, actual_hours: tot.ah, scheduled_pay: tot.sp, actual_pay: tot.ap,
+  }
+  const tileValue = (k: string): number => {
+    const n = folded[k] || 0
+    return agreesToTheCent(narrowed[k], n) ? Number(narrowed[k]?.figure?.amount ?? n) : n
+  }
+  const payrollDrill = useDrillTile(
+    narrowed, (k, p) => !(k in folded) || agreesToTheCent(p, folded[k] || 0))
 
   // PAY VISIBILITY (mig 434). This report reads the SAME gated GET /storeops/payroll the Payroll
   // page does, and a gated caller's money keys are DELETED server-side — but unlike that page this
@@ -179,10 +244,15 @@ export default function StoreOpsReportsPage() {
   const empCols = canSeePay ? empColsAll : empColsAll.filter(c => !PAY_COLS.has(c.header))
   const storeCols = canSeePay ? storeColsAll : storeColsAll.filter(c => !PAY_COLS.has(c.header))
 
-  const Tile = ({ label, value }: { label: string; value: string }) => (
+  const Tile = ({ label, value, drillKey, drillLabel }:
+    { label: string; value: string; drillKey?: string; drillLabel?: string }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 130 }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>{value}</div>
+      {drillKey && (
+        <DrillTileLinks drills={payrollDrill.dl(drillKey, drillLabel || 'the rows behind this figure')}
+          open={payrollDrill.open} onToggle={payrollDrill.toggle} />
+      )}
     </div>
   )
 
@@ -254,12 +324,24 @@ export default function StoreOpsReportsPage() {
       </div>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
-        <Tile label="Scheduled Hrs" value={tot.sh.toFixed(1)} />
-        <Tile label="Actual Hrs" value={tot.ah.toFixed(1)} />
-        {canSeePay && <Tile label="Scheduled Pay" value={fmt(tot.sp)} />}
-        {canSeePay && <Tile label="Actual Pay" value={fmt(tot.ap)} />}
+        <Tile label="Scheduled Hrs" value={tileValue('scheduled_hours').toFixed(1)}
+          drillKey="scheduled_hours" drillLabel="the shifts behind these hours" />
+        <Tile label="Actual Hrs" value={tileValue('actual_hours').toFixed(1)}
+          drillKey="actual_hours" drillLabel="the people behind these hours, and what measured them" />
+        {canSeePay && <Tile label="Scheduled Pay" value={fmt(tileValue('scheduled_pay'))}
+          drillKey="scheduled_pay" drillLabel="the people behind this pay" />}
+        {canSeePay && <Tile label="Actual Pay" value={fmt(tileValue('actual_pay'))}
+          drillKey="actual_pay" drillLabel="the people behind this pay" />}
+        {/* A cardinality, not a fold — no panel (§CORE-17.3x). */}
         <Tile label="Employees" value={String(visibleRows.length)} />
       </div>
+
+      {/* ONE renderer for whichever figure is open — the one home's panel, never a shape of ours. */}
+      {payrollDrill.panel && (
+        <div style={{ marginBottom: 18 }}>
+          <DrillDownPanel panel={payrollDrill.panel} extraColumns={PAYROLL_DRILL_COLUMNS} />
+        </div>
+      )}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>

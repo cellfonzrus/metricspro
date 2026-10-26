@@ -430,7 +430,7 @@ def _needed_cols(cfg):
     for k in ("imei_field", "model_field", "store_field", "owed_field", "due_date_field",
               "billing_friday_field", "sold_date_field", "reimbursement_field",
               "reimbursement_date_field", "invoice_date_field",
-              # The column that DECLARES whether a device was bought on this line (§COMMCALC-31).
+              # The column that DECLARES whether a device was bought on this line (§COMMCALC-32).
               # Selected like any other declared field: unselected, the question cannot be asked and
               # every bring-your-own-phone line reads as an unpriced payable.
               "device_class_field"):
@@ -570,7 +570,7 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
         imei = _norm_imei(r.get(imei_field))
         model_raw = (r.get(cfg["model_field"]) if cfg.get("model_field") else None)
         model = alias.get((str(model_raw or "").strip().lower()), model_raw)
-        # DID THE DEALER BUY A PHONE ON THIS LINE AT ALL (§COMMCALC-31)? Through the one home for
+        # DID THE DEALER BUY A PHONE ON THIS LINE AT ALL (§COMMCALC-32)? Through the one home for
         # "did this line sell a device" (`product_mix.no_device_declared`, §COMMCALC-03.21), on the
         # column this carrier's map declares. No declared column -> every row is kept, which is
         # byte-identical to before this question existed.
@@ -682,7 +682,7 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
             priority = today >= threshold
 
         # status routing. FIRST, because a line that bought no device is not a payable in any state:
-        # it cannot be offset, it is not a discrepancy, and it is never due (§COMMCALC-31). The feed's
+        # it cannot be offset, it is not a discrepancy, and it is never due (§COMMCALC-32). The feed's
         # own declaration is the only thing that may say so — a product DESCRIPTION is not evidence
         # (§66), and reading one here would drop real handsets.
         if no_device:

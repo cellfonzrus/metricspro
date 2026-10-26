@@ -357,7 +357,7 @@ def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit
     if status:
         q = q.eq("status", status)
     else:
-        # A line that bought no device is not a payable in any state (§COMMCALC-31). Excluded through
+        # A line that bought no device is not a payable in any state (§COMMCALC-32). Excluded through
         # the one home, so adding a second non-payable status reaches every reader at once. An
         # EXPLICIT status filter is honoured as asked, so the rows stay reachable for an audit.
         q = _ls.exclude_non_payable(q)
@@ -393,7 +393,7 @@ def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit
             # Fail-closed rows the window could not judge, SAID OUT LOUD (see the docstring).
             "undated_excluded": undated,
             # And the lines left out because no device was bought on them — COUNTED, never silently
-            # dropped (§COMMCALC-31). The note names no feed or column, so it is safe on any screen.
+            # dropped (§COMMCALC-32). The note names no feed or column, so it is safe on any screen.
             "no_device_excluded": _no_device_count(client, org_id, carrier_id) if not status else 0,
             "no_device_note": _ls.EXCLUDED_NOTE,
             "unassigned_store": sum(1 for r in rows if not (r.get("store") or "").strip())}
@@ -415,7 +415,7 @@ def _no_device_count(client, org_id, carrier_id=""):
 
 
 def _due_window(start="", end="", all_dates=False):
-    """WHICH DAYS A PAYMENT SCREEN OPENS ON — one answer, through the window home (§COMMCALC-31).
+    """WHICH DAYS A PAYMENT SCREEN OPENS ON — one answer, through the window home (§COMMCALC-32).
 
     Owner 2026-10-26: the screen should pick today through three days ahead by itself. So an absent
     date range is no longer "every row ever": it is the default ahead window, which the response
@@ -532,7 +532,7 @@ def offsets(imei: str, org_id: str = ORG_ID):
         "imei": n, "store": row.get("store"), "device_model": row.get("device_model"),
         "status": row.get("status"), "owed": row.get("owed"), "owed_source": row.get("owed_source"),
         # The drill-down is an AUDIT view and deliberately still answers for a line the lists leave
-        # out, saying which it is rather than 404-ing on it (§COMMCALC-31).
+        # out, saying which it is rather than 404-ing on it (§COMMCALC-32).
         "is_payable": _ls.is_payable(row.get("status")),
         "primary_rebate": {"amount": row.get("rebate_amount"), "date": row.get("rebate_date"),
                            "source": row.get("rebate_source")},
@@ -552,7 +552,7 @@ def due(as_of: str = "", store: str = "", carrier_id: str = "", org_id: str = OR
     if not as_of:
         raise HTTPException(400, "as_of=<billing friday YYYY-MM-DD> required")
     client = sb()
-    q = _ls.exclude_non_payable(                       # §COMMCALC-31, same reason as the list above
+    q = _ls.exclude_non_payable(                       # §COMMCALC-32, same reason as the list above
         client.schema("commcalc").table("device_payable_ledger")
         .select("store,bill_path,owed,imei,device_model,due_date")
         .eq("org_id", org_id).eq("billing_friday", as_of))
@@ -665,7 +665,7 @@ def owed_by_date(start: str = "", end: str = "", store: str = "", all_dates: boo
     # comma-separated list and matches ANY of them. One value is just a list of one — there is no
     # second single-market code path to drift from.
     want_markets = {m.strip().lower() for m in str(market or "").split(",") if m.strip()} or None
-    q = _ls.exclude_non_payable(                       # §COMMCALC-31
+    q = _ls.exclude_non_payable(                       # §COMMCALC-32
         client.schema("commcalc").table("device_payable_ledger")
         .select("due_date,net_owed,owed,store,imei,device_model,status").eq("org_id", org_id))
     if win:

@@ -305,7 +305,7 @@ DECLARED_NO_DEVICE_BASIS = PRODUCT_CLASS_BASES[0]
 def no_device_declared(declared, no_device_tokens=None):
     """PURE: True only when the row's OWN feed column declares that no device was sold.
 
-    THE ONE TEST, so no caller re-derives it (§COMMCALC-31). The device-payables ledger needs exactly
+    THE ONE TEST, so no caller re-derives it (§COMMCALC-32). The device-payables ledger needs exactly
     this question and nothing else about the product: a bring-your-own-phone line is an activation,
     never a handset the dealer bought, so it can never be owed for and must not be presented as an
     unpriced payable. `product_class_of` below dereferences this rather than keeping a second copy —

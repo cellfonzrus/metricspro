@@ -1,6 +1,6 @@
 """WHAT A DEVICE-PAYABLE LEDGER ROW'S STATUS MEANS — the ONE home for that vocabulary.
 
-Index §COMMCALC-31. Lock: `backend/harness_payables_device_rows.py`.
+Index §COMMCALC-32. Lock: `backend/harness_payables_device_rows.py`.
 
 OWNER REPORT 2026-10-26, on the payables list: *"product not available , it shoudl show the
 product"*. There is no product to show, and that was the finding. Measured on the live Luxelink feed

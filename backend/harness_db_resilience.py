@@ -1256,7 +1256,20 @@ _all_routes = _flatten_routes(real_app.routes)
 # same way as every pin above: `git diff origin/main HEAD -- backend/ | grep -cE '^\+.*@router\.'` = 1
 # and `'^-.*@router\.'` = 0 — one added, NONE removed, 1800 + 1 = 1801. So the pin was re-taken on a
 # counted, named addition, never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1801"))
+# Re-pinned 1801 -> 1802 on 2026-10-26 for the §CORE-17.3x drill-down batch. The delta is ONE route
+# and it is named: GET /storeops/payroll/drilldown (the drill-down panels for the Payroll Report and
+# StoreOps Reports — Hours & Payroll). It exists as a SIBLING rather than a `drilldown` key because
+# `GET /storeops/payroll` returns a bare JSON array that the exports, the approval board, the
+# harnesses and the mobile client all iterate, and changing that shape would break every one of them.
+# It is READ-ONLY and adds no input to any report, statement, GP, commission or tax figure: it calls
+# the SAME shared producer the report calls, in process, with the caller's own authorization, applies
+# the report's own pay-visibility gate, and names where each figure was read. No table gains a
+# writer, and it adds no route to db_resilience itself (I0b proves that independently of this
+# number). Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
+# one added, NONE removed, 1801 + 1 = 1802. So the pin was re-taken on a counted, named addition,
+# never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1802"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

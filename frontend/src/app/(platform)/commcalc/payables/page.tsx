@@ -49,6 +49,11 @@ function MapRow({ cand, carriers, onSave }: any) {
   )
 }
 
+/** One store's share of a date's owed total (`/payables/owed-by-date` → `by_store`, §COMMCALC-32).
+ *  `store` empty means the build could not resolve the store, so the money cannot be debited to an
+ *  account — it is shown as its own line rather than folded into a resolved store's figure. */
+type OwedByStore = { store?: string | null; store_key?: string | null; market?: string | null; count: number; owed: number }
+
 export default function PayablesPage() {
   return <Suspense fallback={null}><PayablesPageBody /></Suspense>
 }
@@ -86,12 +91,14 @@ function PayablesPageBody() {
   const [warns, setWarns] = useState<string[]>([])
   // WHICH DAYS THE SERVER ACTUALLY MEASURED. The default (today -> +3 days) is computed by the
   // endpoint and returned, so the pickers show what was applied instead of this page holding a
-  // second copy of the default that could drift from it (§COMMCALC-31).
+  // second copy of the default that could drift from it (§COMMCALC-32).
   const [appliedWin, setAppliedWin] = useState<{ start?: string; end?: string; basis?: string } | null>(null)
   const [allDates, setAllDates] = useState(false)
   const [openDate, setOpenDate] = useState('')
   const [drill, setDrill] = useState<any | null>(null)
-  // owed-by-date
+  // owed-by-date. WHO OWES WHAT on a date (§COMMCALC-32): the per-store split rides WITH the date
+  // row, so it is shaped here rather than left untyped — a blank `store` is money whose store the
+  // build could not resolve, which must stay visible instead of being folded into another store.
   const [oRows, setORows] = useState<any[]>([])
   const [oMeta, setOMeta] = useState<any>({})
   const [loading, setLoading] = useState(false)
@@ -109,6 +116,10 @@ function PayablesPageBody() {
   // caller's JWT — never hardcoded.
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const owedStore = filt.stores.length === 1 ? filt.stores[0] : ''
+  // The market half of the bar is MULTI-select, and the Daily Owed tab applies it SERVER-side (a date
+  // aggregate carries no store dimension for a client-side predicate to read). One joined key, so the
+  // effect below depends on a plain value and the query sends exactly what the effect watched.
+  const marketKey = filt.markets.join(',')
 
   // The ledger rows carry a store but NO market, so the cascade's market vocabulary comes from the
   // org roster (the same org-scoped pick-don't-type source /core/filter-options serves every other bar).
@@ -147,7 +158,7 @@ function PayablesPageBody() {
   // also means `limit` counts rows inside the range instead of rows before it.
   useEffect(() => { if (tab === 'forecast') loadForecast() }, [tab, lookback, horizon, filt.period, filt.periodTo])
   useEffect(() => { if (tab === 'payables') loadPayables() }, [tab, status, filt.period, filt.periodTo, allDates])
-  useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, owedStore, filt.period, filt.periodTo, filt.markets.join(','), allDates])
+  useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, owedStore, filt.period, filt.periodTo, marketKey, allDates])
   useEffect(() => { if (tab === 'map') loadMap() }, [tab])
 
   async function rebuild() {
@@ -214,7 +225,7 @@ function PayablesPageBody() {
       if (owedStore) qs.set('store', owedStore)   // date-aggregate has no store dim → single-store server filter
       if (filt.period) qs.set('start', filt.period)
       if (filt.periodTo) qs.set('end', filt.periodTo)
-      if (filt.markets.length) qs.set('market', filt.markets.join(','))   // the same bar's market half (RULE FIVE), multi-select
+      if (marketKey) qs.set('market', marketKey)   // the same bar's market half (RULE FIVE), multi-select
       if (allDates) qs.set('all_dates', 'true')
       const d = await api(`/api/v1/payables/owed-by-date${qs.toString() ? `?${qs}` : ''}`); setORows(d.rows || []); setOMeta(d || {})
       setAppliedWin(d.window || null)
@@ -586,7 +597,7 @@ function PayablesPageBody() {
             <><br /><b style={{ color: 'var(--c-fg-d97706)' }}>{pMeta.undated_excluded}</b> row(s) carry
             {' '}<b>no due date</b> and are therefore outside the date range you picked — clear the range to see them.</>
           )}
-          {/* THE LINES THAT ARE NOT PAYABLES AT ALL (§COMMCALC-31). "Product Not Available" was never
+          {/* THE LINES THAT ARE NOT PAYABLES AT ALL (§COMMCALC-32). "Product Not Available" was never
               missing data: the customer brought their own phone, so no handset was bought and nothing
               can be owed. They are counted here rather than dropped, because a list that silently
               sheds rows is how a real one goes missing unnoticed. */}
@@ -676,7 +687,7 @@ function PayablesPageBody() {
                   <td style={td}>{r.count}{r.stores ? ` · ${r.stores} store${r.stores === 1 ? '' : 's'}` : ''}</td>
                   <td style={{ ...td, fontWeight: 600 }}>{fmt(r.owed)}</td>
                 </tr>
-                {openDate === r.due_date && (r.by_store || []).map((b: any, j: number) => (
+                {openDate === r.due_date && ((r.by_store || []) as OwedByStore[]).map((b, j) => (
                   <tr key={`${i}-${j}`} style={{ background: 'var(--surface2)' }}>
                     <td style={{ ...td, paddingLeft: 28 }}>
                       {b.store || <i>store not resolved — cannot be debited to an account</i>}

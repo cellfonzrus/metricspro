@@ -74,6 +74,11 @@ from app.modules.storeops import face_retention as _fret
 from app.modules.storeops import salary_owed as _owed
 from app.modules.storeops import target_attribution as _dmta
 from app.modules.storeops import attendance_exceptions as _attn
+# §CORE-17.3x — the rows behind the figures these screens print. DECLARATIONS ONLY: they name which
+# field, which relation and which rows a figure was folded from, and the shared home in
+# `core/report_drilldown` builds every panel, so no endpoint here holds a panel shape of its own.
+from app.modules.storeops import payroll_hours_drilldown as _phd
+from app.modules.storeops import scheduled_hours_drilldown as _shd
 from app.modules.core import portal_secret as _psec   # THE credential-column registry (index §CORE-03)
 
 try:
@@ -1559,6 +1564,34 @@ def get_payroll_route(month: str = None, start: str = None, end: str = None,
         except Exception:
             pass
     return rows
+
+
+@router.get("/payroll/drilldown")
+def get_payroll_drilldown(month: str = None, start: str = None, end: str = None,
+                          authorization: str = Header(default=""), org_id: str = ORG_ID,
+                          response: Response = None):
+    """THE ROWS BEHIND THE PAYROLL REPORT'S FOUR FIGURES (§CORE-17.3x) — one panel per figure, each
+    naming the people it was folded from and the relation each person's hours came out of.
+
+    A SIBLING ENDPOINT RATHER THAN A `drilldown` KEY, for the same reason batch 22 needed one: `GET
+    /storeops/payroll` returns a BARE ARRAY that the exports, the approval board, the harnesses and
+    the mobile client all iterate, and giving it an object shape would break every one of them.
+
+    IT CANNOT DISCLOSE WHAT THE REPORT WOULD NOT. It calls the SAME shared producer the report calls,
+    in process, with the caller's own authorization and the same range precedence — so the panels hold
+    exactly the rows that caller was served, after the org scope and after the store keyset.
+
+    PAY VISIBILITY IS THE REPORT'S OWN GATE, ASKED AGAIN HERE (mig 434). A caller who may not see pay
+    has the money keys stripped from their rows exactly as on the report, AND is served no money panel
+    at all — not a panel of $0.00s, which is what a stripped row would otherwise fold into. The hours
+    panels are served either way, because a gated caller still runs hours corrections.
+    """
+    rows = get_payroll(month=month, start=start, end=end,
+                       authorization=(authorization or ""), org_id=org_id, response=response)
+    allowed = _payvis.can_see_pay(authorization or "", org_id, client=get_supabase())
+    if not allowed:
+        rows, _ = _payvis.strip_pay(rows)
+    return {"drilldown": _phd.payroll_drilldowns(rows, can_see_pay=allowed)}
 
 
 def _apply_approved_hours(org_id, lo, hi, rows):
@@ -7313,20 +7346,42 @@ def _work_week_bounds(org_id, date_str):
     return ws.isoformat(), (ws + timedelta(days=6)).isoformat()
 
 
-def _store_week_hours(org_id, store_code, ws, we, exclude_id=None):
-    """Total scheduled hours at a store across the work-week [ws, we]."""
-    rows = (sb().table("shifts").select("id,scheduled_hours,start_time,end_time")
+def _store_week_hours_sourced(org_id, store_code, ws, we, exclude_id=None):
+    """Total scheduled hours at a store across the work-week [ws, we], AND THE ROWS IT CAME FROM.
+
+    THE FIX IS AT THE READ (§CORE-17.3c / §CORE-17.3x). This read knew which shift rows it summed and
+    which column of each one answered — a stored `scheduled_hours`, or the two clock times where that
+    column is blank — and every caller threw both away, leaving the Hours Budget screen printing a
+    figure with no way to the rows behind it. Those facts now travel on the rows, under the field
+    names `storeops/scheduled_hours_drilldown` declares (dereferenced, never spelled here), so the
+    figure and its evidence come out of ONE read and cannot disagree. The rows are NEW dicts: the
+    read's own rows are not mutated.
+
+    `_store_week_hours` below is a thin rows-less wrapper over this, so the over-budget projection
+    check stays byte-identical.
+    """
+    rows = (sb().table("shifts")
+            .select("id,employee_name,store_code,shift_date,scheduled_hours,start_time,end_time")
             .eq("org_id", org_id).eq("store_code", store_code).eq("is_deleted", False)
             .gte("shift_date", ws).lte("shift_date", we).execute().data) or []
     total = 0.0
+    out = []
     for r in rows:
         if exclude_id and str(r.get("id")) == str(exclude_id):
             continue
         h = r.get("scheduled_hours")
+        basis = _shd.BASIS_STORED
         if h is None:
             h = _hours_between(r.get("start_time"), r.get("end_time"))
+            basis = _shd.BASIS_DERIVED
         total += float(h or 0)
-    return total
+        out.append(dict(r, **{_shd.HOURS_FIELD: float(h or 0), _shd.BASIS_FIELD: basis}))
+    return total, out
+
+
+def _store_week_hours(org_id, store_code, ws, we, exclude_id=None):
+    """Total scheduled hours at a store across the work-week [ws, we]."""
+    return _store_week_hours_sourced(org_id, store_code, ws, we, exclude_id=exclude_id)[0]
 
 
 def _store_budget(org_id, store_code):
@@ -7397,17 +7452,24 @@ def list_hours_budgets(week: str = "", authorization: str = Header(default=""), 
     except Exception:
         pass
     out = []
+    shifts_by_store = {}
     for s in stores:
         sc = s.get("store_code")
         if not sc:
             continue
-        used = _store_week_hours(org_id, sc, ws, we)
+        used, used_rows = _store_week_hours_sourced(org_id, sc, ws, we)
+        shifts_by_store[sc] = used_rows
         bud = budgets.get(sc)
         out.append({"store_code": sc, "address": s.get("address"), "market": s.get("market"),
                     "weekly_hours": bud, "used_hours": round(used, 1),
                     "over": (bud is not None and used > bud + 1e-6),
                     "override": _budget_override_ok(org_id, sc, ws)})
-    return {"week_start": ws, "week_end": we, "budgets": out}
+    # §CORE-17.3x — the shifts each store-week figure was added up from, served beside it. The
+    # declaration folds nothing: `used_hours` above is still this read's own figure, and the panel's
+    # tie-out is what says so on the screen.
+    return {"week_start": ws, "week_end": we, "budgets": out,
+            "drilldown": _shd.budget_drilldowns(out, shifts_by_store,
+                                                week_start=ws, week_end=we)}
 
 
 class HoursBudgetIn(LaxModel):

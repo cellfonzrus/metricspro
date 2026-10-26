@@ -199,7 +199,10 @@ export default function EmailImportsPage() {
       if (r.phase === 'idle' && !r.shot) return   // session not up yet — keep the local 'starting' state, don't flash idle
       liveSeqRef.current = r.seq ?? liveSeqRef.current
       setLiveState((p: any) => {
-        const next: any = { ...(p || {}), phase: r.phase, message: r.message, seq: r.seq }
+        const next: any = { ...(p || {}), phase: r.phase, message: r.message, seq: r.seq,
+          // §COMMCALC-31 — the step in flight + frame age, read from the backend's one home on every
+          // tick (it rides the unchanged payload too, so it moves even when no new frame arrived).
+          activity: r.activity ?? (p || {}).activity }
         if (r.changed && r.shot) next.shot = r.shot   // only replace the frame when a newer one actually arrived
         return next
       })
@@ -1481,7 +1484,19 @@ export default function EmailImportsPage() {
                 <div style={{ flex: 1 }} />
                 <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => closeLive(true)}>Close</button>
               </div>
-              <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 10px' }}>{liveState?.message || 'Starting…'}</p>
+              <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 4px' }}>{liveState?.message || 'Starting…'}</p>
+              {/* §COMMCALC-31 — the owner's 2026-10-26 report was "it should show what is going on, it
+                  seems nothing is moving". The phase line above is a standing instruction and does not
+                  move; this one is the step in flight and the age of the newest frame, so a stalled
+                  session and a working one no longer look identical. Rendered only when the backend
+                  sends it — never a fabricated "working…". */}
+              {!done && liveState?.activity?.doing && (
+                <p style={{ fontSize: 11.5, color: 'var(--text2)', margin: '0 0 10px', fontVariantNumeric: 'tabular-nums' }}>
+                  ⏳ {liveState.activity.doing}
+                  {typeof liveState.activity.doing_age_s === 'number' ? ` · ${liveState.activity.doing_age_s.toFixed(1)}s` : ''}
+                  {typeof liveState.activity.frame_age_s === 'number' ? ` · screen updated ${liveState.activity.frame_age_s.toFixed(1)}s ago` : ' · no frame yet'}
+                </p>
+              )}
               {ph === 'human_action' ? (
                 <div style={{ fontSize: 12.5, color: 'var(--c-fg-9a3412)', margin: '0 0 6px', fontWeight: 700, padding: '8px 10px', borderRadius: 8, background: 'var(--c-bg-fff7ed)', border: '1px solid var(--c-bg-fdba74)' }}>
                   🧑 Human check detected. <b>Solve the “I’m not a robot” box directly in the live view below</b>, then click the portal’s <b>Sign in</b> button. You’re driving this login now — clicks, typing and scrolling all go straight to the live browser.

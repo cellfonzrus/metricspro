@@ -83,7 +83,7 @@ def fetch_unsold_from_ledger(client, org_id, carrier_ids=(), date_from="", date_
         # order is applied by the one home — an unordered paged read serves some rows twice and
         # others never (§19.48 / core/feed_read.py).
         # A line that bought no device is not unsold INVENTORY — there is no device to hold, so it
-        # can never age and can never be paid out of pocket (§COMMCALC-31). Excluded through the one
+        # can never age and can never be paid out of pocket (§COMMCALC-32). Excluded through the one
         # home, the same filter the payables list makes.
         q = _ls.exclude_non_payable(
             client.schema("commcalc").table("device_payable_ledger")
