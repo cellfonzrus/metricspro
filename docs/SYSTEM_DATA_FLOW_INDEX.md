@@ -153,6 +153,7 @@ Primary code homes:
 | COMMCALC-27 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks, and the page sent one web request per character typed. What is the operator's keystroke charged for before it runs, and what work has no business on the latency path of their next action? |
 | COMMCALC-28 | **A poll's cadence is a gap between responses, never a timer rate** | "It is very laggy" — said after the input fix had shipped and deployed. The live view asked for a new frame every 300ms on a fixed timer, across three hops that take longer than that, and fanned out three more requests per click. What happens to a poll whose request outlives its own interval, and whose connection budget is it spending? |
 | COMMCALC-30 | **A human who is watching is not idle** | His live session was not failing, it was being closed on him: "Live session closed after inactivity", eight minutes into a captcha he was working through. Only commands reset the activity clock; the frame and state polls never did. Which question is that clock actually answering, and which budget had no business being applied to a person who is demonstrably there? |
+| COMMCALC-31 | **Detection is off the operator's input path too, and the session says what it is doing** | "It does not go past it, it is very slow to react" — and "it should show what is going on, it seems nothing is moving", four days after the click fix shipped. The loop stops every 1.2s to re-read every frame of the page, and it did so BEFORE servicing the human's clicks. What else was left on the latency path the last fix cleared, and what fact does a standing instruction fail to tell the person watching? |
 
 ---
 
@@ -26068,6 +26069,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-28 | commcalc |
 | COMMCALC-29 | commcalc |
 | COMMCALC-30 | commcalc |
+| COMMCALC-31 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -33430,6 +33432,104 @@ Neighbours: §COMMCALC-10 (the progress budgets this sits beside), §COMMCALC-11
 8-minute budget was named for), §COMMCALC-07 (the UPS pull this login exists to feed).
 
 ---
+
+
+---
+
+## §COMMCALC-31. DETECTION IS OFF THE OPERATOR'S INPUT PATH TOO, AND THE SESSION SAYS WHAT IT IS DOING (owner report 2026-10-26)
+
+Two sentences from the owner on the UPS Team Portal login, four days after §COMMCALC-27 shipped and
+deployed: *"it does not go past it , it is very slow to react"* and *"also it shoudl show what is
+going on it seems nothing is moving"*. His 18:06 UTC attempt is on the row — the start path is
+healthy; the window he was given was not.
+
+### COMMCALC-31.1 THE CLASS — the same sentence, a second place
+
+§COMMCALC-27 established the rule and fixed ONE site of it:
+
+> **Work that only makes sense once the operator has STOPPED must never sit on the latency path of
+> their next action, and their input must never wait behind a frame tick.**
+
+It took the click's ~750ms VERIFICATION off that path. It left the loop's own DETECTION on it.
+`_preauth_detect` is not cheap: `_classify` reads the text of **every frame** of the page and
+`_captcha_present` queries selectors across all of them. On a heavy portal that costs far more than a
+frame tick — and the order of the tick was `_pump` → (every `_CLASSIFY_POLL_S`) detect → **then**
+drain the operator's input. So the first click of a burst was charged for a pump PLUS a whole page
+re-read before it was even dequeued. The fix named the class correctly and then stopped at the
+instance, which is precisely what the 2026-09-20 directive forbids.
+
+### COMMCALC-31.2 ONE FACT, ONE HOME, DEREFERENCED
+
+- **The input drain LEADS the tick**, in `_preauth_loop` and `_post_auth_loop` alike — ahead of the
+  pump and ahead of the detect, not after them. That is what makes the rule true of the first click
+  of a burst and not only the rest of it.
+- **`detect_due(now, last_detect, input_pending)`** is THE one answer to *may detection run on this
+  tick*. Pure, and it never raises: unreadable inputs read as **DUE**, so the failure mode is the old
+  always-detect behaviour, never a session that silently stops noticing a captcha.
+- **It reads the home §COMMCALC-27 already established** — `operator_input_pending` — rather than
+  peeking at the queue a second time. One reader of "still acting", as it was before.
+- **`_DETECT_DEFER_MAX_S` (4s)** is the ceiling, and it is load-bearing: *defer while they are
+  acting* with no ceiling is exactly how a captcha appearing mid-burst would stop being seen. Past
+  the ceiling detection runs regardless of input.
+
+### COMMCALC-31.3 THE REPORTING HALF — a standing instruction does not move
+
+`phase` and `message` are an INSTRUCTION ("complete the login on the screen"), not a report of
+progress. They are identical for a session grinding through a page re-read and a session that has
+stopped, which is why *"nothing is moving"* was a reasonable reading and not a display preference.
+The step in flight is a **different fact** from the phase, so it gets its own home:
+
+- **`_note_act(doing)`** is the one setter. Lock-only — it never touches the page or the row, because
+  it runs on the hot path.
+- **`activity()`** is the one reader: the step, how long it has been in flight, and the age of the
+  newest frame. Ages are **None** before the first frame, never a fabricated `0` that would read as
+  "a frame just arrived".
+- **`state()` and `frame_since()` dereference it.** Neither composes its own answer, and the
+  *unchanged* frame payload carries it too — so the line moves even when the picture does not, which
+  is the whole point.
+- The modal renders it only when the backend sent one. There is no client-side "working…".
+
+What it buys beyond comfort: *"it does not go past it"* is still undiagnosed, and this is the
+instrument that will say which step the next attempt sits on instead of leaving it to memory.
+
+### COMMCALC-31.4 THE SIBLINGS, CHECKED
+
+| other path that answers the same question | verdict |
+| --- | --- |
+| `_post_auth_loop` (the same operator typing into the same single-threaded loop) | **FIXED in this PR** — its drain leads its tick too |
+| `vidapay_sweep`'s `_classify` call sites (the unattended sweeps) | **excused with the reason**: no operator is waiting on them, so nothing of theirs is on a latency path |
+| `_drive`'s single pre-loop classify | **excused**: it runs before any input queue exists |
+| `_do_click`'s post-click re-classify | **already fixed** by §COMMCALC-27 and untouched here |
+
+### COMMCALC-31.5 DUPLICATE CHECK (the build gate) — what was REUSED, not rebuilt
+
+| question | existing home | this PR |
+| --- | --- | --- |
+| is the operator still acting | `operator_input_pending` (§COMMCALC-27) | **reused, untouched** — the deferral reads it |
+| how promptly does input reach the page | §COMMCALC-27 | **EXTENDED to the detect path — not joined by a sibling** |
+| how often may state be re-detected | `_CLASSIFY_POLL_S` | **folded into `detect_due`; the loop no longer compares against it inline** |
+| how long may a phase go without input | `inactivity_limit` (§COMMCALC-10, §COMMCALC-30) | reused, untouched |
+| is a human watching | `viewer_present` (§COMMCALC-30) | reused, untouched |
+| how often does the client ask for a frame | §COMMCALC-28 | reused, untouched — the activity line rides that same poll |
+| what phase is this session in | `phase` / `message` | reused, untouched — deliberately NOT conflated with the step in flight |
+
+### COMMCALC-31.6 LOCKED
+
+`harness_live_input_latency.py` §J and §K — 151 checks in the file now, DB-free, browser-free, in the
+job that already ran it. It fails the build if the drain stops leading either tick, if the loop
+re-decides the poll interval itself instead of dereferencing `detect_due`, if the deferral loses its
+ceiling (an unbounded deferral is an armed negative control), if `detect_due` stops reading
+`operator_input_pending`, if detection is removed rather than deferred, if a surface reads the raw
+activity field instead of `activity()`, if `_note_act` grows a page or row write, or if the frontend
+invents a step the backend never sent.
+
+### COMMCALC-31.7 Cross-references
+
+Same home, other axes: §COMMCALC-27 (the rule this applies in its second place), §COMMCALC-28 (the
+poll that carries the activity line), §COMMCALC-30 (who is there), §COMMCALC-13 (what a finished
+session leaves on the row), §COMMCALC-24 (which process may answer at all). Neighbours:
+§COMMCALC-10 (the no-progress budgets), §COMMCALC-11 (the human check), §COMMCALC-07 (the UPS pull
+this login exists to feed).
 
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
 

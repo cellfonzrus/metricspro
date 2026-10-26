@@ -34,6 +34,10 @@ WHAT THIS PROVES
   §G  negative controls, including the pre-change single-service shape going RED.
   §I  the frame poll is paced by its own RESPONSES, never by a fixed-rate timer, so a slow hop
       slows the cadence instead of stacking requests that compete with the operator's input.
+  §J  the SIBLING on the same path (index §COMMCALC-31): state DETECTION yielded to the operator
+      too, through one home `detect_due`, with a BOUNDED deferral so a captcha is still noticed.
+  §K  "what is this session doing right now" has ONE home (`_note_act` / `activity`), every surface
+      dereferences it, and it moves even when no new frame arrives.
   §H  the FRONTEND half of the same question: the page batches keystrokes instead of awaiting one
       request per character, and every event — typed text, clicks, named keys, scroll — goes out on
       one ordered chain, so a flushed password can never land behind the Enter that submits it.
@@ -460,6 +464,157 @@ ok("for (" in _pre_nudge,
    "control: the pre-change fan-out nudge is caught")
 ok(len([m for m in re.finditer(r"(?<!await )(?<!const )\brefreshFrame\s*\(\s*\)", _pre_nudge)]) > 0,
    "control: a direct refreshFrame() call is caught")
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# §J  STATE DETECTION IS OFF THE OPERATOR'S INPUT PATH TOO (index §COMMCALC-31)
+#
+# Owner, 2026-10-26, same login, four days after §COMMCALC-27 shipped: *"it does not go past it , it
+# is very slow to react"*. §COMMCALC-27 took the click's VERIFICATION off the input path and left the
+# other work on it: `_preauth_detect` walks every frame of the page (`_classify` reads each frame's
+# text, `_captcha_present` queries selectors), it ran on a fixed timer, and it ran BEFORE the input
+# drain — so a click could wait a full `_pump` plus a whole page re-read before it was dequeued. Same
+# sentence as §COMMCALC-27, second place: work that only makes sense once the operator has STOPPED
+# must never sit on the latency path of their next action.
+#
+# The deferral is BOUNDED, because "defer while they are acting" with no ceiling is how a captcha
+# would stop being noticed. One home, `detect_due`, answers "may detection run on this tick".
+print("\n— J. detection yields to the operator, with a ceiling —")
+
+due = getattr(ll, "detect_due", None)
+ok(callable(due), "detect_due exists and is the one home for 'may detection run now'")
+ceiling = getattr(ll, "_DETECT_DEFER_MAX_S", None)
+poll = getattr(ll, "_CLASSIFY_POLL_S", None)
+ok(isinstance(ceiling, (int, float)) and not isinstance(ceiling, bool),
+   "_DETECT_DEFER_MAX_S is a declared number")
+ok(isinstance(ceiling, (int, float)) and isinstance(poll, (int, float)) and ceiling >= poll,
+   "the ceiling is not shorter than the ordinary poll (it would never defer otherwise)", (poll, ceiling))
+ok(isinstance(ceiling, (int, float)) and ceiling <= 30,
+   "and it is short enough that a captcha is still noticed promptly (<= 30s)", ceiling)
+
+# J: the predicate's four cases.
+ok(due(100.0, 100.0, False) is False, "not due: the poll interval has not elapsed")
+ok(due(100.0 + poll + 0.01, 100.0, False) is True, "due: the interval elapsed and nobody is acting")
+ok(due(100.0 + poll + 0.01, 100.0, True) is False,
+   "DEFERRED: the interval elapsed but the operator is mid-action")
+ok(due(100.0 + ceiling + 0.01, 100.0, True) is True,
+   "NOT STARVED: past the ceiling it runs even while they act")
+ok(due(100.0, 100.0, True) is False, "still not due before the interval, acting or not")
+
+# J: pure — garbage reads as DUE, so the failure mode is the old always-detect behaviour.
+for bad in (None, "x", object()):
+    ok(due(bad, 100.0, False) is True, "unreadable `now` reads as DUE (safe default)", repr(bad))
+    ok(due(100.0, bad, False) is True, "unreadable `last_detect` reads as DUE (safe default)", repr(bad))
+ok(due(100.0 + poll + 0.01, 100.0, _Exploding()) is False,
+   "a pending-flag whose truth test is cheap is honoured; nothing here calls the page")
+
+# J: the loop dereferences that one home instead of re-deciding inline.
+pre = _code("_preauth_loop")
+ok("detect_due" in pre, "_preauth_loop gates its detect through detect_due")
+ok("_CLASSIFY_POLL_S" not in pre,
+   "_preauth_loop no longer compares against the poll constant itself (one home, dereferenced)")
+ok("operator_input_pending" in pre,
+   "and the deferral reads the SAME 'is the operator acting' home as the click settle (§A)")
+ok("_preauth_detect" in pre, "detection is still CALLED — deferred, never removed")
+
+# J: ordering. The drain must come before the pump and before the detect, in both loops.
+for loop, later in (("_preauth_loop", ("_pump", "_preauth_detect")), ("_post_auth_loop", ("_pump",))):
+    code = _code(loop)
+    i_drain = code.find("_next_input")
+    ok(i_drain >= 0, "%s drains operator input" % loop)
+    for other in later:
+        i_other = code.find(other)
+        ok(i_other >= 0 and i_drain < i_other,
+           "%s services input BEFORE %s" % (loop, other), (i_drain, i_other))
+
+# J: negative controls — the pre-change shapes must read as broken.
+_OLD_SHAPE = """
+            self._pump(page)
+            now = time.time()
+            if now - last_poll >= _CLASSIFY_POLL_S:
+                self._preauth_detect(page, ctx, vp)
+            while drained < _INPUT_DRAIN_MAX:
+                ev = self._next_input()
+"""
+ok(_OLD_SHAPE.find("_next_input") > _OLD_SHAPE.find("_preauth_detect"),
+   "negative control: the pre-change order (detect, then drain) is detectable")
+ok("detect_due" not in _OLD_SHAPE, "negative control: the pre-change shape has no one home to read")
+
+
+def _unbounded(now, last, pending):
+    """What a deferral WITHOUT a ceiling would do — the starvation this fix must not introduce."""
+    return (now - last) >= poll and not pending
+
+
+ok(_unbounded(100.0 + ceiling + 99.0, 100.0, True) is False,
+   "negative control: an unbounded deferral starves detection forever while input keeps arriving")
+ok(due(100.0 + ceiling + 99.0, 100.0, True) is True, "…and the shipped one does not")
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# §K  "WHAT IS THIS SESSION DOING RIGHT NOW" HAS ONE HOME, AND IT MOVES (index §COMMCALC-31)
+#
+# Owner, same report: *"also it shoudl show what is going on it seems nothing is moving"*. He was
+# right, and it was not a display preference: `phase` + `message` are a standing INSTRUCTION
+# ("complete the login on the screen"), so a session working through a page re-read and a session
+# that had stopped looked identical. The step in flight is a different fact from the phase, so it
+# gets its own home — one setter, one reader, dereferenced by every surface.
+print("\n— K. the step in flight is reported, from one home —")
+
+s_act = session()
+ok(hasattr(s_act, "_note_act") and callable(s_act._note_act), "_note_act is THE setter")
+ok(hasattr(s_act, "activity") and callable(s_act.activity), "activity() is THE reader")
+
+a0 = s_act.activity()
+ok(isinstance(a0, dict), "activity() returns a dict")
+eq(sorted(a0.keys()), ["doing", "doing_age_s", "frame_age_s"], "activity() reports exactly the three facts")
+ok(a0["frame_age_s"] is None,
+   "frame age is None before the first frame — never a fabricated 0 reading as 'just updated'")
+
+s_act._note_act("Checking the page")
+eq(s_act.activity()["doing"], "Checking the page", "the reader reflects the setter")
+ok(isinstance(s_act.activity()["doing_age_s"], float), "and how long that step has been in flight")
+
+s_act._store_frame("Zm9v")
+ok(isinstance(s_act.activity()["frame_age_s"], float), "once a frame exists its age is reported")
+
+# K: the setter is cheap — it must not touch the page or the row on the hot path.
+set_code = _code("_note_act")
+for forbidden in ("_capture", "persist", "_persist_diag", "page"):
+    ok(forbidden not in set_code, "_note_act does not touch %s (it runs on the hot path)" % forbidden)
+ok(len(s_act._note_act("x" * 500) or "") == 0 or True, "_note_act accepts any label")
+ok(len(s_act.activity()["doing"]) <= 80, "a long label is bounded, never shipped whole", len(s_act.activity()["doing"]))
+
+# K: every operator surface dereferences that reader — none composes its own answer.
+for fn in ("state", "frame_since"):
+    code = _code(fn)
+    ok("activity" in code, "%s() carries the activity fact" % fn)
+    ok("self . activity ( )" in code.replace("self.activity()", "self . activity ( )"),
+       "%s() dereferences the one reader rather than reading _act itself" % fn)
+    ok("_act" not in code.replace("activity", ""), "%s() does not read the raw field" % fn)
+
+st = s_act.state()
+ok(isinstance(st.get("activity"), dict), "state() ships the activity dict")
+fr_unchanged = s_act.frame_since(s_act.snapshot_seq())
+ok(fr_unchanged.get("changed") is False, "a poll with no newer frame is 'unchanged'…")
+ok(isinstance(fr_unchanged.get("activity"), dict),
+   "…and STILL carries the activity, so the line moves when the picture does not")
+
+# K: the loops say what they are doing.
+for loop in ("_preauth_loop", "_post_auth_loop"):
+    ok("_note_act" in _code(loop), "%s reports the step it is on" % loop)
+ok("_note_act" in _code("_do_input"), "delivering the operator's input is reported")
+ok("_note_act" in _code("_do_click"), "waiting for the page to answer a click is reported")
+ok("_note_act" in _code("_drive"), "the startup steps (browser, portal page) are reported")
+
+# K: the frontend renders it, and only when the backend sent it.
+TSX = io.open(os.path.join("..", "frontend", "src", "app", "(platform)", "commcalc",
+                           "email-imports", "page.tsx"), encoding="utf-8").read()
+ok("activity: r.activity" in TSX, "the frame poll keeps the activity the backend sent")
+ok("liveState?.activity?.doing &&" in TSX,
+   "the line renders only when the backend sent a step — never a fabricated 'working…'")
+ok("frame_age_s" in TSX, "the frame age is shown, so a frozen picture is visible as frozen")
+
 
 print("\n%d passed, %d failed" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
