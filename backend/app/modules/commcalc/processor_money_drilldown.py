@@ -159,8 +159,18 @@ def sales_union_tables(meta):
     other = str(meta.get("other") or "").strip()
     if primary in SALES_DISPLAY_SOURCES and int(meta.get("primary_rows") or 0) > 0:
         out.append(primary)
+    # WHAT COUNTS AS THE OTHER SIDE HAVING CONTRIBUTED, and why `other_only_rows` is in the list
+    # (added 2026-10-26, batch 20). The per-DAY union reports a contribution as a filled, richer or
+    # back-filled CELL; the TRANSACTION-grain union (`router._sales_rows_union_txn`) reports the same
+    # fact as `other_only_rows` -- the transactions the primary did not have, kept whole. Without
+    # that key this function named only the leading relation for a transaction-grain read, so a
+    # report whose rows genuinely came out of BOTH would have under-stated its own provenance. One
+    # home answers the question for BOTH unions rather than a second copy appearing beside it for the
+    # transaction grain. A DAY meta carries no `other_only_rows`, so every existing caller is
+    # byte-identical (asserted by `harness_batch20_drilldown.py` §A2b).
     contributed = any(int(meta.get(k) or 0) > 0
-                      for k in ("filled_rows", "richer_rows", "completeness_rows"))
+                      for k in ("filled_rows", "richer_rows", "completeness_rows",
+                                "other_only_rows"))
     if other in SALES_DISPLAY_SOURCES and int(meta.get("other_rows") or 0) > 0 and (
             contributed or not out):
         out.append(other)

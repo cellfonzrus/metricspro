@@ -191,6 +191,15 @@ UNMEASURED_REASONS = {
                                       "all — it is on this report because the airtime feed named "
                                       "it, so its commission is unknown rather than zero, and a "
                                       "$0.00 here would be a number nobody measured",
+    # The two shapes the batch-20 PERFORMANCE-AND-COACHING reports brought with them
+    # (§CORE-17.3t). Both are absences the producers already distinguish and no surface could:
+    # output per hour over a person nobody clocked, and a KPI the carrier's feed never published.
+    "no_time_clock_punches": "no closed time-clock punch was recorded for this person at this "
+                             "store, so there are no hours to divide their output by — the blank "
+                             "is a missing punch, never a person who worked no hours",
+    "kpi_not_reported": "no value was published for this KPI at this grain, so nothing here can be "
+                        "said to be failing it — a metric with no recorded value is reported, "
+                        "never counted as a failure against anybody",
     "no_dm_in_org_tree": "the org chart does not say which district manager owns this store, so "
                          "this figure cannot be attributed to any of them — it is unattributable "
                          "rather than zero, and assigning the store in the org chart is what puts "

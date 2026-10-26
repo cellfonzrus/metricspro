@@ -81,7 +81,8 @@ FACTS: dict[str, dict] = {
                   'harness_batch15_drilldown.py', 'harness_batch16_drilldown.py',
                   'harness_batch17_drilldown.py',
                   'harness_batch18_drilldown.py',
-                  'harness_batch19_drilldown.py'),
+                  'harness_batch19_drilldown.py',
+                  'harness_batch20_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -258,6 +259,17 @@ FACTS: dict[str, dict] = {
             # SERVER's own fold and none is narrowed, which `harness_batch19_drilldown.py` §F locks
             # in both directions off each page's own text.
             'app/modules/commcalc/carrier_owed_drilldown.py': ('report_drilldown',),
+            # HOW ARE REPS AND STORES PERFORMING, AND WHO NEEDS COACHING (§CORE-17.3t) — one
+            # declaration for the four reports that answer that from four angles: Productivity,
+            # Rep Coaching, Autopay Opportunity and Failing KPIs. TWELVE measured grains in four
+            # row shapes, and the programme's FIRST caller for `UNIT_HOURS`. The §CORE-17.3o call
+            # is made BOTH ways inside one family — Coaching and Failing KPIs fold their own tiles
+            # in the browser and are narrowed, Productivity and Autopay put every filter in the
+            # query string and are deliberately not — and `harness_batch20_drilldown.py` §F locks
+            # each decision in both directions off each page's own text. This family is also full
+            # of RATES, so it refuses a lot (§CORE-17.3h) and every refusal names the two figures
+            # it offers instead.
+            'app/modules/commcalc/performance_coaching_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -726,6 +738,14 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/flags.py': ('_kpi',),
             'app/modules/commcalc/payout_structure.py': ('_kpi',),
             'app/modules/commcalc/router.py': ('_kpi_failing', '_kpif'),
+            # §CORE-17.3t. The Failing KPIs drill-down has to say WHICH GRAIN each panel is over —
+            # a door's actual comes out of the carrier's own per-door report and an employee's out
+            # of what the last calculation wrote down, and the two are never pooled. So it asks this
+            # home for the two grain words rather than spelling them, bound by object identity and
+            # locked by `harness_batch20_drilldown.py` §A7. It reads NO KPI column itself and holds
+            # no port-in reading of its own: every per-metric verdict is the classifier's own
+            # `failing` / `met` / `no_data` list, read off the row.
+            'app/modules/commcalc/performance_coaching_drilldown.py': ('_kpif',),
         },
     },
     'spiff_store_impact': {
@@ -1402,6 +1422,17 @@ FACTS: dict[str, dict] = {
             # that fact's one home and this declaration dereferences THAT, because a second copy in
             # the registry would be the very defect the registry exists to prevent.
             'app/modules/commcalc/carrier_owed_drilldown.py': ('_lineage',),
+            # §CORE-17.3t. The TIME CLOCK became a registry constant in that PR, because a figure
+            # that is output PER HOUR WORKED has to name the relation an hour came out of — and
+            # `timelog` was already spelled as a LITERAL in `account/liabilities_drilldown`, which
+            # is the divergence this registry exists to prevent. That copy dereferences the constant
+            # now, string-identical value, no read changed, and `harness_batch20_drilldown.py` §A3c
+            # fails the build if the literal reappears in any drill-down declaration. The carrier's
+            # per-door report and the recorded penalty ledger are dereferenced as the constants
+            # earlier batches named; the REP-PAY SNAPSHOT is deliberately not a constant here at all
+            # (`carrier_pay_drilldown.REP_COMMISSIONS` is its one home), and the sales provenance is
+            # resolved off the read's own meta through `processor_money_drilldown`.
+            'app/modules/commcalc/performance_coaching_drilldown.py': ('_lineage',),
             'app/modules/account/liabilities_drilldown.py': ('_lineage',),
             'app/modules/commcalc/processor_ledger.py': ('_lineage',),
             'app/modules/commcalc/dlar_sweep.py': ('_lineage',),
@@ -1636,6 +1667,14 @@ FACTS: dict[str, dict] = {
             # The simulator BACK-DERIVES baseline sales from stored pay (acc_comm / rate), so a
             # never-written slice silently started a projection from the wrong baseline.
             'app/modules/commcalc/whatif.py': ('_pse',),
+            # §CORE-17.3t. The Rep Coaching drill-down asks this home whether a stored pay breakdown
+            # is EVIDENCE AT ALL before it prints an at-risk figure beside a person's name, rather
+            # than reading the `component` column itself (the §CORE-17.3j ruling, one fact along).
+            # An employee whose breakdown the run never itemised is shown WITHOUT a figure and is
+            # not counted, in this module's own basis word — never as a person with $0.00 at risk,
+            # which a manager would read as "nothing to discuss". Both the predicate and the field
+            # name are bound by object identity, locked by `harness_batch20_drilldown.py` §A6.
+            'app/modules/commcalc/performance_coaching_drilldown.py': ('_pse',),
         },
     },
     'commission_ledger_identity': {

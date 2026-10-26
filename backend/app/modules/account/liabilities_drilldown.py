@@ -68,8 +68,11 @@ PAYABLE_BASIS_FEEDS = {
 #: Where a person's pay rate and their identity live. Named on every payroll row: the gross cannot be
 #: computed without it.
 EMPLOYEES = "employees"
-#: The three places HOURS can come from, named only where they answered for that person.
-TIMELOG = "timelog"
+#: The three places HOURS can come from, named only where they answered for that person. The TIME
+#: CLOCK is DEREFERENCED from the lineage registry (`TIME_CLOCK`), which is the one home for "which
+#: relation records an hour somebody actually worked" — this file held a literal copy of it until
+#: batch 20 re-keyed it, exactly as batch 18 re-keyed the schedule two lines below.
+TIMELOG = _lineage.TIME_CLOCK
 MANUAL_HOURS = "manual_hours"
 #: The schedule. DEREFERENCED from the lineage registry (`SCHEDULE`), which is the one home
 #: for "which relation records a store's scheduled day" — this file and

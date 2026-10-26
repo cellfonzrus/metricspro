@@ -16,8 +16,38 @@ import { api } from '@/lib/client'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import ReportExportBar from '@/components/ReportExportBar'
 import StatTile from '@/components/StatTile'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import type { ExportSheet } from '@/lib/export'
+
+// WHERE EVERY FIGURE CAME FROM (index §CORE-17.3t). The server serves a panel per count from
+// commcalc/performance_coaching_drilldown.py, at the TWO grains this report has — the carrier's own
+// per-door report for a store row, and what the last commission calculation wrote down for an
+// employee row. The two are never pooled, because they answer two questions.
+//
+// THIS PAGE FOLDS ITS OWN TILES over the rows its filter bar leaves on screen, so `lib/drill-narrow`
+// IS WIRED HERE and each count reads off its narrowed panel through the shared `agreesToTheCent`
+// gate. `harness_batch20_drilldown.py` §F fails the build if that stops being true, in BOTH
+// directions.
+//
+// "Failing KPI cells" gets NO panel and that is deliberate — it adds store failing counts to
+// employee failing counts, so there is no one row list it was folded from, and the two halves of it
+// are the two tiles beside it, which each drill (§CORE-17.3k, the batch-18 `scopes` refusal).
+
+// The panel key the server builds for ONE metric at ONE grain. Kept beside the grain words the
+// payload already uses for `defs[].grain`, so the key is spelled once on this side.
+const GRAIN_STORE = 'store', GRAIN_REP = 'rep'
+const metricKey = (kpi: string, grain: string) => ['metric', kpi, grain].join('.')
+
+const KPI_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Failing', get: (r: DrillRow) => String(r.fields?.failing ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.failing ?? '') },
+  { header: 'No data', get: (r: DrillRow) => String(r.fields?.['no data'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['no data'] ?? 0) },
+]
 
 const th: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', fontSize: 12, color: 'var(--text2)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '8px 10px', fontSize: 13, borderBottom: '1px solid var(--border)', verticalAlign: 'top' }
@@ -66,6 +96,16 @@ export default function FailingKpiPage() {
 
   const failingStores = stores.filter((s: any) => s.failing_count > 0)
   const failingReps = reps.filter((r: any) => r.failing_count > 0)
+  // THE PANELS, NARROWED TO THE ROWS ON SCREEN. Two row shapes, so two key sets and one predicate —
+  // the key strings carry their own field names, so a store key and an employee key cannot collide.
+  const kpiPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const kpiStoreKeys = new Set(stores.map(r => screenKey({ store_code: r.store_code, location: r.location })))
+  const kpiRepKeys = new Set(reps.map(r => screenKey({ rep: r.rep, store: r.store })))
+  const kpiNarrowed: Record<string, DrillPanel> = {}
+  Object.keys(kpiPanels).forEach(k => {
+    const p = narrowPanel(kpiPanels[k], (_r: DrillRow, key: string) => kpiStoreKeys.has(key) || kpiRepKeys.has(key))
+    if (p) kpiNarrowed[k] = p
+  })
   const shownStores = showPassing ? stores : failingStores
   const repsByStore = useMemo(() => {
     const m: Record<string, any[]> = {}
@@ -83,6 +123,26 @@ export default function FailingKpiPage() {
     for (const r of failingReps) for (const e of r.failing) { (m[e.kpi] = m[e.kpi] || { label: e.label, stores: 0, reps: 0 }).reps++ }
     return Object.entries(m).map(([kpi, v]) => ({ kpi, ...v })).sort((a, b) => (b.stores + b.reps) - (a.stores + a.reps))
   }, [failingStores, failingReps])
+  // THE FIGURES THE TILES PRINT, in ONE memo beside the fold they come from. Filling a plain object
+  // after `byMetric` resolved would mutate a value derived from a memo, which the React-Compiler
+  // rules refuse (`react-hooks/preserve-manual-memoization`, measured) — and they are right: a tile
+  // whose number is written during render after its memo settled can disagree with the panel it
+  // opens. Both the headline counts and every per-metric slice are built here, once.
+  const kpiFigures: Record<string, number> = useMemo(() => {
+    const f: Record<string, number> = {
+      stores_failing: failingStores.length, reps_failing: failingReps.length,
+    }
+    byMetric.forEach(m => {
+      f[metricKey(m.kpi, GRAIN_STORE)] = m.stores
+      f[metricKey(m.kpi, GRAIN_REP)] = m.reps
+    })
+    return f
+  }, [byMetric, failingStores, failingReps])
+  const kpiTile = (k: string): number => {
+    const n = kpiFigures[k] || 0
+    return agreesToTheCent(kpiNarrowed[k], n) ? Number(kpiNarrowed[k]?.figure?.amount ?? n) : n
+  }
+  const kpiDrill = useDrillTile(kpiNarrowed, (k, p) => agreesToTheCent(p, kpiFigures[k] || 0))
 
   const storeOptSets = useMemo(() => optionsFromRows(allStores as any[], {
     store: (r: any) => r.location || r.store_code, market: (r: any) => r.market,
@@ -144,11 +204,14 @@ export default function FailingKpiPage() {
       {!loading && data && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 14 }}>
-            <StatTile label="Stores failing ≥1 KPI" value={`${failingStores.length} / ${stores.length}`} />
-            <StatTile label="Reps failing ≥1 KPI" value={`${failingReps.length} / ${reps.length}`} />
+            <StatTile label="Stores failing ≥1 KPI" value={`${kpiTile('stores_failing')} / ${stores.length}`}
+              sub={<DrillTileLinks drills={kpiDrill.dl('stores_failing', 'which stores')} open={kpiDrill.open} onToggle={kpiDrill.toggle} />} />
+            <StatTile label="Reps failing ≥1 KPI" value={`${kpiTile('reps_failing')} / ${reps.length}`}
+              sub={<DrillTileLinks drills={kpiDrill.dl('reps_failing', 'which employees')} open={kpiDrill.open} onToggle={kpiDrill.toggle} />} />
             <StatTile label="Failing KPI cells" value={String(failingStores.reduce((a: number, s: any) => a + s.failing_count, 0) + failingReps.reduce((a: number, r: any) => a + r.failing_count, 0))} />
             <StatTile label="Worst KPI" value={byMetric[0] ? byMetric[0].label : '—'} sub={byMetric[0] ? `${byMetric[0].stores} stores · ${byMetric[0].reps} reps` : undefined} />
           </div>
+          {kpiDrill.panel && <DrillDownPanel panel={kpiDrill.panel} extraColumns={KPI_DRILL_COLUMNS} />}
 
           {byMetric.length > 0 && (
             <div className="card" style={{ padding: 12, marginBottom: 14 }}>
@@ -156,7 +219,10 @@ export default function FailingKpiPage() {
               <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
                 {byMetric.map(m => (
                   <div key={m.kpi} style={{ fontSize: 12.5 }}>
-                    <b>{m.label}</b> — {m.stores} store{m.stores === 1 ? '' : 's'}, {m.reps} rep{m.reps === 1 ? '' : 's'}
+                    <b>{m.label}</b> — {kpiTile(metricKey(m.kpi, GRAIN_STORE))} store{m.stores === 1 ? '' : 's'}, {kpiTile(metricKey(m.kpi, GRAIN_REP))} rep{m.reps === 1 ? '' : 's'}
+                    <DrillTileLinks
+                      drills={kpiDrill.dl(metricKey(m.kpi, GRAIN_STORE), 'which stores', metricKey(m.kpi, GRAIN_REP), 'which employees')}
+                      open={kpiDrill.open} onToggle={kpiDrill.toggle} />
                   </div>
                 ))}
               </div>
