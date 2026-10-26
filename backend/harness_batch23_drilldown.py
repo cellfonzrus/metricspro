@@ -895,7 +895,12 @@ MY_ROUTES = ("/accounts/device-purchases", "/accounts/device-payable", "/account
 STILL_OWED = ("/accounts/analysis", "/accounts/cost-centers", "/accounts/profit-centers",
               "/accounts/residual-per-sub", "/accounts/royalty", "/accounts/royalty/recon",
               "/accounts/trends")
-OWES_AFTER = 21
+#: 2026-10-26: batches 23 (the finance set, -4) and 24 (payroll & workforce, -3) were built in
+#: PARALLEL off a shared base of 25, so neither side's own number was the whole reduction and each
+#: would have asserted a pin the other had already moved. This is re-taken from the MERGED ledger —
+#: 25 - 4 - 3 = 18 — and the assertion below stays EQUALITY, not a bound: a pin left above the real
+#: count is a gate that has stopped biting.
+OWES_AFTER = 18
 
 
 def _pin(src):
@@ -915,8 +920,8 @@ def _state(src, route):
     return None
 
 
-check(f"J1 THE RATCHET MOVED DOWN BY EXACTLY THE FOUR ROUTES SERVED: the pin is {OWES_AFTER}",
-      _pin(GATE) == OWES_AFTER, str(_pin(GATE)))
+check(f"J1 THE RATCHET IS AT THE MERGED LEDGER'S OWN NUMBER: the pin is {OWES_AFTER}, which is\n      the base of 25 less this batch's four routes and the parallel batch 24's three",
+      _pin(GATE) == OWES_AFTER == 25 - len(MY_ROUTES) - 3, str(_pin(GATE)))
 check("J2 and the ledger agrees with the pin — a pin lower than the count is a gate that stopped "
       "biting, and one higher is a report shipped without evidence",
       len(_owes(LEDGER_TXT)) == OWES_AFTER, str(len(_owes(LEDGER_TXT))))
@@ -947,8 +952,8 @@ ctl("J6 control: a route SILENTLY DELETED from the ledger is what the coverage g
 print("\n== K. REGISTRATION — the index, the graph, the labels and the guard job ==")
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 WF = read(".github/workflows/carrier-vocab-guard.yml")
-check("K1 this batch has its own index section, and §CORE-17.4's ceiling says what it is now",
-      "§CORE-17.3w" in IDX and f"**{OWES_AFTER}** since §CORE-17.3w" in IDX)
+check("K1 this batch has its own index section, and §CORE-17.4's ceiling says what the pin is\n      now — which after the parallel batch 24 landed is §CORE-17.3x's number, not this one's",
+      "§CORE-17.3w" in IDX and f"**{OWES_AFTER}** since §CORE-17.3x" in IDX)
 check("K2 the three declarations are registered in the index's cross-reference list",
       all(f"account/{m}.py" in IDX for m in DECLS))
 check("K3 every one of them is a HAND-WRITTEN caller edge on the two facts it dereferences — the "
