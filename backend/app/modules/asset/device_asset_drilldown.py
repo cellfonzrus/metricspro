@@ -117,7 +117,7 @@ Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §CORE-17.3l.
 """
 from app.modules.commcalc import data_lineage_registry as _lineage
 from app.modules.core import report_drilldown
-# The ONE home for the shape and the provenance of an unsold-device row (§COMMCALC-28). Imported
+# The ONE home for the shape and the provenance of an unsold-device row (§COMMCALC-26). Imported
 # for its two NAME constants only — the stamp it writes and the value it writes — so this module
 # holds no second copy of either. Pure, like everything else here.
 from app.modules.payables import unsold_inventory as _unsold
@@ -130,7 +130,7 @@ STORE_BORROWINGS = _lineage.STORE_BORROWINGS
 STORE_BORROWING_PAYMENTS = _lineage.STORE_BORROWING_PAYMENTS
 PAYGO_BATCHES = _lineage.PAYGO_BATCHES
 #: The carrier-agnostic per-IMEI payable ledger — the OTHER relation the aging report reads since
-#: §COMMCALC-28, for a tenant that has no consignment ledger of its own. Dereferenced, never spelled.
+#: §COMMCALC-26, for a tenant that has no consignment ledger of its own. Dereferenced, never spelled.
 DEVICE_PAYABLE_LEDGER = _lineage.DEVICE_PAYABLE_LEDGER
 
 #: Every relation on this batch lives in the commcalc schema, so one schema serves every panel —
@@ -728,7 +728,7 @@ def band_rows(rows, band):
 def device_tables(r):
     """WHICH RELATION THIS DEVICE WAS READ OUT OF, per row.
 
-    This report serves two tenants off two different relations since §COMMCALC-28, so a panel that
+    This report serves two tenants off two different relations since §COMMCALC-26, so a panel that
     named one of them for every row would be wrong on every row of the other. The producer already
     stamps its answer; this reads it rather than forming a second one. PURE."""
     r = r or {}

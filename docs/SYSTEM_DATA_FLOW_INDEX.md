@@ -156,6 +156,7 @@ Primary code homes:
 | COMMCALC-31 | **Detection is off the operator's input path too, and the session says what it is doing** | "It does not go past it, it is very slow to react" — and "it should show what is going on, it seems nothing is moving", four days after the click fix shipped. The loop stops every 1.2s to re-read every frame of the page, and it did so BEFORE servicing the human's clicks. What else was left on the latency path the last fix cleared, and what fact does a standing instruction fail to tell the person watching? |
 | COMMCALC-32 | **A line that bought no device is not a device payable** | "product not available , it shoudl show the product" — every payables row read Product Not Available, two of them as `discrepancy`, the status that means he is carrying a handset cost. 869 of those lines are the customer's own phone, and the carrier feed declares it. Which blank means "I could not price this", which means "nothing was bought", and what does a ledger keyed on ACTIVATIONS assume about purchases? |
 | COMMCALC-33 | **What the carrier already recovered is read, and a placeholder is not a measurement** | "the payments for all phones automatically are done from commission and rebates received and auto adjusted" — said to a banner billing him $544,447.78 of his own cash. The deductions were on the row the build already read, −$834,234.25 of them, and the engine wrote `rebate_amount = 0.0` as a placeholder. What does a zero assert that an unwired source has no right to, and which way should the default point when being wrong deletes a liability? |
+| COMMCALC-34 | **A billing period is declared, and the money is read once** | "Weekly Owed to Distributor does not show anything in luxelink" — the report read one carrier's weekly consignment column on one carrier's table, so a tenant whose carrier raises an invoice per order and has no weekly batch at all saw every figure summed over an empty set. Which billing rhythm is a universal fact about owing money, and which is one carrier's arrangement that has to be declared? |
 
 ---
 
@@ -26077,6 +26078,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-31 | commcalc |
 | COMMCALC-32 | commcalc |
 | COMMCALC-33 | commcalc |
+| COMMCALC-34 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -33863,8 +33865,126 @@ Same home, other axes: §COMMCALC-32 (the no-device status, whose rows never rea
 Same class: §66 (a last-resort placement read as evidence), §19.18 (a mechanism written and its
 callers left unwired), §COMMCALC-29.1 (an empty result standing in for a broken declaration).
 Neighbours: §11 (the aging report this exposure figure headlines), §64 (the store identity the same
-rebuild stamps). Still open and NOT fixed here: **Weekly Owed to Distributor** reads
-`commcalc.asset_ledger` and `billing_friday`, both Boost-only, so it is blank for every Total tenant.
+rebuild stamps). The **Weekly Owed to Distributor** defect this section left open — it read
+`commcalc.asset_ledger` and `billing_friday`, both one carrier's, so it was blank for every Total
+tenant — is FIXED in §COMMCALC-34.
+
+---
+
+## §COMMCALC-34. A BILLING PERIOD IS DECLARED, AND THE MONEY IS READ ONCE (owner report 2026-10-26)
+
+**What he said**, verbatim:
+
+> *"Weekly Owed to Distributor does not show anything in luxelink"*
+
+### COMMCALC-34.1 WHY IT WAS BLANK — two causes, and only one of them is code
+
+Measured 2026-10-26 against production (read-only):
+
+| cause | measurement | whose fix |
+| --- | --- | --- |
+| **the report reads one carrier's column** | `asset/router.get_owed_weekly` read `commcalc.asset_ledger` filtered on `billing_friday`, and nothing else. That is ONE carrier's weekly consignment rhythm, stamped by ONE carrier's portal sweep, on ONE carrier's table. The Total tenant has **0** `asset_ledger` rows, so every figure on the report was Σ over an empty set. | **this PR** |
+| **no due dates exist to group** | `commcalc.device_payable_ledger` holds **4,495** rows for that tenant and **0 with a `due_date`** (`due_source` NULL on every one), because `commcalc.payable_source_map` has `net_terms_days` NULL **and** `due_date_field` NULL for its carrier. Nothing says when a device falls due. | **REPORTED, not coded around.** The owner's `net_terms_days = 21` config run (queued with mig 1093) is the missing declaration. Defaulting 21 days in code would be RULE TWO and would put a deadline on real money no feed states. |
+
+The house org, by contrast, carries a due date on all **11,000** of its rows (`due_source = 'report'`).
+So the structural fix below lands first and the figures arrive when the config run does — the report
+says which, rather than printing $0.00 either way.
+
+**THE CLASS, named rather than the instance.** Not *"Luxelink's weekly report is empty"* but: *"which
+billing period does this dated money fall in" is a DECLARED cadence over the carrier's own payable
+rows* — never one carrier's column on one carrier's table. This is §COMMCALC-26.1's class arriving on
+a fifth surface, and §COMMCALC-33.8 named it as still open.
+
+### COMMCALC-34.2 THE DUPLICATE CHECK (build gate — what was searched for, what was reused)
+
+| searched | found | what was done |
+| --- | --- | --- |
+| is there a home for "what is owed, on which date"? | `payables/router.owed_by_date` held a ledger query AND a vendor-feed fallback, both private to it | **FACTORED OUT** into `payables/owed_read.py` and REUSED by both surfaces. Giving the weekly report its own read was the obvious repair and would have been two paths answering *"what do I owe"* — free to disagree the moment either learned something the other did not. The money is now read ONCE and grouped twice: by due date for the daily surface, by billing period for the weekly one. |
+| is there a home for "when is this device due"? | §COMMCALC-26 (`net_terms_days` / `due_date_field` on `payable_source_map`) | **REUSED whole.** No due date is derived here; the cadence groups dates the build already stamped. |
+| is there a home for "did this line buy a device"? | §COMMCALC-32 `ledger_status` | **REUSED** — `exclude_non_payable` gates the shared read, so a line that bought no device never reaches this arithmetic. |
+| is there a home for "is this vendor line a debt"? | §COMMCALC-25 `vendor_invoice.is_debt_line`, whose own docstring says a change to it must reach both grains | **DEREFERENCED** — the read it absorbed carried an inline copy of the comparison, which is exactly the drift that docstring warned about. One test now, both grains. |
+| is there a window home, a market home, a store-identity home? | §COMMCALC-24 `commcalc/date_window.py` (`apply_window`, so both ends stay inclusive the same way), RULE FIVE `core/scope.py::store_market_resolver`, §64 `account/store_identity.py` | **REUSED, injected by the caller.** The shared read holds no copy of any of them — the vendor fallback it absorbed carried its own `gte`/`lte` pair, which is how one screen ends up with two meanings of "inclusive". |
+| a cadence column anywhere? | none | **CREATED** — mig 1095, on the config spine that already carries the selling window and the cost source. |
+
+### COMMCALC-34.3 THE TWO ONE-HOMES
+
+**`backend/app/modules/payables/billing_period.py`** — the ONE home for *"which billing period does
+this dated money fall in, and what says so"*. Pure, stdlib only, no clock of its own.
+
+Three ways a period can be known, kept apart and each NAMED in the answer's `basis`:
+
+| basis | what said so |
+| --- | --- |
+| `period_field` | the feed already stamps the period on the row. **This WINS and is never recomputed** — a derived billing day that disagreed with the sweep's own would move a figure every other surface reconciles against, and the two would drift exactly as §19.18 describes. |
+| `weekly_declared` | the carrier declares a weekly cadence and a weekday, so a due date rolls forward to the first such day **on or after** it. Not *after*: money due ON the billing day bills that day, and rolling it would postpone a real liability by seven days. |
+| `due_date` / `house_default` | each invoice falls due on its own date; the period IS that date. **The house default asserts no rhythm**, which is byte-identical to today's behaviour. |
+| `weekday_undeclared` | cadence `weekly` with no weekday declared. The money is still shown and still counted under its own due date, and the screen says the grouping is **not the carrier's own**. Dropping it would hide a real liability behind a missing config row (§COMMCALC-29); guessing Friday would be the same defect in a config column instead of in code (§COMMCALC-26.3). |
+| `no_date` | no date was recorded. **NOT MEASURED** — reported beside the periods, never folded into one. |
+
+`is_measured(basis)` is an ALLOWLIST (the §66 shape), so an unruled basis reads as NOT measured.
+`week_window` returns the seven days **ENDING** on the billing day, as ISO strings, so a screen states
+the range it rolled up instead of leaving a reader to guess whether the six days before it are in. It
+takes **no weekday** — a span is seven days ending on its billing day whatever weekday that is, so the
+parameter would have been a validity gate and nothing more, which is exactly what made the first draft
+of the caller pass a literal `4`. A guessed Friday in a caller is the same defect as a guessed Friday
+in the home, one import away.
+
+**`backend/app/modules/payables/owed_read.py`** — the ONE read, `dated_owed`, returning
+`{rows, source, grain, note, entities, truncated}`. Two sources, named per tenant:
+
+- `device_ledger` — `commcalc.device_payable_ledger`, grain a **DEVICE**, gated by `ledger_status`.
+- `vendor_feed` — the processor's own dated amounts, used only when the ledger produced **nothing**,
+  which for a Total / MA tenant is not *"you owe nothing"* but *"no device carries an amount"*. Grain
+  an **ORDER LINE** — there is no IMEI on this path at all, and the response says so rather than
+  serving a drill-down that cannot exist.
+
+Both empty is `source: None`, never a $0.00 total dressed as a measurement (§COMMCALC-29.1).
+
+### COMMCALC-34.4 WHAT THE SURFACES NOW DO
+
+- **`/payables/owed-by-date`** (daily) keeps its behaviour exactly and holds **no ledger query of its
+  own**; the grouping by date is all that remains of it. Its private vendor fallback
+  (`_owed_from_vendor_feed`, `_VENDOR_FEED_TABLE`) is **DELETED, not left beside the new one** — a
+  dead second reader is a future divergence that compiles (§19.18).
+- **`/asset/owed-weekly`** answers from the consignment column FIRST and unchanged, so a consignment
+  tenant sees exactly the figures it saw before, with `period_source: "stored_column"`. Only where
+  that found nothing does it resolve the declared cadence and roll the SHARED read up, reporting
+  `period_source: "shared_owed_read"` and the basis that answered. The fallback is fail-soft and
+  REPORTS (`declared_period.error`) rather than reading a failure as *"nothing is owed"*.
+
+### COMMCALC-34.5 LOCKED SO IT CANNOT UN-WIRE
+
+`backend/harness_billing_period.py` — DB-free, stdlib only, with mutation controls. §A the cadence
+vocabulary and the fail-CLOSED allowlist, including a **config row handed straight in where a
+resolved cadence was expected** (a config row is also a dict — the trap that raised `KeyError` while
+this was built). §B the weekly roll forward and the on-the-day case. §C the stamped period wins. §D
+the undeclared weekday is shown and counted. §E nothing is dated that carries no date, and the
+unplaceable money is reported beside the periods. §F **ONE READ**, locked by AST: exactly one
+definition of the shared read may exist in the whole triangle, the daily endpoint may hold no ledger
+query, and the dead fallback must stay gone. §G the debt test is dereferenced. §H RULE TWO, scanned
+over the **executable text only** — a carrier name that explains behaviour is not one that decides it,
+so the owner's own report stays quoted in the prose while `if carrier == "…"` would still fail. §I the
+consignment path is untouched. §J registration.
+
+### COMMCALC-34.6 WHAT IS OWNER-GATED
+
+`database/migrations/1095_payable_billing_cadence.sql` — additive, idempotent, nullable:
+`payable_source_map.billing_cadence` / `billing_weekday` / `billing_period_field`, two CHECK
+constraints pinning the vocabulary the home rules on, a COMMENT on every column, a `-- REVERT:` block
+and the grant restated. **Every column is NULL after it runs, which is byte-identical to today** — the
+resolver's house default asserts no rhythm. The VALUES are a separate, approval-gated data step, and
+the `net_terms_days = 21` run in §COMMCALC-34.1 is the one that makes the figures appear.
+
+### COMMCALC-34.7 Cross-references
+
+Same home, other axes: §COMMCALC-26 (the declared window, net terms and cost source — the config
+spine this extends), §COMMCALC-32 (the no-device status that gates the shared read), §COMMCALC-33
+(the per-device recovery netted off the same ledger), §COMMCALC-25 (the vendor debt test and the
+filters on the daily screen). Same class: §COMMCALC-26.1 (a carrier's arrangement written into code
+instead of declared), §19.18 (a mechanism written and its callers left unwired), §COMMCALC-29.1 (an
+empty result standing in for a broken declaration), §66 (an allowlist so an unruled basis is not
+evidence). Neighbours: §11 (the aging report), §CORE-17.3y (the aging drill-down at device grain),
+§13a (the market home the shared read is handed), §64 (store identity, likewise injected).
 
 ---
 
@@ -37244,7 +37364,7 @@ candidates were read before anything was written.
 |---|---|---|
 | §CORE-17 — is there a home for "the rows behind a figure"? | `core/report_drilldown.py` (`tile_panel`, `tiles`, `tie_out`, `panel`) | **REUSED whole.** No fold, no tie-out and no panel shape is written here. |
 | §CORE-17.3l — does the device-asset family already declare this report? | `asset/device_asset_drilldown.py`, SEVEN catalogues, none of them this report | **EXTENDED**, as an eighth declaration in the same module. A second module would be a second answer to "which relation was this device-asset figure read out of", which is the sibling defect §CORE-17.3l was itself written to refuse. |
-| §COMMCALC-26 / §COMMCALC-28 — who decides the band, and which feed answers "still unsold"? | `commcalc/device_aging_policy.py` (the ladder) and `payables/unsold_inventory.py` (the shape, the source and the stamp) | **DEREFERENCED, never re-derived.** The declaration reads the producer's own `_bucket` stamp; it re-applies no ladder and re-decides no source. |
+| §COMMCALC-26 — who decides the band, and which feed answers "still unsold"? | `commcalc/device_aging_policy.py` (the ladder) and `payables/unsold_inventory.py` (the shape, the source and the stamp) | **DEREFERENCED, never re-derived.** The declaration reads the producer's own `_bucket` stamp; it re-applies no ladder and re-decides no source. |
 | §COMMCALC-33 — is the out-of-pocket headline Σ of this report's amount column? | No: it is that cost NET of the per-device carrier recovery | **REFUSED a panel** (see .5). |
 
 Nothing new was created but the declaration, its lock, one registry NAME constant and one label.
@@ -37271,7 +37391,7 @@ folded over, and `aging_drilldowns` folds each tile over its own devices. Band i
 
 #### .4 TWO RELATIONS, DECIDED PER ROW — AND THE IMEI IS SPELLED TWICE
 
-Since §COMMCALC-28 this report serves two tenants off two different relations: a consignment device
+Since §COMMCALC-26 this report serves two tenants off two different relations: a consignment device
 is read out of `commcalc.asset_ledger` and a device the platform owes for out of
 `commcalc.device_payable_ledger`. A panel naming one of them for every row would be wrong on every
 row of the other tenant, so `device_tables` reads the producer's own stamp per row. The keys are per
@@ -37334,7 +37454,7 @@ tile is the SERVER'S total key rather than the bucket name, so a renamed bucket 
 another band's panel.
 
 Neighbours: §CORE-17.3l (the family this extends, and its grain rule), §COMMCALC-26 (the declared
-window), §COMMCALC-28 (which feed answers "still unsold", and the stamp), §COMMCALC-33 (the netting
+window, which feed answers "still unsold", and the stamp), §COMMCALC-33 (the netting
 that the out-of-pocket refusal points at), §CORE-17.3h (a composed figure gets no panel),
 §CORE-17.3i (an absence is not a zero), §CORE-17.3c (the offer rule — a link only where the server
 served a panel).
