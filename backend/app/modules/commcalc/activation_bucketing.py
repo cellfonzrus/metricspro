@@ -67,7 +67,6 @@ BUCKET_FIELD = {"New Activation": "activation", "Port": "port", "BYOD": "byod", 
                 "BYOD Upgrade": "byod_upgrade", "Other": "other"}
 
 
-
 def _norm_tokens(value, default):
     """A config token list, lowercased/trimmed; None/absent → default; junk entries dropped."""
     if value is None:
