@@ -153,6 +153,8 @@ Primary code homes:
 | COMMCALC-27 | **The operator's input is serviced before the next frame tick** | "The live portal window just freezes — it is not swift access, it seems I have to press hard." One thread streams the frames, detects the state AND executes the human's clicks, and the page sent one web request per character typed. What is the operator's keystroke charged for before it runs, and what work has no business on the latency path of their next action? |
 | COMMCALC-28 | **A poll's cadence is a gap between responses, never a timer rate** | "It is very laggy" — said after the input fix had shipped and deployed. The live view asked for a new frame every 300ms on a fixed timer, across three hops that take longer than that, and fanned out three more requests per click. What happens to a poll whose request outlives its own interval, and whose connection budget is it spending? |
 | COMMCALC-30 | **A human who is watching is not idle** | His live session was not failing, it was being closed on him: "Live session closed after inactivity", eight minutes into a captcha he was working through. Only commands reset the activity clock; the frame and state polls never did. Which question is that clock actually answering, and which budget had no business being applied to a person who is demonstrably there? |
+| COMMCALC-31 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
+| COMMCALC-32 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
 
 ---
 
@@ -7155,7 +7157,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.raw_ma_fulfillment` | upload `/upload/ma_fulfillment` (slice-scoped replace, `ingest_slice.py` §2) | `device_cogs.ma_unit_price_map` (handset price list), MA overview/recon, **mig `314` account→store map source** (`tspid`+`business_address` → `ma_store_pnl.account_store_index`; canonical-spelling wrapper `ma_store_pnl.canonical_store_index` = index ∪ `coa.store_resolver`, the ONE account→store answer, consumed by `payables/engine.ma_store_resolution` — forecast/payables Total-side store attribution, 2026-09-04 §15 — and by `residual_subs.compute` for the §7a report's store names) |
 | `commcalc.ma_account_store_map` (mig `314`) | owner-pinned rows (SQL seed / future admin UI) | `ma_store_pnl.load_store_index` — wins over the fulfillment-derived map; covers accounts fulfillment never names (luxelink `170405`) |
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
-| `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert; **upload via `/upload-mapped` report_key `pos_inventory_listing` (mig `1004`, §25)** — adds `status`/`quantity`/`total_cost`/`category` so an on-hand SNAPSHOT is fully representable and a valuation can be summed from the table | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`); **device-grain store source for `payables/engine.ma_store_resolution`** (forecast/payables Total-side attribution, 2026-09-04 §15 — its `store` is the store_mapping vocabulary, measured 20/20); **the onboarding intake's inventory landing (`write_inventory_devices`, §30.6) — CONFIRMED the same table the inventory module reads (§30.8)** |
+| `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert; **upload via `/upload-mapped` report_key `pos_inventory_listing` (mig `1004`, §25)** — adds `status`/`quantity`/`total_cost`/`category` so an on-hand SNAPSHOT is fully representable and a valuation can be summed from the table | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`); **device-grain store source for `payables/engine.ma_store_resolution`** (forecast/payables Total-side attribution, 2026-09-04 §15 — its `store` is the store_mapping vocabulary, measured 20/20); **the onboarding intake's inventory landing (`write_inventory_devices`, §30.6) — CONFIRMED the same table the inventory module reads (§30.8)**; **`GET /commcalc/my-shelf`, the rep's shelf card (§COMMCALC-32)** — and `commcalc/inventory_stock_age.py` is now the ONE home for the `received_date` / `days_in_stock` / `as_of_date` / `on_hand` reading of these rows: the receipt date, the current-snapshot shelf test and the age-to-today (§COMMCALC-31) |
 | `commcalc.journal_entries` | `PUT /account/journal/{period}` (`account/router.py` — delete+insert per period; echoes `rejected`/`resolved`) | `statement_engine._journal_rows` (BOTH period spellings) → `balance_sheet.journal_scope_entries` (fixed company scoping, mig `933`) → **`balance_sheet.journal_grain_entries`** (mig `954` GRAIN rule: store / company / tenant-total entries, a coarser row booked NET of the finer rows inside it — no double count; conflicts surfaced in `bs['journal_grains']`); legacy `engine.compute_and_store` exact-period read; staleness probe |
 | `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview` (company scopes cross-checked against `coa.org_companies` via `coa.filter_org_scopes` — §13b; **the stored `scope_label` is NOT the display name — every read stamps `scope_display` from `coa.scope_display_label`, §13b.1, 2026-10-03**), `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet`/**`account_pl_range`**; **the P&L month range (§4c, 2026-09-26)** — `router.pl_single_month` (THE single-month read, `get_pl` returns it) looped by `router.get_pl_range` over `_period.month_range`; **the Account hub's Expenses column + per-scope drill-down (2026-09-21)** — `analysis.pl_totals` is the ONE home for the headline figures incl. `expenses` (Σ `analysis.EXPENSE_SECTIONS`), read by `/account/overview` and by the drill-down through `GET /account/pl/{period}?scope=`; **Print each store (§4d, 2026-10-01)** — `GET /account/pl/{period}?stores=<one store>` per store via `accounts/_components/plStatement.plQuery` / `PLPerStorePrint.tsx` |
 | `commcalc.companies` | `POST/PATCH /account/companies` (org_id in payload/filter; mig `952` removed the two 2026-06-27 wrong-org LuxeLink rows) | ONLY `coa.org_companies` (§13b canonical fail-closed enumeration; CI-pinned by `harness_org_scope_guard.py`) → `list_companies`/`list_stores`/journal echo/`overview`/`analysis`/`finance_attention`/`store_company_map`⇒`company_assignment`; billing `per_entity` org-scoped count probe |
@@ -7499,6 +7501,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /payables/payables` | `payables/router.py` `list_payables` (`start`/`end` window `due_date`; `undated_excluded` reported) | §15 (module 095), §COMMCALC-25 |
 | `GET /payables/filter-options` | `payables/router.py` `payables_filter_options` (canonical §13c; every option carries `store_key`) | §15 (module 095), §COMMCALC-25 |
 | `POST /payables/rebuild` | `payables/router.py` → `engine.build_ledger` | §15 (module 095) |
+| `GET /commcalc/my-shelf` | `commcalc/router.py` `my_shelf` — the rep's own shelf: composes `storeops.scope_keyset` (span), `commcalc/inventory_stock_age` (arrival + shelf test), `device_aging_policy` over declared `payable_source_map` (window) and `asset/inventory_buckets.inv_bucket` (device type). Owns NO arithmetic; reads `inventory_aging_device` and deliberately NOT `device_payable_ledger` (§COMMCALC-32.3) | §COMMCALC-31, §COMMCALC-32 |
 | `GET /plan-installments` | `10726` | §8 |
 | `GET /payout-schedule` | `11948` | §7 |
 | `GET/POST /management-incentive/plans` | `28527/28534` | §9 |
@@ -7883,6 +7886,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | Bill-pay pass-through (P&L `billpay_collected`/`billpay_offset`, mig `939`) | `daily_closing.epay_on_cash`+`epay_on_credit` (DM-verified corrections win at store-day grain); pair nets to ZERO | `account/billpay_pl.billpay_cells`/`billpay_bookings` → `coa.build_inputs` (`pl_billpay_presentation='carveout'`; offset label per `pl_billpay_settlement`) |
 | Bill-pay coverage (billpay ≤ cash+card per store/day) | processor feed (`raw_epay_daily_tx` per_store_day / `raw_ma_daily_tx` by `tx_date` — mig-944 row filter `ma_billpay_predicate`, accounts via store_merchant_id → mig-314 index) or declared closing split, vs `daily_closing` tender totals (DM-corrected) | `metric_recon.reconcile_billpay_coverage` via `GET /billpay-coverage/{period}` |
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
+| Received in stock, and days on the shelf TODAY | `inventory_aging_device.received_date` (NULL on all 10,525 rows house-wide, measured 2026-10-26) else `as_of_date − days_in_stock` — ONE derivation, `commcalc/inventory_stock_age.received_on` | `GET /inventory-recon`, `_mi_ever_over_days` (the MI aging gate), `device_history.build_aging_inventory`, `GET /commcalc/my-shelf`. The age is counted to TODAY, never read off the file (§COMMCALC-31.3); `harness_inventory_stock_age_guard.py` fails the build on a second copy |
+| On the shelf (is this unit physically there) | `on_hand` AND `as_of_date` = the org's CURRENT snapshot — `commcalc/inventory_stock_age.on_shelf` | `GET /commcalc/my-shelf`. The second half is load-bearing: a failed off-hand flip leaves `on_hand=true` on a unit long gone (balance_sheet's ~$129k of ghosts). Luxelink 2026-10-26: 1,444 `on_hand` rows, 888 at the snapshot |
 | Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
 | **P&L for a range of months** (a column per month + Total, the page's lines, drill rows and filters) | the STORED `commcalc.account_statements` P&L snapshots (or their store / market filtered sum), one per month — exactly what `/accounts/pl` shows for that month | **ONE read** `account/router.pl_single_month` looped by `get_pl_range` over `_period.month_range`; layout + Total (Σ month cells, exact cents; blank months excluded, never $0.00) `account/pl_range.assemble` / `export_sheet`. Proof `harness_pl_range.py`, lock `harness_pl_range_lock.py` (§4c, 2026-09-26) |
 | **P&L for each store, one per printed page** (the page's lines, any company scope / store / market pick) | the STORED per-store `commcalc.account_statements` P&L snapshots, read through the store-filtered view — exactly what `/accounts/pl` shows with that store alone selected | `GET /account/pl/{period}` (`pl_single_month`) once per store from `PLPerStorePrint.tsx` via `plStatement.plQuery`; store list = that read's `filtered_stores`; layout `plStatement.plStatementRows` / `perStorePayload`; one page per store via `lib/export` `pageBreakBefore`. Lock `harness_pl_range_lock.py` L7c (§4d, 2026-10-01) |
@@ -26057,6 +26062,8 @@ status word rather than a blank that reads as nil.
 | COMMCALC-28 | commcalc |
 | COMMCALC-29 | commcalc |
 | COMMCALC-30 | commcalc |
+| COMMCALC-31 | commcalc |
+| COMMCALC-32 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -33419,6 +33426,200 @@ Neighbours: §COMMCALC-10 (the progress budgets this sits beside), §COMMCALC-11
 8-minute budget was named for), §COMMCALC-07 (the UPS pull this login exists to feed).
 
 ---
+
+## §COMMCALC-31. A DEVICE'S ARRIVAL ON THE SHELF HAS ONE DATE (owner ask 2026-10-26)
+
+Owner, verbatim: *"invenotry aging in luxeliunk shodul say sell within 10 days of receiving the
+phones in stock and it should be on every sales reps daSHBOARDS WHEN TEHY LOG IN"*.
+
+**Module:** `backend/app/modules/commcalc/inventory_stock_age.py` (the one home) ·
+`backend/app/modules/commcalc/device_history.py` (`build_aging_inventory`, the caller that disagreed)
+**Lock:** `backend/harness_inventory_stock_age.py` — 36 checks · and
+`backend/harness_inventory_stock_age_guard.py` — the build gate, run by `carrier-vocab-guard.yml`
+**Migration:** none. The window itself is a config ROW (§COMMCALC-31.6).
+
+### COMMCALC-31.1 THE CLASS, NOT THE INSTANCE
+
+The ask looks like a number change. It is not: it names a fact the platform had no single answer for
+— **the date a handset was received into stock.** `commcalc.inventory_aging_device.received_date`
+exists and is **NULL on all 10,525 rows house-wide** (measured against production 2026-10-26, both
+tenants). The POS export carries the unit's AGE instead — `raw_row`'s `"Age in Store"` — landed as
+`days_in_stock` against the file's `as_of_date`.
+
+So the receipt date must be DERIVED, and three callers each derived it:
+
+| caller | what it did | result |
+| --- | --- | --- |
+| `router._derived_received` (`GET /inventory-recon`) | `as_of_date − days_in_stock` | right |
+| `router._mi_ever_over_days` (the MI aging bonus gate) | `as_of_date − days_in_stock` | right |
+| `device_history.build_aging_inventory` | read `days_in_stock` **verbatim** | the age ON THE DAY THE FILE WAS PULLED |
+
+The third is the defect, and it was invisible because its answer is a plausible number: a unit last
+seen in a 2026-07-25 snapshot reported **9 days** on the Device History screen in October, where the
+other two reported **102**. The MI gate's own comment already recorded the shared fact — *"the
+luxelink aging export carries age, not a received date"* — beside its own private copy of it, which
+is the §19.18 shape this index has now logged four times.
+
+### COMMCALC-31.2 THE ONE HOME
+
+`backend/app/modules/commcalc/inventory_stock_age.py` — PURE, standard library plus
+`device_aging_policy`. No DB, no I/O.
+
+- `received_on(row)` — THE derivation. The feed's own `received_date` when it has one, else
+  `as_of_date − days_in_stock`, else `None`. A negative age is refused rather than dating a receipt
+  in the future.
+- `received_basis(row)` — `received_date` | `age_at_snapshot` | `not_measured`. A surface that shows
+  a deadline can say whether a receipt document supplied the date or the POS's age did.
+- `current_snapshot(rows)` / `on_shelf(row, snapshot)` — **the ghost rule, reused not re-derived.**
+  `inventory_aging_device` is upserted one row per `(org, imei)` (mig `216`), so a row's `as_of_date`
+  is the last file that unit appeared in, and a flip that never ran leaves `on_hand=true` on a unit
+  that is long gone. `account/balance_sheet.py` already measured ~$129k of such ghosts. ON THE SHELF
+  therefore means `on_hand` **AND** carrying the org's current snapshot date. Measured 2026-10-26:
+  Luxelink holds **1,444** `on_hand=true` rows and **888** at the current snapshot.
+- `days_on_shelf(row, today)` — counted to TODAY, never read off the file. This is the line
+  `device_history` crossed.
+- `days_left(row, policy, today)` — the window minus the age. Negative is RETURNED, not clamped:
+  "4 days over" and "due today" are different conversations.
+- `resolve_window(carrier_id, policies, maps)` → `(policy | None, reason | None)` — §COMMCALC-31.4.
+- `shelf_row` / `summarise` — the render shape and its headline.
+
+### COMMCALC-31.3 THE AGE IS NEVER THE FILE'S AGE
+
+Stated separately because it is the half most likely to be undone by a well-meaning edit. A reader
+that wants "days in stock" will find the column sitting right there, already an integer, already
+named for the question. It answers only for the day the file was pulled. Every surface asking a rep
+or a manager to act TODAY must count to today, and the guard (§COMMCALC-31.5) fails the build on the
+one assignment that re-introduces it.
+
+### COMMCALC-31.4 AN UNESTABLISHED DEADLINE IS NOT THE HOUSE DEFAULT
+
+`resolve_window` deliberately does **not** fall back to the house 60 days the way
+`unsold_inventory.policy_for` does:
+
+| situation | answer |
+| --- | --- |
+| carrier known and mapped | that carrier's declared policy |
+| carrier unknown, every active map declares the SAME window | that window — not a guess: whichever carrier it is, the number is the same |
+| carrier unknown, the org's windows DIFFER | no policy, reason `carrier_windows_differ` |
+| the org declares no map at all | no policy, reason `carrier_not_identified` |
+
+The 60-day fallback is right for a payables TOTAL, which must not lose a device. It is wrong on a
+rep's card, where printing "45 days left" over a 10-day carrier's phone is the exact defect
+§COMMCALC-26 was opened for. Two callers, two needs, one window resolver that is explicit about
+which it is serving.
+
+### COMMCALC-31.5 Locked so it cannot un-wire
+
+`backend/harness_inventory_stock_age_guard.py` — the build gate. Three axes:
+
+1. **No second derivation.** No function outside the one home may subtract `days_in_stock` from an
+   `as_of_date`. It resolves **each file's own `timedelta` import aliases** from its AST rather than
+   assuming the spelling: the first draft of this scanner missed
+   `from datetime import timedelta as td`, and a guard with a blind spot is the patchwork it exists
+   to prevent.
+2. **Every collapsed caller still dereferences it**, by name — `_derived_received`,
+   `_mi_ever_over_days`, `build_aging_inventory` — plus the specific assignment
+   (`days = int(dis)`) whose return would restore the stale age. Counting copies alone would pass a
+   caller quietly reverted to believing the file.
+3. **The shelf test is not re-invented**, and `balance_sheet`'s per-store variant is excused BY NAME
+   with its reason (latest `as_of` per STORE, a different grain, pinned by its own harness) rather
+   than by silence.
+
+Six negative controls N1–N6 pin that reading either column to DISPLAY it is not flagged, that a
+`timedelta` subtraction without `days_in_stock` is not flagged, and that the real defect is caught
+under all three `timedelta` spellings.
+
+`backend/harness_inventory_stock_age.py` — 36 checks, DB-free, including the owner's regression
+stated as arithmetic (a unit received 16 days ago reads **6 days over** a declared 10-day window and
+**4 over** the previous 12, so the CONFIG ROW moves the number and no literal in code does) and the
+stale-snapshot defect stated as a measurement (102, not 9).
+
+### COMMCALC-31.6 What is owner-gated
+
+`/mnt/project-files/inventory-aging-window/RUN_luxelink_sell_within_10_2026-10-26.sql` — one Run, one
+column, one row: `payable_source_map.sell_within_days` 12 → 10 on the Luxelink Total/MA map. No code
+change ships the number. Coordinated with the branch declaring `net_terms_days = 21` on the same two
+rows, which writes a disjoint column set, so neither reverts the other.
+
+---
+
+## §COMMCALC-32. A REP'S SHELF, ON THE SCREEN A REP LANDS ON (owner ask 2026-10-26)
+
+Owner, verbatim, same sentence as §COMMCALC-31: the selling deadline *"should be on every sales reps
+daSHBOARDS WHEN TEHY LOG IN"*.
+
+**Module:** `backend/app/modules/commcalc/router.py` (`GET /commcalc/my-shelf`) ·
+`frontend/src/app/(platform)/commcalc/targets/my/_components/ShelfAging.tsx`
+**Lock:** the pure logic is §COMMCALC-31's two harnesses; the endpoint composes them and owns no
+arithmetic of its own.
+**Migration:** none.
+
+### COMMCALC-32.1 WHY THAT SCREEN
+
+`/commcalc/targets/my` is the configured `home` for the `sales_rep` role (mig `015`), so it is the
+first screen after sign-in rather than a page a rep would have to find. Management Overview reports
+are dashboard TILES and a new sidebar row is where reports go to be unfound (the 2026-10-08 ruling),
+so the deadline goes on the landing screen itself.
+
+### COMMCALC-32.2 FOUR FACTS, FOUR EXISTING HOMES
+
+Nothing is derived in the endpoint. It composes:
+
+| fact | home |
+| --- | --- |
+| which stores does this login reach | `storeops.router.scope_keyset` (§14x — evidence: scheduled or clocked in) |
+| when did this unit arrive, is it still here | `commcalc/inventory_stock_age.py` (§COMMCALC-31) |
+| how long may it sit | `commcalc/device_aging_policy.py` over declared `payable_source_map` (§COMMCALC-26) |
+| is this a device at all | `asset/inventory_buckets.inv_bucket` (§11a — the ONE classifier) |
+| which store is this address | `account/store_identity` via `_store_code_resolver` (§13a) |
+
+The span being EVIDENCE-based is load-bearing, not incidental: **9 of Luxelink's 32 active rep logins
+carry no `store_code`** (measured 2026-10-26), and the card sits above the targets and OUTSIDE that
+page's "no store assigned" early return so those reps still see their shelf.
+
+### COMMCALC-32.3 THE POS SNAPSHOT, NOT THE PAYABLE LEDGER
+
+`commcalc.device_payable_ledger` is the carrier's PAYMENT story. Measured 2026-10-26: its Luxelink
+unsold set (**3,095** units) and the POS on-hand set (**888**) overlap by **twelve**, and for several
+IMEIs its `invoice_date` equals the snapshot date on which the POS flipped the unit off-hand — i.e.
+it is the activation/transaction date (`raw_ma_commission.tx_date`), independently confirmed by the
+payables thread the same day. Counting a SELLING window from it would be wrong twice over: wrong
+anchor, wrong population. A rep asked what is on their shelf is told what is on their shelf. The
+card never reads the ledger, which is also why it cannot disagree with the BYOP exclusion
+(§COMMCALC-31) landing on another branch.
+
+### COMMCALC-32.4 WHAT IT REFUSES TO INVENT
+
+- A unit whose carrier cannot be identified shows its AGE and names why the deadline is missing
+  (§COMMCALC-31.4). It never inherits the house 60.
+- A unit with no age is counted as `undated`, apart from both "overdue" and "fine"; `no_window` is
+  counted apart from `undated`, because an unknown age and an unknown deadline are different gaps
+  with different fixes (a feed versus a config row).
+- A FAILED READ says so on the card. "You have nothing aging" and "we could not ask" are different
+  sentences and only one of them is reassuring.
+- The device filter REPORTS what it held back, with model names. Measured on the live snapshot the
+  442 excluded units are exactly two names — "Total by Verizon SIM Kit" (435) and "Total Wireless
+  BYOT SIM Kit" (7) — so no handset is lost to the filter, and they were drowning the real signal:
+  **442 of the 689 overdue rows, carrying $1,326 of the $71,268**.
+- "Received" is labelled on the card as derived from the POS age in stock, because no vendor receipt
+  date exists in this platform (§COMMCALC-31.1). Calling it a receipt date would be the quiet
+  overstatement the house rules treat as a defect.
+- An empty card prints the server's REASON — no snapshot, no span, no devices, or no declared window
+  — never a zero (the §29.12 "never blank" rule).
+
+### COMMCALC-32.5 Verified against production, not only in a harness
+
+Driving the real pure modules over the real rows at the 2026-10-26 snapshot: **446** phones,
+tablets, watches and hotspots on hand at Luxelink, **247** already past a 10-day window
+(**$69,941.61**), **0** undated, **0** without a window. One Chicago store's rep sees 36 units, the
+oldest received 2026-07-02. All **20** store spellings in the feed resolve to a roster `store_code`
+through the real `store_identity` resolver.
+
+Under the window in force before the change (12 days) that same 446-unit shelf reads **170** overdue
+worth $55,482.32; at 10 days it reads **247** worth $69,941.61, so **77** units cross and the 50 that
+read "due today" at 12 are already past at 10. The config row, not code, carries the number. Counting
+the SIM kits in, the figures are 612 and 689 — which is the measurement that decided they stay out of
+the card.
 
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
 

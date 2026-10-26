@@ -19,7 +19,16 @@ import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.join(ROOT, "app")
-ONE_HOME = os.path.join(APP, "modules", "commcalc", "inventory_stock_age.py")
+sys.path.insert(0, ROOT)
+# THE HOME IS NOT TYPED HERE. `module_graph` is the one home for "which file answers this question"
+# (index §50), and a lock that keeps its own copy of the ruling is the duplicate defect wearing the
+# shape of its own cure — fifteen locks did exactly that before the graph existed. So this gate reads
+# the ruling rather than restating it, which is also what `harness_module_graph_guard.py` H2 enforces.
+from app.modules.core import module_graph as _mg
+
+FACT = "device_stock_age"
+HOMES = tuple(_mg.FACTS[FACT]["homes"])
+ONE_HOME = os.path.join(ROOT, HOMES[0])
 FAILED = []
 NOTES = []
 
@@ -96,13 +105,15 @@ for p in py_files():
     h = offending_subtractions(p)
     if h:
         subs[os.path.relpath(p, ROOT)] = h
-outside = {k: v for k, v in subs.items() if not k.endswith("inventory_stock_age.py")}
+_home_rel = {h.replace("/", os.sep) for h in HOMES}
+outside = {k: v for k, v in subs.items() if k.replace("/", os.sep) not in _home_rel}
 for k, v in outside.items():
     NOTES.append(f"{k}: " + ", ".join(f"{n}() line {ln}" for n, ln in v))
 ok(not outside,
    "no function outside inventory_stock_age.py subtracts days_in_stock from as_of_date"
    + (" — FOUND: " + "; ".join(NOTES) if NOTES else ""))
-ok(os.path.exists(ONE_HOME), "the one home exists at commcalc/inventory_stock_age.py")
+ok(len(HOMES) == 1, "module_graph names exactly ONE home for this fact")
+ok(os.path.exists(ONE_HOME), f"and it exists: {HOMES[0]}")
 home_src = open(ONE_HOME, encoding="utf-8").read() if os.path.exists(ONE_HOME) else ""
 ok(SUB.search(home_src) is not None and "days_in_stock" in home_src,
    "and the one home itself still DOES the subtraction (the guard is not passing by deleting it)")

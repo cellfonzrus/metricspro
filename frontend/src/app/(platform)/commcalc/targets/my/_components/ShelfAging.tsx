@@ -12,7 +12,7 @@
  *
  * EVERY NUMBER IS THE SERVER'S. The window, the age, the bucket and the counts all come from
  * GET /commcalc/my-shelf, which reads them from `inventory_stock_age` + `device_aging_policy`
- * (§COMMCALC-32 / §COMMCALC-26). Nothing is recomputed here — a client that subtracts its own dates
+ * (§COMMCALC-31 / §COMMCALC-26). Nothing is recomputed here — a client that subtracts its own dates
  * is how two surfaces end up one day apart.
  *
  * AND IT SAYS WHAT IT DOES NOT KNOW. A device with no deadline shows its age and the reason the

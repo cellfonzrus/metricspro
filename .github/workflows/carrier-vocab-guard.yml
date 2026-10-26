@@ -1356,6 +1356,15 @@ on:
       - "backend/harness_payables_declared_source.py"
       - "backend/app/modules/payables/declared_source.py"
       - "frontend/src/lib/owed-source.ts"
+      # index COMMCALC-31 - A DEVICE'S ARRIVAL ON THE SHELF HAS ONE DATE. The one home, its proof and
+      # the build gate that stops a second copy of the receipt-date derivation appearing. device_history
+      # and the commcalc router are already named above, so a change to either collapsed caller re-runs
+      # both proofs too - which is the point: the gate exists to catch a caller un-wiring itself.
+      - "backend/harness_inventory_stock_age.py"
+      - "backend/harness_inventory_stock_age_guard.py"
+      - "backend/app/modules/commcalc/inventory_stock_age.py"
+      - "backend/app/modules/asset/inventory_buckets.py"
+      - "frontend/src/app/(platform)/commcalc/targets/my/_components/ShelfAging.tsx"
       # index §47.17 — the DM visit plan proof. Its harness sits at the backend ROOT and it parses the
       # seed out of migration 1050, so a change to EITHER must run the proof that guards them (same
       # §13e lesson as the three above).
@@ -2404,6 +2413,19 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_payables_declared_source.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # AND the receipt-date one home, in the same job because it guards the same config spine's
+      # consumers. Two steps, deliberately: the first proves the arithmetic (including the owner's
+      # 10-day regression and the stale-snapshot defect device_history shipped), the second is the
+      # BUILD GATE that fails if any caller stops dereferencing the shared fact or a fourth copy of
+      # `as_of_date - days_in_stock` appears. Both DB-free, seconds. Index COMMCALC-31.
+      - name: Run the shelf-age proof (a device's receipt date has ONE derivation and its age is counted to TODAY, never read off the snapshot file - index COMMCALC-31)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_inventory_stock_age.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the shelf-age BUILD GATE (no second copy of the receipt-date derivation, and every collapsed caller still dereferences the one home - index COMMCALC-31.5)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_inventory_stock_age_guard.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # AND the FRONTEND proof of the forecast grid, in the same job for the same reason: it locks
       # the same screen, and a wiring check nothing runs is not a gate. Node only, seconds.
       - uses: actions/setup-node@v4

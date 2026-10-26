@@ -33945,7 +33945,7 @@ def my_shelf(as_of: str = "", authorization: str = Header(default=""), org_id: s
         the person was scheduled or clocked in). A rep with no store pinned on their login therefore
         still sees their shelf, which matters here: 9 of Luxelink's 32 active rep logins carry no
         store_code at all (measured 2026-10-26).
-      • "when did this device arrive, and is it still here" — `inventory_stock_age` (§COMMCALC-32).
+      • "when did this device arrive, and is it still here" — `inventory_stock_age` (§COMMCALC-31).
       • "how long may it sit" — `device_aging_policy` over the declared
         `payable_source_map.sell_within_days` (§COMMCALC-26).
 
@@ -34079,7 +34079,7 @@ def my_shelf(as_of: str = "", authorization: str = Header(default=""), org_id: s
         "devices_out_of_span": out_of_span,
         "setup_hint": hints,
         # PROVENANCE, so the card can say where the receipt date came from rather than implying a
-        # vendor receipt document exists. It does not: see §COMMCALC-32.
+        # vendor receipt document exists. It does not: see §COMMCALC-31.
         "received_basis": ("age_at_snapshot" if any(d["age_basis"] == _isa.BASIS_AGE_AT_SNAPSHOT
                                                    for d in out) else None),
         "source": "commcalc.inventory_aging_device",
@@ -34100,7 +34100,7 @@ def inventory_recon(store_code: str, period: str, max_days: int = 10, org_id: st
     sc = str(store_code).strip()
 
     # The receipt date is NOT derived here. `inventory_stock_age.received_on` is the ONE home for
-    # "when did this device arrive on the shelf" (§COMMCALC-32); this endpoint, the MI aging gate and
+    # "when did this device arrive on the shelf" (§COMMCALC-31); this endpoint, the MI aging gate and
     # device_history each carried their own copy of the subtraction, and one of them was stale.
     from app.modules.commcalc import inventory_stock_age as _isa
     _derived_received = _isa.received_on
@@ -47951,12 +47951,12 @@ def _mi_ever_over_days(received_date, days_in_stock, as_of_date, off_hand_as_of,
     """Did this device EVER exceed max_days in stock DURING [m_start, m_end]? Returns True/False, or None
     when the age is unknowable. This answers the period-correct question the shipped gate did not: not "is
     it over N right now" but "did it peak over N at any point in the period." The receipt date comes
-    from `inventory_stock_age.received_on` — the ONE home (§COMMCALC-32), since the luxelink aging
+    from `inventory_stock_age.received_on` — the ONE home (§COMMCALC-31), since the luxelink aging
     export carries age and not a received date; this gate, `/inventory-recon` and `device_history`
     each derived it separately until that module existed. PURE / unit-tested."""
     from app.modules.commcalc import inventory_stock_age as _isa
     ms = _mi_parse_date(m_start); me = _mi_parse_date(m_end)
-    # ONE home for the receipt date (§COMMCALC-32) — this gate used to derive it itself.
+    # ONE home for the receipt date (§COMMCALC-31) — this gate used to derive it itself.
     rec = _mi_parse_date(_isa.received_on({"received_date": received_date,
                                            "as_of_date": as_of_date,
                                            "days_in_stock": days_in_stock}))
