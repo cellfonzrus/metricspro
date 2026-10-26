@@ -36112,6 +36112,29 @@ stays its one home (§CORE-17.3t settled that), and batch 22 gave that fact its 
 payment relations and the month-end upload are dereferenced from `data_lineage_registry`; **no new
 registry entry was added**, because every name needed was already in there.
 
+**TWO LOCKS THAT READ THE FORM OF THE TREE, NOT THE FACT THEY ASSERT — found by moving the map,
+fixed here.** Both are the same class as the holes batches 19–21 found, and both now fail the build
+on the thing they were always about:
+
+- `harness_activation_bucketing.py` §E7 lifted `_ACT_BUCKET_FIELD` out of `router.py` with
+  `ast.literal_eval`. It therefore **silently depended on the duplicate** this batch removed, and
+  crashed on an `ast.Attribute` before any check ran — killing every later step in its job. It now
+  dereferences the one home, and a new **§E7b fails the build if the router ever re-declares a map
+  of its own**. Mutation-tested both ways: re-inlining the literal fires §E7b, changing a value in
+  the one home fires §E7. §E8–§E11 read the payload with `.get` so a mutated map lands as named
+  failures instead of a `KeyError` that hides the rest of the file.
+- `harness_batch21_drilldown.py` §J6 asserted `/commcalc` is still `owes`. The right intent against
+  the wrong thing: the claim is that a row that batch did not serve was not quietly **deleted**, and
+  a later batch **serving** it is the programme working. It now asserts the row still exists with a
+  declared state, with a non-vacuity control; deleting the row fires §J6.
+
+**THE ROUTE-COUNT TRIPWIRE.** `harness_db_resilience.py` §I0 pins the app's leaf route count
+exactly, so an endpoint appearing or vanishing is noticed by a human. This batch adds **one** route
+and removes none (`grep -cE '^\+.*@router\.'` = 1, `'^-.*@router\.'` = 0), so the pin advances
+**1800 → 1801** with a dated note naming `GET /commcalc/commissions/{period}/drilldown`. The exact
+match is untouched — not a `>=`, not a range, and `EXPECT_ROUTES` is not set in the workflow to
+dodge it; §I0b, the drift-proof form, needs no re-pin.
+
 **THE ONE RELATION THAT IS DELIBERATELY NOT IN THE FEED REGISTRY.** The subsidy panels name
 `commission_org_config` — the company commission settings a human typed the entitlement rate into.
 That is a **config row, not an external feed**: it has no arrival cadence, no staleness and nothing
