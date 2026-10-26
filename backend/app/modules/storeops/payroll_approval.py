@@ -99,7 +99,17 @@ class PayrollDispatchIn(LaxModel):
     dry_run: Any = None
 
 _STAGES = ("dm", "hr")
-_ACTIONS = ("approve", "send_back", "reset")
+# `save` (owner report 2026-10-26: *"there is a lag in saving and updating the hours ... i had to
+# enter hours for simarjyot 3 times"*) RECORDS a correction and touches NEITHER approval stage. It is
+# an ACTION on the existing decide path, deliberately not a sibling endpoint: the reason gate, the
+# negative-hours guard, the change-log write and the org scoping are the same rules, and a second
+# write path for the same field is the duplicate defect the index rules forbid. Before it existed the
+# ONLY way to persist a typed figure was to approve in the same click, so a reviewer who corrected
+# hours and then did anything else lost the number with no error — measured on E043 / 2026-10-05..18,
+# where three typed attempts produced exactly ONE storeops.payroll_change_log row.
+_ACTIONS = ("approve", "send_back", "reset", "save")
+#: Actions that move an approval stage. `save` is absent, which is the whole point of it.
+_STATUS_ACTIONS = {"approve": "approved", "send_back": "sent_back", "reset": "pending"}
 
 
 def sb():
@@ -457,6 +467,50 @@ def _worked_days_from_sales(org_id, start, end):
     return {k: sorted(v) for k, v in out.items()}
 
 
+def _manual_hours_uncounted(org_id, start, end):
+    """{employee_id: {"hours": <signed total>, "days": [{work_date, hours, reason}, ...]}} for the
+    period, from `storeops.manual_hours`.
+
+    WHY THIS IS ON THE BOARD AT ALL, and why it changes NO figure.
+    `GET /storeops/payroll` deliberately does not read `storeops.manual_hours` on any path — the
+    router says so in its own comment (~:2051) and `payroll_hours_drilldown` reports it as live defect
+    1. So a correction a manager typed on the Time Clock screen never reaches `hours_source`, and a
+    reviewer standing on THIS board could not see that it existed.
+
+    MEASURED, production, read-only, 2026-10-26: E043 / 2026-10-05..18 carries SIX `manual_hours`
+    rows totalling **-16.00 h**, every one of them reasoned "wrong clock out", filed 2026-10-19 by
+    the district manager — against 102.84 h of clock the board was showing as the only truth. With
+    the correction invisible, the reviewer hand-rebuilt it as a -10.97 adjustment: 5.03 h adrift of a
+    figure the system already held.
+
+    So it is REPORTED, never folded. Folding it would change a pay figure, which is the owner's call
+    and not a side effect of a display fix (house rule: a defect found in live data is reported, and
+    the router's own comment forbids the fold in those words). Every key this adds is additive and
+    `counted: false` by name — the same `counted` vocabulary the payroll drill-down already uses for
+    exactly these rows."""
+    try:
+        rows = (sb().table("manual_hours")
+                .select("employee_id,work_date,hours,reason")
+                .eq("org_id", org_id)
+                .gte("work_date", start.isoformat()).lte("work_date", end.isoformat())
+                .limit(20000).execute().data) or []
+    except Exception:
+        return {}          # table absent (mig 045 not applied) -> the board simply says nothing
+    out: dict = {}
+    for r in rows:
+        eid = r.get("employee_id")
+        if not eid:
+            continue
+        hrs = _num(r.get("hours")) or 0.0
+        slot = out.setdefault(eid, {"hours": 0.0, "days": []})
+        slot["hours"] = round(slot["hours"] + hrs, 2)
+        slot["days"].append({"work_date": str(r.get("work_date") or "")[:10],
+                             "hours": round(hrs, 2), "reason": r.get("reason") or ""})
+    for slot in out.values():
+        slot["days"].sort(key=lambda d: d["work_date"])
+    return out
+
+
 def _existing(org_id, start, end):
     try:
         rows = (sb().table("payroll_approval").select("*").eq("org_id", org_id)
@@ -488,15 +542,21 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
     # 0.00 hours, flagged, carrying the days the POS says they worked so the correction is informed
     # rather than invented. This ADDS rows only — no existing row's hours change.
     present = {h.get("employee_id") for h in hours if h.get("employee_id")}
-    _sales_days = _worked_days_from_sales(org_id, s, e)
+    roster = _active_in_span(org_id, authorization)
+    missing = [emp for emp in roster if emp.get("employee_id") not in present]
+    # LAZY, and that is the save lag (owner report 2026-10-26). `_worked_days_from_sales` scans up to
+    # 200,000 `commcalc.raw_sales` rows, and its ONLY consumer is the evidence list on a row the clock
+    # holds nothing for. It used to run on every single GET — including the reload after every save,
+    # so one correction paid for two full scans that answered a question nobody had asked. Skipped
+    # outright when every employee in span already has a clock record; the rows it produces are
+    # byte-identical when it does run.
+    _sales_days = _worked_days_from_sales(org_id, s, e) if missing else {}
     try:
         from app.modules.commcalc.commission_engine import _canon_person as _canon
     except Exception:
         _canon = None   # employee names are already 'First Last'; only the POS side needs the merge
-    for emp in _active_in_span(org_id, authorization):
+    for emp in missing:
         eid = emp.get("employee_id")
-        if eid in present:
-            continue
         worked = _sales_days.get(_canon(emp.get("name")), []) if _canon else []
         hours.append({
             "employee_id": eid, "name": emp.get("name"), "store": emp.get("home_store") or "",
@@ -521,7 +581,35 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
 
     want_stores = {x.strip() for x in store_code.split(",") if x.strip()}
     want_markets = {x.strip().lower() for x in market.split(",") if x.strip()}
-    want_emps = {x.strip() for x in employee_id.split(",") if x.strip()}
+    # THE PERSON FILTER TAKES AN ID **OR** A NAME (owner report 2026-10-26: *"i selected mohammed sami
+    # but nothing showed up"*).
+    #
+    # THE CLASS, not the instance: `GET /core/filter-options` keys its `reps` options by NAME — the
+    # roster is folded into a {name: email} map there, so the picker's option id IS the person's
+    # spelling. Every other board sends that value to a name-matching parameter (`reps` / `rep` /
+    # `employees`); this one alone sent it as `employee_id`, which is compared against 'E043'. So the
+    # filter could not match ANYBODY, ever — not a wrong answer, a guaranteed empty one.
+    #
+    # Fixed by resolving the token through `core.person_identity.folded_token_key` — THE one home for
+    # "is this the same human" (§owner report 2026-10-14), order-free and accent-folded, so
+    # 'Sami, Mohammed' and 'MOHAMMED SAMI' are the same person. An id still matches as an id first, so
+    # an existing caller passing 'E043' is byte-identical. A token that resolves to neither is kept as
+    # an id, which still filters everyone out — an unknown person is an empty board, not every board.
+    want_emp_tokens = {x.strip() for x in employee_id.split(",") if x.strip()}
+    want_emps = set(want_emp_tokens)
+    if want_emp_tokens:
+        try:
+            from app.modules.core.person_identity import folded_token_key as _pkey
+        except Exception:
+            _pkey = None
+        if _pkey is not None:
+            by_person = {}
+            for h in hours:
+                k = _pkey(h.get("name"))
+                if k:
+                    by_person.setdefault(k, set()).add(h.get("employee_id"))
+            for tok in want_emp_tokens:
+                want_emps |= by_person.get(_pkey(tok), set())
 
     # market lookup, only when a market filter is actually in play — THE canonical union map
     # (core.scope.market_by_code: storeops.stores ∪ store_mapping ∪ store_aliases; 2026-09-03
@@ -535,6 +623,10 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
                          for code, mk in _cscope.market_by_code(sb(), org_id).items()}
         except Exception:
             market_of = {}
+
+    # Corrections a manager already typed that this board's figure does NOT contain. Read once for
+    # the period, never folded into a number — see the helper's own docstring.
+    uncounted = _manual_hours_uncounted(org_id, s, e)
 
     out = []
     for h in hours:
@@ -584,6 +676,12 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
             "adjustment_hours": round(adj, 2),
             "adjustment_reason": row.get("adjustment_reason"),
             "hours_payable": payable,              # worked − lunch + adjustment = what gets approved
+            # A CORRECTION THIS FIGURE DOES NOT CONTAIN. `counted: false` by name, so no reader can
+            # mistake it for part of `hours_payable` — it is shown so the reviewer stops rebuilding by
+            # hand a correction the system already holds. Moves no money (see _manual_hours_uncounted).
+            "manual_hours_uncounted": (uncounted.get(eid) or {}).get("hours") or 0.0,
+            "manual_hours_days": (uncounted.get(eid) or {}).get("days") or [],
+            "manual_hours_counted": False,
             # A punch or lunch-config edit AFTER sign-off would otherwise restate an approved week
             # in silence; report the drift instead of hiding it.
             "worked_at_approval": _num(row.get("worked_at_approval")),
@@ -622,6 +720,8 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
         "hours": round(sum(r["hours_effective"] or 0 for r in out), 2),
         "lunch_hours": round(sum(r["lunch_hours"] or 0 for r in out), 2),
         "adjustment_hours": round(sum(r["adjustment_hours"] or 0 for r in out), 2),
+        # Reported beside the figure it is NOT part of, never added to it.
+        "manual_hours_uncounted": round(sum(r["manual_hours_uncounted"] or 0 for r in out), 2),
         "pay": round(sum(r["pay_effective"] or 0 for r in out), 2),
         "pending_dm": sum(1 for r in out if r["dm_status"] == "pending"),
         "pending_hr": sum(1 for r in out if r["dm_status"] == "approved" and r["hr_status"] == "pending"),
@@ -729,6 +829,11 @@ def decide(body: PayrollDecideIn, authorization: str = Header(default=""), org_i
             continue
 
         cur = saved.get(eid) or {}
+        # A `save` is a CORRECTION, not a sign-off, so it is only ever made at the correcting stage.
+        if action == "save" and stage != "dm":
+            errors.append({"employee_id": eid,
+                           "error": "hours are corrected at the DM stage — 'save' is not an HR action"})
+            continue
         if stage == "hr" and action == "approve" and (cur.get("dm_status") != "approved"):
             errors.append({"employee_id": eid,
                            "error": "the DM has not approved these hours yet — HR is the second gate"})
@@ -769,7 +874,28 @@ def decide(body: PayrollDecideIn, authorization: str = Header(default=""), org_i
         row["adjustment_hours"] = adj
 
         # ── correction (DM only) ──────────────────────────────────────────────────────────────────
-        if stage == "dm" and "hours_approved" in r and r.get("hours_approved") not in ("", None):
+        # An EXPLICIT empty value CLEARS the correction back to the computed figure. Before this the
+        # empty string was indistinguishable from "this call does not mention hours", so a reviewer
+        # who typed the wrong number could never take it back from this screen — only type over it,
+        # which is half of "i had to enter hours 3 times". The clear is reason-gated and logged
+        # exactly like the correction it removes; a payroll number may not move anonymously in
+        # either direction.
+        if (stage == "dm" and "hours_approved" in r and r.get("hours_approved") in ("", None)
+                and cur.get("hours_approved") is not None):
+            reason = (r.get("reason") or "").strip()
+            if not reason:
+                errors.append({"employee_id": eid,
+                               "error": "clearing the corrected hours needs a reason — it moves a payroll number"})
+                continue
+            was = _num(cur.get("hours_approved"))
+            row["hours_approved"] = None
+            _log_payroll_change(
+                org_id, field="approved_hours", entry_point="payroll_approval",
+                employee_id=eid, employee_name=h.get("name"), store_code=h.get("store"),
+                work_date=e, before=was, after=src,
+                source_table="payroll_approval", source_id=cur.get("id"),
+                who=who, reason=reason)
+        elif stage == "dm" and "hours_approved" in r and r.get("hours_approved") not in ("", None):
             new_hours = _num(r.get("hours_approved"))
             if new_hours is None or new_hours < 0:
                 errors.append({"employee_id": eid, "error": "hours_approved must be a number >= 0"})
@@ -791,7 +917,7 @@ def decide(body: PayrollDecideIn, authorization: str = Header(default=""), org_i
         # Freeze the figures behind a DM sign-off. Punches and lunch config both change after the
         # fact; without this an approved week silently restates itself and nobody can tell what the
         # DM actually approved. Cleared on reset so a re-approval snapshots afresh.
-        if stage == "dm":
+        if stage == "dm" and action != "save":
             if action == "approve":
                 row["worked_at_approval"] = worked_gross
                 row["lunch_at_approval"] = round(lunch, 2)
@@ -799,16 +925,20 @@ def decide(body: PayrollDecideIn, authorization: str = Header(default=""), org_i
                 row["worked_at_approval"] = None
                 row["lunch_at_approval"] = None
 
-        stamp = {"approve": "approved", "send_back": "sent_back", "reset": "pending"}[action]
-        row[f"{stage}_status"] = stamp
-        row[f"{stage}_by"] = actor if action != "reset" else None
-        row[f"{stage}_at"] = _now() if action != "reset" else None
+        # `save` records the figure and leaves BOTH stages exactly as they were — an approval is a
+        # separate, deliberate click, and a correction typed into an already-approved row must not
+        # quietly re-sign it in the corrector's name.
+        stamp = _STATUS_ACTIONS.get(action)
+        if stamp is not None:
+            row[f"{stage}_status"] = stamp
+            row[f"{stage}_by"] = actor if action != "reset" else None
+            row[f"{stage}_at"] = _now() if action != "reset" else None
         if r.get("note"):
             row[f"{stage}_note"] = str(r["note"])[:500]
 
         # A DM un-approving or bouncing a row invalidates any HR approval sitting on top of it —
         # otherwise HR's sign-off would survive the removal of the thing it was signing off on.
-        if stage == "dm" and action != "approve" and (cur.get("hr_status") == "approved"):
+        if stage == "dm" and action in ("send_back", "reset") and (cur.get("hr_status") == "approved"):
             row.update({"hr_status": "pending", "hr_by": None, "hr_at": None,
                         "hr_note": "reset — the DM withdrew their approval"})
 
@@ -818,7 +948,11 @@ def decide(body: PayrollDecideIn, authorization: str = Header(default=""), org_i
         except Exception as ex:
             errors.append({"employee_id": eid, "error": str(ex)[:200]})
             continue
-        applied.append({"employee_id": eid, "stage": stage, "status": stamp})
+        applied.append({"employee_id": eid, "stage": stage, "action": action,
+                        "status": stamp or (cur.get(f"{stage}_status") or "pending"),
+                        "hours_effective": round((row.get("hours_approved")
+                                                  if "hours_approved" in row and row["hours_approved"] is not None
+                                                  else (src or 0.0) + adj), 2)})
         # Intimation-only mirror into the unified inbox (never affects this decision — see the helper).
         _intimate_payroll_decision(org_id, s, e, eid, h.get("name"), h.get("store"),
                                    ((res.data or [{}])[0].get("id") if res else None) or cur.get("id"),
