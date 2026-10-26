@@ -11,7 +11,7 @@
 // The server is the authority on every gate here (HR cannot approve before the DM; only an admin can
 // override or dispatch). This page shows the right controls for the person looking at it, but it is
 // the API that refuses — the UI hiding a button is never the security boundary.
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { apiCached, CONFIG } from '@/lib/cache'
@@ -20,6 +20,10 @@ import { currentPeriodFromSettingsResponse, stepPeriod, rangeLabel } from '@/lib
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { ReportExportBar, type ExportColumn } from '@/components/ReportExportBar'
 import type { StandardFilterValue } from '@/lib/standard-filters'
+// THE one home for "what will this save do to the payroll?" — the dialog renders it and the request
+// is built from the SAME object, so the confirmation cannot describe a save that differs from the one
+// that goes. Proved by frontend/prove_hours_approval_preview.mjs.
+import { buildPreview, previewToRows, type Preview } from '@/lib/hours-approval-preview'
 
 type Row = {
   employee_id: string; name?: string; store?: string
@@ -39,6 +43,13 @@ type Row = {
   adjustment_hours?: number | null; adjustment_reason?: string | null
   hours_payable?: number | null; hours_drifted?: boolean
   worked_at_approval?: number | null; lunch_at_approval?: number | null
+  // A correction a manager already typed on the Time Clock screen that this board's figure does NOT
+  // contain (GET /storeops/payroll does not read storeops.manual_hours). Shown so a reviewer stops
+  // rebuilding by hand a correction the system already holds; `manual_hours_counted` is false by
+  // name and nothing here is added to any figure.
+  manual_hours_uncounted?: number | null
+  manual_hours_days?: { work_date: string; hours: number; reason: string }[]
+  manual_hours_counted?: boolean
   dispatch_status?: string; dispatched_at?: string | null; dispatch_to?: string | null
   held?: boolean; payable?: boolean
 }
@@ -110,15 +121,29 @@ export default function PayrollApprovalsPage() {
     setEdits(s => ({ ...s, [id]: { ...(s[id] ?? EMPTY_EDIT), ...patch } }))
   }
 
-  const load = useCallback(async () => {
-    setErr(''); setMsg('')
+  // REQUEST SEQUENCING. Typing in the From/To boxes fires a load per keystroke, and an intermediate
+  // value ("end is before start") answers 400. Without a sequence the LATE failure overwrote the
+  // GOOD response's state, so the board sat on a red banner describing a range the user had already
+  // corrected — reported 2026-10-26 with a valid 10/05 -> 10/18 range on screen. Only the newest
+  // request may touch state; every older answer, success or failure, is dropped.
+  const seq = useRef(0)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const load = useCallback(async (opts?: { keepMessages?: boolean }) => {
+    const mine = ++seq.current
+    if (!opts?.keepMessages) { setErr(''); setMsg('') }
+    setRefreshing(true)
     const qs = new URLSearchParams()
     if (f.period && f.periodTo) { qs.set('start', f.period); qs.set('end', f.periodTo) }
     if (f.stores.length) qs.set('store_code', f.stores.join(','))
     if (f.markets.length) qs.set('market', f.markets.join(','))
+    // The person picker's option id is the person's NAME (GET /core/filter-options keys `reps` by
+    // name), and the server now resolves an id OR a name through core.person_identity. Sending the
+    // name as `employee_id` against 'E043' is what made this filter match nobody, ever.
     if (f.reps.length) qs.set('employee_id', f.reps.join(','))
     try {
       const d = await api(`/api/v1/storeops/payroll/approvals?${qs.toString()}`)
+      if (mine !== seq.current) return
       setReady(d?.ready !== false); setNote(d?.note || '')
       setRows(d?.rows || []); setPayers(d?.payers || []); setTotals(d?.totals || null)
       if (d?.period_start) setPeriod({ start: d.period_start, end: d.period_end })
@@ -126,8 +151,17 @@ export default function PayrollApprovalsPage() {
       // Server decides; the UI only mirrors it. Absent key => treat as allowed (an older backend
       // still sends the rates, so hiding the columns would blank data the caller is entitled to).
       setCanSeePay(d?.can_see_pay_rates !== false)
-      setSel({}); setEdits({})
-    } catch (e: any) { setErr(e?.message || 'Could not load the pay period') }
+      // TYPED WORK IS NEVER THROWN AWAY BY A RELOAD (owner report 2026-10-26: *"i had to enter hours
+      // for simarjyot 3 times"*). This used to clear `edits` and `sel` on every load — including the
+      // reload after a REFUSED save — so a missing reason cost the reviewer every number they had
+      // typed, with nothing on screen saying why. A save now clears only the rows the server
+      // confirmed (see `post`), and a plain refresh clears nothing.
+    } catch (e: any) {
+      if (mine !== seq.current) return
+      setErr(e?.message || 'Could not load the pay period')
+    } finally {
+      if (mine === seq.current) setRefreshing(false)
+    }
   }, [f.period, f.periodTo, f.stores, f.markets, f.reps])
 
   useEffect(() => { load() }, [load])
@@ -142,9 +176,13 @@ export default function PayrollApprovalsPage() {
       : true)), [rows, chip])
 
   const selIds = Object.keys(sel).filter(k => sel[k])
+  // How many rows carry an UNSAVED change right now. Derived from the same preview the dialog shows,
+  // so the button's count and the dialog's line count can never disagree.
+  const dirty = useMemo(() => buildPreview(rows, edits, null), [rows, edits])
+  const editedCount = dirty.lines.length
   const allShown = shown.length > 0 && shown.every(r => sel[r.employee_id])
 
-  async function post(path: string, body: any, okMsg: (d: any) => string) {
+  async function post(path: string, body: any, okMsg: (d: any) => string, clearIds?: string[]) {
     if (!period) return
     setBusy(true); setErr(''); setMsg('')
     try {
@@ -155,32 +193,72 @@ export default function PayrollApprovalsPage() {
       const errs = (d?.errors || []).filter(Boolean)
       if (errs.length) setErr(errs.map((x: any) => `${x.employee_id || ''}: ${x.error}`).join(' · '))
       setMsg(okMsg(d))
-      await load()
+      // ONLY the rows the server CONFIRMED lose their typed values. A row it refused keeps what was
+      // typed, sitting beside the reason it was refused, so the reviewer corrects one field instead
+      // of retyping the batch — that retyping is what "i had to enter hours 3 times" was.
+      const applied: string[] = ((d?.results || []) as { employee_id?: string }[])
+        .map(r => r?.employee_id).filter((x): x is string => !!x)
+      const confirmed = new Set(applied.length ? applied : (clearIds || []))
+      if (confirmed.size) {
+        setEdits(cur => {
+          const next = { ...cur }
+          confirmed.forEach(id => { delete next[id] })
+          return next
+        })
+      }
+      await load({ keepMessages: true })
     } catch (e: any) { setErr(e?.message || 'That did not go through') }
     setBusy(false)
   }
 
+  // ── the confirmation (owner directive 2026-10-26) ────────────────────────────────────────────
+  // *"the system should confirm that the new hours will be this after the change and to save it every
+  // time, if multiple hours are adjusted it should show multiple hours before saving what the new
+  // payroll will be"*. One dialog, one preview object, one request built from that same object.
+  const [pending, setPending] = useState<
+    { stage: 'dm' | 'hr'; action: 'save' | 'approve'; note?: string; ids: string[]; preview: Preview } | null
+  >(null)
+
+  function askToSave(stage: 'dm' | 'hr', action: 'save' | 'approve') {
+    // A save with nothing selected still saves every row the reviewer touched: the selection is for
+    // approving, and losing a typed correction because a tick box was not also ticked is the defect.
+    const ids = selIds.length ? selIds : Object.keys(edits)
+    const preview = buildPreview(rows, edits, action === 'approve' ? selIds : ids)
+    if (action === 'save' && preview.empty) {
+      setErr('Nothing has been changed yet — type a figure in Adjustment or Approve hours first.')
+      return
+    }
+    setErr(''); setMsg('')
+    setPending({ stage, action, ids: action === 'approve' ? selIds : ids, preview })
+  }
+
+  function confirmPending() {
+    if (!pending) return
+    const { stage, action, preview, ids } = pending
+    setPending(null)
+    // Rows that carry a change go with their correction; a selected row with nothing typed is still
+    // approved (an approval of the computed figure is the normal case).
+    const changedRows = previewToRows(preview, action)
+    const changedIds = new Set(changedRows.map(r => String(r.employee_id)))
+    const plain = action === 'approve' ? ids.filter(id => !changedIds.has(id)).map(id => ({ employee_id: id, action })) : []
+    const body = { stage, rows: [...changedRows, ...plain] }
+    const verb = action === 'approve' ? 'Approved' : 'Saved'
+    post('approvals/decide', body,
+         d => `${verb} ${d.applied} of ${body.rows.length}.`,
+         body.rows.map(r => String(r.employee_id)))
+  }
+
   function decide(stage: 'dm' | 'hr', action: 'approve' | 'send_back' | 'reset') {
     if (!selIds.length) return
+    if (action === 'approve') { askToSave(stage, 'approve'); return }
     let note = ''
     if (action === 'send_back') {
       note = window.prompt('Why is this going back? The DM/store will see this note.') || ''
       if (!note.trim()) return
     }
-    // A DM approval carries any inline hour correction the reviewer typed, with its reason.
-    const body = {
-      stage,
-      rows: selIds.map(id => {
-        const e = edits[id]
-        const changed = stage === 'dm' && e && e.hours !== ''
-        const adjusted = stage === 'dm' && e && e.adj !== ''
-        return { employee_id: id, action, note: note || undefined,
-                 ...(changed ? { hours_approved: e.hours, reason: e.reason } : {}),
-                 ...(adjusted ? { adjustment_hours: e.adj, adjustment_reason: e.adjReason } : {}) }
-      }),
-    }
-    const verb = action === 'approve' ? 'Approved' : action === 'send_back' ? 'Sent back' : 'Reset'
-    post('approvals/decide', body, d => `${verb} ${d.applied} of ${selIds.length}.`)
+    const body = { stage, rows: selIds.map(id => ({ employee_id: id, action, note: note || undefined })) }
+    const verb = action === 'send_back' ? 'Sent back' : 'Reset'
+    post('approvals/decide', body, d => `${verb} ${d.applied} of ${selIds.length}.`, selIds)
   }
 
   function setPayer(payerId: string) {
@@ -324,6 +402,13 @@ export default function PayrollApprovalsPage() {
             border: chip === k ? 'none' : '1px solid var(--border)' }}>{label} ({n})</button>
         ))}
         <div style={{ flex: 1 }} />
+        {/* REFRESH THIS VIEW (owner ask 2026-10-26: *"there should be a button of refresh also so only
+            the data we are working on should be refreshed"*). Re-reads the period and filters exactly
+            as they stand — it changes no filter, drops no selection and keeps every figure typed and
+            not yet saved, which is the whole difference between this and reloading the browser. */}
+        <button style={{ ...btn, fontSize: 12, padding: '4px 11px' }} disabled={refreshing || busy}
+          title="Re-read the rows on screen. Your filters, selection and unsaved figures are kept."
+          onClick={() => load()}>{refreshing ? '⟳ Refreshing…' : '⟳ Refresh'}</button>
         <ReportExportBar title="Payroll — Hours Approval"
           subtitle={period
             ? `Pay period ${period.start} to ${period.end}${cycle?.payday ? ` · payable ${cycle.payday}` : ''}`
@@ -334,6 +419,12 @@ export default function PayrollApprovalsPage() {
       <div style={{ ...card, padding: 0, marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ padding: '10px 14px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, color: 'var(--text2)', fontWeight: 600 }}>{selIds.length} selected</span>
+          {/* SAVE, on its own, with no sign-off. Before this the only way to persist a typed figure
+              was to approve in the same click, so a reviewer who corrected hours and then did
+              anything else lost the number silently. Needs no selection: it saves every row touched. */}
+          <button style={{ ...btnP, opacity: editedCount && !busy ? 1 : 0.5 }} disabled={!editedCount || busy}
+            title="Save the hours you have changed, without approving anything"
+            onClick={() => askToSave('dm', 'save')}>💾 Save hours{editedCount ? ` (${editedCount})` : ''}</button>
           <button style={{ ...btnP, opacity: selIds.length && !busy ? 1 : 0.5 }} disabled={!selIds.length || busy}
             onClick={() => decide('dm', 'approve')}>✓ Approve as DM</button>
           <button style={{ ...btnP, opacity: selIds.length && !busy ? 1 : 0.5 }} disabled={!selIds.length || busy}
@@ -397,6 +488,23 @@ export default function PayrollApprovalsPage() {
                     <div style={{ fontSize: 11, color: 'var(--text3)' }}>{r.employee_id}</div>
                     {/* A 0.00 that means "the clock has nothing" must not look like a real zero. When
                         the POS proves they were working, say so — that is the correction to make. */}
+                    {/* A CORRECTION THE FIGURE DOES NOT CONTAIN. GET /storeops/payroll does not read
+                        storeops.manual_hours, so hours typed on the Time Clock screen never reach this
+                        board's `Worked`. Measured on E043 / 2026-10-05..18: six rows, −16.00 h, all
+                        reasoned "wrong clock out" — invisible here, so the reviewer rebuilt the
+                        correction by hand and landed 5.03 h away from it. Shown, never folded:
+                        folding it would move a pay figure, which is the owner's decision. */}
+                    {!!r.manual_hours_uncounted && (
+                      <div style={{ fontSize: 10.5, color: 'var(--c-fg-b45309)', marginTop: 3,
+                        borderLeft: '2px solid var(--c-bg-f59e0b)', paddingLeft: 5 }}
+                        title={(r.manual_hours_days || []).map(d => `${d.work_date}: ${d.hours > 0 ? '+' : ''}${d.hours}h — ${d.reason}`).join('\n')}>
+                        <b>{r.manual_hours_uncounted > 0 ? '+' : ''}{r.manual_hours_uncounted.toFixed(2)}h</b>{' '}
+                        already corrected on the Time Clock screen
+                        <div style={{ color: 'var(--text3)', fontSize: 10 }}>
+                          over {(r.manual_hours_days || []).length} day(s) — NOT in Worked or Payable. Hover for the days.
+                        </div>
+                      </div>
+                    )}
                     {r.no_clock_record && (
                       <div style={{ fontSize: 10.5, color: 'var(--c-fg-b45309)', marginTop: 2 }}>
                         {r.worked_days_evidence?.length
@@ -442,10 +550,33 @@ export default function PayrollApprovalsPage() {
                       </div>
                     )}
                   </td>
+                  {/* THE FIGURE BEING APPROVED, and it must be the one the SERVER will pay. It used to
+                      render `hours_payable` — worked − lunch ± adjustment — which ignores a saved
+                      `hours_approved` entirely, so a reviewer who corrected the hours saw the OLD
+                      number in the board's boldest column and concluded the save had not worked
+                      ("still i cannot see the correct hours", 2026-10-26). `hours_effective` is the
+                      server's own resolution (a correction outranks the computation); an unsaved typed
+                      figure previews over it so the cell always shows what the next save will pay. */}
                   <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>
-                    {(adjusted && Number.isFinite(Number(e?.adj))
-                      ? (r.hours_source ?? 0) + Number(e?.adj)
-                      : (r.hours_payable ?? 0)).toFixed(2)}
+                    {(() => {
+                      const live = typed !== '' && Number.isFinite(Number(typed)) ? Number(typed)
+                        : adjusted && Number.isFinite(Number(e?.adj))
+                          && (r.hours_approved === null || r.hours_approved === undefined)
+                          ? (r.hours_source ?? 0) + Number(e?.adj)
+                          : (r.hours_effective ?? r.hours_payable ?? 0)
+                      const saved = r.hours_effective ?? r.hours_payable ?? 0
+                      const previewing = Math.abs(live - saved) > 0.001
+                      return (
+                        <>
+                          <span style={{ color: previewing ? 'var(--c-fg-b45309)' : undefined }}>{live.toFixed(2)}</span>
+                          {previewing && (
+                            <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 400 }}>
+                              not saved · now {saved.toFixed(2)}
+                            </div>
+                          )}
+                        </>
+                      )
+                    })()}
                   </td>
                   <td style={{ textAlign: 'right' }}>
                     <input value={typed} placeholder={String(r.hours_effective ?? '')} inputMode="decimal"
@@ -458,8 +589,13 @@ export default function PayrollApprovalsPage() {
                         style={{ display: 'block', marginTop: 4, width: 150, padding: '4px 6px', fontSize: 11.5,
                           borderRadius: 6, border: '1px solid var(--c-bg-f59e0b)', background: 'var(--surface)' }} />
                     )}
+                    {/* A SAVED correction said so only as the input's grey PLACEHOLDER, which reads as
+                        "nothing here". Stated as a saved fact instead, with the figure it replaced. */}
                     {r.hours_corrected && !changed && (
-                      <div style={{ fontSize: 10.5, color: 'var(--c-fg-b45309)' }}>was {r.hours_source}</div>
+                      <div style={{ fontSize: 10.5, color: 'var(--c-fg-15803d)', fontWeight: 600 }}>
+                        saved {Number(r.hours_approved).toFixed(2)}
+                        <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · clock said {r.hours_source}</span>
+                      </div>
                     )}
                   </td>
                   {canSeePay && <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{money(r.pay_effective)}</td>}
@@ -483,6 +619,124 @@ export default function PayrollApprovalsPage() {
           </tbody>
         </table>
       </div>
+
+      {/* ── the confirmation ─────────────────────────────────────────────────────────────────────
+          Every adjusted row, old hours -> new hours, and what the payroll becomes. It states the
+          save that is actually about to go: the rows below and the request body are built from ONE
+          preview object, so the dialog cannot describe a different write than the one that lands. */}
+      {pending && (
+        <div role="dialog" aria-modal="true" aria-label="Confirm the hours change"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', zIndex: 60,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => setPending(null)}>
+          <div style={{ ...card, maxWidth: 760, width: '100%', maxHeight: '86vh', overflow: 'auto' }}
+            onClick={ev => ev.stopPropagation()}>
+            <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>
+              {pending.action === 'approve' ? 'Approve these hours?' : 'Save these hours?'}
+            </h2>
+            <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 12px' }}>
+              {pending.preview.lines.length === 1
+                ? 'One row changes.'
+                : `${pending.preview.lines.length} rows change.`}{' '}
+              {pending.action === 'approve'
+                ? 'Saving the figures below and signing them off as ' + (pending.stage === 'dm' ? 'the DM' : 'HR') + '.'
+                : 'Nothing is approved — only the figures are recorded.'}{' '}
+              Every change is written to the payroll change log with your name and reason.
+            </p>
+
+            {pending.preview.empty && (
+              <div style={{ ...card, background: 'var(--surface2)', fontSize: 13, marginBottom: 12 }}>
+                No hours change — these rows are being approved at the figures already on the board.
+              </div>
+            )}
+
+            {!pending.preview.empty && (
+              <div className="table-wrapper" style={{ marginBottom: 12 }}>
+                <table>
+                  <thead><tr>
+                    <th>Employee</th>
+                    <th style={{ textAlign: 'right' }}>Hours now</th>
+                    <th style={{ textAlign: 'right' }}>Hours after</th>
+                    <th style={{ textAlign: 'right' }}>Change</th>
+                    {canSeePay && <th style={{ textAlign: 'right' }}>Pay after</th>}
+                    <th>Reason</th>
+                  </tr></thead>
+                  <tbody>
+                    {pending.preview.lines.map(l => (
+                      <tr key={l.employee_id}>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{l.name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                            {l.store || '—'}
+                            {l.clears_correction && ' · correction removed'}
+                            {l.changed_adjustment && !l.changed_hours && ' · adjustment'}
+                          </div>
+                        </td>
+                        <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{l.hours_before.toFixed(2)}</td>
+                        <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{l.hours_after.toFixed(2)}</td>
+                        <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                          color: l.hours_delta === 0 ? 'var(--text3)' : l.hours_delta > 0 ? 'var(--c-fg-15803d)' : 'var(--c-fg-b45309)' }}>
+                          {l.hours_delta > 0 ? '+' : ''}{l.hours_delta.toFixed(2)}
+                        </td>
+                        {canSeePay && <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{money(l.pay_after)}</td>}
+                        <td style={{ fontSize: 12 }}>
+                          {l.reason || l.adjustment_reason || <span style={{ color: 'var(--c-fg-991b1b)' }}>missing</span>}
+                          {l.hours_delta === 0 && l.changed_adjustment && (
+                            <div style={{ color: 'var(--c-fg-b45309)', fontSize: 11 }}>
+                              recorded, but the approved-hours correction on this row still decides the pay
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* WHAT THE NEW PAYROLL WILL BE — the figure the owner asked to see before saving. It is
+                the sum of the lines above and nothing else, so it reconciles by inspection. */}
+            {!pending.preview.empty && (
+              <div style={{ ...card, background: 'var(--surface2)', marginBottom: 14, fontSize: 13.5 }}>
+                <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+                  <div><b>Hours on these rows:</b>{' '}
+                    {pending.preview.totals.hours_before.toFixed(2)} → <b>{pending.preview.totals.hours_after.toFixed(2)}</b>
+                    {' '}({pending.preview.totals.hours_delta > 0 ? '+' : ''}{pending.preview.totals.hours_delta.toFixed(2)})</div>
+                  {canSeePay && (
+                    <div><b>Payroll on these rows:</b>{' '}
+                      {money(pending.preview.totals.pay_before)} → <b>{money(pending.preview.totals.pay_after)}</b>
+                      {' '}({pending.preview.totals.pay_delta > 0 ? '+' : ''}{money(pending.preview.totals.pay_delta)})</div>
+                  )}
+                </div>
+                {canSeePay && totals && (
+                  <div style={{ color: 'var(--text2)', marginTop: 6 }}>
+                    Whole period, every row on screen: {money(totals.pay)} → <b>{money((totals.pay || 0) + pending.preview.totals.pay_delta)}</b>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!!pending.preview.problems.length && (
+              <div style={{ ...card, background: 'var(--c-bg-fef2f2)', borderColor: 'var(--c-bg-fca5a5)',
+                color: 'var(--c-fg-991b1b)', fontSize: 13, marginBottom: 12 }}>
+                <b>These will be refused:</b>
+                <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+                  {pending.preview.problems.map((x, i) => <li key={i}>{x}</li>)}
+                </ul>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button style={btn} onClick={() => setPending(null)}>Go back and edit</button>
+              <button style={{ ...btnP, opacity: pending.preview.problems.length ? 0.5 : 1 }}
+                disabled={!!pending.preview.problems.length}
+                onClick={confirmPending}>
+                {pending.action === 'approve' ? '✓ Save and approve' : '💾 Save these hours'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

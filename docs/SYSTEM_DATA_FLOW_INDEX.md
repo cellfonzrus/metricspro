@@ -156,6 +156,7 @@ Primary code homes:
 | COMMCALC-31 | **Detection is off the operator's input path too, and the session says what it is doing** | "It does not go past it, it is very slow to react" — and "it should show what is going on, it seems nothing is moving", four days after the click fix shipped. The loop stops every 1.2s to re-read every frame of the page, and it did so BEFORE servicing the human's clicks. What else was left on the latency path the last fix cleared, and what fact does a standing instruction fail to tell the person watching? |
 | COMMCALC-32 | **A line that bought no device is not a device payable** | "product not available , it shoudl show the product" — every payables row read Product Not Available, two of them as `discrepancy`, the status that means he is carrying a handset cost. 869 of those lines are the customer's own phone, and the carrier feed declares it. Which blank means "I could not price this", which means "nothing was bought", and what does a ledger keyed on ACTIVATIONS assume about purchases? |
 | COMMCALC-33 | **What the carrier already recovered is read, and a placeholder is not a measurement** | "the payments for all phones automatically are done from commission and rebates received and auto adjusted" — said to a banner billing him $544,447.78 of his own cash. The deductions were on the row the build already read, −$834,234.25 of them, and the engine wrote `rebate_amount = 0.0` as a placeholder. What does a zero assert that an unwired source has no right to, and which way should the default point when being wrong deletes a liability? |
+| COMMCALC-34 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 
 ---
 
@@ -26077,6 +26078,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-31 | commcalc |
 | COMMCALC-32 | commcalc |
 | COMMCALC-33 | commcalc |
+| COMMCALC-34 | storeops |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -37624,3 +37626,113 @@ both `sent` and `failed` fails the build unless it also carries `outcome`** (so 
 go back to two integers); the digest leg must dereference the same home; no module but the one home
 may rule on a provider error code; every surface must render the one view; and no remedy sentence may
 appear in the browser. In CI as **"A failed send names who, why and the fix"**.
+
+---
+
+## §COMMCALC-34. A TYPED PAYROLL FIGURE SAVES ON ITS OWN, AND A SAVE SAYS WHAT IT WILL COST BEFORE IT LANDS (owner report 2026-10-26)
+
+**What he said**, of Hours Approval, pay period 2026-10-05 → 10-18, payable 10-23:
+
+> *"tehere is a lag in saving andf updating the hours when a change is done m teh ssystem shoudl
+> confirm that the new hours will be this after teh change and to save it every time , if multiple
+> hours are adjusted it shoudl show mnultiple hours before saving what the neew payroll will be"*
+> … *"if you see i havd to enter hours for simarjyot 3 times to get the correct horus and still i
+> cannot see the correnct hours"* … *"i selected mohammed sami but nothing showed up in filters"*
+> … *"tehre shoudl eba button of refresh also so only the data we are working on shoudl refreshed"*
+
+**He typed three times and the system recorded once.** Measured read-only against production on
+2026-10-26: `storeops.payroll_approval` for **E043** / 2026-10-05..18 holds ONE adjustment (−10.97)
+and `storeops.payroll_change_log` holds exactly ONE matching row. Two of his three attempts never
+reached the server, and nothing on screen said so.
+
+### COMMCALC-34.1 THE CLASS — five mechanisms, one symptom
+
+Not "the save is slow". Five independent faults, each of which on its own loses a typed number:
+
+| # | the mechanism | what the reviewer saw |
+| --- | --- | --- |
+| 1 | **there was no save.** `decide` wrote `hours_approved` only alongside a DM *approval*; the board had no Save button. A figure typed and not approved in the same click was never sent. | "it did not save" |
+| 2 | **a reload wiped the typed boxes** — `load()` ran `setEdits({})` **including after a REFUSED save**, so a missing reason cost the whole batch with no error beside the cleared cells. | "I had to type it 3 times" |
+| 3 | **the board's boldest column ignored the save.** `Payable` rendered `hours_payable` (worked − lunch ± adjustment), which does not contain `hours_approved`; the saved correction appeared only as the input's grey **placeholder**. The server was right and the screen was stale. | "still i cannot see the correct hours" |
+| 4 | **the person filter could not match anybody, ever.** `GET /core/filter-options` keys its `reps` options by NAME (a `{name: email}` fold), and this board alone sent that value as `employee_id` — compared against `E043`. Not a wrong answer: a guaranteed empty one. | "nothing showed up in filters" |
+| 5 | **the lag was a 200k-row scan nobody asked for.** `_worked_days_from_sales` reads up to 200,000 `commcalc.raw_sales` rows on every GET, and its only consumer is the evidence list on a row the clock holds nothing for. One save paid for two full scans (the POST's own derivation, then the UI's reload). | "there is a lag in saving" |
+
+**And a sixth fault that is upstream of all of them, REPORTED and not repaired here:** `GET
+/storeops/payroll` does not read `storeops.manual_hours` (the router says so at `~:2051`; §14y and
+`payroll_hours_drilldown` both record it as a live defect). So the DM's own corrections never reach
+this board's `Worked`, and the reviewer rebuilds them by hand. E043 carries **six** correction rows
+totalling **−16.00 h**, every one reasoned *"wrong clock out"*, filed 2026-10-19 — against the
+102.84 h the board showed as the only truth. The hand-rebuilt figure landed **5.03 h** away from the
+one the system already held.
+
+### COMMCALC-34.2 WHAT THIS COSTS, measured on the live period
+
+Three rows of 2026-10-05..18 were hand-corrected against force-closed punches. **E029 (Mohammed
+Sami) has never once clocked out**: all 8 punches were closed by `force_clockout_cron` at 02:00,
+~12 h each.
+
+| employee | clock says | hand adjustment | payable today | intended | error |
+| --- | --- | --- | --- | --- | --- |
+| E029 | 125.18 | **+18.49** | **143.67** | 88.20 | **+55.47 h / $943.00** — sign inverted, and already DM+HR approved |
+| E043 | 102.84 | −10.97 | 91.87 | 86.84 (−16.00 already filed) | +5.03 h / $85.51 |
+| E282 | 339.56 | −273.56 | 66.00 | — | a fortnight cannot hold 339.56 h |
+
+A confirmation stating *"125.18 → 143.67, pay $2,442.39"* in words stops the first row dead. That is
+the feature, and this is why it is not cosmetic.
+
+### COMMCALC-34.3 THE FIX, one home each
+
+- **`frontend/src/lib/hours-approval-preview.ts` — THE one home for "what will this save do to the
+  payroll?"** Pure (no React, no fetch, no clock, no tenant/store/person name, no rate of its own).
+  The dialog renders this object AND `previewToRows` builds the request from the SAME object, so the
+  confirmation cannot describe a write that differs from the one that lands. `payableNow` /
+  `payableAfter` are the single restatement of the server's own precedence (`list_approvals`:
+  `approved if approved is not None else payable`) — not a second rule.
+- **`save`, an ACTION on the existing `decide` path**, deliberately not a sibling endpoint: the reason
+  gate, the negative-payable guard, the org scoping and the `payroll_change_log` write are the same
+  rules, and a second write path for one field is the duplicate defect §19.18 names. It records the
+  figure and moves **neither** approval stage — a correction typed into an approved row must not
+  quietly re-sign it in the corrector's name.
+- **A correction can be taken back.** An explicit empty `hours_approved` CLEARS it back to the
+  computed figure, reason-gated and logged exactly like the correction it removes. A payroll number
+  may not move anonymously in either direction.
+- **The person filter dereferences `core.person_identity.folded_token_key`** (§owner report
+  2026-10-14, the one home for "is this the same human") so an id OR a name matches, order-free and
+  accent-folded. An existing caller passing `E043` stays byte-identical. Registered on the
+  `person_identity` fact in `core/module_graph.py`, so a caller that goes back to a local name rule
+  fails the build.
+- **The uncounted corrections are SHOWN on the row** — signed total, day count, and each day's reason
+  on hover — carrying `manual_hours_counted: false` by name, and folded into **nothing**. Proved: the
+  payable figure is byte-identical to before they were visible. Folding them moves a pay figure,
+  which is the owner's call, not a side effect of a display fix.
+- **`⟳ Refresh` on both boards** (Hours Approval and Salary Advances) re-reads the range on screen and
+  changes no filter, drops no selection and keeps every unsaved figure — the browser's own refresh is
+  what loses the filters, which is the only reason it was being used.
+- **Salary Advances awaits both reloads before saying "recorded"**, and when the advance's `paid_date`
+  falls outside the range on screen it SAYS so: `cash_paid_total` is windowed on `paid_date`
+  (`get_salary_owed`), so such an advance is recorded correctly and still changes nothing here.
+  Silently showing no change is what reads as a failed save.
+
+**Locks.** `backend/harness_payroll_approval_save.py` (41 checks, DB-free, recording fake) and
+`frontend/prove_hours_approval_preview.mjs` (34 checks, the real TS through the project's own `tsc`).
+Between them they pin: `save` stamps no status and no signature; the reason gates and the
+negative-payable guard are unchanged; a clear is logged with the figure it reverts to; an HR approval
+survives a DM save while `send_back` still invalidates it; `approve` is byte-identical to before; the
+person filter matches a name in any order or case and an unknown person yields an EMPTY board;
+`manual_hours` moves no figure; and the sales scan is skipped when every employee has a clock record.
+
+**Duplicate check, per the index rules.** Searched before building: §14y (`payroll_hours_basis`, the
+one home for paid hours and its basis — not touched, this board reads `GET /storeops/payroll` as it
+always did), §14z (clock variances), §CORE-17.3x (`payroll_hours_drilldown`, which already REPORTS
+the `manual_hours` gap — extended in spirit, not duplicated), §19.45 (`payroll_log_identity`, the one
+writer of the change log — reused), §64 (store identity — untouched), and `person_identity`
+(dereferenced rather than re-derived). No new endpoint, no new table, **no migration**, and no second
+derivation of any figure.
+
+**Still open, and the owner's decision, not ours.** (a) Whether `storeops.manual_hours` should be
+FOLDED into paid hours rather than reported beside them — it moves money, and the router's own
+comment forbids doing it as a side effect. (b) `force_clockout_cron` is manufacturing ~12 h punches
+for anybody who never clocks out (E029: 8 of 8 days), which is the upstream cause of all three
+hand-corrections above; the auto-closed punch is already `punch_unusable` in §14y's vocabulary, but
+`schedule_fallback` mode still pays it. (c) **E029's live row is overstated by $943 and is
+DM+HR-approved** — a data repair, reported here, never "fixed" in code.
