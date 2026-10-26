@@ -68,14 +68,23 @@ export default function ShelfAging() {
   const [open, setOpen] = useState(true)
   const [showAll, setShowAll] = useState(false)
 
+  // `loading` starts true rather than being set here: a setState in the effect BODY runs during the
+  // commit and renders twice (react-hooks/set-state-in-effect). The card is loading from its first
+  // frame anyway, so the initial value says so and only the resolution needs a write. The effect runs
+  // once, and `live` keeps a resolution that arrives after unmount from writing to a dead component.
   useEffect(() => {
     let live = true
-    setLoading(true)
     api(`/commcalc/my-shelf?org_id=${ORG_ID}`)
       .then((r: Shelf) => { if (live) { setData(r); setFailed(null) } })
       // A FAILED READ IS SAID, not swallowed into an empty shelf. "You have nothing aging" and "we
       // could not ask" are different sentences, and only one of them is reassuring.
-      .catch((e: any) => { if (live) setFailed(String(e?.message || e || 'could not be loaded')) })
+      .catch((e: unknown) => {
+        if (!live) return
+        // Narrowed rather than typed `any`: an Error's message, else whatever the thrown value
+        // stringifies to, else a plain sentence — a thrown `undefined` must not read as "undefined".
+        const msg = e instanceof Error ? e.message : String(e ?? '')
+        setFailed(msg.trim() || 'could not be loaded')
+      })
       .finally(() => { if (live) setLoading(false) })
     return () => { live = false }
   }, [])
