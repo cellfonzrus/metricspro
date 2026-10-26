@@ -1394,6 +1394,13 @@ on:
       # vocabulary it dereferences. The readers it ratchets (payables/engine.py, router.py,
       # unsold_inventory.py) and the screen are already named above, so a change to any of them
       # re-runs this proof too.
+      # index §COMMCALC-33 — WHAT THE CARRIER ALREADY RECOVERED IS READ, AND A PLACEHOLDER IS NOT A
+      # MEASUREMENT. The lock and the one home, named individually; the readers it ratchets
+      # (payables/engine.py, unsold_inventory.py) are already named above, so a change to either
+      # re-runs this proof too.
+      - "backend/harness_payables_recovered_amount.py"
+      - "backend/app/modules/payables/recovered_amount.py"
+      - "database/migrations/1094_payable_recovery_sign_and_basis.sql"
       - "backend/harness_payables_device_rows.py"
       - "backend/app/modules/payables/ledger_status.py"
       - "backend/app/modules/commcalc/product_mix.py"
@@ -2463,6 +2470,19 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_payables_device_rows.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # AND the fourth of the same spine. The terms lock proves the declared numbers are READ; the
+      # declared-source lock proves an unreadable declaration is REPORTED; the device-row lock proves
+      # a line that bought no handset is not a payable; this one proves that what the carrier has
+      # ALREADY RECOVERED is read, and that an unwired recovery source reads as UNKNOWN rather than
+      # as "nothing was recovered" - the 2026-10-26 defect where a `rebate_amount = 0.0` placeholder
+      # billed $544,447.78 of netted devices to the owner as his own cash and turned 1,400 lines into
+      # `discrepancy`. Its §F also guards the correction's own trap: an unnetted liability is
+      # reported IN FULL and flagged, never dropped, because dropping it zeroed Boost's exposure.
+      # DB-free, seconds. Index §COMMCALC-33.
+      - name: Run the recovered-amount lock (what the carrier already deducted or reimbursed is read through one home under a DECLARED sign, an unwired source reads as unknown and is flagged rather than billed, and a placeholder zero cannot return - index COMMCALC-33)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_payables_recovered_amount.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # AND the FRONTEND proof of the forecast grid, in the same job for the same reason: it locks
       # the same screen, and a wiring check nothing runs is not a gate. Node only, seconds.
       - uses: actions/setup-node@v4

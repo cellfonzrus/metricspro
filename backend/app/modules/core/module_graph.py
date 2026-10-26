@@ -793,6 +793,30 @@ FACTS: dict[str, dict] = {
             'app/modules/payables/engine.py': ('_pm',),
         },
     },
+    'device_recovery_amount': {
+        "question": 'How much has the carrier ALREADY recovered against this device - deducted on '
+                    'its own statement or reimbursed - and does anything actually MEASURE that, or '
+                    'is the answer unknown?',
+        "homes": ('app/modules/payables/recovered_amount.py',),
+        "index": ('COMMCALC-33',),
+        "locks": ('harness_payables_recovered_amount.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04, and rewrote 51 of them on 2026-10-26). The lock verifies it against the
+        # real import graph.
+        "callers": {
+            # The ledger WRITER. All three recovery sources (the device's own declared column, the
+            # Boost/VIP classification, the ePay feed) fold through `resolve` here, so the amount
+            # and its basis cannot disagree, and the `rebate_amount = 0.0` placeholder that billed
+            # $544,447.78 of netted devices to the owner cannot return — §F of the lock fails the
+            # build if it does. §COMMCALC-33.
+            'app/modules/payables/engine.py': ('_rec',),
+            # The EXPOSURE figure every surface headlines. `stamp_aging` nets through this home
+            # rather than re-deriving the subtraction, and reports what was NOT netted beside the
+            # total instead of dropping it — which an earlier draft did, zeroing Boost's real
+            # exposure. §COMMCALC-33.4.
+            'app/modules/payables/unsold_inventory.py': ('_rec',),
+        },
+    },
     'kpi_column_meaning': {
         "question": 'Which column carries which KPI actual at each grain, and what does the carrier\'s '
                     'port-in rate MEAN \u2014 which direction is good and what scale is it on?',

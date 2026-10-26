@@ -45,7 +45,13 @@ type Aging = {
   // Every unsold device, aged. `buckets` above is the owed>0 subset of this.
   age_buckets?: Record<string, { count: number; owed: number }>
   age_buckets_basis?: string
-  out_of_pocket?: { devices: number; out_of_pocket: number; out_of_pocket_amount: number; not_measured: number }
+  // `recovered_amount` and the two flags arrive from `payables/recovered_amount.py` (§COMMCALC-33):
+  // what the carrier has ALREADY deducted or reimbursed, how much of the figure has never been
+  // netted against a rebate, and the sentence to say so. A screen that prints the total without
+  // them tells the owner he funded devices the carrier already paid for.
+  out_of_pocket?: { devices: number; out_of_pocket: number; out_of_pocket_amount: number; not_measured: number
+    recovered_amount?: number; netted_devices?: number; recovery_unmeasured?: number
+    recovery_unmeasured_amount?: number; recovery_note?: string|null; amount_not_netted?: boolean }
   // The carrier's own declared selling window — what the deadline on screen must be derived from,
   // instead of one carrier's 60 days printed over everybody's devices (owner 2026-10-22).
   aging_policy?: {
@@ -432,7 +438,24 @@ export default function AgingPage() {
               </div>
               <div style={{ fontSize:13, color:'var(--c-fg-991b1b)', marginTop:4 }}>
                 These are past their payment due date (or past the carrier&apos;s selling window) and
-                still unsold, so the invoice is funded from your own cash rather than from the sale.
+                are still unsold.
+                {/* OWNER 2026-10-26: "the payments for all phones automatically are done from
+                    commission and rebates received and auto adjusted". Whether the invoice is
+                    funded from his own cash is a MEASURED question, not an assumption, so the
+                    sentence is chosen by what the build actually measured (§COMMCALC-33). */}
+                {data.out_of_pocket.amount_not_netted
+                  ? <> {data.out_of_pocket.recovery_note
+                        || 'This figure has NOT been reduced by what the carrier may already have recovered.'}</>
+                  : <> What the carrier already recovered is deducted, so this is what is left to fund
+                      from your own cash.</>}
+                {!!data.out_of_pocket.recovered_amount && <> The carrier has already recovered{' '}
+                  {fmt(data.out_of_pocket.recovered_amount)} against these devices
+                  {!!data.out_of_pocket.netted_devices && <>, settling {data.out_of_pocket.netted_devices} of
+                  them outright</>}.</>}
+                {!!data.out_of_pocket.recovery_unmeasured && <> {data.out_of_pocket.recovery_unmeasured} device
+                  {data.out_of_pocket.recovery_unmeasured>1?'s':''} ({fmt(data.out_of_pocket.recovery_unmeasured_amount || 0)})
+                  have no rebate source configured, so that part of the figure is unaccounted rather
+                  than proven.</>}
                 {data.out_of_pocket.not_measured > 0 && <> {data.out_of_pocket.not_measured} more carry no
                 date to judge by and are reported as unmeasured, not as settled.</>}
               </div>
