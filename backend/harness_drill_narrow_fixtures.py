@@ -24,6 +24,7 @@ from app.modules.closing import day_recon_drilldown as drd        # noqa: E402
 from app.modules.closing import external_credit_drilldown as ecd  # noqa: E402
 from app.modules.closing import external_credit_recon as ecr      # noqa: E402
 from app.modules.commcalc import device_financing_drilldown as dfd  # noqa: E402
+from app.modules.commcalc import exec_month_drilldown as emd      # noqa: E402
 from app.modules.commcalc import tender_recon_drilldown as trd    # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -126,6 +127,27 @@ FIN_RESULT = {"rows": FIN_ROWS, "totals": {"units": 4, "amount": 1550.0, "transa
               "source": {"meta": {"primary": "daily_sales_feed", "primary_rows": 90,
                                   "other": "raw_sales", "other_rows": 12, "filled_rows": 3}}}
 
+# BATCH 17's new shape for the client fold: a panel whose figure counts only SOME of its rows
+# (`in_figure` is a predicate, not "the row has a number"), so the identity has to survive rows that
+# are shown and deliberately not counted — and a three-part row key over a floating person.
+REP_TREND = {
+    "months": ["July 2026", "August 2026"],
+    "reps": [
+        {"rep": "Abid", "store": "1 Main St", "total": 2640.5,
+         "by_period": {"July 2026": 1100.0, "August 2026": 1540.5},
+         "points": [{"period": "July 2026", "store": "1 Main St", "pay": 1100.0, "market": "LI"},
+                    {"period": "August 2026", "store": "1 Main St", "pay": 1240.5, "market": "LI"},
+                    {"period": "August 2026", "store": "2 Oak Ave", "pay": 300.0, "market": "NJ"}]},
+        {"rep": "Dee", "store": "2 Oak Ave", "total": 1445.25,
+         "by_period": {"July 2026": 640.0, "August 2026": 805.25},
+         "points": [{"period": "July 2026", "store": "2 Oak Ave", "pay": 640.0, "market": "NJ"},
+                    {"period": "August 2026", "store": "2 Oak Ave", "pay": 805.25,
+                     "market": "NJ"}]},
+    ],
+    "totals_by_month": [{"period": "July 2026", "total_payout": 1740.0},
+                        {"period": "August 2026", "total_payout": 2345.75}],
+}
+
 
 def build():
     panels = {}
@@ -143,6 +165,8 @@ def build():
         panels["cash." + k] = v
     for k, v in dfd.financing_drilldowns(FIN_RESULT).items():
         panels["financing." + k] = v
+    for k, v in emd.rep_pay_drilldowns(REP_TREND).items():
+        panels["rep_pay." + k] = v
     return {
         "_note": ("GENERATED — do not hand-edit. Real panels from the real server declarations, "
                   "regenerate with `python3 backend/harness_drill_narrow_fixtures.py --write`. "

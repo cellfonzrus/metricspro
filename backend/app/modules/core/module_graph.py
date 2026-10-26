@@ -78,7 +78,8 @@ FACTS: dict[str, dict] = {
                   'harness_batch9_drilldown.py', 'harness_batch10_drilldown.py',
                   'harness_batch11_drilldown.py', 'harness_batch12_drilldown.py',
                   'harness_batch13_drilldown.py', 'harness_batch14_drilldown.py',
-                  'harness_batch15_drilldown.py', 'harness_batch16_drilldown.py'),
+                  'harness_batch15_drilldown.py', 'harness_batch16_drilldown.py',
+                  'harness_batch17_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -213,6 +214,21 @@ FACTS: dict[str, dict] = {
             # identity rather than re-written, and the defect was that the PayGo page threw away a
             # panel its own endpoint had been serving since batch 12.
             'app/modules/commcalc/device_financing_drilldown.py': ('report_drilldown',),
+            # The four EXECUTIVE-MONTH reports (§CORE-17.3q) — the Owner Overview, Executive MTD,
+            # This Month's Focus and the Total Compensation trend, which are the surfaces the owner
+            # looks at most. ELEVEN measured grains over FIVE row shapes and SIX provenance answers
+            # (the calculated rep-commission snapshot, the recorded chargeback, the sales display
+            # union resolved off the read's own meta, the target settings, the store roster — and
+            # one relation this platform CANNOT NAME, because no migration here creates it, which is
+            # reported as a stated countable untraceable origin on every row rather than guessed).
+            # Two of its grains are the SAME roster store row in the SAME unit separated only by
+            # which relation answered: how many stores exist against how many carry a goal somebody
+            # saved. Where the §CORE-17.3o call is made BOTH ways: three of these pages print the
+            # server's own fold and their panels are deliberately not narrowed, while the
+            # compensation trend's by-rep view folds its two tiles in the browser and therefore is.
+            # Also the batch that declined a whole VIEW: every figure on the by-account compensation
+            # trend is refused a panel, with four distinct reasons.
+            'app/modules/commcalc/exec_month_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1313,6 +1329,18 @@ FACTS: dict[str, dict] = {
             # already, and the sales provenance is not a constant at all: it is resolved off the
             # read's own meta through `processor_money_drilldown.sales_union_tables` (§CORE-17.3p).
             'app/modules/commcalc/device_financing_drilldown.py': ('_lineage',),
+            # The executive-month drill-down asks the registry which relation the RECORDED CHARGEBACK
+            # is and which one the STORE ROSTER is (§CORE-17.3q). Both are NAME constants added by
+            # batch 17 — and `ops_chargeback` was already spelled as a LITERAL in TWO drill-down
+            # declarations (`closing/ops_chargeback_drilldown` and `closing/envelope_drilldown`),
+            # which is the divergence this registry exists to prevent. Both dereference it now,
+            # string-identical values, no read changed: naming the fact here is half the fix and
+            # deleting every copy in the same commit is the other half. The snapshot and the target
+            # settings are NOT asked of the registry — they are dereferenced from the declarations
+            # that named them once already (`carrier_pay_drilldown`, `targets_drilldown`).
+            'app/modules/commcalc/exec_month_drilldown.py': ('_lineage',),
+            'app/modules/closing/ops_chargeback_drilldown.py': ('_lineage',),
+            'app/modules/closing/envelope_drilldown.py': ('_lineage',),
             # THE SAME FACT, ONE LAYER DOWN. `raw_catalog` was spelled as a LITERAL four times
             # inside this registry — the ingest list, the no-month reason, the snapshot set and the
             # cadence note — and the drill-down above would have made it a fifth copy. Re-keyed

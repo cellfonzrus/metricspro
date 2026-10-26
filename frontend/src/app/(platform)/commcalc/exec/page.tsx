@@ -4,8 +4,31 @@ import Link from 'next/link'
 import { api, fmt } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
 
 // Owner / exec single-pane — headline business health + store leaderboard for the period.
+//
+// WHERE EACH TILE CAME FROM (index §CORE-17.3q). The server folds the leaderboard rows into the
+// tiles and serves one panel per figure out of the SAME fold, so a tile and its evidence are one
+// number. Declaration: commcalc/exec_month_drilldown.py.
+//
+// `lib/drill-narrow` IS DELIBERATELY NOT WIRED HERE, and harness_batch17_drilldown.py §F fails the
+// build if it appears (§CORE-17.3o): this page carries no filter control at all, so there is nothing
+// to narrow — every figure on it is the server's own fold over the whole month.
+//
+// THE THREE P&L TILES OFFER NO DRILL. They are three columns of ONE stored statement row with
+// nothing folded per store under them, so the page keeps the link to the P&L, which has its own.
+const DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.['market'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['market'] ?? '') },
+  { header: 'People', get: (r: DrillRow) => String(r.fields?.['people'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['people'] ?? 0) },
+  { header: 'Flags', get: (r: DrillRow) => String(r.fields?.['flags'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['flags'] ?? 0) },
+]
 const th: React.CSSProperties = { textAlign: 'right', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }
 const thL: React.CSSProperties = { ...th, textAlign: 'left' }
 const td: React.CSSProperties = { textAlign: 'right', padding: '8px 10px', borderTop: '1px solid var(--border)', fontSize: 13, whiteSpace: 'nowrap' }
@@ -25,6 +48,12 @@ export default function ExecOverviewPage() {
 
   const t = data?.tiles || {}
   const stores: any[] = data?.stores || []
+  // THE OFFER RULE, ONE HOME: a drill is offered only where the served panel agrees with the tile
+  // to the cent — the shared gate, not a condition this page invented. The tile value is read
+  // THROUGH `data?.tiles?.[k]` rather than through the `t` local above, which is a fresh object on
+  // every render and would be a new dependency finding.
+  const drill = useDrillTile((data?.drilldown || {}) as Record<string, DrillPanel>,
+    (k, p) => agreesToTheCent(p, data?.tiles?.[k]))
 
   // Store-leaderboard export columns (money flagged so Excel/PDF/subtotals format correctly).
   const storeCols: ExportColumn[] = [
@@ -82,13 +111,24 @@ export default function ExecOverviewPage() {
             </div>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12, marginBottom: 18 }}>
-            <Tile label="Commissions paid" value={fmt(t.commissions_paid)} />
-            <Tile label="Commission at risk" value={fmt(t.commission_at_risk)} tone="#b45309" sub={`${t.below_tier || 0} reps below tier`} />
-            <Tile label="Chargebacks deducted" value={fmt(t.chargebacks_deducted)} tone="#b42318" />
-            <Tile label="Total left on table" value={fmt(t.money_on_table)} tone="#b42318" />
-            <Tile label="Reps" value={`${t.reps || 0}`} />
-            <Tile label="Open chargebacks" value={`${t.open_chargebacks || 0}`} tone="#b42318" sub="in the bucket" />
+            <Tile label="Commissions paid" value={fmt(t.commissions_paid)}
+              sub={<DrillTileLinks drills={drill.dl('commissions_paid', 'rows behind this')} open={drill.open} onToggle={drill.toggle} />} />
+            <Tile label="Commission at risk" value={fmt(t.commission_at_risk)} tone="#b45309"
+              sub={<>{`${t.below_tier || 0} reps below tier`}<DrillTileLinks drills={drill.dl('commission_at_risk', 'rows behind this')} open={drill.open} onToggle={drill.toggle} /></>} />
+            <Tile label="Chargebacks deducted" value={fmt(t.chargebacks_deducted)} tone="#b42318"
+              sub={<DrillTileLinks drills={drill.dl('chargebacks_deducted', 'rows behind this')} open={drill.open} onToggle={drill.toggle} />} />
+            <Tile label="Total left on table" value={fmt(t.money_on_table)} tone="#b42318"
+              sub={<DrillTileLinks drills={drill.dl('money_on_table', 'rows behind this')} open={drill.open} onToggle={drill.toggle} />} />
+            <Tile label="Reps" value={`${t.reps || 0}`}
+              sub={<DrillTileLinks drills={drill.dl('reps', 'stores behind this')} open={drill.open} onToggle={drill.toggle} />} />
+            {/* NO DRILL ON PURPOSE: this count is not folded per store by the report, and it is not
+                scoped to the month the rest of the strip is about — stated, not papered over. */}
+            <Tile label="Open chargebacks" value={`${t.open_chargebacks || 0}`} tone="#b42318" sub="in the bucket (all periods)" />
           </div>
+
+          {drill.panel && <div style={{ marginBottom: 18 }}>
+            <DrillDownPanel panel={drill.panel} extraColumns={DRILL_COLUMNS} />
+          </div>}
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 10, flexWrap: 'wrap' }}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>Store leaderboard</div>

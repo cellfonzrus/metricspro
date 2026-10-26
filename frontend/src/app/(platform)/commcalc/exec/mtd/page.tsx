@@ -15,6 +15,10 @@ import { useReportLabels, usePosTerm } from '@/lib/report-labels'
 import ReportLabelSettings from '@/components/ReportLabelSettings'
 import ScreenLink, { SCREENS, type ScreenKey } from '@/components/ScreenLink'
 import { sourceLabel } from '@/lib/sourceLabels'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
 
 // Super-admin org-resolution mitigation (same as the Sales Report page): reads carry the active tenant
 // so a super-admin (whom the tenant middleware does NOT rewrite) reads the selected tenant, not the house
@@ -27,6 +31,26 @@ const orgParam = () => { const o = getActiveOrg(); return o ? `&org_id=${encodeU
 // Executive MTD summary — replicates the POS "Month To Date Location / Employee Sales Report".
 // Reads the org-corrected sales source (feed for the open month, raw_sales for a closed one) so it works
 // for luxelink AND the house org with NO monthly upload. DISPLAY-ONLY.
+
+// WHERE EACH FIGURE ON THE PINNED TOTAL ROW CAME FROM (index §CORE-17.3q). The server folds the
+// store / employee rows into that row and serves one panel per figure out of the SAME fold, keyed
+// `<tab>.<column>` so the two tabs can never be confused for one another. Declaration:
+// commcalc/exec_month_drilldown.py.
+//
+// `lib/drill-narrow` IS DELIBERATELY NOT WIRED HERE, and harness_batch17_drilldown.py §F fails the
+// build if it appears (§CORE-17.3o). EVERY filter on this page — the market/store cascade, the
+// employee multi-select and the date range — is a QUERY PARAMETER applied server-side before
+// anything is folded, and <DataGrid> renders `totalRow` exactly as served (it sorts and hides
+// columns; it reduces nothing). So the server's fold already covers what is on screen.
+//
+// `Conv.` AND `APB` OFFER NO DRILL: both are ratios taken at the TOTAL from two other totals
+// (§CORE-17.3h), and both of the totals each one divides do drill.
+const DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Activations', get: (r: DrillRow) => String(r.fields?.['activations'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['activations'] ?? 0) },
+  { header: 'Accessory $', get: (r: DrillRow) => String(r.fields?.['accessory $'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['accessory $'] ?? 0) },
+]
 
 const pct = (n: number) => `${((n || 0) * 100).toFixed(1)}%`
 const n2 = (n: number) => Number(n || 0).toFixed(2)
@@ -124,6 +148,15 @@ export default function ExecMtdPage() {
   const labelKey = tab === 'location' ? 'store' : 'employee'
   const rows: any[] = active?.rows || []
   const total = active?.total || {}
+  // THE PANELS FOR THE TAB ON SCREEN. The key carries the tab, so switching tabs switches which
+  // population every panel is about rather than relabelling one. The offer rule is the shared gate:
+  // a figure whose panel does not agree with the total row to the cent offers no drill and the grid
+  // keeps its own number. The total is read THROUGH `data?.[tab key]?.total?.[c]` rather than through
+  // the `total` local, which is a fresh object every render.
+  const drillTab = tab === 'location' ? 'by_location' : 'by_employee'
+  const drill = useDrillTile((data?.drilldown || {}) as Record<string, DrillPanel>,
+    (k, p) => agreesToTheCent(p, (tab === 'location' ? data?.by_location : data?.by_employee)
+      ?.total?.[k.slice(drillTab.length + 1)]))
   const tr = data?.trending || {}
   // What the SERVER actually did with the requested window (clamped / no overlap / undated lines it had
   // to drop). A backend that predates the range simply omits it -> {} -> the status line never renders.
@@ -234,6 +267,15 @@ export default function ExecMtdPage() {
   // POS-report formatting (int / $ / % / 2-dp / em-dash) and the reconciliation-column tooltips. <DataGrid>
   // handles the sticky header, the pinned Store/Employee column, click-sort and resize; the numbers still
   // come from each column's own `get`, so this stays byte-identical to what the report always showed.
+  // One link per figure the server actually served a panel for, in the grid's own column order so a
+  // reader finds the figure they are looking at. `cols(labelKey)` is the export definition, which is
+  // what the grid renders, so the links and the columns cannot drift apart.
+  const drillLinks = cols(labelKey)
+    .map(c => c.field || '')
+    .filter(f => f && f !== labelKey)
+    .flatMap(f => drill.dl(`${drillTab}.${f}`,
+      String(cols(labelKey).find(c => c.field === f)?.header || f)))
+
   const gridCols: ExportColumn[] = useMemo(() => cols(labelKey).map((c) => {
     const f = c.field || ''
     const render = (r: any) => {
@@ -559,6 +601,23 @@ export default function ExecMtdPage() {
           <DataGrid columns={gridCols} rows={rows} totalRow={total} maxHeight="72vh" storageKey="exec-mtd" />
         </div>
       )}
+
+      {/* WHERE THE TOTAL ROW'S FIGURES CAME FROM. One link per figure, opening the rows of the tab
+          on screen. Nothing is shown when the server served no panel — a month whose tables are
+          empty offers no link rather than a link to an empty panel. */}
+      {!loading && !err && drillLinks.length > 0 && (
+        <div className="card" style={{ padding: '10px 12px', marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6 }}>
+            Where the <b>TOTAL</b> row&apos;s figures came from — open any one to see the{' '}
+            {tab === 'location' ? 'stores' : 'employees'} it was added up from and which data each
+            was read out of.
+          </div>
+          <DrillTileLinks drills={drillLinks} open={drill.open} onToggle={drill.toggle} />
+        </div>
+      )}
+      {drill.panel && <div style={{ marginTop: 12 }}>
+        <DrillDownPanel panel={drill.panel} extraColumns={DRILL_COLUMNS} />
+      </div>}
 
       {!loading && !err && rows.length > 0 && (
         <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 12, maxWidth: 900 }}>

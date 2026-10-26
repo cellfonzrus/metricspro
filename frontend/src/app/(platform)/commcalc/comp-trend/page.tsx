@@ -5,6 +5,33 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, isStandardFilterActive, type StandardFilterValue } from '@/lib/standard-filters'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
+
+// WHERE THE BY-REP TILES CAME FROM (index §CORE-17.3q). Declaration:
+// commcalc/exec_month_drilldown.py. The figures are read out of what the last commission
+// calculation WROTE DOWN for each month, never out of the sales it read (§CORE-17.3j).
+//
+// `lib/drill-narrow` IS WIRED HERE, and harness_batch17_drilldown.py §F fails the build if it stops
+// being: the standard filter bar on the BY-REP view is applied in the BROWSER (it narrows each
+// person's per-month attribution points and re-sums them), and both tiles are a client `reduce` over
+// the surviving rows. So each panel is narrowed to that same selection and each tile is read OFF its
+// narrowed panel rather than reduced a second time — one fold for the figure and its evidence.
+//
+// THE BY-ACCOUNT VIEW OFFERS NO DRILL AT ALL, with four different reasons: its four month tiles are
+// one column of ONE served month row with nothing folded per account beneath them, the delta is a
+// difference taken at the TOTAL (§CORE-17.3k) and its percentage a quotient (§CORE-17.3h), the
+// account count is over a set the report never enumerates, and "Comp lost to dips" is added
+// ENTIRELY IN THE BROWSER over rows the browser filtered, so the producer folds no figure for a
+// panel to explain. All four are written up in the declaration's header.
+const REP_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Stores', get: (r: DrillRow) => String(r.fields?.['stores'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['stores'] ?? '') },
+  { header: 'Months paid', get: (r: DrillRow) => String(r.fields?.['months'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['months'] ?? 0) },
+]
 
 export default function CompTrendPage() {
   // 'rep' = the commission WE pay each rep (rep_commissions.total_payout) — what "commission being
@@ -76,7 +103,7 @@ export default function CompTrendPage() {
       if (!hasStore && !hasMarket) {
         const seen = new Set<string>()
         for (const pt of points) if (norm(pt.store)) seen.add(norm(pt.store))
-        out.push({ ...r, _stores: [...seen].sort() })   // by_period/total untouched (byte-identical)
+        out.push({ ...r, _stores: [...seen].sort(), _pts: points })   // by_period/total untouched (byte-identical)
         continue
       }
       const kept = points.filter(pt =>
@@ -90,15 +117,44 @@ export default function CompTrendPage() {
         total += pt.pay || 0
         if (norm(pt.store)) seen.add(norm(pt.store))
       }
-      out.push({ ...r, by_period, total: Math.round(total * 100) / 100, _stores: [...seen].sort() })
+      out.push({ ...r, by_period, total: Math.round(total * 100) / 100, _stores: [...seen].sort(), _pts: kept })
     }
     return out.sort((a, b) => (b.total || 0) - (a.total || 0))
   }, [repsAll, filt])
   const repFilterActive = isStandardFilterActive(filt)
   const latestRepMonth = repMonths[repMonths.length - 1] || ''
   const repPerMonth = (m: string) => reps.reduce((s: number, r: any) => s + (r.by_period?.[m] || 0), 0)
-  const repGrandTotal = reps.reduce((s: number, r: any) => s + (r.total || 0), 0)
-  const latestRepTotal = repPerMonth(latestRepMonth)
+  // The page's own fold over the rows it is showing — kept as the FALLBACK for a payload carrying no
+  // panel, and as the figure a panel that cannot be narrowed honestly (a capped row list) leaves in
+  // place. Where a panel IS served, each tile below reads the panel's number instead, so the figure
+  // and its evidence are one fold.
+  const reducedGrand = reps.reduce((s: number, r: any) => s + (r.total || 0), 0)
+  const reducedLatest = repPerMonth(latestRepMonth)
+  // THE PANELS, NARROWED TO THE ROWS ON SCREEN — the same selection `reps` is, matched on the row
+  // key the server served with every drill row. A capped panel narrows to null and the drill is then
+  // not offered at all, rather than a smaller number presented as the whole of one.
+  // THE KEY IS THE GRAIN, and the grain here is the ATTRIBUTION POINT (rep x period x store), because
+  // that is what the filter actually acts on: it keeps and drops a person's individual months, not the
+  // person. A rep-level key could only ever drop a whole rep, so a panel narrowed on one would keep
+  // months the screen is not showing and the figure would not be the tile (index §CORE-17.3l).
+  const repKeys = new Set(reps.flatMap(r => (r._pts || []).map(
+    (pt: { period?: string; store?: string }) =>
+      screenKey({ rep: r.rep, period: pt.period, store: pt.store }))))
+  const repKeep = (_r: DrillRow, k: string) => repKeys.has(k)
+  const narrowedLatest = narrowPanel(repData?.drilldown?.['latest'], repKeep)
+  const narrowedWindow = narrowPanel(repData?.drilldown?.['window'], repKeep)
+  const latestRepTotal = agreesToTheCent(narrowedLatest || undefined, reducedLatest)
+    ? Number(narrowedLatest?.figure?.amount ?? reducedLatest) : reducedLatest
+  const repGrandTotal = agreesToTheCent(narrowedWindow || undefined, reducedGrand)
+    ? Number(narrowedWindow?.figure?.amount ?? reducedGrand) : reducedGrand
+  // THE OFFER RULE, ONE HOME: a drill is offered only where the narrowed panel agrees with the tile
+  // to the cent — the shared gate, not a condition this page invented.
+  const narrowedRepPanels: Record<string, DrillPanel> = {
+    ...(narrowedLatest ? { latest: narrowedLatest } : {}),
+    ...(narrowedWindow ? { window: narrowedWindow } : {}),
+  }
+  const repDrill = useDrillTile(narrowedRepPanels, (k, p) =>
+    agreesToTheCent(p, k === 'latest' ? latestRepTotal : repGrandTotal))
 
   function buildRepPayload(): ExportPayload {
     return {
@@ -186,11 +242,16 @@ export default function CompTrendPage() {
         ) : (
           <div style={{ display: 'grid', gap: 16 }}>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              <Tile label={`Paid to reps — ${latestRepMonth || 'latest'}`} value={fmt(latestRepTotal)} accent="#15803d" />
-              <Tile label={`Total — last ${months} mo`} value={fmt(repGrandTotal)} />
+              <Tile label={`Paid to reps — ${latestRepMonth || 'latest'}`} value={fmt(latestRepTotal)} accent="#15803d"
+                sub={<DrillTileLinks drills={repDrill.dl('latest', 'rows behind this')} open={repDrill.open} onToggle={repDrill.toggle} />} />
+              <Tile label={`Total — last ${months} mo`} value={fmt(repGrandTotal)}
+                sub={<DrillTileLinks drills={repDrill.dl('window', 'rows behind this')} open={repDrill.open} onToggle={repDrill.toggle} />} />
+              {/* NO DRILL ON PURPOSE: the table below IS the list this counts, and "Top rep" is a
+                  name rather than a figure. */}
               <Tile label="Reps paid" value={reps.length} />
               <Tile label="Top rep" value={reps[0]?.rep || '—'} />
             </div>
+            {repDrill.panel && <DrillDownPanel panel={repDrill.panel} extraColumns={REP_DRILL_COLUMNS} />}
             <div className="card" style={{ padding: 0, overflow: 'auto' }}>
               <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>
                 Commission paid per rep (total payout) — newest month last; highest total first
@@ -312,11 +373,12 @@ export default function CompTrendPage() {
   )
 }
 
-function Tile({ label, value, accent }: { label: string; value: any; accent?: string }) {
+function Tile({ label, value, accent, sub }: { label: string; value: any; accent?: string; sub?: React.ReactNode }) {
   return (
     <div className="card" style={{ padding: '12px 16px', minWidth: 150 }}>
       <div style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4, color: accent || 'var(--text)' }}>{value}</div>
+      {sub}
     </div>
   )
 }

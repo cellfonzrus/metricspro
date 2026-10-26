@@ -36,6 +36,7 @@ from app.modules.commcalc import tender_recon_drilldown as _tender_recon_drilldo
 from app.modules.asset import device_asset_drilldown as _asset_dd   # 2026-10-25 — THE device-asset family's drill declaration (index §CORE-17.3l; declaration only, pure)
 from app.modules.commcalc import targets_drilldown as _targets_dd   # 2026-10-25 — THE targets family's drill declaration (index §CORE-17.3m; declaration only, pure)
 from app.modules.commcalc import device_financing_drilldown as _dfdd   # 2026-10-26 — THE device-financing family's drill declaration (index §CORE-17.3p; declaration only, pure)
+from app.modules.commcalc import exec_month_drilldown as _emdd   # 2026-10-26 — THE executive-month family's drill declaration (index §CORE-17.3q; declaration only, pure)
 from app.modules.commcalc import month_focus as _mfocus   # 2026-10-09 — the month's declared focus and the weekly check-in (index §63)
 from app.modules.commcalc import kpi_failing as _kpi_failing  # THE built-in KPI set + the feed maps (one home; pure, stdlib)
 from app.modules.commcalc import boost_terms as _bt   # 2026-10-05 — THE Boost engine's resolved terms + KPI bars (one home; pure)
@@ -27769,14 +27770,14 @@ def _month_focus_targets(client, org_id, period):
         codes = {str(s.get("store_code") or "").strip().upper() for s in roster}
         codes.discard("")
     except Exception:
-        return None, None, []
+        return None, None, [], []
     try:
         rows = (client.schema("commcalc").table("targets").select("store_code")
                 .eq("org_id", org_id).in_("period", _pvariants(period)).limit(20000).execute().data) or []
     except Exception:
-        return None, None, []
+        return None, None, [], []
     have = {str(r.get("store_code") or "").strip().upper() for r in rows} & codes
-    return len(codes), len(have), sorted(codes - have)
+    return len(codes), len(have), sorted(codes - have), _emdd.target_rows(codes, have)
 
 
 def _month_focus_live_spiffs(client, org_id, period):
@@ -27804,7 +27805,7 @@ def _month_focus_signals(client, org_id, period, authorization):
     signals, meta = {}, {}
 
     # 1. TARGETS (§5) — and the stores with none, which is the first play.
-    total, have, without = _month_focus_targets(client, org_id, period)
+    total, have, without, _rows = _month_focus_targets(client, org_id, period)
     signals["stores_total"] = total
     signals["stores_without_target"] = without
     meta["targets"] = {"stores_total": total, "with_saved_target": have,
@@ -27912,7 +27913,7 @@ def _month_focus_payload(client, org_id, period, authorization, *, with_plays=Tr
     live = _month_focus_live_spiffs(client, org_id, period)
     today = datetime.now(timezone.utc).date().isoformat()
 
-    total, have, without = _month_focus_targets(client, org_id, period)
+    total, have, without, target_rows = _month_focus_targets(client, org_id, period)
     due = _mfocus.outstanding(
         decl, today, year=_yr, month=_mo, declaration_days=days,
         checkin_weekday=weekday, stores_total=total, stores_with_target=have,
@@ -27951,6 +27952,13 @@ def _month_focus_payload(client, org_id, period, authorization, *, with_plays=Tr
         "ready": table_ready,
         "hint": None if table_ready else
                 "The month-focus declaration is not set up yet — run migration 1065.",
+        # WHERE THE TWO TARGET COUNTS CAME FROM (§CORE-17.3q) — the roster stores behind "14 of 22",
+        # each saying whether a manager actually SAVED a goal for it. TWO grains on one row in one
+        # unit, separated only by which relation answered: the roster, and the target settings. A
+        # store with no saved row carries NO figure and names NO table (§CORE-17.3m). A read that
+        # failed leaves `stores_total` None, and no panel is served for a figure nobody measured.
+        "drilldown": _emdd.focus_drilldowns(
+            {"targets": {"stores_total": total, "with_saved_target": have}}, target_rows),
     }
 
 
@@ -30196,6 +30204,11 @@ def get_comp_rep_pay_trend(months: int = 6, store: str = "", org_id: str = ORG_I
             rr['market'] = _resolve_market(rr.get('store'))          # legacy top-level (backward compat)
             for pt in (rr.get('points') or []):                      # FIX 4: per-MONTH market so a store/
                 pt['market'] = _resolve_market(pt.get('store'))      # market filter narrows the right months
+        # WHERE EACH TILE CAME FROM (§CORE-17.3q). Folded from the SAME rep rows this response
+        # serves; the page NARROWS these panels to its own client-side selection (§CORE-17.3o) and
+        # reads each tile off its narrowed panel. Attached after the market stamping above, because
+        # a panel row reports the stores the window's own attribution points put a person at.
+        result["drilldown"] = _emdd.rep_pay_drilldowns(result)
         return result
     except Exception as e:
         raise HTTPException(500, f"comp-rep-pay-trend failed: {type(e).__name__}: {e}")
@@ -34190,14 +34203,20 @@ def exec_overview(period: str, org_id: str = ORG_ID):
             pl = {'revenue': p.get('revenue'), 'gross_profit': p.get('gross_profit'), 'net_income': p.get('net_income')}
     except Exception:
         pass
-    return {"period": period, "pl": pl,
-            "tiles": {"commissions_paid": round(sum(r.get('final_payout') or 0 for r in reps), 2),
-                      "commission_at_risk": s.get('total_at_risk', 0),
-                      "chargebacks_deducted": s.get('total_chargebacks', 0),
-                      "money_on_table": s.get('total_money_on_table', 0),
-                      "reps": s.get('reps', 0), "below_tier": s.get('below_tier', 0),
-                      "open_chargebacks": open_cb},
-            "stores": stores}
+    out = {"period": period, "pl": pl,
+           "tiles": {"commissions_paid": round(sum(r.get('final_payout') or 0 for r in reps), 2),
+                     "commission_at_risk": s.get('total_at_risk', 0),
+                     "chargebacks_deducted": s.get('total_chargebacks', 0),
+                     "money_on_table": s.get('total_money_on_table', 0),
+                     "reps": s.get('reps', 0), "below_tier": s.get('below_tier', 0),
+                     "open_chargebacks": open_cb},
+           "stores": stores}
+    # WHERE EACH TILE CAME FROM (§CORE-17.3q). Folded from the SAME `stores` and `tiles` this
+    # response serves, by the declaration, so a tile and its drill-down cannot disagree. The three
+    # P&L tiles, the open-chargeback count and the reps-below-tier count are served NO panel — see
+    # the refusals in `exec_month_drilldown`.
+    out["drilldown"] = _emdd.exec_drilldowns(out)
+    return out
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -35043,8 +35062,15 @@ def exec_mtd(period: str, org_id: str = ORG_ID, today: str = "",
             _t = _date.fromisoformat(str(today)[:10])
         except Exception:
             _t = None      # malformed override -> server date (never 500 a report over it)
-    return _exec_mtd(sb(), org_id, period, stores=stores, markets=markets, reps=reps, today=_t,
-                     date_from=date_from or None, date_to=date_to or None, authorization=authorization)
+    out = _exec_mtd(sb(), org_id, period, stores=stores, markets=markets, reps=reps, today=_t,
+                    date_from=date_from or None, date_to=date_to or None, authorization=authorization)
+    # WHERE EACH FIGURE ON THE PINNED TOTAL ROW CAME FROM (§CORE-17.3q), keyed `<tab>.<column>` so
+    # the two tabs' panels cannot be confused for one another. Folded from the SAME rows and totals
+    # this response serves, with the sales provenance resolved off the read's OWN meta. `conv` and
+    # `apb` are ratios and get no panel (§CORE-17.3h). Attached HERE rather than inside `_exec_mtd`
+    # because its five other callers have no screen to render a panel on.
+    out["drilldown"] = _emdd.mtd_drilldowns(out)
+    return out
 
 
 # ── Narrative banners (owner 2026-08-29 modernization track) ───────────────────────────────────────

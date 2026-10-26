@@ -98,6 +98,24 @@ PAYGO_BATCHES = "vip_paygo_payments"       # one row per weekly distributor lend
 #: same posture `ASSET_LEDGER` keeps for its own 74.
 DISTRIBUTOR_INVOICES = "vip_invoices"      # one row per distributor invoice (sweep / workbook)
 
+# ── THE TWO STORED RELATIONS THE EXECUTIVE-MONTH FAMILY HAS TO NAME (§CORE-17.3q, batch 17) ──────
+# Same reason as the four above: a drill-down must say WHICH relation a figure was read out of, and a
+# declaration restating a table name at the call site is the copied fact this registry exists to
+# prevent. Neither is an ingest feed — one is a penalty the platform records itself and the other is
+# the store roster — so both are NAME constants, the `DISCREPANCY_SNAPSHOT` shape, not entries in
+# `INGEST_TABLES_BY_MODULE`.
+#
+# `ops_chargeback` WAS ALREADY SPELLED TWICE, in `closing/ops_chargeback_drilldown.CHARGEBACK` and
+# `closing/envelope_drilldown.CHARGEBACK`, which is the divergence this registry forbids. Both
+# dereference this constant now (string-identical value, no read changed) — naming a fact here is
+# half the fix and deleting every copy in the same commit is the other half.
+OPS_CHARGEBACK = "ops_chargeback"          # commcalc.ops_chargeback (mig 504) — the recorded penalty
+#: The STORE ROSTER (`storeops.stores`, mig 003). A figure that counts STORES — "how many of our
+#: stores have a target a manager saved" — is read out of the roster, so the roster is that figure's
+#: provenance and has to be nameable. Note the SCHEMA differs from every other constant in this
+#: block, which is why a panel naming it carries its schema explicitly.
+STORE_ROSTER = "stores"
+
 
 # ── WHICH TABLE A BILL-PAYMENT PROCESSOR'S FEED LANDS IN ───────────────────────────────────────
 # A drill-down has to tell the reader WHERE a figure came from (§CORE-17), and for the processor leg
