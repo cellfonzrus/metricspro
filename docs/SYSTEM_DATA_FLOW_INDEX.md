@@ -35676,6 +35676,16 @@ that rule forward:
   satisfies**, so pointing the `run:` line at another batch kept it green. It matches the `run:`
   line itself now, exactly once.
 
+**AND THE LINT RATCHET CAUGHT A REAL ONE ON THE PAGE, MEASURED RATHER THAN GUESSED.** The
+failing-KPI page filled its tile figures into a plain object AFTER the `byMetric` memo had resolved,
+which `react-hooks/preserve-manual-memoization` refuses — and it is right: a tile whose number is
+written during render after its memo settled can come to disagree with the panel it opens. Both the
+headline counts and every per-metric slice are built in ONE memo beside that fold now. Measured with
+`npm ci` + `npm run lint:gate` **in this container** (5583 findings against a pin of 5583 — equal, not
+below, because the gate exits 1 on an improvement too), with `tsc --noEmit` and
+`frontend/prove_drill_narrow.mjs` green beside it. Nothing was added to `eslint_pending.txt`, no
+`PINNED_TOTAL` was touched, and no `eslint-disable` was written.
+
 A **third** weakness in this harness was caught by a lock that belongs to somebody else, which is
 the system working: `harness_subject_set_lock.py` **§B1** refuses a harness that asserts a bare
 LOWER BOUND on a set it derived from the code, and §H's first draft did exactly that —

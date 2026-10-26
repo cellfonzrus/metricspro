@@ -106,7 +106,6 @@ export default function FailingKpiPage() {
     const p = narrowPanel(kpiPanels[k], (_r: DrillRow, key: string) => kpiStoreKeys.has(key) || kpiRepKeys.has(key))
     if (p) kpiNarrowed[k] = p
   })
-  const kpiFigures: Record<string, number> = { stores_failing: failingStores.length, reps_failing: failingReps.length }
   const shownStores = showPassing ? stores : failingStores
   const repsByStore = useMemo(() => {
     const m: Record<string, any[]> = {}
@@ -124,10 +123,21 @@ export default function FailingKpiPage() {
     for (const r of failingReps) for (const e of r.failing) { (m[e.kpi] = m[e.kpi] || { label: e.label, stores: 0, reps: 0 }).reps++ }
     return Object.entries(m).map(([kpi, v]) => ({ kpi, ...v })).sort((a, b) => (b.stores + b.reps) - (a.stores + a.reps))
   }, [failingStores, failingReps])
-  byMetric.forEach(m => {
-    kpiFigures[metricKey(m.kpi, GRAIN_STORE)] = m.stores
-    kpiFigures[metricKey(m.kpi, GRAIN_REP)] = m.reps
-  })
+  // THE FIGURES THE TILES PRINT, in ONE memo beside the fold they come from. Filling a plain object
+  // after `byMetric` resolved would mutate a value derived from a memo, which the React-Compiler
+  // rules refuse (`react-hooks/preserve-manual-memoization`, measured) — and they are right: a tile
+  // whose number is written during render after its memo settled can disagree with the panel it
+  // opens. Both the headline counts and every per-metric slice are built here, once.
+  const kpiFigures: Record<string, number> = useMemo(() => {
+    const f: Record<string, number> = {
+      stores_failing: failingStores.length, reps_failing: failingReps.length,
+    }
+    byMetric.forEach(m => {
+      f[metricKey(m.kpi, GRAIN_STORE)] = m.stores
+      f[metricKey(m.kpi, GRAIN_REP)] = m.reps
+    })
+    return f
+  }, [byMetric, failingStores, failingReps])
   const kpiTile = (k: string): number => {
     const n = kpiFigures[k] || 0
     return agreesToTheCent(kpiNarrowed[k], n) ? Number(kpiNarrowed[k]?.figure?.amount ?? n) : n
