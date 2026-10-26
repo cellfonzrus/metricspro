@@ -7,6 +7,32 @@ import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
 import ScreenLink, { LinkedText } from '@/components/ScreenLink'
 import { useTargetAxis } from '@/lib/target-axis'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+
+// ── WHERE EACH FIGURE CAME FROM (§CORE-17.3m) ────────────────────────────────────────────────────
+// The server folds one panel per category ACHIEVED figure and one for the scheduled hours, over the
+// DAYS each was summed over, and names the feed (or the store's own daily closing, for a declared
+// category) per row. This page renders them through the shared component and hand-rolls nothing.
+//
+// NO CLIENT NARROWING. Every filter on this screen is a QUERY PARAMETER — the store/market/rep bar
+// is applied server-side and the detail panel is a separate request per scope — so the server's own
+// fold already covers exactly what is on screen and `lib/drill-narrow` is deliberately not wired in.
+//
+// WHAT HAS NO DRILL, AND WHY (so nobody reads a missing link as an oversight): a MONTHLY TARGET for
+// one scope is a leaf — one column of one stored settings row; `Need` is that leaf minus this
+// scope's own achieved total, subtracted at the TOTAL; `Today's target` is composed from the
+// schedule weighting plus yesterday's cumulative shortfall; `Pace` is a quotient; and the
+// conversion RATE is a quotient whose numerator and denominator are already printed beside it.
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const DAY_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Hours', get: r => dtext(r, 'hours') || '—', sortValue: r => Number(r.fields?.hours ?? -1) },
+  { header: 'Day', get: r => dtext(r, 'day') || '—', sortValue: r => dtext(r, 'day') },
+]
 
 // THE CATEGORY LIST IS NOT HERE. It is asked of the tenant's own axis (lib/target-axis), so a
 // category the admin declared on Count Fields gets a column on this table the day it is declared.
@@ -30,6 +56,8 @@ interface ConvT {
   meets_target: boolean; below_store?: boolean
 }
 interface CalResp {
+  /** §CORE-17.3m — one panel per `achieved_<category>`, plus `scheduled_hours`. */
+  drilldown?: Record<string, DrillPanel>
   period: string; scope: string; store_code: string; rep: string | null
   scheduled_hours_total: number; open_days_total: number; today: string
   has_schedule: boolean; projected_open_days?: number
@@ -65,6 +93,8 @@ export default function DailyTargetsPage() {
   // Explicit "configure X" hints from the server (e.g. no roster/targets, or sales not matched to a target
   // store) so the page never shows a silent blank when a setup step is missing.
   const [setupHint, setSetupHint] = useState<string[]>([])
+  // §CORE-17.3m — the server's own panels for the scope on screen; one open at a time.
+  const drill = useDrillTile(detail?.drilldown || {})
 
   useEffect(() => { loadSummary() }, [period, selStores, selMarkets, selReps])
   useEffect(() => { if (storeCode) loadDetail() }, [storeCode, scope, rep, period])
@@ -353,6 +383,7 @@ export default function DailyTargetsPage() {
         )}
         {detail && <span style={{ fontSize: 12, color: 'var(--text3)' }}>
           {fmtN(detail.scheduled_hours_total, 0)}h scheduled · {detail.open_days_total} open days{detail.projected_open_days ? ` (${detail.projected_open_days} projected)` : ''} · today {detail.today}
+          <DrillTileLinks drills={drill.dl('scheduled_hours', 'the days behind these hours')} open={drill.open} onToggle={drill.toggle} />
         </span>}
         {detail && <span style={{ marginLeft: 'auto' }}><><ExportButtons payload={buildPayload} compact /><SendReportButton exportPayload={buildPayload} compact /></></span>}
       </div>
@@ -379,7 +410,11 @@ export default function DailyTargetsPage() {
                     <span style={{ color: 'var(--text2)' }}>Monthly target</span>
                     <span style={{ fontWeight: 600 }}>{val(m.unit, m.monthly)}</span>
                     <span style={{ color: 'var(--text2)' }}>Achieved so far</span>
-                    <span style={{ fontWeight: 600 }}>{val(m.unit, m.achieved_mtd)}</span>
+                    <span style={{ fontWeight: 600 }}>
+                      {val(m.unit, m.achieved_mtd)}
+                      {/* THE ROWS BEHIND IT — the days this was summed over, each naming its feed. */}
+                      <DrillTileLinks drills={drill.dl(`achieved_${c.key}`, 'the days behind this')} open={drill.open} onToggle={drill.toggle} />
+                    </span>
                     <span style={{ color: 'var(--text2)' }}>Need to achieve</span>
                     <span style={{ fontWeight: 600, color: targetState(m.monthly, m.need).color }}>{val(m.unit, m.need)}</span>
                     <span style={{ color: 'var(--text2)', paddingTop: 6, borderTop: '1px solid var(--border)' }}>Today&apos;s target</span>
@@ -391,6 +426,13 @@ export default function DailyTargetsPage() {
               )
             })}
           </div>
+
+          {/* ONE panel open at a time, below the tiles — the shared renderer (§CORE-17.3m). */}
+          {drill.panel && (
+            <div style={{ marginBottom: 24 }}>
+              <DrillDownPanel panel={drill.panel} extraColumns={DAY_DRILL_COLUMNS} />
+            </div>
+          )}
 
           {/* Conversion (boxes ÷ bill-payments) */}
           {detail.conversion && (

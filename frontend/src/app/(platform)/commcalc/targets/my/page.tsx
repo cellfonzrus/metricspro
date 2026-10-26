@@ -9,6 +9,27 @@ import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-fi
 import AreaTargets from './_components/AreaTargets'
 import { LinkedText } from '@/components/ScreenLink'
 import { useTargetAxis, BUILTIN_HINTS } from '@/lib/target-axis'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+
+// ── WHERE EACH FIGURE CAME FROM (§CORE-17.3m) ────────────────────────────────────────────────────
+// Two sets of server-folded panels reach this screen, over two different grains: the rep's own
+// ACHIEVED figures open to the DAYS they were summed over (`/calendar`'s `drilldown`), and the DM's
+// area roll-up opens to the STORES it is the sum of (`/summary`'s `drilldown`, rendered inside
+// AreaTargets). Neither is narrowed on the client: every filter here is a query parameter.
+//
+// NO DRILL for `Today's target` (composed from the schedule weighting plus yesterday's shortfall),
+// `Pace` (a quotient), `Monthly target` for one scope (a leaf — one column of one settings row) or
+// `Need` for one scope (that leaf minus this scope's own total, subtracted at the TOTAL).
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const DAY_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Hours', get: r => dtext(r, 'hours') || '—', sortValue: r => Number(r.fields?.hours ?? -1) },
+  { header: 'Day', get: r => dtext(r, 'day') || '—', sortValue: r => dtext(r, 'day') },
+]
 
 // THE CATEGORY LIST IS NOT HERE — see lib/target-axis. The four built-ins' hint text lives there
 // too (BUILTIN_HINTS); a declared category has no hint, because the admin's own label IS the
@@ -41,6 +62,10 @@ export default function MyTargetsPage() {
   const [filterOpts, setFilterOpts] = useState<any>({ stores: [], markets: [], reps: [] })
   const [sel, setSel] = useState<StandardFilterValue>(emptyStandardFilter())
   const [reload, setReload] = useState(0)
+  // The AREA panels travel on the SAME summary payload as the collective they explain.
+  const [areaPanels, setAreaPanels] = useState<Record<string, DrillPanel>>({})
+  // The rep's own panels, over the days behind each achieved figure.
+  const drill = useDrillTile((detail?.drilldown as Record<string, DrillPanel>) || {})
 
   // RULE FIVE: the core filters are applied SERVER-side, so the collective total, the drill-down and
   // the exports are one set of numbers by construction.
@@ -58,6 +83,7 @@ export default function MyTargetsPage() {
       .then(d => {
         setStores(d.stores || [])
         setCollective(d.collective || null)
+        setAreaPanels(d.drilldown || {})
         setScope(d.scope || null)
         setSetupHint(Array.isArray(d.setup_hint) ? d.setup_hint : [])
         if (d.filters) setFilterOpts(d.filters)
@@ -157,6 +183,7 @@ export default function MyTargetsPage() {
           period={period}
           stores={stores}
           collective={collective}
+          panels={areaPanels}
           scope={scope}
           onSaved={() => setReload(n => n + 1)}
           filterBar={
@@ -218,7 +245,8 @@ export default function MyTargetsPage() {
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
             <div style={{ fontSize: 13, color: 'var(--text2)' }}>
-              <strong>{rep}</strong> · {fmtN(detail.scheduled_hours_total, 0)}h scheduled this month{detail.rep_share != null ? ` · ${Math.round(detail.rep_share * 100)}% of store hours (your target share)` : ''} · today {detail.today}
+              <strong>{rep}</strong> · {fmtN(detail.scheduled_hours_total, 0)}h scheduled this month
+              <DrillTileLinks drills={drill.dl('scheduled_hours', 'the days behind these hours')} open={drill.open} onToggle={drill.toggle} />{detail.rep_share != null ? ` · ${Math.round(detail.rep_share * 100)}% of store hours (your target share)` : ''} · today {detail.today}
             </div>
             <><ExportButtons payload={buildPayload} compact /><SendReportButton exportPayload={buildPayload} compact /></>
           </div>
@@ -244,7 +272,10 @@ export default function MyTargetsPage() {
                     <span style={{ color: 'var(--text2)' }}>Monthly target</span>
                     <span style={{ fontWeight: 600 }}>{val(m.unit, m.monthly)}</span>
                     <span style={{ color: 'var(--text2)' }}>Achieved so far</span>
-                    <span style={{ fontWeight: 600 }}>{val(m.unit, m.achieved_mtd)}</span>
+                    <span style={{ fontWeight: 600 }}>
+                      {val(m.unit, m.achieved_mtd)}
+                      <DrillTileLinks drills={drill.dl(`achieved_${c.key}`, 'the days behind this')} open={drill.open} onToggle={drill.toggle} />
+                    </span>
                     {c.key === 'accessories' && Number(m.setup_fee_mtd || 0) > 0 && (
                       <>
                         <span style={{ color: 'var(--text3)', fontSize: 11 }}>↳ incl. device set-up fee</span>
@@ -256,6 +287,13 @@ export default function MyTargetsPage() {
               )
             })}
           </div>
+
+          {/* ONE panel open at a time, below the cards — the shared renderer (§CORE-17.3m). */}
+          {drill.panel && (
+            <div style={{ marginTop: 16 }}>
+              <DrillDownPanel panel={drill.panel} extraColumns={DAY_DRILL_COLUMNS} />
+            </div>
+          )}
 
           {detail.conversion?.rep && (
             <div className="card" style={{ marginTop: 16 }}>

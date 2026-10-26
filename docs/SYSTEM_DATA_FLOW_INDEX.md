@@ -2064,6 +2064,15 @@ scoping, MTD projection, and action items.
 `21334`; `/coaching/{period}` `19800`. **Frontend:** `commcalc/targets/page.tsx`, `targets/accessories`,
 `targets/action-plan`, `targets/my`, `targets/rep-map`, `targets/settings`.
 
+- **WHERE A TARGET FIGURE CAME FROM (§CORE-17.3m, batch 13):**
+  `backend/app/modules/commcalc/targets_drilldown.py` is the ONE declaration for all five target
+  reports — six measured grains, four provenance answers (the sales feeds, the store's own daily
+  closing for a declared category, the target settings rows, the shift schedule). The four
+  endpoints `/calendar`, `/summary`, `/action-plan` and `/report-cards` attach its `drilldown` and
+  fold nothing of their own. A TARGET is a declared number, so a store with no settings row reads
+  "no target set" rather than a target of zero; every attainment percentage gets no panel at all.
+  Proof `backend/harness_batch13_drilldown.py` (122 checks, §Z1–Z14 negative controls).
+
 ---
 
 ## 6. Rep commission (Boost)
@@ -34325,9 +34334,11 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 /commcalc/commission-received-breakout` → `drilldown`; `GET /asset/summary`, `GET
 /asset/charges-summary`, `GET /asset/on-inventory-by-store`, `GET /asset/owed-weekly`, `GET
 /asset/inventory-recon`, `GET /asset/borrowings`, `GET /commcalc/vip/paygo/summary` →
+`drilldown`; `GET /commcalc/targets/{period}/calendar`, `GET /commcalc/targets/{period}/summary`,
+`GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards` →
 `drilldown`), §18 ("where is this figure from" → `panel.sources` → `sourceLabel`; "did the
 carrier pay what we computed, and out of which legs" → §CORE-17.3k; "which devices is this
-store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
+store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
 (`sourceLabel`), §2 / `data_lineage_registry.py` (which table is which feed), §15 (the B2B ↔ MA
 activation recon these three reports read), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
 module graph).

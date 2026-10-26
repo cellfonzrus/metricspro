@@ -21,6 +21,28 @@ import { api, ORG_ID, fmt, fmtN } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { useTargetAxis } from '@/lib/target-axis'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+
+// WHERE THE AREA TOTAL CAME FROM (§CORE-17.3m). The collective is a straight SUM of the store rows
+// printed below it, and the server folds one panel per figure over those same rows: what each store
+// achieved and out of which feed, what was ASSIGNED to it and which settings row somebody typed it
+// into, and the per-store gap, which names both. A store nobody set this target for carries NO
+// figure — an unset target is not a target of zero, so it is shown and counted in nothing.
+//
+// THE ATTAINMENT PERCENTAGE GETS NO PANEL (§CORE-17.3h): no set of records sums to a quotient, and
+// both halves of it open instead. `Today (area)` and `Pace /day` get none either — each store's own
+// is composed from the schedule weighting (and the pace is itself a quotient), so a sum of them is
+// not a measurement of anything a store did.
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const STORE_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: r => dtext(r, 'store') || '—', sortValue: r => dtext(r, 'store') },
+  { header: 'Market', get: r => dtext(r, 'market') || '—', sortValue: r => dtext(r, 'market') },
+]
 
 // NEITHER THE CATEGORY LIST NOR THE EDITABLE FIELDS ARE SPELLED HERE. Both are derived from the
 // tenant's own axis (lib/target-axis), which names where each category's target physically lives:
@@ -57,13 +79,16 @@ type Props = {
   period: string
   stores: any[]
   collective: any
+  /** §CORE-17.3m — the server's panels for the collective figures, over these same store rows. */
+  panels?: Record<string, DrillPanel>
   scope: any
   filterBar?: React.ReactNode
   onSaved?: () => void
 }
 
-export default function AreaTargets({ period, stores, collective, scope, filterBar, onSaved }: Props) {
+export default function AreaTargets({ period, stores, collective, panels, scope, filterBar, onSaved }: Props) {
   const { cats: CATS } = useTargetAxis(period)
+  const drill = useDrillTile(panels || {})
   const EDIT_FIELDS = useMemo(() => editFieldsFor(CATS), [CATS])
   const [draft, setDraft] = useState<Record<string, Record<string, string>>>({})
   const [saving, setSaving] = useState('')
@@ -200,12 +225,20 @@ export default function AreaTargets({ period, stores, collective, scope, filterB
               <div style={{ fontSize: 12, color: 'var(--text2)' }}>
                 of {val(c.unit, m.monthly)}{pct != null ? ` · ${pct}%` : ''}
               </div>
+              {/* THE ROWS BEHIND EACH HALF — the stores, each naming where its number came from. */}
+              <DrillTileLinks
+                drills={drill.dl(`achieved_${c.key}`, 'stores behind the achieved',
+                                 `target_${c.key}`, 'stores behind the target')}
+                open={drill.open} onToggle={drill.toggle} />
               <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 5, fontSize: 12,
                             borderTop: '1px solid var(--border)', marginTop: 9, paddingTop: 8 }}>
                 <span style={{ color: 'var(--text2)' }}>Today (area)</span>
                 <span style={{ fontWeight: 600 }}>{val(c.unit, m.today_target)}</span>
                 <span style={{ color: 'var(--text2)' }}>Still needed</span>
-                <span style={{ fontWeight: 600, color: Number(m.need) > 0 ? 'var(--c-fg-b45309)' : 'var(--green)' }}>{val(c.unit, m.need)}</span>
+                <span style={{ fontWeight: 600, color: Number(m.need) > 0 ? 'var(--c-fg-b45309)' : 'var(--green)' }}>
+                  {val(c.unit, m.need)}
+                  <DrillTileLinks drills={drill.dl(`need_${c.key}`, 'stores behind this')} open={drill.open} onToggle={drill.toggle} />
+                </span>
                 <span style={{ color: 'var(--text2)' }}>Pace /day</span>
                 <span style={{ fontWeight: 600 }}>{val(c.unit, m.pace)}</span>
               </div>
@@ -213,6 +246,13 @@ export default function AreaTargets({ period, stores, collective, scope, filterB
           )
         })}
       </div>
+
+      {/* ONE panel open at a time, below the cards — the shared renderer (§CORE-17.3m). */}
+      {drill.panel && (
+        <div style={{ marginTop: 14 }}>
+          <DrillDownPanel panel={drill.panel} extraColumns={STORE_DRILL_COLUMNS} />
+        </div>
+      )}
 
       {collective?.conversion?.billpays > 0 && (
         <div className="card" style={{ marginTop: 14 }}>

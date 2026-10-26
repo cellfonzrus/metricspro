@@ -7,6 +7,32 @@ import { api, ORG_ID, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+
+// ── WHERE EACH FIGURE CAME FROM (§CORE-17.3m) ────────────────────────────────────────────────────
+// Two grains reach this screen. "Commission at risk" opens to the REPS behind it, out of the
+// calculated-commission rows — and a rep whose subtotal the calculation never worked out is shown
+// WITHOUT a figure rather than as $0.00 at risk. "Your team total" opens to the STORES in the plan:
+// what each achieved, what was assigned to it, and the per-store gap that names both. That total
+// used to be reduced here in TypeScript, so it had no server-folded evidence at all; it is folded
+// once on the server now and this page reads it (`team_total`), with the old reduce gone.
+//
+// NO DRILL for the three COUNT tiles — critical items, warnings and stores with targets are the
+// cardinality of the cards printed below them, so the list IS what they count. No client narrowing:
+// the store and rep pickers reorder and hide CARDS; the team total is folded over the whole plan the
+// server returned, which is the population it is shown for.
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const PLAN_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: r => dtext(r, 'store') || '—', sortValue: r => dtext(r, 'store') },
+  { header: 'Market', get: r => dtext(r, 'market') || '—', sortValue: r => dtext(r, 'market') },
+  { header: 'Tier', get: r => dtext(r, 'tier') || '—', sortValue: r => Number(r.fields?.tier ?? -1) },
+  { header: 'KPIs met', get: r => dtext(r, 'kpis met') || '—', sortValue: r => Number(r.fields?.['kpis met'] ?? -1) },
+]
 
 type Sev = 'critical' | 'warning' | 'good'
 interface Item { severity: Sev; metric: string; title: string; detail: string }
@@ -29,11 +55,17 @@ interface PeerMeta {
   caveats?: { column: string; severity: string; message: string }[]
   note?: string; error?: string
 }
+/** One category of the team roll-up as the server folded it (§CORE-17.3m). */
+interface TeamCat { monthly?: number | null; achieved_mtd?: number | null; need?: number | null }
 interface Resp {
   period: string; today: string
   summary: { critical: number; warning: number; stores: number; commission_at_risk: number }
   setup_hint?: string
   peer?: PeerMeta | null
+  /** §CORE-17.3m — the team total, folded ONCE on the server over the plan's own store rows. */
+  team_total?: { categories?: Record<string, TeamCat> }
+  /** §CORE-17.3m — `team_<figure>_<category>` and `commission_at_risk`. */
+  drilldown?: Record<string, DrillPanel>
   stores: StorePlan[]
 }
 
@@ -75,6 +107,7 @@ export default function ActionPlanPage() {
   const [hideOnTrack, setHideOnTrack] = useState(true)
   const [storeFilter, setStoreFilter] = useState('')
   const [repFilter, setRepFilter] = useState('')
+  const drill = useDrillTile((data?.drilldown as Record<string, DrillPanel>) || {})
 
   useEffect(() => { load() }, [period])
 
@@ -189,9 +222,15 @@ export default function ActionPlanPage() {
           <div className="card" style={{ padding: '12px 18px', borderLeft: `4px solid ${data.summary.commission_at_risk > 0 ? 'var(--c-bg-b45309)' : 'var(--green)'}` }}>
             <div style={{ fontSize: 26, fontWeight: 800, color: data.summary.commission_at_risk > 0 ? 'var(--c-fg-b45309)' : 'var(--green)' }}>${Math.round(data.summary.commission_at_risk || 0).toLocaleString()}</div>
             <div style={{ fontSize: 12, color: 'var(--text2)' }}>commission at risk</div>
+            {/* THE REPS BEHIND IT. No link when the endpoint deliberately did not roll this up for
+                the signed-in rep — a suppressed total has no rows behind it. */}
+            <DrillTileLinks drills={drill.dl('commission_at_risk', 'the reps behind this')} open={drill.open} onToggle={drill.toggle} />
           </div>
         </div>
       )}
+
+      {/* ONE panel open at a time, below the strip — the shared renderer (§CORE-17.3m). */}
+      {drill.panel && <div style={{ marginBottom: 18 }}><DrillDownPanel panel={drill.panel} extraColumns={PLAN_DRILL_COLUMNS} /></div>}
 
       {/* THE PEER COMPARISON'S OWN HONESTY, above the items (index §59.7). Three different things a
           reader would otherwise mistake for "nobody is behind their peers": the comparison failed,
@@ -228,10 +267,20 @@ export default function ActionPlanPage() {
 
       {/* rolled-up target across ALL the manager's stores (sum of stores under them) */}
       {data && data.stores.length > 1 && (() => {
-        const agg: Record<string, { label: string; unit: string; target: number; achieved: number; need: number }> = {}
+        // ONE FOLD, ON THE SERVER (§CORE-17.3m). This block used to reduce the store rows itself, so
+        // the figure it printed had no evidence anything could check. The label and unit travel with
+        // the plan's own metrics, which is where they have always come from.
+        const labels: Record<string, { label: string; unit: string }> = {}
         for (const s of data.stores) for (const m of (s.metrics || [])) {
-          const a = agg[m.cat] || (agg[m.cat] = { label: m.label, unit: m.unit, target: 0, achieved: 0, need: 0 })
-          a.target += m.target || 0; a.achieved += m.achieved || 0; a.need += m.need || 0
+          if (!labels[m.cat]) labels[m.cat] = { label: m.label, unit: m.unit }
+        }
+        const served = data.team_total?.categories || {}
+        const agg: Record<string, { label: string; unit: string; target: number; achieved: number; need: number }> = {}
+        for (const [cat, m] of Object.entries(served)) {
+          if (!labels[cat]) continue
+          agg[cat] = { label: labels[cat].label, unit: labels[cat].unit,
+            target: Number(m?.monthly || 0), achieved: Number(m?.achieved_mtd || 0),
+            need: Number(m?.need || 0) }
         }
         const cats = Object.entries(agg)
         if (!cats.length) return null
@@ -243,6 +292,11 @@ export default function ActionPlanPage() {
                 <div key={cat} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '6px 12px', minWidth: 120 }}>
                   <div style={{ fontSize: 11, color: 'var(--text3)' }}>{a.label}</div>
                   <div style={{ fontSize: 15, fontWeight: 700 }}>{mval(a.unit, a.achieved)} <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>/ {mval(a.unit, a.target)}</span></div>
+                  <DrillTileLinks
+                    drills={drill.dl(`achieved_${cat}`, 'stores behind the achieved',
+                                     `target_${cat}`, 'stores behind the target',
+                                     `need_${cat}`, 'stores behind what is left')}
+                    open={drill.open} onToggle={drill.toggle} />
                   {/* OWNER 2026-09-10: 'target met' used to print for a scope with NO target
                       (need 0 because monthly is 0). Shared verdict — see lib/target-state. */}
                   {(() => { const ts = targetState(a.target, a.need); return (

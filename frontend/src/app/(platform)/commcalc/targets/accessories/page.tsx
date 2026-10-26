@@ -6,6 +6,31 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
 import ScreenLink from '@/components/ScreenLink'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanels, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
+
+// ── WHERE EACH TILE CAME FROM (§CORE-17.3m), AND WHY THIS ONE NARROWS ───────────────────────────
+// The server folds the area roll-up's panels over EVERY store in scope. This page then drops the
+// stores with no accessory target, no accessory sales and no projection — a CLIENT filter — so the
+// panels are narrowed to the same selection the tiles are folded over (§CORE-17.3d, lib/drill-narrow
+// is the one home for that). Without it a panel would explain a figure over a population the screen
+// is not showing, which is worse than no panel: it looks like proof of the wrong number.
+//
+// Each tile then reads its number OFF the narrowed panel, with its own reduce kept only as the
+// fallback for a payload carrying no panel — so the tile and its evidence are one fold.
+// "% to goal" gets no panel at all: no set of records sums to a quotient (§CORE-17.3h), and both of
+// its halves open beside it. "Needed today" gets none either — each store's own is composed from
+// the schedule weighting plus yesterday's shortfall, not summed from anything.
+const dtext = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const STORE_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: r => dtext(r, 'store') || '—', sortValue: r => dtext(r, 'store') },
+  { header: 'Market', get: r => dtext(r, 'market') || '—', sortValue: r => dtext(r, 'market') },
+]
 
 // Accessory Sales target tracker: per store, the monthly accessory-$ target vs achieved MTD vs what's
 // still needed (total + per-remaining-day pace), with a behind/on-track flag. Reuses the Daily Targets
@@ -44,6 +69,7 @@ export default function AccessoryTargetsPage() {
   const [selStores, setSelStores] = useState<string[]>([])
   const [selMarkets, setSelMarkets] = useState<string[]>([])
   const [selReps, setSelReps] = useState<string[]>([])
+  const [panels, setPanels] = useState<Record<string, DrillPanel>>({})
 
   const load = useCallback(() => {
     setLoading(true)
@@ -56,6 +82,7 @@ export default function AccessoryTargetsPage() {
       .then((d: any) => {
         setFilters(d.filters || { stores: [], markets: [], reps: [] })
         setTrendMeta(d.trending || {})
+        setPanels(d.drilldown || {})
         setRows((d.stores || []).filter((s: any) => {
           const a = s.categories?.accessories || {}
           // Show a store if it has an accessory target OR any accessory sales achieved this month —
@@ -83,6 +110,21 @@ export default function AccessoryTargetsPage() {
   const tot = rows.reduce((t, s) => {
     const a = acc(s); t.monthly += a.monthly; t.achieved += a.achieved_mtd; t.need += Math.max(0, a.need); t.today += a.today_target; t.trend += trend(s); return t
   }, { monthly: 0, achieved: 0, need: 0, today: 0, trend: 0 })
+
+  // THE PANELS, NARROWED TO THE STORES ON SCREEN — the same selection `rows` is, matched on the
+  // row key the server served with every drill row.
+  const shownKeys = new Set(rows.map(s => screenKey({ store_code: s.store_code })))
+  const narrowed = narrowPanels(panels, (_r, k) => shownKeys.has(k))
+  // THE OFFER RULE: a drill is offered only where the panel's figure agrees with the tile to the
+  // cent — the one home's gate, not a condition this page invented (§CORE-17.3c).
+  const tileOf: Record<string, number> = {
+    target_accessories: tot.monthly, achieved_accessories: tot.achieved,
+    need_accessories: tot.need, trending_accessory_dollars: tot.trend,
+  }
+  const drill = useDrillTile(narrowed, (key, p) => agreesToTheCent(p, tileOf[key]))
+  // ONE FOLD PER FIGURE: the panel's own number where there is one, this page's reduce otherwise.
+  const served = (key: string, fallback: number) =>
+    agreesToTheCent(narrowed[key], tileOf[key]) ? Number(narrowed[key].figure?.amount ?? fallback) : fallback
 
   function buildPayload(): ExportPayload {
     return {
@@ -154,12 +196,19 @@ export default function AccessoryTargetsPage() {
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 14, marginBottom: 16 }}>
-            <Stat label="Accessory target (all stores)" value={fmt(tot.monthly)} />
-            <Stat label="Achieved MTD" value={fmt(tot.achieved)} color="var(--c-fg-16a34a)" sub={tot.monthly ? `${Math.round(100 * tot.achieved / tot.monthly)}% to goal` : undefined} />
-            <Stat label="Trending (proj. month-end)" value={fmt(tot.trend)} color="var(--accent)" sub={tot.monthly ? `${Math.round(100 * tot.trend / tot.monthly)}% of goal` : undefined} />
-            <Stat label="Still needed" value={fmt(tot.need)} color="var(--c-fg-d97706)" />
+            <Stat label="Accessory target (all stores)" value={fmt(served('target_accessories', tot.monthly))}
+              drill={<DrillTileLinks drills={drill.dl('target_accessories', 'stores behind this')} open={drill.open} onToggle={drill.toggle} />} />
+            <Stat label="Achieved MTD" value={fmt(served('achieved_accessories', tot.achieved))} color="var(--c-fg-16a34a)" sub={tot.monthly ? `${Math.round(100 * tot.achieved / tot.monthly)}% to goal` : undefined}
+              drill={<DrillTileLinks drills={drill.dl('achieved_accessories', 'stores behind this')} open={drill.open} onToggle={drill.toggle} />} />
+            <Stat label="Trending (proj. month-end)" value={fmt(served('trending_accessory_dollars', tot.trend))} color="var(--accent)" sub={tot.monthly ? `${Math.round(100 * tot.trend / tot.monthly)}% of goal` : undefined}
+              drill={<DrillTileLinks drills={drill.dl('trending_accessory_dollars', 'stores behind this')} open={drill.open} onToggle={drill.toggle} />} />
+            <Stat label="Still needed" value={fmt(served('need_accessories', tot.need))} color="var(--c-fg-d97706)"
+              drill={<DrillTileLinks drills={drill.dl('need_accessories', 'stores behind this')} open={drill.open} onToggle={drill.toggle} />} />
             <Stat label="Needed today" value={fmt(tot.today)} color="var(--accent)" />
           </div>
+
+          {/* ONE panel open at a time, below the strip — the shared renderer (§CORE-17.3m). */}
+          {drill.panel && <div style={{ marginBottom: 16 }}><DrillDownPanel panel={drill.panel} extraColumns={STORE_DRILL_COLUMNS} /></div>}
 
           <div className="card" style={{ padding: 0, overflow: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
@@ -235,10 +284,11 @@ export default function AccessoryTargetsPage() {
   )
 }
 
-function Stat({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+function Stat({ label, value, sub, color, drill }: { label: string; value: string; sub?: string; color?: string; drill?: React.ReactNode }) {
   return <div className="card" style={{ padding: '14px 16px' }}>
     <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</div>
     <div style={{ fontSize: 20, fontWeight: 700, marginTop: 4, color: color || 'var(--text1)' }}>{value}</div>
     {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+    {drill}
   </div>
 }

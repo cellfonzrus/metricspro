@@ -76,7 +76,8 @@ FACTS: dict[str, dict] = {
                   'harness_batch5_drilldown.py', 'harness_batch6_drilldown.py',
                   'harness_batch7_drilldown.py', 'harness_batch8_drilldown.py',
                   'harness_batch9_drilldown.py', 'harness_batch10_drilldown.py',
-                  'harness_batch11_drilldown.py', 'harness_batch12_drilldown.py'),
+                  'harness_batch11_drilldown.py', 'harness_batch12_drilldown.py',
+                  'harness_batch13_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -171,6 +172,15 @@ FACTS: dict[str, dict] = {
             # inline, and for `GET /asset/summary`'s own On-Inventory predicate, so a tile and its
             # evidence cannot come to mean different rows.
             'app/modules/asset/device_asset_drilldown.py': ('report_drilldown',),
+            # The five TARGETS reports (§CORE-17.3m) — Targets, Accessory Targets, the Action
+            # Plan, My Targets and the Manager Report Cards. ONE module, SIX catalogues,
+            # because the family has SIX measured grains (measured, not assumed: a scope-DAY,
+            # a store-MONTH in three different provenance answers, a rep row and a
+            # district-manager row) and FOUR provenance answers — the sales feeds, the
+            # declared closing counts, the target settings rows and the shift schedule. A
+            # TARGET is a declared number, never a measurement, so an unset one is reported as
+            # unset rather than folded in as zero.
+            'app/modules/commcalc/targets_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1230,6 +1240,13 @@ FACTS: dict[str, dict] = {
             # constants and re-keyed every map that had spelled `asset_ledger` or
             # `vip_paygo_payments` as a literal, because naming a fact is only half the fix.
             'app/modules/asset/device_asset_drilldown.py': ('_lineage',),
+            # The targets drill-down asks the registry WHICH TABLES the sales feeds and the
+            # daily closing are, so a target-vs-actual panel never spells a relation name of
+            # its own (§CORE-17.3m). The four relations it names that are NOT registered
+            # ingest feeds — the two target settings tables, the store roster and the shift
+            # schedule — are config rows, deliberately kept out of the ingest registry so the
+            # feed watchdog's population stays the feeds.
+            'app/modules/commcalc/targets_drilldown.py': ('_lineage',),
             'app/modules/commcalc/dlar_sweep.py': ('_lineage',),
             'app/modules/commcalc/email_sweep.py': ('_lineage',),
             'app/modules/commcalc/epay_sweep.py': ('_lin',),
@@ -1909,6 +1926,12 @@ FACTS: dict[str, dict] = {
             # It also hands the axis to the DM / market-manager report card, which imports nothing
             # by design (harness_manager_report_card D1) — so the card's items come from here.
             'app/modules/commcalc/router.py': ('_te', 'targets_engine'),
+            # The targets drill-down asks `target_axis` what the categories are and
+            # `target_store` / `BUILTIN_TARGET_COLUMN` WHERE each target physically lives, so
+            # a panel names the settings row a number was typed into instead of guessing one
+            # (§CORE-17.3m). It owns no axis and no arithmetic of its own —
+            # `harness_batch13_drilldown` §Y13 fails the build if it grows either.
+            'app/modules/commcalc/targets_drilldown.py': ('_te',),
             # The visit-priority dropdown offers the axis as assignable deliverables.
             'app/modules/storevisit/visit_plan_router.py': ('_te',),
         },

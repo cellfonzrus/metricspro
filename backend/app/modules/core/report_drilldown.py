@@ -143,6 +143,19 @@ UNMEASURED_REASONS = {
     "absent_from_the_loaded_statement": "the carrier side was never looked up for this one, so it "
                                         "carries no figure at all rather than a zero somebody could "
                                         "mistake for a measurement",
+    # The shapes the batch-13 TARGETS reports brought with them (§CORE-17.3m). A target is a
+    # DECLARED number rather than a measurement, so "nobody set one" is its own absence — and a day
+    # that has not happened yet is a third thing again, neither a zero nor a missing record.
+    "target_not_set": "nobody has set this target, so there is nothing to measure against — an "
+                      "unset target is not a target of zero, and a store without one is not a "
+                      "store failing it",
+    "day_not_yet_reached": "this day has not happened yet, so there is nothing it could have "
+                           "achieved — it is shown because the month is not over, not because "
+                           "nothing was sold",
+    "no_dm_in_org_tree": "the org chart does not say which district manager owns this store, so "
+                         "this figure cannot be attributed to any of them — it is unattributable "
+                         "rather than zero, and assigning the store in the org chart is what puts "
+                         "it on somebody's card",
 }
 
 
