@@ -1105,6 +1105,12 @@ FACTS: dict[str, dict] = {
             # The clock feed's employee matcher. THIS MODULE USED TO BE THE HOME (clock_feed.py said
             # so), and the accent fold that makes its key the strongest was found here.
             'app/modules/storeops/payroll_identity.py': ('_person_identity',),
+            # THE HOURS APPROVAL BOARD'S PERSON FILTER. `GET /core/filter-options` keys its `reps`
+            # options by NAME, and this board alone sent that value as `employee_id` — compared
+            # against 'E043', so the filter matched NOBODY, ever (owner report 2026-10-26: *"i
+            # selected mohammed sami but nothing showed up"*). The token is now resolved here
+            # instead of by a seventh local name rule.
+            'app/modules/storeops/payroll_approval.py': ('_pkey',),
         },
     },
     'store_identity': {
