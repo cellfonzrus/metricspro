@@ -12,6 +12,32 @@
 // in this file (RULE TWO); the feed side says which processor the coverage recon read.
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+
+// ── WHERE EACH MONEY TILE CAME FROM (§CORE-17.3n) ───────────────────────────────────────────────
+// The three money tiles open to the store-days they were folded from, through the one shared panel
+// (components/DrillDownPanel over core/report_drilldown, declared in
+// commcalc/processor_money_drilldown.py). The sales leg names the tables the sales union actually
+// read for this period, the processor leg names the feed the configured processor's report lands in,
+// and a store-day only ONE side carries is shown without a figure rather than netted at $0.00.
+//
+// NO NARROWING HERE, deliberately: every filter on this page (period, store) is a QUERY PARAMETER,
+// so the server's own fold already covers exactly what is on screen and `lib/drill-narrow` would be
+// a second fold with nothing to do (§CORE-17.3d; locked by harness_batch14_drilldown.py §Y10).
+//
+// The LINE COUNT tile offers no drill: the Lines tab below IS the list it counts. Nor do the
+// By-store / By-token tables, which re-partition those same lines and already print their own
+// totals.
+const dfield = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const DAY_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Lines', get: r => dfield(r, 'lines'), sortValue: r => Number(r.fields?.lines ?? -1) },
+  { header: 'Verdict', get: r => dfield(r, 'verdict'), sortValue: r => dfield(r, 'verdict') },
+]
 
 type Line = {
   trans_id: string; trans_date: string; store: string; store_key: string; salesperson: string
@@ -31,6 +57,7 @@ type Payload = {
   per_token: { by: string; token: string | null; amount: number; count: number }[]
   token_coverage: { matched: { by: string; token: string; count: number }[]; unmatched_tokens: { by: string; token: string; count: number }[] }
   lines: Line[]; truncated: boolean
+  drilldown?: Record<string, DrillPanel>
 }
 
 const money = (n: number | null | undefined) =>
@@ -65,6 +92,9 @@ export default function BillPaymentsPage() {
 
   const t = data?.totals
   const b = data?.basis
+  // ONE PANEL OPEN AT A TIME, below the strip — the shared hook decides which figures offer a link
+  // (only the ones the server actually served a panel for, §CORE-17.3c).
+  const drill = useDrillTile(data?.drilldown || {})
   return (
     <div style={{ maxWidth: 1150, margin: '0 auto', padding: '4px 0 32px' }}>
       <h1 style={{ fontSize: 20, fontWeight: 800, margin: '0 0 4px' }}>Bill Payments</h1>
@@ -91,10 +121,16 @@ export default function BillPaymentsPage() {
       {!loading && !err && data && t && b && (<>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12, marginBottom: 14 }}>
           <Tile label="Bill-pay lines in the sales export" value={num(t.lines)} tone="info" />
-          <Tile label="Σ extracted" value={money(t.sum)} tone="info" />
-          <Tile label={b.feed_present ? `Σ carrier report (${b.feed_processor})` : 'Carrier bill-pay report'} value={b.feed_present ? money(t.sum_feed) : 'not loaded'} tone={b.feed_present ? 'ok' : 'warn'} />
-          <Tile label="Difference (days both carry)" value={b.feed_present ? `${money(t.difference)} · ${num(t.days_compared)} day(s)` : '—'} tone={b.feed_present && t.difference !== 0 ? 'warn' : 'ok'} />
+          <Tile label="Σ extracted" value={money(t.sum)} tone="info"
+            drill={<DrillTileLinks drills={drill.dl('sum', 'store-days behind this')} open={drill.open} onToggle={drill.toggle} />} />
+          <Tile label={b.feed_present ? `Σ carrier report (${b.feed_processor})` : 'Carrier bill-pay report'} value={b.feed_present ? money(t.sum_feed) : 'not loaded'} tone={b.feed_present ? 'ok' : 'warn'}
+            drill={<DrillTileLinks drills={drill.dl('sum_feed', 'store-days behind this')} open={drill.open} onToggle={drill.toggle} />} />
+          <Tile label="Difference (days both carry)" value={b.feed_present ? `${money(t.difference)} · ${num(t.days_compared)} day(s)` : '—'} tone={b.feed_present && t.difference !== 0 ? 'warn' : 'ok'}
+            drill={<DrillTileLinks drills={drill.dl('difference', 'store-days behind this')} open={drill.open} onToggle={drill.toggle} />} />
         </div>
+
+        {/* ONE panel open at a time, below the strip — the shared renderer. */}
+        {drill.panel && <div style={{ marginBottom: 14 }}><DrillDownPanel panel={drill.panel} extraColumns={DAY_DRILL_COLUMNS} /></div>}
 
         {/* THE BASIS — what was scanned, by which rule, from where */}
         <div style={{ background: 'var(--card,var(--c-bg-ffffff))', border: '1px solid var(--border)', borderRadius: 10, padding: 12, fontSize: 12.5, marginBottom: 14, lineHeight: 1.6 }}>
@@ -190,7 +226,7 @@ const STATUS: Record<string, string> = {
   match: '✅ matches the carrier report', differs: '⚠ differs', sales_only: 'sales export only', feed_only: 'carrier report only',
 }
 
-function Tile({ label, value, tone }: { label: string; value: string; tone: 'ok' | 'warn' | 'info' }) {
+function Tile({ label, value, tone, drill }: { label: string; value: string; tone: 'ok' | 'warn' | 'info'; drill?: React.ReactNode }) {
   const c = tone === 'warn' ? { bg: 'var(--c-bg-fffbeb)', bd: 'var(--c-bg-fde68a)', fg: 'var(--c-fg-92400e)' }
           : tone === 'info' ? { bg: 'var(--c-bg-eff6ff)', bd: 'var(--c-bg-bfdbfe)', fg: 'var(--c-fg-1e40af)' }
           : { bg: 'var(--card, var(--c-bg-ffffff))', bd: 'var(--border)', fg: 'var(--text2)' }
@@ -198,6 +234,7 @@ function Tile({ label, value, tone }: { label: string; value: string; tone: 'ok'
     <div style={{ background: c.bg, border: `1px solid ${c.bd}`, borderRadius: 10, padding: '12px 14px' }}>
       <div style={{ fontSize: 11.5, color: c.fg, opacity: 0.85 }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 800, color: c.fg, marginTop: 2 }}>{value}</div>
+      {drill}
     </div>
   )
 }

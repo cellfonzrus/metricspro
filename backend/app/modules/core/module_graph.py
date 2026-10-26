@@ -77,7 +77,7 @@ FACTS: dict[str, dict] = {
                   'harness_batch7_drilldown.py', 'harness_batch8_drilldown.py',
                   'harness_batch9_drilldown.py', 'harness_batch10_drilldown.py',
                   'harness_batch11_drilldown.py', 'harness_batch12_drilldown.py',
-                  'harness_batch13_drilldown.py'),
+                  'harness_batch13_drilldown.py', 'harness_batch14_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -181,6 +181,14 @@ FACTS: dict[str, dict] = {
             # TARGET is a declared number, never a measurement, so an unset one is reported as
             # unset rather than folded in as zero.
             'app/modules/commcalc/targets_drilldown.py': ('report_drilldown',),
+            # The three BILL-PAYMENT / PROCESSOR MONEY reports (§CORE-17.3n) — Bill Payments, the
+            # fee reconciliation and the processor's daily debits & credits. ONE module, THREE
+            # catalogues, because a catalogue is per ROW LIST and these are three different
+            # populations; SEVEN measured grains, of which SIX are keyed by a store-day and are
+            # separated only by PROVENANCE — what the register rang, what the processor's own
+            # report says, and a third naming both. A side that reported nothing is shown without
+            # a figure, never netted at $0.00.
+            'app/modules/commcalc/processor_money_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1247,6 +1255,17 @@ FACTS: dict[str, dict] = {
             # schedule — are config rows, deliberately kept out of the ingest registry so the
             # feed watchdog's population stays the feeds.
             'app/modules/commcalc/targets_drilldown.py': ('_lineage',),
+            # The bill-payment / processor-money drill-down asks the registry which tables the
+            # sales display union, the bill-pay settlement feed and the dealer-account payment
+            # feeds are, so no panel on these three reports spells a relation name of its own
+            # (§CORE-17.3n). `billpay_processor_feed` is dereferenced rather than re-mapped.
+            'app/modules/commcalc/processor_money_drilldown.py': ('_lineage',),
+            # THE SAME FACT, ONE LAYER DOWN. `processor_ledger.FEED_SHAPES` spelled the payment
+            # and daily-TX table names as LITERALS, which were a second copy of two constants the
+            # registry already held — and the drill-down above reads that map for a cell's
+            # provenance, which would have made it a third. The shapes dereference the registry now
+            # (string-identical values, no read changed).
+            'app/modules/commcalc/processor_ledger.py': ('_lineage',),
             'app/modules/commcalc/dlar_sweep.py': ('_lineage',),
             'app/modules/commcalc/email_sweep.py': ('_lineage',),
             'app/modules/commcalc/epay_sweep.py': ('_lin',),

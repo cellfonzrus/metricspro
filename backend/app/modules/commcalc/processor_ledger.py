@@ -71,20 +71,28 @@ READ-ONLY: this module writes nothing.
 from collections import OrderedDict
 from datetime import date as _date, timedelta as _timedelta
 
+from app.modules.commcalc import data_lineage_registry as _lineage
+
 # Per-feed shape: where the rows live and which way the feed's sign points. `credit_positive` is a
 # property of the source report's own convention (see module docstring; verified against live rows),
 # not tenant/carrier behavior — behavior config (which processor an org uses) stays in
 # metric_source_of_truth / data_source per RULE TWO.
+#
+# `source` DEREFERENCES the lineage registry's own name for each feed (2026-10-26, §CORE-17.3n)
+# rather than re-spelling it. Both tables already had a registry constant, so the literals here were
+# a second copy of a fact the platform states once — and `processor_money_drilldown.ledger_tables`
+# reads THIS map for a drill row's provenance, which would have made it a third. One fact, one home:
+# `harness_batch14_drilldown.py` §Y2 fails the build if a shape stops dereferencing the registry.
 FEED_SHAPES = {
     "epay": {
-        "source": "raw_payment_detail",
+        "source": _lineage.PAYMENT_DETAIL,
         "date_col": "payment_date", "type_col": "payment_type",
         "amount_col": "amount", "store_col": "business_address",
         "credit_positive": True,
         "rule": "amount > 0 = credit to the dealer; amount < 0 = debit (withheld/charged)",
     },
     "vidapay": {
-        "source": "raw_ma_daily_tx",
+        "source": _lineage.MA_DAILY_TX,
         "date_col": "tx_date", "type_col": "order_type",
         "amount_col": "retail_cost", "store_col": "account_id",
         "credit_positive": False,

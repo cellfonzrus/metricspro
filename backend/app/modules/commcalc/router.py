@@ -35938,6 +35938,15 @@ def billpay_extract_report(period: str, org_id: str = ORG_ID, store: str = "", l
         feed = {k: v for k, v in feed.items() if k[0] == want}
     cmp_ = _bpx.compare_with_feed(roll["per_store_day"], feed)
     cap = max(1, min(int(limit or 2000), 20000))
+    # §CORE-17.3n — the three MONEY tiles open to the store-days they were folded from. The sales
+    # leg names the tables the union read FOR THIS PERIOD (off `meta`, because the merge does not tag
+    # rows), the processor leg dereferences `data_lineage_registry.billpay_processor_feed`, and a day
+    # only one side carries is shown WITHOUT a figure rather than netted at $0.00. Folded from the
+    # SAME rows and totals this response serves; the endpoint folds no panel of its own.
+    from app.modules.commcalc import processor_money_drilldown as _pmd
+    _totals = {"lines": roll["count"], "sum": roll["sum"], "sum_feed": cmp_["sum_feed"],
+               "difference": cmp_["difference"], "days_compared": cmp_["days_compared"],
+               "days_sales_only": cmp_["days_sales_only"], "days_feed_only": cmp_["days_feed_only"]}
     return {
         "period": period, "org_id": org_id, "store": store or None,
         "rule": {"bucket": "bill_payment", "rules": rule, "source": bucket.get("source"),
@@ -35948,12 +35957,12 @@ def billpay_extract_report(period: str, org_id: str = ORG_ID, store: str = "", l
                   "rows_skipped": ex["rows_skipped"], "rows_unmatched": ex["rows_unmatched"],
                   "feed_processor": processor or None, "feed_present": cmp_["feed_present"],
                   "feed_reader": "_billpay_processor_by_store_day (the coverage recon's reader)"},
-        "totals": {"lines": roll["count"], "sum": roll["sum"], "sum_feed": cmp_["sum_feed"],
-                   "difference": cmp_["difference"], "days_compared": cmp_["days_compared"],
-                   "days_sales_only": cmp_["days_sales_only"], "days_feed_only": cmp_["days_feed_only"]},
+        "totals": _totals,
         "per_store_day": cmp_["rows"], "per_store": roll["per_store"], "per_token": roll["per_token"],
         "token_coverage": _bpx.token_coverage(rule, lines),
         "lines": lines[:cap], "truncated": len(lines) > cap,
+        "drilldown": _pmd.billpay_drilldowns(cmp_["rows"], _totals,
+                                             sales_meta=meta, processor=processor),
     }
 
 
@@ -47865,6 +47874,13 @@ def epay_fee_recon(date_from: str = "", date_to: str = "", tolerance: float = 1.
             "portal_fee": round(sum(r["portal_fee"] for r in out["rows"]), 2),
             "var": round(sum(r["var"] for r in out["rows"]), 2),
             "flagged": sum(1 for r in out["rows"] if r["flag"]), "store_days": len(out["rows"])}
+    # §CORE-17.3n — the three MONEY tiles open to the store-days behind them, each leg naming the
+    # relation it was read out of and a side that reported NOTHING shown without a figure rather
+    # than as a measured $0.00. Folded AFTER the scope filter, from the SAME rows and totals this
+    # response serves, so a panel can never hold store-days the caller may not see. The page then
+    # narrows them to its own client-side selection (`lib/drill-narrow`, §CORE-17.3d).
+    from app.modules.commcalc import processor_money_drilldown as _pmd
+    out["drilldown"] = _pmd.fee_drilldowns(out["rows"], out["totals"])
     return out
 
 

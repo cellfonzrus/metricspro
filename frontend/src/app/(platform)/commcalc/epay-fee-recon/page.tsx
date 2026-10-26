@@ -5,6 +5,10 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MarketStorePicker, type StoreOpt } from '@/components/MarketStorePicker'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanels, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 
 // ePay (Boost) FEE reconciliation report (P3, owner directive 2026-08-20).
 // Per store-day: the "ePay service charge" fee OUR system rang (raw_sales) vs the fee the owner's Boost
@@ -27,6 +31,27 @@ interface ReconRow {
 interface ReconTotals {
   system_fee: number; portal_fee: number; var: number; flagged: number; store_days: number
 }
+
+// ── WHERE EACH MONEY TILE CAME FROM (§CORE-17.3n), AND WHY THIS ONE NARROWS ─────────────────────
+// The server folds each panel over every store-day in the caller's scope for the range it was asked
+// for. This page then drops rows by store, market and "discrepancies only" — CLIENT filters — and
+// recomputes its totals over what survives, so the panels are narrowed to the SAME selection the
+// tiles are folded over (§CORE-17.3d; lib/drill-narrow is the one home for that). Without it a panel
+// would explain a figure the screen is not showing, which is worse than no panel.
+//
+// Each tile then reads its number OFF the narrowed panel, with its own reduce kept only as the
+// fallback for a payload carrying no panel — so the tile and its evidence are one fold. The
+// TOLERANCE is a query parameter, so it is already in the server's fold.
+//
+// "Store-days flagged" gets no panel: the table below highlights exactly the rows it counts.
+const dfield = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const DAY_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Which sides reported', get: r => dfield(r, 'sides'), sortValue: r => dfield(r, 'sides') },
+  { header: 'Flagged', get: r => (r.fields?.flagged ? 'yes' : ''), sortValue: r => (r.fields?.flagged ? 1 : 0) },
+]
 interface StoreMeta { store_code: string; store_address: string; market: string }
 
 function statusText(r: ReconRow): string {
@@ -40,7 +65,7 @@ export default function EpayFeeReconPage() {
   const [dateFrom, setDateFrom] = useState(() => localToday())
   const [dateTo, setDateTo] = useState(() => localToday())
   const [tolerance, setTolerance] = useState('1')
-  const [data, setData] = useState<{ rows: ReconRow[]; totals: ReconTotals } | null>(null)
+  const [data, setData] = useState<{ rows: ReconRow[]; totals: ReconTotals; drilldown?: Record<string, DrillPanel> } | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [flaggedOnly, setFlaggedOnly] = useState(false)
@@ -52,7 +77,7 @@ export default function EpayFeeReconPage() {
     setLoading(true); setErr('')
     const qs = new URLSearchParams({ date_from: dateFrom, date_to: dateTo || dateFrom, tolerance: tolerance || '1' })
     api(`/api/v1/commcalc/epay/fee-recon?${qs.toString()}`)
-      .then((d: any) => setData({ rows: d?.rows || [], totals: d?.totals || {} }))
+      .then((d: any) => setData({ rows: d?.rows || [], totals: d?.totals || {}, drilldown: d?.drilldown || {} }))
       .catch((e: any) => { setErr(e?.message || String(e)); setData({ rows: [], totals: {} as ReconTotals }) })
       .finally(() => setLoading(false))
   }
@@ -91,6 +116,20 @@ export default function EpayFeeReconPage() {
     var: a.var + (r.var || 0),
     flagged: a.flagged + (r.flag ? 1 : 0),
   }), { system_fee: 0, portal_fee: 0, var: 0, flagged: 0 }), [rows])
+
+  // THE PANELS, NARROWED TO THE STORE-DAYS ON SCREEN — the same selection `rows` is, matched on the
+  // row key the server served with every drill row.
+  const shownKeys = new Set(rows.map(r => screenKey({ store_code: r.store_code, close_date: r.close_date })))
+  const narrowed = narrowPanels(data?.drilldown || {}, (_r, k) => shownKeys.has(k))
+  // THE OFFER RULE: a drill is offered only where the panel's figure agrees with the tile to the
+  // cent — the one home's gate, not a condition this page invented (§CORE-17.3c).
+  const tileOf: Record<string, number> = {
+    system_fee: totals.system_fee, portal_fee: totals.portal_fee, var: totals.var,
+  }
+  const drill = useDrillTile(narrowed, (key, p) => agreesToTheCent(p, tileOf[key]))
+  // ONE FOLD PER FIGURE: the panel's own number where there is one, this page's reduce otherwise.
+  const served = (key: string, fallback: number) =>
+    agreesToTheCent(narrowed[key], tileOf[key]) ? Number(narrowed[key].figure?.amount ?? fallback) : fallback
 
   const rangeLabel = dateTo && dateTo !== dateFrom ? `${dateFrom} → ${dateTo}` : dateFrom
 
@@ -135,11 +174,17 @@ export default function EpayFeeReconPage() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 16 }}>
-        <Stat label="System fee (raw sales)" value={fmt(totals.system_fee)} />
-        <Stat label="Portal fee (DTD)" value={fmt(totals.portal_fee)} color="var(--c-fg-16a34a)" />
-        <Stat label="Net variance" value={`${totals.var >= 0 ? '+' : ''}${fmt(totals.var)}`} color={Math.abs(totals.var) > 0.005 ? 'var(--c-fg-dc2626)' : 'var(--text1)'} />
+        <Stat label="System fee (raw sales)" value={fmt(served('system_fee', totals.system_fee))}
+          drill={<DrillTileLinks drills={drill.dl('system_fee', 'store-days behind this')} open={drill.open} onToggle={drill.toggle} />} />
+        <Stat label="Portal fee (DTD)" value={fmt(served('portal_fee', totals.portal_fee))} color="var(--c-fg-16a34a)"
+          drill={<DrillTileLinks drills={drill.dl('portal_fee', 'store-days behind this')} open={drill.open} onToggle={drill.toggle} />} />
+        <Stat label="Net variance" value={`${served('var', totals.var) >= 0 ? '+' : ''}${fmt(served('var', totals.var))}`} color={Math.abs(totals.var) > 0.005 ? 'var(--c-fg-dc2626)' : 'var(--text1)'}
+          drill={<DrillTileLinks drills={drill.dl('var', 'store-days behind this')} open={drill.open} onToggle={drill.toggle} />} />
         <Stat label="Store‑days flagged" value={`${totals.flagged} / ${rows.length}`} color={totals.flagged ? 'var(--c-fg-dc2626)' : 'var(--c-fg-059669)'} />
       </div>
+
+      {/* ONE panel open at a time, below the strip — the shared renderer (§CORE-17.3n). */}
+      {drill.panel && <div style={{ marginBottom: 16 }}><DrillDownPanel panel={drill.panel} extraColumns={DAY_DRILL_COLUMNS} /></div>}
 
       <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <MarketStorePicker
@@ -211,9 +256,10 @@ export default function EpayFeeReconPage() {
   )
 }
 
-function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
+function Stat({ label, value, color, drill }: { label: string; value: string; color?: string; drill?: React.ReactNode }) {
   return <div className="card" style={{ padding: '14px 16px' }}>
     <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</div>
     <div style={{ fontSize: 20, fontWeight: 700, marginTop: 4, color: color || 'var(--text1)' }}>{value}</div>
+    {drill}
   </div>
 }

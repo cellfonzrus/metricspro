@@ -50,4 +50,11 @@ def processor_ledger(date_from: str = "", date_to: str = "", stores: str = "", t
                                         markets=want_markets, categories=want_cats)
     out["types"] = sorted({c["tx_type"] for c in out["cells"]}, key=str.lower)
     out["rollup"] = _pl.day_type_rollup(out["cells"])
+    # §CORE-17.3n — the strip's three figures open to the CELLS they were folded from, each naming
+    # the feed `FEED_SHAPES` says it was read out of. Folded from the SAME cells and the SAME total
+    # this response serves, so a tile and its evidence cannot describe different populations; this
+    # endpoint folds no panel of its own. The page then narrows them to its own client-side
+    # selection (`lib/drill-narrow`, §CORE-17.3d).
+    from app.modules.commcalc import processor_money_drilldown as _pmd
+    out["drilldown"] = _pmd.ledger_drilldowns(out["cells"], out["rollup"]["total"])
     return out
