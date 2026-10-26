@@ -33951,10 +33951,21 @@ Both empty is `source: None`, never a $0.00 total dressed as a measurement (§CO
   that found nothing does it resolve the declared cadence and roll the SHARED read up, reporting
   `period_source: "shared_owed_read"` and the basis that answered. The fallback is fail-soft and
   REPORTS (`declared_period.error`) rather than reading a failure as *"nothing is owed"*.
+- **THE SCREEN SAYS IT.** A server that serves a figure to a screen that renders none has moved the
+  blank report one layer down, not fixed it. `commcalc/asset/owed-weekly` gains an *Owed in this
+  period* block: the total, the period count with the basis in WORDS, the money that could not be
+  dated, the cadence sentence and the grain sentence (both from the server, one home each), and a
+  table of the periods with the span each covers. A period the server did not measure prints **not
+  measured**, never $0.00 — a measured zero is exactly what this report's whole defect looked like.
+  The three consignment cards, *By Store*, *Upcoming Fridays* and the device table are suppressed
+  **only** where the declared roll-up really answered, because three $0.00 cards and *"Nothing bills
+  on this Friday"* printed under a real total would contradict the figure above them. The export
+  carries the same figures, with the same words instead of a zero a spreadsheet would total.
 
 ### COMMCALC-34.5 LOCKED SO IT CANNOT UN-WIRE
 
-`backend/harness_billing_period.py` — DB-free, stdlib only, with mutation controls. §A the cadence
+`backend/harness_billing_period.py` — **84 passed, 0 failed**, DB-free, stdlib only, with mutation
+controls. §A the cadence
 vocabulary and the fail-CLOSED allowlist, including a **config row handed straight in where a
 resolved cadence was expected** (a config row is also a dict — the trap that raised `KeyError` while
 this was built). §B the weekly roll forward and the on-the-day case. §C the stamped period wins. §D
@@ -33964,7 +33975,9 @@ definition of the shared read may exist in the whole triangle, the daily endpoin
 query, and the dead fallback must stay gone. §G the debt test is dereferenced. §H RULE TWO, scanned
 over the **executable text only** — a carrier name that explains behaviour is not one that decides it,
 so the owner's own report stays quoted in the prose while `if carrier == "…"` would still fail. §I the
-consignment path is untouched. §J registration.
+consignment path is untouched. §J registration. §K the SCREEN — it reads the roll-up, prints the
+span and the basis, shows an unmeasured period without a figure, suppresses the consignment sections
+only where something really answered, and reports a failed roll-up in words.
 
 ### COMMCALC-34.6 WHAT IS OWNER-GATED
 

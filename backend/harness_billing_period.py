@@ -551,6 +551,44 @@ check("J11 and its PATHS FILTER names the files it is about, so a change to one 
                             "backend/harness_billing_period.py")))
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n== K. THE SCREEN SAYS IT, AND CANNOT GO BACK TO SAYING NOTHING ==")
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+PAGE = read("frontend/src/app/(platform)/commcalc/asset/owed-weekly/page.tsx")
+check("K1 the page READS the declared roll-up — a server that serves a figure to a screen that "
+      "renders none has moved the blank report one layer down, not fixed it",
+      "declared_period" in PAGE and "period_source" in PAGE)
+check("K2 and it prints the PERIODS, their span and what said so, rather than one number: a reader "
+      "who cannot see the range cannot tell whether the six days before it are in or out",
+      all(t in PAGE for t in ("dec.periods", "pd.start", "pd.end", "basisWord(pd.basis)")))
+check("K3 A PERIOD NOBODY MEASURED IS SHOWN WITHOUT A FIGURE, never as $0.00 — the reader would "
+      "take a measured zero for an answer (§CORE-17.3i), and this report's whole defect was a "
+      "figure that looked measured and was a sum over an empty set",
+      re.search(r"pd\.measured && pd\.amount != null \? fmt\(pd\.amount\)", PAGE) is not None
+      and "not measured" in PAGE)
+check("K4 and the BASIS is printed as a WORD from one map, so a basis the screen has never seen "
+      "reads as itself instead of rendering as the carrier's own billing day",
+      "BASIS_WORDS" in PAGE and "basisWord" in PAGE
+      and all(b in PAGE for b in (bp.BASIS_PERIOD_FIELD, bp.BASIS_WEEKLY, bp.BASIS_DUE_DATE,
+                                  bp.BASIS_HOUSE, bp.BASIS_WEEKDAY_UNDECLARED, bp.BASIS_NO_DATE)))
+check("K5 the CONSIGNMENT sections are suppressed only where the declared roll-up really answered "
+      "— three $0.00 cards and 'Nothing bills on this Friday' printed under a real total would "
+      "contradict the figure above them",
+      "{!onShared && <>" in PAGE
+      and "report?.period_source === 'shared_owed_read'" in PAGE)
+check("K6 and a roll-up that could NOT be read is reported in words, not as a zero (§COMMCALC-29)",
+      "dec.error" in PAGE and "Not measured." in PAGE)
+check("K7 the GRAIN CHANGE is said out loud: the processor's feed carries no IMEI, so those are "
+      "order lines and the column heading cannot keep saying devices",
+      "order_line" in PAGE and "order lines" in PAGE and "source_note" in PAGE)
+check("K8 the UNPLACEABLE money has a card of its own, because money nobody could date is reported "
+      "beside the periods rather than folded into the nearest one",
+      "unplaced_rows" in PAGE and "unplaced_amount" in PAGE)
+check("K9 the EXPORT carries the same figures the screen does, and prints 'not measured' in words "
+      "rather than a 0.00 a spreadsheet would happily total",
+      "Billing periods" in PAGE and "'not measured'" in PAGE)
+
+
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")
 if FAIL:
     print("FAILED:")

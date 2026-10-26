@@ -490,6 +490,7 @@ on:
       - "backend/app/modules/payables/router.py"
       - "backend/app/modules/payables/vendor_invoice.py"
       - "database/migrations/1095_payable_billing_cadence.sql"
+      - "frontend/src/app/(platform)/commcalc/asset/owed-weekly/page.tsx"
       - "backend/harness_batch25_drilldown.py"
       - "backend/app/modules/asset/device_asset_drilldown.py"
       - "backend/app/modules/asset/router.py"
