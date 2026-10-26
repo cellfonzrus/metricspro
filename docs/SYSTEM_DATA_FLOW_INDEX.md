@@ -7605,7 +7605,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /compliance-summary` (per-queue open counts over the existing flag/exception surfaces; failed probe = null, never 0; pure `compliance_summary.py`) | `commcalc/router.py` (`get_compliance_summary`, beside `/kpi-failing`) | §14 mig 948 Flags & Compliance |
 | `GET /account/liabilities-due` (owed-to-distributor + due-this-week payments/payroll/payroll-tax/rents/insurance per store; mig-434 + mig-946 gates fail closed; pure `account/liabilities_due.py`; distributor side = the SAME as-of-parameterized derivation the BS books, mig `954`) | `account/router.py` (`liabilities_due_endpoint` → `_liabilities_due_impl`) | §4 Current Monetary Liabilities |
 | `GET /account/config` / `PUT /account/config` (this tenant's finance config: accessory COGS %, service-fee products, payroll names/routes, device-COGS mode, **and the mig-954 distributor-payable tenant mapping** — resolved basis + source + valid target-line options) | `account/router.py` (`get_config` → `_distributor_payable_config`, `put_config`) | §4 balance-sheet truths / tenant onboarding contract |
-| `GET /commcalc/tax-collected` (retail sales tax per store WITH a per-day drill-down, tender split, taxable/non-taxable segregation, and a date range that spans months; **had no row in this table until 2026-09-08**, and §16's epay row cited a stale line number for it) | `commcalc/router.py` (`tax_collected` `2459`) → **the shared pure pass `commcalc/tax_collected.py aggregate()`**, read via `_sales_rows_union_txn_range`, store key canonicalized through `coa.store_resolver` (§13a) | §23f (the rate + the taxable base), §4 (mig `991` — the SAME aggregator books the `sales_tax_payable` BS liability) |
+| `GET /commcalc/tax-collected` (retail sales tax per store WITH a per-day drill-down, tender split, taxable/non-taxable segregation, and a date range that spans months; **had no row in this table until 2026-09-08**, and §16's epay row cited a stale line number for it) | `commcalc/router.py` (`tax_collected` `2459`) → **the shared pure pass `commcalc/tax_collected.py aggregate()`**, read via `_sales_rows_union_txn_range`, store key canonicalized through `coa.store_resolver` (§13a) | §23f (the rate + the taxable base), §4 (mig `991` — the SAME aggregator books the `sales_tax_payable` BS liability). **DRILL-DOWN §CORE-17.3u:** the tax, the revenue, the taxable revenue, each tender bucket's sales and tax, and each store's own tax open to the rows behind them at TWO ROW SHAPES — a store row for the company and tender figures, that store's DAY rows for its own (§CORE-17.3l). The RANGE read can name its relations at last: it carries its per-month metas and the ONE resolver unions its own answers over them (batch 20's defect 11, fixed in the resolver and not beside it). The effective rate is refused as a rate (§CORE-17.3h) and the non-taxable revenue because its company total is composed from two other totals rather than folded (§CORE-17.3k). TWO DEFECTS REPORTED, not hidden: this endpoint applies NO per-store RBAC scope, and an UNDATED sales line sits in a store's tax total and in none of its days, so that store's DAY panel comes back explicitly NOT TIED and names the difference. NARROWED through `lib/drill-narrow`, because this page re-adds its own tender and store tiles in the browser. Declaration `commcalc/sales_outcome_drilldown.py` (`tax_drilldowns`), proof `harness_batch21_drilldown.py` §F |
 
 | `POST /storeops/google-reviews/sweep/run-now` + `/sweep/run-due` → `_do_google_reviews_sweep` → `google_reviews.sweep_org/sweep_store`. run-due is SELF-SCHEDULED since mig `950`: pg_cron job `google-reviews-sweep-run-due` (every 15 min; per-org `next_run_at` gates actual sweeps) via `storeops.ensure_google_reviews_sweep_cron`, re-registered on every backend boot (`main.py` startup → `storeops/router._ensure_google_reviews_sweep_cron`) — before 950 NOTHING ever invoked run-due | `storeops/router.py` | §14 Google Reviews |
 
@@ -22756,6 +22756,16 @@ A zero on this screen accuses a person, so nothing is allowed to look like a res
 
 - **Endpoint** `GET /commcalc/peer-comparison?period&bands&markets&metric` — `router.peer_comparison`,
   RBAC store-scoped through `scope_keyset` / `in_keyset` like every other sales report.
+  **DRILL-DOWN §CORE-17.3u:** the lagging-store count and every traffic band's store count open to the
+  STORE ROWS behind them — the report's ONE grain, a counted peer store row out of whichever sales
+  relations the period's union actually read. A store ALONE in its band is counted as UNMEASURED with
+  its own reason (`no_peer_in_band`), never as a store that passed (§CORE-17.3i). Boxes per bill
+  payment, accessory $ per box and family plan % are refused as rates (§CORE-17.3h); the band best,
+  median and leader as order statistics; the gaps as a subtraction composed at the TOTAL
+  (§CORE-17.3k); and the bill payments and the box parts because they count DISTINCT transactions the
+  report itself says are not a partition. The `drilldown` key is attached AFTER the keyset and the
+  market filter. Server-folded. Declaration `commcalc/sales_outcome_drilldown.py` (`peer_drilldowns`),
+  proof `harness_batch21_drilldown.py` §C.
 - **Page** `frontend/src/app/(platform)/commcalc/peer-comparison/page.tsx`. Registered in
   **BOTH** NAV groups the owner named, as ONE href so RBAC and ⌘K see one report: *Management Overview*
   (`module: 'commissions'`, beside Sales Comparison — the management-review surface) and *Targets &
@@ -23044,6 +23054,16 @@ is declared, not assumed, so a future lower-is-better metric cannot silently inv
   store-scoped through `scope_keyset` / `in_keyset` like every other sales report. The carrier feed is
   read PAGED through `feed_read.read_all` with **no literal row ceiling** (§19.48's rule; 11,054 rows a
   month). READ-ONLY: books nothing, pays nobody, recomputes no statement.
+  **DRILL-DOWN §CORE-17.3u:** the spiff dollars, its paid units, its P&L line total, all carrier
+  dollars, net profit, revenue, the boxes and the count of stores with no profit base open to the
+  STORE ROWS behind them, across THREE PROVENANCES on that one row — the carrier's own compensation
+  statement, the stored financial statements named as the SNAPSHOT they are (§CORE-17.3j), and the
+  sales relations the month's union read, which this endpoint had been DISCARDING (defect 3, carried
+  read-only now). A store with no stored P&L is a blank with a reason, never a zero profit
+  (§CORE-17.3i). EVERY TILE ON THE PAGE IS A RATE AND IS REFUSED (§CORE-17.3h), so each links the
+  measured figures it divides instead; the profit lift twice over, being also a subtraction composed
+  at the TOTAL (§CORE-17.3k). Server-folded. Declaration `commcalc/sales_outcome_drilldown.py`
+  (`spiff_drilldowns`), proof `harness_batch21_drilldown.py` §E.
 - **Page** `frontend/src/app/(platform)/commcalc/spiff-impact/page.tsx`, registered in **BOTH** NAV
   groups as ONE href (*Management Overview* `module: 'commissions'`, beside Peer Sales Comparison, and
   *Targets & Coaching* `module: 'targets'`), plus `REPORT_DIRECTORY` `'comm'`, `reports.ts`,
@@ -23473,6 +23493,17 @@ comparison that did not run is not a finding that nobody is lagging.
 ### 62.7 Surfaces, registration and posture
 
 - `GET /commcalc/product-mix?period=&markets=&bands=` → `router._product_mix_payload` → `product_mix.build`.
+  **DRILL-DOWN §CORE-17.3u:** the count of salespeople low on both signals and the count ranked at all
+  open to the REP-AT-A-STORE ROWS behind them, at company grain and once per store — two UNITS over
+  one PROVENANCE (§CORE-17.3l), the sales union. A rep below this report's own box floor reaches NO
+  verdict and is shown without one (`below_ranking_floor`), never counted as having passed
+  (§CORE-17.3i). The three median tiles are refused as order statistics; accessory $ per box, port
+  share, cheap share, free share and the carrier's port % as rates (§CORE-17.3h); the two correlations
+  because they are neither; and the estate MODEL table because its rows are not on the payload. The
+  `drilldown` key is attached AFTER the keyset and the market filter. SERVER-FOLDED although the page
+  has a browser filter: that checkbox narrows the rep TABLE and not one figure above it, and a panel
+  explains the FIGURE, not the table (§CORE-17.3o). Declaration `commcalc/sales_outcome_drilldown.py`
+  (`product_mix_drilldowns`), proof `harness_batch21_drilldown.py` §D.
   RBAC store-scoped exactly like every other sales report.
 - Page `frontend/src/app/(platform)/commcalc/product-mix/page.tsx` — renders and never computes; a withheld
   figure is an em dash, never 0. Listed in **both** Management Overview and Targets & Coaching as ONE href
@@ -35744,6 +35775,274 @@ resolver EXTENDED rather than forked (every existing caller byte-identical), and
 `UNMEASURED_REASONS` entries. Each endpoint's payload was **deep-compared before and after the
 declaration runs over it and is byte-identical** (§G1–§G4). `OWES_MAX` **37 → 33**, lowered by
 exactly the four routes served.
+
+### §CORE-17.3u THE SALES-OUTCOME FAMILY (2026-10-26, batch 21)
+
+**`/commcalc/peer-comparison` · `/commcalc/product-mix` · `/commcalc/spiff-impact` ·
+`/commcalc/tax-collected`** — *this store sold less than its peers; show me the rows.* One family
+because all four fold **ONE month of the SAME retail sales lines** through the **same union read**,
+and they are read in sequence: **Peer Sales Comparison** says WHO is behind, at store grain, inside
+its own traffic band; **Product Mix & Ports** says WHICH REP inside that store and on which of the
+two signals; **Spiff Impact** says WHAT THAT COSTS the store in carrier dollars and in profit. The
+family has a **stated seam**: **Tax Collected** is the one worth challenging, because its subject is
+a TAX AUTHORITY rather than a store being coached. It is in the family because it is the same retail
+lines folded a fourth way — per day and per tender — and because it is the one of the four whose
+figures reach the **financial statements**; it keeps **its own catalogue and its own two row
+shapes** (a store row, and that store's DAY rows) rather than being forced into the others'. It is
+also the report batch 20 handed forward: its defect 11 was that a RANGE read could name no relation
+at all, and this batch is the one that had to fix it to serve this report honestly. Declaration:
+`backend/app/modules/commcalc/sales_outcome_drilldown.py`. Proof:
+`backend/harness_batch21_drilldown.py`, **156 checks**, **24 mutations / negative
+controls**, wired into the guard job with a paths filter naming every file it is about.
+
+**WHY THE ABSENCES CARRY THE WEIGHT HERE.** Every figure in this family is an **accusation about a
+store or a person**: behind your peers, low on both signals, not earning this spiff. So the four
+shapes of "we cannot answer that" must each read as a **blank with a reason** rather than a zero
+somebody gets coached on. A store **alone in its traffic band** has nobody to be behind — being
+alone in a band is not a result, and a gap invented from one store would be an accusation with no
+peer behind it. A rep **below the mix report's own box floor** reaches no verdict at all and is shown
+without one rather than counted as having passed. A store with **no stored P&L** has no profit to
+lift. A sales line with **no date** is in its store's tax total and in none of its days.
+
+**WHAT WAS CHECKED FOR A DUPLICATE, AND WHAT WAS REUSED INSTEAD OF REBUILT.** The index was searched
+for an existing mechanism serving these figures before anything was written. Found and **reused by
+object identity**: `processor_money_drilldown.sales_union_tables` (the one home for "which tables did
+this period's sales actually come from" — §CORE-17.3n/§CORE-17.3r/§CORE-17.3t), `data_lineage_registry`
+for every relation name a panel can print, `peer_comparison`'s own `BAND_MIN_PEERS` and
+`DEFAULT_GAP_METRIC`, `product_mix`'s own `MIN_BOXES_TO_RANK` and `VERDICTS`, and
+`spiff_impact.SPIFF_METRIC` — so a panel's NOTE says what the producer refused, in the producer's own
+numbers, and this declaration compares nothing against any of them. Found and **deliberately not
+extended**: `sales_margin_drilldown` (§CORE-17.3r) folds a store row out of the same sales union, but
+at the MARGIN grain its own report works at; `performance_coaching_drilldown` (§CORE-17.3t) folds an
+employee-at-a-store row, which is not a rep-at-a-store row judged on two signals — neither has the
+row list these tiles were folded from. Found and **refused a second path**: the range provenance
+resolver, below.
+
+**THE GRAIN COUNT, MEASURED OFF THE PRODUCERS (§CORE-17.3l).** Driving `peer_comparison.build` /
+`lagging` / `with_extra_metric`, `product_mix.build`, `spiff_impact.pay_type_options` /
+`default_selection` / `store_money` / `units_per_100_boxes` / `build`, and `tax_collected.aggregate`
+gives **ELEVEN** grains in **FIVE** row shapes, because a grain fixes the ROW, the UNIT **and** the
+PROVENANCE:
+
+| the grain | the row | why it is its own grain |
+|---|---|---|
+| a PEER STORE ROW, COUNTED | one store inside one traffic band | count, out of whichever sales relations the period's union actually read — and it is the report's ONLY grain, because every other column on it is a rate, an order statistic or a distinct-transaction set |
+| a REP-AT-A-STORE ROW's BOXES | one salesperson under one store | count, out of the same sales union — the drill of the grain above, which is what makes the second report a continuation of the first rather than a rival |
+| a REP-AT-A-STORE ROW's ACCESSORY DOLLARS | the SAME row | the same provenance, a different UNIT (§CORE-17.3l) |
+| a SPIFF STORE ROW's PAID DOLLARS | one store on the spiff table | money, out of the **carrier's own compensation statement** |
+| a SPIFF STORE ROW's PAID UNITS | the SAME row | the same provenance, a different UNIT |
+| a SPIFF STORE ROW's NET PROFIT | the same row again | the same unit as the dollars, separated **ONLY by provenance** (§CORE-17.3n): the **stored financial statements**, named as the SNAPSHOT they are and the trail stops there (§CORE-17.3j) |
+| a SPIFF STORE ROW's LOSS STATE | the same row | a COUNT over those same statements — the stores with no profit base to lift, with a store that has no stored P&L shown beside them and deliberately not counted |
+| a SPIFF STORE ROW's BOXES | the same row | a count again, over a THIRD provenance: the sales relations the month's union read |
+| a TAX STORE ROW's MONEY | one store on the tax report | money, out of the sales union — the same lines the three reports above fold, read a fourth way |
+| a TAX STORE ROW's TRANSACTION COUNT | the SAME row | the same provenance, a different UNIT |
+| a TAX STORE DAY ROW's MONEY | one DAY under one store | the same unit and provenance over a **different ROW SHAPE**, which is why a store's own figure and the company's are two grains and not one |
+
+The harness MEASURES those triples off the panels and compares them **as a set, for EQUALITY**, never
+as a bound (§I1), and prints every triple it measured so a lost grain names itself. §I1b is the real
+split that earns the spiff report its place — **three provenances on one store row** — and §I1c is
+the other, two row shapes inside one report. §I2 states the overlap that makes the family a family:
+the peer report's counted store row and the mix report's counted rep row come out of the **same
+sales union**.
+
+**THE §CORE-17.3o CALL, DECIDED PER PAGE BY READING THE PAGE — AND THIS BATCH SETTLES ITS HARDEST
+CASE.** Batch 20 settled "narrowed or not" both ways inside one family. This one answers the question
+that was still open underneath it: **what does a browser filter that narrows the TABLE but no FIGURE
+mean?**
+
+| route | call | why |
+|---|---|---|
+| `/commcalc/tax-collected` | **NARROWED** | it re-adds its own tender and per-store tiles with a `reduce(` over the rows it holds and filters by market in the browser, so a server-folded panel would explain a number the screen is not printing |
+| `/commcalc/peer-comparison` | **SERVER-FOLDED** | every filter is a QUERY PARAMETER — month, ranked metric, band cut-offs, market — so the server folds again and each panel follows its figure by construction |
+| `/commcalc/spiff-impact` | **SERVER-FOLDED** | the same: month, pay type, band cut-offs and market are all sent to the endpoint |
+| `/commcalc/product-mix` | **SERVER-FOLDED**, *and it HAS a browser filter* | its "only reps low on both" checkbox narrows `shown`, the rep TABLE. It touches **no figure above the table** — the flagged count is the length of the server's own flagged list and the three medians are the server's own basis, computed over every rep either way. **A panel explains the FIGURE, not the table**, so narrowing here would make every panel disagree with the tile it was opened from |
+
+That last row is the ruling's sharpest statement so far: the call is not "does this page filter
+anything", it is "does this page fold the figure the panel explains". §G1 fails the build if
+`narrowPanel(` is absent from the narrowed page's CODE, §G1b fails it if it appears in any
+server-folded page's code (comments stripped, so each page can carry the rule in its own header
+where somebody would break it), §G1c/§G1d witness the stripper both ways, and §G1e witnesses that
+the CALL scan is stricter than the identifier scan. §G2/§G2b assert the same split by the pages'
+**actual folds** — a `reduce(` in the narrowed page and none in any server-folded one — and **§G2d
+asserts the product-mix filter is real** and that the page says in its own header why it is not
+narrowed anyway.
+
+**WHAT GETS NO PANEL, AND WHICH RULING SAYS SO** — every refusal names the figures it offers instead:
+
+- **Every rate** (§CORE-17.3h): boxes per bill payment, accessory $ per box, family plan %, port
+  share, cheap share, free share, the carrier's own port %, the share of the P&L line, the share of
+  all carrier dollars, the profit lift, the % of revenue, the paid units per 100 boxes, and the
+  effective tax rate. On the spiff page **every tile is a rate**, which is why each one links the
+  MEASURED FIGURES IT DIVIDES — the line total, the profit, the revenue, the boxes.
+- **Order statistics**: the band's best, median and leader, and the mix report's three median tiles.
+  A median over the rows is not a fold of them, and no row list adds up to one.
+- **Subtractions composed at the TOTAL** (§CORE-17.3k): the gap to band median and to band best; the
+  profit lift (both sides of which drill); and **the non-taxable revenue**, whose company total is
+  `revenue - taxable_revenue` out of two separately rounded sums while every store row folds its
+  own — the two really can disagree, demonstrated in §F6c rather than claimed.
+- **Distinct-transaction sets**: the peer report's bill payments and its new/port/BYOD/upgrade/swap/
+  tablet parts. The payload itself says the parts are not a partition; a row list under them would
+  be re-counting transactions the report never summed.
+- **The two correlation coefficients** on the mix report, which are neither a sum nor a rate of
+  these rows, and **the estate model table**, whose per-model rows the endpoint does not return.
+- **Any figure whose every row would be shown without a number**, and **a $0.00 or a 0 over zero
+  counted rows**: a store whose flagged count is zero because nobody there was ranked gets no panel,
+  and a tender bucket nothing went through gets none — each would tie 0 against 0 and read as a
+  measurement. **A NON-ZERO figure over no counted rows keeps its panel** so the tie-out publishes
+  the disagreement.
+
+**ABSENCE IS NEVER ZERO, FOUR TIMES.** A store **alone in its traffic band** is shown WITHOUT a
+verdict and not counted, in a new vocabulary entry (`no_peer_in_band`) whose own words say being
+alone in a band is not a result. A rep **below the ranking floor** is shown without one too
+(`below_ranking_floor`) — the report reaches no verdict about them at all, and counting them as
+having passed would be the same lie in the other direction. A store the statement run **never
+computed** is shown without a profit figure (`not_computed`), never as one that broke even. A store
+the **sales union never named** is shown without boxes (`not_recorded`). **In every case no figure
+moved by a cent**: each of those rows contributed 0.00 to the producer's own total and contributes
+0.00 here. Only the ROW changes, from a measured zero into a stated blank.
+
+**TWO DESIGN FIXES, EACH WITH ITS OTHER HALF.**
+
+1. **The stored financial statements are a registry constant.** A figure read out of a statement run
+   has to name the relation it came from, and `account_statements` was spelled as a LITERAL in
+   `account/statement_drilldown.SNAPSHOT` with no constant anywhere. It is now
+   `data_lineage_registry.FINANCIAL_STATEMENTS`, and **that copy was re-keyed in the same commit**,
+   asserted by **object identity** and not equal text (§A4b). §A5b fails the build if the literal
+   reappears in **any** drill-down declaration or lineage registry in the backend, with §A5c as its
+   non-vacuity witness. The constant's **SCOPE is stated in its own comment**, exactly as
+   `STORE_EXPENSES` and `TIME_CLOCK` carry theirs: it is the one home for the PROVENANCE NAME, and
+   deliberately NOT a rename of the PostgREST `.table("account_statements")` reads or of the
+   `control_box_api` registry row — a read is an I/O call, not a second statement about where a
+   figure came from, and **finance work is the finance agent's**.
+2. **"Which figures can be explained at all" moved INTO the one home.** Batch 20's declaration held a
+   private copy of the rule that skips a tile whose total is absent, is `None`, or is a zero no row
+   counts toward. This batch needed the same rule, and a second copy is the duplicate defect the
+   index rules forbid — so the rule is now `report_drilldown.served_tiles`, **batch 20's declaration
+   dereferences it by identity**, and neither file holds a copy (§A3). Behaviour is byte-identical
+   and batch 20's harness was re-run green (165/165) over the change.
+
+**ONE HOME EXTENDED RATHER THAN FORKED — AND BETTER THAN THE ONE-LINE FIX PROPOSED FOR IT.**
+`processor_money_drilldown.sales_union_tables` could not answer for a multi-month RANGE read at all;
+batch 20 reported that as its defect 11 and proposed carrying `primary` and `other` through the range
+meta. **A single carried pair would have been wrong**: two months in one range can be led by
+different relations, so the carried pair would name one and silently drop the other. The range read
+now carries its **per-month metas** (one line in `router._sales_rows_union_txn_range`) and the ONE
+resolver **unions its own answers over them** (§A2/§A2b) — one home for all three unions rather than
+a range resolver beside it. A single-month meta carries no `per_period` key at all, so **every
+existing caller is byte-identical** (§A2c, with §A2d as the control that the new key is not a free
+pass).
+
+**A PANEL CANNOT DISCLOSE WHAT THE REPORT DOES NOT, BY CONSTRUCTION.** Every entry point takes
+**only the endpoint's own response** — no client, no org id, no second read — so a panel can only
+fold rows the caller was already served. The `drilldown` key is attached AFTER everything each
+endpoint filters: after the RBAC keyset and the market filter on the peer, mix and spiff reports.
+`/commcalc/tax-collected` turns out to carry **no per-store RBAC scope at all** (defect 1), which is
+REPORTED rather than papered over: the panel discloses exactly what the report already does, and the
+remedy is the scope, not the panel.
+
+**SEVEN LIVE DEFECTS, ALL REPORTED, NONE FIXED, NO FIGURE MOVED.** Each carries a regression check in
+the harness. **(1)** `/commcalc/tax-collected` applies **no RBAC store scope at all** (§H7).
+**(2)** A sales line with **no transaction date** is counted in its store's TAX TOTAL and appears in
+**none of that store's days**, so that store's DAY panel comes back **explicitly NOT TIED** and names
+the difference — reproduced in §F5 rather than reconciled by a panel that drops the undated line to
+make the sum work. **(3)** `/commcalc/spiff-impact` was **discarding the provenance its own sales
+read returns** — the same shape as batch 20's defect 7 and batch 19's twice before that — carried
+read-only now. **(4)** A RANGE sales read could name **no relation at all**; fixed in the ONE
+resolver, above. **(5)** The spiff estate's profit-without-it base subtracts the **estate-wide** spiff
+from only the **measured** profits, so the estate lift is understated whenever a store has spiff
+dollars and no stored P&L — which is why the estate base gets no panel. **(6)** The mix report's
+estate MODEL table has no row list on its payload. **(7)** The peer report's set-based columns
+(bill payments, the box parts) **cannot be summed**, which the report says itself and which is why
+they are refused. The full list, each with the harness check that reproduces it, is in the
+declaration's module docstring. Plus the composed-total divergence under "what gets no panel" above.
+
+**A NOTE ON THE EXACT-EQUALITY CALLER SNAPSHOTS.** `harness_carrier_dollar_class.py` §K3 is an
+exact-equality snapshot of the `carrier_dollar_component` fact's callers, and a module that asks
+`component_is_evidence` must be added to it in the SAME commit. This declaration **does not ask it**:
+it asks no evidence question of the ePay keyword ladder at all. The five facts this module does
+dereference (`report_drilldown`, `feed_lineage`, `peer_traffic_band`, `device_price_band`,
+`spiff_store_impact`) were re-grepped for exact-equality caller snapshots of their own and have none
+— their callers are checked by `harness_module_graph_guard.py` A/B/C, run green after the five
+hand-written edges went in.
+
+**EVERY LOCK IN THIS SECTION WAS MUTATION-TESTED BEFORE BEING CLAIMED**, one at a time, by breaking
+the thing it guards and watching which check went red. The ids observed firing: **§A5b** (a second
+copy of the stored statements' name reintroduced into a declaration), **§A3** (batch 20's declaration
+pointed back at a private copy of `served_tiles`), **§G5** (the render deleted, the import left),
+**§G1** and **§G1b** (each page's narrowing decision, broken in its own direction), **§I1** (a grain
+removed from the measured set — it named itself in `missing`), **§J1b** (the pin raised), **§K4** (a
+hand-written caller edge removed) and **§K7** (the guard job's `run:` line pointed at another batch
+while the paths filter still named this one). The two shapes batch 20 found — an **identifier where
+the CALL or the ELEMENT was meant**, and a **paths-filter mention standing in for a `run:` line** —
+were written into this file's locks from the first draft as a result, with §G1e and §K7b as their
+non-vacuity witnesses.
+
+**A WEAKNESS IN THIS HARNESS WAS CAUGHT BY A LOCK THAT BELONGS TO SOMEBODY ELSE, WHICH IS THE
+SYSTEM WORKING — THE SECOND BATCH RUNNING TO BE CAUGHT BY THIS ONE.**
+`harness_subject_set_lock.py` **§B1** refuses a harness that asserts a bare LOWER BOUND on a set it
+derived from the code, and four checks in this file's first draft did exactly that:
+`len(PEER_PAYLOAD["rows"]) == 3 and len(PEER_PAYLOAD["bands"]) >= 2`, `len(_floor) >= 1`,
+`len(SPIFF_PAYLOAD["rows"]) >= 3` and `len(_nosnap) >= 1`. The point of the refusal is precise: a
+`>=` stays **green while a subject silently LEAVES the set and another takes its place** — the guard
+goes blind and nothing says so. All four now declare the expected SUBJECTS at module level and
+compare for **equality**, printing `extra` and `missing` both ways. For `_floor` and `_nosnap` that
+matters doubly: the whole content of those two checks is **WHICH** rep or store was withheld, and a
+count cannot say which. The replacement was mutation-tested the way batch 20's was — **one member of
+the derived set swapped for a ghost at UNCHANGED SIZE**, where the old bound stays green: **§C1**
+went red naming `extra=['S9'] missing=['S3']`, and **§E4** went red naming `extra=['S3']
+missing=['S1']`. §C1b and §E4d are the two in-file witnesses that the equality really is stricter
+than the bound it replaced. Neither `harness_subject_set_lock.py` nor
+`harness_subject_set_pending.txt` was touched — that list is a ratchet pinned at 50 against a ceiling
+of 50, so adding a row would be a relaxation and would fail anyway.
+
+**AND THE LINT RATCHET WAS MEASURED, NOT GUESSED.** `node tools/eslint-ratchet.mjs` **in this
+container**: 5583 findings against a pin of 5583 — equal, not below, because the gate exits 1 on an
+improvement too — with `tsc --noEmit` green beside it. Nothing was added to `eslint_pending.txt`, no
+`PINNED_TOTAL` was touched, and no `eslint-disable` was written.
+
+**A COUNT WRITTEN INTO THIS INDEX IS A CLAIM LIKE ANY OTHER.** The counts above were written
+**last**, from the harness's own printed summary.
+
+#### §16–18 CROSS-REFERENCES
+
+Registered in `app/modules/core/module_graph.py` as a caller of five facts — `report_drilldown`
+(home `app/modules/core/report_drilldown.py`), `feed_lineage`, `peer_traffic_band`,
+`device_price_band` and `spiff_store_impact` — all five edges hand-written, never `--bless` (§50),
+beside a sixth for `account/statement_drilldown` which stopped spelling the literal in the same
+commit. Depends on: §CORE-17 (the one home and the shared panel), §59 (the traffic-band comparison),
+§62 (product mix and the port-in reading), §60 (spiff impact), §13a (the canonical store key the tax
+report groups on), §19.38 (a feed's plain name), §CORE-17.3n / §CORE-17.3r / §CORE-17.3t (the
+sales-union provenance resolver, extended here). Feeds: §CORE-17.4 (the audit ledger — `OWES_MAX`
+**33 → 29**). Neighbours: §CORE-17.3r (the other family that folds a store row out of the same sales
+union), §CORE-17.3t (the batch that handed this one its defect 11 and whose private copy of
+`served_tiles` this one dissolved), §19.18 (writing a registry without wiring the callers is not a
+fix), §CORE-17.3o (the ruling whose hardest case this batch settles).
+
+CI: `carrier-vocab-guard`, step *Run the batch-21 drill lock*, with a paths filter naming every file
+it is about. **No migration, no new table, no money moved.**
+
+Files: `backend/app/modules/commcalc/sales_outcome_drilldown.py` (**new**),
+`backend/app/modules/commcalc/router.py`, `backend/app/modules/commcalc/data_lineage_registry.py`,
+`backend/app/modules/commcalc/processor_money_drilldown.py`,
+`backend/app/modules/commcalc/performance_coaching_drilldown.py`,
+`backend/app/modules/account/statement_drilldown.py`,
+`backend/app/modules/core/report_drilldown.py`, `backend/app/modules/core/module_graph.py`,
+`backend/harness_batch21_drilldown.py` (**new**), `backend/harness_drilldown_coverage.py`,
+`backend/harness_drilldown_pending.txt`,
+`frontend/src/app/(platform)/commcalc/peer-comparison/page.tsx`,
+`frontend/src/app/(platform)/commcalc/product-mix/page.tsx`,
+`frontend/src/app/(platform)/commcalc/spiff-impact/page.tsx`,
+`frontend/src/app/(platform)/commcalc/tax-collected/page.tsx`,
+`.github/workflows/carrier-vocab-guard.yml`, `docs/SYSTEM_DATA_FLOW_INDEX.md`.
+
+**No migration, no new table, no money moved** — four read-only `drilldown` keys on four endpoints,
+four pages wired to the shared panel, no change to any producer's arithmetic, one registry constant
+added (`FINANCIAL_STATEMENTS`) with its one existing literal copy re-keyed by object identity, one
+shared rule MOVED into the one home (and batch 20's private copy dissolved onto it), one shared
+resolver EXTENDED rather than forked (every existing caller byte-identical), and two new
+`UNMEASURED_REASONS` entries. Each endpoint's payload was **deep-compared before and after the
+declaration runs over it and is byte-identical** (§H1). `OWES_MAX` **33 → 29**, lowered by exactly
+the four routes served.
 
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 

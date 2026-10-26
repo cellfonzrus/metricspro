@@ -3,6 +3,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 import { MultiSelect } from '@/lib/multiselect'
 
 // PEER SALES COMPARISON — owner directive 2026-10-08: compare stores that have SIMILAR BILL PAYMENTS,
@@ -14,6 +17,25 @@ import { MultiSelect } from '@/lib/multiselect'
 // column is a roll-up of the one shared sales aggregation, so these numbers are the same ones the
 // Sales Report shows. This page renders and never computes — in particular it never fills a blank with
 // a 0, because a blank here means "cannot be answered for this tenant", which the caveats explain.
+//
+// WHERE THE MEASURED FIGURES CAME FROM (index §CORE-17.3u). The server serves one panel per COUNT
+// this page prints — the lagging count in the headline card, and each traffic band's store count on
+// its tile — from commcalc/sales_outcome_drilldown.py, folded over the SAME per-store rows the table
+// below prints, out of the same sales relations.
+//
+// THIS PAGE IS SERVER-FOLDED AND IS DELIBERATELY *NOT* NARROWED. Every filter on it — the month, the
+// ranked metric, the band cut-offs and the market picker — is a QUERY PARAMETER (see `load` below),
+// so the server folds again on every change and each panel follows its figure by construction. There
+// is no browser fold here and `lib/drill-narrow` must not appear in this file;
+// `harness_batch21_drilldown.py` §G fails the build in BOTH directions if that changes.
+//
+// WHAT IS REFUSED A PANEL, AND WHY. Boxes per bill payment, accessory $ per box and family plan % are
+// RATES (§CORE-17.3h). The band's best, median and leader are order statistics over the band, not a
+// fold of it, so no row list adds up to them. The gap columns are a store's distance from its band
+// median — a subtraction composed at the TOTAL, which does not drill (§CORE-17.3k). Bill payments and
+// the new/port/BYOD/upgrade/swap/tablet parts are counts of DISTINCT transactions, which is why the
+// payload itself says the parts are not a partition: a row list under them would be re-counting
+// transactions this page never summed. The two COUNTS above are what remains, and they are served.
 
 const orgParam = () => { const o = getActiveOrg(); return o ? `&org_id=${encodeURIComponent(o)}` : '' }
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -30,6 +52,18 @@ function num(v: number | null | undefined, digits = 0): string {
 function gapColor(behind: boolean | undefined): string {
   return behind ? 'var(--red, #dc2626)' : 'var(--text1)'
 }
+
+// The columns a peer store row carries beside its count, in the producer's own words.
+const PEER_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.market ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.market ?? '') },
+  { header: 'Bill payments', get: (r: DrillRow) => String(r.fields?.['bill payments'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['bill payments'] ?? 0) },
+  { header: 'Boxes', get: (r: DrillRow) => String(r.fields?.boxes ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.boxes ?? 0) },
+  { header: 'Peers in band', get: (r: DrillRow) => String(r.fields?.['peers in band'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['peers in band'] ?? 0) },
+]
 
 const SEV_STYLE: Record<string, { bg: string; fg: string; icon: string }> = {
   cannot_answer: { bg: 'var(--c-bg-e0e7ff)', fg: 'var(--c-fg-3730a3)', icon: '◻︎' },
@@ -95,6 +129,12 @@ export default function PeerComparisonPage() {
 
   const marketOpts: string[] = data?.markets || []
 
+  // The server's fold, printed as served. The shared offer gate carries NO extra condition here:
+  // the figure and its panel came out of the same fold over the same rows, so a link appears for
+  // exactly the figures a row list exists for.
+  const peerPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const peerDrill = useDrillTile(peerPanels)
+
   const BandTile = ({ b }: { b: any }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 190, background: b.comparable ? 'var(--surface)' : 'var(--surface2)' }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{b.label}</div>
@@ -110,6 +150,10 @@ export default function PeerComparisonPage() {
             Best <b>{b.boxes_best}</b> boxes · median <b>{b.boxes_median}</b> · leader <b>{b.leader}</b>
           </div>
         : <div style={{ fontSize: 11, color: 'var(--c-fg-92400e)', marginTop: 4 }}>{b.note}</div>}
+      {/* The store COUNT on this tile opens; the best / median / leader beside it are order
+          statistics over the band and never do. */}
+      <DrillTileLinks drills={peerDrill.dl(`band.${b.band}`, 'which stores')}
+                      open={peerDrill.open} onToggle={peerDrill.toggle} />
     </div>
   )
 
@@ -194,12 +238,18 @@ export default function PeerComparisonPage() {
               </div>
             ))}
           </div>
+          <DrillTileLinks drills={peerDrill.dl('behind_median', 'every store weighed for this list')}
+                          open={peerDrill.open} onToggle={peerDrill.toggle} />
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 9 }}>
             Ranked on <b>{gapMetrics.find(m => m.key === activeMetric)?.label || activeMetric}</b> against
             each store’s own band median. A store alone in its band is never listed — it has no peer to
             be behind.
           </div>
         </div>}
+
+      {/* ONE renderer for whichever count is open — the band tiles and the lagging card both
+          toggle into it, so the rows appear in one place rather than reflowing the tile strip. */}
+      {peerDrill.panel && <DrillDownPanel panel={peerDrill.panel} extraColumns={PEER_DRILL_COLUMNS} />}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>

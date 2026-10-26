@@ -500,44 +500,14 @@ def _nonzero(amount):
     return report_drilldown.money(amount) != report_drilldown.money(0)
 
 
-def _any_counted(rows, value, in_figure=None):
-    """PURE: would this panel count ANY row? A figure whose every row is shown without a number ties
-    against nothing (0 == 0, True) and would read as a measurement, so it is served NO panel."""
-    for r in rows or ():
-        if value(r) is None:
-            continue
-        if in_figure is None or in_figure(r):
-            return True
-    return False
-
-
-def _served(catalogue, rows, totals, cap):
-    """PURE: every panel in a catalogue whose figure can be read as a measurement.
-
-    The refusal is made HERE rather than in four entry points, because "an empty report drills to
-    nothing" is one rule and four copies of it would be four chances to get it wrong.
-
-    AND IT IS A REFUSAL ABOUT A TRIVIAL TIE, NOT ABOUT A DISAGREEMENT (§CORE-17.3o). A figure of
-    ZERO over rows none of which were counted ties 0 against 0, which is True by accident and would
-    read to the owner as "nothing was there, and here is the proof". That gets no panel. A figure
-    that is NOT zero over rows none of which were counted is the opposite case: the report asserts a
-    number its own rows cannot account for, and the panel is SERVED so the tie-out says so in words.
-    Refusing that one would hide the very disagreement the tie-out exists to publish.
-    """
-    keep, amounts = [], {}
-    for spec in catalogue or ():
-        total_key = spec.get("total")
-        if total_key not in (totals or {}) or (totals or {}).get(total_key) is None:
-            continue
-        if not _any_counted(rows, spec.get("value"), spec.get("in_figure")) \
-                and not _nonzero((totals or {}).get(total_key)):
-            continue
-        keep.append(spec)
-        amounts[total_key] = (totals or {}).get(total_key)
-    if not keep:
-        return {}
-    return report_drilldown.tiles(tuple(keep), rows, amounts,
-                                  cap=cap or report_drilldown.ROW_CAP)
+#: WHICH FIGURES CAN HONESTLY BE EXPLAINED AT ALL — the ONE home's own rule, dereferenced by
+#: identity and no longer a copy in this file. It was written here with this batch and batch 21
+#: needed exactly the same refusal, so it moved into `core/report_drilldown.served_tiles` rather
+#: than being copied: two implementations of a refusal rule is two chances to get a refusal wrong,
+#: which is the duplicate the index rules forbid (§CORE-17.3u). Byte-identical behaviour — the
+#: function it points at is the text that was here, with `_nonzero` asked of the same
+#: `report_drilldown.money` rounding it always asked.
+_served = report_drilldown.served_tiles
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

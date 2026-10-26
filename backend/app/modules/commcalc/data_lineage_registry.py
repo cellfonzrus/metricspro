@@ -191,6 +191,27 @@ TIME_CLOCK = "timelog"
 #: forbidden, and locked by `harness_batch18_drilldown.py` §A, is a second copy of this name inside
 #: a drill-down DECLARATION — which is where the divergence this registry exists to stop happens.
 STORE_EXPENSES = "store_expenses"
+#: THE COMPUTED FINANCIAL STATEMENTS (`commcalc.account_statements`). The stored snapshot a
+#: statement run WROTE DOWN for one (period, scope) — so a figure read out of it names the SNAPSHOT
+#: and the trail stops there, which is the §CORE-17.3j ruling (batch 10) rather than a claim about
+#: the feeds that run happened to read.
+#:
+#: `account_statements` WAS ALREADY SPELLED as a literal in `account/statement_drilldown.SNAPSHOT`,
+#: which is the divergence this registry forbids — the same shape `timelog` had one batch ago and
+#: `shifts` the batch before that. That copy dereferences this constant now (string-identical value,
+#: no read changed), and `harness_batch21_drilldown.py` §A fails the build if the literal returns
+#: inside any drill-down declaration or lineage registry. Naming a fact here is half the fix;
+#: deleting every copy in the same commit is the other half (§19.18).
+#:
+#: SCOPE, STATED SO THE NEXT READER DOES NOT RE-DERIVE IT — the same scope `TIME_CLOCK` and
+#: `STORE_EXPENSES` above already carry. This constant is the one home for the PROVENANCE NAME: what
+#: a drill-down tells a reader a figure was read out of. It is deliberately NOT a rename of the
+#: PostgREST `.table("account_statements")` reads and writes across the statement engine, the
+#: statement filter, the P&L range and the finance router, nor of the `control_box_api` registry row
+#: that names the same table as a thing to monitor: a read, a write or a monitoring row is not a
+#: second statement about where a FIGURE came from, and re-pointing them is a finance-module change
+#: rather than a drill-down one — and finance work is the finance agent's (CLAUDE.md).
+FINANCIAL_STATEMENTS = "account_statements"
 
 
 # ── WHICH TABLE A BILL-PAYMENT PROCESSOR'S FEED LANDS IN ───────────────────────────────────────

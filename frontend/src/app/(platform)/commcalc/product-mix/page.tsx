@@ -3,6 +3,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 import { MultiSelect } from '@/lib/multiselect'
 
 // PRODUCT MIX & PORT DISCIPLINE — owner directive 2026-10-09: *"sales by each store as per the product
@@ -19,6 +22,29 @@ import { MultiSelect } from '@/lib/multiselect'
 // Peer Sales Comparison's own verdict. This page RENDERS and never computes — in particular it never
 // fills a blank with a 0: a blank means "cannot be answered", the caveats say why, and a 0 would read as
 // a result somebody gets coached on.
+//
+// WHERE THE MEASURED FIGURES CAME FROM (index §CORE-17.3u). The server serves a panel per COUNT it
+// can stand behind, from commcalc/sales_outcome_drilldown.py, folded over the SAME rep-at-a-store
+// rows the first table prints, out of the same sales relations — once for the company and once per
+// store.
+//
+// THIS PAGE IS SERVER-FOLDED AND IS DELIBERATELY *NOT* NARROWED, AND THE "only reps low on both"
+// CHECKBOX IS EXACTLY WHY THE RULING MATTERS. That checkbox is the one filter on this page the server
+// never sees: it narrows `shown`, the rep TABLE. It does not touch a single figure above the table —
+// the flagged count is the length of the server's own flagged list and the three medians are the
+// server's own basis, all of them computed over every rep either way. A panel explains the FIGURE,
+// not the table (§CORE-17.3o), so narrowing these panels to the ticked subset would make each one
+// disagree with the number it was opened from. `lib/drill-narrow` must not appear in this file;
+// `harness_batch21_drilldown.py` §G fails the build in BOTH directions if that changes. Every other
+// filter — the month, the price cut-offs, the market picker — is a query parameter, so the server
+// folds figure and panel together on each change.
+//
+// WHAT IS REFUSED A PANEL, AND WHY. The three median tiles are order statistics over the rep rows,
+// not a fold of them, so no row list sums to one. Accessory $ per box, port share, cheap share, free
+// share and the carrier's port % are RATES (§CORE-17.3h). The correlation coefficient is neither a
+// sum nor a rate of these rows. The model table is a separate per-model fold whose rows the endpoint
+// does not return, so the figures in it are left closed rather than explained from the wrong rows —
+// reported in the declaration module, not papered over here.
 
 const orgParam = () => { const o = getActiveOrg(); return o ? `&org_id=${encodeURIComponent(o)}` : '' }
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -39,6 +65,28 @@ function pct(v: number | null | undefined, digits = 1): string {
   return `${v.toFixed(digits)}%`
 }
 
+// What a salesperson's row carries beside the figure being explained, in the producer's own words.
+const MIX_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: (r: DrillRow) => String(r.fields?.store ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.store ?? '') },
+  { header: 'Transactions', get: (r: DrillRow) => String(r.fields?.transactions ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.transactions ?? 0) },
+  { header: 'Boxes', get: (r: DrillRow) => String(r.fields?.boxes ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.boxes ?? 0) },
+  { header: 'Verdict', get: (r: DrillRow) => String(r.fields?.verdict ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.verdict ?? '') },
+]
+// The store figures a single store's panels open, in the order the store table prints them.
+const MIX_STORE_FIGURES: [string, string][] = [
+  ['boxes', 'boxes'],
+  ['accessory_revenue', 'accessory dollars'],
+  ['ports', 'port-ins'],
+  ['device_lines', 'devices sold'],
+  ['cheap_devices', 'cheap-band devices'],
+  ['flagged_reps', 'flagged reps'],
+  ['ranked_reps', 'ranked reps'],
+]
+
 const VERDICT_STYLE: Record<string, { bg: string; fg: string; icon: string; label: string }> = {
   both: { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-991b1b)', icon: '⚑', label: 'Low on both' },
   accessory_only: { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', icon: '⚠︎', label: 'Low accessory per box' },
@@ -56,6 +104,7 @@ export default function ProductMixPage() {
   const [selMarkets, setSelMarkets] = useState<string[]>([])
   const [bands, setBands] = useState('')          // '' = the house / tenant price cuts
   const [onlyFlagged, setOnlyFlagged] = useState(false)
+  const [drillStore, setDrillStore] = useState('')   // which store's own rows to offer, '' = none
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
@@ -117,11 +166,17 @@ export default function ProductMixPage() {
 
   const marketOpts: string[] = data?.markets || []
 
-  const Tile = ({ label, value, sub, warn }: { label: string; value: string; sub?: string; warn?: boolean }) => (
+  // The server's fold, printed as served. The shared offer gate carries NO extra condition: figure
+  // and panel came out of the same fold over the same rows.
+  const mixPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const mixDrill = useDrillTile(mixPanels)
+
+  const Tile = ({ label, value, sub, warn, links }: { label: string; value: string; sub?: string; warn?: boolean; links?: React.ReactNode }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 190 }}>
       <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, marginTop: 3, color: warn ? 'var(--c-fg-92400e)' : 'var(--text1)' }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+      {links}
     </div>
   )
 
@@ -179,7 +234,11 @@ export default function ProductMixPage() {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <Tile label="Reps low on both" value={String(flagged.length)}
                 sub={`of ${basis.ranked_reps || 0} ranked · ${basis.listed_reps || 0} listed`}
-                warn={flagged.length > 0} />
+                warn={flagged.length > 0}
+                links={<DrillTileLinks
+                  drills={mixDrill.dl('flagged_reps', 'who they are',
+                                      'ranked_reps', 'who was ranked at all')}
+                  open={mixDrill.open} onToggle={mixDrill.toggle} />} />
           <Tile label="Accessory $ per box (median)" value={num(basis.accessory_per_box_median, 2)}
                 sub="the bar a rep is measured against" />
           <Tile label="Port share (median)" value={share(basis.port_share_median, 1)}
@@ -188,6 +247,11 @@ export default function ProductMixPage() {
           <Tile label="Cheap-device share (median)" value={share(basis.cheap_share_median, 0)}
                 sub={`${bandDefs.filter(b => b.cheap).map(b => b.label.toLowerCase()).join(' + ')} bands`} />
         </div>}
+
+      {/* ONE renderer for whichever figure is open — the company tiles and the per-store offer below
+          both toggle into it. */}
+      {!mixDrill.open?.startsWith('store.') && mixDrill.panel &&
+        <DrillDownPanel panel={mixDrill.panel} extraColumns={MIX_DRILL_COLUMNS} />}
 
       {/* THE OWNER'S CLAIM, MEASURED. It is a hypothesis, so the report states the coefficient rather
           than coaching from an assumption — and says plainly that a correlation is not a cause. */}
@@ -277,6 +341,26 @@ export default function ProductMixPage() {
               totals
               stickyHeader
             />
+            {/* THE STORE TABLE'S OWN FIGURES. The store table is a shared ReportShell, which has no
+                per-cell affordance, so the store is PICKED here rather than clicked in the grid —
+                the same panels, reached without forking the shared table component. */}
+            {stores.length > 0 &&
+              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text2)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span>Open the rows behind one store’s figures:</span>
+                <select style={sel} value={drillStore} onChange={e => setDrillStore(e.target.value)}>
+                  <option value="">— pick a store —</option>
+                  {stores.map(st => <option key={st.store} value={st.store}>{st.store}</option>)}
+                </select>
+                {drillStore !== '' &&
+                  <DrillTileLinks
+                    drills={mixDrill.dl(...MIX_STORE_FIGURES.flatMap(
+                      ([k, label]) => [`store.${drillStore}.${k}`, label]))}
+                    open={mixDrill.open} onToggle={mixDrill.toggle} />}
+              </div>}
+            {/* A store's rows open HERE, under the store table they belong to, rather than back up
+                beside the company tiles. */}
+            {mixDrill.open?.startsWith('store.') && mixDrill.panel &&
+              <DrillDownPanel panel={mixDrill.panel} extraColumns={MIX_DRILL_COLUMNS} />}
             <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
               ℹ︎ {data?.carrier_port_meaning} It is reported <b>beside</b> ours, never merged into it:
               the two count different months and different denominators, and comparing them is the point.
