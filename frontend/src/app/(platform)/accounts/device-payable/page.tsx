@@ -24,6 +24,10 @@ import ReportExportBar from '@/components/ReportExportBar'
 import StatTile from '@/components/StatTile'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import type { ExportSheet } from '@/lib/export'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 
 const th: React.CSSProperties = { textAlign: 'left', padding: '7px 10px', fontSize: 12, color: 'var(--text2)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }
 const thr: React.CSSProperties = { ...th, textAlign: 'right' }
@@ -36,6 +40,33 @@ const num = (v: any) => (v == null ? '—' : Number(v).toLocaleString())
 const pct = (v: any) => (v == null ? '—' : `${(Number(v) * 100).toFixed(2)}%`)
 
 const today = () => new Date().toISOString().slice(0, 10)
+
+// WHERE EACH OF THESE FIGURES CAME FROM (index §CORE-17.3w). The server serves a panel per figure it
+// can stand behind, from account/device_billing_drilldown.py — the declaration this report SHARES
+// with Device Purchases, because both fold the units the distributor billed at the same store row.
+// The payable figures name TWO relations on every row: which units were billed comes from the
+// serialised invoice rows, and both the amount owed and the day it was settled from the unit ledger.
+// That is the whole method of this report, and it is why these are a different PROVENANCE from the
+// purchase money on the same row in the same unit (§CORE-17.3n).
+//
+// THIS PAGE FOLDS ITS OWN TILES IN THE BROWSER, so the store-keyed panels are NARROWED through
+// `lib/drill-narrow` and each figure is read OFF its narrowed panel through the SHARED
+// `agreesToTheCent` gate. The figures this page itself refuses to narrow (it prints `—` for them
+// under any filter) keep the server's own panel, offered only while nothing is selected — the page's
+// own rule honoured rather than a second one. An as-at date the ledger does not cover serves no
+// figure and therefore no panel at all. `harness_batch23_drilldown.py` §G locks both directions.
+const PAYABLE_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Company', get: (r: DrillRow) => String(r.fields?.company ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.company ?? '') },
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.market ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.market ?? '') },
+]
+//: The figures whose panels this page narrows, because it folds them itself over the filtered rows.
+//: `paid_amount` is deliberately NOT one of them: the page prints `—` for it under a filter rather
+//: than narrowing it, while the payable beside it DOES narrow — the asymmetry is the page's own and
+//: is reported in the declaration's docstring rather than papered over with a narrowed figure the
+//: tile does not print.
+const NARROWED_KEYS = ['payable_amount', 'payable_devices']
 
 function Card({ title, note, children }: { title: string; note?: React.ReactNode; children?: React.ReactNode }) {
   return (
@@ -110,6 +141,29 @@ export default function DevicePayablePage() {
   const payableTotal = rows.reduce((a, r) => a + (r.payable_amount || 0), 0)
   const payableDevices = rows.reduce((a, r) => a + (r.payable_devices || 0), 0)
   const cascade = useMemo(() => [...new Map(stores.map(r => [r.store, { id: r.store, label: r.store, market: r.market || '' }])).values()], [stores])
+
+  // THE PANELS, NARROWED WITH THE SAME PREDICATE THE TABLES ARE FILTERED BY.
+  const served = useMemo(
+    () => (data?.drilldown || {}) as Record<string, DrillPanel>, [data])
+  const shown = useMemo(
+    () => new Set(rows.map(r => screenKey({ store: r.store, company: r.company }))), [rows])
+  const panels = useMemo(() => {
+    const out: Record<string, DrillPanel> = {}
+    for (const k of Object.keys(served)) {
+      if (!NARROWED_KEYS.includes(k)) { if (!narrowed) out[k] = served[k]; continue }
+      const p = narrowPanel(served[k], (_r: DrillRow, key: string) => key === '' || shown.has(key))
+      if (p) out[k] = p
+    }
+    return out
+  }, [served, shown, narrowed])
+  const tileValue: Record<string, number> = {
+    payable_amount: payableTotal, payable_devices: payableDevices,
+  }
+  const drill = useDrillTile(panels, (k, p) => !(k in tileValue) || agreesToTheCent(p, tileValue[k]))
+  /** The figure a tile prints: its narrowed panel's own total where the two agree to the cent, else
+   *  this page's fold. One expression, so the tile and the panel beneath it cannot drift. */
+  const drillFigure = (k: string, own: number) =>
+    agreesToTheCent(panels[k], own) ? Number(panels[k]?.figure?.amount ?? own) : own
 
   const nd = data?.non_device || null
   const ndItems: any[] = nd?.by_item || []
@@ -233,12 +287,21 @@ export default function DevicePayablePage() {
       {data && !loading && measured && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10, marginBottom: 14 }}>
-            <StatTile label={`Device payable at ${asAt}`} value={money(payableTotal)} />
-            <StatTile label="Devices still unpaid" value={num(payableDevices)} />
+            <StatTile label={`Device payable at ${asAt}`} value={money(drillFigure('payable_amount', payableTotal))} />
+            <StatTile label="Devices still unpaid" value={num(drillFigure('payable_devices', payableDevices))} />
             <StatTile label="Already paid by this date" value={narrowed ? '—' : money(T.paid_amount)} />
+            {/* A RATE gets no panel (§CORE-17.3h); the two counts it divides are offered instead. */}
             <StatTile label="Devices matched to the unit ledger" value={narrowed ? '—' : pct(T.match_rate)} />
             <StatTile label="Non-device items billed (separate basis)" value={narrowed ? '—' : money(nd?.amount)} />
           </div>
+          {/* One link per figure a row list exists for, then ONE renderer for whichever is open. */}
+          <DrillTileLinks
+            drills={drill.dl('payable_amount', 'the stores behind this payable',
+              'payable_devices', 'the stores behind this unit count',
+              'paid_amount', 'the stores behind what was already paid',
+              'non_device_amount', 'the items behind this figure')}
+            open={drill.open} onToggle={drill.toggle} />
+          {drill.panel && <DrillDownPanel panel={drill.panel} extraColumns={PAYABLE_DRILL_COLUMNS} />}
 
           {/* A $0.00 PAYABLE BESIDE A LARGE DEVICE COUNT IS THE FEED'S OWN POSITION, NOT A BLANK
               REPORT. The distributor states nothing owed while a unit sits inside its reimbursement

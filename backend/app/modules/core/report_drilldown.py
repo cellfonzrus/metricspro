@@ -481,6 +481,13 @@ def tile_panel(figure_label, amount, rows, *, value, tables, row_label=None, key
     read_m = measured if callable(measured) else _reader(measured, default=None)
     read_rs = reason if callable(reason) else _reader(reason, default=None)
     read_in = in_figure if callable(in_figure) else None
+    # WHICH COLUMN A FIGURE WAS READ OUT OF, PER ROW WHERE THAT GENUINELY DIFFERS (added for the
+    # batch-23 inventory family, §CORE-17.3w). `tables` has taken a callable since the cash-recon
+    # family, for exactly this reason: one store's effective value came out of the override column a
+    # person typed and the next store's out of the swept column of the SAME relation, and a panel
+    # that named one column for both would be wrong on half its rows. A plain string still behaves
+    # exactly as before, so no existing declaration changes.
+    read_c = column if callable(column) else (lambda _r: column)
     key_names = tuple(keys) if isinstance(keys, (tuple, list)) else ((keys,) if keys else ())
 
     out = []
@@ -507,7 +514,7 @@ def tile_panel(figure_label, amount, rows, *, value, tables, row_label=None, key
         # config-resolved feed has the same shape (cash recon's processor and sales legs included).
         _tables = tuple(read_t(r) or ()) or (None,)
         out.append(drill_row(
-            lab, origins_of([(t, kv) for t in _tables], schema=schema, column=column),
+            lab, origins_of([(t, kv) for t in _tables], schema=schema, column=read_c(r)),
             row_key=kv,
             amount=v,
             in_figure=(read_in(r) if read_in else v is not None),

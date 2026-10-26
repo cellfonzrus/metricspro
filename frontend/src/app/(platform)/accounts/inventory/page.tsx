@@ -6,6 +6,41 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { usePosTerm } from '@/lib/report-labels'
 import { scopeState, connectorNotApplicableCopy } from '@/lib/connectors'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+
+// WHERE EACH OF THESE FIGURES CAME FROM (index §CORE-17.3w). The server serves a panel per figure it
+// can stand behind, from account/inventory_value_drilldown.py, folded over the SAME store rows each
+// table prints — ONE row shape and FOUR grains on it, three of them separated by PROVENANCE ALONE:
+// what the emailed report says a store's stock is worth, what the per-device aging rows say, the
+// phones themselves, and the EFFECTIVE value, whose source is decided PER ROW and named per row.
+//
+// THIS PAGE IS SERVER-FOLDED AND IS DELIBERATELY *NOT* NARROWED. It has no store, market or period
+// filter of any kind — its only controls are the override inputs, the connector form and a save —
+// so each figure is printed exactly as its endpoint served it and `lib/drill-narrow` has no place
+// here. `harness_batch23_drilldown.py` §G fails the build in both directions off this page's text.
+//
+// REPORTED ON THE SCREEN'S OWN TERMS: the grid's "Effective (on BS)" column follows a precedence
+// the Balance Sheet does not apply on every basis, and the reconciliation table lower down prints
+// the configured one under the SAME header. The panel for the grid total says so in the reader's
+// words rather than averaging the disagreement away (declaration docstring, defect 1).
+const VALUE_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Source', get: (r: DrillRow) => String(r.fields?.source ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.source ?? '') },
+  { header: 'Manual override', get: (r: DrillRow) => String(r.fields?.['manual override'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['manual override'] ?? 0) },
+  { header: 'From the report', get: (r: DrillRow) => String(r.fields?.['from the report'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['from the report'] ?? 0) },
+]
+const RECON_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Phones', get: (r: DrillRow) => String(r.fields?.phones ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.phones ?? 0) },
+  { header: 'Report as of', get: (r: DrillRow) => String(r.fields?.['report as of'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['report as of'] ?? '') },
+  { header: 'Devices as of', get: (r: DrillRow) => String(r.fields?.['devices as of'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['devices as of'] ?? '') },
+]
 
 const inp: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
@@ -32,6 +67,9 @@ export default function InventoryValuesPage() {
   // Reconciliation tab (owner defect #1 2026-09-02 / roadmap Phase 2): the emailed-report ↔
   // unsold-phone-ledger tie-out from GET /account/inventory-recon — read-only, rendered below.
   const [recon, setRecon] = useState<any>(null)
+  // The two panel sets, one per endpoint — each keyed on the figure the page prints (§CORE-17.3w).
+  const [valueDrill, setValueDrill] = useState<Record<string, DrillPanel>>({})
+  const [reconDrill, setReconDrill] = useState<Record<string, DrillPanel>>({})
 
   function load() {
     setLoading(true)
@@ -41,6 +79,8 @@ export default function InventoryValuesPage() {
       api(`/api/v1/account/inventory-recon?org_id=${ORG_ID}`).catch(() => null),
     ]).then(([d, c, rc]: any) => {
       setRows(d.rows || []); setSweep(d.sweep); setTotal(d.total_effective || 0); setCfg(c || {}); setRecon(rc)
+      setValueDrill((d.drilldown || {}) as Record<string, DrillPanel>)
+      setReconDrill((rc?.drilldown || {}) as Record<string, DrillPanel>)
     }).catch(console.error).finally(() => { setLoading(false); setCfgLoaded(true) })
   }
   useEffect(() => { load() }, [])
@@ -77,6 +117,11 @@ export default function InventoryValuesPage() {
     } catch (e: any) { setMsg('Fetch failed: ' + (e?.message || e)) }
     setFetching(false)
   }
+
+  // ONE open panel at a time per table, through the shared hook — the offer rule lives in the one
+  // home, so a figure the server served no panel for shows no link rather than an empty panel.
+  const vDrill = useDrillTile(valueDrill)
+  const rDrill = useDrillTile(reconDrill)
 
   // Step 1 (lib/connectors.ts): 'checking' | 'unknown' | 'not_defined' | 'defined'. 'unknown' (an
   // older backend / a failed read) renders the form as before — a lookup failure never hides a surface.
@@ -153,7 +198,12 @@ export default function InventoryValuesPage() {
 
       <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>
         Total on-hand inventory (effective): <strong style={{ color: 'var(--text)' }}>{fmt(total)}</strong> · {rows.length} stores
+        <DrillTileLinks drills={vDrill.dl('total_effective', 'the stores behind this figure')}
+          open={vDrill.open} onToggle={vDrill.toggle} />
       </div>
+      {/* ONE renderer for whichever figure is open — the store rows it was folded from, each naming
+          the relation it was actually read out of. */}
+      {vDrill.panel && <DrillDownPanel panel={vDrill.panel} extraColumns={VALUE_DRILL_COLUMNS} />}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
@@ -207,6 +257,14 @@ export default function InventoryValuesPage() {
               <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>
                 Effective basis: <b>{recon.basis}</b> · report {fmt(recon.totals?.report_value)} vs devices {fmt(recon.totals?.device_value)} ({recon.totals?.device_count} phones) · delta <b style={{ color: Math.abs(recon.totals?.delta || 0) > 1 ? 'var(--c-fg-b45309)' : 'var(--c-fg-15803d)' }}>{fmt(recon.totals?.delta)}</b>
               </div>
+              {/* A link per figure in that line — the delta included, because the producer folds it
+                  per ROW and a difference folded per row is drillable (§CORE-17.3k). */}
+              <DrillTileLinks
+                drills={rDrill.dl('report_value', 'the stores behind the report total',
+                  'device_value', 'the stores behind the device total',
+                  'device_count', 'the stores behind the phone count',
+                  'delta', 'the stores behind the delta')}
+                open={rDrill.open} onToggle={rDrill.toggle} />
             </div>
             {(recon.device_meta?.unplaced_devices > 0 || recon.device_meta?.superseded_devices > 0) && (
               <div style={{ fontSize: 12, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)', padding: '4px 8px', borderRadius: 8, alignSelf: 'flex-start' }}>
@@ -243,6 +301,7 @@ export default function InventoryValuesPage() {
               ))}
             </tbody>
           </table>
+          {rDrill.panel && <DrillDownPanel panel={rDrill.panel} extraColumns={RECON_DRILL_COLUMNS} />}
           <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text3)' }}>{recon.note}</div>
         </div>
       )}
