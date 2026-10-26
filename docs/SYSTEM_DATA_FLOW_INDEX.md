@@ -35336,6 +35336,17 @@ browser-filtered pages was considered and REFUSED:** their tiles would then disa
 screen never prints, which would HIDE defects 9 and 10 behind a figure nobody measured. The defects
 are reported instead.
 
+**AN UN-WIRING HOLE IN THE PROGRAMME'S OWN LOCKS, FOUND BY MUTATION-TESTING THEM AND CLOSED FOR
+EVERY BATCH.** Every lock in this programme asserted a page renders the shared panel with
+`"DrillDownPanel" in src` — **which the IMPORT alone satisfies.** Measured 2026-10-26 by deleting the
+render from one of these four pages and leaving its import: `harness_batch19_drilldown.py` §F5 **and
+`harness_drilldown_coverage.py` §D1 both stayed GREEN.** That is precisely the un-wiring the house
+rule exists to forbid — a lock that cannot tell a wired caller from an unused import is not a lock.
+Both now match the **JSX element** `<DrillDownPanel`, with §F5c as a non-vacuity witness in both
+directions, and the fix went into the SHARED gate rather than only into this batch's harness, so it
+holds for all **57** `shared` routes at once instead of for the batch that happened to find it. All
+57 pass the stricter match, so no earlier batch was relying on an import.
+
 **A DESIGN FIX, WITH ITS OTHER HALF.** The two CARRIER ACTIVITY REPORTS were spelled as LITERALS in
 **five** places inside `data_lineage_registry.py` itself and named by no constant. They are now
 `DLAR_REP` and `DLAR_STORE`, and **all five copies were re-keyed in the same commit**, asserted by

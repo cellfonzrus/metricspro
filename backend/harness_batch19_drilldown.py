@@ -1011,11 +1011,26 @@ check("F4 the two pages whose filters are QUERY PARAMETERS say so, and really do
       "their panels follow their tiles by construction",
       "qs.set('stores'" in PAGES["ma-commission"]
       and "?status=" in PAGES["recovery"])
-check("F5 all four pages render the SHARED panel and hand-roll none of their own",
-      all("DrillDownPanel" in s for s in PAGES.values())
+#: THE ELEMENT, NOT THE IDENTIFIER. `"DrillDownPanel" in src` is satisfied by the IMPORT ALONE, so
+#: a page whose render was deleted while its import stayed passed every scan in this programme —
+#: MEASURED 2026-10-26 by deleting the render from one of these four pages and watching this file
+#: AND `harness_drilldown_coverage.py` §D1 both stay green. That is the un-wiring hole the house
+#: rule exists to close ("a design fix ships with a check that FAILS THE BUILD if a caller stops
+#: dereferencing the shared fact"), so both are matched on the JSX ELEMENT now.
+_RENDERS = {n: bool(re.search(r"<DrillDownPanel[\s/>]", strip_comments(s)))
+            for n, s in PAGES.items()}
+check("F5 all four pages RENDER the shared panel — matched on the JSX element `<DrillDownPanel`, "
+      "never on the bare identifier, which an unused import satisfies on a page whose render was "
+      "deleted — and hand-roll none of their own",
+      all(_RENDERS.values())
       and not any(("rows_total_count" in strip_comments(s)) or ("tie_out" in strip_comments(s))
                   for s in PAGES.values()),
-      str([n for n, s in PAGES.items() if "DrillDownPanel" not in s]))
+      str([n for n, ok in _RENDERS.items() if not ok]))
+ctl("F5c control: the element scan is NOT vacuous, and it really is stricter than the identifier "
+    "scan — an import-only page has the identifier and NOT the element",
+    re.search(r"<DrillDownPanel[\s/>]", "  <DrillDownPanel panel={p} />\n")
+    and not re.search(r"<DrillDownPanel[\s/>]",
+                      "import DrillDownPanel from '@/components/DrillDownPanel'\n"))
 check("F6 and each reads what the SERVER served, through the shared offer gate, rather than deriving "
       "a drill of its own",
       all("drilldown" in s and "useDrillTile" in s and "agreesToTheCent" in s

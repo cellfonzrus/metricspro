@@ -142,7 +142,13 @@ def _src(route):
 
 
 _shared = [r for r, v in rows.items() if v["state"] == "shared"]
-_not_wired = [r for r in _shared if "DrillDownPanel" not in _src(r)]
+# THE ELEMENT, NOT THE IDENTIFIER (measured 2026-10-26, batch 19). `"DrillDownPanel" in src` is
+# satisfied by the IMPORT ALONE: a page whose render was deleted while its import stayed passed this
+# lock and the batch harnesses alike, which is the un-wiring hole every one of these locks exists to
+# close. Matching the JSX element closes it for EVERY batch at once rather than for the one that
+# happened to find it. `harness_batch19_drilldown.py` §F5 carries the same rule with a non-vacuity
+# witness in both directions.
+_not_wired = [r for r in _shared if not re.search(r"<DrillDownPanel[\s/>]", _src(r))]
 check("D1 BUILD LOCK — every route marked `shared` really renders the shared panel. Writing the "
       "registry without wiring the caller to it is not a fix at all (CLAUDE.md §19.18)",
       _shared and _not_wired == [], str(_not_wired))
