@@ -35236,6 +35236,19 @@ screen keeps its own number — and §G7/§G7b the capped-panel refusal against 
 the same for the three server-folded screens, including a server-side witness where one store's rows
 are removed from the READ and the total, the panel's figure and its row count all move together.
 
+**THE NEW CALLER IS REGISTERED IN THE ONE FROZEN SNAPSHOT THAT HOLDS THEM.** Asking §66's allowlist
+whether a carrier dollar's placement is evidence makes this declaration the FOURTH caller of the
+`carrier_dollar_component` fact, and `harness_carrier_dollar_class.py` **§K3** is an exact-equality
+snapshot of that fact's callers — so the hand-written `module_graph.py` edge the graph guard demanded
+is only half the registration, and the snapshot is the other half. Both are in the same commit. The
+`==` is untouched, and that it still bites was MUTATION-TESTED rather than asserted: an unregistered
+fifth caller is red, and **removing the fourth caller's edge to make §K3 quiet is red too**, which is
+the un-wiring shortcut §19.18 exists to stop. **§K8b** is ADDED beside §K8, never substituted for it,
+so `connected()` is asserted for the new caller as well. Measured at the same time, so the class
+cannot cost a second CI round: **§K3 is the only exact-equality caller snapshot in the suite** — every
+other harness that reads `MG.FACTS` tests membership with `in`, and the three facts this module
+dereferences are `report_drilldown`, `feed_lineage` and `carrier_dollar_component`.
+
 **No migration, no new table, no money moved** — four read-only `drilldown` keys on four endpoints,
 four pages wired to the shared panel, no change to any producer's arithmetic, two registry constants
 added (`SCHEDULE`, `STORE_EXPENSES`) with every existing literal copy re-keyed by object identity,
