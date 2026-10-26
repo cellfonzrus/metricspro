@@ -7,6 +7,10 @@ import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
 import ScreenLink from '@/components/ScreenLink'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
 
 // ACCESSORY TARGET ALLOCATION (index §61, owner ask 2026-10-09) — the company names ONE accessory
 // number at the top of the page; the table says who has to sell what to get there, weighted by each
@@ -20,6 +24,30 @@ import { SortableTh, useTableSort } from '@/components/SortableTh'
 // The "Assign" button writes into the SAME target row the Accessory Sales Targets tracker reads
 // (`commcalc.targets.accessories_monthly`, mig 006) through the same permission + store-span gate as
 // the single-store save — there is no second home for a store's accessory target.
+//
+// WHERE EACH FIGURE CAME FROM (§CORE-17.3o). Every money total here opens to the store rows it was
+// summed over, and the family has FOUR grains on that one row: the month's accessory sales out of
+// the sales rows, the target somebody TYPED into Target Settings, the share this page derives on
+// this load and stores NOWHERE (so every row of it reports an origin that cannot be traced), and the
+// extension, which names both and can therefore disagree with either. Declared in
+// commcalc/accessory_money_drilldown.py, folded once by core/report_drilldown.
+//
+// The two GOAL-DEPENDENT panels are served only once a goal has been entered: a $0.00 "being
+// assigned" over stores that all carry no suggestion is the ABSENCE of a figure, not a figure
+// (§CORE-17.3m), and the page already prints an em dash for it. Every filter here is a QUERY
+// PARAMETER, so the server's own fold already covers exactly what is on screen and `lib/drill-narrow`
+// is not wired in (locked, harness_batch15_drilldown.py §E).
+const dfield = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const PLAN_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: r => dfield(r, 'market'), sortValue: r => dfield(r, 'market') },
+  { header: 'Boxes used', get: r => dfield(r, 'boxes used'), sortValue: r => Number(r.fields?.['boxes used'] ?? -1) },
+  { header: 'Rate basis', get: r => dfield(r, 'rate basis'), sortValue: r => dfield(r, 'rate basis') },
+  { header: 'In selection', get: r => dfield(r, 'in selection'), sortValue: r => dfield(r, 'in selection') },
+  { header: 'Target row', get: r => dfield(r, 'target row'), sortValue: r => dfield(r, 'target row') },
+]
 
 type Row = {
   store_code: string; address: string; market: string | null; is_active?: boolean
@@ -44,6 +72,7 @@ type Plan = {
   allocation: { reserved: number; to_split: number | null; weight_basis: string | null; unweighted: string[]; reason: string | null; shortfall: number | null }
   rows: Row[]
   totals: Record<string, number>
+  drilldown?: Record<string, DrillPanel>
   goal_modes: Opt[]; goal_bases: Opt[]
   filters: { stores: Opt[]; markets: string[] }
   scope: { restricted: boolean; can_edit_targets: boolean; stores_in_scope: number }
@@ -139,6 +168,10 @@ export default function AccessoryTargetPlanPage() {
   const writable = useMemo(() => picked.filter((r) => r.suggested_target !== null), [picked])
   const goal = plan?.goal
   const alloc = plan?.allocation
+  // The drill is offered only where the panel agrees with the tile to the cent — one home for that
+  // rule (lib/drill-narrow), so a panel can never explain a number the page is not showing.
+  const drill = useDrillTile(plan?.drilldown || {},
+    (k, p) => agreesToTheCent(p, plan?.totals?.[k]))
 
   async function assign() {
     if (!plan || writable.length === 0) return
@@ -293,15 +326,24 @@ export default function AccessoryTargetPlanPage() {
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: 14, marginBottom: 16 }}>
-            <Stat label={`${m1Label} actual`} value={fmt(plan!.totals.m1_acc)} />
-            <Stat label="Projected this month" value={fmt(plan!.totals.projected_acc)} />
-            <Stat label="Targets set now" value={fmt(plan!.totals.current_target)} />
+            <Stat label={`${m1Label} actual`} value={fmt(plan!.totals.m1_acc)}
+              drill={<DrillTileLinks drills={drill.dl('m1_acc', 'stores behind this')} open={drill.open} onToggle={drill.toggle} />} />
+            <Stat label="Projected this month" value={fmt(plan!.totals.projected_acc)}
+              drill={<DrillTileLinks drills={drill.dl('projected_acc', 'stores behind this')} open={drill.open} onToggle={drill.toggle} />} />
+            <Stat label="Targets set now" value={fmt(plan!.totals.current_target)}
+              drill={<DrillTileLinks drills={drill.dl('current_target', 'stores behind this')} open={drill.open} onToggle={drill.toggle} />} />
             <Stat label="Being assigned" value={money(goal?.goal === null ? null : plan!.totals.assigned)} color="var(--accent)"
-              sub={alloc?.reserved ? `+ ${fmt(alloc.reserved)} reserved on unselected stores` : undefined} />
+              sub={alloc?.reserved ? `+ ${fmt(alloc.reserved)} reserved on unselected stores` : undefined}
+              drill={<DrillTileLinks drills={drill.dl('assigned', 'stores behind this')} open={drill.open} onToggle={drill.toggle} />} />
             <Stat label="Total extension" value={goal?.goal === null ? '—' : fmt(plan!.totals.extension)}
               color={plan!.totals.extension >= 0 ? 'var(--c-fg-16a34a)' : 'var(--c-fg-d97706)'}
-              sub={`${plan!.totals.stores_selected} of ${plan!.totals.stores} stores selected`} />
+              sub={`${plan!.totals.stores_selected} of ${plan!.totals.stores} stores selected`}
+              drill={<DrillTileLinks drills={drill.dl('extension', 'stores behind this')} open={drill.open} onToggle={drill.toggle} />} />
           </div>
+
+          {/* The two month columns that have no tile of their own carry their drill in the footer
+              total below; whichever figure is open, its panel renders here. */}
+          {drill.panel && <div style={{ marginBottom: 14 }}><DrillDownPanel panel={drill.panel} extraColumns={PLAN_DRILL_COLUMNS} /></div>}
 
           {plan!.scope.can_edit_targets && (
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
@@ -367,9 +409,11 @@ export default function AccessoryTargetPlanPage() {
               </tbody>
               <tfoot><tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)', fontWeight: 700, fontSize: 13 }}>
                 <td style={{ padding: '9px 12px' }}>Total</td>
-                <Td>{fmt(plan!.totals.m2_acc)}</Td>
+                <Td>{fmt(plan!.totals.m2_acc)}
+                  <DrillTileLinks drills={drill.dl('m2_acc', 'stores behind this')} open={drill.open} onToggle={drill.toggle} /></Td>
                 <Td>{fmt(plan!.totals.m1_acc)}</Td>
-                <Td>{fmt(plan!.totals.mtd_acc)}</Td>
+                <Td>{fmt(plan!.totals.mtd_acc)}
+                  <DrillTileLinks drills={drill.dl('mtd_acc', 'stores behind this')} open={drill.open} onToggle={drill.toggle} /></Td>
                 <Td>{fmt(plan!.totals.projected_acc)}</Td>
                 <Td>—</Td><Td>—</Td><Td>—</Td>
                 <Td>{fmt(plan!.totals.current_target)}</Td>
@@ -432,10 +476,11 @@ function Sub({ children }: { children?: React.ReactNode }) {
   return <div style={{ fontSize: 10.5, color: 'var(--text3)', fontWeight: 400 }}>{children}</div>
 }
 
-function Stat({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+function Stat({ label, value, sub, color, drill }: { label: string; value: string; sub?: string; color?: string; drill?: React.ReactNode }) {
   return <div className="card" style={{ padding: '14px 16px' }}>
     <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{label}</div>
     <div style={{ fontSize: 20, fontWeight: 700, marginTop: 4, color: color || 'var(--text1)' }}>{value}</div>
     {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+    {drill}
   </div>
 }

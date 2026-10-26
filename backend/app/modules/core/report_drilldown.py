@@ -152,6 +152,16 @@ UNMEASURED_REASONS = {
     "day_not_yet_reached": "this day has not happened yet, so there is nothing it could have "
                            "achieved — it is shown because the month is not over, not because "
                            "nothing was sold",
+    # The shapes the batch-15 ACCESSORY MONEY reports brought with them (§CORE-17.3o). A DERIVED
+    # target — a share of a company goal, worked out on this load and stored nowhere — has two ways
+    # of being absent that are not the same as an unset target, and neither of them is a zero.
+    "not_in_selection": "this store is not in the selection the goal is being split across, so "
+                        "nothing is being asked of it — the target it already carries is reserved "
+                        "out of the goal rather than re-planned",
+    "no_capacity_measured": "nothing measurable was found for this store — no accessories-per-box "
+                            "rate and no boxes to multiply one by — so no share of the goal can be "
+                            "derived for it; its target is left exactly as it is rather than "
+                            "written down as $0.00",
     "no_dm_in_org_tree": "the org chart does not say which district manager owns this store, so "
                          "this figure cannot be attributed to any of them — it is unattributable "
                          "rather than zero, and assigning the store in the org chart is what puts "

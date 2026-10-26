@@ -6,6 +6,10 @@ import { ReportShell } from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { agreesToTheCent } from '@/lib/drill-narrow'
 
 // ACCESSORY COST AUDIT — READ-ONLY. Nothing on this page changes what anyone is paid; it explains the
 // numbers a %-of-GP payout is computed FROM, and shows what the SAME period would have paid under each
@@ -19,8 +23,31 @@ import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterVa
 // $0 payout, by arithmetic; (2) a plan rule's rate is a FRACTION (0.10 = 10%) with no clamp on save,
 // so a rate typed as a whole percent pays 100×.
 
+// WHERE EACH OPTION TOTAL CAME FROM (§CORE-17.3o). Every option total opens to the REP rows it was
+// summed over, naming the two sale relations the pay engine's own read walks plus the plan rule that
+// carries the rate — and Option A names the product catalogue as well, because it is the one option
+// that reads a second relation. Δ B / Δ C / Δ R drill too: the producer folds each of them PER REP.
+// Δ A does NOT — the page subtracts it at the total and there is no per-rep figure to open
+// (§CORE-17.3k). Declared in commcalc/accessory_money_drilldown.py.
+//
+// `lib/drill-narrow` is DELIBERATELY NOT WIRED HERE (locked, harness_batch15_drilldown.py §E): the
+// filter bar narrows the per-rep and per-line tables in the browser while these five totals are the
+// SERVER's own over every rep, so narrowing the panels would change the number being read. The
+// panels say which population they cover; the tile/table disagreement is REPORTED (§CORE-17.3o).
 type Opt = 'current' | 'option_a' | 'option_b' | 'option_c' | 'option_r'
 const OPTS: Opt[] = ['current', 'option_a', 'option_b', 'option_c', 'option_r']
+const DELTA_KEY: Partial<Record<Opt, string>> = { option_b: 'delta_b', option_c: 'delta_c', option_r: 'delta_r' }
+
+const dfield = (r: DrillRow, field: string) => {
+  const v = r.fields?.[field]
+  return v == null || v === '' ? '' : String(v)
+}
+const REP_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: r => dfield(r, 'store'), sortValue: r => dfield(r, 'store') },
+  { header: 'Plan', get: r => dfield(r, 'plan'), sortValue: r => dfield(r, 'plan') },
+  { header: 'Lines', get: r => dfield(r, 'lines'), sortValue: r => Number(r.fields?.lines ?? -1) },
+  { header: 'Suspect', get: r => dfield(r, 'suspect lines'), sortValue: r => Number(r.fields?.['suspect lines'] ?? -1) },
+]
 
 const REP_COLS: ExportColumn[] = [
   { header: 'Rep', get: r => r.rep, role: 'rep' },
@@ -106,6 +133,12 @@ export default function AccessoryCostAuditPage() {
 
   const totals = data?.totals || {}
   const cnt = data?.counts || {}
+  // The figure each key's panel must agree with, to the cent, before any drill is offered.
+  const tileFigure = useCallback((k: string): unknown => (
+    k.startsWith('delta_') ? data?.deltas?.[`option_${k.slice(6)}`] : totals[k]
+  ), [data, totals])
+  const drill = useDrillTile((data?.drilldown || {}) as Record<string, DrillPanel>,
+    (k, p) => agreesToTheCent(p, tileFigure(k)))
 
   return (
     <div>
@@ -191,7 +224,7 @@ export default function AccessoryCostAuditPage() {
             </div>
             <table style={{ width: '100%', fontSize: 13 }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['Option', 'Total for the period', 'Δ vs today'].map(h =>
+                {['Option', 'Total for the period', 'Δ vs today', 'Where it came from'].map(h =>
                   <th key={h} style={{ textAlign: 'left', padding: '5px 8px', color: 'var(--text2)' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -206,11 +239,18 @@ export default function AccessoryCostAuditPage() {
                       <td style={{ padding: '5px 8px', color: d < 0 ? 'var(--red)' : d > 0 ? 'var(--green)' : 'var(--text3)' }}>
                         {k === 'current' ? '—' : unknown ? 'unknown until the POS costs are corrected' : fmt(d)}
                       </td>
+                      <td style={{ padding: '5px 8px' }}>
+                        <DrillTileLinks
+                          drills={drill.dl(k, 'reps behind this',
+                            ...(DELTA_KEY[k] ? [DELTA_KEY[k] as string, 'reps behind the difference'] : []))}
+                          open={drill.open} onToggle={drill.toggle} />
+                      </td>
                     </tr>
                   )
                 })}
               </tbody>
             </table>
+            {drill.panel && <div style={{ marginTop: 10 }}><DrillDownPanel panel={drill.panel} extraColumns={REP_DRILL_COLUMNS} /></div>}
             <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 8, lineHeight: 1.6 }}>
               <b>A</b> can only be computed for items the POS catalog already carries a cost for
               ({data.catalog_rows || 0} catalog row(s) loaded); everything else is “unknown until the owner sets a cost”
