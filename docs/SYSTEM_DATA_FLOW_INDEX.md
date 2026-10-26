@@ -35271,7 +35271,7 @@ That fourth one is in the family because a reader who disbelieves a dollar figur
 next — and it keeps its **own catalogue and its own grains** rather than being forced into theirs,
 because counting cells is not folding money. Declaration:
 `backend/app/modules/commcalc/carrier_owed_drilldown.py`. Proof:
-`backend/harness_batch19_drilldown.py`, **161 checks**, **27 mutations / negative controls**, wired
+`backend/harness_batch19_drilldown.py`, **163 checks**, **28 mutations / negative controls**, wired
 into the guard job with a paths filter naming every file it is about.
 
 **WHAT WAS CHECKED FOR A DUPLICATE, AND WHAT WAS REUSED INSTEAD OF REBUILT.** The index was searched
