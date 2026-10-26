@@ -19,7 +19,9 @@ from app.modules.asset.router import (
     _norm_imei, _vip_invoice_map, _epay_payments_map, _classify_rma,
 )
 from app.modules.commcalc import flag_registry as _reg
+from app.modules.commcalc import product_mix as _pm
 from app.modules.payables import declared_source as _ds
+from app.modules.payables import ledger_status as _ls
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 PAGE = 1000
@@ -427,7 +429,11 @@ def _needed_cols(cfg):
     cols = set()
     for k in ("imei_field", "model_field", "store_field", "owed_field", "due_date_field",
               "billing_friday_field", "sold_date_field", "reimbursement_field",
-              "reimbursement_date_field", "invoice_date_field"):
+              "reimbursement_date_field", "invoice_date_field",
+              # The column that DECLARES whether a device was bought on this line (§COMMCALC-31).
+              # Selected like any other declared field: unselected, the question cannot be asked and
+              # every bring-your-own-phone line reads as an unpriced payable.
+              "device_class_field"):
         v = cfg.get(k)
         if v:
             cols.add(v)
@@ -531,6 +537,10 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
     imei_field = cfg["imei_field"]
     owed_field = cfg.get("owed_field")
     imeis = [r.get(imei_field) for r in chunk]
+    # Resolved ONCE per page, not per row: which column declares the device class, and the words that
+    # mean "no device" for this tenant (None -> the one home's house words).
+    class_field = str(cfg.get("device_class_field") or "").strip()
+    nod_tokens = cfg.get("no_device_tokens") or None
 
     vip_map = (_vip_invoice_map(client, org_id, imeis)
                if cfg.get("invoice_date_source") == "vip_invoices" else {})
@@ -560,6 +570,11 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
         imei = _norm_imei(r.get(imei_field))
         model_raw = (r.get(cfg["model_field"]) if cfg.get("model_field") else None)
         model = alias.get((str(model_raw or "").strip().lower()), model_raw)
+        # DID THE DEALER BUY A PHONE ON THIS LINE AT ALL (§COMMCALC-31)? Through the one home for
+        # "did this line sell a device" (`product_mix.no_device_declared`, §COMMCALC-03.21), on the
+        # column this carrier's map declares. No declared column -> every row is kept, which is
+        # byte-identical to before this question existed.
+        no_device = bool(class_field) and _pm.no_device_declared(r.get(class_field), nod_tokens)
         store = r.get(cfg["store_field"]) if cfg.get("store_field") else None
         # No store on the source row (every Total/MA map: the activation is booked against the dealer
         # account) -> use the POS store that sold the device. Only ever FILLS a blank; a configured
@@ -666,15 +681,23 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
             threshold = window_start + timedelta(days=int(span * (1 - pct / 100.0)))
             priority = today >= threshold
 
-        # status routing
-        if owed is not None and rebate_got and (rebate_amount or 0) >= (owed - 0.01):
-            status = "offset"
+        # status routing. FIRST, because a line that bought no device is not a payable in any state:
+        # it cannot be offset, it is not a discrepancy, and it is never due (§COMMCALC-31). The feed's
+        # own declaration is the only thing that may say so — a product DESCRIPTION is not evidence
+        # (§66), and reading one here would drop real handsets.
+        if no_device:
+            status = _ls.STATUS_NO_DEVICE
+            owed, net_owed, net_offset = None, None, 0.0
+            owed_source = _ls.OWED_SOURCE_NO_DEVICE
+            priority = False
+        elif owed is not None and rebate_got and (rebate_amount or 0) >= (owed - 0.01):
+            status = _ls.STATUS_OFFSET
         elif sold_flag and not rebate_got:
-            status = "discrepancy"
+            status = _ls.STATUS_DISCREPANCY
         elif (not sold_flag) and not rebate_got and due_date and today >= due_date:
-            status = "due"
+            status = _ls.STATUS_DUE
         else:
-            status = "open"
+            status = _ls.STATUS_OPEN
 
         out.append({
             "org_id": org_id, "carrier_id": cid, "imei": imei, "store": store,

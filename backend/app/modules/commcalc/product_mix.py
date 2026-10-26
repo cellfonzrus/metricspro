@@ -296,6 +296,25 @@ def _has_token(text, tokens):
     return any(f" {t} " in low for t in (tokens or ()) if t)
 
 
+#: The basis a class rests on when the FEED ITSELF said no device was sold. The strongest basis there
+#: is, and the only one another surface may act on — §66's lesson: a class read off a keyword is not
+#: evidence, and acting on one is how a real handset gets dropped.
+DECLARED_NO_DEVICE_BASIS = PRODUCT_CLASS_BASES[0]
+
+
+def no_device_declared(declared, no_device_tokens=None):
+    """PURE: True only when the row's OWN feed column declares that no device was sold.
+
+    THE ONE TEST, so no caller re-derives it (§COMMCALC-31). The device-payables ledger needs exactly
+    this question and nothing else about the product: a bring-your-own-phone line is an activation,
+    never a handset the dealer bought, so it can never be owed for and must not be presented as an
+    unpriced payable. `product_class_of` below dereferences this rather than keeping a second copy —
+    writing a shared fact and leaving the callers unwired is §19.18, and it has happened here before.
+    """
+    nod = HOUSE_NO_DEVICE_TOKENS if no_device_tokens is None else tuple(no_device_tokens)
+    return _has_token(declared, nod)
+
+
 def product_class_of(product_desc, declared=None, classes=None, residual=None,
                      no_device_tokens=None, no_product_tokens=None):
     """PURE: `(class_key, basis)` for ONE sale line — what was sold, and HOW that was decided.
@@ -311,8 +330,8 @@ def product_class_of(product_desc, declared=None, classes=None, residual=None,
     res_key, _res_label = residual or HOUSE_RESIDUAL_CLASS
     nod = HOUSE_NO_DEVICE_TOKENS if no_device_tokens is None else tuple(no_device_tokens)
     nop = HOUSE_NO_PRODUCT_TOKENS if no_product_tokens is None else tuple(no_product_tokens)
-    if _has_token(declared, nod):
-        return NO_DEVICE_CLASS[0], "declared_no_device"
+    if no_device_declared(declared, nod):                 # the ONE test, above
+        return NO_DEVICE_CLASS[0], DECLARED_NO_DEVICE_BASIS
     desc = str(product_desc or "").strip()
     if not desc:
         return UNCLASSIFIED_CLASS[0], "no_product_named"

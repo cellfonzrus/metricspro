@@ -1356,6 +1356,15 @@ on:
       - "backend/harness_payables_declared_source.py"
       - "backend/app/modules/payables/declared_source.py"
       - "frontend/src/lib/owed-source.ts"
+      # index §COMMCALC-31 — A LINE THAT BOUGHT NO DEVICE IS NOT A DEVICE PAYABLE. Named
+      # individually for the same reason: the lock itself, the status one home, and the device-class
+      # vocabulary it dereferences. The readers it ratchets (payables/engine.py, router.py,
+      # unsold_inventory.py) and the screen are already named above, so a change to any of them
+      # re-runs this proof too.
+      - "backend/harness_payables_device_rows.py"
+      - "backend/app/modules/payables/ledger_status.py"
+      - "backend/app/modules/commcalc/product_mix.py"
+      - "database/migrations/1093_payable_device_class_field.sql"
       # index §47.17 — the DM visit plan proof. Its harness sits at the backend ROOT and it parses the
       # seed out of migration 1050, so a change to EITHER must run the proof that guards them (same
       # §13e lesson as the three above).
@@ -2404,6 +2413,17 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_payables_declared_source.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # AND the third half of the same spine: the terms lock proves the declared numbers are READ,
+      # the declared-source lock proves an unreadable declaration is REPORTED, and this one proves a
+      # line the feed itself says bought no handset is not reported as a device payable at all - the
+      # 2026-10-26 defect where 869 bring-your-own-phone lines read as unpriced payables and two of
+      # them as `discrepancy`, i.e. a handset cost the owner never had. It also locks the automatic
+      # due-date window and the per-store split that says which account to debit. DB-free, seconds.
+      # Index §COMMCALC-31.
+      - name: Run the device-payable row lock (a line whose own feed declares no handset was bought leaves the payable totals under its own status, the due window picks itself from one home, and who owes what is split per store on the date row - index COMMCALC-31)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_payables_device_rows.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # AND the FRONTEND proof of the forecast grid, in the same job for the same reason: it locks
       # the same screen, and a wiring check nothing runs is not a gate. Node only, seconds.
       - uses: actions/setup-node@v4
