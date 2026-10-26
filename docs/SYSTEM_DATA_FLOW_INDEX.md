@@ -35462,7 +35462,7 @@ its subject is a CUSTOMER rather than a person being coached — it is in the fa
 answer to "so what do I tell them to do", and it keeps **its own catalogue and its own grain** (a
 store row out of a transaction-grain read) rather than being forced into the others'. Declaration:
 `backend/app/modules/commcalc/performance_coaching_drilldown.py`. Proof:
-`backend/harness_batch20_drilldown.py`, **164 checks**, **22 mutations /
+`backend/harness_batch20_drilldown.py`, **165 checks**, **23 mutations /
 negative controls**, wired into the guard job with a paths filter naming every file it is about.
 
 **THIS IS THE SHARPEST VERSION OF THE OWNER'S ASK IN THE PROGRAMME SO FAR**, and it is why the
@@ -35621,7 +35621,7 @@ coaching card. `/commcalc/productivity` turns out to carry **no per-store RBAC s
 (defect 1), which is REPORTED rather than papered over: the panel discloses exactly what the report
 already does, and the remedy is the scope, not the panel.
 
-**TEN LIVE DEFECTS, ALL REPORTED, NONE FIXED, NO FIGURE MOVED.** Each carries a regression check in
+**ELEVEN LIVE DEFECTS, ALL REPORTED, NONE FIXED, NO FIGURE MOVED.** Each carries a regression check in
 the harness. The ones the drill-downs turn on: **(1)** `/productivity` has no per-store scope
 filter; **(2)** a productivity rep row carries no transaction count, so "sold nothing" and "the
 sales union never named them" cannot be told apart and the row is counted exactly as the producer
@@ -35638,7 +35638,19 @@ read-only now, with §D11b showing what that cost (an untraceable origin instead
 own by-metric fold; **(10)** the coaching page re-derives "below full tier" with its own `1.0`
 threshold, so the declaration reads the verdict the handler now states on each row and holds no
 threshold of its own (§A9c). The full list, each with the harness check that reproduces it, is in
-the declaration's module docstring.
+the declaration's module docstring. And **(11)**, which is **not this family's defect** and is
+recorded here only because this batch's extension of `sales_union_tables` is what makes it matter
+(found in review of this PR): `router._sales_rows_union_txn_range` builds its meta by **summing only
+the numeric keys and drops `primary` and `other`**, which are the first two things that resolver
+reads — so a RANGE read names **no source at all**, however many rows it returned. It is **latent
+today**: its one caller, `/commcalc/tax-collected`, binds the meta and discards it, the same shape as
+defect 7 above and as batch 18's zero-sales finding, so nothing is wrong on a screen. But
+`/commcalc/tax-collected` is one of the **33 routes still owing** a drill-down, so the batch that
+wires it would declare a silently empty provenance and might reach for a resolver of its own. **The
+fix, for that batch:** carry `primary` and `other` through the range meta — ONE line, in the ONE home
+— never a sibling resolver, which is the duplicate the index rules forbid. REPORTED and deliberately
+**not** fixed here: widening this PR to `/commcalc/tax-collected` would change a report nobody asked
+this batch to touch.
 
 **A NOTE ON THE EXACT-EQUALITY CALLER SNAPSHOTS.** `harness_carrier_dollar_class.py` §K3 is an
 exact-equality snapshot of the `carrier_dollar_component` fact's callers, and a module that asks
@@ -35663,6 +35675,16 @@ that rule forward:
 - **§J7** asserted `"harness_batch20_drilldown.py" in` the workflow — which **the PATHS FILTER also
   satisfies**, so pointing the `run:` line at another batch kept it green. It matches the `run:`
   line itself now, exactly once.
+
+A **third** weakness in this harness was caught by a lock that belongs to somebody else, which is
+the system working: `harness_subject_set_lock.py` **§B1** refuses a harness that asserts a bare
+LOWER BOUND on a set it derived from the code, and §H's first draft did exactly that —
+`len(MEASURED) >= 9`, one line under a docstring promising a SET — so a grain could have vanished
+and another taken its place with the build still green. §H now **declares the twelve grains as a set
+of (row shape, unit, provenance) triples and compares for EQUALITY**, printing `extra` and `missing`
+so a lost grain names itself, which is the shape `harness_batch19_drilldown.py` §H already used.
+§B1 was watched going red on the reinstated bound and green again after. Neither
+`harness_subject_set_lock.py` nor `harness_subject_set_pending.txt` was touched.
 
 Both were fixed in the same commit as the locks they belong to, and the mutations are recorded here
 rather than only in the harness, because a lock claimed without being watched go red is a claim like

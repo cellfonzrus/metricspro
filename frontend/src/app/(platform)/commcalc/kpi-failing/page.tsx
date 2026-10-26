@@ -99,8 +99,8 @@ export default function FailingKpiPage() {
   // THE PANELS, NARROWED TO THE ROWS ON SCREEN. Two row shapes, so two key sets and one predicate —
   // the key strings carry their own field names, so a store key and an employee key cannot collide.
   const kpiPanels: Record<string, DrillPanel> = data?.drilldown || {}
-  const kpiStoreKeys = new Set(stores.map((r: any) => screenKey({ store_code: r.store_code, location: r.location })))
-  const kpiRepKeys = new Set(reps.map((r: any) => screenKey({ rep: r.rep, store: r.store })))
+  const kpiStoreKeys = new Set(stores.map(r => screenKey({ store_code: r.store_code, location: r.location })))
+  const kpiRepKeys = new Set(reps.map(r => screenKey({ rep: r.rep, store: r.store })))
   const kpiNarrowed: Record<string, DrillPanel> = {}
   Object.keys(kpiPanels).forEach(k => {
     const p = narrowPanel(kpiPanels[k], (_r: DrillRow, key: string) => kpiStoreKeys.has(key) || kpiRepKeys.has(key))

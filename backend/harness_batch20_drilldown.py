@@ -948,12 +948,17 @@ for _k in KD:
                                       or _k == "stores_failing" else "employee_pay_row")
 
 
+#: How this file writes "this panel's rows report an origin that cannot be traced" when it collects
+#: provenances. Not a relation name: the whole point is that there is none (§CORE-17.3i).
+UNTRACEABLE = "(nothing nameable)"
+
+
 def _provenance(panel):
     """The set of relations this panel's rows were actually read out of, with an untraceable origin
     named as such — read off the panel, never declared."""
     names = {s["table"] for s in panel.get("sources") or ()}
     if panel.get("untraceable_origins"):
-        names.add("(nothing nameable)")
+        names.add(UNTRACEABLE)
     return frozenset(names)
 
 
@@ -966,10 +971,45 @@ print(f"       MEASURED {len(MEASURED)} distinct grains over {len(ROW_SHAPE)} pa
       f"{len({s for s in ROW_SHAPE.values()})} row shapes")
 for _g in sorted(MEASURED, key=lambda g: (g[0], g[1], sorted(g[2]))):
     print(f"         · {_g[0]} / {_g[1]} / {sorted(_g[2])}")
-check("H1 THE GRAIN COUNT IS MEASURED, NOT ASSERTED — every panel's unit and provenance are read "
-      "off the panel and collected as a SET, so two panels that really are one grain collapse "
-      "instead of being counted twice",
-      len(MEASURED) >= 9 and len(MEASURED) <= len(ROW_SHAPE), str(len(MEASURED)))
+#: THE GRAINS THIS FAMILY HAS, DECLARED AS A SET AND COMPARED FOR EQUALITY — batch 19's §H shape.
+#: A BOUND ON THE SIZE IS NOT AN ASSERTION ABOUT THE SET: `len(MEASURED) >= 12` stays green while a
+#: grain silently vanishes and another takes its place, which is the "guard that goes blind" shape
+#: `harness_subject_set_lock.py` §B1 exists to refuse — and it caught this file's first draft doing
+#: exactly that, one line under a docstring promising a SET. The relations are the registry's and the
+#: units are the one home's, so this declaration spells no table name of its own either.
+_SALES_UNION = frozenset({lineage.LIVE_SALES_FEED, lineage.MONTHLY_SALES})
+_EXPECTED = {
+    # PRODUCTIVITY — one employee under one store, three units, and the hours in two provenances
+    # because an employee nobody clocked names nothing at all.
+    ("employee_at_a_store", rd.UNIT_COUNT, _SALES_UNION),
+    ("employee_at_a_store", rd.UNIT_MONEY, _SALES_UNION),
+    ("employee_at_a_store", rd.UNIT_HOURS, frozenset({dd.TIME_CLOCK})),
+    ("employee_at_a_store", rd.UNIT_HOURS, frozenset({dd.TIME_CLOCK, UNTRACEABLE})),
+    # COACHING — one employee pay row, ONE unit, and provenance alone separating four figures.
+    ("employee_pay_row", rd.UNIT_MONEY, frozenset({dd.REP_COMMISSIONS})),
+    ("employee_pay_row", rd.UNIT_MONEY, frozenset({UNTRACEABLE})),
+    ("employee_pay_row", rd.UNIT_MONEY, frozenset({dd.OPS_CHARGEBACK, UNTRACEABLE})),
+    ("employee_pay_row", rd.UNIT_MONEY, frozenset({dd.REP_COMMISSIONS, dd.OPS_CHARGEBACK,
+                                                   UNTRACEABLE})),
+    # The COUNT over that same row — shared outright by the below-tier and failing-employee figures.
+    ("employee_pay_row", rd.UNIT_COUNT, frozenset({dd.REP_COMMISSIONS})),
+    # AUTOPAY — one store row out of the transaction-grain read, two units.
+    ("store_row", rd.UNIT_COUNT, _SALES_UNION),
+    ("store_row", rd.UNIT_MONEY, _SALES_UNION),
+    # FAILING KPIs at the DOOR grain — the carrier's own per-door report, never pooled with the rep.
+    ("store_row_kpi", rd.UNIT_COUNT, frozenset({dd.DLAR_STORE})),
+}
+_extra, _missing = sorted(MEASURED - _EXPECTED), sorted(_EXPECTED - MEASURED)
+check("H1 THE GRAIN COUNT IS MEASURED AND THE SET IS COMPARED FOR EQUALITY — every panel's unit and "
+      "provenance are read off the panel, collected as a SET so two panels that really are one "
+      "grain collapse, and checked against the declared twelve. A bound on the SIZE would stay "
+      "green while one grain vanished and another took its place, so a lost grain NAMES ITSELF here",
+      MEASURED == _EXPECTED and len(MEASURED) == 12 and len(MEASURED) < len(ROW_SHAPE),
+      "extra=%s missing=%s" % (_extra, _missing))
+ctl("H1a control: the equality is not vacuous — dropping one declared grain is reported BY NAME, "
+    "and the comparison really is a set difference rather than a count",
+    (MEASURED - (_EXPECTED - {("store_row_kpi", rd.UNIT_COUNT, frozenset({dd.DLAR_STORE}))}))
+    == {("store_row_kpi", rd.UNIT_COUNT, frozenset({dd.DLAR_STORE}))})
 check("H1b TWO REPORTS SHARE ONE GRAIN OUTRIGHT, and that is the point rather than a defect — a "
       "failing-employee count and a below-tier count are both a COUNT over an employee pay row out "
       "of the same calculated snapshot, so the set holds one triple for the two",
@@ -994,7 +1034,7 @@ check("H1d AND THREE PROVENANCES ON ONE EMPLOYEE PAY ROW, in ONE unit — the ca
                         "total_money_on_table")))
 ctl("H1e control: the provenance reader is NOT blind to an untraceable origin — the chargeback "
     "panel's provenance is the untraceable one and nothing else",
-    _provenance(CD["total_chargebacks"]) == frozenset({"(nothing nameable)"}))
+    _provenance(CD["total_chargebacks"]) == frozenset({UNTRACEABLE}))
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

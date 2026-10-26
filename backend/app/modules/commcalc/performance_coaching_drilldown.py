@@ -162,8 +162,11 @@ the productivity endpoint applies NO per-store scope filter at all (defect 1), w
 rather than quietly repaired: the panels disclose exactly what the report already does, and the
 remedy is the scope, not the panel.
 
-LIVE DEFECTS THESE FOUR REPORTS HAVE TODAY — TEN REPORTED, NONE FIXED, NO FIGURE MOVED
-─────────────────────────────────────────────────────────────────────────────────────
+LIVE DEFECTS, ELEVEN REPORTED, NONE FIXED, NO FIGURE MOVED
+──────────────────────────────────────────────────────────
+Ten belong to these four reports; the eleventh belongs to a THIRD reader of a fact this
+batch extended, and is recorded here because this is where somebody would otherwise
+re-derive it.
  1. **`GET /productivity/{period}` applies no RBAC scope at all.** The other three in this family
     run `scope_keyset` / `in_keyset`; this one is org-scoped and nothing narrower, so a store-scoped
     manager is served every store's employees, their hours and their accessory dollars. REPORTED,
@@ -220,6 +223,18 @@ LIVE DEFECTS THESE FOUR REPORTS HAVE TODAY — TEN REPORTED, NONE FIXED, NO FIGU
     declaration dereferences that, so the panel and the figure cannot disagree; the page's own copy
     is REPORTED and left alone, because changing which expression the displayed count comes from
     would move a figure's source on screen for no drill-down reason.
+11. **A RANGE read of the sales union cannot name its own source** — not this family's defect, and
+    latent today, but this batch's extension of `sales_union_tables` is what makes it matter (found
+    in review of this PR). `router._sales_rows_union_txn_range` builds its meta by SUMMING only the
+    numeric keys and drops `primary` and `other`, which are the first two things that resolver
+    reads — so a range read returns NO SOURCE AT ALL however many rows it carried. Nothing is wrong
+    on a screen now: its one caller, `/commcalc/tax-collected`, binds the meta and discards it (the
+    shape of defect 7 above, and of batch 18's zero-sales finding). But that route is one of the 33
+    still owing a drill-down, so the batch that wires it would declare a silently empty provenance
+    and might reach for a second resolver. THE FIX, FOR THAT BATCH: carry `primary` and `other`
+    through the range meta — one line, in the one home — never a sibling resolver. REPORTED here,
+    and deliberately not fixed: widening this PR to `/commcalc/tax-collected` would change a report
+    nobody asked this batch to touch.
 
 💰 MOVES NO MONEY. Read-only presentation of figures the producers already computed. Books nothing,
 pays nothing, writes nothing, and computes no business figure of its own: every amount it carries was
@@ -242,6 +257,18 @@ from app.modules.core import report_drilldown as report_drilldown
 #: `processor_money_drilldown.sales_union_tables`, bound BY IDENTITY exactly as batches 14, 17, 18
 #: and 19 bound it. Extended in this same commit to recognise the TRANSACTION-grain union's way of
 #: reporting that the second relation contributed, so one home answers for both unions.
+#:
+#: A LATENT DEFECT IN A THIRD READER OF THIS SAME FACT, REPORTED HERE AND DELIBERATELY NOT FIXED
+#: (defect 11, found in review of this batch). `router._sales_rows_union_txn_range` builds its meta
+#: by SUMMING only the numeric keys and drops `primary` and `other` entirely — and those two are the
+#: first thing this resolver reads, so a RANGE read names NO SOURCE AT ALL however many rows it
+#: returned. It is not this family's defect and nothing is wrong on a screen today: the one caller,
+#: `/commcalc/tax-collected`, binds that meta and discards it (the same shape batch 18 reported for
+#: zero sales). But `/commcalc/tax-collected` is one of the routes still owing a drill-down, so the
+#: batch that wires it would hit a silently empty provenance. THE FIX, WHEN THAT BATCH COMES, is to
+#: carry `primary` and `other` through the range meta — ONE line, in the ONE home — and never a
+#: second resolver beside this one, which is the duplicate the index rules forbid. Written down here
+#: so nobody re-derives it.
 sales_union_tables = _pmd.sales_union_tables
 
 #: THE TIME CLOCK. A registry NAME constant as of this batch, with its one pre-existing literal copy
