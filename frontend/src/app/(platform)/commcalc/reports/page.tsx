@@ -18,6 +18,40 @@ import WhyZeroPanel from '../_lib/WhyZeroPanel'
 import AutoCalcNotice from '../_lib/AutoCalcNotice'
 import { GoogleRatingChips, GoogleRatingDetail, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
 import { sourceLabel } from '@/lib/sourceLabels'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
+
+// WHERE EACH OF THESE FIGURES CAME FROM (index §CORE-17.3v). The server serves a panel per figure it
+// can stand behind, from commcalc/rep_incentive_drilldown.py, folded over the SAME rep rows this
+// table prints — one row per person the month's calculation wrote down, out of the calculated
+// rep-commission snapshot. `GET /commissions/{period}` is a bare JSON list with nowhere to hang a
+// `drilldown` key, so the panels come from `…/drilldown` beside it.
+//
+// THIS PAGE FOLDS ITS OWN FIGURES IN THE BROWSER, so every panel is NARROWED to the rows the
+// standard filter bar leaves on screen (lib/drill-narrow, index §CORE-17.3d) and each figure is read
+// OFF its narrowed panel through the shared `agreesToTheCent` gate — the figure and its evidence are
+// one fold by construction. ONE predicate narrows every panel, because every row of every panel here
+// carries the same person-and-store key. `harness_batch22_drilldown.py` §G fails the build in both
+// directions if that changes.
+//
+// WHAT GETS NO LINK, AND WHY. The INSTALLMENT footer adds two columns at the total, one of which the
+// one home does not sum at all, so it has no rows of its own (§CORE-17.3k). The Compensation by Line
+// tab prints no total of any kind. The Individual Rep tab is already a drill of its own, to the
+// transactions. And the Month range tab folds a rep-MONTH row — the grain comp-trend's own
+// declaration already serves — so a second catalogue over it would be two paths to one question; it
+// is still owed and the declaration says so rather than this page inventing one.
+const REP_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: (r: DrillRow) => String(r.fields?.store ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.store ?? '') },
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.market ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.market ?? '') },
+  { header: 'Tier', get: (r: DrillRow) => String(r.fields?.tier ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.tier ?? 0) },
+  { header: 'Payout', get: (r: DrillRow) => String(r.fields?.payout ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.payout ?? 0) },
+]
 
 interface Rep {
   epay_salesperson: string
@@ -132,6 +166,8 @@ export default function ReportsPage() {
   const [plans, setPlans] = useState<any[]>([])
   const [assigning, setAssigning] = useState(false)
   const [linking, setLinking] = useState(false)
+  // §CORE-17.3v — the rows behind each figure, served beside the bare-list commissions read.
+  const [drill, setDrill] = useState<Record<string, DrillPanel>>({})
 
   useEffect(() => {
     api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
@@ -140,6 +176,10 @@ export default function ReportsPage() {
       .then(setCfg).catch(console.error)
     api(`/api/v1/commcalc/chargebacks/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
       .then(setChargebacks).catch(console.error)
+    // The rows behind the figures (§CORE-17.3v). Its own request because the commissions read is a
+    // bare list; a failure here costs the drill links and never the report.
+    api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}/drilldown?org_id=${ORG_ID}`)
+      .then(d => setDrill((d?.drilldown || {}) as Record<string, DrillPanel>)).catch(() => setDrill({}))
   }, [period])
 
   // Incentive plans available to attach (pick-don't-type). Fetched once; drives the dropdown shown when
@@ -169,6 +209,37 @@ export default function ReportsPage() {
   const filtered = useMemo(() => filterRows(reps, filt, acc), [reps, filt])   // eslint-disable-line react-hooks/exhaustive-deps
   const totalPayout = filtered.reduce((s, r) => s + (r.total_payout || 0), 0)
   const filterActive = isStandardFilterActive(filt)
+
+  // THE PANELS, NARROWED TO THE PEOPLE ON SCREEN — matched on the person-and-store key the server
+  // served with every drill row, built here with the SAME helper that builds it there so neither
+  // side spells the key shape.
+  const shownReps = useMemo(
+    () => new Set(filtered.map(r => screenKey({ epay_salesperson: r.epay_salesperson, store: r.store }))),
+    [filtered])
+  const narrowed = useMemo(() => {
+    const out: Record<string, DrillPanel> = {}
+    Object.keys(drill).forEach(k => {
+      const p = narrowPanel(drill[k], (_r: DrillRow, key: string) => key === '' || shownReps.has(key))
+      if (p) out[k] = p
+    })
+    return out
+  }, [drill, shownReps])
+  // THIS PAGE'S OWN FOLD, per panel key — what the gate compares each panel against. A figure the
+  // page does not fold is not in here and is simply not offered, rather than offered ungated.
+  const folded: Record<string, number> = {
+    total_payout: totalPayout,
+    subtotal: filtered.reduce((s, r) => s + (r.subtotal || 0), 0),
+  }
+  // Each figure reads off its narrowed panel where the two agree to the cent, through the SHARED
+  // gate, and keeps this page's own fold where they do not. A disagreement costs the drill link,
+  // never the number — which is exactly what happens on a month whose breakdown was never computed,
+  // because the page adds a never-computed Subtotal in at zero and the panel refuses to.
+  const repTile = (k: string): number => {
+    const n = folded[k] || 0
+    return agreesToTheCent(narrowed[k], n) ? Number(narrowed[k]?.figure?.amount ?? n) : n
+  }
+  const repDrill = useDrillTile(
+    narrowed, (k, p) => !(k in folded) || agreesToTheCent(p, folded[k] || 0))
 
   // ── MONTH RANGE tab (owner 2026-09-25) — default window: the last three months ending this month ──
   const [rangeFrom, setRangeFrom] = useState(() => monthInput(new Date(), 2))
@@ -523,7 +594,9 @@ export default function ReportsPage() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Rep Incentive Report</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-            {period} · {filtered.length}{filterActive ? ` of ${reps.length}` : ''} reps · Total: <strong style={{ color: 'var(--accent)' }}>{fmt(totalPayout)}</strong>
+            {period} · {filtered.length}{filterActive ? ` of ${reps.length}` : ''} reps · Total: <strong style={{ color: 'var(--accent)' }}>{fmt(repTile('total_payout'))}</strong>
+            {' '}<DrillTileLinks drills={repDrill.dl('total_payout', 'the people behind this payout')}
+              open={repDrill.open} onToggle={repDrill.toggle} />
           </p>
         </div>
         {/* WYSIWYG (§3c): every format renders from buildPayload() — the FILTERED rows on the list tabs,
@@ -650,16 +723,28 @@ export default function ReportsPage() {
                 <tfoot>
                   <tr style={{ background: 'var(--surface2)', fontWeight: 700 }}>
                     <td colSpan={9} style={{ textAlign: 'right', paddingRight: 8, color: 'var(--text2)' }}>Total:</td>
+                    {/* NO LINK ON THIS ONE (§CORE-17.3k): it adds two columns at the TOTAL, and
+                        one of them is not a column the one home sums at all. */}
                     {hasInstallment && <td style={{ textAlign: 'right', color: 'var(--c-fg-0369a1)' }}>{fmt(filtered.reduce((s, r) => s + instOf(r), 0))}</td>}
-                    <td style={{ textAlign: 'right', color: 'var(--text2)' }}>{fmt(filtered.reduce((s, r) => s + (r.subtotal || 0), 0))}</td>
+                    <td style={{ textAlign: 'right', color: 'var(--text2)' }}>{fmt(repTile('subtotal'))}</td>
                     <td style={{ textAlign: 'right', color: 'var(--accent)' }}>
-                      {fmt(filtered.reduce((s, r) => s + r.total_payout, 0))}
+                      {fmt(repTile('total_payout'))}
                     </td>
                     {hasGoogle && <td />}
                   </tr>
                 </tfoot>
               )}
             </table>
+          </div>
+          {/* ONE renderer for whichever figure is open — the people that figure was folded from,
+              each naming the stored month it was read out of. */}
+          {repDrill.panel && <DrillDownPanel panel={repDrill.panel} extraColumns={REP_DRILL_COLUMNS} />}
+          <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8 }}>
+            <DrillTileLinks drills={repDrill.dl('subtotal', 'the subtotal rows',
+                                                'premium_acts', 'the premium activations',
+                                                'byod_acts', 'the BYOD activations',
+                                                'upgrade_acts', 'the upgrades')}
+              open={repDrill.open} onToggle={repDrill.toggle} />
           </div>
         </div>
       )}

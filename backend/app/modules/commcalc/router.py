@@ -36,6 +36,8 @@ from app.modules.commcalc import tender_recon_drilldown as _tender_recon_drilldo
 from app.modules.asset import device_asset_drilldown as _asset_dd   # 2026-10-25 — THE device-asset family's drill declaration (index §CORE-17.3l; declaration only, pure)
 from app.modules.commcalc import targets_drilldown as _targets_dd   # 2026-10-25 — THE targets family's drill declaration (index §CORE-17.3m; declaration only, pure)
 from app.modules.commcalc import device_financing_drilldown as _dfdd   # 2026-10-26 — THE device-financing family's drill declaration (index §CORE-17.3p; declaration only, pure)
+from app.modules.commcalc import activation_count_drilldown as _acdd   # 2026-10-26 — the Activations report's drill declaration (index §CORE-17.3v; declaration only, pure)
+from app.modules.commcalc import entitlement_coverage_drilldown as _ecdd   # 2026-10-26 — Subsidy Months Missing's drill declaration (index §CORE-17.3v; declaration only, pure)
 from app.modules.commcalc import exec_month_drilldown as _emdd   # 2026-10-26 — THE executive-month family's drill declaration (index §CORE-17.3q; declaration only, pure)
 from app.modules.commcalc import sales_margin_drilldown as _smdd   # 2026-10-26 — THE sales-and-margin family's drill declaration (index §CORE-17.3r; declaration only, pure)
 from app.modules.commcalc import month_focus as _mfocus   # 2026-10-09 — the month's declared focus and the weekly check-in (index §63)
@@ -12047,7 +12049,14 @@ def mdf_entitlement_coverage(store: str = "", org_id: str = ORG_ID):
     READ-ONLY. BOOKS NOTHING, PAYS NOBODY, WRITES NO FLAG (index §68).
     """
     require_org(org_id)
-    return _mdf_entitlement_run(sb(), org_id, store)
+    res = _mdf_entitlement_run(sb(), org_id, store)
+    # WHERE EACH OF THESE FIGURES CAME FROM (§CORE-17.3v). ONE store-month row and THREE grains on
+    # it: the verdict COUNTS, the money that ARRIVED, and what an ABSENT month is worth — the last
+    # two in the same unit on the same row, separated only by provenance, because a gap is priced
+    # from a number somebody DECLARED (§CORE-17.3m/§CORE-17.3n). Attached over the producer's own
+    # output, which is handed in unchanged.
+    res["drilldown"] = _ecdd.entitlement_drilldowns(res)
+    return res
 
 
 @router.get("/comp-by-component")
@@ -17833,6 +17842,36 @@ async def _get_commissions_rows(period, authorization, org_id):
         return _pa.mine_only(comms, rep_keys, canon=lambda v: _canon(v, cmap))
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
     return [c for c in comms if in_keyset(ks, c.get('store'), c.get('store_code'))]
+
+
+@router.get("/commissions/{period}/drilldown")
+async def get_commissions_drilldown(period: str, authorization: str = Header(default=""),
+                                    org_id: str = ORG_ID):
+    """WHERE EVERY FIGURE ON THE REP INCENTIVE SCREENS CAME FROM (index §CORE-17.3v).
+
+    `GET /commissions/{period}` returns a bare JSON LIST, so there is nowhere on it to hang a
+    `drilldown` key without changing the shape every caller of that read depends on — the exports,
+    the emailed report, the statement PDF, the month range and the mobile client. This serves the
+    panels beside it instead, and it calls the single-month handler IN PROCESS with the caller's own
+    authorization, exactly as `/commissions-range` does: a panel therefore holds precisely the rows
+    that caller was served, after the SELF / span scope and after the rep-row allow-list (§6m), and
+    can disclose nothing the report would not.
+
+    THE FIGURES ARE NOT FOLDED HERE. `rep_incentive_range.assemble` already folds exactly these
+    fields for one month, and it does it through `payout_slice_evidence.sum_slice` — the ONE home
+    for whether a named slice may be added up at all (§COMMCALC-09), which is why an un-itemised
+    person is never added in at $0.00. Handing it a one-month window is the whole of the arithmetic
+    on this endpoint; `commcalc/rep_incentive_drilldown` then only names where each figure was read.
+
+    READ-ONLY. BOOKS NOTHING, PAYS NOBODY, WRITES NO FLAG, MOVES NO MONEY.
+    """
+    require_org(org_id)
+    from app.modules.commcalc import rep_incentive_drilldown as _ridd
+    from app.modules.commcalc import rep_incentive_range as _rir
+    rows = await get_commissions(period, authorization=authorization, org_id=org_id)
+    totals = (_rir.assemble([period], {period: rows}, _pse_mod())["month_totals"] or [{}])[0]
+    return {"period": period, "rows_counted": len(rows), "totals": totals,
+            "drilldown": _ridd.month_drilldowns(rows, totals)}
 
 
 @router.get("/commissions-range")
@@ -35401,9 +35440,13 @@ def exec_mtd_narrative(period: str, org_id: str = ORG_ID, today: str = "",
 # EXCEPT an Upgrade. Verified against the b2b "Month To Date Location Sales Report" totals row
 # (Activation+Port+BYOD+Tablet+HomeInternet+Edge = Total Activation; Upgrade is a separate column).
 _ACT_TOTAL_BUCKETS = ("New Activation", "Port", "BYOD", "Tablet", "Home Internet", "Edge", "Other")
-_ACT_BUCKET_FIELD = {"New Activation": "activation", "Port": "port", "BYOD": "byod", "Tablet": "tablet",
-                     "Home Internet": "home_internet", "Edge": "edge", "Upgrade": "upgrade",
-                     "BYOD Upgrade": "byod_upgrade", "Other": "other"}
+# WHICH PAYLOAD COLUMN HOLDS EACH ACTIVATION BUCKET'S COUNT. DEREFERENCED from
+# `activation_bucketing.BUCKET_FIELD`, which is the one home for this report's bucket vocabulary and
+# already owns `BUCKET_RANK` and `TOTAL_ACTIVATION_EXCLUDED`. It was a literal map here until
+# 2026-10-26: the §CORE-17 drill-down for this report has to name a figure by the same column key
+# this fold writes it under, and a second copy of that map is the divergence the house rule forbids
+# (index §CORE-17.3v). String-identical values; not one fold changed.
+_ACT_BUCKET_FIELD = _act_bucketing.BUCKET_FIELD
 
 
 def _market_for_fn(client, org_id):
@@ -35475,7 +35518,7 @@ def activation_counts(period: str, org_id: str = ORG_ID, as_of: str = "", includ
     _sort_key = (lambda x: -x["total_with_upgrade"]) if include_upgrade else (lambda x: -x["total_activation"])
     stores = sorted(by_store.values(), key=_sort_key)
     markets = sorted(by_market.values(), key=_sort_key)
-    return {
+    out = {
         "period": period, "org_id": org_id,
         "as_of": cutoff or None, "excluded_after_cutoff": excluded_after,
         "include_upgrade": include_upgrade,
@@ -35486,6 +35529,13 @@ def activation_counts(period: str, org_id: str = ORG_ID, as_of: str = "", includ
                  "'Activation Details' report as a Custom Import (Data Imports → Custom Reports), or route "
                  "it to the email import, then re-check."),
     }
+    # WHERE EACH OF THESE COUNTS CAME FROM (§CORE-17.3v). ONE grain — a STORE row of distinct
+    # devices out of the custom-import capture the Activation Details export lands in — with a
+    # per-market panel folded over the SAME store rows the market row above it was folded from, so
+    # the two tables on that screen are one fold rather than two. Attached over the payload
+    # unchanged; no figure here moves.
+    out["drilldown"] = _acdd.activation_drilldowns(out)
+    return out
 
 
 @router.get("/dealer-code-map/{period}")

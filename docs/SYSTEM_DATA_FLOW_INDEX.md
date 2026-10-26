@@ -5976,7 +5976,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **Activation TYPE of a POS sale line — THE predicate (2026-09-21)** | `raw_sales` / `daily_sales_feed` lines (any column: `contract_type`, `category` path, `product_desc`, `department`, `trans_type`) × `accessory_config.activation_details_rules` (`fields` / `tokens` / `exact` / `auto_activation_tokens` / `hints` / `metric_hints` / `broad_attested` — extended mig-313 JSON, NO migration; house defaults = the retired classifiers; THE NO-LEAK RULE: house tokens fill an undeclared class only under the house field) | `commcalc/line_class.py` (PURE: `activation_class` / `classify_line` / `bucket_of` / `resolve_rules` (`house_fill`) / `count_classes` (+ `broad` / `refused`) / `gate_open` / `token_shares` / `broad_tokens` / `refused_tokens` / `rules_refused` / `refusal_sentence` / `norm_broad_ok` / `suggest_rules` / `suggest_metric_rules` / `merge_into_raw`); resolved ONCE by `router._line_rules_resolve` (the loader `_accessory_config_uncached` → `acfg['line_rules']`, and the 2.5a save's guard — no second resolution; + `_line_rules_of`, `_line_skip`); dereferenced by `calculator.calc_rep_commissions` (`cfg['line_class_rules']`, threaded by the calc endpoint + `payout_accrual`), `commission_engine._activation_buckets` / `_read_ct_classification_config`, `plan_options._resolved_bucket`, `router._sales_cell_agg` (Sales Report / Exec MTD / Daily Targets; the Port sub-split is the predicate's `'port'`), `_blank_ct_bucket_map` (the mig-224 transaction rescue SUPPLEMENTS it), `_classification_gaps`, `/sales-report/detail`, `whatif._byod_mdns` / `accessory_byod_correlation`, `sales_comparison.tally` (`line_rules`), `closing.router._b2b_counts_by_store` (+ the tender split) via `_line_rules`, `marketing/event_sales.org_classifier`; written ONLY by `PUT /accessory-config` (`activation_details_rules`, merged — the AD-basis keys beside it untouched) which the intake's `PUT /onboarding/intake/line-class` calls. Proof `harness_line_class.py` (47: predicate, the money pin, the suggestion engine over the measured vocabulary, the aggregation + pay path counting 39/25/23 by distinct invoice, §G the too-broad guard / no-leak / seed); lock `harness_line_class_lock.py` (29) |
 | **Activation-Details basis (b2b activation TYPE buckets)** | `raw_custom_import` (signature-detected sheet: `Serial#`+`Contract Type`); config `accessory_config.activation_details_rules` — mig `313_activation_details_bucket_rules` (per-org token rules; RULE TWO) | `activation_bucketing.py` (PURE: `activation_details_bucket`/`resolve_rules`/`BUCKET_RANK`/`TOTAL_ACTIVATION_EXCLUDED`) ← delegated to by `router._activation_details_bucket`; rules loaded per-org by `_activation_details_rules` (defensive, mig-214 posture); resolver `_cr_resolve_activation_details` (serial-dedup by rank); consumers `_ad_cells_full` → `_apply_activation_basis` (Exec MTD + Sales Report), `_ad_activation_buckets` (metric recon), `GET /activation-counts/{period}`; proof `harness_activation_bucketing.py`. HOUSE DEFAULTS (2026-09-01 approved fix): Edge = whole-word `edge` in CONTRACT TYPE only (`edge_name_tokens` opts device-name matching back in per org — the Motorola-Edge over-match trade-off); `BYOD Upgrade` = its own hidden bucket (excluded from Total Activation exactly like Upgrade, NOT shown in the Upgrade column; `upgrade_hidden_contract_tokens: []` restores one family) |
 | **ZERO SALES — store-days / rep-days with NO activation and NO upgrade** §15z | mig `1016` (`commcalc.zero_sales_config`, **NOT applied**; absent ⇒ `zero_sales.HOUSE_CONFIG`, the shipped behaviour) | `commcalc/zero_sales.py` (PURE; five day states, runs, alert items) + `commcalc/manager_digest.py` (the ONE alert fan-out); `GET /commcalc/zero-sales`, `GET/PUT /commcalc/zero-sales-config`, `POST /commcalc/zero-sales/alerts/run-due|run-now`. READ-ONLY, `books_to` = []. Proofs `harness_zero_sales.py` (79) + lock `harness_zero_sales_lock.py` (39) |
-| **SUBSIDY MONTHS MISSING — a store-month inside a store's own entitlement that never arrived** §68 | mig `1068` (`commission_org_config.mdf_entitlement_config`, **NOT applied**; absent ⇒ `entitlement_coverage.CODE_DEFAULT`, which declares nothing, so the report says `configured: false` and calls no month missing) | `commcalc/entitlement_coverage.py` (PURE, DB-free; `entitlement_store_months` is **the "expected but absent" home at store × month grain**, plus `entitlement_window` / `entitlement_type_matcher` and the five `ROW_*` statuses); `GET /commcalc/mdf-entitlement-coverage`. READ-ONLY, `books_to` = []. Proof `harness_mdf_entitlement_coverage.py` (96) |
+| **SUBSIDY MONTHS MISSING — a store-month inside a store's own entitlement that never arrived** §68 | mig `1068` (`commission_org_config.mdf_entitlement_config`, **NOT applied**; absent ⇒ `entitlement_coverage.CODE_DEFAULT`, which declares nothing, so the report says `configured: false` and calls no month missing) | `commcalc/entitlement_coverage.py` (PURE, DB-free; `entitlement_store_months` is **the "expected but absent" home at store × month grain**, plus `entitlement_window` / `entitlement_type_matcher` and the five `ROW_*` statuses); `GET /commcalc/mdf-entitlement-coverage`. READ-ONLY, `books_to` = []. Proof `harness_mdf_entitlement_coverage.py` (96) **DRILL-DOWN §CORE-17.3v** (`commcalc/entitlement_coverage_drilldown.py`, proof `harness_batch22_drilldown.py` §E) — the drill-down reads this producer's OWN verdict words, config column and migration name rather than restating any of them, so a verdict renamed here reaches the panel with no second edit |
 
 ## 15z. ZERO SALES — a store-day with no activation, and the three answers it can have (owner 2026-09-22)
 
@@ -7311,7 +7311,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - `GET /commcalc/accessory-target-plan/{period}?mode=&value=&basis=&stores=&markets=` — ONE company accessory goal, split per store on that store's own accessories-per-box over the last two months against the boxes it is projected to sell: the two history months in their own columns, MTD, the projected month-end (§5's `_targets_trending_by_code`), the target in force (mig `006`), the proportionate target and the extension it represents. READ-ONLY. `POST /commcalc/accessory-target-plan/{period}/assign` writes `accessories_monthly` on the selected stores through `_require_target_edit` — the same permission + store-span gate as `PUT /targets/{period}` — recomputing the plan server-side and moving no other column (§61).
 - `GET /commcalc/product-mix?period=&markets=&bands=` — per STORE and per REP: boxes, accessory $ per box, port-ins per box, and the device mix banded by what the CUSTOMER paid (free / budget / mid / premium, money cuts stated on every payload and overridable per call), plus the most-sold models with their average customer price and how many went out free. A rep is flagged only when BOTH signals are below the median of the reps in view, and the measured Pearson correlation between the mix and each outcome ships with the payload so the owner's claim can be falsified rather than assumed. The lagging-store ACTION PLAN is §59's own band, median, gap, verdict and sentence through `_peer_comparison_payload` + `with_extra_metric` on the SAME rows (no second feed read, no second definition of behind), with this report's flagged reps attached to each store item. The carrier's own port-in rate per store rides BESIDE ours through `kpi_failing.port_in_rate` — the column migration 002 has carried since 2026 and nothing ever displayed. READ-ONLY (§62).
 - `GET /commcalc/device-line-reimbursement?period=&store=` — one row per DEVICE the distributor ledger claims a reimbursement for in the month: what it claimed, what the handset cost (`asset_ledger.owed_to_vip`), what the store charged for it (`selling_price`, `null` when the ledger records no price — never `$0.00`), who the carrier paid the line against, and what the carrier's own PER-LINE feed paid for that device at THIS store and at any OTHER store, those stores named. Four verdicts: paid · **paid_to_other_store** · not_paid · not_measured. Classifies nothing (§58 `carrier_dollar_class` + the org's own `carrier_component_lines` routing, injected), resolves no store itself (§64 `coa.store_resolver`), re-derives no coverage (§19.54) and states no lag rule (§27 `period_window`, read symmetrically). READ-ONLY, no writer, no migration (§65).
-- `GET /commcalc/mdf-entitlement-coverage?store=` — one row per store-month inside a store's DECLARED entitlement window (`commission_org_config.mdf_entitlement_config`, mig `1068`): `received` · **`missing`** (the month's payment run demonstrably arrived for other stores and this store is not in it) · **`unconfirmed_missing`** (no payment of this kind reached us for ANY store that month — OUR feed, counted apart and never netted into the gaps) · `not_due` (the month has not finished) · `not_measured` (`entitlement_window_not_declared` / `no_entitlement_configured` / `store_identity_ambiguous`). Takes NO period: the question is the whole window. Declares nothing itself — the payment types are the org's own `payment_categories` through §57, the store key is §64's `coa.store_resolver` (+ `ambiguous_store_keys`), the calendar is `feed_period.month_state`, the verdict vocabulary is `pay_data_quality`'s. READ-ONLY, no writer, no flag (§68).
+- `GET /commcalc/mdf-entitlement-coverage?store=` — one row per store-month inside a store's DECLARED entitlement window (`commission_org_config.mdf_entitlement_config`, mig `1068`): `received` · **`missing`** (the month's payment run demonstrably arrived for other stores and this store is not in it) · **`unconfirmed_missing`** (no payment of this kind reached us for ANY store that month — OUR feed, counted apart and never netted into the gaps) · `not_due` (the month has not finished) · `not_measured` (`entitlement_window_not_declared` / `no_entitlement_configured` / `store_identity_ambiguous`). Takes NO period: the question is the whole window. Declares nothing itself — the payment types are the org's own `payment_categories` through §57, the store key is §64's `coa.store_resolver` (+ `ambiguous_store_keys`), the calendar is `feed_period.month_state`, the verdict vocabulary is `pay_data_quality`'s. READ-ONLY, no writer, no flag (§68). **DRILL-DOWN §CORE-17.3v:** all five tiles open, counts AND money — each count ties over the store-months its own verdict put there, money that ARRIVED names the carrier's two payment relations and nothing else (a receipt is a measurement; a declaration had no part in it), and what an ABSENT month was worth names PER ROW whether the rate was DECLARED in `commission_org_config` or OBSERVED from that store's own payments — two grains on one row in one unit separated by PROVENANCE ALONE (§CORE-17.3n). A store with no declared first month is never counted as missing; its observed absence is its own figure. A gap nothing can price is counted as a gap, shown without a figure, and the priced total comes back explicitly NOT TIED rather than letting a short sum look complete. Server-folded. Declaration `commcalc/entitlement_coverage_drilldown.py` (`entitlement_drilldowns`), proof `harness_batch22_drilldown.py` §E.
 - `GET /commcalc/device-line-reimbursement?period=&store=` — one row per DEVICE the distributor ledger claims a reimbursement for in the month: what it claimed, what the handset cost (`asset_ledger.owed_to_vip`), what the store charged for it (`selling_price`, `null` when the ledger records no price — never `$0.00`), who the carrier paid the line against, and what the carrier's own PER-LINE feed paid for that device at THIS store and at any OTHER store, those stores named. Four verdicts: paid · **paid_to_other_store** · not_paid · not_measured. Classifies nothing (§58 `carrier_dollar_class` + the org's own `carrier_component_lines` routing, injected), resolves no store itself (§64 `coa.store_resolver`), re-derives no coverage (§19.54) and states no lag rule (§27 `period_window`, read symmetrically). READ-ONLY, no writer, no migration (§65). Its per-device verdict is also what the COST side dereferences to place a handset's cost on the activating store (§70) — one reconciliation, two readers, never two derivations.
 - `GET /closing/cash-variance?date_from=&date_to=&markets=&stores=&reps=&verdict=` — shortage and overage AFTER management recon: what management received (`envelope_count` first, else `cash_pickup.actual_picked_amount`), the cash envelope the rep declared (`daily_closing.t_cash`) and the POS cash the close gate recorded (`closing_attempt.b2b_cash`), per store-day-rep — each figure carried WITH its basis, and a pair whose bases differ reported as NOT MEASURABLE rather than subtracted. Plus `by_store` / `by_employee` rollups off ONE summariser, the four trend kinds, and `blockers` naming what cannot be measured and why. Band + trend threshold are per-org config (mig `1070`); the verdict is `deposit_recon.status_for`; the POS figure is read, never re-derived from the feed. READ-ONLY, no writer (§72).
 - `POST /closing/pickup/open-count` · `POST /closing/billpay-pickup/open-count` — open a SEALED envelope and record the count, **or CORRECT a count already entered** (owner 2026-10-10). Optional `note` for why. Every changed field appends to `commcalc.cash_count_revision` through the one writer, and the reply carries `corrections` / `history_recorded` / `history_detail` so a trail that could not be written is stated rather than implied (§73.5). `POST /closing/pickup` and `POST /closing/envelope-count` return the same two keys.
@@ -7372,6 +7372,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /core/me` (+ `/core/bootstrap`) — `permissions.payout = {audience, carrier_view, refused_pages}`: the viewer's payout audience, whether they hold the carrier permission, and the carrier pages the server refuses them (the nav hides these) | `core._me_payload` → `payout_audience.viewer_payload(storeops.role_is_self_scoped(...), payout_audience.carrier_view_allowed(...))` | §6j / §6m |
 | `GET /commcalc/multimonth/status?periods=` — is multi-month configured for this org (`configured` / `off` / `off_with_money` + the money per period + a note). READ-ONLY | `router.get_multimonth_status` → `multimonth_config.load` | §6h |
 | `GET /commcalc/commissions-range?period_from=&period_to=` — the Rep Incentive report over a month range (≤ 12), one row per rep per month + month subtotals + total. READ-ONLY; each month IS `get_commissions(month)` | `router.get_commissions_range` → `account/_period.month_range` → `get_commissions` (per month, in-process) → `rep_incentive_range.assemble` | §6g |
+| `GET /commcalc/commissions/{period}/drilldown` — the drill-down panels for the Rep Incentive single-month report and the commission dashboard. READ-ONLY; a SIBLING endpoint because `/commissions/{period}` returns a bare JSON list with nowhere to hang a `drilldown` key and changing its shape would break every existing caller; it calls the single-month handler **in process with the caller's own authorization** (the `/commissions-range` precedent), so it can disclose nothing the report does not | `router.get_commissions_drilldown` → `get_commissions` (in-process) → `rep_incentive_range.assemble` (the month totals, which already fold through `payout_slice_evidence.sum_slice`) → `rep_incentive_drilldown.month_drilldowns` | §6g, §CORE-17. **DRILL-DOWN §CORE-17.3v:** ONE catalogue serving TWO screens that share a grain — the dashboard's payout and activation-count KPIs and the Rep Breakdown tab's header Total and Payout footer, all folded to one row per rep per store off the calculated rep-commission snapshot. A rep whose payout slices the run never itemised is shown WITHOUT a figure in `payout_slice_evidence`'s own basis word and is NOT counted (§CORE-17.3j). §CORE-17.3o settled BOTH ways inside one catalogue: the dashboard is server-folded and NOT narrowed, the breakdown IS narrowed on its own rep+store filter and reads each figure off its narrowed panel only when that panel agrees to the cent. REFUSED: the dashboard's composed Activations card (§CORE-17.3k — both halves drill), Reps Calculated (a distinct count), and the breakdown's Subtotal and Installment footers — DEFECTS REPORTED: that Subtotal footer sums a never-recorded slice in as zero while the cell above prints a dash, and the two tabs mean different things by `installment`. Declaration `commcalc/rep_incentive_drilldown.py`, proof `harness_batch22_drilldown.py` §C/§D |
 | `GET /commcalc/commission-explain` · the reports **🔍 Plan commission** drill (`PlanLineBreakdown`) — every plan line now carries `event_id / event_key / event_key_kind / event_type` when a rule pays per activation; the pay-gate report `pay_gate.unit.activation_events` (events, ambiguous invoices, config) | `commission_engine.preview(detail=True)` → `commission_drilldown.explain_rep`; frontend `planLines.toPlanLine` / `eventsOf` | §6f |
 | `GET/PUT /commcalc/commission-plans/pay-gate` — now also `unit_basis.auto_event_fields` (⑥ once per activation / upgrade) | `router.get_pay_gate` / put | §6f |
 | `GET /commcalc/pay-feed-balance?period=` — EVERY DOLLAR the carrier paid, PLACED in a pay bucket or REPORTED unplaced under a named reason, with `balances` as the arithmetic proof that `placed + unplaced == feed_total` to the cent; `day_coverage` (two feeds for the same money must cover the same days); and, since §19.54, `statement_month` — whether a CLOSED month's statement covers every day of its own calendar, the missing days NAMED and PRICED, §19.49's tri-state verdict. READ-ONLY, org-scoped: books nothing, pays nobody | `router.pay_feed_balance` → `core/feed_read.read_all` + `pay_data_quality.reconcile_pay_feed` / `.day_coverage_gap` / `.statement_month_coverage` | §19.48, §19.54 |
@@ -7535,7 +7536,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `PATCH /commcalc/commission-withholding/{flag_id}/appeal` (the SAME appeal state machine as `/discrepancy-appeals`; touches only the four mig-1060 columns, never a detector field or an amount) | `commcalc/router.py` (`set_withholding_appeal`) | §55.4 |
 | `PATCH /discrepancy-appeals/{row_id}` (appeal state machine — validate against CURRENT row state, who/when stamped; org-scoped read-then-update) | `commcalc/router.py` (`set_discrepancy_appeal`) | §15 Commission Discrepancy hub |
 | `GET/POST /ma-payment-rules`, `PATCH/DELETE /ma-payment-rules/{rule_id}` | `19200-19270` | §15 B2B ↔ MA recon |
-| `GET /activation-counts/{period}` (b2b Activation-Details store/market counts; buckets via `activation_bucketing`, mig 313 — `total_activation` excludes BOTH Upgrade families) | `activation_counts` (search `@router.get("/activation-counts/`) | §15 Activation-Details basis |
+| `GET /activation-counts/{period}` (b2b Activation-Details store/market counts; buckets via `activation_bucketing`, mig 313 — `total_activation` excludes BOTH Upgrade families) | `activation_counts` (search `@router.get("/activation-counts/`) | §15 Activation-Details basis. **DRILL-DOWN §CORE-17.3v:** every chip and every TOTAL-row cell on `/commcalc/activations` opens to the STORE ROWS the fold built it from, out of the month-end upload, counts only, keyed by the bucket column `activation_bucketing.BUCKET_FIELD` now owns (the router's literal copy was deleted in the same commit). A device whose dealer code resolves to no store is COUNTED, under the placeholder row the report itself puts it in. NO per-market panel is served and the grouping is NOT re-derived: `router._blank(mk, key="market")` is a dict-literal key collision that blanks every market label before it prints (defect REPORTED, not repaired), and the duplicate `Devices counted` chip gets no panel of its own because it is the same measurement as `incl. upgrade`. Server-folded. Declaration `commcalc/activation_count_drilldown.py` (`activation_drilldowns`), proof `harness_batch22_drilldown.py` §F |
 | `GET /tile-layout` (`?module=` — resolved tenant>house tile layout, dashboard-builder D1) | `commcalc/router.py` (`get_tile_layout`, beside nav-config) | §14 D1 |
 | `PUT /tile-layout` (fail-closed: house/foreign → super-admin; own org → `menu_layout` grant) | `commcalc/router.py` (`put_tile_layout`) | §14 D1 |
 | `GET/PUT /tile-layout?module=super-admin-toolbox` — the Super Admin Toolbox's tile arrangement (NO new endpoint: the same D1 pair; the built-in tiling is `NavItem.tile` data, a saved layout wins) | `commcalc/router.py` (`get_tile_layout` / `put_tile_layout`) | §38 |
@@ -24503,6 +24504,9 @@ payments **when they agree**; a store whose payments disagree prices nothing and
 - Page `frontend/src/app/(platform)/commcalc/mdf-entitlement-coverage/page.tsx` — renders and never
   computes a verdict, a window or a term. The two absence facts are separate tiles and separate
   columns; an unpriceable amount shows an em dash.
+  **DRILL-DOWN §CORE-17.3v:** every tile links its count and its money figure to the shared
+  `<DrillDownPanel`; the panels are the server's own fold and are NOT narrowed, because this page
+  has no browser filter above its figures (§CORE-17.3o, decided by reading the page).
 - **Management Overview** (`/hub/management-overview`) tile **"Subsidy Months Missing"** — mig `1068`
   Block 2, the `ui_label_override` `scope='tiles'` jsonb **append** with an `@>` containment guard
   and mig 1016's post-flight "exactly 1 tile" assertion. A string-matching migration into a tile
@@ -36044,6 +36048,172 @@ resolver EXTENDED rather than forked (every existing caller byte-identical), and
 declaration runs over it and is byte-identical** (§H1). `OWES_MAX` **33 → 29**, lowered by exactly
 the four routes served.
 
+### §CORE-17.3v THE LAST FOUR COMMCALC REPORTS (2026-10-26, batch 22)
+
+**`/commcalc` · `/commcalc/reports` · `/commcalc/mdf-entitlement-coverage` ·
+`/commcalc/activations`** — the four remaining COMMCALC report routes that print a figure a reader
+can be asked to trust. **THREE declarations, not one**, and the reason is the grain rule (§CORE-17.3l
+/ §CORE-17.3n) rather than taste: a **rep-per-store row of payout**, a **store-month of
+entitlement** and a **store row of counted devices** are three different subjects, and one module
+pretending otherwise would be three catalogues sharing nothing but a filename. The dashboard and the
+Rep Breakdown tab **do** share a grain — the same stored rep-commission snapshot, folded the same
+way — so they share **ONE catalogue** in one declaration; a second catalogue over that grain is the
+sibling derivation the index rules forbid.
+
+- `backend/app/modules/commcalc/rep_incentive_drilldown.py` (**new**) — `/commcalc` + `/commcalc/reports`
+- `backend/app/modules/commcalc/entitlement_coverage_drilldown.py` (**new**) — `/commcalc/mdf-entitlement-coverage`
+- `backend/app/modules/commcalc/activation_count_drilldown.py` (**new**) — `/commcalc/activations`
+
+Proof: `backend/harness_batch22_drilldown.py`, **131 checks**, **21 mutations / negative controls**,
+every producer driven **for real** and every grain **measured off the panels as a SET compared for
+equality** (never a `>=` bound), each equality mutation-tested with a **ghost swapped in at unchanged
+size** — the control that distinguishes an equality check from the bound it replaced.
+
+**THE SIX GRAINS, MEASURED.** Three row shapes, and two of the six separated by **provenance alone**
+(§CORE-17.3n):
+
+| # | row shape | unit | provenance |
+|---|---|---|---|
+| 1 | rep × store | money | the calculated rep-commission snapshot |
+| 2 | rep × store | count | the same snapshot, one UNIT apart (§CORE-17.3l) |
+| 3 | store × month | count | the carrier's two payment records, unioned |
+| 4 | store × month | money | the same two records — money that ARRIVED |
+| 5 | store × month | money | **the same row, same unit** — what an ABSENT month was worth, priced from the rate **declared** in company commission settings |
+| 6 | store × month | money | **the same row, same unit** — priced from the rate **observed** in that store's own payments, where none was declared |
+
+Rows 5 and 6 are the sharpest §CORE-17.3n case in COMMCALC so far: identical subject, identical
+unit, and the only difference is **which relation answered**, decided per row. A reader asking "what
+is this gap worth" is owed that distinction, because one number is the company's own declaration and
+the other is an inference from the carrier's behaviour.
+
+**A PANEL EXPLAINS THE FIGURE, NOT THE TABLE — settled BOTH ways inside ONE catalogue**
+(§CORE-17.3o). The call was made by **reading each page**, not by convention:
+
+- `/commcalc` prints the server's own fold. Its KPI strip has no browser filter, so the panels are
+  **not narrowed** and `drill-narrow` is absent from the page.
+- `/commcalc/reports` folds the reader's own **rep + store filter in the browser**, so its panels
+  **are narrowed** (`lib/drill-narrow`), and each figure is read **off its narrowed panel only when
+  that panel agrees to the cent** — a disagreement costs the link, never the figure.
+
+Both directions are **locked off the pages' own text**: the lock fails the build if the dashboard
+grows a `narrowPanel(` call or the breakdown loses one.
+
+**ONE FACT, ONE HOME — and the other half of it, in the same commit.** *Which payload column holds
+each activation bucket's count* was a literal map inside `commcalc/router._ACT_BUCKET_FIELD`. A fold
+writes a bucket under a column key and a panel has to name that figure **by the same key**, so a
+second copy is a panel that silently explains the wrong number. The map moved to
+`activation_bucketing.BUCKET_FIELD`, beside the bucket rank and the excluded families, **and the
+router's copy was deleted in the same commit** — naming the fact is half a design fix and deleting
+every copy is the half that has been skipped three times here (§19.18). New graph fact
+`activation_bucket_column`, with the re-keyed router registered beside the new caller. The
+calculated rep-commission snapshot is **dereferenced, not re-named**: `carrier_pay_drilldown.REP_COMMISSIONS`
+stays its one home (§CORE-17.3t settled that), and batch 22 gave that fact its own graph block
+(`rep_pay_snapshot`) with the five pre-existing callers named for the first time. The two carrier
+payment relations and the month-end upload are dereferenced from `data_lineage_registry`; **no new
+registry entry was added**, because every name needed was already in there.
+
+**THE ONE RELATION THAT IS DELIBERATELY NOT IN THE FEED REGISTRY.** The subsidy panels name
+`commission_org_config` — the company commission settings a human typed the entitlement rate into.
+That is a **config row, not an external feed**: it has no arrival cadence, no staleness and nothing
+for the feed watchdog to measure, so putting it in `data_lineage_registry` would add a row to a
+population whose every check is about ingest. The posture `targets_drilldown.TARGETS` already takes,
+taken again rather than re-litigated. It has a `sourceLabels.ts` entry (*company commission
+settings*) so a reader sees plain words.
+
+**ABSENCE IS NEVER ZERO.** Three shapes of "we cannot answer that", each a blank with a reason:
+
+- A rep whose payout slices the run **never itemised** is shown **without a figure**, in
+  `payout_slice_evidence`'s **own basis word**, and is **not counted** (§CORE-17.3j). A `$0.00`
+  there tells a rep they earned nothing beside a total that is correct.
+- A store whose **first entitled month is not declared** is never counted as missing. Its observed
+  absence is its own figure on the report — evidence, not an accusation.
+- A gap **nothing can price** is counted as a gap and shown without a figure, and the priced total
+  comes back **explicitly NOT TIED** (`ties is None`) rather than letting a short sum look complete.
+
+**WHAT IS REFUSED, AND WHY.**
+
+- The dashboard's **Activations** card composes two measured halves **at the total** — each half
+  drills on its own (§CORE-17.3k).
+- **Reps Calculated** is a distinct count, not a fold of its rows.
+- The Rep Breakdown's **Subtotal** and **Installment** footers (defects 1 and 2 below).
+- The **Month range** tab: its grain is already `exec_month_drilldown`'s and a second catalogue over
+  it would be the duplicate defect. Left **owed**, honestly.
+- Every **per-market** panel on `/commcalc/activations` (defect 3 below).
+- The duplicate **Devices counted** chip, which is the same measurement as **incl. upgrade** under a
+  second label; one figure gets one panel.
+
+**THREE LIVE DEFECTS — REPORTED, REPRODUCED, NOT REPAIRED.** Each has a regression check in the
+harness driven off the real code, and none is hidden behind a number the screen does not print:
+
+1. **The Rep Breakdown's Subtotal footer adds a never-recorded slice in as zero.** The page prints
+   each rep's Subtotal **cell** as a dash where the run never itemised it, then totals the column
+   with a plain reduce over the same rows — the arithmetic `payout_slice_evidence.sum_slice` exists
+   to refuse, and which the Month-range tab already avoids. The footer keeps its own number; it is
+   refused a panel and the shared gate withholds the link on any month where the two differ.
+2. **The two tabs mean different things by `installment`.** The breakdown footer sums a column the
+   one home does not sum at all, which is why that footer is refused as well as being composed at
+   the total.
+3. **The activations By-Market fold destroys every market label.** `router._blank(mk, key="market")`
+   builds `{key: label, "market": "", …}` — a **dict-literal key collision**, so every market row's
+   label is blanked before it is printed. No per-market panel is served, and the grouping is **not
+   re-derived beside the report**: a panel cannot name a subject the report has thrown away, and
+   inventing it back would be a second fold of a figure the report itself lost.
+
+**WHAT IS STILL OWED, HONESTLY** (three routes read and deliberately **not** reclassified):
+
+- `/commcalc/custom-report` — the only figures above its rows are the shared `ReportShell` footer,
+  which §CORE-17.3u already refuses as a disposition, plus a pivot whose evidence rows sit directly
+  beneath it. Still `owes`, because it **is** a report and reclassifying it would hide it.
+- `/commcalc/store-takeover` — a real report needing its own family (the takeover evaluation's own
+  grain, §COMMCALC-03.23).
+- `/commcalc/whatif` — most of a what-if is refusable by §CORE-17.3m (declared targets) and
+  §CORE-17.3h (rates), but the **measured base** it starts from should drill and deserves its own
+  pass rather than a corner of this one.
+
+#### §16–18 CROSS-REFERENCES
+
+Registered in `app/modules/core/module_graph.py` as a caller of five facts — `report_drilldown`
+(home `app/modules/core/report_drilldown.py`), `feed_lineage`, `payout_slice_evidence`,
+`entitlement_month_coverage` and the two facts this batch gave a home block for the first time,
+`rep_pay_snapshot` (home `commcalc/carrier_pay_drilldown.py`) and `activation_bucket_column` (home
+`commcalc/activation_bucketing.py`) — every edge **hand-written, never `--bless`** (§50), including
+the one for the re-keyed `commcalc/router.py`. Depends on: §CORE-17 (the one home and the shared
+panel), §6g (the rep-incentive range assembler whose fold these month totals are read from), §68
+(the entitlement coverage producer), §15 / mig `313` (the Activation-Details buckets), §COMMCALC-09
+(is a stored payout slice evidence at all), §19.38 (a feed's plain name), §13a (the canonical store
+key). Feeds: §CORE-17.4 (the audit ledger — `OWES_MAX` **29 → 25**). Neighbours: §CORE-17.3q (the
+executive-month family, whose declaration owns the month-range grain this batch left owed rather
+than re-deriving), §CORE-17.3t (the other family that folds the same rep-pay snapshot),
+§CORE-17.3o (the ruling settled both ways inside one catalogue here), §19.18 (writing a registry
+without wiring the callers is not a fix).
+
+CI: `carrier-vocab-guard`, step *Run the batch-22 drill lock*, with a paths filter naming every file
+it is about. **No migration, no new table, no money moved.**
+
+Files: `backend/app/modules/commcalc/rep_incentive_drilldown.py` (**new**),
+`backend/app/modules/commcalc/entitlement_coverage_drilldown.py` (**new**),
+`backend/app/modules/commcalc/activation_count_drilldown.py` (**new**),
+`backend/app/modules/commcalc/activation_bucketing.py`,
+`backend/app/modules/commcalc/router.py`, `backend/app/modules/core/module_graph.py`,
+`backend/harness_batch22_drilldown.py` (**new**), `backend/harness_drilldown_coverage.py`,
+`backend/harness_drilldown_pending.txt`, `frontend/src/lib/sourceLabels.ts`,
+`frontend/src/app/(platform)/commcalc/page.tsx`,
+`frontend/src/app/(platform)/commcalc/reports/page.tsx`,
+`frontend/src/app/(platform)/commcalc/activations/page.tsx`,
+`frontend/src/app/(platform)/commcalc/mdf-entitlement-coverage/page.tsx`,
+`.github/workflows/carrier-vocab-guard.yml`, `docs/SYSTEM_DATA_FLOW_INDEX.md`.
+
+**No migration, no new table, no money moved** — three read-only `drilldown` keys attached to
+existing payloads plus **one new sibling endpoint**
+(`GET /commcalc/commissions/{period}/drilldown`, because `/commissions/{period}` returns a bare JSON
+list with nowhere to hang a key and changing its shape would break every existing caller; it calls
+the single-month handler **in process with the caller's own authorization**, the `/commissions-range`
+precedent, so the panel can disclose nothing the report does not). Four pages wired to the shared
+panel, **no change to any producer's arithmetic**, no new registry entry, one literal map moved into
+its one home with the copy deleted in the same commit. Each producer's payload was
+**deep-compared before and after the declaration runs over it and is byte-identical** (§H1).
+`OWES_MAX` **29 → 25**, lowered by exactly the four routes served.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
@@ -36104,7 +36274,7 @@ has not forked, the page hand-rolls no panel, RULE TWO holds in both files.
 `backend/harness_drilldown_coverage.py` — **17 checks**, the ratchet: every report route declared
 exactly once, no ledger route has stopped existing, every excused state carries a written reason,
 every `shared` route really renders the shared panel (writing the registry without wiring the caller
-is not a fix at all — §19.18), and **`OWES_MAX = 93`, which may only go DOWN**. Re-pin it downward in
+is not a fix at all — §19.18), and **`OWES_MAX`, which may only go DOWN** (**93** at the audit, **25** since §CORE-17.3v). Re-pin it downward in
 the same PR that builds a drill-down; a change that raises it is a report shipped without evidence.
 
 ### §CORE-17.6 WHAT IS DELIBERATELY NOT HERE
@@ -36126,17 +36296,17 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 `closing/attempts_drilldown.py`, `commcalc/tender_recon_drilldown.py`, `crm/reports_drilldown.py`,
 `helpdesk/dashboard_drilldown.py`, `account/statement_drilldown.py`,
 `account/liabilities_drilldown.py`, `commcalc/carrier_pay_drilldown.py`,
-`asset/device_asset_drilldown.py`, `commcalc/targets_drilldown.py`, `commcalc/processor_money_drilldown.py`, `commcalc/accessory_money_drilldown.py`, `commcalc/device_financing_drilldown.py`, `commcalc/exec_month_drilldown.py`, `commcalc/sales_margin_drilldown.py`), §17 (`GET
+`asset/device_asset_drilldown.py`, `commcalc/targets_drilldown.py`, `commcalc/processor_money_drilldown.py`, `commcalc/accessory_money_drilldown.py`, `commcalc/device_financing_drilldown.py`, `commcalc/exec_month_drilldown.py`, `commcalc/sales_margin_drilldown.py`, `commcalc/rep_incentive_drilldown.py`, `commcalc/entitlement_coverage_drilldown.py`, `commcalc/activation_count_drilldown.py`), §17 (`GET
 /closing/cash-variance` → `drilldown`; `GET /commcalc/discrepancy/{period}` → `drilldown` +
 `drilldown_store`; `GET /commcalc/carrier-vs-pay/{period}` → `drilldown`; `GET
 /commcalc/commission-received-breakout` → `drilldown`; `GET /asset/summary`, `GET
 /asset/charges-summary`, `GET /asset/on-inventory-by-store`, `GET /asset/owed-weekly`, `GET
 /asset/inventory-recon`, `GET /asset/borrowings`, `GET /commcalc/vip/paygo/summary` →
 `drilldown`; `GET /commcalc/targets/{period}/calendar`, `GET /commcalc/targets/{period}/summary`,
-`GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards`, `GET /commcalc/billpay-extract/{period}`, `GET /commcalc/epay/fee-recon`, `GET /commcalc/processor-ledger`, `GET /commcalc/accessory-target-plan/{period}`, `GET /commcalc/accessory-cost-audit/{period}`, `GET /commcalc/accessory-flags`, `GET /commcalc/vip/summary`, `GET /commcalc/device-line-reimbursement`, `GET /commcalc/financing/{period}`, `GET /commcalc/exec-overview/{period}`, `GET /commcalc/exec-mtd/{period}`, `GET /commcalc/month-focus/{period}`, `GET /commcalc/comp/rep-pay-trend`, `GET /commcalc/gp/{period}`, `GET /commcalc/sales-analyzer/{period}`, `GET /commcalc/sales-comparison`, `GET /commcalc/zero-sales` →
-`drilldown`), §18 ("where is this figure from" → `panel.sources` → `sourceLabel`; "did the
+`GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards`, `GET /commcalc/billpay-extract/{period}`, `GET /commcalc/epay/fee-recon`, `GET /commcalc/processor-ledger`, `GET /commcalc/accessory-target-plan/{period}`, `GET /commcalc/accessory-cost-audit/{period}`, `GET /commcalc/accessory-flags`, `GET /commcalc/vip/summary`, `GET /commcalc/device-line-reimbursement`, `GET /commcalc/financing/{period}`, `GET /commcalc/exec-overview/{period}`, `GET /commcalc/exec-mtd/{period}`, `GET /commcalc/month-focus/{period}`, `GET /commcalc/comp/rep-pay-trend`, `GET /commcalc/gp/{period}`, `GET /commcalc/sales-analyzer/{period}`, `GET /commcalc/sales-comparison`, `GET /commcalc/zero-sales`, `GET /commcalc/mdf-entitlement-coverage`, `GET /activation-counts/{period}` →
+`drilldown`; `GET /commcalc/commissions/{period}/drilldown` — a SIBLING endpoint, because the report it explains returns a bare JSON list with nowhere to hang the key), §18 ("where is this figure from" → `panel.sources` → `sourceLabel`; "did the
 carrier pay what we computed, and out of which legs" → §CORE-17.3k; "which devices is this
-store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p; "how is the month going, against what, and is anybody being paid for it" → §CORE-17.3q; "what did we sell, at what margin, and which upload or feed actually answered for it" → §CORE-17.3r; "what did we expect the carrier to pay, what did it pay, and what is being clawed back or is missing" → §CORE-17.3s; "how are reps and stores performing, and who needs coaching" → §CORE-17.3t), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
+store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p; "how is the month going, against what, and is anybody being paid for it" → §CORE-17.3q; "what did we sell, at what margin, and which upload or feed actually answered for it" → §CORE-17.3r; "what did we expect the carrier to pay, what did it pay, and what is being clawed back or is missing" → §CORE-17.3s; "how are reps and stores performing, and who needs coaching" → §CORE-17.3t; "what is each rep being paid this month and what for" → §CORE-17.3v; "which store-month of this entitlement never arrived, and what was it worth" → §CORE-17.3v; "how many devices did this store activate, and which upload says so" → §CORE-17.3v), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
 (`sourceLabel`), §2 / `data_lineage_registry.py` (which table is which feed), §15 (the B2B ↔ MA
 activation recon these three reports read), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
 module graph).
