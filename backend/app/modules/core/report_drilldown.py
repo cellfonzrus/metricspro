@@ -56,7 +56,8 @@ total deliberately excludes days inside the tolerance band. Those days still bel
 sums only the counted ones, and the panel says in words how many are shown without being counted. A
 drill-down that silently dropped them would read as a shorter month than the one the report measured.
 
-LOCKED SO IT CANNOT UN-WIRE (CLAUDE.md). `backend/harness_report_drilldown.py` fails the build when
+LOCKED SO IT CANNOT UN-WIRE (CLAUDE.md). `backend/harness_report_drilldown.py`, and per family
+`harness_batch24_drilldown.py` (payroll and workforce) beside its siblings, fail the build when
 a drill origin names a table no migration creates, when that table has no `sourceLabel` entry (the
 operator would be shown a database name), when a producer builds a panel dict by hand instead of
 through these functions, and when a tie-out claims a tie over an unmeasured row.
@@ -210,6 +211,17 @@ UNMEASURED_REASONS = {
     "below_ranking_floor": "this person sold too few boxes in the window for a per-box rate to "
                            "mean anything, so the report reaches no verdict about them at all — "
                            "they are shown without one rather than counted as having passed",
+    # The two shapes the batch-24 PAYROLL-AND-WORKFORCE reports brought with them (§CORE-17.3x).
+    # Both KEYS are `storeops/payroll_hours_basis.NOT_MEASURED_UNPAID` / `.PUNCH_UNUSABLE`
+    # THEMSELVES — the payroll engine's own basis vocabulary, not a second spelling of it, and
+    # `harness_batch24_drilldown.py` §A fails the build if the two drift apart. The sentences here
+    # are the reader-facing half; that module's own longer explanation stays in its `BASIS_REASONS`.
+    "not_measured_unpaid": "nothing was measured for this person over this period and they are not "
+                           "paid from the schedule, so there are no hours to show — the blank is a "
+                           "missing punch, never somebody who worked and produced nothing",
+    "punch_unusable": "a punch exists but it is still open or it was auto-closed, and this company "
+                      "does not count such a punch as a measurement — the hours are unknown rather "
+                      "than zero, and paying a punch left open for days is what that rule prevents",
     "no_dm_in_org_tree": "the org chart does not say which district manager owns this store, so "
                          "this figure cannot be attributed to any of them — it is unattributable "
                          "rather than zero, and assigning the store in the org chart is what puts "
@@ -454,8 +466,10 @@ def tile_panel(figure_label, amount, rows, *, value, tables, row_label=None, key
     `value` reads the row's contribution; **None means the row has no number**, and such a row is
     shown with its reason rather than counted as nothing. `tables` names where that figure was read
     from — a tuple, or a callable when a row's provenance genuinely differs row to row (one feed
-    present for this store-day, absent for that one). `keys` are the field names that address the
-    row in those tables, so a reader can find it again.
+    present for this store-day, absent for that one). `column` is the same: a name, or a callable
+    when the column the figure was read out of differs row by row (a punch's hours for one person,
+    the schedule's for the next). `keys` are the field names that address the row in those tables, so
+    a reader can find it again.
 
     `figure_label` NAMES THE TILE and `row_label` names each row, and they are deliberately two
     words rather than one: in a catalogue both live in the same dict, and when they shared the name
@@ -477,6 +491,11 @@ def tile_panel(figure_label, amount, rows, *, value, tables, row_label=None, key
     read_l = _reader(row_label if row_label is not None else "label", default=None)
     read_k = _reader(keys, default=None) if keys else (lambda _r: None)
     read_t = tables if callable(tables) else (lambda _r: tables)
+    # WHICH COLUMN A FIGURE WAS READ OUT OF CAN DIFFER PER ROW, exactly as `tables` can: one person's
+    # hours come off a punch's own column and another's off the schedule's, and naming one for both
+    # would name the wrong column on half the rows. So `column` takes a callable too (batch 24),
+    # additively — a plain string behaves exactly as before.
+    read_c = column if callable(column) else (lambda _r: column)
     read_f = _reader(fields, default=None) if fields is not None else (lambda _r: None)
     read_m = measured if callable(measured) else _reader(measured, default=None)
     read_rs = reason if callable(reason) else _reader(reason, default=None)
@@ -507,7 +526,7 @@ def tile_panel(figure_label, amount, rows, *, value, tables, row_label=None, key
         # config-resolved feed has the same shape (cash recon's processor and sales legs included).
         _tables = tuple(read_t(r) or ()) or (None,)
         out.append(drill_row(
-            lab, origins_of([(t, kv) for t in _tables], schema=schema, column=column),
+            lab, origins_of([(t, kv) for t in _tables], schema=schema, column=read_c(r)),
             row_key=kv,
             amount=v,
             in_figure=(read_in(r) if read_in else v is not None),

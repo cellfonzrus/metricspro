@@ -212,6 +212,35 @@ STORE_EXPENSES = "store_expenses"
 #: second statement about where a FIGURE came from, and re-pointing them is a finance-module change
 #: rather than a drill-down one — and finance work is the finance agent's (CLAUDE.md).
 FINANCIAL_STATEMENTS = "account_statements"
+#: THE EMPLOYEE RECORD (`storeops.employees`, mig 003). Where a person's pay rate, their pay basis
+#: and their identity live — so every MONEY figure folded out of hours names it beside whichever
+#: relation answered for the hours, because a gross cannot be read without the two together.
+#:
+#: `employees` WAS ALREADY SPELLED as a literal in `account/liabilities_drilldown.EMPLOYEES`, which
+#: is the divergence this registry forbids — the same shape `timelog`, `shifts`, `ops_chargeback` and
+#: `account_statements` each had when they arrived here. That copy dereferences this constant now
+#: (string-identical value, no read changed), and `harness_batch24_drilldown.py` §A fails the build if
+#: the literal returns inside any drill-down declaration. Naming a fact here is half a design fix;
+#: deleting every copy in the same commit is the other half (§19.18).
+#:
+#: SCOPE, STATED SO THE NEXT READER DOES NOT RE-DERIVE IT — the same scope `TIME_CLOCK` carries. This
+#: is the one home for the PROVENANCE NAME, not a rename of the hundred-odd `.table("employees")`
+#: reads across the roster, payroll, scheduling and onboarding paths: a read is an I/O call, not a
+#: statement about where a figure came from.
+EMPLOYEE_ROSTER = "employees"
+#: HAND-ENTERED HOURS (`storeops.manual_hours`, mig 045). A correction somebody typed for a day the
+#: clock did not answer for, and therefore the provenance of an hours figure that came from neither
+#: the punch nor the plan.
+#:
+#: `manual_hours` WAS ALREADY SPELLED as a literal in `account/liabilities_drilldown.MANUAL_HOURS`,
+#: and that copy dereferences this constant now — same posture, same commit, same lock as
+#: `EMPLOYEE_ROSTER` above.
+#:
+#: REPORTED, NOT PAPERED OVER: `GET /storeops/payroll` does not read this table at all (§14y), so the
+#: Payroll Report's own drill-down deliberately never names it — a provenance claim about a read that
+#: did not happen would be worse than the gap. The gap is written down in
+#: `storeops/payroll_hours_drilldown.py` and in §CORE-17.3x instead.
+MANUAL_HOURS = "manual_hours"
 
 
 # ── WHICH TABLE A BILL-PAYMENT PROCESSOR'S FEED LANDS IN ───────────────────────────────────────
