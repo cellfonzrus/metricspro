@@ -135,8 +135,8 @@ export default function AccessoryCostAuditPage() {
   const cnt = data?.counts || {}
   // The figure each key's panel must agree with, to the cent, before any drill is offered.
   const tileFigure = useCallback((k: string): unknown => (
-    k.startsWith('delta_') ? data?.deltas?.[`option_${k.slice(6)}`] : totals[k]
-  ), [data, totals])
+    k.startsWith('delta_') ? data?.deltas?.[`option_${k.slice(6)}`] : data?.totals?.[k]
+  ), [data])
   const drill = useDrillTile((data?.drilldown || {}) as Record<string, DrillPanel>,
     (k, p) => agreesToTheCent(p, tileFigure(k)))
 
