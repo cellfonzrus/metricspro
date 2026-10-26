@@ -94,10 +94,23 @@ PAGE = open(os.path.join(ROOT, "../frontend/src/app/(platform)/commcalc/gp/page.
 from harnesslib import js_code_only   # noqa: E402
 page = js_code_only(PAGE)
 tiles = page.split("Summary cards", 1)[-1].split(".map(({ label", 1)[0]
+# THE TILE STRIP IS KEYED, NOT VALUED (2026-10-26, index §CORE-17.3r). Each tile used to carry its
+# number inline as `val: totals.<key>`; it now names the COLUMN as `key: '<key>'` and the number is
+# read through the ONE reader `gpTile(key)`, which returns the tile's narrowed drill-down figure when
+# that panel agrees with the page's own fold to the cent and the page's own fold otherwise. So the
+# fact this check is about is unchanged — the header carries a tile for each of the five terms — and
+# it is asserted twice over rather than once: the tile must be DECLARED for that column, and the
+# strip's number must come from that one reader rather than from a second arithmetic beside it.
 for key, label in (("total_rev", "Total Revenue"), ("net_phone_cost", "Phone Cost"),
                    ("rep_pay", "Rep Incentives"), ("exp_total", "Store Expenses"),
                    ("net_profit", "Net Profit")):
-    check(f"C1 the header carries a `{key}` tile ({label})", f"totals.{key}" in tiles, tiles[:200])
+    check(f"C1 the header carries a `{key}` tile ({label})", f"key: '{key}'" in tiles, tiles[:200])
+check("C1b and every tile's number comes from the ONE reader over the page's own totals, so a tile "
+      "cannot grow an arithmetic of its own beside the fold this file checks",
+      "const val = gpTile(key)" in page
+      and "const gpTile = (k: string): number =>" in page
+      and "val: totals." not in page,
+      page[page.find("const gpTile"):][:160])
 
 check("C2 the subtracting tiles are marked red, so the row reads as an arithmetic",
       tiles.count("red: true") >= 3)
