@@ -1825,7 +1825,7 @@ async def get_aging(
     by_model_total = len(by_model)
     by_model_shown = by_model[:_AGING_MODEL_CAP]
 
-    return {
+    out = {
         "today": today.isoformat(),
         "data_as_of": fd,
         "buckets": buckets,
@@ -1871,6 +1871,14 @@ async def get_aging(
         "filters": {"store": store or None, "market": market or None, "month": month, "year": year,
                     "date_from": date_from or None, "date_to": date_to or None},
     }
+    # §CORE-17.3y — EVERY BAND OPENS TO ITS OWN DEVICES (owner ask 2026-10-26, quoting this page's
+    # own banner: "124 devices in the 9-12 day window ... need a drill donw for these , whic store
+    # market date range etc"). The declaration is `device_asset_drilldown`'s, folded over
+    # `all_rows` — the UNCAPPED population this endpoint just built — rather than over the response,
+    # whose zero-owed and unknown-age lists are capped for payload size. Pass the response instead
+    # and every panel still works; its tie-out is then honestly over a page of the devices.
+    out["drilldown"] = _dd.aging_drilldowns(out, all_rows)
+    return out
 
 
 def _attach_investigation(client, org_id, rows):

@@ -34,6 +34,12 @@ PAGE = 1000
 SOURCE_TABLE = "source_table"
 SOURCE_LEDGER = "payable_ledger"
 
+#: THE FIELD THIS MODULE STAMPS ITS ANSWER INTO, named once so a reader of a shaped row does not
+#: carry a second copy of the key. `asset/device_asset_drilldown` dereferences it to decide WHICH
+#: relation each aging row was read out of (§CORE-17.3y) — a literal there would be the copied fact
+#: the house rules forbid, and it would silently stop matching the day this key changed.
+SOURCE_FIELD = "_source"
+
 
 def load_policies(client, org_id):
     """{carrier_id: resolved policy} for the org, plus the maps themselves.
@@ -114,7 +120,7 @@ def fetch_unsold_from_ledger(client, org_id, carrier_ids=(), date_from="", date_
             "reimbursement": None,
             # PROVENANCE, carried so the screen can say where each figure came from instead of
             # implying it came from a consignment ledger this tenant does not have.
-            "_source": SOURCE_LEDGER,
+            SOURCE_FIELD: SOURCE_LEDGER,
             "_owed_source": r.get("owed_source"),
             "_due_source": r.get("due_source"),
         })

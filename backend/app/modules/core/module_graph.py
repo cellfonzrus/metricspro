@@ -84,7 +84,8 @@ FACTS: dict[str, dict] = {
                   'harness_batch19_drilldown.py',
                   'harness_batch20_drilldown.py',
                   'harness_batch21_drilldown.py',
-                  'harness_batch22_drilldown.py'),
+                  'harness_batch22_drilldown.py',
+                  'harness_batch25_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first

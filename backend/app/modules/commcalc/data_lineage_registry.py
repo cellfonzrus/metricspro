@@ -122,6 +122,15 @@ PAYGO_BATCHES = "vip_paygo_payments"       # one row per weekly distributor lend
 #: nothing here to re-key — the `.table(...)` reads that address it are PostgREST call sites, the
 #: same posture `ASSET_LEDGER` keeps for its own 74.
 DISTRIBUTOR_INVOICES = "vip_invoices"      # one row per distributor invoice (sweep / workbook)
+#: THE CARRIER-AGNOSTIC PER-IMEI PAYABLE LEDGER (mig 095) — one row per device the platform owes
+#: for, materialized from every carrier's own declared `payable_source_map`. Named here because the
+#: aging report serves TWO provenances per row since §COMMCALC-28: a Boost/VIP device was read out of
+#: `ASSET_LEDGER` and a Total device out of this relation, and a panel that named one for both would
+#: be wrong on every row of the other tenant (§CORE-17.3y, batch 25). Like the constants above it is
+#: a NAME constant, not an entry in `INGEST_TABLES_BY_MODULE`: the platform WRITES this relation from
+#: feeds that are themselves registered, so registering it again would claim a second ingest edge
+#: into the same money. This file held no literal copy of it, so there is nothing here to re-key.
+DEVICE_PAYABLE_LEDGER = "device_payable_ledger"
 
 # ── THE FIVE RELATIONS THE FINANCE DEVICE-BILLING AND INVENTORY FAMILIES HAVE TO NAME ────────────
 # (§CORE-17.3w, batch 23.) Same reason as every block above it: a drill-down must tell the reader

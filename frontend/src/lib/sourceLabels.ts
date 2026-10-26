@@ -75,6 +75,10 @@ const SOURCE_LABEL: Record<string, string> = {
   account_statements: 'computed financial statements',
   journal_entries: 'manual journal entries',
   asset_ledger: 'device asset landing ledger',
+  // The carrier-agnostic per-IMEI payable ledger (§CORE-17.3y). The aging report names TWO
+  // relations per row — a consignment device was read out of the ledger above and a device the
+  // platform owes for out of this one — so both need a plain name or half the rows print a table.
+  device_payable_ledger: 'per-device payable ledger',
   vip_invoices: 'distributor invoices',
   // The finance device-billing and credit-memo families (§CORE-17.3w). A reader opening a device
   // purchase or a payable sees what the distributor billed and what it credited, never a table —
