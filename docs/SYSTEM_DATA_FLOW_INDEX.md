@@ -3781,6 +3781,16 @@ gates.
   get no panel (ratios at the total, §CORE-17.3h) and neither does the by-account view (four
   reasons). Proof `harness_batch17_drilldown.py`.
 
+- **DRILL-DOWN (§CORE-17.3t, batch 20):** `/productivity/{period}`, `/coaching/{period}`,
+  `/atu-opportunity` and `/kpi-failing/{period}` each return a read-only `drilldown` key — how are
+  reps and stores performing, and who needs coaching. TWELVE grains in FOUR row shapes, and the
+  programme's FIRST `UNIT_HOURS` caller: what was WORKED names the time clock alone, never the
+  schedule. An employee nobody clocked, a KPI the carrier never published and a pay breakdown the
+  run never itemised are each a BLANK WITH A REASON rather than a zero somebody could coach on.
+  Coaching and Failing KPIs are NARROWED through `lib/drill-narrow` because they fold their own
+  tiles; Productivity and Autopay are server-folded. Every rate, index and weighted score gets no
+  panel (§CORE-17.3h) and the figures each divides are offered instead. Declaration
+  `commcalc/performance_coaching_drilldown.py`, proof `harness_batch20_drilldown.py`.
 - **DRILL-DOWN (§CORE-17.3s, batch 19):** `/expected-commission/{period}`,
   `/ma-commission/summary`, `/recovery/ledger` and `/dlar-vs-platform/{period}` each return a
   read-only `drilldown` key — what did we expect the carrier to pay, what did it pay, and what is
@@ -5962,7 +5972,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | `raw_ma_commission` / `raw_ma_daily_tx` — **as a REPORTED INCOME figure** §4a | mig `083` (tables); mig `314`/`934` (config) | WRITTEN by the upload/sweep paths (§2). READ AS MONEY for a report by **`account/ma_store_pnl.py`** and `account/residual_subs.py` ONLY — `gp_carrier_income`, `ma_earned_month_ladder`, `ma_received_month_ladder`, `ma_sheet_component_total`, `ma_sheet_spiff_total`, `ma_commission_components`. `coa.build_inputs` (P&L), `router._compute_gp` (GP), `router.ma_commission_summary` + `_ma_summary_legs` and `commission_received.add_ma_rows` all DEREFERENCE those; none sums the components itself. Locked by `harness_ma_income_one_home_guard.py` |
 | **Vendor rebate history (earned, per line)** §27 | mig `1005` (`raw_vendor_rebate`) | `commcalc/vendor_rebate_feed.py` (PURE; `BOOKS_TO` = ()); `GET /commcalc/vendor-rebates`. Lands via `POST /commcalc/upload-mapped` (no new ingest route). **Books NOTHING** — earned ≠ collected, open owner decision. NOT `raw_ma_commission` (money reads it) and NOT `activation_rebate_ledger` (that one books). Proof `harness_vendor_rebate_landing.py` |
 | **Device Forecasting & Vendor Payables (module 095)** | `device_payable_ledger` + `payable_source_map` (mig `095_device_payables` — a NEW carrier is a config row: source_table/imei_field/store_field/owed_field/sold-match/reimbursement), `device_model_alias` (mig `096` — raw model → canonical + carrier, the forecast alignment) | `payables/engine.py` (`build_ledger` delete+insert per carrier; **`ma_store_resolution`/`resolve_ma_store` — Total/MA device→store attribution, 2026-09-04**: POS sale line → `inventory_aging_device` §11 device grain → mig-314 account index (`ma_store_pnl.load_store_index` + `coa.store_resolver` spelling collapse) → None, fills blanks only); `payables/router.py` `/api/v1/payables/*` — `/forecast` (phones-only velocity/on-hand/recommend, per carrier; Boost leg `raw_sales` device lines, Total leg `raw_ma_commission` + the attribution above), `/payables` (per-IMEI ledger read; read-time blank-store fill via the same attribution), `/filter-options` (canonical §13c roster+markets — the frontend bar's PLATFORM-WIDE gate source), `/owed-by-date` (ledger, else `raw_ma_daily_tx` vendor-feed fallback), `/due`, `/priority`, `/source-maps*`, `/phone-map*`, `/settings`, `POST /rebuild`. Frontend `commcalc/payables/page.tsx` (bar gated on roster ∪ rows — owner 2026-09-04 "need to be platform wide"). Proofs `harness_device_forecast_store_filter.py`, `harness_payables_market_filter.py`, **`harness_payables_filter_scope.py` (§COMMCALC-25 — the date window's one home + the store selection binding through `store_identity`)**. Frontend one-home `lib/forecast-matrix.ts` (the exportable store × model grid, proof `scratchpad/prove_forecast_matrix.mjs`) |
-| **ATU opportunity** | mig `295` | `atu_opportunity.py`; `/atu-opportunity` `28410` |
+| **ATU opportunity** | mig `295` | `atu_opportunity.py`; `/atu-opportunity` `28410` **DRILL-DOWN §CORE-17.3t:** the unconverted recharge and the two activation counts the attach rates are computed from open to the STORE ROWS behind them — two UNITS over one PROVENANCE (§CORE-17.3l), the transaction-grain sales read, whose provenance this endpoint had been DISCARDING (defect 7, carried read-only now). All six tiles are REFUSED and each for a stated reason: the three customer counts are per mobile number and the per-store table carries none; the carry figures, the annualised figure and the customer saving are this fold multiplied by a rate typed into the assumptions and one has no rows at all (§CORE-17.3m); every attach percentage is a rate (§CORE-17.3h). Server-folded. Declaration `commcalc/performance_coaching_drilldown.py` (`atu_drilldowns`), proof `harness_batch20_drilldown.py` §D |
 | **Activation TYPE of a POS sale line — THE predicate (2026-09-21)** | `raw_sales` / `daily_sales_feed` lines (any column: `contract_type`, `category` path, `product_desc`, `department`, `trans_type`) × `accessory_config.activation_details_rules` (`fields` / `tokens` / `exact` / `auto_activation_tokens` / `hints` / `metric_hints` / `broad_attested` — extended mig-313 JSON, NO migration; house defaults = the retired classifiers; THE NO-LEAK RULE: house tokens fill an undeclared class only under the house field) | `commcalc/line_class.py` (PURE: `activation_class` / `classify_line` / `bucket_of` / `resolve_rules` (`house_fill`) / `count_classes` (+ `broad` / `refused`) / `gate_open` / `token_shares` / `broad_tokens` / `refused_tokens` / `rules_refused` / `refusal_sentence` / `norm_broad_ok` / `suggest_rules` / `suggest_metric_rules` / `merge_into_raw`); resolved ONCE by `router._line_rules_resolve` (the loader `_accessory_config_uncached` → `acfg['line_rules']`, and the 2.5a save's guard — no second resolution; + `_line_rules_of`, `_line_skip`); dereferenced by `calculator.calc_rep_commissions` (`cfg['line_class_rules']`, threaded by the calc endpoint + `payout_accrual`), `commission_engine._activation_buckets` / `_read_ct_classification_config`, `plan_options._resolved_bucket`, `router._sales_cell_agg` (Sales Report / Exec MTD / Daily Targets; the Port sub-split is the predicate's `'port'`), `_blank_ct_bucket_map` (the mig-224 transaction rescue SUPPLEMENTS it), `_classification_gaps`, `/sales-report/detail`, `whatif._byod_mdns` / `accessory_byod_correlation`, `sales_comparison.tally` (`line_rules`), `closing.router._b2b_counts_by_store` (+ the tender split) via `_line_rules`, `marketing/event_sales.org_classifier`; written ONLY by `PUT /accessory-config` (`activation_details_rules`, merged — the AD-basis keys beside it untouched) which the intake's `PUT /onboarding/intake/line-class` calls. Proof `harness_line_class.py` (47: predicate, the money pin, the suggestion engine over the measured vocabulary, the aggregation + pay path counting 39/25/23 by distinct invoice, §G the too-broad guard / no-leak / seed); lock `harness_line_class_lock.py` (29) |
 | **Activation-Details basis (b2b activation TYPE buckets)** | `raw_custom_import` (signature-detected sheet: `Serial#`+`Contract Type`); config `accessory_config.activation_details_rules` — mig `313_activation_details_bucket_rules` (per-org token rules; RULE TWO) | `activation_bucketing.py` (PURE: `activation_details_bucket`/`resolve_rules`/`BUCKET_RANK`/`TOTAL_ACTIVATION_EXCLUDED`) ← delegated to by `router._activation_details_bucket`; rules loaded per-org by `_activation_details_rules` (defensive, mig-214 posture); resolver `_cr_resolve_activation_details` (serial-dedup by rank); consumers `_ad_cells_full` → `_apply_activation_basis` (Exec MTD + Sales Report), `_ad_activation_buckets` (metric recon), `GET /activation-counts/{period}`; proof `harness_activation_bucketing.py`. HOUSE DEFAULTS (2026-09-01 approved fix): Edge = whole-word `edge` in CONTRACT TYPE only (`edge_name_tokens` opts device-name matching back in per org — the Motorola-Edge over-match trade-off); `BYOD Upgrade` = its own hidden bucket (excluded from Total Activation exactly like Upgrade, NOT shown in the Upgrade column; `upgrade_hidden_contract_tokens: []` restores one family) |
 | **ZERO SALES — store-days / rep-days with NO activation and NO upgrade** §15z | mig `1016` (`commcalc.zero_sales_config`, **NOT applied**; absent ⇒ `zero_sales.HOUSE_CONFIG`, the shipped behaviour) | `commcalc/zero_sales.py` (PURE; five day states, runs, alert items) + `commcalc/manager_digest.py` (the ONE alert fan-out); `GET /commcalc/zero-sales`, `GET/PUT /commcalc/zero-sales-config`, `POST /commcalc/zero-sales/alerts/run-due|run-now`. READ-ONLY, `books_to` = []. Proofs `harness_zero_sales.py` (79) + lock `harness_zero_sales_lock.py` (39) |
@@ -7588,7 +7598,10 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
 | `GET /dlar-vs-platform/{period}` (carrier feed vs the store's transactions, per metric, attributed; composes Executive MTD's cells + `raw_dlar_*` as landed + `dlar_sweep.slice_vintage`; pure `dlar_vs_platform.py`; READ-ONLY, `books_to == []`) | `commcalc/router.py` (`get_dlar_vs_platform`, beside `/kpi-failing`; helper `_platform_side`) | §19.31 — the difference report **DRILL-DOWN §CORE-17.3s:** the four count tiles open to the ENTITY COMPARISON ROWS the summary folded them from — this is the CELL COUNT the carrier-money reports' figures are computed on, so it keeps its own catalogue and grain rather than being forced into theirs. `Agree` and `Attributed` get NO panel (subtracted at the TOTAL, §CORE-17.3k) and every figure they are composed of does — including `cells_differing`, which has no tile anywhere on the page and is offered as a LINK. Each row names the carrier activity report at its own grain plus whichever platform sales relations the period's union actually read, dereferenced by object identity from the one home for that question. The `drilldown` key is attached AFTER `in_keyset`. Server-folded, and NOT narrowed although the page filters its table in the browser — defect 10, REPORTED rather than hidden behind a narrowed figure the screen never prints. Declaration `commcalc/carrier_owed_drilldown.py` (`comparison_drilldowns`), proof `harness_batch19_drilldown.py` §E |
 | `GET /portout-fraud` (THE DAILY FRAUD REPORT: port-in activations that ported OUT again inside the configured window, with the accessory sold alongside each one; composes `line_class.activation_class` (is it a port-in), `event_sales.line_feed_state` (did it stay — the retention report's own derivation), `_is_accessory`/`_is_setup_fee` (the Sales Report's own accessory dollar) and the retention report's own bounded `raw_mi` loader; pure `portout_fraud.py`; READ-ONLY, `books_to == []`; the headline carries `undecidable` + `coverage_pct` beside `flagged`) | `commcalc/router.py` (`get_portout_fraud`, beside `/dlar-vs-platform`; rules via `_portout_rules`) | §19.32 — the daily fraud report |
-| `GET /kpi-failing/{period}` (failing-KPI overview: /coaching target resolution + in-process `/dlar-store` store rows + `rep_commissions.kpi_values`; pure `kpi_failing.py`) | `commcalc/router.py` (`get_kpi_failing`, beside `/dlar-store`) | §10 failing-KPI report |
+| `GET /kpi-failing/{period}` (failing-KPI overview: /coaching target resolution + in-process `/dlar-store` store rows + `rep_commissions.kpi_values`; pure `kpi_failing.py`) | `commcalc/router.py` (`get_kpi_failing`, beside `/dlar-store`) | §10 failing-KPI report **DRILL-DOWN §CORE-17.3t:** the failing-store count, the failing-employee count and each metric's own slice of both open to the rows behind them at the TWO grains this report has — a door's actual out of the carrier's own per-door report, an employee's out of what the last calculation wrote down, never pooled (§CORE-17.3n). THREE STATES ARE TOLD APART: a metric the carrier published nothing for is shown WITHOUT a figure, a metric that was MET is a measured zero marked not counted, and a failing one is a counted 1. The mixed-grain `failing_cells` gets NO panel (§CORE-17.3k) and both halves of it are served; the two row-count denominators and 'worst KPI' get none either. The `drilldown` key is attached AFTER `in_keyset`. NARROWED through `lib/drill-narrow`, because this page folds its counts in the browser. Declaration `commcalc/performance_coaching_drilldown.py` (`kpi_failing_drilldowns`), proof `harness_batch20_drilldown.py` §E |
+| `GET /productivity/{period}` (output per hour worked per employee-at-a-store, against the store's own baseline; pure `productivity.compute_productivity`) | `commcalc/router.py` (`get_productivity`) | §10 — the productivity report. **DRILL-DOWN §CORE-17.3t:** the three figures in every store header open to the EMPLOYEE ROWS they were folded from — boxes and accessory dollars out of whichever sales relations the period's union actually read, hours out of the TIME CLOCK alone and never the schedule, which is the programme's first `UNIT_HOURS` panel and carries its own SCHEMA explicitly. An employee with no closed punch is shown WITHOUT a figure, names NO relation and is not counted (§CORE-17.3i), while still counted in the two sales panels, because the absence is of an hour and not of a sale. Every rate and index on the page is refused and the figures each divides are offered (§CORE-17.3h). Server-folded (every filter is a query parameter). Defect REPORTED: this endpoint carries no per-store RBAC scope at all. Declaration `commcalc/performance_coaching_drilldown.py` (`productivity_drilldowns`), proof `harness_batch20_drilldown.py` §B |
+| `GET /coaching/{period}` (`rep_coaching` — what a missed tier costs each employee, with the chargeback deductions and the ops penalty beside it; the per-rep fold is INLINE in the router and is pinned to its own source text by the harness) | `commcalc/router.py` (`rep_coaching`) | §6 / §COMMCALC-09 — the coaching card. **DRILL-DOWN §CORE-17.3t:** the four money figures and the tier count open to the EMPLOYEE ROWS behind them, separated by WHICH RELATION ANSWERED — the calculated pay snapshot, the recorded penalty ledger, and for the employee chargeback file, which no migration here creates, NOTHING NAMEABLE at all, stated and counted (§CORE-17.3i, defect 4). Three provenances on ONE row in ONE unit (§CORE-17.3n). Whether a stored pay breakdown is EVIDENCE at all is asked of `payout_slice_evidence`, never inferred from the stored column (§CORE-17.3j): an employee the run never itemised is withheld in that module's own basis word, never shown with nothing at risk. The employee COUNT, the tier percentage and the KPIs-met fraction get no panel (§CORE-17.3h). NARROWED through `lib/drill-narrow`, and each tile reads off its own narrowed panel. Declaration `commcalc/performance_coaching_drilldown.py` (`coaching_drilldowns`), proof `harness_batch20_drilldown.py` §C |
+| `GET /atu-opportunity` (card customers on a recurring recharge with no enrolment line — who was never asked; pure `atu_opportunity.fold_transactions` / `summarize` / `by_store`) | `commcalc/router.py` (`get_atu_opportunity`) | §16 ATU opportunity (mig `295`). **DRILL-DOWN §CORE-17.3t:** the unconverted recharge and the two activation counts open to the STORE ROWS behind them, out of the transaction-grain sales read whose provenance this endpoint had been discarding (defect 7). ALL SIX TILES ARE REFUSED, each for a stated reason — the customer counts are per mobile number and the per-store table carries none; the carry figures, the annualised figure and the customer saving are this fold times a rate typed into the assumptions and one has no rows at all (§CORE-17.3m); every attach percentage is a rate (§CORE-17.3h). Server-folded. Declaration `commcalc/performance_coaching_drilldown.py` (`atu_drilldowns`), proof `harness_batch20_drilldown.py` §D |
 | `GET /compliance-summary` (per-queue open counts over the existing flag/exception surfaces; failed probe = null, never 0; pure `compliance_summary.py`) | `commcalc/router.py` (`get_compliance_summary`, beside `/kpi-failing`) | §14 mig 948 Flags & Compliance |
 | `GET /account/liabilities-due` (owed-to-distributor + due-this-week payments/payroll/payroll-tax/rents/insurance per store; mig-434 + mig-946 gates fail closed; pure `account/liabilities_due.py`; distributor side = the SAME as-of-parameterized derivation the BS books, mig `954`) | `account/router.py` (`liabilities_due_endpoint` → `_liabilities_due_impl`) | §4 Current Monetary Liabilities |
 | `GET /account/config` / `PUT /account/config` (this tenant's finance config: accessory COGS %, service-fee products, payroll names/routes, device-COGS mode, **and the mig-954 distributor-payable tenant mapping** — resolved basis + source + valid target-line options) | `account/router.py` (`get_config` → `_distributor_payable_config`, `put_config`) | §4 balance-sheet truths / tenant onboarding contract |
@@ -7783,7 +7796,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | Activation TYPE buckets (AD basis: New / Port / BYOD / Tablet / Home Internet / Edge / Upgrade / hidden `BYOD Upgrade`) | `raw_custom_import` Activation-Details sheet (`Contract Type` + SP-PO/product/category name) × `accessory_config.activation_details_rules` token config (mig 313; house defaults: contract-type-only word-boundary Edge, `byod upgrade` → hidden family) | `activation_bucketing.activation_details_bucket` via `_cr_resolve_activation_details`; consumed by `_ad_cells_full`/`_apply_activation_basis` (Exec MTD + Sales Report columns), `_ad_activation_buckets` (recon), `/activation-counts/{period}`; `total_activation` excludes `TOTAL_ACTIVATION_EXCLUDED = (Upgrade, BYOD Upgrade)` |
 | Processor DEBITS / CREDITS / NET per day × transaction type | `raw_payment_detail.amount` (>0 credit, <0 debit) and `raw_ma_daily_tx.retail_cost` (>0 debit, <0 credit) — the sign convention is a property of the FEED SHAPE, not the carrier (`processor_ledger.FEED_SHAPES`) | `processor_ledger.classify_amount` → `fold_cells` → `day_type_rollup`; NET = credits − debits at every grain (positive = the processor paid the dealer more than it took). Live-verified + pinned in `harness_processor_ledger.py` (§15) |
 | VHI/FIOS / home-internet count | `raw_sales` product tokens / `installment_category.py:82` | `_mi_resolve_numbers` `28843`; `installment_category` (plan-mode, runtime-only) |
-| Failing-KPI classification (store/rep below target; `no_data` never fails) | `raw_dlar_store` KPI columns (store grain, `kpi_failing.STORE_KPI_COLUMNS`) + `rep_commissions.kpi_values` (rep grain) vs `payout_config.kpi_*_target` falling back to `carrier_kpi_metric.target_default` | `kpi_failing.evaluate/store_rows/rep_rows` via `GET /kpi-failing/{period}` (§10) |
+| Failing-KPI classification (store/rep below target; `no_data` never fails) | `raw_dlar_store` KPI columns (store grain, `kpi_failing.STORE_KPI_COLUMNS`) + `rep_commissions.kpi_values` (rep grain) vs `payout_config.kpi_*_target` falling back to `carrier_kpi_metric.target_default` | `kpi_failing.evaluate/store_rows/rep_rows` via `GET /kpi-failing/{period}` (§10)  **DRILL-DOWN §CORE-17.3t:** every failing count opens to the rows behind it at its OWN grain, and a metric with `no_data` is shown WITHOUT a figure with its own reason — a metric nobody published a value for is reported, never counted as a failure against anybody |
 | ATU % | `raw_dlar_store.atu` / `raw_dlar_rep.atu_pct` / `store_kpis.atu_pct` | `_cr_resolve_kpi_metrics` `25656`; MI ATU RPC mig `032`; the pay engine via `kpi_failing.rep_kpi_values` (§19.28) |
 | Boost App % / Carrier App (`boostapp`) | **DERIVED by us, and the denominator is the OWNER'S RULING (2026-09-27, §19.31):** `boost_ready_bounty` over the store's own NEW ACTIVATIONS (`line_class.new_activation_units` — Executive MTD's Total Activation less Upgrade less swap), resolved at SCORE time through `kpi_failing.REP_DERIVED_RATES` + `kpi_failing.derived_rate`. The LEGACY value is `raw_dlar_rep.boost_app_pct`, which `dlar_sweep.derived_rate(boost_ready_bounty, ga_prepaid)` wrote at INGEST; it is still read for historical rows and is what a tenant on `payout_config.kpi_boostapp_basis = 'feed_prepaid'` (the default) gets. **`None` when there is no denominator, never a measured 0** (§19.28) | `kpi_failing.rep_kpi_values(..., basis=…)` → `kpi_failing.score`; the basis comes from `calculator.calc_rep_commissions`; no store-grain column exists |
 | NEW ACTIVATIONS (how many — any surface) | DERIVED from the classified sale lines: `line_class.new_activation_units` over `activation_units`, per the org's `accessory_config.activation_details_rules.new_activation` (`classes` + `exclusions`; house = the owner's ruling: activation + port + byod, less swap). **ONE home** (§19.31) | the shared cell field `act_new_activation` (`router._apply_activation_basis`) → Executive MTD's `new_activation` column, the Boost pay engine's Ready App denominator, `GET /dlar-vs-platform/{period}` |
@@ -35436,6 +35449,270 @@ copies re-keyed by object identity, one new `UNMEASURED_REASONS` entry and three
 entries. Each endpoint's payload was **deep-compared before and after the declaration runs over it
 and is byte-identical** (§G1–§G4). `OWES_MAX` **41 → 37**, lowered by exactly the four routes served.
 
+### §CORE-17.3t THE PERFORMANCE-AND-COACHING FAMILY (2026-10-26, batch 20)
+
+**`/commcalc/productivity` · `/commcalc/coaching` · `/commcalc/atu-opportunity` ·
+`/commcalc/kpi-failing`** — *how are reps and stores performing, and who needs coaching.* One family
+because all four answer that one question from four angles, and they are read in sequence: a manager
+opens **Failing KPIs** to see which door or person is below target, **Coaching** to see what the
+miss costs that person in their own pay, **Productivity** for the output-per-hour context that says
+whether the miss is effort or traffic, and **Autopay Opportunity** for the one concrete counter
+behaviour to change. The family has a **stated seam**: Autopay is the one worth challenging, because
+its subject is a CUSTOMER rather than a person being coached — it is in the family because it is the
+answer to "so what do I tell them to do", and it keeps **its own catalogue and its own grain** (a
+store row out of a transaction-grain read) rather than being forced into the others'. Declaration:
+`backend/app/modules/commcalc/performance_coaching_drilldown.py`. Proof:
+`backend/harness_batch20_drilldown.py`, **164 checks**, **22 mutations /
+negative controls**, wired into the guard job with a paths filter naming every file it is about.
+
+**THIS IS THE SHARPEST VERSION OF THE OWNER'S ASK IN THE PROGRAMME SO FAR**, and it is why the
+ABSENCES carry more weight here than anywhere else. Every other family explains money to the person
+who banked it; this one explains a figure that is **about a named employee, to their manager, before
+a conversation**. A rep nobody clocked, a KPI the carrier never published and a pay breakdown the
+run never itemised must each read as a **blank with a reason** — because as a zero they are an
+accusation with nothing behind it.
+
+**WHAT WAS CHECKED FOR A DUPLICATE, AND WHAT WAS REUSED INSTEAD OF REBUILT.** The index was searched
+for an existing mechanism serving these figures before anything was written. Found and **reused by
+object identity**: `processor_money_drilldown.sales_union_tables` (the one home for "which tables did
+this period's sales actually come from" — §CORE-17.3n/§CORE-17.3r), `data_lineage_registry` for every
+relation name a panel can print, `carrier_pay_drilldown.REP_COMMISSIONS` for the calculated pay
+snapshot (batch 11 named it; a registry constant for it would be a second copy), `kpi_failing`'s own
+`GRAIN_STORE` / `GRAIN_REP`, and `payout_slice_evidence.is_evidence` / `BASIS_FIELD` for "is this
+stored pay breakdown a figure at all" (§COMMCALC-09). Found and **deliberately not extended**:
+`exec_month_drilldown` (§CORE-17.3q) folds a rep row too, but at the ATTRIBUTION-POINT grain its own
+filter bar works at, and `carrier_owed_drilldown` (§CORE-17.3s) folds an employee pay row at the
+MONEY grain of the carrier's position — neither has the row list these tiles were folded from.
+Found and **refused a second path**: the port-in rate, below.
+
+**TWO SETTLED FACTS IN THIS NEIGHBOURHOOD WERE DEREFERENCED, NOT RE-DERIVED.** `kpi_failing` is the
+ONE home for the carrier's port-in rate — `raw_dlar_store.port_pct` is port-**INS** and is ALREADY a
+percent, and a past defect read it as a port-out rate and multiplied it by 100 (§62). This batch
+reads **no KPI column at all**: every per-metric verdict is the classifier's own `failing` / `met` /
+`no_data` list, read off the row, so that reading is not re-spelled anywhere. And the org tree
+resolves a district manager for only a minority of stores, so `UNMEASURED_REASONS` carries
+`no_dm_in_org_tree` for DM-keyed figures — **no figure in these four reports is DM-keyed** (the
+store-upkeep index is an average and is refused under §CORE-17.3h), so the reason is correctly
+unused here rather than forced onto a row it does not describe.
+
+**THE GRAIN COUNT, MEASURED OFF THE PRODUCERS (§CORE-17.3l).** Driving
+`productivity.compute_productivity`, the coaching fold in `commcalc/router.py` (reproduced AND pinned
+to the router's own source text, because FastAPI cannot be imported in a DB-free harness),
+`atu_opportunity.fold_transactions` / `summarize` / `by_store` and `kpi_failing.store_rows` /
+`rep_rows` / `summarize` gives **TWELVE** grains in **FOUR** row shapes, because a grain fixes the
+ROW, the UNIT **and** the PROVENANCE:
+
+| the grain | the row | why it is its own grain |
+|---|---|---|
+| an EMPLOYEE-AT-A-STORE's BOXES | one employee under one store | count, out of whichever sales relations the period's union actually read |
+| an EMPLOYEE-AT-A-STORE's ACCESSORY DOLLARS | the SAME row | the same provenance, a different UNIT (§CORE-17.3l) |
+| an EMPLOYEE-AT-A-STORE's HOURS | the same row again | **`UNIT_HOURS` — the programme's first caller** — and a provenance that is the TIME CLOCK ALONE, in another SCHEMA, never the schedule, which records an intention rather than an hour |
+| the SAME row with a MISSING PUNCH | the same row | the same unit over a provenance that is **nothing nameable**: a missing punch is an absence, not a row in a relation (§CORE-17.3i) |
+| an EMPLOYEE PAY ROW's SHORTFALL | one employee on the coaching card | money, out of the calculated pay snapshot |
+| an EMPLOYEE PAY ROW's POSTED PENALTY | the SAME row | the same unit, separated **ONLY by provenance** (§CORE-17.3n): the recorded penalty ledger |
+| an EMPLOYEE PAY ROW's CHARGEBACK FILE | the same row again | the same unit again, and a provenance that is **NOTHING NAMEABLE AT ALL** — no migration in this repository creates that relation (defect 4), stated and counted |
+| an EMPLOYEE PAY ROW's MONEY ON THE TABLE | the same row | the same unit over a provenance that is the UNION of all three above, because that figure is their sum |
+| an EMPLOYEE PAY ROW's TIER STATE | the same row | a COUNT over the same snapshot — the people below full tier, with the people at full tier SHOWN beside them and deliberately not counted |
+| a STORE ROW's CARD ACTIVATIONS | one store on the autopay table | count, out of the transaction-grain sales read |
+| a STORE ROW's UNCONVERTED RECHARGE | the SAME row | the same provenance, a different UNIT (§CORE-17.3l) |
+| a STORE-KPI ROW's FAILING COUNT | one door on the failing-KPI report | count, out of the carrier's own per-door report — never pooled with the employee grain below it, which is a count in the same unit out of the calculated snapshot (§CORE-17.3n) |
+
+The harness MEASURES those triples off the panels and compares them **as a set**, never as a count
+(§H1), and prints every triple it measured. §H1b states the collapse that makes twelve-for-twelve
+honest rather than lucky: a failing-EMPLOYEE count and a below-tier count are **one grain** — both a
+COUNT over an employee pay row out of the same snapshot — so the set holds one triple for the two
+figures. §H1c and §H1d are the two real splits: three units on one employee-at-a-store row, and
+three provenances on one employee pay row in ONE unit.
+
+**THE §CORE-17.3o CALL, DECIDED PER PAGE BY READING THE PAGE, AND SETTLED BOTH WAYS INSIDE ONE
+FAMILY.** This is the first batch where the same family answers it both ways, which is the clearest
+statement yet that the call is about the PAGE and not about the report:
+
+| route | call | why |
+|---|---|---|
+| `/commcalc/coaching` | **NARROWED** | its filter bar narrows `reps` in the browser and every tile is a `reduce(` over the survivors, so a server-folded panel would explain a figure the screen is not showing |
+| `/commcalc/kpi-failing` | **NARROWED** | the same: its two headline counts and its whole by-metric block are folded in the browser from the filtered rows |
+| `/commcalc/productivity` | **SERVER-FOLDED** | every filter is a QUERY PARAMETER, so the server folds again and each panel follows its tile by construction |
+| `/commcalc/atu-opportunity` | **SERVER-FOLDED** | the same — the store, market and period selections are all sent to the endpoint |
+
+§F1 fails the build if `narrowPanel` is absent from either narrowed page's CODE, §F1b fails it if it
+appears in either server-folded page's code (comments stripped, so each page can carry the rule in
+its own header where somebody would break it), and §F1c / §F1d witness the stripper in both
+directions. §F2 / §F2b assert the same split by the pages' **actual folds** — a `reduce(` in each
+narrowed page and none in either server-folded one — so the decision is checked against what the
+code does and not only against what it imports. §F3 asserts each narrowed tile is read OFF its
+narrowed panel through the shared `agreesToTheCent` gate, rather than the page keeping two numbers
+and hoping.
+
+**WHAT GETS NO PANEL, AND WHICH RULING SAYS SO. THIS FAMILY REFUSES MORE THAN ANY BEFORE IT**,
+because performance reporting is mostly rates — and every refusal names the figures it offers
+instead:
+
+- **Every rate, index and score** (§CORE-17.3h): boxes per hour, accessory dollars per hour and the
+  vs-store indices on Productivity (rates over rates), the stack-ranking and performance-review
+  SCORES on its other two tabs (weighted averages of attainments), the tier percentage and the
+  KPIs-met fraction on Coaching, and every attach percentage on Autopay. The two figures each one
+  divides ARE served, which is the whole content of the refusal.
+- **The failing-CELL count** (§CORE-17.3k): it adds store failing counts to employee failing counts,
+  so there is no one row list it was folded from — the batch-18 `scopes` and batch-19 `entities`
+  precedent. **Both halves of it are served** as the two panels above.
+- **Autopay's three customer counts**: they are per MOBILE NUMBER and the per-store table carries
+  none, so they have no row list on that payload at all (defect 6). Only ~38% of rows carry an MDN,
+  which the producer states itself.
+- **Autopay's two carry figures, its annualised figure and its customer saving** (§CORE-17.3m): each
+  is this fold multiplied by a rate somebody typed into an assumptions box, and one of them has **no
+  rows at all** because its base is hand-entered — those recharges never reach the POS export, which
+  the producer says in its own `totals_measurable` note. A figure composed of a hand-typed number
+  cannot state its provenance honestly.
+- **The two row-count denominators** on Failing KPIs (the panels state the row count in their own
+  headers) and **"worst KPI"**, which is a LABEL and not a measurement.
+- **Any figure whose every row would be shown without a number**, and **a $0.00 or a 0 over zero
+  counted rows**: a store nobody was clocked at gets NO hours panel while its two sales panels are
+  still served, a period the chargeback file names nobody in gets no panel, and a metric nothing is
+  failing gets none — because each would tie 0 against 0 (True) and read as a measurement.
+  **A NON-ZERO figure over no counted rows is the opposite case and KEEPS its panel**, so the
+  tie-out publishes the disagreement instead of the report hiding it (§E7).
+
+**ABSENCE IS NEVER ZERO, FOUR TIMES.** An employee with sales and **no closed punch** is shown
+WITHOUT an hours figure, names NO relation and is not counted, in a new vocabulary entry
+(`no_time_clock_punches`) whose own words say the blank is a missing punch and never a person who
+worked no hours. A door or employee the carrier **published no value for** is shown without a figure
+(`kpi_not_reported`) — while one that **MET** the metric is a measured zero marked not counted,
+because the two must never read alike. An employee whose pay breakdown the run **never itemised** is
+withheld in `payout_slice_evidence`'s own basis word, asked of that home rather than inferred from
+the stored column (§CORE-17.3j). An employee the chargeback file carries **no line for** is shown
+without a figure, while one it carries a wholly non-deducting line for is a measured zero — the file
+named them, and that is a different fact. **In every case no figure moved by a cent**: each of those
+rows contributed 0.00 to the producer's own total and contributes 0.00 here. Only the ROW changes,
+from a measured zero into a stated blank, which is the entire argument for putting it there.
+
+**A DESIGN FIX, WITH ITS OTHER HALF, AND ITS SCOPE WRITTEN DOWN.** A figure that is output PER HOUR
+WORKED has to name the relation an hour came out of, and `timelog` was spelled as a LITERAL in
+`account/liabilities_drilldown.TIMELOG` with no constant anywhere. It is now
+`data_lineage_registry.TIME_CLOCK`, and **that copy was re-keyed in the same commit**, asserted by
+**object identity** and not equal text. §A3c fails the build if the literal reappears in **any**
+drill-down declaration or lineage registry in the backend, with §A3d as its non-vacuity witness. The
+constant's **SCOPE is stated in its own comment**, exactly as `STORE_EXPENSES` has carried since
+batch 18: it is the one home for the PROVENANCE NAME, and deliberately NOT a rename of the forty-odd
+PostgREST `.table("timelog")` reads, of `storeops/payroll_evidence.PUNCH_TABLE` (a constant whose
+only use is such a read), of `core/scope.WORKED_AT_SOURCES` (its own table/column/soft-delete
+registry, with its own lock) or of the `source_table="timelog"` audit arguments — a read or a write
+is an I/O call, not a second statement about where a figure came from, re-pointing them is a payroll
+change rather than a drill-down one, and **payroll work is the payroll-workforce agent's**. `shifts`
+has coexisted with `WORKED_AT_SOURCES` on exactly these terms for two batches. The **rep-pay
+snapshot** was deliberately NOT made a registry constant: `carrier_pay_drilldown.REP_COMMISSIONS` is
+already its one home, so a constant here would be the second copy the registry exists to prevent —
+and that reasoning is written INTO the registry beside where it would have gone.
+
+**ONE HOME EXTENDED RATHER THAN FORKED.** `processor_money_drilldown.sales_union_tables` answers
+"which tables did this period's sales actually come from" off the read's own meta, but it recognised
+only the per-DAY union's way of saying the second relation contributed. The TRANSACTION-grain union
+says it with `other_only_rows`, so a naive reading would have under-reported Autopay's provenance —
+and the tempting fix was a second resolver for the transaction grain, which is the duplicate defect
+the index rules forbid. **The one home was extended** to recognise both, a day meta carries no such
+key so **every existing caller is byte-identical** (§A2b, with §A2c as the control that the new key
+is not a free pass), and batches 14 / 16 / 17 / 18 / 19 were re-run green over the change.
+
+**A PANEL CANNOT DISCLOSE WHAT THE REPORT DOES NOT, BY CONSTRUCTION.** Every entry point takes
+**only the endpoint's own response** — no client, no org id, no second read — so a panel can only
+fold rows the caller was already served. The `drilldown` key is attached AFTER everything each
+endpoint filters: after `in_keyset` on Failing KPIs, and after the self-scope narrowing on the
+coaching card. `/commcalc/productivity` turns out to carry **no per-store RBAC scope at all**
+(defect 1), which is REPORTED rather than papered over: the panel discloses exactly what the report
+already does, and the remedy is the scope, not the panel.
+
+**TEN LIVE DEFECTS, ALL REPORTED, NONE FIXED, NO FIGURE MOVED.** Each carries a regression check in
+the harness. The ones the drill-downs turn on: **(1)** `/productivity` has no per-store scope
+filter; **(2)** a productivity rep row carries no transaction count, so "sold nothing" and "the
+sales union never named them" cannot be told apart and the row is counted exactly as the producer
+counted it, with the note saying so; **(3)** `no_hours` cannot tell a missing punch from a genuine
+zero either; **(4)** `chargeback_items` is created by **no migration in this repository**, so every
+row of that panel reports a stated, countable UNTRACEABLE ORIGIN rather than a guessed feed, and it
+has no `sourceLabels.ts` entry to give it a plain name (§CORE-17.3i, the batch-17
+`exec_month_drilldown` precedent); **(5)** an ops-chargeback row's own lines need not sum to the
+capped deduction the total is made of, so the panel follows the figure the total is Σ of and says so
+in its note; **(6)** autopay's customer figures are on a basis the per-store table does not carry;
+**(7)** `/atu-opportunity` was **discarding the provenance its own sales read returns** — carried
+read-only now, with §D11b showing what that cost (an untraceable origin instead of a named feed);
+**(8)** `failing_cells` mixes two row shapes; **(9)** the kpi-failing page re-derives the server's
+own by-metric fold; **(10)** the coaching page re-derives "below full tier" with its own `1.0`
+threshold, so the declaration reads the verdict the handler now states on each row and holds no
+threshold of its own (§A9c). The full list, each with the harness check that reproduces it, is in
+the declaration's module docstring.
+
+**A NOTE ON THE EXACT-EQUALITY CALLER SNAPSHOTS.** `harness_carrier_dollar_class.py` §K3 is an
+exact-equality snapshot of the `carrier_dollar_component` fact's callers, and a module that asks
+`component_is_evidence` must be added to it in the SAME commit — the hole that cost batch 18 a CI
+round. This declaration **does not ask it**: the evidence question here is about a stored pay
+BREAKDOWN, whose one home is `payout_slice_evidence`, not about the ePay keyword ladder's basis. The
+four facts this module does dereference (`report_drilldown`, `feed_lineage`, `payout_slice_evidence`,
+`kpi_column_meaning`) were re-grepped for exact-equality caller snapshots of their own and have
+none — their callers are checked by `harness_module_graph_guard.py` A/B/C, which was run green after
+the four hand-written edges went in.
+
+**TWO HOLES IN THIS BATCH'S OWN LOCKS, FOUND BY MUTATION-TESTING THEM BEFORE CLAIMING THEM.** Every
+lock this section claims was tested by BREAKING the thing it guards and watching which check went
+red. Two of them did not, in their first draft, and both were the **identifier-instead-of-the-call**
+hole batch 19 found in `"DrillDownPanel" in src` — reappearing in the very checks written to carry
+that rule forward:
+
+- **§F1** asserted `"narrowPanel" in` a narrowed page's code, which **the IMPORT alone satisfies**:
+  renaming the call site and leaving the import kept it green. It matches the CALL `narrowPanel(`
+  now, with §F1e as a non-vacuity witness that the call scan really is stricter than the identifier
+  scan.
+- **§J7** asserted `"harness_batch20_drilldown.py" in` the workflow — which **the PATHS FILTER also
+  satisfies**, so pointing the `run:` line at another batch kept it green. It matches the `run:`
+  line itself now, exactly once.
+
+Both were fixed in the same commit as the locks they belong to, and the mutations are recorded here
+rather than only in the harness, because a lock claimed without being watched go red is a claim like
+any other. The ids observed firing, one mutation at a time: **§A3c** (a second copy of the time
+clock's name), **§F5** (the render deleted, the import left), **§F1** and **§F1b** (each page's
+narrowing decision, broken in its own direction), **§J3** (the hand-written caller edge removed) and
+**§J7** (the guard job pointed away from this harness).
+
+**A COUNT WRITTEN INTO THIS INDEX IS A CLAIM LIKE ANY OTHER**, and it goes stale the moment a check
+is added after it — §CORE-17.3s's own check count was written before its last three checks landed
+and was corrected to 163/28 in this PR. The counts above were therefore written **last**, from the
+harness's own printed summary.
+
+#### §16–18 CROSS-REFERENCES
+
+Registered in `app/modules/core/module_graph.py` as a caller of four facts —
+`report_drilldown` (home `app/modules/core/report_drilldown.py`), `feed_lineage`,
+`payout_slice_evidence` and `kpi_column_meaning` — all four edges hand-written, never `--bless`
+(§50). Depends on: §CORE-17 (the one home and the shared panel), §10 (the KPI system),
+§COMMCALC-09 (the payout-slice evidence allowlist), §19.38 (a feed's plain name), §CORE-17.3n /
+§CORE-17.3r (the sales-union provenance resolver). Feeds: §CORE-17.4 (the audit ledger — `OWES_MAX`
+**37 → 33**). Neighbours: §CORE-17.3q (the other family that folds a rep row), §CORE-17.3s (the
+batch whose check count this PR corrects), §62 (the port-in reading this batch does not re-spell),
+§19.18 (writing a registry without wiring the callers is not a fix), §48.7 (the org-tree walk behind
+`no_dm_in_org_tree`).
+
+CI: `carrier-vocab-guard`, step *Run the batch-20 drill lock*, with a paths filter naming every file
+it is about. **No migration, no new table, no money moved.**
+
+Files: `backend/app/modules/commcalc/performance_coaching_drilldown.py` (**new**),
+`backend/app/modules/commcalc/router.py`, `backend/app/modules/commcalc/data_lineage_registry.py`,
+`backend/app/modules/commcalc/processor_money_drilldown.py`,
+`backend/app/modules/account/liabilities_drilldown.py`,
+`backend/app/modules/core/report_drilldown.py`, `backend/app/modules/core/module_graph.py`,
+`backend/harness_batch20_drilldown.py` (**new**), `backend/harness_drilldown_coverage.py`,
+`backend/harness_drilldown_pending.txt`,
+`frontend/src/app/(platform)/commcalc/productivity/page.tsx`,
+`frontend/src/app/(platform)/commcalc/coaching/page.tsx`,
+`frontend/src/app/(platform)/commcalc/atu-opportunity/page.tsx`,
+`frontend/src/app/(platform)/commcalc/kpi-failing/page.tsx`,
+`.github/workflows/carrier-vocab-guard.yml`, `docs/SYSTEM_DATA_FLOW_INDEX.md`.
+
+**No migration, no new table, no money moved** — four read-only `drilldown` keys on four endpoints,
+four pages wired to the shared panel, no change to any producer's arithmetic, one registry constant
+added (`TIME_CLOCK`) with its one existing literal copy re-keyed by object identity, one shared
+resolver EXTENDED rather than forked (every existing caller byte-identical), and two new
+`UNMEASURED_REASONS` entries. Each endpoint's payload was **deep-compared before and after the
+declaration runs over it and is byte-identical** (§G1–§G4). `OWES_MAX` **37 → 33**, lowered by
+exactly the four routes served.
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
@@ -35528,7 +35805,7 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 `GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards`, `GET /commcalc/billpay-extract/{period}`, `GET /commcalc/epay/fee-recon`, `GET /commcalc/processor-ledger`, `GET /commcalc/accessory-target-plan/{period}`, `GET /commcalc/accessory-cost-audit/{period}`, `GET /commcalc/accessory-flags`, `GET /commcalc/vip/summary`, `GET /commcalc/device-line-reimbursement`, `GET /commcalc/financing/{period}`, `GET /commcalc/exec-overview/{period}`, `GET /commcalc/exec-mtd/{period}`, `GET /commcalc/month-focus/{period}`, `GET /commcalc/comp/rep-pay-trend`, `GET /commcalc/gp/{period}`, `GET /commcalc/sales-analyzer/{period}`, `GET /commcalc/sales-comparison`, `GET /commcalc/zero-sales` →
 `drilldown`), §18 ("where is this figure from" → `panel.sources` → `sourceLabel`; "did the
 carrier pay what we computed, and out of which legs" → §CORE-17.3k; "which devices is this
-store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p; "how is the month going, against what, and is anybody being paid for it" → §CORE-17.3q; "what did we sell, at what margin, and which upload or feed actually answered for it" → §CORE-17.3r; "what did we expect the carrier to pay, what did it pay, and what is being clawed back or is missing" → §CORE-17.3s), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
+store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p; "how is the month going, against what, and is anybody being paid for it" → §CORE-17.3q; "what did we sell, at what margin, and which upload or feed actually answered for it" → §CORE-17.3r; "what did we expect the carrier to pay, what did it pay, and what is being clawed back or is missing" → §CORE-17.3s; "how are reps and stores performing, and who needs coaching" → §CORE-17.3t), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
 (`sourceLabel`), §2 / `data_lineage_registry.py` (which table is which feed), §15 (the B2B ↔ MA
 activation recon these three reports read), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
 module graph).

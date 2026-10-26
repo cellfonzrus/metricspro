@@ -18313,7 +18313,7 @@ def get_kpi_failing(period: str, authorization: str = Header(default=""), org_id
     comms = [c for c in comms if in_keyset(ks, c.get('store'))]
     stores = _kpif.store_rows(dlar_rows, kpi_defs, targets, resolve_market=resolve_market)
     reps = _kpif.rep_rows(comms, kpi_defs, targets)
-    return {"period": cperiod, "targets": targets,
+    out = {"period": cperiod, "targets": targets,
             # WHICH GRAIN each KPI is actually measured at (§19.28). Three of the seven a Boost rep is
             # tiered on — familyplan / tmr3 / aal — have never been published at rep grain (all 516
             # `raw_dlar_rep` rows are NULL in those columns, every period), so a rep reaches them only
@@ -18328,6 +18328,13 @@ def get_kpi_failing(period: str, authorization: str = Header(default=""), org_id
             "feed_vintage": _dlar_slice_vintage(client, org_id, cperiod),
             "note": ("No store DLAR rows for this period — store-grain KPIs unavailable; "
                      "rep grain shown from computed commissions.") if not dlar_rows else None}
+    # WHERE EVERY FIGURE ON THIS REPORT CAME FROM (§CORE-17.3t). Attached LAST, after the
+    # `in_keyset` scope filter the rep rows went through above, so a panel can never disclose a row
+    # the caller may not see. The mixed-grain `failing_cells` figure gets no panel at all -- it adds
+    # store failing counts to rep failing counts -- and both halves of it are offered instead.
+    from app.modules.commcalc import performance_coaching_drilldown as _pcd
+    out["drilldown"] = _pcd.kpi_failing_drilldowns(out)
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -34009,6 +34016,13 @@ def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
         kpis_met = sum(1 for x in kpis if x['met']) if kpis_met is None else kpis_met
         at_risk = (round(subtotal * (1.0 - tier), 2)
                    if (tier < 1.0 and _sub_known is not None) else 0.0)
+        # TWO FACTS THIS HANDLER ALREADY DECIDES, STATED ON THE ROW READ-ONLY (§CORE-17.3t). Both
+        # were computed here and thrown away, so every other surface re-derived them: the page tests
+        # `tier < 1.0` in the browser a third time, and nothing anywhere could tell an at-risk of
+        # $0.00 on a full tier from one on a pay breakdown the run never itemised. Neither moves a
+        # figure -- `at_risk`, `subtotal` and every total above are byte-identical -- and the
+        # drill-down declaration dereferences them instead of holding a threshold or re-asking the
+        # evidence question for itself.
         keys = {name.upper(), eslp.upper()} - {''}
         cbd = {'total': 0.0, 'count': 0, 'deducted': 0.0}
         fld = {'count': 0, 'high': 0, 'notes': []}
@@ -34042,6 +34056,8 @@ def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
             'chargeback_count': cbd['count'], 'flag_count': fld['count'], 'flag_high': fld['high'],
             'ops_chargeback_deduction': round(ops_amt, 2), 'ops_chargeback_lines': ops_lines,
             'coaching_notes': fld['notes'], 'money_on_table': round(at_risk + cbd['deducted'] + ops_amt, 2),
+            'below_tier': tier < 1.0,
+            _pse_mod().BASIS_FIELD: _pse_mod().basis(cr),
         })
     reps.sort(key=lambda r: -r['money_on_table'])
     from app.modules.storeops.router import scope_keyset, in_keyset
@@ -34064,7 +34080,13 @@ def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
                'total_ops_chargebacks': round(sum(r.get('ops_chargeback_deduction', 0) for r in reps), 2),
                'total_money_on_table': round(sum(r['money_on_table'] for r in reps), 2),
                'below_tier': sum(1 for r in reps if r['tier'] < 1.0)}
-    return {"period": period, "reps": reps, "summary": summary}
+    out = {"period": period, "reps": reps, "summary": summary}
+    # WHERE EVERY FIGURE ON THIS CARD CAME FROM (§CORE-17.3t). Attached LAST, after the scope filter
+    # and after the self-scope narrowing above, so a panel can only ever fold rows this caller is
+    # already being served. Read-only: the declaration takes this response and nothing else.
+    from app.modules.commcalc import performance_coaching_drilldown as _pcd
+    out["drilldown"] = _pcd.coaching_drilldowns(out)
+    return out
 
 
 def _team_totals(stores):
@@ -37258,8 +37280,15 @@ def get_productivity(period: str, org_id: str = ORG_ID, today: str = "",
     try:
         g = _prod_gather(sb(), org_id, period, stores=stores, markets=markets, reps=reps, today=today)
         res = _prod.compute_productivity(g['store_reps'], g['hours_by_key'])
-        return {"period": period, "org_id": org_id, **res,
-                "filters": g['filters'], "applied": g['applied'], "source_meta": g['source_meta']}
+        out = {"period": period, "org_id": org_id, **res,
+               "filters": g['filters'], "applied": g['applied'], "source_meta": g['source_meta']}
+        # WHERE EVERY FIGURE ON THIS REPORT CAME FROM (§CORE-17.3t). Attached LAST, over this
+        # response alone, so a panel can only fold rows the caller is already being served. This
+        # endpoint applies no per-store scope of its own (reported as defect 1 in the declaration),
+        # and the panels therefore disclose exactly what the report already does -- no more.
+        from app.modules.commcalc import performance_coaching_drilldown as _pcd
+        out["drilldown"] = _pcd.productivity_drilldowns(out)
+        return out
     except Exception as e:
         # A report must DEGRADE, not 500. Any unexpected cross-module condition → an empty, well-formed
         # payload the page renders as "no data" (never a crash / white screen).
@@ -47122,7 +47151,10 @@ def atu_opportunity_report(period: str = "", start: str = "", end: str = "",
         n = _datetime.now(_timezone.utc)
         period = f"{n.year}-{n.month:02d}"
     cfg, table_present = _atu_cfg(client, org_id)
-    rows, _meta = _sales_rows_union_txn(
+    # THE READ'S OWN PROVENANCE, KEPT (§CORE-17.3t, defect 7). This was bound to `_meta` and never
+    # read, so the one fact saying which relations these transactions came out of was discarded every
+    # request. Collected read-only; no figure moves.
+    rows, sales_meta = _sales_rows_union_txn(
         client, org_id, period,
         cols="trans_id,trans_date,store,tender_type,product_desc,ext_price,mdn,contract_type,voided")
     rows = [r for r in rows if str(r.get("voided") or "").strip().lower() not in ("true", "yes", "y", "1")]
@@ -47159,11 +47191,11 @@ def atu_opportunity_report(period: str = "", start: str = "", end: str = "",
     for s in stores_out:
         s["market"] = resolve_market(s["store"])
     store_opts = sorted({str(r.get("store") or "") for r in rows if r.get("store")})
-    return {
+    out = {
         "org_id": org_id, "period": period, "start": s0 or None, "end": s1 or None,
         "config": cfg, "table_present": table_present,
         "summary": summary, "stores": stores_out,
-        "transactions": len(txs),
+        "transactions": len(txs), "source_meta": sales_meta,
         "filter_options": {"stores": store_opts, "markets": sorted(all_markets)},
         "applied_filters": {"stores": sel_stores, "markets": sel_markets},
         # Stated on the page, not buried: enrolment is observed at ACTIVATION only, so a customer who
@@ -47177,6 +47209,13 @@ def atu_opportunity_report(period: str = "", start: str = "", end: str = "",
             "base entered in Settings.",
         ],
     }
+    # WHERE THE MEASURED FIGURES ON THIS REPORT CAME FROM (§CORE-17.3t). Attached LAST, after the
+    # date, store, market and scope filters above, so a panel folds only rows this caller is served.
+    # The commission-carry and customer-saving figures get NO panel: each is this fold multiplied by
+    # a rate somebody typed into the assumptions, and one of them has no rows at all.
+    from app.modules.commcalc import performance_coaching_drilldown as _pcd
+    out["drilldown"] = _pcd.atu_drilldowns(out)
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

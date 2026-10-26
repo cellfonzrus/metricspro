@@ -5,7 +5,35 @@ import { api, fmt, getActiveOrg } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { MultiSelect } from '@/lib/multiselect'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 import { GoogleRatingChips, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
+
+// WHERE EVERY FIGURE CAME FROM (index §CORE-17.3t). The server serves a panel per store-header
+// figure from commcalc/performance_coaching_drilldown.py, folded over the SAME employee rows this
+// page prints — boxes and accessory dollars out of whichever sales relations the period actually
+// read, hours out of the time clock alone.
+//
+// THIS PAGE IS SERVER-FOLDED AND IS DELIBERATELY *NOT* NARROWED. Every filter on it is a QUERY
+// PARAMETER — the store, market and employee pickers are appended to the request URL — so the
+// server folds again on every change and each panel follows its figure by construction. There is no
+// browser fold here and `lib/drill-narrow` must not appear in this file;
+// `harness_batch20_drilldown.py` §F fails the build in BOTH directions if that changes.
+//
+// The three RATES in each store header get no panel (§CORE-17.3h) — boxes per hour, accessory
+// dollars per hour, and every `vs store` index, which is a rate over a rate. The three figures they
+// divide are printed beside them and are the ones that open. The Stack Ranking and Performance
+// Review tabs carry only weighted-attainment SCORES, refused for the same reason.
+
+const PROD_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Hours', get: (r: DrillRow) => String(r.fields?.hours ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.hours ?? 0) },
+  { header: 'Time clock', get: (r: DrillRow) => String(r.fields?.['time clock'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['time clock'] ?? '') },
+]
+// The panel key the server serves one store header's figure under. Spelled once on this side.
+const storeKey = (code: string, figure: string) => ['store', code, figure].join('.')
 
 // Productivity · Stack Ranking · Performance Review — mod-commission, NON-money (display/analytics).
 // Feature 1: output per hour worked (StoreOps time-clock) vs the store's own baseline. Feature 2: weighted
@@ -110,6 +138,10 @@ export default function ProductivityPage() {
 // ── FEATURE 1 — productivity vs the store baseline (grouped by store, rep rows) ──────────────────────
 function ProductivityView({ data, period, hasFilter, clearFilters }: any) {
   const stores: any[] = data?.stores || []
+  const prodPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  // The shared offer gate with NO extra condition: the server folded both the figure and the panel
+  // over the same rows, so a link is offered for exactly the figures it served a panel for.
+  const prodDrill = useDrillTile(prodPanels)
   if (stores.length === 0) {
     return <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>
       {hasFilter ? <>No sales/hours match the filter. <span style={{ color: 'var(--accent)', cursor: 'pointer' }} onClick={clearFilters}>Clear filters</span>.</>
@@ -146,8 +178,18 @@ function ProductivityView({ data, period, hasFilter, clearFilters }: any) {
             <div style={{ fontSize: 12, color: 'var(--text2)' }}>
               Store baseline: <b>{n3(s.store_boxes_per_hr)}</b> boxes/hr · <b>{fmt(s.store_acc_per_hr)}</b>/hr
               <span style={{ color: 'var(--text3)' }}> ({n2(s.store_boxes)} boxes · {fmt(s.store_acc)} · {n2(s.store_hours)} hrs)</span>
+              <DrillTileLinks
+                drills={prodDrill.dl(storeKey(s.store_code, 'boxes'), 'boxes behind this',
+                  storeKey(s.store_code, 'acc_sales'), 'accessory dollars behind this',
+                  storeKey(s.store_code, 'hours'), 'hours behind this')}
+                open={prodDrill.open} onToggle={prodDrill.toggle} />
             </div>
           </div>
+          {prodDrill.open?.startsWith(storeKey(s.store_code, '')) && prodDrill.panel && (
+            <div style={{ padding: '0 12px' }}>
+              <DrillDownPanel panel={prodDrill.panel} extraColumns={PROD_DRILL_COLUMNS} />
+            </div>
+          )}
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>
               <th style={thL}>Employee</th><th style={th}>Boxes</th><th style={th}>Acc $</th><th style={th}>Hours</th>

@@ -150,6 +150,36 @@ STORE_ROSTER = "stores"
 #: value, no read changed), and `harness_batch18_drilldown.py` §A fails the build if either literal
 #: returns. Naming a fact here is half the fix; deleting every copy in the same commit is the other.
 SCHEDULE = "shifts"
+#: THE TIME CLOCK (`storeops.timelog`, mig 003). A figure that is output PER HOUR WORKED has to say
+#: which relation the hours came out of, and for a worked hour that is the closed punch — never the
+#: schedule, which records an intention (§CORE-17.3t, batch 20). Same schema caveat as the two above.
+#:
+#: `timelog` WAS ALREADY SPELLED as a literal in `account/liabilities_drilldown.TIMELOG`, which is
+#: the divergence this registry forbids — the same shape `shifts` had one batch ago and
+#: `ops_chargeback` the batch before that. That copy dereferences this constant now
+#: (string-identical value, no read changed), and `harness_batch20_drilldown.py` §A fails the build
+#: if the literal returns inside any drill-down declaration. Naming a fact here is half the fix;
+#: deleting every copy in the same commit is the other half (§19.18).
+#:
+#: SCOPE, STATED SO THE NEXT READER DOES NOT RE-DERIVE IT — the same scope `STORE_EXPENSES` below
+#: already carries. This constant is the one home for the PROVENANCE NAME: what a drill-down tells a
+#: reader a figure was read out of. It is deliberately NOT a rename of the forty-odd PostgREST
+#: `.table("timelog")` reads and writes across the time-clock, payroll and attendance paths, of
+#: `storeops/payroll_evidence.PUNCH_TABLE` (a constant whose only use is such a read), of
+#: `core/scope.WORKED_AT_SOURCES` (its own table/column/soft-delete registry, with its own lock), or
+#: of the `source_table="timelog"` audit arguments: a read or a write is an I/O call, not a second
+#: statement about where a figure came from, and re-pointing them is a payroll change rather than a
+#: drill-down one — and payroll work is the payroll-workforce agent's (CLAUDE.md). `shifts` above
+#: coexists with `WORKED_AT_SOURCES` on exactly these terms. What IS forbidden, and locked, is a
+#: second copy of this name inside a drill-down DECLARATION, which is where the divergence this
+#: registry exists to stop actually happens.
+#:
+#: THE REP-PAY SNAPSHOT IS DELIBERATELY *NOT* A CONSTANT HERE. "Which relation holds what the last
+#: commission calculation wrote down" already has one home — `carrier_pay_drilldown.REP_COMMISSIONS`,
+#: named there by batch 11 — and four declarations dereference THAT. A constant for it here would be
+#: the second copy this registry exists to prevent, which is exactly the call batch 19 made for the
+#: approved expected-to-earned moves. Written down so the next reader does not re-derive it.
+TIME_CLOCK = "timelog"
 #: THE ENTERED EXPENSE SHEET (`commcalc.store_expenses`, mig 002). The relation a store's monthly
 #: expenses are typed into, and therefore the provenance of every "−Expenses" figure.
 #:

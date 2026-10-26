@@ -14,8 +14,38 @@ import { useActiveCarrier } from '@/lib/auth-context'
 import { atuActiveCarry } from '@/lib/carrier-scope'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
 import { MultiSelect } from '@/lib/multiselect'
 import { SetupNotice } from '@/lib/setupNotice'
+
+// WHERE THE MEASURED FIGURES CAME FROM (index §CORE-17.3t). The server serves a panel per measured
+// figure from commcalc/performance_coaching_drilldown.py, folded over the SAME per-store rows the
+// table below prints.
+//
+// THIS PAGE IS SERVER-FOLDED AND IS DELIBERATELY *NOT* NARROWED. Every filter on it — the period,
+// the date range, the store and market pickers — is a QUERY PARAMETER, so the server folds again on
+// every change and each panel follows its figure by construction. There is no browser fold here and
+// `lib/drill-narrow` must not appear in this file; `harness_batch20_drilldown.py` §F fails the build
+// in BOTH directions if that changes.
+//
+// EVERY ONE OF THE SIX TILES IS REFUSED A PANEL, AND EACH FOR A STATED REASON. The three customer
+// counts are per mobile number and the per-store table carries none, so they have no row list here.
+// The commission forgone, the annualised figure and the customer saving are each a fold multiplied
+// by a rate typed into the assumptions above, and one of them has no rows at all because its base is
+// typed in by hand — a panel for an assumption would present it as a measurement (§CORE-17.3m).
+// Every attach percentage is a rate (§CORE-17.3h). What DOES open is the measured half underneath:
+// the unconverted recharge, and the two activation counts the attach rates are computed from.
+
+const ATU_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Market', get: (r: DrillRow) => String(r.fields?.market ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.market ?? '') },
+  { header: 'Card activations', get: (r: DrillRow) => String(r.fields?.['card activations'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['card activations'] ?? 0) },
+  { header: 'Already enrolled', get: (r: DrillRow) => String(r.fields?.['already enrolled'] ?? '—'),
+    sortValue: (r: DrillRow) => Number(r.fields?.['already enrolled'] ?? 0) },
+]
 
 // Same super-admin org-resolution mitigation the Sales and Custom reports carry: these reads send no
 // org_id, so a super-admin (whom the tenant middleware does not rewrite) would fall back to the HOUSE
@@ -69,6 +99,10 @@ export default function AtuOpportunityPage() {
   const s = data?.summary
   const c = s?.customers, m = s?.money, rc = s?.recharge
   const stores: StoreRow[] = data?.stores || []
+  const atuPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  // The shared offer gate with NO extra condition: the server folded the figure and the panel over
+  // the same rows, so a link appears for exactly the figures it served a panel for.
+  const atuDrill = useDrillTile(atuPanels)
   // The active carrier's commission carry — NEVER the combined carry_monthly (which sums both carriers).
   const activeCarry = atuActiveCarry(m, activeCarrier)
 
@@ -180,6 +214,12 @@ export default function AtuOpportunityPage() {
                 <b style={{ color: 'var(--text)' }}>{c.card_attach_pct}%</b> on card — the case for working the card book is the
                 cost to close, not a better conversion rate.</>
             )}
+            <DrillTileLinks
+              drills={atuDrill.dl('recharge_open', 'the recharge behind this',
+                'card_activations', 'the card activations',
+                'card_on_atu', 'the ones already enrolled')}
+              open={atuDrill.open} onToggle={atuDrill.toggle} />
+            {atuDrill.panel && <DrillDownPanel panel={atuDrill.panel} extraColumns={ATU_DRILL_COLUMNS} />}
             {/* Total-side caveat (recharges settle through VidaPay) — only under the Total lens. */}
             {isTotal && !s.totals_measurable?.total && (
               <div style={{ marginTop: 8, color: 'var(--c-fg-b45309)' }}>

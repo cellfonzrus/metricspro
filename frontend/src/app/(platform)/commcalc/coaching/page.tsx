@@ -4,10 +4,36 @@ import { api, fmt } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import DrillDownPanel, {
+  DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
+} from '@/components/DrillDownPanel'
+import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
 import { GoogleRatingChips, GoogleRatingDetail, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
 
 // Rep coaching — which KPIs each rep met vs missed + WHY they're losing money (commission at risk
 // below tier + chargebacks) + flags. Sorted by money left on the table. Admin/DM (market-scoped).
+//
+// WHERE EVERY FIGURE CAME FROM (index §CORE-17.3t). The server serves a panel per summary figure
+// from commcalc/performance_coaching_drilldown.py, folded over the SAME rep rows this page shows.
+//
+// THIS PAGE FOLDS ITS OWN TILES, so `lib/drill-narrow` IS WIRED HERE and each tile reads its number
+// off its narrowed panel through the shared `agreesToTheCent` gate — the tile and its evidence are
+// one fold by construction. `harness_batch20_drilldown.py` §F fails the build if that stops being
+// true, in BOTH directions, so this cannot quietly revert to a panel about the whole company.
+//
+// Four figures drill and three do not. The Reps COUNT is the row count the panel below already
+// states; the tier percentage and the KPIs-met fraction are ratios, and the figures they divide are
+// the ones that open (§CORE-17.3h).
+
+// The report's own columns on each drill row, off `fields` — never a fork of the shared panel.
+const COACH_DRILL_COLUMNS: DrillExtraColumn[] = [
+  { header: 'Store', get: (r: DrillRow) => String(r.fields?.store ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.store ?? '') },
+  { header: 'Full tier', get: (r: DrillRow) => String(r.fields?.['full tier'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['full tier'] ?? '') },
+  { header: 'Pay breakdown', get: (r: DrillRow) => String(r.fields?.['pay breakdown'] ?? '—'),
+    sortValue: (r: DrillRow) => String(r.fields?.['pay breakdown'] ?? '') },
+]
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const chip = (active: boolean): React.CSSProperties => ({ padding: '5px 11px', borderRadius: 16, border: '1px solid var(--border)', cursor: 'pointer', fontSize: 12, fontWeight: 600, background: active ? 'var(--c-bg-1e3a5f)' : 'var(--surface)', color: active ? 'var(--c-fg-ffffff)' : 'var(--text2)' })
 const th: React.CSSProperties = { textAlign: 'right', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }
@@ -76,13 +102,35 @@ export default function RepCoachingPage() {
     : cols
 
   // tiles reflect the current filter (recomputed client-side from the visible reps)
-  const s = {
+  const s: Record<string, number> = {
     reps: reps.length,
     below_tier: reps.filter(r => (r.tier ?? 1) < 1).length,
     total_at_risk: reps.reduce((a, r) => a + (r.at_risk || 0), 0),
     total_chargebacks: reps.reduce((a, r) => a + (r.chargeback_deducted || 0), 0),
+    // Folded here so the posted-penalty panel has a figure to be gated against. It is NOT printed as
+    // a tile of its own: it is a component of the total beside it, offered as a link there, which is
+    // the batch-19 posture for a figure a reader needs and no tile shows.
+    total_ops_chargebacks: reps.reduce((a, r) => a + (r.ops_chargeback_deduction || 0), 0),
     total_money_on_table: reps.reduce((a, r) => a + (r.money_on_table || 0), 0),
   }
+
+  // THE PANELS, NARROWED TO THE ROWS ON SCREEN — the same selection `reps` is, matched on the row
+  // key the server served with every drill row (rep plus store, which is what this page filters on).
+  const coachPanels: Record<string, DrillPanel> = data?.drilldown || {}
+  const coachKeys = new Set(reps.map(r => screenKey({ rep: r.rep, store: r.store })))
+  const coachNarrowed: Record<string, DrillPanel> = {}
+  Object.keys(coachPanels).forEach(k => {
+    const p = narrowPanel(coachPanels[k], (_r: DrillRow, key: string) => coachKeys.has(key))
+    if (p) coachNarrowed[k] = p
+  })
+  // Each tile reads its number off its narrowed panel where the two agree to the cent, through the
+  // SHARED gate, and keeps this page's own fold where they do not. A disagreement costs the drill
+  // link, never the number.
+  const coachTile = (k: string): number => {
+    const n = s[k] || 0
+    return agreesToTheCent(coachNarrowed[k], n) ? Number(coachNarrowed[k]?.figure?.amount ?? n) : n
+  }
+  const coachDrill = useDrillTile(coachNarrowed, (k, p) => agreesToTheCent(p, s[k] || 0))
 
   return (
     <div>
@@ -124,11 +172,16 @@ export default function RepCoachingPage() {
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: 18 }}>
-            <Tile label="Reps" value={`${s.reps || 0}`} sub={`${s.below_tier || 0} below full tier`} />
-            <Tile label="Incentive at risk" value={fmt(s.total_at_risk)} tone="#b45309" />
-            <Tile label="Chargebacks lost" value={fmt(s.total_chargebacks)} tone="#b42318" />
-            <Tile label="Total left on table" value={fmt(s.total_money_on_table)} tone="#b42318" />
+            <Tile label="Reps" value={`${s.reps || 0}`} sub={`${coachTile('below_tier')} below full tier`}
+              links={<DrillTileLinks drills={coachDrill.dl('below_tier', 'who is below full tier')} open={coachDrill.open} onToggle={coachDrill.toggle} />} />
+            <Tile label="Incentive at risk" value={fmt(coachTile('total_at_risk'))} tone="#b45309"
+              links={<DrillTileLinks drills={coachDrill.dl('total_at_risk', 'rows behind this')} open={coachDrill.open} onToggle={coachDrill.toggle} />} />
+            <Tile label="Chargebacks lost" value={fmt(coachTile('total_chargebacks'))} tone="#b42318"
+              links={<DrillTileLinks drills={coachDrill.dl('total_chargebacks', 'rows behind this')} open={coachDrill.open} onToggle={coachDrill.toggle} />} />
+            <Tile label="Total left on table" value={fmt(coachTile('total_money_on_table'))} tone="#b42318"
+              links={<DrillTileLinks drills={coachDrill.dl('total_money_on_table', 'rows behind this', 'total_ops_chargebacks', 'posted penalties')} open={coachDrill.open} onToggle={coachDrill.toggle} />} />
           </div>
+          {coachDrill.panel && <DrillDownPanel panel={coachDrill.panel} extraColumns={COACH_DRILL_COLUMNS} />}
 
           <div className="card table-wrapper" style={{ padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -212,10 +265,11 @@ export default function RepCoachingPage() {
   )
 }
 
-const Tile = ({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: string }) => (
+const Tile = ({ label, value, sub, tone, links }: { label: string; value: string; sub?: string; tone?: string; links?: React.ReactNode }) => (
   <div className="card" style={{ padding: 14 }}>
     <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
     <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2, color: tone || 'var(--text)' }}>{value}</div>
     {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
+    {links}
   </div>
 )
