@@ -161,6 +161,7 @@ Primary code homes:
 | COMMCALC-38 | **What a supplier billed us has a supplier-neutral home, and the invoice feed ships with its door** | "i want to pull in invoices from ups and then compare to the sales reports to make sure every single shipment is being paid for and cash collected by the sales reps" — and the login row he had already made sat on a processor nothing dispatches, so Run now stamped "not wired yet" and stopped. Which part of "a supplier invoice" is a universal fact, which part is one distributor's portal, and what does a second supplier's invoices do to a table whose every reader assumes the first? |
 | COMMCALC-39 | **A declaration is read off the page, and a declared report resolves to itself** | Fourteen reports were asked for by name, and every one of them would have resolved to NOTHING: the pull passed a source's own declaration back to its adapter as a FILTER, squashed under a different rule from the one the reports were keyed by, so a fully configured source read as "No reports are enabled". And the filters those reports need are behind framework-generated control ids nobody can guess. Where should a declaration come from, and what does one argument meaning two things to two callers cost? |
 | COMMCALC-40 | **The status word is the sentence's own verdict, never a literal** | The sweep said "⚠ PARTIAL — a column stopped arriving" in one column and stored `ok` in the column next to it, so every screen that colours on the word showed green over October 2026's missing KPI counts for ten days. What does a verdict cost when it is computed as prose and then discarded at the one place a machine reads it? |
+| PAYABLES-01 | **A rebuild never deletes what it cannot replace** | "Rebuild via sql let me know what permissions to add" — and the rebuild, run for real, deleted all 11,000 Boost rows and inserted none, then returned HTTP 200 describing the table it had just emptied. Two migrations had been skipped while later-numbered ones landed. What is a delete+insert worth without a transaction, and which half of that pair is the one you can afford to run first? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26119,6 +26120,7 @@ status word rather than a blank that reads as nil.
 | POS-07 | pos |
 | POS-08 | pos |
 | POS-09 | pos |
+| PAYABLES-01 | payables |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -26136,7 +26138,6 @@ it is removed.
 | asset | its paths appear in passing in §34 only; no section documents the asset module itself |
 | crm | undocumented |
 | helpdesk | undocumented |
-| payables | its paths appear in passing in §14u and §53.1 only; no section documents it |
 | recovery | undocumented |
 | referral | undocumented |
 | remediation | undocumented |
@@ -38573,3 +38574,106 @@ restoring `_dlar_set_status(client, org_id, 'ok'` fails the build.
 Same class: §CORE-18 (the other half of this silence — the diagnostic's answer truncated out of the
 same two columns), §COMMCALC-16 (the diagnostic itself), §19.21 (a status that reports what was pulled
 rather than what was written), §19.41 (`success` is what landed, not what the status word says).
+
+## §PAYABLES-01. A REBUILD NEVER DELETES WHAT IT CANNOT REPLACE (found 2026-10-27)
+
+> **Numbered PAYABLES-01.** Checked against `origin/main` immediately before pushing, per §CORE-17's
+> number race (§COMMCALC-40 landed the same morning in #570).
+
+**Owner, verbatim:** *"Rebuild via sql let me know what permissions to add"*, asked after
+*"What are the upcoming payments for the next week"* returned nothing.
+
+**MEASURED, NOT IMAGINED — this is an incident write-up.** At 10:44 UTC I ran the real
+`engine.build_ledger` against production for the house org. `_build_one_carrier` deleted the
+carrier's rows and THEN inserted the rebuilt ones, so it **deleted all 11,000 Boost/VIP rows and
+inserted none**:
+
+    PGRST204  Could not find the 'rebate_basis' column of 'device_payable_ledger' in the schema cache
+
+`build_ledger` catches per carrier so one bad config cannot abort the rest, so the call **returned
+normally** — `{"carriers": 1, "written": 0, "per_carrier": [{"error": "…"}]}`, and through
+`POST /payables/rebuild` an **HTTP 200** — describing a table it had just emptied. The rows were
+restored in full from a snapshot taken beforehand (15,495 total, 11,000 house rows all carrying due
+dates, `built_at` 2026-09-04, sample rows matching the snapshot). **Pressing ↻ Rebuild ledger in the
+UI does exactly the same thing, and nobody pressing it has a snapshot.**
+
+### PAYABLES-01.1 THE CLASS — a delete+insert with no transaction is a delete
+
+The instance was "the code is ahead of the production schema": migrations **1093 and 1094 had never
+been applied** while 1095, 1098 and 1099 had. Migrations are applied by hand here, so **a landed
+migration number is no evidence that the ones below it landed** — check the columns, not the number.
+
+The class is wider and is what is fixed: this backend reaches the database only through PostgREST
+(§CORE-13 — there is no direct SQL path), so a rebuild cannot wrap its delete and its insert in one
+transaction. Any write the relation refuses — a dropped column, a renamed one, a revoked grant —
+turns the pair into a delete. Naming the missing column would have fixed one morning; naming the
+order fixes every morning after it.
+
+### PAYABLES-01.2 THE FIX — refuse, then delete, then insert
+
+`backend/app/modules/payables/write_shape.py` is the ONE home for *"can this relation accept the row
+this build is about to write?"*. `_build_one_carrier` now builds the first page of replacement rows,
+asks `refuse_if_unwritable`, and only then sweeps the carrier's old snapshot — so a refusal arrives
+while the old rows are still there. The delete itself was lifted into **one home**,
+`engine._sweep_carrier`, which is not reached before the check.
+
+**The guard can only fire where there is something to lose**, which is what makes it safe
+everywhere. The live column set is read from a sample row of the relation (PostgREST returns every
+column, NULLs included, so a row's KEYS are the relation's columns; `information_schema` is not
+reachable through it). An EMPTY relation yields `None` — "I could not look", deliberately not "it
+has no columns" — and the build proceeds exactly as before, because an empty table has nothing to
+destroy. Cost: one `select … limit 1` per carrier. No arithmetic changed.
+
+### PAYABLES-01.3 THE OTHER HALF — a refused rebuild is not a 200
+
+`build_ledger` reports a refusal under `blocked`, kept apart from a per-carrier `error`: *"this
+carrier rebuilt badly"* and *"this carrier was left exactly as it was"* are different sentences, and
+the per-carrier entry carries `rows_left_intact` so nobody reads `rows: 0` as loss. A blocked carrier
+is not counted in `carriers` or `written`. `POST /payables/rebuild` turns a non-empty `blocked` into
+**409** naming the missing columns — before the flags refresh, so a refused rebuild cannot go on to
+restate the discrepancy flags off a ledger it did not write.
+
+### PAYABLES-01.4 The lock
+
+`backend/harness_payable_rebuild_preflight.py` — **32 checks, stdlib-only, DB-free**. §A
+`write_shape` as pure arithmetic, including that an unknown column set refuses nothing and a sparse
+sample cannot cause a false refusal; §B the ORDER, driven through the **real** `_build_one_carrier`
+against a recording client (only `_rows_for_page` is stubbed) — on a refusal **not one delete is
+issued**, and the sweep happens once per carrier, not once per page; §C the regression in the live
+defect's exact shape, a ledger with no `rebate_basis`; §D the refusal reaching a reader and the 409;
+§E the AST ratchet — the delete has one home, the guard is WIRED rather than merely written (§19.18),
+and inside the build the preflight call appears before the sweep call; §F the read side (see
+PAYABLES-01.6) — the one home is dereferenced, no hand-cut page loop or page ceiling survives in the
+engine, and the source is read before the sweep.
+
+Restoring the old order fails B1 and B2, verified by reverting it and re-running.
+
+### PAYABLES-01.5 Cross-references
+
+Same class: §CORE-13 (no direct SQL path — why the catalogue cannot be read and why a grant can
+refuse a write), §19.18 (a registry written and never dereferenced), §19.41 (`success` is what
+landed, not what the status word says), §COMMCALC-40 (a verdict discarded where a machine reads it),
+§COMMCALC-32 (`ledger_status`, the other gate on what reaches this ledger), §COMMCALC-34
+(`owed_read`, the one read over what this build writes).
+
+### PAYABLES-01.6 THE SAME DEFECT ON THE READ SIDE — a rebuild cannot replace from half the source
+
+Found while answering the obvious question about the rebuild: the house ledger went from 11,000 rows
+to 35,346, so was it double-counting? **No — measured 2026-10-27, `commcalc.asset_ledger` holds
+exactly 35,346 house rows with `owed_to_vip > 0`, against 35,346 ledger rows and 33,384 distinct
+`(imei, carrier_id)` keys whose only repeats are the feed's three non-device placeholders (`''`,
+`PROCESSING FEE`, `SHIPPING`). One row per source row.** The old number was the defect: **11,000 is
+eleven exact pages of 1,000**, a build that covered a third of its source and reported success.
+
+The cause is §CORE-05 in this engine. `_build_one_carrier` cut its own pages with
+`.range(page * PAGE, …)` and **no `.order(...)`** — and Postgres promises no row order without one,
+so such a walk serves some rows twice, never serves others, and still ends on a short page. Two
+sibling reads inside `ma_store_resolution` did the same, each under a 40-page ceiling, and the build
+loop under an 80-page one: the §19.48 shape, a read that is quietly wrong.
+
+All three now dereference **`app/modules/core/feed_read.read_all`** (§CORE-05), which pages on a
+stable key, has no ceiling that truncates in silence, and raises `IncompleteRead` rather than
+returning a partial feed. Placed where it is, that raise reaches the caller **before the sweep**, so
+an unreadable source leaves the old snapshot standing — the same guarantee as the write preflight,
+on the other side: *a rebuild never deletes what it cannot replace, and it cannot establish it can
+replace from half the source.* `harness_feed_read_lock.py`'s unordered-read ratchet drops 98 → 95.

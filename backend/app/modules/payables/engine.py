@@ -23,6 +23,8 @@ from app.modules.commcalc import product_mix as _pm
 from app.modules.payables import declared_source as _ds
 from app.modules.payables import ledger_status as _ls
 from app.modules.payables import recovered_amount as _rec
+from app.modules.core import feed_read as _feed_read
+from app.modules.payables import write_shape as _ws
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 PAGE = 1000
@@ -169,7 +171,6 @@ def _unit_price_map(client, org_id, cfg, complaints=None):
     if str(cfg.get("owed_mode") or "").strip().lower() != OWED_MODE_UNIT_PRICE:
         return {}
     from app.modules.account import device_cogs as _cogs
-    from app.modules.core import feed_read as _feed_read
     src = str(cfg.get("owed_price_table") or cfg.get("source_table") or "").strip()
     model_field = str(cfg.get("owed_price_model_field") or cfg.get("model_field") or "").strip()
     names = set()
@@ -377,19 +378,16 @@ def ma_store_resolution(client, org_id):
     with none of them gets a resolver that answers None (rows stay "(unassigned)", page still up)."""
     inv_by_imei, store_by_account, account_by_imei = {}, {}, {}
     try:                                        # 2 — inventory snapshot, device grain
-        page = 0
-        while page <= 40:
-            chunk = (client.schema("commcalc").table("inventory_aging_device")
-                     .select("imei,store").eq("org_id", org_id)
-                     .range(page * PAGE, page * PAGE + PAGE - 1).execute().data) or []
-            for r in chunk:
-                k = _norm_imei(r.get("imei"))
-                st = str(r.get("store") or "").strip()
-                if k and st and k not in inv_by_imei:
-                    inv_by_imei[k] = st
-            if len(chunk) < PAGE:
-                break
-            page += 1
+        # Paged through the §CORE-05 one home: the `.range()` walk that stood here cut pages out of
+        # an unordered set, so a device could be mapped twice and another never mapped at all, and
+        # its 40-page ceiling dropped the rest of a larger snapshot in silence.
+        for r in _feed_read.read_all(_feed_read.table_reader(
+                client, "commcalc", "inventory_aging_device", "imei,store")(
+                    lambda q: q.eq("org_id", org_id))):
+            k = _norm_imei(r.get("imei"))
+            st = str(r.get("store") or "").strip()
+            if k and st and k not in inv_by_imei:
+                inv_by_imei[k] = st
     except Exception as e:
         print(f"WARN payables ma_store_resolution inventory read failed: {e}")
     try:                                        # 3 — mig-314 account index, canonical spelling
@@ -402,19 +400,14 @@ def ma_store_resolution(client, org_id):
         print(f"WARN payables ma_store_resolution mig-314 index failed: {e}")
     if store_by_account:
         try:                                    # device → its own MA account (for account fallback
-            page = 0                            # on rows that don't carry the account themselves)
-            while page <= 40:
-                chunk = (client.schema("commcalc").table("raw_ma_commission")
-                         .select("imei,merchant_account_id").eq("org_id", org_id)
-                         .range(page * PAGE, page * PAGE + PAGE - 1).execute().data) or []
-                for r in chunk:
-                    k = _norm_imei(r.get("imei"))
-                    a = str(r.get("merchant_account_id") or "").strip()
-                    if k and a and k not in account_by_imei:
-                        account_by_imei[k] = a
-                if len(chunk) < PAGE:
-                    break
-                page += 1
+            # Same §CORE-05 one home, same reason, as the inventory read above.
+            for r in _feed_read.read_all(_feed_read.table_reader(
+                    client, "commcalc", "raw_ma_commission",
+                    "imei,merchant_account_id")(lambda q: q.eq("org_id", org_id))):
+                k = _norm_imei(r.get("imei"))
+                a = str(r.get("merchant_account_id") or "").strip()
+                if k and a and k not in account_by_imei:
+                    account_by_imei[k] = a
         except Exception as e:
             print(f"WARN payables ma_store_resolution imei->account read failed: {e}")
 
@@ -453,7 +446,12 @@ def build_ledger(client, org_id=ORG_ID, carrier_id=None):
     alias = _load_model_alias(client, org_id)
     reimb_types = _reimb_types(client, org_id)
     maps = _load_source_maps(client, org_id, carrier_id)
-    result = {"carriers": 0, "written": 0, "status_counts": {}, "per_carrier": []}
+    # `blocked` names the carriers whose rebuild was REFUSED before it could delete anything. It is
+    # kept apart from a per-carrier `error` on purpose: an error means "this carrier rebuilt badly",
+    # a block means "this carrier was left exactly as it was, and the database is behind the code".
+    # The router turns a non-empty list into a non-2xx, because the 2026-10-27 defect was not only
+    # the delete — it was a 200 describing it (§PAYABLES-01).
+    result = {"carriers": 0, "written": 0, "status_counts": {}, "per_carrier": [], "blocked": []}
     for cfg in maps:
         # ONE collector per carrier: a declared table or column this build could not read is
         # reported with the result rather than dying in a log line (§COMMCALC-29). It rides out
@@ -462,6 +460,16 @@ def build_ledger(client, org_id=ORG_ID, carrier_id=None):
         try:
             n, sc = _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types,
                                       complaints=complaints)
+        except _ws.WriteShapeRefused as e:
+            result["blocked"].append({"carrier_id": cfg.get("carrier_id"),
+                                      "label": cfg.get("label"), "relation": e.relation,
+                                      "missing_columns": e.missing, "reason": str(e)})
+            result["per_carrier"].append({"carrier_id": cfg.get("carrier_id"),
+                                          "label": cfg.get("label"), "blocked": True,
+                                          "error": str(e)[:400], "rows_left_intact": True,
+                                          "warnings": complaints.notes()})
+            _ds.merge(result, complaints)
+            continue
         except Exception as e:
             result["per_carrier"].append({"carrier_id": cfg.get("carrier_id"),
                                           "label": cfg.get("label"), "error": str(e)[:200],
@@ -487,9 +495,12 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types, comp
     terms = _terms_days(client, org_id, cfg.get("distributor_id"), cfg)
     select_str = ",".join(_needed_cols(cfg))
 
-    # delete this carrier's snapshot first (per-carrier scope — never touches other carriers)
-    client.schema("commcalc").table("device_payable_ledger").delete() \
-        .eq("org_id", org_id).eq("carrier_id", cid).execute()
+    # THE DELETE USED TO BE HERE, AND THAT IS THE DEFECT (§PAYABLES-01, 2026-10-27). It deleted this
+    # carrier's rows before anything had established the replacement could be written, so a relation
+    # that refused the row shape left the carrier with NOTHING — measured: 11,000 Boost rows deleted,
+    # 0 inserted, and a normal-looking return describing it. The delete now happens below, after the
+    # first page of replacement rows has been built AND `write_shape` has confirmed the table can
+    # accept them. Nothing else about the build changed.
 
     # Store fallback for a source with no store of its own (every Total/MA map) — the POS sold-match
     # still wins per row; this only fills what it leaves blank (see ma_store_resolution). Built ONCE
@@ -506,30 +517,62 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types, comp
     # with an owed_field never reads the handset sheet at all (byte-identical).
     price_map = _unit_price_map(client, org_id, cfg, complaints)
 
-    status_counts, written, page = {}, 0, 0
-    while True:
+    status_counts, written = {}, 0
+    swept = False                 # has this carrier's old snapshot been cleared yet?
+
+    # THE SOURCE IS READ IN FULL, THROUGH THE ONE HOME FOR A PAGED READ (§CORE-05,
+    # `core/feed_read`), BEFORE ANYTHING IS DELETED. The loop that used to stand here cut its own
+    # pages with `.range()` and NO `.order()`, which is the §CORE-05 defect measured live on
+    # 2026-10-14: an unordered paged read serves some rows twice and never serves others, and still
+    # ends on a short page, so the build reported success over an incomplete read. Measured here on
+    # 2026-10-27: the 4 September snapshot held 11,000 rows — eleven exact pages of 1,000 — against
+    # a source population of 35,346, and nothing said so. It also carried an 80-page ceiling, the
+    # §19.48 failure mode: a read that is quietly wrong. `read_all` pages on a stable key, has no
+    # ceiling that silently truncates, and RAISES `IncompleteRead` rather than returning a partial
+    # feed — which, reaching here before the sweep, leaves the old snapshot untouched. That is the
+    # same guarantee as the write-preflight below, on the READ side: a rebuild never deletes what
+    # it has not established it can replace, and it cannot establish that from half the source.
+    def _source_query():
         q = (client.schema("commcalc").table(src_table).select(select_str)
              .eq("org_id", org_id))
         if owed_field:                       # only actual payables (keeps Boost small + meaningful)
             q = q.gt(owed_field, 0)
-        chunk = q.range(page * PAGE, page * PAGE + PAGE - 1).execute().data or []
-        if not chunk:
-            break
+        return q
+
+    source = _feed_read.read_all(_source_query)
+
+    for _start in range(0, len(source), PAGE):
+        chunk = source[_start:_start + PAGE]
         rows = _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, terms,
                               price_map=price_map,
                               ma_resolve=ma_resolve, complaints=complaints,
                               declared_cost=declared_cost)
+        if rows and not swept:
+            # THE ORDER IS THE WHOLE FIX: refuse first, delete second, insert third. Every row of
+            # one build carries the same keys, so the first one answers for all of them. A refusal
+            # raises out of here with the old snapshot untouched.
+            _ws.refuse_if_unwritable(client, "device_payable_ledger", rows[0],
+                                     label=cfg.get("label") or cid)
+            _sweep_carrier(client, org_id, cid)
+            swept = True
         for i in range(0, len(rows), 500):
             client.schema("commcalc").table("device_payable_ledger").insert(rows[i:i + 500]).execute()
         for r in rows:
             status_counts[r["status"]] = status_counts.get(r["status"], 0) + 1
         written += len(rows)
-        if len(chunk) < PAGE:
-            break
-        page += 1
-        if page > 80:                        # safety backstop
-            break
+    if not swept:
+        # The source carries nothing for this carrier, so there is no replacement to refuse and the
+        # old snapshot is genuinely stale — clearing it is the same answer the pre-2026-10-27 code
+        # gave, reached without ever risking a delete it could not follow through.
+        _sweep_carrier(client, org_id, cid)
     return written, status_counts
+
+
+def _sweep_carrier(client, org_id, cid):
+    """Clear ONE carrier's snapshot — per-carrier scope, never touching another carrier's rows.
+    Its one call site order is guarded by `write_shape`; see `_build_one_carrier`."""
+    client.schema("commcalc").table("device_payable_ledger").delete() \
+        .eq("org_id", org_id).eq("carrier_id", cid).execute()
 
 
 def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, terms,

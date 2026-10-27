@@ -159,6 +159,14 @@ def rebuild(carrier_id: str = "", org_id: str = ORG_ID):
     completes server-side (like the commission recalc) — poll /payables/payables afterwards."""
     client = sb()
     built = engine.build_ledger(client, org_id, carrier_id or None)
+    # A REFUSED REBUILD IS NOT A SUCCESS (§PAYABLES-01). Before 2026-10-27 this returned 200 with
+    # `written: 0` after the build had already emptied a carrier; the delete is now held back until
+    # the write is known to be possible, and the remaining half of that defect is this status code —
+    # a screen must not be able to render "rebuilt" over a rebuild that did not happen.
+    if built.get("blocked"):
+        raise HTTPException(409, {"message": "rebuild refused — the database is behind the code; "
+                                             "nothing was deleted and every carrier is as it was",
+                                  "blocked": built["blocked"], "result": built})
     try:
         built["flags_written"] = engine.sync_payable_flags(client, org_id)
     except Exception as e:
