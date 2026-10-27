@@ -76,6 +76,9 @@ jobs:
       - name: Every section is registered to a module, and a collision fails here
         working-directory: backend
         run: python3 harness_index_section_register.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: A length cap does not decide which part of a status survives (the real 2026-10-26 DLAR line, whose finding was at the end; a growing middle cannot push the conclusion out; every length and every cap fuzzed for an over-cap result; the writer never raises — found 2026-10-27, index §CORE-18)
+        working-directory: backend
+        run: python3 harness_status_detail.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   impact:
     name: What else answers this question?

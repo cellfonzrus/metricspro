@@ -53,6 +53,8 @@ from datetime import datetime, timedelta, timezone
 
 from app.modules.commcalc import data_lineage_registry as _lineage
 from app.modules.account import _period as _pd
+# THE one home of "a status line that must fit a column keeps its ends" (found 2026-10-27).
+from app.core import status_detail as _status_detail
 
 HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
 MIGRATION = "1030_auto_calc_on_landing.sql"
@@ -310,7 +312,8 @@ def classify_run(result):
     if status == "done":
         errs = r.get("save_errors") or []
         if errs:
-            return "calculated_with_errors", "; ".join(str(e) for e in errs)[:600]
+            return "calculated_with_errors", _status_detail.fit(
+                "; ".join(str(e) for e in errs), 600)
         return "calculated", ""
     if status == "error":
         msg = str(r.get("error") or "the calculation stopped with no message").strip()

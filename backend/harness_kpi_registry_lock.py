@@ -328,9 +328,24 @@ check("(h) WHICH COLUMNS MUST CARRY A VALUE lives in the lineage registry, and t
       and "_lineage.required_content_columns(" in SWEEP_CODE
       and "_lineage.content_arrival(" in SWEEP_CODE
       and "REQUIRED_CONTENT_COLUMNS" not in SWEEP_CODE)
+# RE-AIMED 2026-10-27, NOT RELAXED (index §COMMCALC-40). This pin used to scan for the literal
+# `if not (skipped or gone or shape)` inside `status_sentence`. That condition still decides the
+# verdict — it moved into `dlar_sweep.status_verdict`, the one home the sentence AND the router's
+# stored status word now both dereference, because the router was storing the literal 'ok' beside a
+# detail line reading "⚠ PARTIAL". A pin whose subject moves is re-aimed at the new form; left as it
+# was it would have failed for the right reason and been "fixed" by deleting it. It is now a
+# BEHAVIOURAL assertion on each of the three conditions, so no later refactor can satisfy it by
+# spelling.
 check("(h) a column that stopped arriving CANNOT sit under a green OK",
-      'gone = []' in SWEEP_CODE and 'COLUMN STOPPED ARRIVING' in SWEEP
-      and 'if not (skipped or gone or shape)' in SWEEP_CODE)
+      'COLUMN STOPPED ARRIVING' in SWEEP
+      and _ds.status_verdict({"content": {"raw_dlar_store": {"rows": 28,
+                                                             "empty_columns": ["gross_adds"]}}}) == "partial"
+      and _ds.status_verdict({"skipped_guard": ["raw_dlar_rep"]}) == "partial"
+      and _ds.status_verdict({"fields": {"dlar": {"missing": ["gross_activation_quantity"]}}}) == "partial"
+      and _ds.status_verdict({}) == "ok"
+      # …and the WORD stored beside the sentence is that same verdict, never a literal.
+      and 'dlar_sweep.status_verdict(res)' in ROUTER
+      and "_dlar_set_status(client, org_id, 'ok'" not in ROUTER)
 check("(h) nor can a PORTAL FIELD that stopped arriving — and the fields the portal sends that "
       "nothing reads are named beside it, which is where the new spelling is (owner 2026-10-16)",
       'PORTAL FIELD CHANGED' in SWEEP and 'NOTHING READS' in SWEEP
