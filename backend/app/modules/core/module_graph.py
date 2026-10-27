@@ -1841,6 +1841,41 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_bt',),
         },
     },
+    # ── §COMMCALC-35 (owner ask 2026-10-26) — a device's arrival on the shelf has ONE date ──────
+    'device_stock_age': {
+        "question": 'WHEN DID THIS DEVICE ARRIVE ON THE SHELF, HOW LONG HAS IT SAT THERE, AND IS IT '
+                    'STILL THERE? `inventory_aging_device.received_date` is NULL on all 10,525 rows '
+                    'house-wide (measured 2026-10-26) — the POS export carries the unit\'s AGE, not a '
+                    'date — so the receipt date must be DERIVED, and three callers each derived it: '
+                    'the `/inventory-recon` endpoint, the management-incentive aging gate, and '
+                    '`device_history.build_aging_inventory`, which read `days_in_stock` VERBATIM and '
+                    'therefore reported a July age in October for any unit whose snapshot was stale. '
+                    'The age is counted to TODAY, never read off the file. "On the shelf" is `on_hand` '
+                    'AND the org\'s CURRENT snapshot date, because a failed off-hand flip leaves '
+                    '`on_hand=true` on a unit long gone (balance_sheet\'s ~$129k of ghosts). The '
+                    'WINDOW is not decided here: it is the carrier\'s declared `sell_within_days`, '
+                    'resolved by `device_aging_policy` (§COMMCALC-26) — and an unresolved device does '
+                    'NOT inherit the house 60, because printing someone else\'s deadline over a rep\'s '
+                    'phone is the defect that section was opened for.',
+        "homes": ('app/modules/commcalc/inventory_stock_age.py',),
+        "index": ('COMMCALC-35', 'COMMCALC-36'),
+        "locks": ('harness_inventory_stock_age.py', 'harness_inventory_stock_age_guard.py'),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`. Hand-written for
+        # the reason recorded in §COMMCALC-01: --bless strips per-caller comments, and the three
+        # collapsed callers are exactly what a future reader needs explained. Verified by running the
+        # guard (not --bless) afterwards.
+        "callers": {
+            # The two that already derived it correctly, and now dereference instead: the
+            # `/inventory-recon` endpoint (`_derived_received`) and the management-incentive aging
+            # bonus gate (`_mi_ever_over_days`), whose own comment recorded the shared fact beside its
+            # private copy of it. Plus the rep's shelf card endpoint (`my_shelf`), which owns no
+            # arithmetic at all.
+            'app/modules/commcalc/router.py': ('_isa',),
+            # The one that DISAGREED. It believed the file's `days_in_stock`, so the same device aged
+            # 9 days here and 102 days through the other two paths.
+            'app/modules/commcalc/device_history.py': ('_isa',),
+        },
+    },
     'trade_in_basis': {
         "question": 'Which record says a trade-in happened — the till or the carrier statement — and '
                     'how many does this rep get paid for?',

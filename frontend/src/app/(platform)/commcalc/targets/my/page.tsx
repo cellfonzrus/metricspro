@@ -7,6 +7,7 @@ import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import AreaTargets from './_components/AreaTargets'
+import ShelfAging from './_components/ShelfAging'
 import { LinkedText } from '@/components/ScreenLink'
 import { useTargetAxis, BUILTIN_HINTS } from '@/lib/target-axis'
 import DrillDownPanel, {
@@ -173,6 +174,12 @@ export default function MyTargetsPage() {
           {period} · Your daily goal, pace to finish, and what&apos;s left for the month.
         </p>
       </div>
+
+      {/* THE SHELF — above the targets and OUTSIDE the "no store assigned" branch below, because the
+          endpoint's span is evidence-based and answers for a rep whose login carries no store pin.
+          Owner 2026-10-26: this is the screen a sales rep lands on, so this is where the selling
+          deadline belongs. */}
+      <ShelfAging />
 
       {/* AREA / DM VIEW — a collective target across every store assigned to this viewer, with the
           per-store drill-down (and, for whoever already holds the 'Target Settings' permission, the
