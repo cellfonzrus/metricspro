@@ -38587,7 +38587,11 @@ not know when to run, so the data should be live update as soon as something cha
 one-homes) · `backend/app/modules/asset/router.py` (`process_asset_ledger_bytes` — the landing that was
 telling nobody)
 **Proof:** `backend/harness_derived_builds.py` — 56 checks, DB-free
-**Lock:** `backend/harness_derived_build_lock.py` — static, stdlib only, 7 negative controls
+**Lock:** `backend/harness_derived_build_lock.py` — static, stdlib only, 8 negative controls. Its §A
+discovery is **the owner's question asked of the code**: every `@router.post`/`put` whose path contains
+rebuild / recalc / recompute / rerun — every button a tenant could be expected to know when to press —
+must be a registered build's `endpoint` or be excused with its reason. Five exist today; two are
+registered, three excused
 **Migration:** `1100_derived_build_queue.sql` — one new table, surfaced for approval. **Unapplied costs
 liveness, never correctness**: without it the queue degrades to one per process and every button still
 works exactly as it does today.
@@ -38674,7 +38678,28 @@ A **verdict is never read off a row count** (§COMMCALC-40): the exact shape tha
 2026-10-27 — `HTTP 200 {"written": 0}` over a ledger whose rows had just been deleted — classifies as
 `failed`, pinned as §C3 of the proof.
 
-### COMMCALC-41.5 REPORTED, not fixed
+### COMMCALC-41.5 A BUILD CANNOT BE THE JUDGE OF WHETHER IT FINISHED
+
+The 4 September build of the house ledger wrote **exactly 11,000 rows — eleven pages of one thousand
+— and reported success.** An automatic rebuild makes that shape worse, not better: nobody is watching
+it, so a success-looking response over an incomplete ledger becomes the normal case.
+
+So the row count is checked **outside** the build, in `payables/refresh.shortfall_warnings`: each
+carrier's written count against its source population, counted under the same filters the build
+applies (`org_id`, and `owed_field > 0` where the carrier declares one). Short of its population →
+a warning that says the figures for that carrier are incomplete and must not be read as a smaller
+balance. A population that cannot be counted yields **no** warning rather than a false one.
+
+This is deliberately not a check inside `build_ledger`: a build that stopped part-way is exactly the
+caller least able to say so.
+
+**And the eleven exact pages are probably not only a partial insert.** `engine._build_one_carrier`
+pages its source with `q.range(page * PAGE, …)` and **no `.order(...)`** — the §CORE-05 defect
+`harness_feed_read_lock.py` exists for, where an unordered `range()` walk can serve duplicates, miss
+rows, and still end on a short page. REPORTED to the thread that owns the engine; an atomic swap of an
+incomplete read is still an incomplete ledger.
+
+### COMMCALC-41.6 REPORTED, not fixed
 
 - **`build_ledger` is still delete-then-insert per carrier.** That is why `{"written": 0}` over an
   emptied table was possible at all, and it is owned by the *Device Payable VidaPay T-CETRA empty*
@@ -38688,7 +38713,7 @@ A **verdict is never read off a row count** (§COMMCALC-40): the exact shape tha
   carry a due date whatever rebuilds them. Liveness does not create a date nobody declared
   (§COMMCALC-34).
 
-### COMMCALC-41.6 Cross-references
+### COMMCALC-41.7 Cross-references
 
 Same class: **§6l** (the hook this generalises), §COMMCALC-40 (the status word is the verdict),
 §COMMCALC-29 (a declared source that cannot be read is REPORTED — applied here to the registry's own

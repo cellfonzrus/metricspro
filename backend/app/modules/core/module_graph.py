@@ -1629,6 +1629,13 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             'app/modules/commcalc/auto_calc.py': ('_lineage',),
+            # §COMMCALC-41 — the registry of DERIVED BUILDS declares which tables make each stored
+            # snapshot stale, so the post-landing hook can rebuild it. Every one of those table names
+            # is dereferenced from here (`ASSET_LEDGER`, `PAYMENT_DETAIL`, `DISTRIBUTOR_INVOICES`,
+            # `MI_RESIDUAL`, `COMMISSION_CALC_FEEDS`) rather than spelled beside the build: a second
+            # copy of "which table is this feed" is exactly the divergence this registry exists to
+            # stop, and `harness_derived_build_lock.py` §F fails the build on a literal.
+            'app/modules/commcalc/derived_builds.py': ('_lineage',),
             # A DRILL-DOWN HAS TO NAME A TABLE, so the cash-recon tiles' provenance asks the
             # registry which feed the resolved bill-payment processor lands in, and which table is
             # the live sales feed (§CORE-17.3a). Naming either at the call site would be the copied

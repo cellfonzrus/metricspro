@@ -171,7 +171,24 @@ check("A7 org_builds() excludes commission, which auto_calc runs on its own path
 check("A8 every runner resolves to a real function",
       all(callable(db._load(b["run"])) for b in db.BUILDS),
       [b["key"] for b in db.BUILDS])
-check("A9 the payable build's static inputs are the three feeds every carrier's build reads",
+check("A9 every manual rebuild door is a registered endpoint or excused with a reason — the owner's own "
+      "question ('tenant would not know when to run') asked of the code",
+      all(len(e) == 2 and e[1] for e in db.EXCUSED_DOORS)
+      and "POST /payables/rebuild" in {b["endpoint"] for b in db.BUILDS}
+      and "POST /recovery/rebuild" in {b["endpoint"] for b in db.BUILDS},
+      db.EXCUSED_DOORS)
+check("A9b every excused and every pinned-unwired entry carries a REASON, so a reader can check it",
+      all(len(e) == 3 and e[2] for e in db.EXCUSED_BUILDS)
+      and all(len(e) == 4 and e[3] for e in db.UNWIRED_SNAPSHOTS),
+      [e[:2] for e in db.EXCUSED_BUILDS if len(e) != 3 or not e[2]])
+check("A10 the same-class siblings this PR did NOT wire are named rather than left out",
+      len(db.UNWIRED_SNAPSHOTS) == 4
+      and {e[1] for e in db.UNWIRED_SNAPSHOTS} == {"sync_flags", "_sync_invoice_due_flags",
+                                                   "sync_inventory_flags", "_sync_hotsheet_flags"},
+      db.UNWIRED_SNAPSHOTS)
+check("A11 no function is both registered and excused",
+      not ({e[1] for e in db.EXCUSED_BUILDS} & {b["run"].partition(":")[2] for b in db.BUILDS}))
+check("A12 the payable build's static inputs are the three feeds every carrier's build reads",
       set(db.static_inputs(db.by_key("payable_ledger"))) == {"asset_ledger", "raw_payment_detail",
                                                              "vip_invoices"},
       db.static_inputs(db.by_key("payable_ledger")))

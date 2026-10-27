@@ -167,38 +167,71 @@ def run(tree=None):
     lineage_env = module_consts(tree[LINEAGE])
     reg_src = tree[REG]
     # `_lineage.X` inside the registry resolves through the lineage module's own constants.
-    env = module_consts(reg_src, extra={f"@{k}": v for k, v in lineage_env.items() if isinstance(v, str)})
+    env = module_consts(reg_src, extra={f"@{k}": v for k, v in lineage_env.items()
+                                   if isinstance(v, (str, tuple))})
     builds = tuple(env.get("BUILDS") or ())
     excused = {(b[0], b[1]) for b in (env.get("EXCUSED_BUILDS") or ())}
 
-    # ═══ §A every derived snapshot build is classified ═══════════════════════════════════════════════════
-    print("\n§A EVERY DERIVED SNAPSHOT BUILD IS CLASSIFIED")
+    # ═══ §A every manual rebuild door, and every snapshot build, is classified ══════════════════════════
+    print("\n§A EVERY REBUILD DOOR IS CLASSIFIED")
+    doors = set()
+    for path, src in sorted(tree.items()):
+        for m in re.finditer(r'@router\.(?:post|put)\(\s*"([^"]*(?:rebuild|recalc|recompute|rerun)[^"]*)"',
+                             src, re.I):
+            doors.add((path, m.group(1)))
+    check("A1 the door discovery is not vacuous — it finds the payables and recovery buttons",
+          {p for p, _r in doors} >= {"app/modules/payables/router.py", "app/modules/recovery/router.py"},
+          sorted(doors))
+    declared_doors = {str(b.get("endpoint") or "") for b in builds} | \
+                     {d for (d, _w) in (env.get("EXCUSED_DOORS") or ())}
+    # A door is classified when some declared/excused endpoint string ends with its route path. The module
+    # prefix is mounted in main.py, so the path tail is what can be compared statically.
+    unclassified_doors = [(p, r) for (p, r) in sorted(doors)
+                          if not any(d.rstrip("/").endswith(r.rstrip("/")) for d in declared_doors)]
+    check("A2 every rebuild / recalc / recompute door is a registered build's endpoint or excused with its "
+          "reason — no button a tenant must know to press is unclassified",
+          not unclassified_doors, unclassified_doors)
+    check("A3 every excused door carries a reason",
+          all(len(e) == 2 and e[1] for e in (env.get("EXCUSED_DOORS") or ())),
+          [e[0] for e in (env.get("EXCUSED_DOORS") or ()) if len(e) != 2 or not e[1]])
+
+    print("\n§A2 EVERY SNAPSHOT BUILD BEHIND A REGISTERED BUILD IS CLASSIFIED")
     registered = set()
     for b in builds:
         mod, _, fn = str(b.get("run", "")).partition(":")
-        path = mod.replace("app.", "app/", 1).replace(".", "/") + ".py"
-        registered.add((path, fn))
-    # discovery: a function that both deletes from and inserts into the SAME commcalc table is a snapshot build
-    found, stale_excuse = [], []
-    for path, src in sorted(tree.items()):
-        for name, node in functions(src):
-            dels, ins = table_calls(node, {"delete"}), table_calls(node, {"insert", "upsert"})
-            both = dels & ins
-            if not both:
-                continue
-            found.append((path, name, sorted(both)))
-    unclassified = [(p, n, t) for (p, n, t) in found
-                    if (p, n) not in excused and not any(p.endswith(rp) and n == rf for rp, rf in registered)
-                    # the refresh one-homes are the registered runners' own call targets
-                    and not p.endswith("refresh.py")]
-    check("A1 every delete-then-insert snapshot build is registered or excused, with its reason",
-          not unclassified, unclassified)
-    for (p, fn, _w) in (env.get("EXCUSED_BUILDS") or ()):
-        if p not in tree or fn_src(tree[p], fn) is None:
-            stale_excuse.append((p, fn))
-    check("A2 no EXCUSED_BUILDS entry is stale (the function still exists)", not stale_excuse, stale_excuse)
-    check("A3 the discovery is not vacuous — it finds the builds we know about",
-          len(found) >= 3, [(p, n) for p, n, _t in found])
+        registered.add((mod.replace("app.", "app/", 1).replace(".", "/") + ".py", fn))
+    excused = {(b[0], b[1]) for b in (env.get("EXCUSED_BUILDS") or ())}
+    unwired = {(b[0], b[1]) for b in (env.get("UNWIRED_SNAPSHOTS") or ())}
+    stale = [(p, fn) for (p, fn, _w) in (env.get("EXCUSED_BUILDS") or ())
+             if p not in tree or fn_src(tree[p], fn) is None]
+    stale += [(p, fn) for (p, fn, _t, _w) in (env.get("UNWIRED_SNAPSHOTS") or ())
+              if p not in tree or fn_src(tree[p], fn) is None]
+    check("A4 no excused or pinned entry is stale (each function still exists)", not stale, stale)
+    check("A5 the unwired-sibling pin may only SHRINK — a new snapshot build cannot hide in it",
+          len(unwired) <= 4, sorted(unwired))
+    check("A6 no function is both registered and excused", not (excused & registered), excused & registered)
+    # The registered runners, the excused builds and the pinned siblings are all real delete-then-insert
+    # snapshot writers: if one stopped being one, this registry would be describing something that no longer
+    # exists. (The broad "every delete-then-insert in the app" sweep is deliberately NOT the predicate here —
+    # most of those are config and period replaces, and §A's door discovery is the owner's actual question.)
+    not_a_build = []
+    for (p, fn) in sorted(excused | unwired):
+        if p.endswith("refresh.py"):
+            continue
+        node = next((n for name, n in functions(tree.get(p, "")) if name == fn), None)
+        if node is None:
+            continue
+        # A literal table name is not required: `_restore_rows` and the POS rebuild write through a variable
+        # table or a helper, which is why the predicate is "this function writes rows" rather than "this
+        # function names a table". What it rules out is an entry that writes nothing at all — a stale excuse
+        # describing something that no longer happens.
+        writes = [c for c in ast.walk(node)
+                  if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                  and c.func.attr in ("insert", "upsert", "delete")]
+        if not writes:
+            not_a_build.append((p, fn))
+    check("A7 every excused / pinned entry really still writes rows — an excuse cannot describe something "
+          "that no longer happens", not not_a_build, not_a_build)
 
     # ═══ §B a registered build can actually be made stale ════════════════════════════════════════════════
     print("\n§B A REGISTERED BUILD CAN BE MADE STALE")
@@ -336,13 +369,15 @@ if __name__ == "__main__":
     p, f = run(base)
     print("\n§N NEGATIVE CONTROLS — each planted violation must turn this lock RED")
     controls = [
-        ("a new snapshot build nobody made live",
-         mutate(base, "app/modules/payables/unsold_inventory.py",
-                "def ", 'def _rebuild_shadow_snapshot(client, org_id, rows):\n'
-                        '    client.schema("commcalc").table("device_payable_ledger").delete()'
-                        '.eq("org_id", org_id).execute()\n'
-                        '    client.schema("commcalc").table("device_payable_ledger").insert(rows).execute()\n\n\n'
-                        'def ')),
+        ("a new rebuild button nobody classified",
+         mutate(base, "app/modules/payables/router.py",
+                '@router.get("/auto-build")',
+                '@router.post("/shadow-rebuild")\ndef shadow_rebuild(org_id: str = ORG_ID):\n'
+                '    return {"ok": True}\n\n\n@router.get("/auto-build")')),
+        ("a pinned same-class sibling is quietly deleted from the registry",
+         mutate(base, REG, '    ("app/modules/asset/router.py", "sync_inventory_flags",\n'
+                           '     "flags", "the inventory flag sweep — no caller at all in backend/app today"),\n',
+                "")),
         ("the asset-ledger landing stops calling the hook",
          mutate(base, "app/modules/asset/router.py",
                 'auto = _auto.landed(client, org_id, table="asset_ledger", periods=[], '

@@ -46,6 +46,55 @@ def input_tables(client, org_id):
     return tuple(out)
 
 
+def source_population(client, org_id, cfg):
+    """How many rows the build SHOULD have written for this carrier: the source table's own count under the
+    same filters the build applies (org, and `owed_field > 0` where the carrier declares one). Returns None
+    when it cannot be counted — a number nobody could read is never reported as zero."""
+    table = str(cfg.get("source_table") or "").strip()
+    if not table:
+        return None
+    try:
+        q = (client.schema("commcalc").table(table).select("org_id", count="exact")
+             .eq("org_id", org_id).limit(1))
+        owed = str(cfg.get("owed_field") or "").strip()
+        if owed:
+            q = q.gt(owed, 0)
+        return q.execute().count
+    except Exception:
+        return None
+
+
+def shortfall_warnings(client, org_id, built):
+    """A BUILD THAT STOPPED PART-WAY AND REPORTED SUCCESS IS THE DEFECT, so the row count is checked against
+    the population it was built from.
+
+    Measured 2026-10-27: the 4 September build of the house ledger wrote exactly 11,000 rows — eleven pages of
+    one thousand — and reported success. A per-carrier count that is short of its source population is the one
+    cheap signal that says so, and it is checked HERE, outside the build, because a build cannot be the judge
+    of whether it finished. A count that cannot be read yields no warning rather than a false one.
+    """
+    out = []
+    try:
+        cfgs = {str(r.get("carrier_id")): r for r in
+                ((client.schema("commcalc").table("payable_source_map").select("*")
+                  .eq("org_id", org_id).eq("is_active", True).execute().data) or [])}
+    except Exception:
+        return out
+    for pc in (built.get("per_carrier") or []):
+        if not isinstance(pc, dict) or pc.get("error") is not None or not isinstance(pc.get("rows"), int):
+            continue
+        cfg = cfgs.get(str(pc.get("carrier_id")))
+        if not cfg:
+            continue
+        want = source_population(client, org_id, cfg)
+        if want is None or pc["rows"] >= want:
+            continue
+        out.append(f"{cfg.get('label') or pc.get('carrier_id')}: the rebuild wrote {pc['rows']:,} rows but "
+                   f"{want:,} rows in {cfg.get('source_table')} qualify — the build did not finish, so the "
+                   f"figures for this carrier are incomplete. Do not read them as a smaller balance.")
+    return out
+
+
 def refresh(client, org_id, carrier_id=None):
     """Rebuild the payable ledger (all carriers, or one) and the flags that read it. THE one composition of a
     rebuild — the endpoint and the post-landing hook both arrive here."""
@@ -60,6 +109,7 @@ def refresh(client, org_id, carrier_id=None):
     for pc in (out.get("per_carrier") or []):
         if isinstance(pc, dict) and pc.get("error"):
             warnings.append(f"{pc.get('label') or pc.get('carrier_id')}: {pc['error']}")
+    warnings += shortfall_warnings(client, org_id, out)
     try:
         out["flags_written"] = engine.sync_payable_flags(client, org_id)
     except Exception as e:

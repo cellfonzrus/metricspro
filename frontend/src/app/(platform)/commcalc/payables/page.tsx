@@ -89,6 +89,11 @@ function PayablesPageBody() {
   // could not read. Silence here is what let a mis-declared cost source write 2,923 devices with no
   // price that looked exactly like a carrier nobody had configured (§COMMCALC-29).
   const [warns, setWarns] = useState<string[]>([])
+  // WHEN THIS LEDGER LAST REBUILT ITSELF (index §COMMCALC-41). The ledger is rebuilt by the post-landing
+  // hook now, so the question a tenant used to answer by pressing the button — "is what I am looking at
+  // current?" — is answered on the page instead. One sentence, from the server's own one home: this screen
+  // composes no wording of its own and makes no judgement about freshness.
+  const [auto, setAuto] = useState<{ state?: string; tone?: string; sentence?: string } | null>(null)
   // WHICH DAYS THE SERVER ACTUALLY MEASURED. The default (today -> +3 days) is computed by the
   // endpoint and returned, so the pickers show what was applied instead of this page holding a
   // second copy of the default that could drift from it (§COMMCALC-32).
@@ -161,6 +166,16 @@ function PayablesPageBody() {
   useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, owedStore, filt.period, filt.periodTo, marketKey, allDates])
   useEffect(() => { if (tab === 'map') loadMap() }, [tab])
 
+  const loadAuto = useCallback(async () => {
+    try {
+      const r = await api(`/api/v1/payables/auto-build`)
+      setAuto(r?.auto || null)
+    } catch {
+      setAuto(null)          // the page works without it; freshness is never guessed from the client
+    }
+  }, [])
+  useEffect(() => { loadAuto() }, [loadAuto])
+
   async function rebuild() {
     setBusy(true); setMsg('Rebuilding ledger… (may take a minute for a full rebuild)')
     try {
@@ -171,6 +186,7 @@ function PayablesPageBody() {
         Object.entries(sc).map(([k, v]) => `${v} ${k}`).join(', ') +
         (r.flags_written != null ? ` · ${r.flags_written} discrepancy flags` : ''))
       if (tab === 'payables') loadPayables(); else if (tab === 'forecast') loadForecast(); else loadOwed()
+      loadAuto()
     } catch (e: any) { setWarns([]); setMsg('Rebuild error (it may still be completing server-side): ' + e.message) }
     setBusy(false)
   }
@@ -386,6 +402,16 @@ function PayablesPageBody() {
             style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)', background: allDates ? 'var(--accent, var(--c-bg-2563eb))' : 'var(--surface)', color: allDates ? 'var(--c-fg-ffffff)' : 'var(--text)', cursor: 'pointer', fontSize: 12 }}>
             {allDates ? '✓ All dates' : 'All dates'}
           </button>
+        </div>
+      )}
+      {auto?.sentence && (
+        <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 8, fontSize: 13,
+          background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <strong style={{ fontWeight: 600 }}>
+            {auto.tone === 'error' ? '\u26a0 This ledger updates itself, and the last attempt did not finish.'
+              : 'This ledger updates itself.'}
+          </strong>{' '}{auto.sentence}{' '}
+          <span style={{ opacity: 0.7 }}>The Rebuild button is only there if you want it rebuilt right now.</span>
         </div>
       )}
       {msg && <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, background: 'var(--surface)', border: '1px solid var(--border)', fontSize: 13 }}>{msg}</div>}

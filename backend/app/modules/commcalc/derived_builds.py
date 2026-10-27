@@ -103,18 +103,50 @@ BUILDS = (
     },
 )
 
-# Snapshot builders REVIEWED and deliberately NOT registered, each with the reason. The lock discovers every
-# delete-then-insert snapshot build under backend/app and fails on one that is in neither list, so the day one
-# of these starts answering a question a tenant waits on, it is RED until it is wired or re-excused.
-EXCUSED_BUILDS = (
-    ("app/modules/pos/sales_from_reports.py", "rebuild",
+# EVERY MANUAL REBUILD DOOR IN THE PLATFORM, classified. The lock discovers each `@router.post`/`put` whose
+# path contains rebuild / recalc / recompute / rerun — that IS the owner's question, stated as code: which
+# buttons does a tenant have to know when to press? Each must be a registered build's `endpoint` above, or be
+# excused here with its reason. A new one cannot ship unclassified.
+EXCUSED_DOORS = (
+    ("POST /pos/sales-from-reports/rebuild",
      "already live: the intake commit calls `_intake_pos_rebuild_after_landing` for the stores and dates it "
-     "landed, so this snapshot is refreshed by its own landing and a second trigger would double it"),
+     "landed, so this snapshot refreshes on its own landing and a second trigger would run it twice"),
+    ("POST /commcalc/recompute-rep",
+     "ONE REP inside the registered `commission` build — a narrower manual action on a build that is already "
+     "live, not a second build. The whole-period run it narrows is `POST /commcalc/calculate`"),
+    ("POST /vision/behavior/recompute",
+     "the vision module's own behaviour scoring over camera events, not a figure derived from a landed feed; "
+     "no upload makes it stale"),
+)
+
+# Snapshot builders REVIEWED and deliberately NOT registered, each with the reason — the write side of the
+# same question. `harness_derived_build_lock.py` requires every entry to still exist, so a stale excuse is RED.
+EXCUSED_BUILDS = (
+    ("app/modules/asset/router.py", "process_asset_ledger_bytes",
+     "a LANDING of asset_ledger (staging swap, mig 300) — it is this registry's main input, and it calls the "
+     "hook; treating it as a build would have it rebuild itself"),
+    ("app/modules/asset/router.py", "_stage_and_swap_ledger",
+     "the staging swap INSIDE that landing, not a build derived from one"),
     ("app/modules/commcalc/router.py", "_restore_rows",
      "puts a snapshot BACK after a failed insert — nothing landed, so nothing derived from it changed"),
-    ("app/modules/asset/router.py", "_stage_and_swap_ledger",
-     "this IS a landing of `asset_ledger` (the staging swap behind process_asset_ledger_bytes), not a build "
-     "derived from one; it fires the hook through its caller, which is an auto_calc lander"),
+)
+
+# SAME CLASS, NOT WIRED IN THIS PR — reported rather than silently left out (the house rule: find the siblings
+# and fix them OR excuse them explicitly). Each rebuilds a derived snapshot from landed data and still waits
+# for somebody to press something. The lock pins the COUNT, so this list may only shrink.
+#
+# Why not now: every one of them writes `commcalc.flags`, the discrepancy-flag table several modules share, so
+# making them live means deciding which feed landing owns each flag family — a question about the flag
+# registry, not about this queue. Wiring them blind would queue a flag sweep after every unrelated upload.
+UNWIRED_SNAPSHOTS = (
+    ("app/modules/account/recon.py", "sync_flags",
+     "flags", "the device-reimbursement / sales recon flag sweep, on three endpoints"),
+    ("app/modules/asset/invoice_due.py", "_sync_invoice_due_flags",
+     "flags", "the invoice-due flag sweep, on its own endpoint"),
+    ("app/modules/asset/router.py", "sync_inventory_flags",
+     "flags", "the inventory flag sweep — no caller at all in backend/app today"),
+    ("app/modules/asset/router.py", "_sync_hotsheet_flags",
+     "flags", "the hotsheet flag sweep, on its own endpoint"),
 )
 
 
