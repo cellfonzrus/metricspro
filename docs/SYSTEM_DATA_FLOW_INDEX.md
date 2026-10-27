@@ -160,6 +160,7 @@ Primary code homes:
 | COMMCALC-37 | **A report is its page AND its filters, and an unfiltered export is refused** | Fourteen back-office reports were asked for "by the day with all regular filters we have been using", one of them "in detail and pulled for every item" — and the pull loop reached each report's page and pressed Export without ever setting a date, a class, a detail toggle, or pressing Run. What question does a page's default answer, and what does a landed row look like when it answers a different question from the one that was asked? |
 | COMMCALC-38 | **What a supplier billed us has a supplier-neutral home, and the invoice feed ships with its door** | "i want to pull in invoices from ups and then compare to the sales reports to make sure every single shipment is being paid for and cash collected by the sales reps" — and the login row he had already made sat on a processor nothing dispatches, so Run now stamped "not wired yet" and stopped. Which part of "a supplier invoice" is a universal fact, which part is one distributor's portal, and what does a second supplier's invoices do to a table whose every reader assumes the first? |
 | COMMCALC-39 | **A declaration is read off the page, and a declared report resolves to itself** | Fourteen reports were asked for by name, and every one of them would have resolved to NOTHING: the pull passed a source's own declaration back to its adapter as a FILTER, squashed under a different rule from the one the reports were keyed by, so a fully configured source read as "No reports are enabled". And the filters those reports need are behind framework-generated control ids nobody can guess. Where should a declaration come from, and what does one argument meaning two things to two callers cost? |
+| COMMCALC-40 | **The password is sometimes on the next page — one home for a login's first step** | "If there is no password on the first page then click to continue with username and then enter password on thr next page" — said after a two-page sign-in was reported as a form that renders unexpectedly, in a message naming a different vendor's portal. Three paths answered "what does this page want first", two by spelling one vendor's element ids and one not at all. What is a login's first step a fact ABOUT, and what does a page that asks for something we do not hold deserve to be told? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26094,6 +26095,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-37 | commcalc |
 | COMMCALC-38 | commcalc |
 | COMMCALC-39 | commcalc |
+| COMMCALC-40 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -34564,6 +34566,100 @@ capture writes for), §COMMCALC-38 (the one normalizer and the invoice feed). Ne
 §COMMCALC-24 (which process may answer), §COMMCALC-27 / §COMMCALC-31 (the operator's input leads the
 tick, which is why a capture is a queued command and not a second thread), §COMMCALC-13 (what a
 finished session leaves on the row).
+
+## §COMMCALC-40. THE PASSWORD IS SOMETIMES ON THE NEXT PAGE — one home for a login's first step (owner ask 2026-10-27)
+
+Owner, verbatim: *"If there is no password on the first page then click to continue with username and
+then enter password on thr next page"* — said after his UPS billing login reported *"Could not find
+the password field on the VidaPay login page"* about a `ups.com` sign-in page.
+
+### COMMCALC-40.1 THE CLASS, not the instance
+
+"The password is on a later page" is not a fact about one vendor's SSO. It is a SHAPE of login form:
+the page asks for something first — an account or company id, or just the user id — and reveals the
+password once that step is taken. The platform had answered that question three different ways:
+
+| path | what it did |
+|------|-------------|
+| `live_login._companyid_step` | filled `#companyId`, pressed `#btnSubmit`, waited for `#password` |
+| `vidapay_sweep.begin_login_b2bsoft` | filled `#companyId`, looked for `#username`, pressed `#btnSubmit` |
+| `vidapay_sweep.begin_login` — **every other portal** | did not answer it at all: no password field found, so *"the form may render differently than expected"* |
+
+Two copies of one vendor's element ids, and nothing for the generic path. So the shape worked at
+exactly one portal, and the next portal with the same shape read as a broken form — which is what the
+owner hit. Fixing it for UPS alone would have left the third one broken, so the MECHANISM is fixed.
+
+### COMMCALC-40.2 THE ONE HOME
+
+`commcalc/login_progressive.py` decides, from a page's OWN controls and OWN words, what its first step
+is. It names no portal, no tenant and no element id (RULE TWO).
+
+| fact | its one home |
+|------|--------------|
+| what this control says it is for | `control_words` + `field_purpose` — label, then name, then id, longest phrase first; a `password` KIND outranks any wording |
+| which control advances this form | `press_purpose` — `step` ("continue", "next") outranks `final` ("sign in", "submit"); everything in `NEVER_WORDS` (forgot / register / cancel / remember / language) is refused before its other words are read |
+| is the password here at all | `has_password` |
+| what to do about it | `plan_first_step(controls, have, declared)` — **PURE**: `{needed, fill[], press, why}` |
+| carrying that out on a live page | `advance_past_first_step(page, have, declared)` — THE one driver, per frame, never raises |
+
+**REUSED, not rebuilt** (the duplicate gate): `portal_report_pull.read_page_controls` is the page
+reader — already shipped for report calibration (§COMMCALC-39), already returning every visible input,
+button and link with its id, name, printed words and the input's own `type` as `kind`, and **unchanged
+by this PR**. `portal_report_pull.control_selector` is the selector rule. `report_columns.norm`
+(§COMMCALC-38) is the spelling rule — a login matcher with its own normalizer is the store-code trap
+again, in the one place where getting it wrong locks an account out.
+
+**Three rules, each because its opposite is worse.** A field we hold no value for is never filled: an
+empty required box comes back as "rejected", which reads as wrong credentials and sends the operator
+to re-type a password that was never the problem. A page that asks for something we cannot supply is
+never submitted empty, for the same reason — but a page with no text box at all and a Continue control
+IS pressed, because that is an interstitial and pressing it is the only way forward. And a step control
+outranks the final submit, because pressing "Sign in" before the password exists submits a form with no
+password in it.
+
+**A portal whose markup explains nothing is CONFIG, not a branch**:
+`data_source.portal_calibration["login"]` = `{"fields": {...}, "press": "...", "field_words": {...}}`.
+A declared selector wins over anything read off the page.
+
+### COMMCALC-40.3 THE COPY NAMES THE PORTAL IT ACTUALLY TRIED
+
+`vidapay_sweep.begin_login` and `complete_2fa` now take `label=` and dereference `_portal_label`, like
+their b2bsoft twins have since §12a.2. `router._connector_label` passes the registry label (mig 1014)
+at **both** call-site pairs — the login/verify endpoints and `login_unattended` — so the branch that
+used to hand the generic pair nothing is gone. Three sentences stopped naming the wrong vendor: the
+missing-password-field one, the anti-automation one, and the rejected-credentials one (which also
+stopped naming three credentials at a portal that asked for two).
+
+Excused, with the reason: `run_vidapay_sweep`'s session-expired sentence and the `#companyId` session
+classifier are that vendor's own sweep, dispatched only for its own processor.
+
+### COMMCALC-40.4 Locked
+
+`backend/harness_login_progressive.py` — **89 checks**, DB-free and browser-free, over fake pages of the
+exact dicts `read_page_controls` returns (this platform can reach neither portal from CI, and a
+mechanism that can only be tested against a live vendor is one nobody will re-test). It proves the
+single-page, two-page, access-code, interstitial, opaque and declared shapes, and the driver against a
+fake page and a fake frame. It FAILS the build if a login path spells an element id again, if
+`live_login`'s own copy comes back, if a fourth copy of the decision appears, if either login family
+loses its `label=`, or if the `#companyId` / `#btnSubmit` / `#username` / `#password` counts in
+`vidapay_sweep` GROW (a ratchet pinned at main 69b8bfe0 — 5 / 2 / 3 / 4, re-pinned lower when they
+shrink, never higher). Nine armed negative controls, including the old press-whatever-submits rule.
+
+`harness_connector_scope_lock.py`'s router pin was WIDENED to both login families rather than relaxed.
+
+### COMMCALC-40.5 Not built
+
+Nothing reads `portal_calibration["login"]` on a screen yet — a tenant whose page explains nothing has
+the declaration written for it by whoever drives the live login, like §COMMCALC-39's capture. And the
+b2bsoft variant keeps its own ids as a fallback *after* the mechanism has answered: removing them needs
+a session at that portal, which nothing here has.
+
+### COMMCALC-40.6 Cross-references
+
+Same home, other axes: §COMMCALC-39 (the page reader this dereferences), §COMMCALC-38 (the spelling
+rule), §12a.2 (the registry label the copy names). Neighbours: §COMMCALC-24 (which process may answer),
+§COMMCALC-11 (a human check gates the submit — a login this step reaches may still hand over to a
+human), §COMMCALC-10 (whose login server a retry goes to).
 
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
 

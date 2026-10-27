@@ -240,9 +240,16 @@ BACKEND_RULES = [
       '(r.get("connector_scope") or {}).get("applies", True)']),
     ("commcalc/router.py", "the connector-health scan reports a not-applicable connector as unmonitored, never alerted",
      ['if _sc.get("applies") is False:', '"kind": "unmonitored"', ':not_applicable"']),
-    ("commcalc/router.py", "the inventory stub receives the registry row; the b2bsoft login family receives the label",
+    # WIDENED 2026-10-27 (§COMMCALC-40): the label used to be passed to the b2bsoft login family ONLY,
+    # so every other portal — the path `vp.begin_login` / `vp.complete_2fa` serves — was described to
+    # its operator by one vendor's name. Both families now take `label=`, which is why the pinned
+    # strings are the partial's label argument rather than one function's name: a call site that hands
+    # EITHER family no label fails this lock and §K of harness_login_progressive.py.
+    ("commcalc/router.py", "the inventory stub receives the registry row; BOTH login families receive the label",
      ["connector=conn)", "label=_connector_label(sb(), org_id, src_row.get(\"processor\"))",
-      "_functools.partial(vp.begin_login_b2bsoft, label=", "_functools.partial(vp.complete_2fa_b2bsoft, label=",
+      "else vp.begin_login, label=", "else vp.complete_2fa, label=",
+      "vp.begin_login_b2bsoft if is_b2b else vp.begin_login",
+      "vp.complete_2fa_b2bsoft if is_b2b else vp.complete_2fa",
       "vp.pull_b2bsoft_on_page(page, label="]),
     ("commcalc/import_audit.py", "p_connectors and p_portal_sessions skip a connector that does not apply (context, never a read)",
      ['_scope_ctx = (ctx or {}).get("connector_scope")', "if not _applies(proc):", "_cr.scope_for(_scope_ctx, r.get(\"processor\"))"]),

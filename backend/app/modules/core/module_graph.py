@@ -518,6 +518,10 @@ FACTS: dict[str, dict] = {
             # the same cold restore, which is the whole point of the extraction: a new portal feed is
             # four functions, not a copied sweep
             'app/modules/commcalc/supplier_invoice_sweep.py': ('prp',),
+            # the login step (§COMMCALC-40) reuses this loop's PAGE READER and SELECTOR RULE whole —
+            # "what controls does this page offer" is one question whether the page is a report page
+            # or a sign-in page, and a second reader in the login path is the duplicate defect
+            'app/modules/commcalc/login_progressive.py': ('prp',),
             # the live session's dispatch and the scheduled cron both ask the registry
             'app/modules/commcalc/router.py': ('_prp',),
         },
@@ -550,6 +554,33 @@ FACTS: dict[str, dict] = {
             # words that say what it is for, and a label compared under one rule here while a header
             # is compared under another there is the drift this home exists to prevent
             'app/modules/commcalc/portal_report_pull.py': ('norm',),
+            # a login page's controls are compared against the words that say what they take
+            # (COMMCALC-40) — the same rule that compares a report header, for the same reason
+            'app/modules/commcalc/login_progressive.py': ('rc',),
+        },
+    },
+    # ── §COMMCALC-40 — what a login page wants before it will show the password ──────────────────
+    'login_first_step': {
+        "question": 'Is the password on this login page, and if not, what does the page want first? '
+                    'Every login driver must answer it before typing anything, and three of them '
+                    'answered it differently: live_login._companyid_step and '
+                    'vidapay_sweep.begin_login_b2bsoft each spelled ONE vendor\'s element ids '
+                    '(#companyId / #btnSubmit / #username), and the GENERIC begin_login — the path '
+                    'every other portal signs in through — did not answer it at all, reporting a '
+                    'two-page sign-in as a form that renders unexpectedly (the owner\'s UPS billing '
+                    'login, 2026-10-27). "The password is on a later page" is a SHAPE of login form, '
+                    'not a fact about a vendor, so the decision is read off the page\'s own controls '
+                    'and own words here, and a portal whose markup explains nothing declares its '
+                    'fields in portal_calibration["login"] (RULE TWO: config, never code).',
+        "homes": ('app/modules/commcalc/login_progressive.py',),
+        "index": ('COMMCALC-40',),
+        "locks": ('harness_login_progressive.py',),
+        # SNAPSHOT — written BY HAND (§50). The planner is PURE and takes read_page_controls' output,
+        # so the lock can prove every page shape without a browser; the driver is the only caller of
+        # a page object, and both login paths plus the live session reach it rather than copying it.
+        "callers": {
+            'app/modules/commcalc/live_login.py': ('lp',),
+            'app/modules/commcalc/vidapay_sweep.py': ('_lp',),
         },
     },
     # ── §COMMCALC-38 — what a supplier billed us ─────────────────────────────────────────────────
