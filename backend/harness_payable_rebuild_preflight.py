@@ -318,22 +318,35 @@ check("D2 …and the per-carrier entry says the rows are intact, so nobody reads
 check("D3 a blocked carrier is NOT counted as rebuilt — `carriers` and `written` stay at zero",
       RES["carriers"] == 0 and RES["written"] == 0, (RES["carriers"], RES["written"]))
 
-RCODE = open(ROUTER_PY, encoding="utf-8").read()
+# WHICH FILE OWNS THE ORDER. The 409 and the flag refresh may sit in the router or, once the rebuild
+# is driven by the post-landing hook, in `payables/refresh.py` — whichever file holds BOTH steps owns
+# the ordering claim, so this reads that one. Matching the CALL form `sync_payable_flags(` and not
+# the bare name is deliberate: both files discuss the flag sync in prose above the code, and a
+# comment must not be able to satisfy — or defeat — an ordering claim. (Hardening contributed by the
+# "Make payables ledger update live" thread, which moved the composition into refresh.py.)
+REFRESH_PY = os.path.join(ROOT, "app", "modules", "payables", "refresh.py")
+_ORDER_OWNER = ROUTER_PY
+if os.path.exists(REFRESH_PY):
+    _t = open(REFRESH_PY, encoding="utf-8").read()
+    if "sync_payable_flags(" in _t and 'blocked' in _t:
+        _ORDER_OWNER = REFRESH_PY
+RCODE = open(_ORDER_OWNER, encoding="utf-8").read()
+# The guard as each file spells it; -1 (never satisfied) when neither form is present.
+_GUARD_AT = max(RCODE.find('if out.get("blocked")'), RCODE.find('if built.get("blocked")'))
 check("D4 the endpoint turns a block into a NON-2xx — the other half of the defect was a 200 "
       "describing an emptied table, and a screen must not be able to render 'rebuilt' over it",
       'if built.get("blocked")' in RCODE and "HTTPException(409" in RCODE)
-FCODE = open(REFRESH_PY, encoding="utf-8").read() if os.path.exists(REFRESH_PY) else ""
-check("D5 …and the flags are never refreshed AFTER a block, so a refused rebuild cannot go on to "
-      "restate the discrepancy flags off a ledger it did not write. The two steps live in "
-      "payables/refresh.py (§COMMCALC-41's one home), so the block must return before the sync there, "
-      "and the router's 409 must come before any flag call it still makes",
-      # The CALL form, not the bare name: both files discuss the flag sync in prose above the code,
-      # and a comment must not be able to satisfy or defeat an ordering claim.
-      (('if out.get("blocked")' in FCODE and "sync_payable_flags(" in FCODE
-        and FCODE.index('if out.get("blocked")') < FCODE.index("sync_payable_flags("))
-       or ("sync_payable_flags(" in RCODE
-           and RCODE.index('if built.get("blocked")') < RCODE.index("sync_payable_flags("))),
-      "neither refresh.py nor router.py orders the block before the flag refresh")
+check("D5 …and it does so BEFORE the flags refresh, so a refused rebuild cannot go on to restate "
+      "the discrepancy flags off a ledger it did not write",
+      # Two deliberate choices, both of them about what can satisfy or defeat the claim:
+      #  * `.find`, not `.index`: a missing marker must make this check FAIL and say so, not raise
+      #    and take the whole harness down with it — a lock that crashes reports nothing.
+      #  * the GUARD form (`if ….get("blocked")`), not the bare word `blocked`: refresh.py explains
+      #    the block in its module docstring, line 20, long before the sync at line 145, so the bare
+      #    word is satisfied by prose and the ordering claim would hold even with the guard deleted.
+      0 <= _GUARD_AT < (RCODE.find("sync_payable_flags(")
+                        if "sync_payable_flags(" in RCODE else -1),
+      (_GUARD_AT, RCODE.find("sync_payable_flags("), os.path.basename(_ORDER_OWNER)))
 
 
 # ══ §E — THE OLD BEHAVIOUR CANNOT COME BACK ══════════════════════════════════════════════════════
@@ -383,6 +396,32 @@ check("E4 THE RATCHET: inside the build, the preflight call appears BEFORE the s
       "single line of source order that the 11,000 rows depended on",
       body.index("refuse_if_unwritable") < body.index("_sweep_carrier("),
       (body.index("refuse_if_unwritable"), body.index("_sweep_carrier(")))
+
+section("§F  THE SOURCE IS READ IN FULL, AND THE READ CANNOT GO BACK TO CUTTING ITS OWN PAGES")
+
+ENGINE_SRC = SRC
+check("F1 the build dereferences the §CORE-05 one home for a paged read (`core/feed_read`) — a "
+      "rebuild that deletes what it cannot replace and one that replaces it from half the source "
+      "are the same defect on two sides",
+      "from app.modules.core import feed_read" in ENGINE_SRC
+      and "_feed_read.read_all(" in ENGINE_SRC)
+
+check("F2 …and `_build_one_carrier` is the caller that does it, not merely some other function in "
+      "the file",
+      "_feed_read.read_all(" in body, body.count("_feed_read.read_all("))
+
+check("F3 NOT ONE hand-cut page loop is left in the engine — `.range(page * PAGE` was the shape "
+      "that served some source rows twice and never served others, and it was in THREE places",
+      ".range(page * PAGE" not in ENGINE_SRC)
+
+check("F4 …and no page ceiling survives it: an 80-page backstop in the build and a 40-page one in "
+      "each store-resolution read each silently answered 'that is all there was'",
+      "page > 80" not in ENGINE_SRC and "page <= 40" not in ENGINE_SRC)
+
+check("F5 THE RATCHET: the source is read BEFORE the sweep, so an unreadable feed leaves the old "
+      "snapshot standing — `read_all` raises rather than returning a short list, and it raises here",
+      body.index("_feed_read.read_all(") < body.index("_sweep_carrier("),
+      (body.index("_feed_read.read_all("), body.index("_sweep_carrier(")))
 
 print()
 print("=" * 78)

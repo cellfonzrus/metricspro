@@ -38780,14 +38780,16 @@ restate the discrepancy flags off a ledger it did not write.
 
 ### PAYABLES-01.4 The lock
 
-`backend/harness_payable_rebuild_preflight.py` — **27 checks, stdlib-only, DB-free**. §A
+`backend/harness_payable_rebuild_preflight.py` — **32 checks, stdlib-only, DB-free**. §A
 `write_shape` as pure arithmetic, including that an unknown column set refuses nothing and a sparse
 sample cannot cause a false refusal; §B the ORDER, driven through the **real** `_build_one_carrier`
 against a recording client (only `_rows_for_page` is stubbed) — on a refusal **not one delete is
 issued**, and the sweep happens once per carrier, not once per page; §C the regression in the live
 defect's exact shape, a ledger with no `rebate_basis`; §D the refusal reaching a reader and the 409;
 §E the AST ratchet — the delete has one home, the guard is WIRED rather than merely written (§19.18),
-and inside the build the preflight call appears before the sweep call.
+and inside the build the preflight call appears before the sweep call; §F the read side (see
+PAYABLES-01.6) — the one home is dereferenced, no hand-cut page loop or page ceiling survives in the
+engine, and the source is read before the sweep.
 
 Restoring the old order fails B1 and B2, verified by reverting it and re-running.
 
@@ -38798,3 +38800,25 @@ refuse a write), §19.18 (a registry written and never dereferenced), §19.41 (`
 landed, not what the status word says), §COMMCALC-40 (a verdict discarded where a machine reads it),
 §COMMCALC-32 (`ledger_status`, the other gate on what reaches this ledger), §COMMCALC-34
 (`owed_read`, the one read over what this build writes).
+
+### PAYABLES-01.6 THE SAME DEFECT ON THE READ SIDE — a rebuild cannot replace from half the source
+
+Found while answering the obvious question about the rebuild: the house ledger went from 11,000 rows
+to 35,346, so was it double-counting? **No — measured 2026-10-27, `commcalc.asset_ledger` holds
+exactly 35,346 house rows with `owed_to_vip > 0`, against 35,346 ledger rows and 33,384 distinct
+`(imei, carrier_id)` keys whose only repeats are the feed's three non-device placeholders (`''`,
+`PROCESSING FEE`, `SHIPPING`). One row per source row.** The old number was the defect: **11,000 is
+eleven exact pages of 1,000**, a build that covered a third of its source and reported success.
+
+The cause is §CORE-05 in this engine. `_build_one_carrier` cut its own pages with
+`.range(page * PAGE, …)` and **no `.order(...)`** — and Postgres promises no row order without one,
+so such a walk serves some rows twice, never serves others, and still ends on a short page. Two
+sibling reads inside `ma_store_resolution` did the same, each under a 40-page ceiling, and the build
+loop under an 80-page one: the §19.48 shape, a read that is quietly wrong.
+
+All three now dereference **`app/modules/core/feed_read.read_all`** (§CORE-05), which pages on a
+stable key, has no ceiling that truncates in silence, and raises `IncompleteRead` rather than
+returning a partial feed. Placed where it is, that raise reaches the caller **before the sweep**, so
+an unreadable source leaves the old snapshot standing — the same guarantee as the write preflight,
+on the other side: *a rebuild never deletes what it cannot replace, and it cannot establish it can
+replace from half the source.* `harness_feed_read_lock.py`'s unordered-read ratchet drops 98 → 95.
