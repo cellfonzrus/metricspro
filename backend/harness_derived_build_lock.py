@@ -207,8 +207,11 @@ def run(tree=None):
     stale += [(p, fn) for (p, fn, _t, _w) in (env.get("UNWIRED_SNAPSHOTS") or ())
               if p not in tree or fn_src(tree[p], fn) is None]
     check("A4 no excused or pinned entry is stale (each function still exists)", not stale, stale)
-    check("A5 the unwired-sibling pin may only SHRINK — a new snapshot build cannot hide in it",
-          len(unwired) <= 4, sorted(unwired))
+    # EXACT, not "at most": a pin that only caps the count lets an entry be DELETED without the sibling it
+    # names being wired, which is the same silence the pin exists to stop. Lowering this number is the
+    # deliberate act of wiring one of them, in the PR that wires it.
+    check("A5 the unwired-sibling pin is exact — a new snapshot build cannot hide in it, and a sibling "
+          "cannot be dropped from it without being wired", len(unwired) == 4, sorted(unwired))
     check("A6 no function is both registered and excused", not (excused & registered), excused & registered)
     # The registered runners, the excused builds and the pinned siblings are all real delete-then-insert
     # snapshot writers: if one stopped being one, this registry would be describing something that no longer
@@ -272,6 +275,10 @@ def run(tree=None):
     silent = []
     for path, src in sorted(tree.items()):
         if path in (REG, AUTO) or path.endswith("refresh.py"):
+            continue
+        # CHEAP PREFILTER, and it cannot hide a violation: a function can only write a table whose name
+        # appears as a literal somewhere in its own file, and `table_calls` reads literals only.
+        if not any(t in src for t in inputs):
             continue
         for name, node in functions(src):
             wrote = table_calls(node, {"insert", "upsert"}) & inputs
