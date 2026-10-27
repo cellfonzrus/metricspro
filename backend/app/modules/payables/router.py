@@ -158,12 +158,29 @@ def rebuild(carrier_id: str = "", org_id: str = ORG_ID):
     Delete+insert per carrier. May run long on a full Boost rebuild; if the browser 502s it still
     completes server-side (like the commission recalc) — poll /payables/payables afterwards."""
     client = sb()
-    built = engine.build_ledger(client, org_id, carrier_id or None)
-    try:
-        built["flags_written"] = engine.sync_payable_flags(client, org_id)
-    except Exception as e:
-        built["flags_error"] = str(e)[:200]
+    # ONE COMPOSITION OF A REBUILD (§COMMCALC-41.2). The post-landing hook rebuilds this ledger too, and a
+    # button that rebuilt it differently from the hook would be two answers to one question — so both arrive
+    # at `payables/refresh.refresh` and neither knows what a rebuild is made of.
+    from app.modules.payables import refresh as _refresh
+    built = _refresh.refresh(client, org_id, carrier_id or None)
+    built["auto"] = _build_state(client, org_id)
     return built
+
+
+@router.get("/auto-build")
+def auto_build_state(org_id: str = ORG_ID):
+    """When this ledger last rebuilt itself, and whether a rebuild is queued — so the screen can say so
+    instead of leaving a tenant to guess whether the button needs pressing (owner 2026-10-27)."""
+    return {"auto": _build_state(sb(), org_id)}
+
+
+def _build_state(client, org_id):
+    """The hook's own answer for this build, read through its one home. Never raises into a response."""
+    try:
+        from app.modules.commcalc import derived_builds as _builds
+        return _builds.read_view(client, org_id, "payable_ledger")
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 # ── Part A — forecast (phones only) ───────────────────────────────────────────

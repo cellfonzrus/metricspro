@@ -161,6 +161,7 @@ Primary code homes:
 | COMMCALC-38 | **What a supplier billed us has a supplier-neutral home, and the invoice feed ships with its door** | "i want to pull in invoices from ups and then compare to the sales reports to make sure every single shipment is being paid for and cash collected by the sales reps" — and the login row he had already made sat on a processor nothing dispatches, so Run now stamped "not wired yet" and stopped. Which part of "a supplier invoice" is a universal fact, which part is one distributor's portal, and what does a second supplier's invoices do to a table whose every reader assumes the first? |
 | COMMCALC-39 | **A declaration is read off the page, and a declared report resolves to itself** | Fourteen reports were asked for by name, and every one of them would have resolved to NOTHING: the pull passed a source's own declaration back to its adapter as a FILTER, squashed under a different rule from the one the reports were keyed by, so a fully configured source read as "No reports are enabled". And the filters those reports need are behind framework-generated control ids nobody can guess. Where should a declaration come from, and what does one argument meaning two things to two callers cost? |
 | COMMCALC-40 | **The status word is the sentence's own verdict, never a literal** | The sweep said "⚠ PARTIAL — a column stopped arriving" in one column and stored `ok` in the column next to it, so every screen that colours on the word showed green over October 2026's missing KPI counts for ten days. What does a verdict cost when it is computed as prose and then discarded at the one place a machine reads it? |
+| COMMCALC-41 | **A derived snapshot rebuilds itself when its inputs land** | "The rebuild ledger or recalculate should be real time all across, then tenant would not know when to run" — and the payable ledger had last been built 53 days earlier while the feed it is built from was four days old, so every "what is owed next week" surface read EMPTY and nothing on the page said why. Which derived things are live, which are on a button nobody knows to press, and what is a tenant doing scheduling a rebuild at all? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26110,6 +26111,7 @@ status word rather than a blank that reads as nil.
 | CORE-17 | core |
 | CORE-18 | core |
 | COMMCALC-40 | commcalc |
+| COMMCALC-41 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -38573,3 +38575,122 @@ restoring `_dlar_set_status(client, org_id, 'ok'` fails the build.
 Same class: §CORE-18 (the other half of this silence — the diagnostic's answer truncated out of the
 same two columns), §COMMCALC-16 (the diagnostic itself), §19.21 (a status that reports what was pulled
 rather than what was written), §19.41 (`success` is what landed, not what the status word says).
+
+## §COMMCALC-41. A DERIVED SNAPSHOT REBUILDS ITSELF WHEN ITS INPUTS LAND — no tenant is the scheduler (owner ask 2026-10-27)
+
+Owner, verbatim: *"The rebuild ledger or recalculate should be real time all across, then tenant would
+not know when to run, so the data should be live update as soon as something changes."*
+
+**Module:** `backend/app/modules/commcalc/derived_builds.py` (THE registry + the (org, build) queue) ·
+`backend/app/modules/commcalc/auto_calc.py` (the ONE post-landing hook and the ONE poller, extended) ·
+`backend/app/modules/payables/refresh.py` · `backend/app/modules/recovery/refresh.py` (the two refresh
+one-homes) · `backend/app/modules/asset/router.py` (`process_asset_ledger_bytes` — the landing that was
+telling nobody)
+**Proof:** `backend/harness_derived_builds.py` — 56 checks, DB-free
+**Lock:** `backend/harness_derived_build_lock.py` — static, stdlib only, 7 negative controls
+**Migration:** `1100_derived_build_queue.sql` — one new table, surfaced for approval. **Unapplied costs
+liveness, never correctness**: without it the queue degrades to one per process and every button still
+works exactly as it does today.
+
+### COMMCALC-41.1 THE CLASS — one derived thing was live, and every other one was a button
+
+§6l already made the rep commission calculation live: a landing queues it, a debounce coalesces a burst
+of uploads into one run, one conditional UPDATE claims it, and **nobody presses Run Calculation**. Every
+*other* derived snapshot in this platform was left on a button, and a button is a scheduler that only
+works if the tenant knows the schedule.
+
+What that cost, measured against production on **2026-10-27**:
+
+| Fact | Measured |
+|---|---|
+| `commcalc.device_payable_ledger.built_at` (house / Boost) | **2026-09-04** |
+| `commcalc.asset_ledger` — the feed it is built FROM | uploaded **2026-10-23** |
+| Rows in the ledger due on or after that day | **0** of 11,000 dated |
+| What `/payables/owed-by-date`, `/payables/due`, `/asset/owed-weekly` and the Payables screen showed | an empty upcoming list |
+| What the screen said about it | **nothing** |
+
+**53 days stale, and the page read as "nothing is owed".** The feed was four days old. Nothing was
+broken, nothing was missing, and nobody had pressed ↻ Rebuild ledger — because nothing tells anyone to.
+
+**The instance is "the payable ledger is stale". The class is: a derived table's freshness is its own
+fact, and a tenant cannot be the scheduler for it.** So the fix is NOT a second hook for payables —
+that is exactly the patchwork the house forbids. It is a registry of derived builds plus the hook,
+the debounce, the claim and the poller that already exist.
+
+### COMMCALC-41.2 THE ONE HOMES
+
+| Question | The one home | Who reads it |
+|---|---|---|
+| Which stored snapshots are live, and what makes each stale? | `commcalc/derived_builds.BUILDS` — per build: its input tables **by identity from `data_lineage_registry`**, a resolver for the inputs that are DECLARED per carrier, its runner, and the manual door that stays | `auto_calc.landed` (it lists no build and no table of its own), the lock |
+| Has a landing made something stale, and when does it rebuild? | `auto_calc.landed` — unchanged as the ONE entry every lander calls; it now asks the registry as well as `is_calc_feed` | every lander |
+| What IS a rebuild of the payable ledger? | `payables/refresh.refresh` — `engine.build_ledger` + `engine.sync_payable_flags`, which is what the button always did | `POST /payables/rebuild` **and** the hook |
+| What IS a rebuild of the recovery ledger? | `recovery/refresh.refresh` — the build plus the `last_run_at` stamp | `POST /recovery/rebuild` **and** the hook |
+| Did it rebuild, and what does the screen say? | `derived_builds.record` / `.sentence` / `.view`, over `commcalc.derived_build_status` | `GET /payables/auto-build`, the rebuild response |
+
+**The button is not removed, and it is not a second answer.** Both callers arrive at the same refresh
+function, so a pressed rebuild and a live rebuild cannot be two different rebuilds — §D of the lock
+fails the build if the endpoint reaches the engine directly again.
+
+**Three registered builds:** `commission` (period-scoped, §6l's own path, registered so the list of
+live builds has one home), `payable_ledger`, `appeal_recovery`. A snapshot is **org-scoped**, not
+period-scoped, because "what we owe" is a point-in-time fact about the whole shelf and not September's
+figure — which is why it cannot ride `calc_status`'s `(org_id, period)` key and mig 1100 exists.
+
+**The landing that was telling nobody.** `asset_ledger` — the payable ledger's main input — lands
+through `asset/router.process_asset_ledger_bytes` (the manual Asset Lending upload **and** the VIP
+sweep both), and that function was listed in `auto_calc.EXCUSED` as *"not calculation input"*. True,
+and beside the point: it is the input of a different build. It now fires the hook with **no period at
+all**, which is the honest shape for a snapshot, and only the org-scoped builds are queued.
+
+### COMMCALC-41.3 DUPLICATE CHECK (the build gate)
+
+| Searched for | Found | Reused or excused |
+|---|---|---|
+| an existing home for "data landed for org X" | **`commcalc/auto_calc.py` (§6l)** | **EXTENDED, not sat beside.** Same hook, same debounce (`due_at` / `is_due` / `merge_landings` are IMPORTED), same claim shape, same poller, same `auto_calc_on_landing` switch — a tenant turns ONE thing off, not two |
+| a second place that could schedule a rebuild | none; the engine had no caller but its endpoint | the registry starts no thread and registers no cron — §E of the lock pins `derived_builds.run_due` to `auto_calc.run_due`'s single caller |
+| other derived snapshots with the same stale-button shape (**find the siblings**) | `commcalc.appeal_recovery` (`POST /recovery/rebuild`) — **registered here, same PR**; `pos.sales` (`sales_from_reports.rebuild`) — **already live** via `_intake_pos_rebuild_after_landing`, so excused with that reason | both stated in `EXCUSED_BUILDS` / `BUILDS` rather than left to a reader to notice |
+| a table name to put in the registry | `data_lineage_registry.ASSET_LEDGER` / `.PAYMENT_DETAIL` / `.DISTRIBUTOR_INVOICES` / `.MI_RESIDUAL` / `.COMMISSION_CALC_FEEDS` | dereferenced by identity; §F of the lock fails the build on a literal |
+| where a carrier's own feeds are declared | `commcalc.payable_source_map` | READ as the registry's `inputs_fn`, so declaring a new carrier changes what refreshes the ledger with **no code change** (RULE TWO) |
+
+Nothing new derives a figure here; this moves no money and changes no number. It changes **when** a
+number is rebuilt.
+
+### COMMCALC-41.4 WHAT A LANDING NOW DOES
+
+1. a lander writes its rows and calls `auto_calc.landed(…)` — exactly as before;
+2. the hook asks `is_calc_feed` (the commission calculation) **and** `derived_builds.stale_builds`
+   (every snapshot whose static or DECLARED inputs include that table);
+3. each answer is queued, coalesced to ONE row per key — `calc_status` for a month, mig 1100's
+   `derived_build_status` for a build;
+4. the existing poller claims each request once uploads have been quiet for the org's debounce window
+   (default 5 minutes, never later than 6 windows after the FIRST landing so a steady stream cannot
+   starve it) and runs it through the refresh one home;
+5. the outcome — built / built with warnings / refused / failed — is RECORDED with the one sentence an
+   operator reads. **A failed rebuild says the screen still shows the last good build**, and its tone is
+   `error`, so a screen that colours on tone cannot show green over a stale figure (§COMMCALC-40's
+   class, applied to a build).
+
+A **verdict is never read off a row count** (§COMMCALC-40): the exact shape that bit this platform on
+2026-10-27 — `HTTP 200 {"written": 0}` over a ledger whose rows had just been deleted — classifies as
+`failed`, pinned as §C3 of the proof.
+
+### COMMCALC-41.5 REPORTED, not fixed
+
+- **`build_ledger` is still delete-then-insert per carrier.** That is why `{"written": 0}` over an
+  emptied table was possible at all, and it is owned by the *Device Payable VidaPay T-CETRA empty*
+  thread, which is making it write-then-swap in its own PR. This PR deliberately does not touch it —
+  it makes the rebuild AUTOMATIC, which raises the stakes of that fix rather than performing it. Until
+  it lands, a live rebuild is exactly as safe as the button, no safer.
+- **Migration 1100 is not applied.** Until it is, the queue is per process: a landing in one worker is
+  rebuilt by that worker, and two workers receiving two landings could rebuild the same snapshot
+  concurrently. The durable claim is what makes that impossible, and it is one `create table`.
+- **`payable_source_map` declares `net_terms_days` NULL for Luxelink**, so 0 of its 4,495 payable rows
+  carry a due date whatever rebuilds them. Liveness does not create a date nobody declared
+  (§COMMCALC-34).
+
+### COMMCALC-41.6 Cross-references
+
+Same class: **§6l** (the hook this generalises), §COMMCALC-40 (the status word is the verdict),
+§COMMCALC-29 (a declared source that cannot be read is REPORTED — applied here to the registry's own
+declared-input read), §COMMCALC-34 (a billing cadence is declared, not inferred), §19.18 (writing a
+registry without wiring the callers to it is not a fix), §CORE-13 (a migration grants what it creates).

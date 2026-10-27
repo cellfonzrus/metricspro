@@ -26,6 +26,14 @@ on:
       - "backend/app/modules/recovery/engine.py"
       # the auto-calc-on-landing lock (index §6l) — every lander under backend/app, the index, the page, the CI
       - "backend/harness_auto_calc_lock.py"
+      # the derived-build lock (index §COMMCALC-41) — the registry, the two refresh one homes, the queue's
+      # migration; every writer and every snapshot build under backend/app is judged by the paths above
+      - "backend/harness_derived_build_lock.py"
+      - "backend/harness_derived_builds.py"
+      - "backend/app/modules/commcalc/derived_builds.py"
+      - "backend/app/modules/payables/refresh.py"
+      - "backend/app/modules/recovery/refresh.py"
+      - "database/migrations/1100_derived_build_queue.sql"
       - "docs/SYSTEM_DATA_FLOW_INDEX.md"
       - "database/migrations/1030_auto_calc_on_landing.sql"
       - "frontend/src/app/(platform)/commcalc/**"
@@ -123,6 +131,18 @@ jobs:
       - name: Run the auto-calc-on-landing lock
         working-directory: backend
         run: python3 harness_auto_calc_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # A DERIVED SNAPSHOT REBUILDS ITSELF WHEN ITS INPUTS LAND (owner ask 2026-10-27, index §COMMCALC-41).
+      # Measured that day: the device payable ledger had last been built 53 days earlier while the feed it is
+      # built from was four days old, so every "what is owed" surface read empty and nothing said why. These
+      # two steps keep every delete-then-insert snapshot build registered against the ONE post-landing hook,
+      # keep the button and the hook composing the same rebuild, and keep the queue from growing a second
+      # scheduler. Seven planted controls inside the lock; the proof is DB-free.
+      - name: Run the derived-build proof
+        working-directory: backend
+        run: python3 harness_derived_builds.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the derived-build lock
+        working-directory: backend
+        run: python3 harness_derived_build_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   feed-read-lock:
     # A PAGED READ IS A READ OF THE DATA (owner report 2026-10-14, index §CORE-05). `range()` paging with
