@@ -212,14 +212,39 @@ print("\nF. the loop, driven end to end on a fake page")
 class FakePage:
     """The smallest page the loop can drive: it records what it was asked to do."""
 
-    def __init__(self, *, reachable=True, exportable=True):
+    def __init__(self, *, reachable=True, exportable=True, missing=()):
         self.reachable, self.exportable = reachable, exportable
         self.clicked, self.goto_urls = [], []
+        # §J — selectors this page does NOT have, so a declared parameter can be proved to fail.
+        self.missing = set(missing or ())
+        self.filled, self.selected, self.checked, self.ran = [], [], [], []
+
+    def _present(self, sel):
+        if sel in self.missing:
+            raise RuntimeError("no such selector: %s" % sel)
+
+    # form controls the declared parameters drive (§COMMCALC-37)
+    def fill(self, sel, value, timeout=None):
+        self._present(sel)
+        self.filled.append((sel, value))
+
+    def select_option(self, sel, value, timeout=None):
+        self._present(sel)
+        self.selected.append((sel, value))
+
+    def check(self, sel, timeout=None):
+        self._present(sel)
+        self.checked.append((sel, True))
+
+    def uncheck(self, sel, timeout=None):
+        self._present(sel)
+        self.checked.append((sel, False))
 
     # navigation
     def click(self, sel, timeout=None):
         if not self.reachable:
             raise RuntimeError("no such selector")
+        self._present(sel)
         self.clicked.append(sel)
 
     def goto(self, url, **kw):
@@ -399,6 +424,136 @@ armed = re.sub(r'if not navigate_to_report\(page, src_row, spec\):', 'if False:'
 ok(armed != home, "control: §F's unreachable-report branch is a real line of the loop")
 ok("expect_download(" in home, "control: the one home is the module that downloads")
 ok(len([f for f in py_files() if "portal_report_pull" in f]) == 1, "control: there is one such module")
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# §J  THE REPORT'S FILTERS ARE DECLARED, AND AN UNFILTERED EXPORT IS REFUSED (index §COMMCALC-37)
+#
+# Owner, 2026-10-27: fourteen UPS Store reports "by the day with all regular filters we have been
+# using", Item Sales "in detail and pulled for every item". The loop reached a page and pressed
+# Export — no date, no class, no category, no detail toggle, no Run press.
+#
+# THE CLASS: a report is identified by its page AND the parameters it was run with. Exporting the
+# page's default answers a different question from the one asked, and the landed row carries no sign
+# of it. So the parameters are DECLARED (config, never code) and a report whose declared parameters
+# could not be applied is NOT exported — refusing is the honest outcome.
+print("\n— J. the filters are declared, and an unset filter refuses the export —")
+
+P_SRC = dict(SRC)
+P_SRC["portal_calibration"] = {
+    "daily": {"run_selector": "#RunReport",
+              "params": [{"selector": "#DateFrom", "kind": "fill", "value": "{date}", "label": "date"},
+                         {"selector": "#DateTo", "kind": "fill", "value": "{date}", "label": "date to"},
+                         {"selector": "#Class", "kind": "select", "value": "All", "label": "class"},
+                         {"selector": "#Detail", "kind": "check", "label": "detail"}]}}
+
+steps = prp.report_params(P_SRC, "daily")
+eq(len(steps), 4, "every declared parameter is read back")
+eq(steps[0]["kind"], "fill", "…with its kind")
+eq(steps[2]["value"], "All", "…and its value")
+ok(prp.report_params(P_SRC, "nosuch") == (), "a report with nothing declared declares nothing")
+ok(prp.report_params({}, "daily") == (), "and a source with no calibration is not an error")
+
+# malformed entries are DROPPED, never guessed at
+bad = {"portal_calibration": {"daily": {"params": [{"kind": "fill"},               # no selector
+                                                   {"selector": "#x", "kind": "wave"},  # unknown verb
+                                                   "not a dict",
+                                                   {"selector": "#ok", "kind": "click"}]}}}
+got = prp.report_params(bad, "daily")
+eq(len(got), 1, "a malformed parameter is dropped, not guessed at")
+eq(got[0]["selector"], "#ok", "…and the sound one survives")
+for k in prp.PARAM_KINDS:
+    ok(isinstance(k, str), "the declared verbs are a closed, spelled list: %r" % (k,))
+
+# date substitution has ONE home
+eq(prp.resolve_param_value("{date}", day="2026-10-20"), "2026-10-20", "{date} becomes the day")
+eq(prp.resolve_param_value("{date_from}..{date_to}", d_from="A", d_to="B"), "A..B",
+   "the window tokens resolve too")
+eq(prp.resolve_param_value("{date}", day=None), "{date}",
+   "a token with nothing to put in it is LEFT STANDING — visibly wrong beats plausibly wrong")
+ok(prp.resolve_param_value(None) is None, "a value-less step (check/click) stays value-less")
+
+# per-day is DERIVED from the declaration, never a second switch that could disagree with it
+ok(prp.is_per_day(P_SRC, "daily") is True, "a report whose parameters name {date} is per-day")
+ok(prp.is_per_day(bad, "daily") is False, "one that does not, is not")
+days = prp.pull_days("2026-10-01", "2026-10-05")
+eq(len(days), 5, "the days of the window, inclusive")
+eq(days[0], "2026-10-01", "…oldest first")
+eq(prp.pull_days("2026-10-05", "2026-10-01"), (), "a backwards range is no days, never a crash")
+eq(prp.pull_days("rubbish", "2026-10-01"), (), "and an unreadable range is no days")
+ok(len(prp.pull_days("2026-01-01", "2026-12-31")) <= prp.MAX_WINDOW_DAYS,
+   "a mis-declared range can never become a year of portal requests")
+
+# the behaviour: one run per day, each with its own date, Run pressed before the export
+adp = FakeAdapter(specs=(SPEC,), rows=2)
+pg = FakePage()
+resp = with_adapter(adp, lambda: prp.pull_reports_on_page(None, "ORG", P_SRC, pg))
+nday = len(prp.pull_days(resp["date_from"], resp["date_to"]))
+eq(len(adp.ingested), nday, "the report was exported once per day in the window")
+eq(resp["reports"][0]["days_run"], nday, "…and the result says how many days it ran")
+eq(resp["rows_ingested"], 2 * nday, "every day's rows are counted")
+eq(len(pg.filled), 2 * nday, "both date boxes were filled, every day")
+ok(pg.filled[0][1] == resp["date_from"],
+   "the first run carries the first day (first fill %r)" % (pg.filled[0],))
+ok(pg.filled[-1][1] == resp["date_to"],
+   "and the last run the last day (last fill %r)" % (pg.filled[-1],))
+ok(("#Class", "All") in pg.selected, "the declared dropdown was set")
+ok(("#Detail", True) in pg.checked, "the declared tick box was ticked")
+eq(pg.clicked.count("#RunReport"), nday, "Run was pressed for each day, before its export")
+
+# THE REFUSAL — a declared filter that is not on the page means NO export for that day
+pg2 = FakePage(missing={"#Detail"})
+adp2 = FakeAdapter(specs=(SPEC,), rows=2)
+res2 = with_adapter(adp2, lambda: prp.pull_reports_on_page(None, "ORG", P_SRC, pg2))
+eq(len(adp2.ingested), 0, "NOT ONE day was exported when a declared filter could not be set")
+ok(not res2["delivered"], "…so the pull is not delivered")
+ok("could not set" in (res2["reports"][0].get("error") or ""),
+   "…and the failure NAMES the filter, not just the report")
+ok("detail" in (res2["reports"][0].get("error") or ""), "…by the operator's own label for it")
+
+# a Run control that does not respond is its own message, and also refuses
+pg3 = FakePage(missing={"#RunReport"})
+adp3 = FakeAdapter(specs=(SPEC,), rows=2)
+res3 = with_adapter(adp3, lambda: prp.pull_reports_on_page(None, "ORG", P_SRC, pg3))
+eq(len(adp3.ingested), 0, "a Run that does not respond exports nothing")
+ok("Run control" in (res3["reports"][0].get("error") or ""),
+   "…and says so, which is a different fix from a missing filter")
+
+# a report with NO declared parameters is untouched by all of this — the pre-change behaviour
+adp4 = FakeAdapter(specs=(SPEC,), rows=3)
+pg4 = FakePage()
+res4 = with_adapter(adp4, lambda: prp.pull_reports_on_page(None, "ORG", SRC, pg4))
+eq(len(adp4.ingested), 1, "a report that declares no parameters still runs exactly once")
+eq(len(pg4.filled), 0, "…sets nothing")
+eq(pg4.clicked.count("#RunReport"), 0, "…and presses no Run it was never told about")
+ok(res4["delivered"], "…and still delivers, byte-identically to before this section")
+
+# negative controls — the pre-change shape must read as broken
+_OLD = """
+            if not navigate_to_report(page, src_row, spec):
+                continue
+            path, name = download_report(page, src_row, spec, tmp)
+"""
+ok("apply_report_params" not in _OLD,
+   "control: the pre-change loop went from navigate straight to download")
+loop_src = read(os.path.join("app", "modules", "commcalc", "portal_report_pull.py"))
+i_apply = loop_src.find("missed = apply_report_params")
+i_dl = loop_src.find("path, name = download_report(page, src_row, spec, tmp)")
+ok(i_apply > 0 and i_dl > 0 and i_apply < i_dl,
+   "the parameters are applied BEFORE the export, in the shipped loop")
+i_run = loop_src.find("if not run_report(")
+ok(i_run > i_apply and i_run < i_dl, "and Run is pressed between the two")
+
+
+def _permissive(missed):
+    """What exporting anyway would do — the defect this section exists to forbid."""
+    return True
+
+
+ok(_permissive(["detail"]) is True,
+   "control: a loop that exported despite an unset filter would pass its own test — which is why "
+   "the check above counts the EXPORTS, not the error string")
+
 
 print("\n%d passed, %d failed" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

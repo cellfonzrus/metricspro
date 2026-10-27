@@ -485,9 +485,17 @@ FACTS: dict[str, dict] = {
                     'could only be built by copying the calibration ladder, the export words, the '
                     'honest-failure wording and the cold-session restore. A feed is now an ADAPTER '
                     '(four functions) and the loop is written once; three older sweeps still drive '
-                    'their own and are PINNED with reasons in the lock, a count that may only shrink.',
+                    'their own and are PINNED with reasons in the lock, a count that may only shrink. '
+                    'Second axis (§COMMCALC-37): WITH WHICH PARAMETERS was it run? A report is '
+                    'identified by its page AND its filters, so the dates, dropdowns and detail '
+                    'toggles are DECLARED per report in portal_calibration and set by '
+                    'apply_report_params before the Run press and the export — and a report whose '
+                    'declared parameters could not all be set is NOT exported, because the page '
+                    'default under the asked-for date is the wrong figures wearing the right date. '
+                    'Whether a report runs once per day is DERIVED from that declaration ({date} '
+                    'appearing in a value), never a second switch that could disagree with it.',
         "homes": ('app/modules/commcalc/portal_report_pull.py',),
-        "index": ('COMMCALC-07',),
+        "index": ('COMMCALC-07', 'COMMCALC-37'),
         "locks": ('harness_portal_report_pull.py',),
         # SNAPSHOT — written BY HAND (§50): the modules that IMPORT the home, derived from the import
         # graph. The adapters import it for its helpers and are resolved BY it through the registry,
@@ -1833,7 +1841,7 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_bt',),
         },
     },
-    # ── §COMMCALC-35 (owner ask 2026-10-26) — a device's arrival on the shelf has ONE date ──────
+    # ── §COMMCALC-37 (owner ask 2026-10-26) — a device's arrival on the shelf has ONE date ──────
     'device_stock_age': {
         "question": 'WHEN DID THIS DEVICE ARRIVE ON THE SHELF, HOW LONG HAS IT SAT THERE, AND IS IT '
                     'STILL THERE? `inventory_aging_device.received_date` is NULL on all 10,525 rows '
@@ -1850,7 +1858,7 @@ FACTS: dict[str, dict] = {
                     'NOT inherit the house 60, because printing someone else\'s deadline over a rep\'s '
                     'phone is the defect that section was opened for.',
         "homes": ('app/modules/commcalc/inventory_stock_age.py',),
-        "index": ('COMMCALC-35', 'COMMCALC-36'),
+        "index": ('COMMCALC-37', 'COMMCALC-36'),
         "locks": ('harness_inventory_stock_age.py', 'harness_inventory_stock_age_guard.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`. Hand-written for
         # the reason recorded in §COMMCALC-01: --bless strips per-caller comments, and the three

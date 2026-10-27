@@ -157,6 +157,7 @@ Primary code homes:
 | COMMCALC-32 | **A line that bought no device is not a device payable** | "product not available , it shoudl show the product" — every payables row read Product Not Available, two of them as `discrepancy`, the status that means he is carrying a handset cost. 869 of those lines are the customer's own phone, and the carrier feed declares it. Which blank means "I could not price this", which means "nothing was bought", and what does a ledger keyed on ACTIVATIONS assume about purchases? |
 | COMMCALC-33 | **What the carrier already recovered is read, and a placeholder is not a measurement** | "the payments for all phones automatically are done from commission and rebates received and auto adjusted" — said to a banner billing him $544,447.78 of his own cash. The deductions were on the row the build already read, −$834,234.25 of them, and the engine wrote `rebate_amount = 0.0` as a placeholder. What does a zero assert that an unwired source has no right to, and which way should the default point when being wrong deletes a liability? |
 | COMMCALC-34 | **A billing period is declared, and the money is read once** | "Weekly Owed to Distributor does not show anything in luxelink" — the report read one carrier's weekly consignment column on one carrier's table, so a tenant whose carrier raises an invoice per order and has no weekly batch at all saw every figure summed over an empty set. Which billing rhythm is a universal fact about owing money, and which is one carrier's arrangement that has to be declared? |
+| COMMCALC-37 | **A report is its page AND its filters, and an unfiltered export is refused** | Fourteen back-office reports were asked for "by the day with all regular filters we have been using", one of them "in detail and pulled for every item" — and the pull loop reached each report's page and pressed Export without ever setting a date, a class, a detail toggle, or pressing Run. What question does a page's default answer, and what does a landed row look like when it answers a different question from the one that was asked? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26088,6 +26089,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-34 | commcalc |
 | COMMCALC-35 | commcalc |
 | COMMCALC-36 | commcalc |
+| COMMCALC-37 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -34205,6 +34207,97 @@ evidence). Neighbours: §11 (the aging report), §CORE-17.3y (the aging drill-do
 §13a (the market home the shared read is handed), §64 (store identity, likewise injected).
 
 ---
+
+## §COMMCALC-37. A REPORT IS ITS PAGE AND ITS FILTERS, AND AN UNFILTERED EXPORT IS REFUSED (owner ask 2026-10-27)
+
+> **Numbered COMMCALC-37, not COMMCALC-35.** Two other threads merged into `main` while this was
+> being built and took 35 and 36. `harness_index_section_register.py --next` reads the index in your
+> WORKING TREE — it is not a reservation — so re-check right before pushing. The sixth and seventh
+> time two threads have raced for one index number (§50 notes the first four, §CORE-17 the fifth).
+
+Owner, verbatim: *"need the followig reports pulled … do each report by the day with all regular filters
+we have been using and also the send options / item sales should be in detail and pulled for every
+item"* — fourteen named reports on the back-office portal he had just signed into.
+
+### COMMCALC-37.1 WHAT WAS WRONG — not a missing feature, a silent wrong answer
+
+`portal_report_pull.pull_reports_on_page` (§COMMCALC-07) reached a report and pressed its export
+control. It took `date_from`/`date_to` and used them **only to word the summary string**. Nothing set
+a date on the page, nothing set a dropdown, nothing ticked a detail box, and nothing pressed the
+report's Run control. So the file that landed was whatever that page happened to default to — often
+the last run, often today, often a summary where detail was asked for.
+
+**THE CLASS, stated once so nobody re-derives it.** *A report is not identified by its page. It is
+identified by its page AND the parameters it was run with.* Exporting the page's default silently
+answers a different question from the one asked, and the row that lands carries no sign of it — the
+figures look ordinary, they are simply about a different day or a different grain. A reconciliation
+built on top would inherit that and never see it. So the parameters are DECLARED per report, and a
+report whose declared parameters could not all be set is **NOT EXPORTED**. Refusing is the honest
+outcome; an unfiltered export is not.
+
+### COMMCALC-37.2 ONE FACT, ONE HOME, DEREFERENCED
+
+| fact | its one home | how callers get it |
+| --- | --- | --- |
+| what must be set on this report before exporting | `portal_calibration[<report_key>]["params"]`, read by `prp.report_params` | the loop reads it once per report; nothing else parses that key |
+| how a declared value becomes a form value | `prp.resolve_param_value` | the ONLY place a date token becomes text |
+| which date tokens exist | `prp.DATE_TOKENS` | spelled once |
+| which verbs a declaration may use | `prp.PARAM_KINDS` — a closed list | `apply_report_params` dispatches on it |
+| does this report run once per day | `prp.is_per_day` — **DERIVED** from the declaration (`{date}` appears in a value) | never a second switch beside the declaration that could disagree with it |
+| which days one per-day report covers | `prp.pull_days` — inclusive, oldest first, bounded by `MAX_WINDOW_DAYS` | the loop; a backwards or unreadable range is no days, never a crash |
+| one report over its days | `prp.pull_one_report` | returns ONE result dict whatever the number of days, so a per-day report and a window report read identically to every surface |
+
+RULE TWO holds throughout: no report name, menu word, selector or filter value appears in this
+repository. The fourteen reports, their navigation, their filters and their Run control are rows on
+the tenant's `data_source` (`portal_reports`, `portal_calibration`). Adding the fifteenth report — or
+onboarding a second tenant of the same kind — is a config row, never a code change.
+
+### COMMCALC-37.3 THE ORDER, AND WHY IT IS THAT ORDER
+
+Per report, per day: **reach the page → set every declared parameter → press Run → export → ingest**.
+Run sits between the parameters and the export deliberately: a portal that renders its grid on Run
+exports the *previous* run's grid otherwise, which is the stalest possible way to be wrong and the
+hardest to notice. A report that declares no Run control simply has none pressed, and a report that
+declares no parameters behaves byte-identically to before this section.
+
+### COMMCALC-37.4 THE REFUSAL, AND WHAT IT SAYS
+
+`apply_report_params` returns the LABELS it could not set — the operator's own words for the filter,
+not a selector — and the loop skips that day's export and names them. A day covered is counted
+(`days_run`), so a report that managed nine of ten days reports the gap as a gap rather than as a
+smaller number. A Run that does not respond is its own message, because it is a different fix from a
+filter whose box has moved.
+
+### COMMCALC-37.5 DUPLICATE CHECK (the build gate — what was searched for, what was reused)
+
+| the thing that might already exist | what the index says | what was done |
+| --- | --- | --- |
+| a pull loop that reaches a report and exports it | §COMMCALC-07, `portal_report_pull` | EXTENDED in place — no sibling loop |
+| a per-report selector store | `portal_calibration` + `prp.calibrated` (§COMMCALC-07) | reused; `params` and `run_selector` are keys in it, not a new column or table |
+| a day window | `prp.date_range` / `window_days` / `MAX_WINDOW_DAYS` | reused; `pull_days` walks the SAME window and is bounded by the SAME ceiling |
+| an operator's Cancel | `should_stop` (§COMMCALC-07) | reused — honoured per day, so a long per-day pull stops on the day, not at the end |
+| a line → declared-category map | `pos_report_feed` (§COMMCALC-07) | untouched; this section changes only WHICH file reaches it |
+
+Nothing new was created, so nothing new needed registering beyond this section and the
+`portal_report_pull` module-graph fact's second axis.
+
+### COMMCALC-37.6 LOCKED
+
+`harness_portal_report_pull.py` §J — 147 checks in the file now, DB-free and browser-free, driven
+against a fake page that records every `fill` / `select_option` / `check` / `click`. It fails the
+build if the parameters stop being applied before the export, if Run stops sitting between them, if a
+day is exported when a declared filter could not be set (the check counts the EXPORTS, not the error
+string — an armed negative control proves why), if `is_per_day` becomes a second switch instead of a
+derivation, if `pull_days` loses its ceiling or its ordering, if a malformed declaration is guessed at
+rather than dropped, or if a date token with nothing to put in it is quietly resolved to something
+plausible.
+
+### COMMCALC-37.7 Cross-references
+
+Same home, other axes: §COMMCALC-07 (the one pull loop and the adapter contract). Neighbours:
+§CORE-03 (the stored portal credential this login rides), §COMMCALC-24 (which process may answer),
+§COMMCALC-31 (the live login that captures a calibration), §CORE-17 (the drill-down every landed
+figure owes).
 
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
 
