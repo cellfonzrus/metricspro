@@ -42692,6 +42692,46 @@ def _live_pull(client, org_id, src_row):
     return _p
 
 
+def _live_calibrate(client, org_id, src_row):
+    """Build the calibrate_fn the live session runs on its OWN authenticated page (index §COMMCALC-39).
+
+    WHY IT EXISTS. §COMMCALC-37 made a report's filters DECLARED and refuses to export a report whose
+    declared filters could not be set. That is right, and it moved the whole problem onto one
+    question: where does the declaration come from? Not from guessing — a portal's date box can have
+    an id its framework generated, and a guessed selector makes the report refuse to export while
+    leaving nobody any way to tell which guess was wrong. So the declaration is read from what the
+    page actually says, through the session that is already signed in.
+
+    It READS and SUGGESTS. Nothing here writes to portal_calibration: a capture is evidence about a
+    page, not a decision about a tenant's config, and a capture that silently rewrote a working
+    declaration would be the worst kind of helpful. The operator confirms what lands.
+    """
+    from app.modules.commcalc import portal_report_pull as _prp
+
+    def _c(page, should_stop=None):
+        row = dict(src_row or {})
+        proc = _prp.connector(row.get("processor"))
+        specs = _prp.specs_for(row, proc)
+        if not specs:
+            return {"ok": False, "reports": [],
+                    "error": _prp.setup_hint_for(row, proc)
+                    or "No report is declared on this login yet, so there is no page to read."}
+        words = (row.get("portal_calibration") or {})
+        words = words.get("control_words") if isinstance(words, dict) else None
+        out = []
+        for spec in specs:
+            if should_stop is not None and should_stop():
+                break
+            try:
+                out.append(_prp.capture_report_calibration(page, row, spec, words))
+            except Exception as e:
+                out.append({"report": spec.get("key"), "label": spec.get("label"),
+                            "reached": False, "error": str(e)[:200]})
+        return {"ok": True, "reports": out,
+                "note": "Nothing was changed. Confirm these before they are saved on the login."}
+    return _c
+
+
 def _live_pull_persist(client, org_id, sid):
     """The callback the live session invokes with the AUTOMATIC post-login pull's result. Routes it
     through the very same recorder as ▶ Pull now, so an auto-pull that lands rows advances last_run_at
@@ -42790,7 +42830,8 @@ def live_login_start(sid: str, org_id: str = ORG_ID, confirm: bool = False):
                                     _live_persist_shot(client, sid, org_id),
                                     _live_pull(client, org_id, s),
                                     _live_pull_persist(client, org_id, sid),
-                                    auto_pull_gate=lambda: _source_cooldown(client, sid, org_id))
+                                    auto_pull_gate=lambda: _source_cooldown(client, sid, org_id),
+                                    calibrate_fn=_live_calibrate(client, org_id, s))
     auto = (s.get("auto_pull_after_login") is not False)
     blocked_now = bool(cool.get("blocked"))
     return {"ok": True, "phase": sess.snapshot_phase(), "auto_pull": auto and not blocked_now,
@@ -43059,6 +43100,42 @@ def live_login_frame(sid: str, since: int = 0, org_id: str = ORG_ID):
     if not sess:
         return {"seq": 0, "phase": "idle", "message": None, "changed": False, "shot": None}
     return sess.frame_since(since)
+
+
+@router.post("/data-sources/{sid}/live-login/calibrate")
+def live_login_calibrate(sid: str, org_id: str = ORG_ID):
+    """READ this login's declared report pages on the live authenticated session and SUGGEST each
+    report's declaration — its date boxes, its detail toggle, its Run and Export controls (index
+    §COMMCALC-39).
+
+    WRITES NOTHING, and that is the design, not a limitation. Since §COMMCALC-37 a report whose
+    declared filters could not be set is refused rather than exported, which is right and which makes
+    the declaration load-bearing: a wrong selector now means a report that never exports. A portal's
+    controls can carry ids its own framework generated, so guessing one produces exactly that failure
+    with no way to tell which guess was wrong. This reads the page instead. What comes back is a
+    SUGGESTION an operator confirms — a capture is evidence about a page, not a decision about a
+    tenant's config, and a capture that silently rewrote a working declaration would be the worst kind
+    of helpful.
+
+    Needs a live session that is already signed in: the whole point is to read the page as the portal
+    actually renders it to this tenant."""
+    from app.modules.commcalc import live_login
+    live_login.require_session_host()   # §COMMCALC-24 — the sessions live in the browser-owning process
+    require_org(org_id)
+    sess = live_login.get_session(sid, org_id)
+    if sess is None:
+        raise HTTPException(409, "No live session is open for this login. Start the live login and "
+                                 "sign in first — the report pages are read as the portal shows them "
+                                 "to you.")
+    if not sess.can_calibrate():
+        return {"ok": False, "phase": sess.snapshot_phase(),
+                "error": "This live session is not signed in yet, so its report pages cannot be read."}
+    res = sess.run_calibrate_blocking()
+    if res is None:
+        return {"ok": False, "phase": sess.snapshot_phase(),
+                "error": "The report pages could not be read before the session timed out. Nothing "
+                         "was changed."}
+    return res
 
 
 @router.post("/data-sources/{sid}/live-login/cancel")

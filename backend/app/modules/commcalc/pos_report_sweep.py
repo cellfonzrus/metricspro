@@ -66,6 +66,17 @@ def portal_descriptor(connector=None):
             "session_ttl_hours": SESSION_TTL_HOURS}
 
 
+def spec_key(item):
+    """THE key of one declared report, whichever shape it was declared in. One home, because the
+    declaration is read twice — once to build the specs and once to filter them — and two spellings
+    of "which report is this" is how every declared report filtered itself out."""
+    if isinstance(item, dict):
+        return str(item.get("key") or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if isinstance(item, str):
+        return item.strip().lower().replace(" ", "_").replace("-", "_")
+    return ""
+
+
 def report_specs(connector=None, enabled_keys=None, src_row=None):
     """The reports to pull, DECLARED on the source row (`data_source.portal_reports`, jsonb).
 
@@ -82,18 +93,25 @@ def report_specs(connector=None, enabled_keys=None, src_row=None):
         declared = [declared]
     want = None
     if src_row is not None and enabled_keys and isinstance(enabled_keys, (list, tuple, set)):
-        want = {str(k).strip().lower() for k in enabled_keys if isinstance(k, str)}
+        # DERIVED BY THE SAME RULE the declared items are keyed by — `spec_key`, not a second
+        # spelling. The loop passes `src_row["portal_reports"]` as `enabled_keys` (it is the enabled
+        # list for the card feed, whose keys are already canonical), so for a DECLARATION-driven feed
+        # the filter is the declaration itself. Squashing it under a different rule made `want` either
+        # the unsquashed words ("item sales" vs the key "item_sales") or, for the object shape, EMPTY —
+        # and an empty `want` filtered every declared report out. A source that declared fourteen
+        # reports resolved to none and read as "No reports are enabled for this portal source".
+        want = {k for k in (spec_key(item) for item in enabled_keys) if k}
     out = []
     for item in declared:
         if isinstance(item, str):
-            key = item.strip().lower().replace(" ", "_").replace("-", "_")
+            key = spec_key(item)
             if not key:
                 continue
             spec = {"key": key, "label": item.strip(),
                     "nav": tuple(w for w in key.split("_") if len(w) > 2),
                     "export": "csv", "grain": "metric_day"}
         elif isinstance(item, dict):
-            key = str(item.get("key") or "").strip().lower()
+            key = spec_key(item)
             if not key:
                 continue
             nav = item.get("nav") or item.get("nav_hints") or ()

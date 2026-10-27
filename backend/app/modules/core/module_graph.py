@@ -493,9 +493,16 @@ FACTS: dict[str, dict] = {
                     'declared parameters could not all be set is NOT exported, because the page '
                     'default under the asked-for date is the wrong figures wearing the right date. '
                     'Whether a report runs once per day is DERIVED from that declaration ({date} '
-                    'appearing in a value), never a second switch that could disagree with it.',
+                    'appearing in a value), never a second switch that could disagree with it. '
+                    'Third axis (COMMCALC-39): WHERE DOES THE DECLARATION COME FROM? Off the page, '
+                    'not a guess — read_page_controls / control_selector / control_purpose / '
+                    'suggest_params read a report page through the authenticated session and SUGGEST '
+                    'its declaration, writing nothing, because a framework-generated control id '
+                    'cannot be guessed and a wrong selector is now a report that never exports. '
+                    'specs_for is the one resolver of a source\'s declared reports, so the capture '
+                    'reads exactly the set the pull will run.',
         "homes": ('app/modules/commcalc/portal_report_pull.py',),
-        "index": ('COMMCALC-07', 'COMMCALC-37'),
+        "index": ('COMMCALC-07', 'COMMCALC-37', 'COMMCALC-39'),
         "locks": ('harness_portal_report_pull.py',),
         # SNAPSHOT — written BY HAND (§50): the modules that IMPORT the home, derived from the import
         # graph. The adapters import it for its helpers and are resolved BY it through the registry,
@@ -539,6 +546,10 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/commcalc/pos_report_feed.py': ('rc',),
             'app/modules/commcalc/supplier_invoice_feed.py': ('rc',),
+            # the calibration capture (COMMCALC-39) compares a control's printed LABEL against the
+            # words that say what it is for, and a label compared under one rule here while a header
+            # is compared under another there is the drift this home exists to prevent
+            'app/modules/commcalc/portal_report_pull.py': ('norm',),
         },
     },
     # ── §COMMCALC-38 — what a supplier billed us ─────────────────────────────────────────────────
