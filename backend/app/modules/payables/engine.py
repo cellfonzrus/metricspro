@@ -23,6 +23,7 @@ from app.modules.commcalc import product_mix as _pm
 from app.modules.payables import declared_source as _ds
 from app.modules.payables import ledger_status as _ls
 from app.modules.payables import recovered_amount as _rec
+from app.modules.payables import write_shape as _ws
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 PAGE = 1000
@@ -453,7 +454,12 @@ def build_ledger(client, org_id=ORG_ID, carrier_id=None):
     alias = _load_model_alias(client, org_id)
     reimb_types = _reimb_types(client, org_id)
     maps = _load_source_maps(client, org_id, carrier_id)
-    result = {"carriers": 0, "written": 0, "status_counts": {}, "per_carrier": []}
+    # `blocked` names the carriers whose rebuild was REFUSED before it could delete anything. It is
+    # kept apart from a per-carrier `error` on purpose: an error means "this carrier rebuilt badly",
+    # a block means "this carrier was left exactly as it was, and the database is behind the code".
+    # The router turns a non-empty list into a non-2xx, because the 2026-10-27 defect was not only
+    # the delete — it was a 200 describing it (§COMMCALC-41).
+    result = {"carriers": 0, "written": 0, "status_counts": {}, "per_carrier": [], "blocked": []}
     for cfg in maps:
         # ONE collector per carrier: a declared table or column this build could not read is
         # reported with the result rather than dying in a log line (§COMMCALC-29). It rides out
@@ -462,6 +468,16 @@ def build_ledger(client, org_id=ORG_ID, carrier_id=None):
         try:
             n, sc = _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types,
                                       complaints=complaints)
+        except _ws.WriteShapeRefused as e:
+            result["blocked"].append({"carrier_id": cfg.get("carrier_id"),
+                                      "label": cfg.get("label"), "relation": e.relation,
+                                      "missing_columns": e.missing, "reason": str(e)})
+            result["per_carrier"].append({"carrier_id": cfg.get("carrier_id"),
+                                          "label": cfg.get("label"), "blocked": True,
+                                          "error": str(e)[:400], "rows_left_intact": True,
+                                          "warnings": complaints.notes()})
+            _ds.merge(result, complaints)
+            continue
         except Exception as e:
             result["per_carrier"].append({"carrier_id": cfg.get("carrier_id"),
                                           "label": cfg.get("label"), "error": str(e)[:200],
@@ -487,9 +503,12 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types, comp
     terms = _terms_days(client, org_id, cfg.get("distributor_id"), cfg)
     select_str = ",".join(_needed_cols(cfg))
 
-    # delete this carrier's snapshot first (per-carrier scope — never touches other carriers)
-    client.schema("commcalc").table("device_payable_ledger").delete() \
-        .eq("org_id", org_id).eq("carrier_id", cid).execute()
+    # THE DELETE USED TO BE HERE, AND THAT IS THE DEFECT (§COMMCALC-41, 2026-10-27). It deleted this
+    # carrier's rows before anything had established the replacement could be written, so a relation
+    # that refused the row shape left the carrier with NOTHING — measured: 11,000 Boost rows deleted,
+    # 0 inserted, and a normal-looking return describing it. The delete now happens below, after the
+    # first page of replacement rows has been built AND `write_shape` has confirmed the table can
+    # accept them. Nothing else about the build changed.
 
     # Store fallback for a source with no store of its own (every Total/MA map) — the POS sold-match
     # still wins per row; this only fills what it leaves blank (see ma_store_resolution). Built ONCE
@@ -507,6 +526,7 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types, comp
     price_map = _unit_price_map(client, org_id, cfg, complaints)
 
     status_counts, written, page = {}, 0, 0
+    swept = False                 # has this carrier's old snapshot been cleared yet?
     while True:
         q = (client.schema("commcalc").table(src_table).select(select_str)
              .eq("org_id", org_id))
@@ -519,6 +539,14 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types, comp
                               price_map=price_map,
                               ma_resolve=ma_resolve, complaints=complaints,
                               declared_cost=declared_cost)
+        if rows and not swept:
+            # THE ORDER IS THE WHOLE FIX: refuse first, delete second, insert third. Every row of
+            # one build carries the same keys, so the first one answers for all of them. A refusal
+            # raises out of here with the old snapshot untouched.
+            _ws.refuse_if_unwritable(client, "device_payable_ledger", rows[0],
+                                     label=cfg.get("label") or cid)
+            _sweep_carrier(client, org_id, cid)
+            swept = True
         for i in range(0, len(rows), 500):
             client.schema("commcalc").table("device_payable_ledger").insert(rows[i:i + 500]).execute()
         for r in rows:
@@ -529,7 +557,19 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types, comp
         page += 1
         if page > 80:                        # safety backstop
             break
+    if not swept:
+        # The source carries nothing for this carrier, so there is no replacement to refuse and the
+        # old snapshot is genuinely stale — clearing it is the same answer the pre-2026-10-27 code
+        # gave, reached without ever risking a delete it could not follow through.
+        _sweep_carrier(client, org_id, cid)
     return written, status_counts
+
+
+def _sweep_carrier(client, org_id, cid):
+    """Clear ONE carrier's snapshot — per-carrier scope, never touching another carrier's rows.
+    Its one call site order is guarded by `write_shape`; see `_build_one_carrier`."""
+    client.schema("commcalc").table("device_payable_ledger").delete() \
+        .eq("org_id", org_id).eq("carrier_id", cid).execute()
 
 
 def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, terms,
