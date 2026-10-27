@@ -223,7 +223,7 @@ class FakePage:
         if sel in self.missing:
             raise RuntimeError("no such selector: %s" % sel)
 
-    # form controls the declared parameters drive (§COMMCALC-35)
+    # form controls the declared parameters drive (§COMMCALC-37)
     def fill(self, sel, value, timeout=None):
         self._present(sel)
         self.filled.append((sel, value))
@@ -427,7 +427,7 @@ ok(len([f for f in py_files() if "portal_report_pull" in f]) == 1, "control: the
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# §J  THE REPORT'S FILTERS ARE DECLARED, AND AN UNFILTERED EXPORT IS REFUSED (index §COMMCALC-35)
+# §J  THE REPORT'S FILTERS ARE DECLARED, AND AN UNFILTERED EXPORT IS REFUSED (index §COMMCALC-37)
 #
 # Owner, 2026-10-27: fourteen UPS Store reports "by the day with all regular filters we have been
 # using", Item Sales "in detail and pulled for every item". The loop reached a page and pressed

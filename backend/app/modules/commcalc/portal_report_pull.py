@@ -235,7 +235,7 @@ def click_text(page, words, timeout_ms=15000):
     return None
 
 
-# ── the report's own FILTERS, declared (index §COMMCALC-35) ──────────────────────────────────────
+# ── the report's own FILTERS, declared (index §COMMCALC-37) ──────────────────────────────────────
 # Owner, 2026-10-27, asked for fourteen UPS Store reports "by the day with all regular filters we have
 # been using", Item Sales "in detail and pulled for every item". The loop reached a report and pressed
 # Export — it never set a date, a class, a category or a detail toggle, and never pressed Run. So it
@@ -432,7 +432,7 @@ def pull_one_report(client, org_id, src_row, page, mod, proc, spec, tmp,
     The order is the operator's own: reach the page, set every declared parameter, press Run, export.
     A day whose declared parameters could not all be set is NOT exported and is named in the error —
     exporting it anyway would land the page's default under the day the operator asked for, which is
-    the wrong figures wearing the right date (§COMMCALC-35)."""
+    the wrong figures wearing the right date (§COMMCALC-37)."""
     steps = report_params(src_row, spec["key"])
     rows, errors, ran = 0, [], 0
     unresolved, delivered_any = [], False
@@ -507,7 +507,7 @@ def pull_reports_on_page(client, org_id, src_row, page, should_stop=None):
         for spec in specs:
             if should_stop is not None and should_stop():
                 break
-            # A report whose declared parameters name `{date}` is run ONCE PER DAY (§COMMCALC-35);
+            # A report whose declared parameters name `{date}` is run ONCE PER DAY (§COMMCALC-37);
             # one that declares none is run once for the whole window, exactly as before.
             days = (pull_days(d_from, d_to) if is_per_day(src_row, spec["key"]) else (None,))
             res = pull_one_report(client, org_id, src_row, page, mod, proc, spec, tmp,
