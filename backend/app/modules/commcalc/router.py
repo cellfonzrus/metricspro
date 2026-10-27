@@ -17,6 +17,8 @@ from app.core.schemas import LaxModel
 from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
+# THE one home of "a status line that must fit a column keeps its ends" (found 2026-10-27).
+from app.core import status_detail as _status_detail
 from app.modules.core import portal_secret as _psec   # 2026-10-12 — THE registry of which stored columns hold a credential (index §CORE-03; pure)
 from app.modules.commcalc import prospect_feed_tally as _pft   # 2026-10-16 — THE per-feed,
 # per-month row tally, in the one shape both its readings produce (index §COMMCALC-TALLY)
@@ -3461,7 +3463,12 @@ def _sweep_set_status(client, table, org_id, status, detail, mark_run=False, suc
     mark_run — this call ends a run (not the 'running…' heartbeat, which must stamp no timestamp).
     success  — did the run actually IMPORT data? Defaults to status in ('ok','partial'); only a success
                advances last_run_at (the freshness trail core.import_evidence reads)."""
-    upd = {'last_status': status, 'last_detail': (detail or '')[:600]}
+    # A CAP MUST NOT DECIDE WHICH PART OF A STATUS SURVIVES (found 2026-10-27, index §CORE-xx).
+    # This was `detail[:600]`, a HEAD cut — so the §COMMCALC-16 diagnostic's conclusion, which names
+    # the portal field the carrier renamed and is written LAST, was the exact text thrown away. The
+    # detection worked and the finding died on the way to the column. `core.status_detail.fit` keeps
+    # both ends and says how much it dropped; a line that already fits is unchanged.
+    upd = {'last_status': status, 'last_detail': _status_detail.fit(detail, 600)}
     if mark_run:
         ok = (str(status or '').strip().lower() in ('ok', 'partial')) if success is None else bool(success)
         now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -3472,7 +3479,7 @@ def _sweep_set_status(client, table, org_id, status, detail, mark_run=False, suc
         try:
             client.schema('core').table('job_run').insert({
                 'org_id': org_id, 'job_name': f'sweep:{table}', 'status': 'succeeded' if ok else 'failed',
-                'detail': {'status': status, 'detail': (detail or '')[:600]}, 'started_at': now_iso,
+                'detail': {'status': status, 'detail': _status_detail.fit(detail, 600)}, 'started_at': now_iso,
                 'finished_at': now_iso}).execute()
         except Exception as e:
             print(f'WARN sweep run history not recorded ({table}): {e}')
@@ -41302,7 +41309,7 @@ def _pull_diag_payload(res):
                   "buttons", "date_fields") if probe.get(k) is not None}
     return {
         "at": datetime.now(timezone.utc).isoformat(),
-        "status": str(res.get("status") or res.get("error") or "")[:600],
+        "status": _status_detail.fit(res.get("status") or res.get("error") or "", 600),
         "delivered": _pull_delivered(res), "rows_ingested": res.get("rows_ingested"),
         "reason": res.get("reason"),
         "reports_page_reachable": res.get("reports_page_reachable"),
@@ -41338,8 +41345,8 @@ def _record_pull_result(client, sid, org_id, res, *, source="portal-pull"):
     delivered = _pull_delivered(res)
     try:
         _source_stamp(client, sid, org_id,
-                      {"last_status": str((res or {}).get("status")
-                                          or (res or {}).get("error") or "ok")[:600],
+                      {"last_status": _status_detail.fit((res or {}).get("status")
+                                                           or (res or {}).get("error") or "ok", 600),
                        "auth_status": "authenticated"},
                       success=delivered)
     except Exception:

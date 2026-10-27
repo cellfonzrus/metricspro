@@ -1594,6 +1594,19 @@ FACTS: dict[str, dict] = {
             'app/modules/storeops/salary_owed.py': ('_hours_basis',),
         },
     },
+    'status_detail': {
+        "question": ("This status must fit a column — which part of it survives, and does the reader "
+                     "know something was dropped?"),
+        "homes": ('app/core/status_detail.py',),
+        "index": ('CORE-18',),
+        "locks": ('harness_status_detail.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/commcalc/auto_calc.py': ('_status_detail',),
+            'app/modules/commcalc/router.py': ('_status_detail',),
+            'app/modules/commcalc/vidapay_sweep.py': ('_status_detail',),
+        },
+    },
     'feed_lineage': {
         "question": "Which table is the LIVE feed for this item, and which column means 'arrived'?",
         "homes": ('app/modules/commcalc/data_lineage_registry.py',),

@@ -26107,6 +26107,7 @@ status word rather than a blank that reads as nil.
 | CORE-15 | core |
 | CORE-16 | core |
 | CORE-17 | core |
+| CORE-18 | core |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -38432,3 +38433,75 @@ for anybody who never clocks out (E029: 8 of 8 days), which is the upstream caus
 hand-corrections above; the auto-closed punch is already `punch_unusable` in §14y's vocabulary, but
 `schedule_fallback` mode still pays it. (c) **E029's live row is overstated by $943 and is
 DM+HR-approved** — a data repair, reported here, never "fixed" in code.
+
+---
+
+## §CORE-18. A LENGTH CAP DOES NOT DECIDE WHICH PART OF A STATUS SURVIVES (found 2026-10-27)
+
+**Owner report 2026-10-27, verbatim:** *"Is all the data being ingested properly for kpi, Ismail
+reported that data was off"*.
+
+**The §COMMCALC-16 diagnostic worked.** The DLAR sweep's 2026-10-26 run detected that the carrier had
+renamed the store report's unit-count fields, and the line it composed named them **and** named the
+fields the portal is sending that nothing reads — the new spelling, which is the entire point of that
+mechanism. What reached the operator, measured live on `commcalc.dlar_sweep_config.last_detail`, was
+**600 characters** ending:
+
+```
+… ⚠ PORTAL FIELD CHANGED: store (DLAR): 'gross_activation_quantity' NOT SENT, store (DLAR):
+'prepaid_activations' NOT SENT, store (DLAR): 'postpaid_activations' NOT SENT, store (DLAR):
+'upgrades' NOT SENT,
+```
+
+mid-list, with the conclusion gone. `router._sweep_set_status` wrote `detail[:600]`. **The detection
+worked and the finding was destroyed on the way to the column.**
+
+### CORE-18.1 The class, not the instance
+
+> **A length cap on a human-read status must not decide WHICH part of it survives. Keep both ends and
+> elide the middle, and say how much was dropped.**
+
+A head cut silently privileges whatever is written first, which is usually the restatement of what
+already went fine. It is worst exactly where it matters most: a diagnostic's conclusion is written
+last, and the part of a status that GROWS is the middle — one entry per changed column, one per store.
+So the longer the list of things wrong, the more certain it is that the answer is the text thrown away.
+The elision also carries a COUNT, because a bare `…` cannot be told from a sentence that trails off —
+which is how the 2026-10-26 line read.
+
+### CORE-18.2 The one home
+
+`app/core/status_detail.py` — `fit(detail, limit=600, keep_tail=None)`. PURE, stdlib only. A line that
+already fits is returned **unchanged**, so every healthy status is byte-identical to before. Over the
+cap, head and tail are both kept with `MARK` (`" …[N chars elided]… "`) between them. A cap too small
+for both ends degrades to the plain head cut, and nothing in it can raise: a status writer is the last
+place in the system that may throw.
+
+### CORE-18.3 The callers, wired
+
+| caller | what was being cut |
+|---|---|
+| `commcalc/router._sweep_set_status` | every portal sweep's `last_detail` — the DLAR instance above |
+| the same function's `core.job_run` insert | the durable history of the same line |
+| `commcalc/router._pull_diag` | a connector pull's probe `status` |
+| `commcalc/router._source_stamp` caller | a `data_source` row's `last_status` |
+| `commcalc/vidapay_sweep` | the ORIGINAL status, which a prepended prefix pushed into the tail |
+| `commcalc/auto_calc` | the later entries of a joined error list |
+
+**Excused, with reason:** `supply/catalog_scrape` and `supply/ordering_logic` cap a product
+*description*, not a status — the head IS the useful part; `core/control_box` caps a redacted log
+context, where the head is the subject.
+
+### CORE-18.4 Locks
+
+`backend/harness_status_detail.py` — 32 checks, DB-free, in CI. §B is the regression from the **real**
+2026-10-26 line, with a pre-fix control proving the head cut dropped the answer. §C proves a middle
+four times longer still cannot push the conclusion out. §D fuzzes every input length and every cap for
+an over-cap result. §E proves the writer never raises on junk input or a junk cap.
+
+**A control that passed for the wrong reason, caught in the writing:** the fixture's invented new
+spelling was first `activation_quantity`, which is a substring of the OLD `gross_activation_quantity`,
+so the pre-fix control found the old name in the truncated head and called it the answer. The fixture
+now uses spellings that are substrings of no old field name. A negative control must be able to fail.
+
+Same class: §COMMCALC-16 (the diagnostic this one was silencing), §19.26 (missing beats wrong), §19.21
+(a status that reports what was pulled rather than what was written).

@@ -30,6 +30,8 @@ hard-coded — credentials always come from the data_source row (UI config).
 """
 from datetime import datetime, timezone, timedelta
 from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
+# THE one home of "a status line that must fit a column keeps its ends" (found 2026-10-27).
+from app.core import status_detail as _status_detail
 
 # Portal rate-limit / temporary-block detection + the shared cooldown state (migration 244). A pure
 # leaf module (it imports nothing from commcalc), so a top-level import here cannot create a cycle.
@@ -3530,7 +3532,8 @@ def _pull_all_reports_on_page(page, client, org_id, source_id=None, carrier_id=N
                   "last %s month(s)%s." % (months_back,
                                            ("; not yet calibrated: " + ", ".join(calib)) if calib else ""))
     if stopped:
-        status = ("stopped early at the operator's request — " + status)[:600]
+        # the ORIGINAL status is the tail here, so a head cut dropped what actually happened
+        status = _status_detail.fit("stopped early at the operator's request — " + status, 600)
     return {"status": status, "authenticated": True, "delivered": delivered, "reports": reports,
             "rows_ingested": ok_rows, "months_back": months_back, "reason": reason,
             "stopped": stopped,
