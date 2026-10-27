@@ -507,8 +507,68 @@ FACTS: dict[str, dict] = {
                 'DEFAULT_WINDOW_DAYS', 'MAX_WINDOW_DAYS', 'date_range', 'make_pull_fn', 'next_expiry',
                 'prp', 'pull_reports_on_page', 'session_ttl_hint', 'window_days'),
             'app/modules/commcalc/pos_report_sweep.py': ('prp',),
+            # the THIRD adapter (§COMMCALC-38) — it reaches the loop for the same four helpers and
+            # the same cold restore, which is the whole point of the extraction: a new portal feed is
+            # four functions, not a copied sweep
+            'app/modules/commcalc/supplier_invoice_sweep.py': ('prp',),
             # the live session's dispatch and the scheduled cron both ask the registry
             'app/modules/commcalc/router.py': ('_prp',),
+        },
+    },
+    # ── §COMMCALC-38 (owner ask 2026-10-27) — reading an exported report's columns ───────────────
+    'report_column_vocabulary': {
+        "question": 'Which column of a downloaded report is which fact? Every portal feed faces it '
+                    'before reading a figure: the export says "Trans Date", "Ext Price", "Center '
+                    'Number". `pos_report_feed` answered it with a normalizer, a '
+                    'longest-synonym-first header matcher and a header-row scorer, welded to its own '
+                    'vocabulary — so a second feed needing the same three things against its own '
+                    'vocabulary would have copied them. That copy fails expensively: `norm` is what '
+                    'makes \'B-1115\' and \'b 1115\' one store key, and this platform has already '
+                    'lost a phantom store holding $289 to a code compared under one rule here and '
+                    'another rule there. So the MECHANISM is here and the VOCABULARY stays with each '
+                    'feed, which also keeps every vendor and tenant spelling out of this module. '
+                    '`money_or_none` DEREFERENCES merchant_portals.money and adds exactly one rule — '
+                    'a blank cell is None, never 0.0 — because 0.0 asserts a supplier billed nothing '
+                    'and a blank asserts nothing at all.',
+        "homes": ('app/modules/commcalc/report_columns.py',),
+        "index": ('COMMCALC-38',),
+        "locks": ('harness_supplier_invoice_feed.py',),
+        # SNAPSHOT — written BY HAND (§50). Both feeds keep their old public spellings
+        # (`norm`/`map_headers`/`header_score`/`_cell`) as dereferences of this home, so every
+        # existing caller of theirs reads the same code it always did.
+        "callers": {
+            'app/modules/commcalc/pos_report_feed.py': ('rc',),
+            'app/modules/commcalc/supplier_invoice_feed.py': ('rc',),
+        },
+    },
+    # ── §COMMCALC-38 — what a supplier billed us ─────────────────────────────────────────────────
+    'supplier_invoice_line': {
+        "question": 'What did a supplier bill us, and which shipment was it for? Asked so every '
+                    'charge can be checked against the sale that should have collected for it '
+                    '(owner 2026-10-27). The platform already held DISTRIBUTOR invoices in '
+                    'commcalc.vip_invoices, but those tables are keyed on one portal\'s internal '
+                    'invoice id, carry no supplier and no source column, and are read by the P&L, '
+                    'the balance sheet, device COGS and the Distributor Invoices report — so a '
+                    'second supplier landed in them would be indistinguishable from the first and '
+                    'would make every one of those readers wrong, silently, on money. This home '
+                    'names no supplier. vip_invoices is the EXCUSED SIBLING that should fold into '
+                    'it later, with the reason recorded in index COMMCALC-38 rather than left for '
+                    'a reader to notice. The two recon references are kept verbatim AND normalized '
+                    'by the one rule, because the supplier and the POS print a tracking number '
+                    'differently and two rules would make one shipment read as unbilled on one side '
+                    'and uncollected on the other.',
+        "homes": ('app/modules/commcalc/supplier_invoice_feed.py',
+                  'app/modules/commcalc/supplier_invoice_sweep.py'),
+        "index": ('COMMCALC-38',),
+        "locks": ('harness_supplier_invoice_feed.py',),
+        "callers": {
+            # the registry row dereferences the module's CONNECTOR constant rather than re-spelling
+            # it — a literal there would be the second copy, and the two disagreeing is exactly how a
+            # feed ends up dispatchable with no door (§12a.2a)
+            'app/modules/commcalc/connector_registry.py': ('SUPPLIER_INVOICE_CONNECTOR',),
+            # the dispatcher; the reconciliation that reads these rows is not built yet
+            # (§COMMCALC-38.8 states that plainly rather than implying it shipped)
+            'app/modules/commcalc/router.py': ('_SUPPLIER_INVOICE_CONNECTOR', 'sis'),
         },
     },
     'pos_report_declared_metric': {

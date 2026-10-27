@@ -60,6 +60,7 @@ _DOWNLOAD_TIMEOUT_MS = 120000
 ADAPTER_MODULES = (
     "app.modules.commcalc.merchant_portal_sweep",     # card settlement + funding (mig 955)
     "app.modules.commcalc.pos_report_sweep",          # the POS report of declared categories (mig 1078)
+    "app.modules.commcalc.supplier_invoice_sweep",    # what a supplier billed us (§COMMCALC-36)
 )
 
 REQUIRED = ("connector_keys", "portal_descriptor", "report_specs", "ingest_report")

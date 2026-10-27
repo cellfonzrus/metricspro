@@ -158,6 +158,7 @@ Primary code homes:
 | COMMCALC-33 | **What the carrier already recovered is read, and a placeholder is not a measurement** | "the payments for all phones automatically are done from commission and rebates received and auto adjusted" — said to a banner billing him $544,447.78 of his own cash. The deductions were on the row the build already read, −$834,234.25 of them, and the engine wrote `rebate_amount = 0.0` as a placeholder. What does a zero assert that an unwired source has no right to, and which way should the default point when being wrong deletes a liability? |
 | COMMCALC-34 | **A billing period is declared, and the money is read once** | "Weekly Owed to Distributor does not show anything in luxelink" — the report read one carrier's weekly consignment column on one carrier's table, so a tenant whose carrier raises an invoice per order and has no weekly batch at all saw every figure summed over an empty set. Which billing rhythm is a universal fact about owing money, and which is one carrier's arrangement that has to be declared? |
 | COMMCALC-37 | **A report is its page AND its filters, and an unfiltered export is refused** | Fourteen back-office reports were asked for "by the day with all regular filters we have been using", one of them "in detail and pulled for every item" — and the pull loop reached each report's page and pressed Export without ever setting a date, a class, a detail toggle, or pressing Run. What question does a page's default answer, and what does a landed row look like when it answers a different question from the one that was asked? |
+| COMMCALC-38 | **What a supplier billed us has a supplier-neutral home, and the invoice feed ships with its door** | "i want to pull in invoices from ups and then compare to the sales reports to make sure every single shipment is being paid for and cash collected by the sales reps" — and the login row he had already made sat on a processor nothing dispatches, so Run now stamped "not wired yet" and stopped. Which part of "a supplier invoice" is a universal fact, which part is one distributor's portal, and what does a second supplier's invoices do to a table whose every reader assumes the first? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26090,6 +26091,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-35 | commcalc |
 | COMMCALC-36 | commcalc |
 | COMMCALC-37 | commcalc |
+| COMMCALC-38 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -34298,6 +34300,158 @@ Same home, other axes: §COMMCALC-07 (the one pull loop and the adapter contract
 §CORE-03 (the stored portal credential this login rides), §COMMCALC-24 (which process may answer),
 §COMMCALC-31 (the live login that captures a calibration), §CORE-17 (the drill-down every landed
 figure owes).
+
+## §COMMCALC-38. WHAT A SUPPLIER BILLED US HAS A SUPPLIER-NEUTRAL HOME, AND THE INVOICE FEED SHIPS WITH ITS DOOR (owner ask 2026-10-27)
+
+> **Numbered COMMCALC-38.** Three other threads merged into `main` while this and its sibling
+> §COMMCALC-37 were being built, taking 35, 36 and 37's neighbours in turn.
+> `harness_index_section_register.py --next` reads the index in your WORKING TREE and is not a
+> reservation — re-check right before pushing. Likewise the migration numbers: this change was built
+> as 1096/1097 and shipped as **1098/1099** because both were claimed mid-flight.
+
+Owner, verbatim: *"i want to pull in invoices from ups and then compare to the sales reports to make
+sure every single shipment is being paid for and cash collected by the sales reps, the time should be
+recorded so incase the payment is not taken then it shoudl be addressed with the employees … make it
+as a recon under supplier / distribuot , also all these we are doing for ups should be stored in index
+so when a ups store signs up it can use all of these as a dfault option"*.
+
+This section is the PULL and the HOME. The reconciliation it exists to feed, and the signup preset,
+are their own sections and are named in §COMMCALC-38.8 as NOT BUILT YET — stated, so nobody reads
+this as the whole ask delivered.
+
+### COMMCALC-38.1 WHY RUN NOW SAID NOTHING USEFUL
+
+He had already created the login row. It carried `processor = 'other'`, and `router._SOURCE_SCRAPERS`
+has no handler for `other`, so `run_data_source` stamped *"scraper for 'other' not wired yet — reports
+ingest via the email sweep or the Data Imports upload"* and stopped. That message is honest and it was
+useless to him: nothing on the screen offered a processor that would have worked, because none existed.
+
+### COMMCALC-38.2 THE CLASS — three facts that had been one
+
+| the question | where it lives now |
+| --- | --- |
+| which column of an exported report is which fact | `commcalc/report_columns.py` — the MECHANISM (`norm`, longest-synonym-first `map_headers`, `header_score`, `cell`, `money_or_none`) |
+| what does THIS feed call those facts | each feed's own `COLUMN_SYNONYMS`, overlaid by the tenant's `portal_calibration.column_synonyms` |
+| what does one supplier-invoice line say | `commcalc/supplier_invoice_feed.py` — PURE |
+
+`pos_report_feed` carried the mechanism and the vocabulary welded together. A second feed needed the
+mechanism against its own vocabulary, and the only thing standing between this repository and a copied
+normalizer was that nobody had looked. That copy would have failed in a specific, expensive way:
+`norm` is what makes `'B-1115'` and `'b 1115'` one store key, and this platform has already lost a
+phantom store holding $289 to a store code compared under one rule here and another rule there. So the
+mechanism moved to one home, `pos_report_feed.norm` / `map_headers` / `header_score` / `_cell` became
+DEREFERENCES at their old spellings and signatures (every existing caller reads the same code it
+always did, and its 111 checks are unchanged), and the new feed reads the same home.
+
+One money parser, too. `merchant_portals.money` parses a portal money cell and remains the only one;
+`report_columns.money_or_none` dereferences it and adds exactly one rule — **a blank cell is None, not
+0.0**. A supplier invoice needs that distinction and a recon needs it more: 0.0 asserts the supplier
+billed nothing for this shipment, a blank asserts nothing at all, and a recon handed a zero would
+close the line as *collected in full*. Same lesson as §COMMCALC-33, in the place it would have cost
+the most. A line whose charge cannot be read is SKIPPED with its reason and reported, never coerced.
+
+### COMMCALC-38.3 SUPPLIER-NEUTRAL, AND THE SIBLING IS NAMED
+
+`commcalc.vip_invoices` / `vip_invoice_lines` (mig 008) already hold DISTRIBUTOR invoices. They are
+not reused, and the reason is written into mig 1098's header rather than left for a reader to notice:
+
+- they are keyed on one portal's internal invoice id (`vip_id bigint`) and carry **no supplier and no
+  `source_id` column**, so a second supplier's invoices landed in them would be indistinguishable from
+  the first's;
+- they are read by the P&L (`coa.build_inputs` → `vip_fees` / `vip_ap`), the balance sheet, device
+  COGS and the Distributor Invoices report (§15v), so widening them is a money change on paths another
+  piece of work owns.
+
+So "a supplier invoice" gets `commcalc.supplier_invoice_line` (mig **1098**, SURFACED not applied),
+which names no supplier. **`vip_invoices` is the EXCUSED SIBLING** that should fold into it later, with
+that reason recorded. Two homes for one question is a defect; an unstated one is a worse defect.
+
+### COMMCALC-38.4 THE GRAIN, AND THE TWO RECON KEYS
+
+One row per invoice LINE, upserted on `(org_id, source_id, invoice_number, shipment_key, service_key,
+charge_date)` — `supplier_invoice_sweep.ON_CONFLICT`, read from both files by the harness so it cannot
+drift from the migration's unique index. An invoice's own line numbering is not in every export, so
+the key is what identifies the CHARGE.
+
+- **`charge_date` is the day the charge happened** (shipped / pickup / service date), falling back to
+  the invoice date only when the export carries no charge date. A recon keyed on the invoice date would
+  look for the sale in the wrong week.
+- **`shipment_key` / `counter_key`** are the two references a recon may match on — `MATCH_KEYS`, an
+  ALLOWLIST, so a reference kind added later reads as NOT matchable until somebody rules on it rather
+  than silently becoming a join key (the §66 shape). Both are kept verbatim AND normalized by
+  `match_key`, which is `report_columns.norm` and only that: the supplier prints
+  `1Z 999 AA1 01 2345 6784` and the POS prints `1Z999AA1012345 6784`, and two normalizers would make
+  one shipment read as unbilled on one side and uncollected on the other.
+- An export carrying **no** shipment reference on any line says so once, in its warnings, naming the
+  column to declare — because it decides how the recon can match at all, and a recon that fell back to
+  day-and-amount without saying so would read as exact when it is not.
+
+### COMMCALC-38.5 THE FEED SHIPPED WITH ITS DOOR, AND THAT IS THE RATCHET WORKING
+
+Mig 1084 (§12a.2a) fixed the class that "the platform can dispatch this feed" and "a tenant can find
+this feed" were unrelated facts, and armed `harness_connector_scope_lock.py` §I to fail the build on a
+dispatchable key with no `connector_registry` row. **This is the first feed to ship after that ratchet,
+and the lock fired on the first run** — naming `supplier_invoice` as added and doorless. The registry
+row (mig **1099**) and `router._SOURCE_SCRAPERS[supplier_invoice]` are therefore one change, not two,
+and `DISPATCHED_KEYS` names the new key by hand so a feed that later LEAVES still announces itself.
+No host and ANY scope on the row, deliberately: a connector KIND, not a supplier, and any tenant may be
+invoiced by one.
+
+### COMMCALC-38.6 DUPLICATE CHECK (the build gate — what was searched for, what was reused)
+
+| the thing that might already exist | what the index says | what was done |
+| --- | --- | --- |
+| a loop that reaches a report on a logged-in portal and exports it | §COMMCALC-07 | REUSED whole — this feed is the THIRD adapter (four functions), no second loop |
+| per-report filters and day-by-day runs | §COMMCALC-37 | REUSED — an invoice report declares its date filters the same way |
+| a declaration of which reports to pull | `pos_report_sweep.report_specs` | DEREFERENCED, not re-parsed: one config column, one reader, this feed only overriding the grain word |
+| distributor invoice headers + lines | mig 008, §15v | NOT reused, EXCUSED in writing (§COMMCALC-38.3) |
+| per-unit distributor payable | `asset_ledger` | different question (a unit owed, not a line billed) — untouched |
+| our invoices to customers, with tender | `raw_sales_invoice` / `raw_sales_invoice_tender` (mig 1012) | the cash-collected side the recon will READ; nothing written here |
+| the POS side of a daily comparison | `portal_metric_day` (mig 1078) | the other side of the recon, which is why these rows do not go there |
+| which connectors exist and what they apply to | `connector_registry` (migs 1014 + 1084) | EXTENDED with one row, appended as a third seed file — an applied migration is never edited |
+| how a consumer finds a pulled feed's table | `report_pull_map` (mig 207) | one HOUSE row, `sort_order` 63 (60/61 merchant, 62 POS-report) |
+| the store a spelling means | `coa.store_resolver` (§64) | injected; this feed resolves nothing itself, so there is no second store vocabulary |
+| whether a pull route is open | `connector_route_policy` (mig 998) | no row needed — no rows reads as OPEN, and this change opens nothing |
+
+### COMMCALC-38.7 LOCKED
+
+`harness_supplier_invoice_feed.py` — 110 checks, DB-free and browser-free, wired into the
+`carrier-vocab-guard` lock job and named in its own paths filter (so a change to either feed, the
+shared mechanism or either migration cannot skip the job). It fails the build if either feed grows its
+own normalizer, header matcher or money parser; if `report_columns` defines a second `money`; if the
+two feeds' `norm` stop being the same function; if the natural key drifts from mig 1098's unique
+index; if the migration stops granting what it creates (`service_role` only — the browser never reads
+a supplier's billing detail); if a blank charge becomes a zero; if a skip reason comes from outside
+the shared vocabulary; if the parser gains a browser, a socket or an `async def`; if the lander learns
+to delete; or if a supplier's or tenant's name appears in executable text (whole-word, comments and
+docstrings stripped, with both controls armed). `harness_connector_scope_lock.py` is at 46 checks and
+still green with the new key declared.
+
+### COMMCALC-38.8 NOT BUILT YET, SAID PLAINLY
+
+- **The reconciliation** — one row per shipment the supplier billed, the sale that should have collected
+  for it, the rep who rang it, the time, the tender, and a verdict. It reads these rows and
+  `raw_sales_invoice` / `portal_metric_day`; it writes nothing here. Its matching grain depends on
+  whether the tenant's POS export carries the shipment reference, which the first real pull will show.
+- **A calibration capture on the live login.** The fourteen reports the owner named each run behind a
+  form, and since §COMMCALC-37 a report whose declared filters cannot be set is refused rather than
+  exported — correctly. But the portal is ASP.NET WebForms, so a date box's real id is
+  `ctl00_…_txtFromDate` and cannot be guessed; a guess would make the report refuse and leave nobody
+  knowing which guess was wrong. The missing piece is reading a report page's own controls through the
+  authenticated session, so a declaration is written from what the page says. It is one pass per
+  report, permanent, and it is what makes a second tenant of this kind a config row.
+- **The signup preset** — the owner asked that a new tenant of this business kind inherit all of this as
+  a default rather than having it configured by hand. The platform already has the mechanism shape for
+  it (the HOUSE-org preset rows `ui_label_override` uses, migs 945/947/948/953/954, tenant overlaying
+  house), and nothing of it is built. Until it is, a second tenant means declaring the reports again.
+
+### COMMCALC-38.9 Cross-references
+
+Same home, other axes: §COMMCALC-07 (the one pull loop and the adapter contract), §COMMCALC-37 (the
+declared per-report filters an invoice report rides). Neighbours: §12a.2a (the registry door and its
+ratchet), §15v (the distributor-invoice sibling), §COMMCALC-33 (a placeholder is not a measurement),
+§64 (the one store resolver), §66 (an allowlist, so an unruled basis is not evidence), §CORE-03 (the
+stored portal credential this login rides), §CORE-17 (the drill-down every landed figure owes).
 
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
 
