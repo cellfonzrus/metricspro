@@ -330,12 +330,20 @@ if os.path.exists(REFRESH_PY):
     _t = open(REFRESH_PY, encoding="utf-8").read()
     if "sync_payable_flags(" in _t and 'blocked' in _t:
         _ORDER_OWNER = REFRESH_PY
+ROUTER_CODE = open(ROUTER_PY, encoding="utf-8").read()
 RCODE = open(_ORDER_OWNER, encoding="utf-8").read()
 # The guard as each file spells it; -1 (never satisfied) when neither form is present.
 _GUARD_AT = max(RCODE.find('if out.get("blocked")'), RCODE.find('if built.get("blocked")'))
+# D4 AND D5 ASK DIFFERENT QUESTIONS OF DIFFERENT FILES, and reading both from `_ORDER_OWNER` is
+# what made this harness RED on 2026-10-27. D4 is about THE ENDPOINT: only a router raises an
+# HTTPException, so it reads router.py whatever else moves. D5 is about ORDER within whichever file
+# composes the rebuild, which is `_ORDER_OWNER`. While those were one file the distinction was free;
+# the moment refresh.py took the composition they came apart, and D4 went looking for a 409 in a
+# module that has no business raising one.
 check("D4 the endpoint turns a block into a NON-2xx — the other half of the defect was a 200 "
       "describing an emptied table, and a screen must not be able to render 'rebuilt' over it",
-      'if built.get("blocked")' in RCODE and "HTTPException(409" in RCODE)
+      'if built.get("blocked")' in ROUTER_CODE and "HTTPException(409" in ROUTER_CODE,
+      os.path.basename(ROUTER_PY))
 check("D5 …and it does so BEFORE the flags refresh, so a refused rebuild cannot go on to restate "
       "the discrepancy flags off a ledger it did not write",
       # Two deliberate choices, both of them about what can satisfy or defeat the claim:
