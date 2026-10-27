@@ -1269,7 +1269,18 @@ _all_routes = _flatten_routes(real_app.routes)
 # `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
 # one added, NONE removed, 1801 + 1 = 1802. So the pin was re-taken on a counted, named addition,
 # never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1802"))
+# Re-pinned 1802 -> 1803 on 2026-10-26 for §COMMCALC-36, the rep's shelf card. The delta is ONE route
+# and it is named: GET /commcalc/my-shelf (the devices physically on the shelf at the stores a login
+# reaches, with the days each has left inside the carrier's declared selling window). It is READ-ONLY
+# and adds no input to any report, statement, GP, commission or tax figure: it reads the POS
+# inventory snapshot, span-filters it through `storeops.scope_keyset`, and does its arithmetic in
+# `commcalc/inventory_stock_age.py` (§COMMCALC-35, pure and DB-free). No table gains a writer, no
+# existing payload shape changes, and it adds no route to db_resilience itself (I0b proves that
+# independently of this number). Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
+# one added, NONE removed, 1802 + 1 = 1803. So the pin was re-taken on a counted, named addition,
+# never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1803"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

@@ -458,14 +458,23 @@ def build_aging_inventory(inv_row, sale_sold_date, today):
     """Aging section for a NON-VIP tenant, sourced from an inventory_aging_device row (the b2bsoft/POS
     Inventory Aging report's per-device line) instead of asset_ledger. Same OUTPUT SHAPE as build_aging
     so the UI/exports are unchanged. Aging basis:
-      • received_date present → received → sold (if a B2B sale matched) else received → today (unsold);
-      • else days_in_stock from the report → used as-is (as of the file's as_of_date);
+      • receipt date (ONE home: `inventory_stock_age.received_on`) → sold (if a B2B sale matched),
+        else → today for a device still unsold;
       • else honest 'no aging date' note.
+
+    FIXED 2026-10-26 (§COMMCALC-35). This function used to fall back to `days_in_stock` READ OFF THE
+    FILE when `received_date` was NULL — which it is on all 10,525 rows house-wide, so that fallback
+    was the normal path, and it reported the age ON THE DAY THE FILE WAS PULLED. A device last seen in
+    a July snapshot therefore showed its July age in October, while `/inventory-recon` and the
+    management-incentive gate, deriving the receipt date from the same two columns, showed the real
+    one. Same question, three code paths, one of them wrong: the receipt date is now dereferenced from
+    the one home and the age is counted to `today` like every other surface's.
     inv_row None/empty → honest 'no inventory record' (delegates to build_aging(None, …))."""
+    from app.modules.commcalc import inventory_stock_age as _isa
     asof = iso_date(today) or (today if isinstance(today, str) else None)
     if not inv_row:
         return build_aging(None, sale_sold_date, today)
-    acquired = iso_date(inv_row.get("received_date"))
+    acquired = iso_date(_isa.received_on(inv_row))
     match_sold = iso_date(sale_sold_date)
     sold = match_sold  # the aging report is an ON-HAND snapshot; only a B2B sale supplies a sold date
     is_sold = bool(sold)
@@ -478,14 +487,12 @@ def build_aging_inventory(inv_row, sale_sold_date, today):
             basis = ("days on inventory (received → sold)" if is_sold
                      else "current age (received → today, unsold)")
     note = None
-    dis = inv_row.get("days_in_stock")
-    if days is None and dis is not None:
-        try:
-            days = int(dis)
-            basis = "days in stock (from the inventory-aging report" + (
-                f", as of {iso_date(inv_row.get('as_of_date'))}" if inv_row.get("as_of_date") else "") + ")"
-        except (TypeError, ValueError):
-            days = None
+    # NO days_in_stock FALLBACK. `received_on` already consumed days_in_stock to DATE the receipt, so
+    # reading it again here would re-introduce the stale age the docstring describes. Where it yields
+    # no date there is genuinely no age, and that is said rather than approximated.
+    if acquired is not None and days is not None and _isa.received_basis(inv_row) == _isa.BASIS_AGE_AT_SNAPSHOT:
+        basis = (basis or "") + " — receipt date derived from the inventory-aging report's age in stock" + (
+            f", as of {iso_date(inv_row.get('as_of_date'))}" if inv_row.get("as_of_date") else "")
     if acquired is None and days is None:
         note = "Inventory record found but no received/aging date — cannot compute age."
     model = ((str(inv_row.get("item") or "").strip()) or (str(inv_row.get("sku") or "").strip()) or None)

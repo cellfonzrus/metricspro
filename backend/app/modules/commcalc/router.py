@@ -33931,13 +33931,172 @@ def import_paramount_mtd(body: ImportParamountMtdIn, org_id: str = ORG_ID):
     return {"stores": len(parsed), "values": len(entries), "preview": preview, "saved": saved}
 
 
+@router.get("/my-shelf")
+def my_shelf(as_of: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """THE REP'S OWN SHELF: every device physically in stock at the stores this login reaches, with how
+    many days each one has left inside the carrier's declared selling window.
+
+    OWNER 2026-10-26: *"invenotry aging in luxeliunk shodul say sell within 10 days of receiving the
+    phones in stock and it should be on every sales reps daSHBOARDS WHEN TEHY LOG IN"*.
+
+    NOT A NEW DERIVATION, and deliberately not a new table. Three facts are dereferenced, each from
+    the home that already owns it:
+      • "which stores does this login reach" — `storeops.scope_keyset`, the evidence-based span (where
+        the person was scheduled or clocked in). A rep with no store pinned on their login therefore
+        still sees their shelf, which matters here: 9 of Luxelink's 32 active rep logins carry no
+        store_code at all (measured 2026-10-26).
+      • "when did this device arrive, and is it still here" — `inventory_stock_age` (§COMMCALC-35).
+      • "how long may it sit" — `device_aging_policy` over the declared
+        `payable_source_map.sell_within_days` (§COMMCALC-26).
+
+    WHY THE POS SNAPSHOT AND NOT THE PAYABLE LEDGER. `device_payable_ledger` is the carrier's payment
+    story; its `invoice_date` is the activation/transaction date, not a receipt. Measured 2026-10-26:
+    its Luxelink unsold set (3,095 devices) and the POS on-hand set (888) overlap by **12**. A rep
+    asked what is on their shelf must be told what is on their shelf, so the source is the POS
+    on-hand snapshot. Nothing here reads the ledger, which is also why this card and the payables
+    thread's BYOP exclusion cannot disagree.
+
+    WHAT IT REFUSES TO INVENT. A device whose carrier cannot be identified does NOT inherit the house
+    60-day window (see `inventory_stock_age.resolve_window`); its age is shown and the missing deadline
+    names its reason. A device with no age is counted as `undated`, never as fine. An empty shelf
+    reports WHY — no snapshot, no span, or a span with no devices — rather than rendering as zero.
+    """
+    from app.modules.commcalc import inventory_stock_age as _isa
+    from app.modules.commcalc import unsold_inventory as _unsold
+    from app.modules.asset.inventory_buckets import inv_bucket
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    require_org(org_id)
+    client = sb()
+    today = str(as_of or "")[:10] or _date.today().isoformat()
+
+    # The carrier's declared windows, through the payables config spine's own loader.
+    policies, maps = _unsold.load_policies(client, org_id)
+
+    # model -> carrier, via the EXISTING alias one home (mig 096). No new matcher: the inventory feed
+    # carries a model name and no carrier_id, and this is the table the forecast already aligns on.
+    model_carrier = {}
+    try:
+        for a in (client.schema("commcalc").table("device_model_alias")
+                  .select("raw_model,canonical_model,carrier_id")
+                  .eq("org_id", org_id).limit(2000).execute().data) or []:
+            for k in (a.get("raw_model"), a.get("canonical_model")):
+                k = str(k or "").strip().lower()
+                if k and a.get("carrier_id"):
+                    model_carrier.setdefault(k, a["carrier_id"])
+    except Exception as e:
+        print(f"WARN my_shelf device_model_alias unreadable (windows fall to the org ladder): {e}")
+
+    def _make():
+        return (client.schema("commcalc").table("inventory_aging_device")
+                .select("imei,serial,sku,item,store,unit_cost,received_date,days_in_stock,"
+                        "as_of_date,on_hand,status")
+                .eq("org_id", org_id))
+    try:
+        rows = list(_feed_read.read_all(_make))
+    except Exception as e:
+        # BUSINESS WORDS, not the table's name (§19.38 — a tenant must not be shown the platform's
+        # internals, and the boundary only rewrites RUNTIME database errors, not a sentence we typed).
+        # The technical cause still reaches the server log, which is where the platform admin reads it.
+        print(f"ERROR my_shelf inventory read failed (org {org_id}): {e}")
+        raise HTTPException(500, "The stock-on-hand records could not be read just now. "
+                                 "Nothing on your shelf has changed — try again in a moment.")
+
+    snapshot = _isa.current_snapshot(rows)
+    shelf_rows = [r for r in rows if _isa.on_shelf(r, snapshot)]
+
+    # PHONES, because that is what the owner asked about — and through the platform's ONE device-type
+    # classifier (`asset/inventory_buckets.inv_bucket`), which the On-Inventory recon and the aging
+    # ingest already bucket with. A second keyword matcher over model names is the class of bug that
+    # module's own docstring was extracted to prevent.
+    #
+    # NOT a silent drop: `excluded` reports the count and the model names, because a card that shows
+    # 446 of 888 units without saying so reads as missing data. Measured 2026-10-26 on Luxelink's live
+    # snapshot, the 442 excluded units are exactly two model names — "Total by Verizon SIM Kit" (435)
+    # and "Total Wireless BYOT SIM Kit" (7) — so no handset is lost to the filter, and they were
+    # drowning every genuinely overdue phone: they are 442 of the 689 overdue rows at 10 days while
+    # carrying $1,326 of the $71,268.
+    devices_only, excluded = [], {}
+    for r in shelf_rows:
+        if inv_bucket(r.get("item")) is not None:
+            devices_only.append(r)
+        else:
+            k = (str(r.get("item") or "").strip() or "(unnamed)")
+            excluded[k] = excluded.get(k, 0) + 1
+    shelf_rows = devices_only
+
+    # The store span. `scope_keyset` returns UPPER store keys (codes AND addresses), which is what
+    # this feed's free-text `store` holds, and the resolver collapses the spellings that differ.
+    ks = scope_keyset(authorization, org_id)
+    resolve_code = _store_code_resolver(client, org_id)
+    mine, out_of_span = [], 0
+    for r in shelf_rows:
+        raw = str(r.get("store") or "").strip()
+        code = str(resolve_code(raw) or "").strip()
+        if in_keyset(ks, raw, code):
+            mine.append((r, code or raw or None))
+        else:
+            out_of_span += 1
+
+    out = []
+    for r, code in mine:
+        carrier = model_carrier.get(str(r.get("item") or "").strip().lower())
+        pol, why = _isa.resolve_window(carrier, policies, maps)
+        row = _isa.shelf_row(r, pol, today, reason=why)
+        row["store_code"] = code
+        row["carrier_id"] = carrier
+        out.append(row)
+    # Worst first: the phone closest to costing money is the one the rep should pick up.
+    out.sort(key=lambda x: (x["days_left"] if x["days_left"] is not None else 10 ** 6,
+                            -(x["days_on_shelf"] or 0)))
+
+    by_store = {}
+    for row in out:
+        b = by_store.setdefault(row["store_code"] or "(unplaced)", [])
+        b.append(row)
+    stores = [{"store_code": k, **_isa.summarise(v)} for k, v in sorted(by_store.items())]
+
+    # WHY AN EMPTY CARD IS EMPTY — said, never left blank (the §29.12 "never blank" rule).
+    hints = []
+    if not snapshot:
+        hints.append("No inventory-aging snapshot has been uploaded for this organization yet, so "
+                     "there is nothing to age. Upload the POS Inventory Aging report.")
+    elif not shelf_rows:
+        hints.append(
+            f"The latest inventory snapshot ({snapshot}) lists no phones, tablets, watches or hotspots "
+            "still on hand" + (f" — only {sum(excluded.values())} SIM kits and accessories." if excluded
+                               else "."))
+    elif not out:
+        hints.append("The latest inventory snapshot has devices, but none at a store this login "
+                     "reaches. Visibility follows where you were scheduled or clocked in.")
+    if not policies:
+        hints.append("No carrier selling window is declared for this organization, so no device can "
+                     "show days remaining. Declare it on the payables source map.")
+
+    windows = sorted({int(p["sell_within_days"]) for p in policies.values() if p})
+    return {
+        "as_of": today, "snapshot": snapshot,
+        "devices": out, "stores": stores, "summary": _isa.summarise(out),
+        "windows_declared": windows,
+        # What the device filter held back, named rather than merely counted.
+        "excluded_non_devices": sum(excluded.values()),
+        "excluded_models": sorted(excluded.items(), key=lambda kv: -kv[1])[:20],
+        "span_restricted": ks is not None,
+        "devices_out_of_span": out_of_span,
+        "setup_hint": hints,
+        # PROVENANCE, so the card can say where the receipt date came from rather than implying a
+        # vendor receipt document exists. It does not: see §COMMCALC-35.
+        "received_basis": ("age_at_snapshot" if any(d["age_basis"] == _isa.BASIS_AGE_AT_SNAPSHOT
+                                                   for d in out) else None),
+        "source": "commcalc.inventory_aging_device",
+    }
+
+
 @router.get("/inventory-recon")
 def inventory_recon(store_code: str, period: str, max_days: int = 10, org_id: str = ORG_ID):
     """IMEI/serial reconciliation for a store + period — is every device accounted for? Matches B2B
     inventory (inventory_aging_device) against B2B sales (raw_sales.serial_1) and reports: devices that
     left the shelf with no sale (shrink), sales with no matching received device, uncategorized sales,
     and a sold-within-N-days aging split. Reuses the app's own IMEI normalizer + bucket classifier."""
-    from datetime import timedelta
     from app.modules.commcalc import inventory_recon as _ir
     from app.modules.commcalc import gp_report as _gp
     require_org(org_id)
@@ -33945,18 +34104,11 @@ def inventory_recon(store_code: str, period: str, max_days: int = 10, org_id: st
     resolve_code = _store_code_resolver(client, org_id)
     sc = str(store_code).strip()
 
-    def _derived_received(r):
-        rd = r.get("received_date")
-        if rd:
-            return str(rd)[:10]
-        aod = _mi_parse_date(r.get("as_of_date"))
-        dis = r.get("days_in_stock")
-        if aod is not None and dis is not None:
-            try:
-                return (aod - timedelta(days=int(dis))).isoformat()
-            except (TypeError, ValueError):
-                return None
-        return None
+    # The receipt date is NOT derived here. `inventory_stock_age.received_on` is the ONE home for
+    # "when did this device arrive on the shelf" (§COMMCALC-35); this endpoint, the MI aging gate and
+    # device_history each carried their own copy of the subtraction, and one of them was stale.
+    from app.modules.commcalc import inventory_stock_age as _isa
+    _derived_received = _isa.received_on
 
     try:
         inv_rows = (client.schema("commcalc").table("inventory_aging_device")
@@ -47803,20 +47955,16 @@ def _mi_parse_date(s):
 def _mi_ever_over_days(received_date, days_in_stock, as_of_date, off_hand_as_of, m_start, m_end, max_days):
     """Did this device EVER exceed max_days in stock DURING [m_start, m_end]? Returns True/False, or None
     when the age is unknowable. This answers the period-correct question the shipped gate did not: not "is
-    it over N right now" but "did it peak over N at any point in the period." `received` falls back to
-    (as_of_date − days_in_stock) when received_date is NULL — the luxelink aging export carries age, not a
-    received date, and device_history uses the same fallback ladder. PURE / unit-tested."""
-    from datetime import timedelta
+    it over N right now" but "did it peak over N at any point in the period." The receipt date comes
+    from `inventory_stock_age.received_on` — the ONE home (§COMMCALC-35), since the luxelink aging
+    export carries age and not a received date; this gate, `/inventory-recon` and `device_history`
+    each derived it separately until that module existed. PURE / unit-tested."""
+    from app.modules.commcalc import inventory_stock_age as _isa
     ms = _mi_parse_date(m_start); me = _mi_parse_date(m_end)
-    rec = _mi_parse_date(received_date)
-    if rec is None:
-        aod = _mi_parse_date(as_of_date)
-        try:
-            dis = int(days_in_stock)
-        except (TypeError, ValueError):
-            dis = None
-        if aod is not None and dis is not None:
-            rec = aod - timedelta(days=dis)
+    # ONE home for the receipt date (§COMMCALC-35) — this gate used to derive it itself.
+    rec = _mi_parse_date(_isa.received_on({"received_date": received_date,
+                                           "as_of_date": as_of_date,
+                                           "days_in_stock": days_in_stock}))
     if rec is None or ms is None or me is None:
         return None
     off = _mi_parse_date(off_hand_as_of)
