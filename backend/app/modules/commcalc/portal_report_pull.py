@@ -235,6 +235,137 @@ def click_text(page, words, timeout_ms=15000):
     return None
 
 
+# ── the report's own FILTERS, declared (index §COMMCALC-35) ──────────────────────────────────────
+# Owner, 2026-10-27, asked for fourteen UPS Store reports "by the day with all regular filters we have
+# been using", Item Sales "in detail and pulled for every item". The loop reached a report and pressed
+# Export — it never set a date, a class, a category or a detail toggle, and never pressed Run. So it
+# exported whatever that page happened to default to.
+#
+# THE CLASS: a report is not identified by its PAGE, it is identified by its page AND the parameters it
+# was run with. Exporting the page's default silently answers a different question from the one asked,
+# and the row that lands carries no sign of it — the defect a recon would inherit without ever seeing.
+# So: the parameters are DECLARED per report (config, never code — RULE TWO), and a report whose
+# declared parameters could not be applied is NOT exported. Refusing is the honest outcome; an
+# unfiltered export is not.
+PARAM_KINDS = ("fill", "select", "check", "uncheck", "click")
+# A declared value may name the day the run covers. Spelled once, here, and substituted by
+# `resolve_param_value` — the only place a date becomes a form value.
+DATE_TOKENS = ("{date}", "{date_from}", "{date_to}")
+
+
+def report_params(src_row, report_key):
+    """THE declared "what must be set on this report's page before exporting", as a tuple of
+    normalized steps. Read from `portal_calibration[<report_key>]["params"]`.
+
+    Each step is {selector, kind, value, label}. PURE and it never raises: a malformed entry is
+    DROPPED rather than guessed at, because a half-understood filter is how the wrong figures land.
+    An entry dropped here simply is not declared — it can never become an unannounced default,
+    since `apply_report_params` refuses on anything it was asked for and could not set."""
+    cal = ((src_row or {}).get("portal_calibration") or {}).get(report_key) or {}
+    raw = cal.get("params") if isinstance(cal, dict) else None
+    if isinstance(raw, dict):
+        raw = [raw]
+    out = []
+    for item in (raw or []):
+        if not isinstance(item, dict):
+            continue
+        sel = str(item.get("selector") or "").strip()
+        kind = str(item.get("kind") or "fill").strip().lower()
+        if not sel or kind not in PARAM_KINDS:
+            continue
+        val = item.get("value")
+        out.append({"selector": sel, "kind": kind,
+                    "value": None if val is None else str(val),
+                    "label": str(item.get("label") or sel)[:80]})
+    return tuple(out)
+
+
+def resolve_param_value(value, day=None, d_from=None, d_to=None):
+    """A declared value with its date tokens filled in. PURE. A token with nothing to put in it is
+    left standing, so `apply_report_params` sets a visibly wrong value rather than a plausible one —
+    which the operator sees, instead of a silently shifted date."""
+    if value is None:
+        return None
+    out = str(value)
+    for tok, repl in (("{date}", day), ("{date_from}", d_from), ("{date_to}", d_to)):
+        if repl is not None:
+            out = out.replace(tok, str(repl))
+    return out
+
+
+def is_per_day(src_row, report_key):
+    """Does this report run once PER DAY? DERIVED, never a second switch: a report whose declared
+    parameters reference `{date}` is by definition a per-day report, and one that does not is not.
+    A flag beside the declaration could disagree with it; this cannot."""
+    for step in report_params(src_row, report_key):
+        if "{date}" in str(step.get("value") or ""):
+            return True
+    return False
+
+
+def pull_days(d_from, d_to, limit=MAX_WINDOW_DAYS):
+    """THE days one per-day report covers, oldest first. PURE. Bounded by the same ceiling the window
+    already has, so a mis-declared range can never become a month of portal requests."""
+    try:
+        a = date.fromisoformat(str(d_from))
+        b = date.fromisoformat(str(d_to))
+    except (TypeError, ValueError):
+        return ()
+    if b < a:
+        return ()
+    out, cur = [], a
+    while cur <= b and len(out) < max(1, int(limit)):
+        out.append(cur.isoformat())
+        cur += timedelta(days=1)
+    return tuple(out)
+
+
+def apply_report_params(page, steps, day=None, d_from=None, d_to=None):
+    """Set every declared parameter on the report's page. Returns the labels that could NOT be set.
+
+    Never raises — a Playwright failure IS the "could not set" answer. The caller refuses to export
+    when anything comes back, which is the whole point: the filters were asked for, so a report
+    exported without them is the wrong report.
+    """
+    failed = []
+    for step in (steps or ()):
+        sel, kind = step["selector"], step["kind"]
+        val = resolve_param_value(step.get("value"), day, d_from, d_to)
+        try:
+            if kind == "fill":
+                page.fill(sel, "" if val is None else val, timeout=20000)
+            elif kind == "select":
+                page.select_option(sel, val, timeout=20000)
+            elif kind == "check":
+                page.check(sel, timeout=20000)
+            elif kind == "uncheck":
+                page.uncheck(sel, timeout=20000)
+            else:
+                page.click(sel, timeout=20000)
+        except Exception:
+            failed.append(step["label"])
+    return failed
+
+
+def run_report(page, src_row, report_key):
+    """Press the report's declared Run control, if it has one. A portal that renders on Run exports
+    the PREVIOUS run's grid without this — the stalest possible way to be wrong. Best-effort by
+    design: a report with nothing declared here is one that needs no Run press."""
+    vp = _vp()
+    sel = calibrated(src_row, report_key, "run_selector")
+    if not sel:
+        return True
+    try:
+        page.click(sel, timeout=30000)
+    except Exception:
+        return False
+    try:
+        vp._wait_settle(page)
+    except Exception:
+        pass
+    return True
+
+
 def navigate_to_report(page, src_row, spec):
     """Reach one report. Calibrated selector first (authoritative once an operator captured it on the
     live screencast), then a calibrated URL, then the spec's text hints. True when we believe we
@@ -294,6 +425,62 @@ def _read_download(path):
 
 
 # ── THE pull loop ────────────────────────────────────────────────────────────────────────────────
+def pull_one_report(client, org_id, src_row, page, mod, proc, spec, tmp,
+                    d_from, d_to, days, should_stop=None):
+    """One report, over the days it covers. ONE result dict, whatever the number of days.
+
+    The order is the operator's own: reach the page, set every declared parameter, press Run, export.
+    A day whose declared parameters could not all be set is NOT exported and is named in the error —
+    exporting it anyway would land the page's default under the day the operator asked for, which is
+    the wrong figures wearing the right date (§COMMCALC-35)."""
+    steps = report_params(src_row, spec["key"])
+    rows, errors, ran = 0, [], 0
+    unresolved, delivered_any = [], False
+    for day in (days or (None,)):
+        if should_stop is not None and should_stop():
+            break
+        if not navigate_to_report(page, src_row, spec):
+            return {"report": spec["key"], "label": spec["label"], "rows_ingested": 0,
+                    "delivered": False, "unreachable": True,
+                    "error": "Could not reach this report — calibrate it on the live login."}
+        missed = apply_report_params(page, steps, day=day, d_from=d_from, d_to=d_to)
+        if missed:
+            errors.append("%s: could not set %s" % (day or "the window", ", ".join(missed[:3])))
+            continue
+        if not run_report(page, src_row, spec["key"]):
+            errors.append("%s: the Run control did not respond" % (day or "the window"))
+            continue
+        path, name = download_report(page, src_row, spec, tmp)
+        if not path:
+            return {"report": spec["key"], "label": spec["label"], "rows_ingested": rows,
+                    "delivered": delivered_any, "unreachable": True,
+                    "error": "Reached the report but found no export control — calibrate "
+                             "export_selector for this source on the live login."}
+        ran += 1
+        try:
+            one = mod.ingest_report(client, org_id, src_row, proc, spec,
+                                    _read_download(path), name)
+        except Exception as e:
+            # The merchant feed's own wording, kept verbatim: the operator reads one sentence for
+            # this failure whichever feed produced it, and the harness locks the phrase.
+            errors.append("%s: Ingest failed: %s" % (day or "the window", str(e)[:120]))
+            continue
+        rows += one.get("rows_ingested") or 0
+        delivered_any = delivered_any or bool(one.get("delivered"))
+        for u in (one.get("unresolved") or one.get("unresolved_merchants") or []):
+            if u not in unresolved:
+                unresolved.append(u)
+    out = {"report": spec["key"], "label": spec["label"], "rows_ingested": rows,
+           "delivered": bool(rows) and delivered_any, "days_run": ran}
+    if unresolved:
+        out["unresolved"] = unresolved
+    if errors:
+        # Named, never swallowed: a report that covered only some of its days says which, so a gap in
+        # the data is visible as a gap rather than as a smaller number.
+        out["error"] = "; ".join(errors[:4])
+    return out
+
+
 def pull_reports_on_page(client, org_id, src_row, page, should_stop=None):
     """Pull EVERY enabled report for this source on an ALREADY-AUTHENTICATED page.
 
@@ -320,25 +507,13 @@ def pull_reports_on_page(client, org_id, src_row, page, should_stop=None):
         for spec in specs:
             if should_stop is not None and should_stop():
                 break
-            if not navigate_to_report(page, src_row, spec):
+            # A report whose declared parameters name `{date}` is run ONCE PER DAY (§COMMCALC-35);
+            # one that declares none is run once for the whole window, exactly as before.
+            days = (pull_days(d_from, d_to) if is_per_day(src_row, spec["key"]) else (None,))
+            res = pull_one_report(client, org_id, src_row, page, mod, proc, spec, tmp,
+                                  d_from, d_to, days, should_stop)
+            if res.get("unreachable"):
                 unreachable.append(spec["label"])
-                results.append({"report": spec["key"], "label": spec["label"], "rows_ingested": 0,
-                                "delivered": False,
-                                "error": "Could not reach this report — calibrate it on the live login."})
-                continue
-            path, name = download_report(page, src_row, spec, tmp)
-            if not path:
-                unreachable.append(spec["label"])
-                results.append({"report": spec["key"], "label": spec["label"], "rows_ingested": 0,
-                                "delivered": False,
-                                "error": "Reached the report but found no export control — calibrate "
-                                         "export_selector for this source on the live login."})
-                continue
-            try:
-                res = mod.ingest_report(client, org_id, src_row, proc, spec, _read_download(path), name)
-            except Exception as e:
-                res = {"report": spec["key"], "label": spec["label"], "rows_ingested": 0,
-                       "delivered": False, "error": ("Ingest failed: %s" % e)[:300]}
             results.append(res)
             total += res.get("rows_ingested") or 0
     return summarize(results, total, d_from, d_to, unreachable)

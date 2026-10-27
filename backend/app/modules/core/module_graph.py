@@ -485,9 +485,17 @@ FACTS: dict[str, dict] = {
                     'could only be built by copying the calibration ladder, the export words, the '
                     'honest-failure wording and the cold-session restore. A feed is now an ADAPTER '
                     '(four functions) and the loop is written once; three older sweeps still drive '
-                    'their own and are PINNED with reasons in the lock, a count that may only shrink.',
+                    'their own and are PINNED with reasons in the lock, a count that may only shrink. '
+                    'Second axis (§COMMCALC-35): WITH WHICH PARAMETERS was it run? A report is '
+                    'identified by its page AND its filters, so the dates, dropdowns and detail '
+                    'toggles are DECLARED per report in portal_calibration and set by '
+                    'apply_report_params before the Run press and the export — and a report whose '
+                    'declared parameters could not all be set is NOT exported, because the page '
+                    'default under the asked-for date is the wrong figures wearing the right date. '
+                    'Whether a report runs once per day is DERIVED from that declaration ({date} '
+                    'appearing in a value), never a second switch that could disagree with it.',
         "homes": ('app/modules/commcalc/portal_report_pull.py',),
-        "index": ('COMMCALC-07',),
+        "index": ('COMMCALC-07', 'COMMCALC-35'),
         "locks": ('harness_portal_report_pull.py',),
         # SNAPSHOT — written BY HAND (§50): the modules that IMPORT the home, derived from the import
         # graph. The adapters import it for its helpers and are resolved BY it through the registry,
