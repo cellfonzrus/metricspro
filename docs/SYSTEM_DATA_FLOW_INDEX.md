@@ -159,6 +159,7 @@ Primary code homes:
 | COMMCALC-34 | **A billing period is declared, and the money is read once** | "Weekly Owed to Distributor does not show anything in luxelink" — the report read one carrier's weekly consignment column on one carrier's table, so a tenant whose carrier raises an invoice per order and has no weekly batch at all saw every figure summed over an empty set. Which billing rhythm is a universal fact about owing money, and which is one carrier's arrangement that has to be declared? |
 | COMMCALC-37 | **A report is its page AND its filters, and an unfiltered export is refused** | Fourteen back-office reports were asked for "by the day with all regular filters we have been using", one of them "in detail and pulled for every item" — and the pull loop reached each report's page and pressed Export without ever setting a date, a class, a detail toggle, or pressing Run. What question does a page's default answer, and what does a landed row look like when it answers a different question from the one that was asked? |
 | COMMCALC-38 | **What a supplier billed us has a supplier-neutral home, and the invoice feed ships with its door** | "i want to pull in invoices from ups and then compare to the sales reports to make sure every single shipment is being paid for and cash collected by the sales reps" — and the login row he had already made sat on a processor nothing dispatches, so Run now stamped "not wired yet" and stopped. Which part of "a supplier invoice" is a universal fact, which part is one distributor's portal, and what does a second supplier's invoices do to a table whose every reader assumes the first? |
+| COMMCALC-39 | **A declaration is read off the page, and a declared report resolves to itself** | Fourteen reports were asked for by name, and every one of them would have resolved to NOTHING: the pull passed a source's own declaration back to its adapter as a FILTER, squashed under a different rule from the one the reports were keyed by, so a fully configured source read as "No reports are enabled". And the filters those reports need are behind framework-generated control ids nobody can guess. Where should a declaration come from, and what does one argument meaning two things to two callers cost? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26092,6 +26093,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-36 | commcalc |
 | COMMCALC-37 | commcalc |
 | COMMCALC-38 | commcalc |
+| COMMCALC-39 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -34452,6 +34454,116 @@ declared per-report filters an invoice report rides). Neighbours: §12a.2a (the 
 ratchet), §15v (the distributor-invoice sibling), §COMMCALC-33 (a placeholder is not a measurement),
 §64 (the one store resolver), §66 (an allowlist, so an unruled basis is not evidence), §CORE-03 (the
 stored portal credential this login rides), §CORE-17 (the drill-down every landed figure owes).
+
+## §COMMCALC-39. A DECLARATION IS READ OFF THE PAGE, AND A DECLARED REPORT RESOLVES TO ITSELF (owner ask 2026-10-27)
+
+Owner, verbatim: *"do each report by the day with all regular filters we have been using and also the
+send options / item sales should be in detail and pulled for every item"* — fourteen named reports.
+
+### COMMCALC-39.1 THE DEFECT FOUND ON THE WAY — every declared report filtered itself out
+
+`pull_reports_on_page` resolves a source's reports with
+`mod.report_specs(proc, src_row["portal_reports"], src_row=src_row)`. For the CARD feed that second
+argument is genuinely an enabled list and its keys are already canonical. For a DECLARATION-driven
+feed the declaration and the "enabled list" are the SAME list, and the adapter built its filter from
+it under a different rule from the one it keyed the specs by:
+
+| declared as | the spec's key | the filter the old rule built | result |
+| --- | --- | --- | --- |
+| `["Item Sales"]` | `item_sales` | `{"item sales"}` | dropped |
+| `[{"key": "item_sales"}]` | `item_sales` | `set()` — a dict is not a `str` | dropped |
+
+So a source that declared fourteen reports resolved to **none**, and said *"No reports are enabled for
+this portal source"* — the same sentence an unconfigured source gets, which is exactly what would
+have made it look like a setup mistake rather than a defect. It was latent only because no tenant had
+declared a report yet.
+
+**THE CLASS:** *one argument meaning two different things to two callers.* `enabled_keys` meant "the
+filter" to the adapter and "the declaration" to the loop, and nothing made them agree. The fix is a
+single `spec_key(item)` — the one rule for "which report is this" — dereferenced by BOTH the
+construction and the filter, so the two cannot be derived differently again. A genuinely narrower
+enabled list still narrows; that was never the problem.
+
+`specs_for(src_row, proc)` and `setup_hint_for(src_row, proc)` are the one home for resolving a
+source's reports, because the capture below must read exactly the set the pull will run — a capture
+reading a different set would calibrate a report nobody pulls and miss one somebody does.
+
+### COMMCALC-39.2 WHERE A DECLARATION COMES FROM — the page, not a guess
+
+§COMMCALC-37 made a report's filters DECLARED and refuses to export a report whose declared filters
+could not be set. That is right, and it makes the declaration load-bearing: a wrong selector is now a
+report that never exports. A portal can carry ids its own framework generated (`ctl00_…_txtFromDate`
+rather than `#DateFrom`), so a guessed selector produces exactly that failure with no way to tell
+which guess was wrong.
+
+So the declaration is READ from the page, through the session that is already signed in:
+
+| fact | its one home |
+| --- | --- |
+| what controls does this page offer | `prp.read_page_controls` — one page evaluation, returning plain dicts so the suggester needs no browser |
+| which selector should a declaration use | `prp.control_selector` — `#id` escaped for CSS, else `[name="…"]` |
+| what is this control FOR | `prp.control_purpose` — the page's own words, longest phrase first, tenant words declared in `portal_calibration.control_words` (RULE TWO) |
+| what declaration do those controls imply | `prp.suggest_params` — PURE |
+| reach a report and suggest its declaration | `prp.capture_report_calibration` — navigates by the SAME ladder the pull uses |
+
+`POST /commcalc/data-sources/{sid}/live-login/calibrate` runs it on the live authenticated page, as
+the sibling of `PULL` on the same single-threaded loop (`LiveLoginSession.calibrate` /
+`can_calibrate` / `run_calibrate_blocking` / `_handle_calibrate`, with `calibrate_fn` built by
+`router._live_calibrate`). It is never called by the auto-pull: a session that signed in to fetch
+reports must not start reading pages nobody asked about.
+
+**IT WRITES NOTHING.** Not to the portal, not to `portal_calibration`. A capture is evidence about a
+page, not a decision about a tenant's config, and a capture that silently rewrote a working
+declaration would be the worst kind of helpful. Three suggestion rules, each because its opposite is
+worse:
+
+- the date boxes are declared with the **tokens**, never with the day the capture happened to run — a
+  captured literal date would pull one day forever and look like it was working;
+- a detail / itemized tick box is declared **ticked**, because the owner asked for every item and an
+  untouched box is the page default §COMMCALC-37 exists to stop trusting;
+- **Run and Export come back under their own keys**, not as params, because the loop presses them at a
+  fixed point in its order and a param pressing Run early would export the previous run's grid.
+
+Anything whose purpose the page's own words do not state is returned in `unrecognised` — named for a
+human, with its own dropdown options so the value can be declared without opening the portal — and
+never guessed into a param.
+
+### COMMCALC-39.3 DUPLICATE CHECK (the build gate — what was searched for, what was reused)
+
+| the thing that might already exist | what the index says | what was done |
+| --- | --- | --- |
+| per-report selectors and filters | `portal_calibration` + §COMMCALC-37 | REUSED — this writes the same shape it reads, and nothing new is stored |
+| reaching one report | `prp.navigate_to_report` | REUSED whole: a capture that reaches a page proves the pull will reach it, and one that cannot says which report needs its navigation declared first |
+| a live authenticated browser, and work queued onto it | `LiveLoginSession` + the `PULL` command (§COMMCALC-24) | EXTENDED with a sibling command — no second session, no second worker, no second loop |
+| what the last pull saw | `GET /data-sources/{sid}/pull-diagnostic` | different question (what the pull DID), untouched; this answers what the page OFFERS before a pull is run |
+| the normalizer that compares words | `report_columns.norm` (§COMMCALC-38) | DEREFERENCED, so a label compared here and a header compared there cannot drift |
+| resolving a source's declared reports | was inline in the pull loop | EXTRACTED to `specs_for` and fixed (§COMMCALC-39.1) — one resolver, two callers |
+
+### COMMCALC-39.4 LOCKED
+
+`harness_portal_report_pull.py` §K — 183 checks in the file now, DB-free and browser-free. It
+reproduces the defect in both declared shapes and keeps the shipped rule as an **armed negative
+control**, so restoring it fails the build. It also fails the build if a date box is suggested with a
+literal date instead of a token, if Run or Export becomes a param, if a detail box stops being
+declared ticked, if an unrecognised control is guessed into a param rather than named, if a
+framework-separated id stops being escaped, if the suggester learns to write `portal_calibration`, or
+if a portal is named in the capture's executable text.
+
+### COMMCALC-39.5 NOT BUILT YET, SAID PLAINLY
+
+A screen for the capture. Today it is an endpoint and its answer is JSON: an operator (or whoever is
+driving the live login) runs it and confirms the declaration onto the source row. The owner's
+*"when a ups store signs up it can use all of these as a default option"* — the signup preset that
+would make a confirmed declaration the house default for the next tenant of this kind — is still
+unbuilt, and §COMMCALC-38.8 carries that same note.
+
+### COMMCALC-39.6 Cross-references
+
+Same home, other axes: §COMMCALC-07 (the one pull loop), §COMMCALC-37 (the declared filters this
+capture writes for), §COMMCALC-38 (the one normalizer and the invoice feed). Neighbours:
+§COMMCALC-24 (which process may answer), §COMMCALC-27 / §COMMCALC-31 (the operator's input leads the
+tick, which is why a capture is a queued command and not a second thread), §COMMCALC-13 (what a
+finished session leaves on the row).
 
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
 

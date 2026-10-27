@@ -555,5 +555,95 @@ ok(_permissive(["detail"]) is True,
    "the check above counts the EXPORTS, not the error string")
 
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+print("\n§K  A DECLARED REPORT RESOLVES TO ITSELF (the regression), AND THE PAGE IS READ NOT GUESSED")
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# THE DEFECT, reproduced. `pull_reports_on_page` passes `src_row["portal_reports"]` as the adapter's
+# `enabled_keys` — for the card feed that IS the enabled list, and its keys are already canonical.
+# For a DECLARATION-driven feed the two are the same list, and the filter squashed it under a
+# different rule from the one the specs were keyed by: the bare-string shape produced "item sales"
+# against a key of "item_sales", and the OBJECT shape produced an EMPTY set because a dict is not a
+# str. An empty `want` filtered every declared report out, so a source that declared fourteen
+# reports resolved to NONE and read as "No reports are enabled for this portal source" — the same
+# sentence an unconfigured source gets, which is why it would have looked like a setup mistake.
+from app.modules.commcalc import pos_report_sweep as _prs                 # noqa: E402
+
+OBJ = {"processor": "pos_report", "portal_reports": [{"key": "item_sales", "label": "Item Sales"},
+                                                     {"key": "store_total", "label": "Store Total"}]}
+BARE = {"processor": "pos_report", "portal_reports": ["Item Sales", "Store Total"]}
+eq([s["key"] for s in prp.specs_for(OBJ)], ["item_sales", "store_total"],
+   "a report declared as an OBJECT resolves to itself through the loop's own path")
+eq([s["key"] for s in prp.specs_for(BARE)], ["item_sales", "store_total"],
+   "…and so does one declared as a bare string, whose words are not its key")
+eq([s["key"] for s in _prs.report_specs("pos_report", ["item_sales"], src_row=BARE)], ["item_sales"],
+   "a genuinely NARROWER enabled list still narrows — the filter was fixed, not removed")
+eq(prp.specs_for({"processor": "pos_report"}), (),
+   "a source that declared nothing still resolves to nothing")
+eq(prp.specs_for({"processor": "nosuchconnector", "portal_reports": ["x"]}), (),
+   "…and a connector with no adapter resolves to nothing rather than raising")
+eq(_prs.spec_key({"key": "Item Sales"}), "item_sales", "one key rule: the object shape")
+eq(_prs.spec_key("Item-Sales"), "item_sales", "…and the string shape, squashed identically")
+eq(_prs.spec_key(7), "", "…and anything else is no key, never a guess")
+
+
+def _old_want(enabled_keys):
+    """The rule that shipped — kept here as an ARMED negative control, so the regression cannot be
+    quietly undone by restoring it."""
+    return {str(k).strip().lower() for k in enabled_keys if isinstance(k, str)}
+
+
+ok(_old_want(OBJ["portal_reports"]) == set(),
+   "control: the old rule made the object shape's filter EMPTY — every declared report dropped")
+ok("item_sales" not in _old_want(BARE["portal_reports"]),
+   "control: …and the bare-string shape's filter did not contain the key it was filtering on")
+
+# THE CAPTURE (§COMMCALC-39). A page's own controls are READ and the declaration is SUGGESTED from
+# what the page says — never guessed. The pure half is provable with no browser at all.
+CTRLS = [{"id": "ctl00$cph$txtFrom", "name": "", "kind": "text", "label": "From Date", "options": []},
+         {"id": "", "name": "ctl00$cph$txtTo", "kind": "text", "label": "To Date", "options": []},
+         {"id": "chkDet", "name": "", "kind": "checkbox", "label": "Show Detail", "options": []},
+         {"id": "btnRun", "name": "", "kind": "submit", "label": "Run Report", "options": []},
+         {"id": "btnExp", "name": "", "kind": "button", "label": "Export to CSV", "options": []},
+         {"id": "ddlClass", "name": "", "kind": "select", "label": "Class", "options": ["All", "A"]}]
+sug = prp.suggest_params(CTRLS)
+eq([p["value"] for p in sug["params"] if p["kind"] == "fill"], ["{date_from}", "{date_to}"],
+   "the date boxes are declared with the TOKENS, never with the day the capture happened to run")
+eq(sug["run_selector"], "#btnRun", "the Run control is returned under its own key…")
+eq(sug["export_selector"], "#btnExp", "…and so is Export")
+ok(all(p["selector"] not in ("#btnRun", "#btnExp") for p in sug["params"]),
+   "…and NEITHER becomes a param, because the loop presses them at a fixed point in its order and a "
+   "param pressing Run early would export the previous run's grid")
+ok(any(p["kind"] == "check" and p["selector"] == "#chkDet" for p in sug["params"]),
+   "a detail tick box is declared TICKED — the owner asked for every item, and an untouched box is "
+   "the page default COMMCALC-37 exists to stop trusting")
+eq([u["selector"] for u in sug["unrecognised"]], ["#ddlClass"],
+   "a control whose purpose the page's own words do not state is NAMED for a human…")
+ok(sug["unrecognised"][0]["options"] == ["All", "A"],
+   "…with its own options, so the operator can declare the value without opening the portal")
+ok("\\$" in prp.control_selector({"id": "ctl00$cph$txtFrom"}),
+   "an id with a framework separator is ESCAPED — an unescaped one is a selector that never matches "
+   "and therefore a filter that always refuses")
+ok(prp.control_selector({"id": "", "name": "a-b"}) == '[name="a-b"]',
+   "…and a control with no id is reached by its name")
+ok(prp.control_selector({}) is None, "a control with neither id nor name has no selector, not a bad one")
+eq(prp.control_purpose({"label": "From Date"}), "date_from", "longest phrase first: 'from date'…")
+eq(prp.control_purpose({"label": "Run Report"}), "run", "…and 'run report' beats 'run'")
+ok(prp.control_purpose({"label": "Sprocket"}) is None,
+   "a label matching nothing returns None — the suggestion is meant to be confirmable, and a wrong "
+   "purpose is harder to spot than a missing one")
+eq(prp.control_purpose({"label": "Comienzo"}, {"date_from": ["comienzo"]}), "date_from",
+   "a tenant whose page words it differently DECLARES that (RULE TWO), never a code change")
+eq(prp.suggest_params([]), {"params": [], "run_selector": None, "export_selector": None,
+                            "unrecognised": []},
+   "no controls is an empty suggestion, never an exception")
+cap_src = executable_text(read(os.path.join("app", "modules", "commcalc", "portal_report_pull.py")))
+_sug_body = cap_src.split("def suggest_params")[1].split("def capture_report")[0]
+ok("portal_calibration" not in _sug_body,
+   "the suggester writes nothing: a capture is evidence about a page, not a decision about config")
+for _w in ("ups", "theupsstore", "aspx"):
+    ok(re.search(r"\b%s\b" % _w, cap_src, re.I) is None,
+       "no portal is named in the capture: %r" % _w)
+
+
 print("\n%d passed, %d failed" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

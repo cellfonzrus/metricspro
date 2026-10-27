@@ -48,6 +48,7 @@ fake adapter — no browser, no database, no network.
 import csv
 import io
 import os
+import re
 import tempfile
 from datetime import date, datetime, timedelta, timezone
 
@@ -367,6 +368,227 @@ def run_report(page, src_row, report_key):
     return True
 
 
+# ── READING A REPORT PAGE'S OWN CONTROLS (the calibration capture) ───────────────────────────────
+# WHY THIS EXISTS. §COMMCALC-37 made a report's filters DECLARED, and refuses to export a report whose
+# declared filters could not be set. That is right, and it moved the whole problem onto one question:
+# where does the declaration come from? Not from guessing. The owner's portal is ASP.NET WebForms, so a
+# date box's real id is `ctl00_ContentPlaceHolder1_txtFromDate`, not `#DateFrom` — a guessed selector
+# makes the report refuse to export (correctly) and leaves nobody knowing which guess was wrong.
+#
+# So the declaration is written from what the page ACTUALLY SAYS. This reads a report page's own form
+# controls through the already-authenticated session, with the label printed beside each one, and
+# SUGGESTS the declaration an operator confirms. It is one pass per report, permanent, and it is what
+# makes the next tenant of the same kind a config row rather than a setup job.
+#
+# IT SUGGESTS AND NEVER WRITES. Nothing here touches `portal_calibration`: a capture is evidence about
+# a page, not a decision about a tenant's config, and a capture that silently rewrote a working
+# declaration would be the worst kind of helpful.
+
+# The label words that identify a control's PURPOSE, house defaults, longest-first. A tenant whose page
+# words it differently declares `portal_calibration.control_words` (RULE TWO) — no portal's wording,
+# and no vendor, lives in this file.
+CONTROL_WORDS = {
+    "date_from": ("from date", "start date", "begin date", "date from", "beginning", "from", "start"),
+    "date_to": ("to date", "end date", "thru date", "through date", "date to", "ending", "to", "end"),
+    "date": ("business date", "report date", "as of date", "date"),
+    "detail": ("detail", "show detail", "itemized", "every item", "all items", "line detail",
+               "expand"),
+    "run": ("run report", "run", "generate", "view report", "submit", "display", "refresh", "go"),
+    "export": ("export", "download", "csv", "excel", "save as"),
+}
+
+# Which HTML control kind becomes which declared verb. A control kind we have no verb for is REPORTED,
+# never mapped to the nearest-looking verb — the suggestion is meant to be confirmable, and a wrong
+# verb is harder to spot than a missing one.
+_KIND_FOR = {"text": "fill", "date": "fill", "textarea": "fill", "select": "select",
+             "checkbox": "check", "radio": "check", "button": "click", "submit": "click",
+             "link": "click"}
+
+# What the page is asked for, in ONE place, so the shape the pure suggester reads is the shape the
+# browser produces. Returns a list of plain dicts — no Playwright handles escape this function, which
+# is what keeps `suggest_params` provable without a browser.
+_CONTROLS_JS = r"""() => {
+  const vis = (el) => {
+    const r = el.getBoundingClientRect();
+    const st = window.getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
+  };
+  const labelFor = (el) => {
+    const byFor = el.id ? document.querySelector('label[for="' + el.id + '"]') : null;
+    if (byFor && byFor.innerText) return byFor.innerText;
+    const wrap = el.closest('label');
+    if (wrap && wrap.innerText) return wrap.innerText;
+    const cell = el.closest('td');
+    if (cell && cell.previousElementSibling && cell.previousElementSibling.innerText) {
+      return cell.previousElementSibling.innerText;
+    }
+    if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
+    if (el.getAttribute('placeholder')) return el.getAttribute('placeholder');
+    if (el.getAttribute('title')) return el.getAttribute('title');
+    if (el.value && (el.type === 'submit' || el.type === 'button')) return el.value;
+    if (el.tagName === 'BUTTON' && el.innerText) return el.innerText;
+    if (el.tagName === 'A' && el.innerText) return el.innerText;
+    return '';
+  };
+  const out = [];
+  const nodes = document.querySelectorAll(
+    'input, select, textarea, button, a[href*="javascript"], a[onclick]');
+  for (const el of nodes) {
+    if (el.type === 'hidden' || !vis(el)) continue;
+    const tag = el.tagName.toLowerCase();
+    const kind = tag === 'select' ? 'select'
+               : tag === 'textarea' ? 'textarea'
+               : tag === 'button' ? 'button'
+               : tag === 'a' ? 'link'
+               : (el.type || 'text').toLowerCase();
+    const opts = tag === 'select'
+      ? Array.from(el.options).slice(0, 40).map(o => String(o.text || '').trim())
+      : [];
+    out.push({id: el.id || '', name: el.getAttribute('name') || '', kind: kind,
+              label: String(labelFor(el) || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+              options: opts});
+    if (out.length >= 300) break;
+  }
+  return out;
+}"""
+
+
+def read_page_controls(page):
+    """The report page's own visible form controls — id, name, kind, the label printed beside it, and a
+    dropdown's option words. Never raises: a page that will not answer returns no controls, which reads
+    as "nothing captured" rather than as an empty page."""
+    try:
+        got = page.evaluate(_CONTROLS_JS)
+    except Exception:
+        return []
+    out = []
+    for c in (got or []):
+        if not isinstance(c, dict):
+            continue
+        out.append({"id": str(c.get("id") or ""), "name": str(c.get("name") or ""),
+                    "kind": str(c.get("kind") or "").lower(),
+                    "label": str(c.get("label") or "")[:120],
+                    "options": [str(o) for o in (c.get("options") or [])][:40]})
+    return out
+
+
+def control_selector(control):
+    """THE selector a declaration should use for one control. PURE.
+
+    `#id` when the control has an id, else `[name="…"]`. Both are escaped for the CSS that ASP.NET
+    actually produces: WebForms ids contain `$` in the name and `_` in the id, and a bare `#a$b` is
+    not a valid selector, so an unescaped suggestion would be a selector that never matches and a
+    filter that always refuses."""
+    cid = str((control or {}).get("id") or "").strip()
+    if cid:
+        return "#" + re.sub(r'([^A-Za-z0-9_-])', r'\\\1', cid)
+    nm = str((control or {}).get("name") or "").strip()
+    if not nm:
+        return None
+    return '[name="%s"]' % nm.replace('\\', '\\\\').replace('"', '\\"')
+
+
+def control_purpose(control, words=None):
+    """What this control is FOR, by the words printed beside it — or None. PURE.
+
+    Longest phrase first, so "from date" beats "date" and "run report" beats "run". A control whose
+    label matches nothing returns None and is reported as unrecognised: the operator sees it and
+    declares it, which is strictly better than this function picking the closest-looking purpose.
+    """
+    syn = dict(CONTROL_WORDS)
+    for purpose, extra in (words or {}).items():
+        if not extra:
+            continue
+        if isinstance(extra, str):
+            extra = (extra,)
+        syn[purpose] = tuple(extra) + tuple(syn.get(purpose, ()))
+    hay = _norm_words(" ".join(str((control or {}).get(f) or "")
+                               for f in ("label", "id", "name")))
+    if not hay:
+        return None
+    pairs = sorted(((len(w), w, p) for p, ws in syn.items() for w in ws), reverse=True)
+    for _n, w, purpose in pairs:
+        if _norm_words(w) in hay:
+            return purpose
+    return None
+
+
+def _norm_words(v):
+    """Matching spelling for a control's words — the ONE normalizer (§COMMCALC-38), dereferenced so a
+    label compared here and a header compared there cannot drift apart."""
+    from app.modules.commcalc.report_columns import norm
+    return norm(v)
+
+
+def suggest_params(controls, words=None):
+    """A report page's controls → a DECLARATION an operator can confirm. PURE, no browser.
+
+    Returns `{"params": [...], "run_selector": str|None, "export_selector": str|None,
+    "unrecognised": [...]}`.
+
+    Three rules, each of which exists because its opposite is worse:
+      · the DATE boxes are declared with the tokens, not with today's date — a captured literal date
+        would pull one day forever and look like it was working;
+      · a detail / itemized tick box is declared TICKED, because the owner asked for every item and an
+        untouched tick box is the page's default, which §COMMCALC-37 exists to stop trusting;
+      · the Run and Export controls are returned under their OWN keys, not as params, because the loop
+        presses them at a fixed point in its order and a param pressing Run early would export the
+        previous run's grid.
+    Anything whose purpose the page's own words do not state is returned in `unrecognised` — named for
+    a human, never guessed into a param.
+    """
+    params, run_sel, exp_sel, unknown = [], None, None, []
+    for c in (controls or []):
+        sel = control_selector(c)
+        kind = _KIND_FOR.get(str(c.get("kind") or "").lower())
+        purpose = control_purpose(c, words)
+        if not sel or not kind:
+            if sel:
+                unknown.append({"selector": sel, "label": c.get("label") or "",
+                                "why": "this control kind has no declared verb"})
+            continue
+        if purpose == "run":
+            run_sel = run_sel or sel
+            continue
+        if purpose == "export":
+            exp_sel = exp_sel or sel
+            continue
+        if purpose in ("date_from", "date_to", "date") and kind == "fill":
+            token = {"date_from": "{date_from}", "date_to": "{date_to}", "date": "{date}"}[purpose]
+            params.append({"selector": sel, "kind": "fill", "value": token,
+                           "label": (c.get("label") or purpose)[:80]})
+            continue
+        if purpose == "detail" and kind == "check":
+            params.append({"selector": sel, "kind": "check", "value": None,
+                           "label": (c.get("label") or "detail")[:80]})
+            continue
+        unknown.append({"selector": sel, "label": c.get("label") or "", "kind": kind,
+                        "options": c.get("options") or [],
+                        "why": "the page's own words do not say what this is for"})
+    return {"params": params, "run_selector": run_sel, "export_selector": exp_sel,
+            "unrecognised": unknown[:40]}
+
+
+def capture_report_calibration(page, src_row, spec, words=None):
+    """Reach one report and SUGGEST its declaration. Writes nothing.
+
+    The navigation is `navigate_to_report`'s — the same ladder the pull uses, so a capture that
+    reaches the page proves the pull will reach it too, and a capture that cannot says which report
+    needs its navigation declared first.
+    """
+    if not navigate_to_report(page, src_row, spec):
+        return {"report": spec.get("key"), "label": spec.get("label"), "reached": False,
+                "error": "Could not reach this report — declare its menu words or its address first."}
+    controls = read_page_controls(page)
+    out = suggest_params(controls, words)
+    out.update({"report": spec.get("key"), "label": spec.get("label"), "reached": True,
+                "controls_seen": len(controls)})
+    if not controls:
+        out["error"] = ("Reached the page but it offered no readable controls. It may render inside a "
+                        "frame, or the report may still have been loading.")
+    return out
+
+
 def navigate_to_report(page, src_row, spec):
     """Reach one report. Calibrated selector first (authoritative once an operator captured it on the
     live screencast), then a calibrated URL, then the spec's text hints. True when we believe we
@@ -498,7 +720,7 @@ def pull_reports_on_page(client, org_id, src_row, page, should_stop=None):
     if not mod:
         return {"ok": False, "delivered": False, "rows_ingested": 0,
                 "error": "No report feed is registered for this connector."}
-    specs = tuple(mod.report_specs(proc, src_row.get("portal_reports"), src_row=src_row) or ())
+    specs = specs_for(src_row, proc)
     if not specs:
         return {"ok": False, "delivered": False, "rows_ingested": 0,
                 "error": ("No reports are enabled for this portal source. " + setup_hint(mod, src_row)).strip()}
@@ -518,6 +740,28 @@ def pull_reports_on_page(client, org_id, src_row, page, should_stop=None):
             results.append(res)
             total += res.get("rows_ingested") or 0
     return summarize(results, total, d_from, d_to, unreachable)
+
+
+def specs_for(src_row, proc=None):
+    """THE reports this source has declared, resolved through its adapter. One home: the pull asks it
+    and so does the calibration capture, because a capture that read a different set from the one the
+    pull will run would calibrate a report nobody pulls and miss one somebody does."""
+    src_row = dict(src_row or {})
+    proc = proc or connector(src_row.get("processor"))
+    mod = adapter_for(proc)
+    if not mod:
+        return ()
+    try:
+        return tuple(mod.report_specs(proc, src_row.get("portal_reports"), src_row=src_row) or ())
+    except Exception:
+        return ()
+
+
+def setup_hint_for(src_row, proc=None):
+    """The adapter's setup words for this SOURCE (rather than for an adapter the caller already
+    holds), or "". The same one home, reached the way a caller that only has a row can reach it."""
+    mod = adapter_for(proc or connector((src_row or {}).get("processor")))
+    return setup_hint(mod, src_row) if mod else ""
 
 
 def setup_hint(mod, src_row):

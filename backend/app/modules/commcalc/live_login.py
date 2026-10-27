@@ -471,7 +471,7 @@ class LiveLoginSession:
     """One persistent browser-backed login session. Owns a single worker thread for its whole life."""
 
     def __init__(self, sid, org_id, row, persist=None, persist_shot=None, pull_fn=None,
-                 persist_pull=None, auto_pull_gate=None):
+                 persist_pull=None, auto_pull_gate=None, calibrate_fn=None):
         self.sid = sid
         self.org_id = org_id
         self.url = row.get("portal_url")
@@ -486,6 +486,10 @@ class LiveLoginSession:
         self.pull_fn = pull_fn                     # callable(page) -> pull result; runs on THIS live page
         self.persist_pull = persist_pull           # callable(result) -> stamps the pull's outcome honestly
         self.pull_result = None                    # last pull result (auto-pull or '▶ Pull now')
+        # READ a report page's own controls and SUGGEST its declaration (§COMMCALC-39). Separate from
+        # pull_fn and never called by the auto-pull: a capture is something an operator asks for, and
+        # a session that signed in to fetch reports must not start reading pages nobody asked about.
+        self.calibrate_fn = calibrate_fn           # callable(page[, should_stop]) -> suggestion dict
         self.session_state = None                 # durable storage_state once authenticated
         # AUTO-PULL AFTER LOGIN (owner report 2026-07-27 — "shows logged in ... does not import any
         # file"). Signing in used to leave the trusted browser idling until a human clicked a SECOND
@@ -751,6 +755,39 @@ class LiveLoginSession:
         """Enqueue a report pull to run on THIS live authenticated browser (not a cold restore)."""
         self._touch()
         self._cmd_q.put(("PULL", result_q))
+
+    def calibrate(self, result_q=None):
+        """Enqueue a CALIBRATION CAPTURE on THIS live authenticated browser.
+
+        The sibling of `pull`, deliberately: a capture reaches a report the same way a pull does, on
+        the same authenticated page, through the same single-threaded loop. It READS the page's own
+        controls and SUGGESTS a declaration — it writes nothing, neither to the portal nor to the
+        source row, because a capture is evidence about a page, not a decision about a tenant's
+        config (§COMMCALC-39)."""
+        self._touch()
+        self._cmd_q.put(("CALIBRATE", result_q))
+
+    def can_calibrate(self):
+        """True only when the worker is alive AND we are post-authentication AND a capture is
+        configured. Same shape and the same honest fallback as `can_pull`: a dead or aged-out session
+        returns False and the caller says so rather than hanging."""
+        with self._lock:
+            ok_phase = self.phase in ("authenticated", "pulling")
+        alive = bool(self._thread and self._thread.is_alive())
+        return ok_phase and alive and self.calibrate_fn is not None
+
+    def run_calibrate_blocking(self, timeout=300):
+        """Called from the request thread: enqueue a capture and block for its result. Returns None if
+        the session cannot capture or times out — never a half-filled declaration, because a partial
+        capture confirmed by an operator is a filter that silently will not be set."""
+        if not self.can_calibrate():
+            return None
+        rq = queue.Queue(maxsize=1)
+        self.calibrate(rq)
+        try:
+            return rq.get(timeout=timeout)
+        except queue.Empty:
+            return None
 
     def can_pull(self):
         """True only when the worker is alive AND we're post-authentication (browser still open) AND a
@@ -1409,6 +1446,9 @@ class LiveLoginSession:
             if kind == "PULL":
                 self._handle_pull(page, vp, cmd[1] if len(cmd) > 1 else None)
                 continue
+            if kind == "CALIBRATE":
+                self._handle_calibrate(page, vp, cmd[1] if len(cmd) > 1 else None)
+                continue
             if kind == "INPUT":
                 self._do_input(page, ctx, vp, cmd[1])
                 continue
@@ -1431,6 +1471,37 @@ class LiveLoginSession:
         except Exception:
             pass
         return st
+
+    def _handle_calibrate(self, page, vp, result_q):
+        """Read this login's report pages and hand back the SUGGESTED declarations. Writes nothing.
+
+        The page is left where the capture ended, and the phase goes back to `authenticated`, so the
+        operator can look at the same screen the suggestion was read from. Best-effort throughout —
+        a capture failure is reported, never crashes the session, because the session is also how the
+        operator stays signed in."""
+        self._set(phase="pulling", message="Signed in — reading this login's report pages…")
+        self._note_act("Reading the report pages")
+        self._capture(page)
+        res = None
+        try:
+            if self.calibrate_fn is not None:
+                res = (self.calibrate_fn(page, self._stop_requested)
+                       if _takes_stop(self.calibrate_fn) else self.calibrate_fn(page))
+            else:
+                res = {"ok": False,
+                       "error": "No calibration capture is configured for this live session."}
+        except Exception as e:
+            res = {"ok": False,
+                   "error": ("Could not read the report pages: " + str(e))[:300]}
+        if result_q is not None:
+            try:
+                result_q.put(res)
+            except Exception:
+                pass
+        self._capture(page)
+        self._set(phase="authenticated",
+                  message="Signed in — the report pages were read; nothing was changed.")
+        self._note_act("Waiting")
 
     def _handle_pull(self, page, vp, result_q):
         """Run the report pull on THIS live authenticated browser (never a cold restore) and hand the
@@ -1722,11 +1793,13 @@ def _prune_locked():
 
 
 def start_session(sid, org_id, row, persist=None, persist_shot=None, pull_fn=None, persist_pull=None,
-                  auto_pull_gate=None):
+                  auto_pull_gate=None, calibrate_fn=None):
     """Spawn (or REPLACE) the live session for `sid`. Non-blocking — the worker thread drives it.
     `pull_fn` (callable(page) -> pull result) runs the report pull on THIS live browser — automatically
     the moment the login authenticates, and again on every '▶ Pull now'. `persist_pull(result)` records
-    that pull's outcome on the data_source row (honest last_run_at vs last_attempt_at)."""
+    that pull's outcome on the data_source row (honest last_run_at vs last_attempt_at).
+    `calibrate_fn` (callable(page) -> suggestion) READS this login's report pages and suggests their
+    declarations (§COMMCALC-39). It is never called automatically — only when an operator asks."""
     with _SESSIONS_LOCK:
         _prune_locked()
         old = _SESSIONS.get(sid)
@@ -1736,7 +1809,7 @@ def start_session(sid, org_id, row, persist=None, persist_shot=None, pull_fn=Non
             except Exception:
                 pass
         sess = LiveLoginSession(sid, org_id, row, persist, persist_shot, pull_fn, persist_pull,
-                                auto_pull_gate)
+                                auto_pull_gate, calibrate_fn)
         _SESSIONS[sid] = sess
     sess.start()
     return sess
