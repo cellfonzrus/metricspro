@@ -53,7 +53,7 @@
 
 INSERT INTO commcalc.connector_registry (org_id, key, aliases, label, host, kind, applies_to_pos, applies_to_carrier,
   defined_by, sort_order, notes) VALUES
-  ('00000000-0000-0000-0000-000000000001', 'supplier_invoice', '{}', 'Supplier invoices (billing portal)', NULL, 'portal', '{}', '{}', 'house', 150, 'A supplier''s own portal publishing the invoices it has billed us, pulled so every charge can be checked against the sale that should have collected for it (index §COMMCALC-38). The address, the report list, the date filters and the column vocabulary are declared per tenant on its own login row. Supplier-neutral: the distributor-only invoice feed (''vip'') is its sibling, and mig 1098''s header states why they are not yet one.')
+  ('00000000-0000-0000-0000-000000000001', 'supplier_invoice', '{}', 'Supplier invoices (billing portal)', NULL, 'portal', '{}', '{}', 'house', 150, 'A supplier''s own portal publishing the invoices it has billed us, pulled so every charge can be checked against the sale that should have collected for it (index §COMMCALC-38). The address, the report list, the date filters and the column vocabulary are declared per tenant on its own login row. Supplier-neutral: the distributor-only invoice feed (''vip'') is its sibling, and index §COMMCALC-38 states why they are not yet one.')
 -- DO NOTHING, not DO UPDATE, for the reason mig 1014's own seed states: a re-run must never overwrite
 -- a scope an operator has since narrowed or widened. Still idempotent — a second run inserts nothing.
 ON CONFLICT (org_id, key) DO NOTHING;

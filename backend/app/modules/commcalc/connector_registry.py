@@ -135,7 +135,7 @@ HOUSE_CONNECTORS = [
     # the registry row and `router._SOURCE_SCRAPERS[supplier_invoice]` are one PR, not two. No host and
     # ANY scope for the reasons stated above — a kind, not a supplier, and any tenant may be invoiced.
     _c(key=SUPPLIER_INVOICE_CONNECTOR, label="Supplier invoices (billing portal)", sort_order=150,
-       notes="A supplier's own portal publishing the invoices it has billed us, pulled so every charge can be checked against the sale that should have collected for it (index §COMMCALC-38). The address, the report list, the date filters and the column vocabulary are declared per tenant on its own login row. Supplier-neutral: the distributor-only invoice feed ('vip') is its sibling, and mig 1098's header states why they are not yet one."),
+       notes="A supplier's own portal publishing the invoices it has billed us, pulled so every charge can be checked against the sale that should have collected for it (index §COMMCALC-38). The address, the report list, the date filters and the column vocabulary are declared per tenant on its own login row. Supplier-neutral: the distributor-only invoice feed ('vip') is its sibling, and index §COMMCALC-38 states why they are not yet one."),
 ]
 HOUSE_CONNECTOR_KEYS = [r["key"] for r in HOUSE_CONNECTORS]
 

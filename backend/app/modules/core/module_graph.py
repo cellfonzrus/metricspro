@@ -552,7 +552,7 @@ FACTS: dict[str, dict] = {
                     'second supplier landed in them would be indistinguishable from the first and '
                     'would make every one of those readers wrong, silently, on money. This home '
                     'names no supplier. vip_invoices is the EXCUSED SIBLING that should fold into '
-                    'it later, with the reason written into mig 1098\'s header rather than left for '
+                    'it later, with the reason recorded in index COMMCALC-38 rather than left for '
                     'a reader to notice. The two recon references are kept verbatim AND normalized '
                     'by the one rule, because the supplier and the POS print a tracking number '
                     'differently and two rules would make one shipment read as unbilled on one side '
