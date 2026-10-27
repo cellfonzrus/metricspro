@@ -161,7 +161,7 @@ Primary code homes:
 | COMMCALC-38 | **What a supplier billed us has a supplier-neutral home, and the invoice feed ships with its door** | "i want to pull in invoices from ups and then compare to the sales reports to make sure every single shipment is being paid for and cash collected by the sales reps" — and the login row he had already made sat on a processor nothing dispatches, so Run now stamped "not wired yet" and stopped. Which part of "a supplier invoice" is a universal fact, which part is one distributor's portal, and what does a second supplier's invoices do to a table whose every reader assumes the first? |
 | COMMCALC-39 | **A declaration is read off the page, and a declared report resolves to itself** | Fourteen reports were asked for by name, and every one of them would have resolved to NOTHING: the pull passed a source's own declaration back to its adapter as a FILTER, squashed under a different rule from the one the reports were keyed by, so a fully configured source read as "No reports are enabled". And the filters those reports need are behind framework-generated control ids nobody can guess. Where should a declaration come from, and what does one argument meaning two things to two callers cost? |
 | COMMCALC-40 | **The status word is the sentence's own verdict, never a literal** | The sweep said "⚠ PARTIAL — a column stopped arriving" in one column and stored `ok` in the column next to it, so every screen that colours on the word showed green over October 2026's missing KPI counts for ten days. What does a verdict cost when it is computed as prose and then discarded at the one place a machine reads it? |
-| COMMCALC-41 | **A rebuild never deletes what it cannot replace** | "Rebuild via sql let me know what permissions to add" — and the rebuild, run for real, deleted all 11,000 Boost rows and inserted none, then returned HTTP 200 describing the table it had just emptied. Two migrations had been skipped while later-numbered ones landed. What is a delete+insert worth without a transaction, and which half of that pair is the one you can afford to run first? |
+| PAYABLES-01 | **A rebuild never deletes what it cannot replace** | "Rebuild via sql let me know what permissions to add" — and the rebuild, run for real, deleted all 11,000 Boost rows and inserted none, then returned HTTP 200 describing the table it had just emptied. Two migrations had been skipped while later-numbered ones landed. What is a delete+insert worth without a transaction, and which half of that pair is the one you can afford to run first? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26111,7 +26111,6 @@ status word rather than a blank that reads as nil.
 | CORE-17 | core |
 | CORE-18 | core |
 | COMMCALC-40 | commcalc |
-| COMMCALC-41 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -26121,6 +26120,7 @@ status word rather than a blank that reads as nil.
 | POS-07 | pos |
 | POS-08 | pos |
 | POS-09 | pos |
+| PAYABLES-01 | payables |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -26138,7 +26138,6 @@ it is removed.
 | asset | its paths appear in passing in §34 only; no section documents the asset module itself |
 | crm | undocumented |
 | helpdesk | undocumented |
-| payables | its paths appear in passing in §14u and §53.1 only; no section documents it |
 | recovery | undocumented |
 | referral | undocumented |
 | remediation | undocumented |
@@ -38576,9 +38575,9 @@ Same class: §CORE-18 (the other half of this silence — the diagnostic's answe
 same two columns), §COMMCALC-16 (the diagnostic itself), §19.21 (a status that reports what was pulled
 rather than what was written), §19.41 (`success` is what landed, not what the status word says).
 
-## §COMMCALC-41. A REBUILD NEVER DELETES WHAT IT CANNOT REPLACE (found 2026-10-27)
+## §PAYABLES-01. A REBUILD NEVER DELETES WHAT IT CANNOT REPLACE (found 2026-10-27)
 
-> **Numbered COMMCALC-41.** Checked against `origin/main` immediately before pushing, per §CORE-17's
+> **Numbered PAYABLES-01.** Checked against `origin/main` immediately before pushing, per §CORE-17's
 > number race (§COMMCALC-40 landed the same morning in #570).
 
 **Owner, verbatim:** *"Rebuild via sql let me know what permissions to add"*, asked after
@@ -38598,7 +38597,7 @@ restored in full from a snapshot taken beforehand (15,495 total, 11,000 house ro
 dates, `built_at` 2026-09-04, sample rows matching the snapshot). **Pressing ↻ Rebuild ledger in the
 UI does exactly the same thing, and nobody pressing it has a snapshot.**
 
-### COMMCALC-41.1 THE CLASS — a delete+insert with no transaction is a delete
+### PAYABLES-01.1 THE CLASS — a delete+insert with no transaction is a delete
 
 The instance was "the code is ahead of the production schema": migrations **1093 and 1094 had never
 been applied** while 1095, 1098 and 1099 had. Migrations are applied by hand here, so **a landed
@@ -38610,7 +38609,7 @@ transaction. Any write the relation refuses — a dropped column, a renamed one,
 turns the pair into a delete. Naming the missing column would have fixed one morning; naming the
 order fixes every morning after it.
 
-### COMMCALC-41.2 THE FIX — refuse, then delete, then insert
+### PAYABLES-01.2 THE FIX — refuse, then delete, then insert
 
 `backend/app/modules/payables/write_shape.py` is the ONE home for *"can this relation accept the row
 this build is about to write?"*. `_build_one_carrier` now builds the first page of replacement rows,
@@ -38625,7 +38624,7 @@ reachable through it). An EMPTY relation yields `None` — "I could not look", d
 has no columns" — and the build proceeds exactly as before, because an empty table has nothing to
 destroy. Cost: one `select … limit 1` per carrier. No arithmetic changed.
 
-### COMMCALC-41.3 THE OTHER HALF — a refused rebuild is not a 200
+### PAYABLES-01.3 THE OTHER HALF — a refused rebuild is not a 200
 
 `build_ledger` reports a refusal under `blocked`, kept apart from a per-carrier `error`: *"this
 carrier rebuilt badly"* and *"this carrier was left exactly as it was"* are different sentences, and
@@ -38634,7 +38633,7 @@ is not counted in `carriers` or `written`. `POST /payables/rebuild` turns a non-
 **409** naming the missing columns — before the flags refresh, so a refused rebuild cannot go on to
 restate the discrepancy flags off a ledger it did not write.
 
-### COMMCALC-41.4 The lock
+### PAYABLES-01.4 The lock
 
 `backend/harness_payable_rebuild_preflight.py` — **27 checks, stdlib-only, DB-free**. §A
 `write_shape` as pure arithmetic, including that an unknown column set refuses nothing and a sparse
@@ -38647,7 +38646,7 @@ and inside the build the preflight call appears before the sweep call.
 
 Restoring the old order fails B1 and B2, verified by reverting it and re-running.
 
-### COMMCALC-41.5 Cross-references
+### PAYABLES-01.5 Cross-references
 
 Same class: §CORE-13 (no direct SQL path — why the catalogue cannot be read and why a grant can
 refuse a write), §19.18 (a registry written and never dereferenced), §19.41 (`success` is what

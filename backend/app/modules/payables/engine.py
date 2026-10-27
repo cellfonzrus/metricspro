@@ -458,7 +458,7 @@ def build_ledger(client, org_id=ORG_ID, carrier_id=None):
     # kept apart from a per-carrier `error` on purpose: an error means "this carrier rebuilt badly",
     # a block means "this carrier was left exactly as it was, and the database is behind the code".
     # The router turns a non-empty list into a non-2xx, because the 2026-10-27 defect was not only
-    # the delete — it was a 200 describing it (§COMMCALC-41).
+    # the delete — it was a 200 describing it (§PAYABLES-01).
     result = {"carriers": 0, "written": 0, "status_counts": {}, "per_carrier": [], "blocked": []}
     for cfg in maps:
         # ONE collector per carrier: a declared table or column this build could not read is
@@ -503,7 +503,7 @@ def _build_one_carrier(client, org_id, cfg, today, pct, alias, reimb_types, comp
     terms = _terms_days(client, org_id, cfg.get("distributor_id"), cfg)
     select_str = ",".join(_needed_cols(cfg))
 
-    # THE DELETE USED TO BE HERE, AND THAT IS THE DEFECT (§COMMCALC-41, 2026-10-27). It deleted this
+    # THE DELETE USED TO BE HERE, AND THAT IS THE DEFECT (§PAYABLES-01, 2026-10-27). It deleted this
     # carrier's rows before anything had established the replacement could be written, so a relation
     # that refused the row shape left the carrier with NOTHING — measured: 11,000 Boost rows deleted,
     # 0 inserted, and a normal-looking return describing it. The delete now happens below, after the

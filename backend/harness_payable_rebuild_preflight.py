@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DB-FREE PROOF — a rebuild never deletes what it cannot replace (index §COMMCALC-41).
+"""DB-FREE PROOF — a rebuild never deletes what it cannot replace (index §PAYABLES-01).
 
 THE DEFECT THIS LOCKS, measured on production 2026-10-27. `engine.build_ledger` was run for the
 house org. `_build_one_carrier` deleted the carrier's rows and THEN inserted the rebuilt ones, so it

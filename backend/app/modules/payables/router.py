@@ -159,7 +159,7 @@ def rebuild(carrier_id: str = "", org_id: str = ORG_ID):
     completes server-side (like the commission recalc) — poll /payables/payables afterwards."""
     client = sb()
     built = engine.build_ledger(client, org_id, carrier_id or None)
-    # A REFUSED REBUILD IS NOT A SUCCESS (§COMMCALC-41). Before 2026-10-27 this returned 200 with
+    # A REFUSED REBUILD IS NOT A SUCCESS (§PAYABLES-01). Before 2026-10-27 this returned 200 with
     # `written: 0` after the build had already emptied a carrier; the delete is now held back until
     # the write is known to be possible, and the remaining half of that defect is this status code —
     # a screen must not be able to render "rebuilt" over a rebuild that did not happen.

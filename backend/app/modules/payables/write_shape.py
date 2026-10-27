@@ -1,7 +1,7 @@
 """ONE home for *"can this relation actually accept the row this build is about to write?"* — asked
 BEFORE anything is deleted.
 
-Index §COMMCALC-41. Lock: `backend/harness_payable_rebuild_preflight.py`.
+Index §PAYABLES-01. Lock: `backend/harness_payable_rebuild_preflight.py`.
 
 WHY THIS EXISTS, measured rather than imagined. On 2026-10-27, `engine.build_ledger` was run against
 production for the house org. `_build_one_carrier` deletes a carrier's rows and then inserts the
