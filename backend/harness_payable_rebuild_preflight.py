@@ -369,6 +369,32 @@ check("E4 THE RATCHET: inside the build, the preflight call appears BEFORE the s
       body.index("refuse_if_unwritable") < body.index("_sweep_carrier("),
       (body.index("refuse_if_unwritable"), body.index("_sweep_carrier(")))
 
+section("§F  THE SOURCE IS READ IN FULL, AND THE READ CANNOT GO BACK TO CUTTING ITS OWN PAGES")
+
+ENGINE_SRC = SRC
+check("F1 the build dereferences the §CORE-05 one home for a paged read (`core/feed_read`) — a "
+      "rebuild that deletes what it cannot replace and one that replaces it from half the source "
+      "are the same defect on two sides",
+      "from app.modules.core import feed_read" in ENGINE_SRC
+      and "_feed_read.read_all(" in ENGINE_SRC)
+
+check("F2 …and `_build_one_carrier` is the caller that does it, not merely some other function in "
+      "the file",
+      "_feed_read.read_all(" in body, body.count("_feed_read.read_all("))
+
+check("F3 NOT ONE hand-cut page loop is left in the engine — `.range(page * PAGE` was the shape "
+      "that served some source rows twice and never served others, and it was in THREE places",
+      ".range(page * PAGE" not in ENGINE_SRC)
+
+check("F4 …and no page ceiling survives it: an 80-page backstop in the build and a 40-page one in "
+      "each store-resolution read each silently answered 'that is all there was'",
+      "page > 80" not in ENGINE_SRC and "page <= 40" not in ENGINE_SRC)
+
+check("F5 THE RATCHET: the source is read BEFORE the sweep, so an unreadable feed leaves the old "
+      "snapshot standing — `read_all` raises rather than returning a short list, and it raises here",
+      body.index("_feed_read.read_all(") < body.index("_sweep_carrier("),
+      (body.index("_feed_read.read_all("), body.index("_sweep_carrier(")))
+
 print()
 print("=" * 78)
 print("RESULT: %d passed, %d failed" % (P, F))
