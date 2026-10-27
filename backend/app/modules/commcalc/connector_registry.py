@@ -58,6 +58,7 @@ from app.modules.commcalc import merchant_portals as _mp
 # disagreeing is exactly how a feed ends up dispatchable with no door.
 from app.modules.commcalc.pos_report_sweep import CONNECTOR as POS_REPORT_CONNECTOR
 from app.modules.supply.portal import SUPPLY_PROCESSOR as SUPPLY_CONNECTOR
+from app.modules.commcalc.supplier_invoice_sweep import CONNECTOR as SUPPLIER_INVOICE_CONNECTOR
 
 HOUSE_ORG = _rk.HOUSE_ORG
 # THE SEED'S MIGRATIONS, in apply order. A LIST, not one file, and that is the point: a new house
@@ -65,7 +66,8 @@ HOUSE_ORG = _rk.HOUSE_ORG
 # below against exactly one file. So the cheapest way to ship a feed was to leave it out of the
 # registry entirely — which is what happened twice (see POS_REPORT / SUPPLY below). A later migration
 # appends; `MIGRATION` stays as the first for the callers that name it.
-MIGRATIONS = ("1014_connector_registry.sql", "1084_connector_registry_dispatchable_kinds.sql")
+MIGRATIONS = ("1014_connector_registry.sql", "1084_connector_registry_dispatchable_kinds.sql",
+              "1099_connector_registry_supplier_invoice.sql")
 MIGRATION = MIGRATIONS[0]
 TABLE = "connector_registry"
 CAP_PREFIX = "connector:"                    # ui_label_override scope 'cap' namespace (beside kind:/carrier:/pos:)
@@ -128,6 +130,12 @@ HOUSE_CONNECTORS = [
        notes="A back-office POS reports portal — the daily report of what each worker sold, per declared category, for checking against what the reps declared at closing (index §COMMCALC-07). The address, the report list and the category mapping are declared per tenant on its own login row."),
     _c(key=SUPPLY_CONNECTOR, label="Supply vendor portal (ordering)", sort_order=140,
        notes="A supply vendor's own portal: the catalogue crawl and the draft order (index §36 / §51). Registered 2026-10-15 as the sibling of the POS-report kind — it had been dispatchable with no registry row since it shipped, so no tenant could pick it either."),
+    # ── mig 1099 appends from here (owner ask 2026-10-27) ─────────────────────────────────────────
+    # The first feed to ship AFTER the §I ratchet, and it shipped with its door in the same change:
+    # the registry row and `router._SOURCE_SCRAPERS[supplier_invoice]` are one PR, not two. No host and
+    # ANY scope for the reasons stated above — a kind, not a supplier, and any tenant may be invoiced.
+    _c(key=SUPPLIER_INVOICE_CONNECTOR, label="Supplier invoices (billing portal)", sort_order=150,
+       notes="A supplier's own portal publishing the invoices it has billed us, pulled so every charge can be checked against the sale that should have collected for it (index §COMMCALC-38). The address, the report list, the date filters and the column vocabulary are declared per tenant on its own login row. Supplier-neutral: the distributor-only invoice feed ('vip') is its sibling, and mig 1098's header states why they are not yet one."),
 ]
 HOUSE_CONNECTOR_KEYS = [r["key"] for r in HOUSE_CONNECTORS]
 

@@ -40950,6 +40950,29 @@ from app.modules.supply.portal import SUPPLY_PROCESSOR as _SUPPLY_PROCESSOR  # n
 _SOURCE_SCRAPERS[_SUPPLY_PROCESSOR] = _supply_catalog_scraper
 
 
+async def _supplier_invoice_scraper(org_id, src_row):
+    """_SOURCE_SCRAPERS handler for a SUPPLIER'S OWN PORTAL publishing the invoices it has billed us
+    (index §COMMCALC-36). Owner 2026-10-27: the invoices are pulled so every shipment a supplier
+    charged for can be checked against the sale that should have collected for it.
+
+    Same durable-session posture as every other portal here — a human satisfies the second factor
+    ONCE on the live-login screencast, the authenticated storage_state is persisted, and this
+    scheduled pull rides it. The portal's address, its report list, its date filters and its column
+    vocabulary are all declared on the source row, so a source nobody has configured yet refuses
+    with the feed's own setup words instead of pulling nothing and looking healthy."""
+    from app.modules.commcalc import supplier_invoice_sweep as sis
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(sis.run_supplier_invoice_sweep, sb(), org_id,
+                                   dict(src_row or {}))
+
+
+# The supplier-invoice connector KIND is named ONCE, by its module — never re-spelled here, exactly
+# as the two connectors above are not (index §COMMCALC-36).
+from app.modules.commcalc.supplier_invoice_sweep import (  # noqa: E402
+    CONNECTOR as _SUPPLIER_INVOICE_CONNECTOR)
+_SOURCE_SCRAPERS[_SUPPLIER_INVOICE_CONNECTOR] = _supplier_invoice_scraper
+
+
 def _strip_source_pw(row, policy_rows=None, scope_ctx=None):
     """Public view of a data_source row — drops every secret, exposes only booleans/status.
 

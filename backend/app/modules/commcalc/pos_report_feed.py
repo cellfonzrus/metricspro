@@ -46,6 +46,10 @@ from `merchant_portals` — the platform's existing PURE portal-export readers, 
 import re
 
 from app.modules.commcalc.merchant_portals import iso_date, money
+# The column-vocabulary MECHANISM lives in ONE home (§COMMCALC-36) and the VOCABULARY lives here.
+# `norm`, `map_headers` and `header_score` below are DEREFERENCES of it, kept at their old spellings
+# and signatures so every existing caller reads the same code it always did.
+from app.modules.commcalc import report_columns as rc
 
 # ── the columns a POS report line can carry ──────────────────────────────────────────────────────
 # House defaults. A tenant whose export carries a header we have not seen adds it per source in
@@ -96,44 +100,24 @@ def basis_is_declared(basis) -> bool:
 
 
 def norm(v) -> str:
-    """Normalized matching spelling: lowercase, non-alphanumerics collapsed to single spaces.
-    `'2nd Day Air '` and `'2ND-DAY  AIR'` are the same key; `'B-1115'` and `'b 1115'` are too, which
-    is the store-code case trap this platform has already been bitten by once."""
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", str(v or "").lower())).strip()
+    """Normalized matching spelling — `report_columns.norm` (§COMMCALC-36). Kept at this spelling
+    because `pos_report_sweep._project` builds the upsert's KEY columns with it: `store_key` and
+    `employee_key` must be normalized by exactly the same rule the matcher used, and two rules is a
+    store that exists twice."""
+    return rc.norm(v)
 
 
 def map_headers(header_row, synonyms=None):
-    """{field: column index} for the headers we recognize. Longest synonym first; a field already
-    claimed by an earlier (longer) synonym is not re-claimed."""
-    syn = dict(COLUMN_SYNONYMS)
-    for field, extra in (synonyms or {}).items():
-        if field in syn and extra:
-            syn[field] = tuple(extra) + tuple(syn[field])
-        elif extra:
-            syn[field] = tuple(extra)
-    pairs = []
-    for field, words in syn.items():
-        for w in words:
-            pairs.append((len(w), w, field))
-    pairs.sort(reverse=True)
-    out = {}
-    for i, cell in enumerate(header_row or []):
-        h = norm(cell)
-        if not h:
-            continue
-        for _n, w, field in pairs:
-            if field in out:
-                continue
-            if h == norm(w) or norm(w) in h:
-                out[field] = i
-                break
-    return out
+    """{field: column index} for the headers we recognize — `report_columns.map_headers` over THIS
+    feed's vocabulary. Longest synonym first; the tenant's declared extras outrank the house
+    defaults. The mechanism is not re-implemented here (§COMMCALC-36)."""
+    return rc.map_headers(header_row, COLUMN_SYNONYMS, synonyms)
 
 
 def header_score(row, synonyms=None) -> int:
     """How many of our fields this row's cells look like — what `portal_report_pull.read_table` uses
-    to tell the real header from the title banner printed above it."""
-    return len(map_headers(row, synonyms))
+    to tell the real header from the title banner printed above it. One home (§COMMCALC-36)."""
+    return rc.header_score(row, COLUMN_SYNONYMS, synonyms)
 
 
 # ── the match ladder ─────────────────────────────────────────────────────────────────────────────
@@ -208,9 +192,9 @@ def match_metric(label, *, catalog=None, line_map=None):
 
 # ── the normalizer ───────────────────────────────────────────────────────────────────────────────
 def _cell(row, idx):
-    if idx is None or idx < 0 or idx >= len(row):
-        return ""
-    return row[idx]
+    """One cell, or "" — `report_columns.cell` with this feed's own missing-cell default. Byte-identical
+    to the local indexing it replaces; the INDEXING is what had no business existing twice."""
+    return rc.cell(row, idx, default="")
 
 
 def _units(v):

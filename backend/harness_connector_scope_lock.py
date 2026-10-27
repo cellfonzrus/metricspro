@@ -311,6 +311,9 @@ DISPATCHED_KEYS = frozenset({
     "b2b", "b2bsoft",      # the POS reports portal family (`b2b` is the alias)
     "businesstrack", "payanywhere", "transfirst",   # the three merchant card portals
     "pos_report",          # = pos_report_sweep.CONNECTOR     (§COMMCALC-07, registered 2026-10-15)
+    "supplier_invoice",    # = supplier_invoice_sweep.CONNECTOR (§COMMCALC-38, registered 2026-10-27
+                           #   — the first feed to ship its door in the SAME change as its dispatcher,
+                           #   which is what this ratchet exists to make the cheap path)
     "supply_vendor",       # = supply.portal.SUPPLY_PROCESSOR (§36 / §51, registered 2026-10-15)
     "total_access", "vidapay",      # the master-agent portal under both its names
 })
