@@ -158,20 +158,41 @@ def rebuild(carrier_id: str = "", org_id: str = ORG_ID):
     Delete+insert per carrier. May run long on a full Boost rebuild; if the browser 502s it still
     completes server-side (like the commission recalc) — poll /payables/payables afterwards."""
     client = sb()
-    built = engine.build_ledger(client, org_id, carrier_id or None)
+    # ONE COMPOSITION OF A REBUILD (§COMMCALC-41.2). The post-landing hook rebuilds this ledger too, and a
+    # button that rebuilt it differently from the hook would be two answers to one question — so both arrive
+    # at `payables/refresh.refresh` and neither knows what a rebuild is made of. `refresh` carries §PAYABLES-01's
+    # contract through: when the preflight BLOCKED a carrier it returns `blocked` and does NOT go on to
+    # restate the discrepancy flags off a ledger it did not write.
+    from app.modules.payables import refresh as _refresh
+    built = _refresh.refresh(client, org_id, carrier_id or None)
     # A REFUSED REBUILD IS NOT A SUCCESS (§PAYABLES-01). Before 2026-10-27 this returned 200 with
     # `written: 0` after the build had already emptied a carrier; the delete is now held back until
     # the write is known to be possible, and the remaining half of that defect is this status code —
-    # a screen must not be able to render "rebuilt" over a rebuild that did not happen.
+    # a screen must not be able to render "rebuilt" over a rebuild that did not happen. The ordering that
+    # matters (no `sync_payable_flags` after a block) is enforced inside `refresh`, which is where the two
+    # steps now live; this raise is what the caller sees.
     if built.get("blocked"):
         raise HTTPException(409, {"message": "rebuild refused — the database is behind the code; "
                                              "nothing was deleted and every carrier is as it was",
                                   "blocked": built["blocked"], "result": built})
-    try:
-        built["flags_written"] = engine.sync_payable_flags(client, org_id)
-    except Exception as e:
-        built["flags_error"] = str(e)[:200]
+    built["auto"] = _build_state(client, org_id)
     return built
+
+
+@router.get("/auto-build")
+def auto_build_state(org_id: str = ORG_ID):
+    """When this ledger last rebuilt itself, and whether a rebuild is queued — so the screen can say so
+    instead of leaving a tenant to guess whether the button needs pressing (owner 2026-10-27)."""
+    return {"auto": _build_state(sb(), org_id)}
+
+
+def _build_state(client, org_id):
+    """The hook's own answer for this build, read through its one home. Never raises into a response."""
+    try:
+        from app.modules.commcalc import derived_builds as _builds
+        return _builds.read_view(client, org_id, "payable_ledger")
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 # ── Part A — forecast (phones only) ───────────────────────────────────────────

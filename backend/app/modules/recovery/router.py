@@ -89,11 +89,12 @@ def put_config(body: RecoveryPutConfigIn, org_id: str = ORG_ID):
 def rebuild(org_id: str = ORG_ID):
     """Scan denied appeals + rebuild the recovery ledger as of today. May take a few seconds."""
     client = sb()
-    cfg = _get_cfg(client, org_id)
-    summary = engine.build_recovery_ledger(client, org_id, cfg, _today())
-    client.schema("commcalc").table("appeal_recovery_config").update(
-        {"last_run_at": _now_iso()}).eq("org_id", org_id).execute()
-    return {"summary": summary}
+    # ONE COMPOSITION OF A REBUILD (§COMMCALC-41.2) — the post-landing hook rebuilds this ledger too.
+    from app.modules.recovery import refresh as _refresh
+    out = _refresh.refresh(client, org_id)
+    if out.get("status") == "error":
+        raise HTTPException(500, out.get("error") or "the recovery rebuild failed")
+    return {"summary": out.get("summary"), "warnings": out.get("warnings")}
 
 
 @router.get("/ledger")
