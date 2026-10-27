@@ -312,13 +312,29 @@ check("D2 …and the per-carrier entry says the rows are intact, so nobody reads
 check("D3 a blocked carrier is NOT counted as rebuilt — `carriers` and `written` stay at zero",
       RES["carriers"] == 0 and RES["written"] == 0, (RES["carriers"], RES["written"]))
 
-RCODE = open(ROUTER_PY, encoding="utf-8").read()
+# WHICH FILE OWNS THE ORDER. The 409 and the flag refresh may sit in the router or, once the rebuild
+# is driven by the post-landing hook, in `payables/refresh.py` — whichever file holds BOTH steps owns
+# the ordering claim, so this reads that one. Matching the CALL form `sync_payable_flags(` and not
+# the bare name is deliberate: both files discuss the flag sync in prose above the code, and a
+# comment must not be able to satisfy — or defeat — an ordering claim. (Hardening contributed by the
+# "Make payables ledger update live" thread, which moved the composition into refresh.py.)
+REFRESH_PY = os.path.join(ROOT, "app", "modules", "payables", "refresh.py")
+_ORDER_OWNER = ROUTER_PY
+if os.path.exists(REFRESH_PY):
+    _t = open(REFRESH_PY, encoding="utf-8").read()
+    if "sync_payable_flags(" in _t and 'blocked' in _t:
+        _ORDER_OWNER = REFRESH_PY
+RCODE = open(_ORDER_OWNER, encoding="utf-8").read()
 check("D4 the endpoint turns a block into a NON-2xx — the other half of the defect was a 200 "
       "describing an emptied table, and a screen must not be able to render 'rebuilt' over it",
       'if built.get("blocked")' in RCODE and "HTTPException(409" in RCODE)
 check("D5 …and it does so BEFORE the flags refresh, so a refused rebuild cannot go on to restate "
       "the discrepancy flags off a ledger it did not write",
-      RCODE.index('if built.get("blocked")') < RCODE.index("sync_payable_flags"))
+      # `.find`, not `.index`: a missing marker must make this check FAIL and say so, not raise and
+      # take the whole harness down with it — a lock that crashes reports nothing.
+      0 <= RCODE.find("blocked") < (RCODE.find("sync_payable_flags(")
+                                    if "sync_payable_flags(" in RCODE else -1),
+      (RCODE.find("blocked"), RCODE.find("sync_payable_flags("), os.path.basename(_ORDER_OWNER)))
 
 
 # ══ §E — THE OLD BEHAVIOUR CANNOT COME BACK ══════════════════════════════════════════════════════
