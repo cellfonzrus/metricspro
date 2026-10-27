@@ -1280,7 +1280,18 @@ _all_routes = _flatten_routes(real_app.routes)
 # `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
 # one added, NONE removed, 1802 + 1 = 1803. So the pin was re-taken on a counted, named addition,
 # never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1803"))
+# Re-pinned 1803 -> 1804 on 2026-10-27 for §COMMCALC-39, reading a report's declaration off the page.
+# The delta is ONE route and it is named: POST /commcalc/data-sources/{sid}/live-login/calibrate (reach
+# one declared report through the already-authenticated live session and report what controls its page
+# offers, so a tenant's filters are declared from the page instead of guessed). It WRITES NOTHING — not
+# to the portal, not to `portal_calibration`, not to any table — and adds no input to any report,
+# statement, GP, commission or tax figure: it returns a suggestion for a human to confirm onto the
+# source row. It runs only when called, never from the auto-pull, and it adds no route to db_resilience
+# itself (I0b proves that independently of this number). Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
+# one added, NONE removed, 1803 + 1 = 1804. So the pin was re-taken on a counted, named addition,
+# never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1804"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
