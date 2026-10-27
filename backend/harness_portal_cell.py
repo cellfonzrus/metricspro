@@ -54,6 +54,9 @@ from app.modules.commcalc import dlar_sweep as ds           # noqa: E402
 P = F = 0
 
 
+import pathlib as _pathlib
+
+
 def check(label, ok, got=None):
     global P, F
     if ok:
@@ -228,6 +231,45 @@ check("G6 a long list of changed fields is capped, not dumped",
 check("G7 the sweep measures BOTH reports' field arrival, not just the one that broke",
       set(ds.FIELD_MAPS) == {"dlar", "advocate"} and
       bool(ds.declared_source_fields("advocate")))
+
+print("\nH. the status WORD is the sentence's own verdict, never a literal (index §COMMCALC-40)")
+# Found 2026-10-27: the detail line read "⚠ PARTIAL … COLUMN STOPPED ARRIVING" and the stored
+# `last_status` read 'ok', because the caller passed the literal. Every surface that colours on the
+# word — the sweep page, the connectors row, `_upload_duties` (which already treats 'partial' as a
+# failed auto feed) — showed green over October 2026's missing unit counts for ten days.
+_oct_res = {"period": "October 2026",
+            "written": {"raw_dlar_store": 28, "raw_dlar_rep": 45},
+            "pulled": {"raw_dlar_store": 28, "raw_dlar_rep": 45},
+            "as_of": {}, "vintage": {},
+            "content": {"raw_dlar_store": {"rows": 28, "empty_columns": ["gross_adds"]}},
+            "fields": {"dlar": {"missing": ["gross_activation_quantity"], "blank": [],
+                                "unconsumed": ["activation_qty"]}}}
+_healthy = {"period": "October 2026", "written": {"raw_dlar_store": 28}, "pulled": {},
+            "as_of": {}, "vintage": {}, "content": {}, "fields": {}}
+check("H1 the real October run is 'partial', not 'ok'",
+      ds.status_verdict(_oct_res) == "partial", ds.status_verdict(_oct_res))
+check("H2 a healthy run is still 'ok'", ds.status_verdict(_healthy) == "ok")
+check("H3 the sentence head and the verdict cannot disagree — ONE computation, both readings",
+      all((ds.status_sentence(r).startswith("OK")) == (ds.status_verdict(r) == "ok")
+          for r in (_oct_res, _healthy,
+                    dict(_healthy, skipped_guard=["raw_dlar_rep"]),
+                    dict(_healthy, fields={"advocate": {"missing": [], "blank": ["name"],
+                                                        "unconsumed": []}}),
+                    dict(_healthy, content={"raw_dlar_rep": {"rows": 45,
+                                                             "empty_columns": ["store"]}}))))
+check("H4 a refused table is partial even when every field arrived",
+      ds.status_verdict(dict(_healthy, skipped_guard=["raw_dlar_rep"])) == "partial")
+check("H5 the verdict is one of the house's own status words, not a new vocabulary",
+      {ds.status_verdict(_oct_res), ds.status_verdict(_healthy)} <= {"ok", "partial"})
+# THE UN-WIRE LOCK. The defect was not in this module at all — it was a caller passing a literal
+# beside a computed sentence. A green verdict here proves nothing if the caller stops asking.
+_router = _pathlib.Path(__file__).resolve().parent / "app" / "modules" / "commcalc" / "router.py"
+_src = _router.read_text(encoding="utf-8") if _router.exists() else ""
+check("H6 the router asks for the verdict",
+      "dlar_sweep.status_verdict(res)" in _src)
+check("H7 and no caller passes a literal status beside the computed detail (the shipped defect, "
+      "kept as an armed negative control)",
+      "_dlar_set_status(client, org_id, 'ok'" not in _src)
 
 print("\n%d passed, %d failed" % (P, F))
 if F:

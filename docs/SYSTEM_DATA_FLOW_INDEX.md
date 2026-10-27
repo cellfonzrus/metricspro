@@ -160,6 +160,7 @@ Primary code homes:
 | COMMCALC-37 | **A report is its page AND its filters, and an unfiltered export is refused** | Fourteen back-office reports were asked for "by the day with all regular filters we have been using", one of them "in detail and pulled for every item" — and the pull loop reached each report's page and pressed Export without ever setting a date, a class, a detail toggle, or pressing Run. What question does a page's default answer, and what does a landed row look like when it answers a different question from the one that was asked? |
 | COMMCALC-38 | **What a supplier billed us has a supplier-neutral home, and the invoice feed ships with its door** | "i want to pull in invoices from ups and then compare to the sales reports to make sure every single shipment is being paid for and cash collected by the sales reps" — and the login row he had already made sat on a processor nothing dispatches, so Run now stamped "not wired yet" and stopped. Which part of "a supplier invoice" is a universal fact, which part is one distributor's portal, and what does a second supplier's invoices do to a table whose every reader assumes the first? |
 | COMMCALC-39 | **A declaration is read off the page, and a declared report resolves to itself** | Fourteen reports were asked for by name, and every one of them would have resolved to NOTHING: the pull passed a source's own declaration back to its adapter as a FILTER, squashed under a different rule from the one the reports were keyed by, so a fully configured source read as "No reports are enabled". And the filters those reports need are behind framework-generated control ids nobody can guess. Where should a declaration come from, and what does one argument meaning two things to two callers cost? |
+| COMMCALC-40 | **The status word is the sentence's own verdict, never a literal** | The sweep said "⚠ PARTIAL — a column stopped arriving" in one column and stored `ok` in the column next to it, so every screen that colours on the word showed green over October 2026's missing KPI counts for ten days. What does a verdict cost when it is computed as prose and then discarded at the one place a machine reads it? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26108,6 +26109,7 @@ status word rather than a blank that reads as nil.
 | CORE-16 | core |
 | CORE-17 | core |
 | CORE-18 | core |
+| COMMCALC-40 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -38505,3 +38507,69 @@ now uses spellings that are substrings of no old field name. A negative control 
 
 Same class: §COMMCALC-16 (the diagnostic this one was silencing), §19.26 (missing beats wrong), §19.21
 (a status that reports what was pulled rather than what was written).
+
+## §COMMCALC-40. THE STATUS WORD IS THE SENTENCE'S OWN VERDICT, NEVER A LITERAL (found 2026-10-27)
+
+> **Numbered COMMCALC-40.** Checked against `origin/main` immediately before pushing, per §CORE-17's
+> note on the allocator not being a reservation.
+
+Found while answering *"is all the data being ingested properly for kpi, Ismail reported that data was
+off"*. The DLAR sweep's detail line read, correctly, every day from 2026-10-16:
+
+```
+⚠ PARTIAL — October 2026: … · ⚠ COLUMN STOPPED ARRIVING: raw_dlar_store.gross_adds (0 of 28 rows) …
+```
+
+and the `last_status` stored beside it read **`ok`**. So the DLAR sweep page, the connectors row and
+the upload-duty feed all showed green over October 2026's missing unit counts for ten days, with the
+contradiction sitting in the next column.
+
+### COMMCALC-40.1 THE CLASS — one fact, two homes, one of them a literal
+
+`status_sentence` computes the verdict (`"OK" if not (skipped or gone or shape) else "⚠ PARTIAL"`) and
+returns it as *prose*. The caller then passed the literal `'ok'` to `_dlar_set_status`. The verdict
+existed, was correct, and was discarded at the one place a machine could read it.
+
+`'partial'` was never a new word here, which is what makes this a wiring defect rather than a feature:
+
+| Already spoke 'partial' | Where |
+|---|---|
+| `_sweep_set_status` — a run that imported | `success` defaults to status in `('ok', 'partial')` |
+| the ePay sweep — a mixed run | `_epay_set_status(… 'partial' if _errs else 'ok' …)` |
+| the VIP sweep | `status = 'ok' if not errs else ('partial' if parts else 'error')` |
+| the upload-duty feed | `failed = auto and sweep_last_status in ('error', 'partial')` |
+
+A consumer already knew the word the producer refused to say. **DLAR was the only sibling computing
+the verdict and then throwing it away** — checked in the same PR, and that is why no sibling fix is
+excused here.
+
+### COMMCALC-40.2 THE ONE HOME
+
+`dlar_sweep.status_verdict(res)` → `'ok'` | `'partial'`, pure. `status_sentence` derives its head from
+it, so the prose and the word are ONE computation with two readings, and the router passes it instead
+of a literal.
+
+### COMMCALC-40.3 DUPLICATE CHECK (the build gate)
+
+| Searched for | Found | Reused or excused |
+|---|---|---|
+| an existing "did this run leave the feed whole" home | none; four private derivations (table above) | the house's own `('ok','partial','error')` vocabulary is REUSED, not extended |
+| a second place computing the DLAR verdict | `status_sentence`'s `head` | REWIRED to dereference, not copied |
+| sibling sweeps with the same literal | b2b (handles its honest zero), ePay, VIP (both already derive) | none needed fixing; stated rather than assumed |
+
+Nothing new is derived and no new vocabulary is introduced.
+
+### COMMCALC-40.4 LOCKED
+
+`harness_portal_cell.py` §H (54 checks in the file now, DB-free, in CI): the real October run reads
+`partial`; a healthy run still reads `ok`; the sentence head and the verdict **cannot disagree** across
+five result shapes; a refused table is partial even when every field arrived; the verdict is one of the
+house's own words; and — the un-wire lock, because the defect was in the CALLER and not in this module
+— the router is read as source and the shipped literal is kept as an **armed negative control**, so
+restoring `_dlar_set_status(client, org_id, 'ok'` fails the build.
+
+### COMMCALC-40.5 Cross-references
+
+Same class: §CORE-18 (the other half of this silence — the diagnostic's answer truncated out of the
+same two columns), §COMMCALC-16 (the diagnostic itself), §19.21 (a status that reports what was pulled
+rather than what was written), §19.41 (`success` is what landed, not what the status word says).

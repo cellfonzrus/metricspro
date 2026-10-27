@@ -1549,6 +1549,20 @@ FACTS: dict[str, dict] = {
             'app/modules/notify/report_registry.py': ('SR',),
         },
     },
+    'sweep_verdict': {
+        "question": ("Did this sweep run leave the feed whole — and does the stored status WORD say "
+                     "the same thing as the status sentence beside it?"),
+        "homes": ('app/modules/commcalc/dlar_sweep.py',),
+        "index": ('COMMCALC-40',),
+        "locks": ('harness_portal_cell.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            # The defect was HERE, not in the home: the router passed the literal 'ok' beside a
+            # detail line that said "⚠ PARTIAL". §H of the lock reads this file as source and keeps
+            # the literal as an armed negative control.
+            'app/modules/commcalc/router.py': ('dlar_sweep',),
+        },
+    },
     'portal_cell': {
         "question": ("Did the source actually SEND this figure, or is this a zero we wrote down? And "
                      "which source field feeds which column?"),

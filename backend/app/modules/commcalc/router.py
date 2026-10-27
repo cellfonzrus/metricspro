@@ -15458,7 +15458,11 @@ def _do_dlar_sweep(org_id):
         # debounced Run Calculation of that period in the background (the outcome shows on the Rep Incentive
         # page). The status line says what the hook did — never "recalculated" for a run that was only queued.
         detail += " · " + _auto_calc.phrase(res.get('auto_calc'))
-        _dlar_set_status(client, org_id, 'ok', detail, mark_run=True)
+        # THE STATUS WORD IS THE SENTENCE'S OWN VERDICT, never a literal (index §COMMCALC-40).
+        # This line used to pass 'ok' whatever `status_sentence` had just concluded, so the sweep page
+        # and the connectors row stayed green over a '⚠ PARTIAL' detail for the ten days October 2026's
+        # unit counts were missing. `status_verdict` is the one home both now dereference.
+        _dlar_set_status(client, org_id, dlar_sweep.status_verdict(res), detail, mark_run=True)
     except dlar_sweep.DlarLoginError as e:
         _dlar_set_status(client, org_id, 'error', str(e), mark_run=True)
     except Exception as e:
