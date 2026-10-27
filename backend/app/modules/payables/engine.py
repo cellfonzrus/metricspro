@@ -19,7 +19,10 @@ from app.modules.asset.router import (
     _norm_imei, _vip_invoice_map, _epay_payments_map, _classify_rma,
 )
 from app.modules.commcalc import flag_registry as _reg
+from app.modules.commcalc import product_mix as _pm
 from app.modules.payables import declared_source as _ds
+from app.modules.payables import ledger_status as _ls
+from app.modules.payables import recovered_amount as _rec
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 PAGE = 1000
@@ -427,7 +430,11 @@ def _needed_cols(cfg):
     cols = set()
     for k in ("imei_field", "model_field", "store_field", "owed_field", "due_date_field",
               "billing_friday_field", "sold_date_field", "reimbursement_field",
-              "reimbursement_date_field", "invoice_date_field"):
+              "reimbursement_date_field", "invoice_date_field",
+              # The column that DECLARES whether a device was bought on this line (§COMMCALC-32).
+              # Selected like any other declared field: unselected, the question cannot be asked and
+              # every bring-your-own-phone line reads as an unpriced payable.
+              "device_class_field"):
         v = cfg.get(k)
         if v:
             cols.add(v)
@@ -531,6 +538,10 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
     imei_field = cfg["imei_field"]
     owed_field = cfg.get("owed_field")
     imeis = [r.get(imei_field) for r in chunk]
+    # Resolved ONCE per page, not per row: which column declares the device class, and the words that
+    # mean "no device" for this tenant (None -> the one home's house words).
+    class_field = str(cfg.get("device_class_field") or "").strip()
+    nod_tokens = cfg.get("no_device_tokens") or None
 
     vip_map = (_vip_invoice_map(client, org_id, imeis)
                if cfg.get("invoice_date_source") == "vip_invoices" else {})
@@ -560,6 +571,11 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
         imei = _norm_imei(r.get(imei_field))
         model_raw = (r.get(cfg["model_field"]) if cfg.get("model_field") else None)
         model = alias.get((str(model_raw or "").strip().lower()), model_raw)
+        # DID THE DEALER BUY A PHONE ON THIS LINE AT ALL (§COMMCALC-32)? Through the one home for
+        # "did this line sell a device" (`product_mix.no_device_declared`, §COMMCALC-03.21), on the
+        # column this carrier's map declares. No declared column -> every row is kept, which is
+        # byte-identical to before this question existed.
+        no_device = bool(class_field) and _pm.no_device_declared(r.get(class_field), nod_tokens)
         store = r.get(cfg["store_field"]) if cfg.get("store_field") else None
         # No store on the source row (every Total/MA map: the activation is booked against the dealer
         # account) -> use the POS store that sold the device. Only ever FILLS a blank; a configured
@@ -633,22 +649,36 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
         else:
             sold_flag, sold_date = False, None
 
-        # rebate received (primary), + ePay cross-check
-        rebate_amount, rebate_date, rebate_source = 0.0, None, cfg.get("reimbursement_source") or "none"
+        # WHAT THE CARRIER HAS ALREADY RECOVERED (§COMMCALC-33). The amount and its BASIS travel
+        # together, and an unwired source yields None — never 0.0, which is the sentence "nothing
+        # was recovered against this device" and was written into all 4,495 Luxelink rows while the
+        # commission feed carried -$834,234.25 of deductions. `recovered_amount` owns the reading,
+        # the declared sign convention and the "do we know?" question.
+        rebate_amount, rebate_date = None, None
+        rebate_source = cfg.get("reimbursement_source") or "none"
+        rebate_basis = _rec.BASIS_UNMEASURED
+        sign = _rec.sign_of(cfg)
         if rebate_source == "asset_ledger":
             _b, _o, reimb = _classify_rma(r)
-            rebate_amount = reimb or 0.0
+            rebate_amount, rebate_basis = _rec.resolve(reimb, _rec.BASIS_ASSET_LEDGER)
             rebate_date = _pdate(r.get(cfg.get("reimbursement_date_field")))
         elif rebate_source == "epay":
-            rebate_amount = _epay_reimb_amount(epay_map.get(imei), reimb_types)
+            rebate_amount, rebate_basis = _rec.resolve(
+                _epay_reimb_amount(epay_map.get(imei), reimb_types), _rec.BASIS_EPAY)
         elif rebate_source == "imei_match":
-            mt = cfg.get("reimbursement_match_table")
-            if mt:  # pending until a Total reimbursement report exists → stays 0 when unset
-                rebate_amount = 0.0  # (wired via config; amount source added when the report lands)
+            # The recovery is on the device's OWN source row when a column is declared for it. This
+            # replaces the `0.0` placeholder: no column declared now reads as UNMEASURED, so the
+            # out-of-pocket surfaces say "not known" instead of billing it to the owner.
+            rebate_amount, rebate_basis = _rec.resolve(
+                _rec.from_row(r, cfg.get("reimbursement_field"), sign), _rec.BASIS_DECLARED_FIELD)
+            rebate_date = _pdate(r.get(cfg.get("reimbursement_date_field")))
         epay_rebate = _epay_reimb_amount(epay_map.get(imei), reimb_types) if do_epay else None
         rebate_mismatch = bool(cfg.get("epay_crosscheck") and epay_rebate
-                               and abs((epay_rebate or 0) - rebate_amount) > 0.01)
-        rebate_got = (rebate_amount and rebate_amount > 0) or bool(rebate_date)
+                               and abs((epay_rebate or 0) - (rebate_amount or 0.0)) > 0.01)
+        # "Was the rebate received?" is now answerable only where something MEASURED it. An
+        # unmeasured recovery is not a missing rebate, so it can no longer produce a `discrepancy`.
+        rebate_measured = _rec.is_measured(rebate_basis)
+        rebate_got = bool(rebate_measured and ((rebate_amount or 0) > 0 or rebate_date))
 
         # offset math
         if owed is not None:
@@ -666,15 +696,29 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
             threshold = window_start + timedelta(days=int(span * (1 - pct / 100.0)))
             priority = today >= threshold
 
-        # status routing
-        if owed is not None and rebate_got and (rebate_amount or 0) >= (owed - 0.01):
-            status = "offset"
-        elif sold_flag and not rebate_got:
-            status = "discrepancy"
+        # status routing. FIRST, because a line that bought no device is not a payable in any state:
+        # it cannot be offset, it is not a discrepancy, and it is never due (§COMMCALC-32). The feed's
+        # own declaration is the only thing that may say so — a product DESCRIPTION is not evidence
+        # (§66), and reading one here would drop real handsets.
+        if no_device:
+            status = _ls.STATUS_NO_DEVICE
+            owed, net_owed, net_offset = None, None, 0.0
+            owed_source = _ls.OWED_SOURCE_NO_DEVICE
+            priority = False
+        elif owed is not None and rebate_got and (rebate_amount or 0) >= (owed - 0.01):
+            status = _ls.STATUS_OFFSET
+        elif sold_flag and rebate_measured and not rebate_got:
+            # A claim against the carrier, which is what `discrepancy` means: the device sold and
+            # something MEASURED that no rebate came back for it.
+            status = _ls.STATUS_DISCREPANCY
         elif (not sold_flag) and not rebate_got and due_date and today >= due_date:
-            status = "due"
+            status = _ls.STATUS_DUE
         else:
-            status = "open"
+            # Includes the sold-but-UNMEASURED case (§COMMCALC-33). Before this, a carrier with no
+            # recovery source wired had every sold device written as a `discrepancy` — 1,400 Luxelink
+            # lines telling the owner he was carrying a cost nobody had checked. Unknown is `open`,
+            # and `rebate_basis` on the row says why.
+            status = _ls.STATUS_OPEN
 
         out.append({
             "org_id": org_id, "carrier_id": cid, "imei": imei, "store": store,
@@ -683,7 +727,10 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
             "due_date": _dstr(due_date), "due_source": due_source,
             "billing_friday": _dstr(billing_friday), "bill_path": bill_path,
             "sold_flag": sold_flag, "sold_date": _dstr(sold_date),
-            "rebate_amount": round(rebate_amount or 0.0, 2), "rebate_date": _dstr(rebate_date),
+            # NULL, not 0.00, where nothing measured the recovery: a stored zero is a measurement
+            # claim and every reader downstream believed it (§COMMCALC-33).
+            "rebate_amount": (None if rebate_amount is None else round(rebate_amount, 2)),
+            "rebate_basis": rebate_basis, "rebate_date": _dstr(rebate_date),
             "rebate_source": rebate_source, "epay_rebate_amount": epay_rebate,
             "rebate_mismatch": rebate_mismatch, "net_offset": round(net_offset, 2),
             "net_owed": net_owed, "window_start": _dstr(window_start), "window_end": _dstr(window_end),

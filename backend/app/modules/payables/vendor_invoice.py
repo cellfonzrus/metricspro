@@ -15,7 +15,7 @@ transaction record — and it carries exactly the four fields this report needs:
 of them dated, $2,049,592.50**, of which 331 fall due on or after 2026-10-01. The report was not
 short of data. It was asking the wrong table.
 
-WHY THIS IS A SHARED HOME AND NOT A SECOND READER. `payables/router._owed_from_vendor_feed` already
+WHY THIS IS A SHARED HOME AND NOT A SECOND READER. `payables/owed_read.vendor_rows` already
 reads this table, grouped BY DATE, for the Daily Owed tab. This report needs the same rows grouped BY
 INVOICE. Two grains over one source is legitimate; two separately-written notions of which rows count
 as a debt is not — a sign convention or an order-type exclusion written into one of them would make
@@ -58,7 +58,9 @@ def is_debt_line(row) -> bool:
     """Does this feed row represent money the dealer OWES?
 
     A positive `retail_cost` is a charge; zero or negative is a credit or a payment TO the dealer and
-    is not a payable. This is the same test `_owed_from_vendor_feed` applies for the Daily Owed tab,
+    is not a payable. `payables/owed_read.vendor_rows` DEREFERENCES this function for the daily and
+    weekly date-grain reads (it once carried an inline copy of the comparison, which is the drift
+    this very docstring warned about),
     which is why it lives here — a change to it must reach both grains or they stop reconciling.
     """
     amt = _money((row or {}).get("retail_cost"))

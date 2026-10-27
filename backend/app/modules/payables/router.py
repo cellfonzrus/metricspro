@@ -14,6 +14,8 @@ from app.core.schemas import LaxModel
 from app.modules.asset.router import _norm_imei, _vip_invoice_map, _epay_payments_map
 from app.modules.commcalc import date_window
 from app.modules.payables import engine
+from app.modules.payables import ledger_status as _ls
+from app.modules.payables import owed_read as _owed
 
 router = APIRouter()
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -332,7 +334,7 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
 # ── Part B — payables + offsets + due ─────────────────────────────────────────
 @router.get("/payables")
 def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit: int = 500,
-                  start: str = "", end: str = "", org_id: str = ORG_ID):
+                  start: str = "", end: str = "", all_dates: bool = False, org_id: str = ORG_ID):
     """The per-IMEI ledger, optionally narrowed to a DUE-DATE window (`start`/`end`, both ends
     inclusive — the shared filter bar's date range) and to one store.
 
@@ -347,7 +349,7 @@ def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit
     `limit` still means "this many rows I can see" rather than "this many before filtering".
     """
     client = sb()
-    win = date_window.resolve_window(start, end, 0) if (start or end) else None
+    win = _due_window(start, end, all_dates)
     skey = _store_key_resolver(client, org_id)
     want_store = _store_selected(skey, store)
     q = (client.schema("commcalc").table("device_payable_ledger").select("*").eq("org_id", org_id))
@@ -355,6 +357,11 @@ def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit
         q = q.eq("carrier_id", carrier_id)
     if status:
         q = q.eq("status", status)
+    else:
+        # A line that bought no device is not a payable in any state (§COMMCALC-32). Excluded through
+        # the one home, so adding a second non-payable status reaches every reader at once. An
+        # EXPLICIT status filter is honoured as asked, so the rows stay reachable for an audit.
+        q = _ls.exclude_non_payable(q)
     if win:
         q = date_window.apply_window(q, "due_date", win)
     scan = max(limit, 5000) if want_store else limit
@@ -386,7 +393,41 @@ def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit
             "window": win,
             # Fail-closed rows the window could not judge, SAID OUT LOUD (see the docstring).
             "undated_excluded": undated,
+            # And the lines left out because no device was bought on them — COUNTED, never silently
+            # dropped (§COMMCALC-32). The note names no feed or column, so it is safe on any screen.
+            "no_device_excluded": _no_device_count(client, org_id, carrier_id) if not status else 0,
+            "no_device_note": _ls.EXCLUDED_NOTE,
             "unassigned_store": sum(1 for r in rows if not (r.get("store") or "").strip())}
+
+
+def _no_device_count(client, org_id, carrier_id=""):
+    """How many ledger lines bought no device — the number the screen SAYS instead of the rows it
+    leaves out. ADAPTIVE: any failure reports None, which a screen renders as "not measured" rather
+    than as a confident zero."""
+    try:
+        q = (client.schema("commcalc").table("device_payable_ledger").select("imei", count="exact")
+             .eq("org_id", org_id).eq("status", _ls.STATUS_NO_DEVICE).limit(1))
+        if carrier_id:
+            q = q.eq("carrier_id", carrier_id)
+        return q.execute().count
+    except Exception as e:                                        # pragma: no cover - defensive
+        print(f"WARN payables no_device count failed: {e}")
+        return None
+
+
+def _due_window(start="", end="", all_dates=False):
+    """WHICH DAYS A PAYMENT SCREEN OPENS ON — one answer, through the window home (§COMMCALC-32).
+
+    Owner 2026-10-26: the screen should pick today through three days ahead by itself. So an absent
+    date range is no longer "every row ever": it is the default ahead window, which the response
+    RETURNS so the pickers render what was actually applied instead of holding a second copy of the
+    default. An explicit range is honoured as given, and `all_dates=true` is the escape that asks for
+    no window at all — without it there would be no way back to the full list."""
+    if all_dates:
+        return None
+    if start or end:
+        return date_window.resolve_window(start, end, 0)
+    return date_window.ahead_window(datetime.now(timezone.utc).date())
 
 
 @router.get("/filter-options")
@@ -491,6 +532,9 @@ def offsets(imei: str, org_id: str = ORG_ID):
     return {
         "imei": n, "store": row.get("store"), "device_model": row.get("device_model"),
         "status": row.get("status"), "owed": row.get("owed"), "owed_source": row.get("owed_source"),
+        # The drill-down is an AUDIT view and deliberately still answers for a line the lists leave
+        # out, saying which it is rather than 404-ing on it (§COMMCALC-32).
+        "is_payable": _ls.is_payable(row.get("status")),
         "primary_rebate": {"amount": row.get("rebate_amount"), "date": row.get("rebate_date"),
                            "source": row.get("rebate_source")},
         "epay_crosscheck": {"amount": row.get("epay_rebate_amount"), "mismatch": row.get("rebate_mismatch"),
@@ -509,9 +553,10 @@ def due(as_of: str = "", store: str = "", carrier_id: str = "", org_id: str = OR
     if not as_of:
         raise HTTPException(400, "as_of=<billing friday YYYY-MM-DD> required")
     client = sb()
-    q = (client.schema("commcalc").table("device_payable_ledger")
-         .select("store,bill_path,owed,imei,device_model,due_date")
-         .eq("org_id", org_id).eq("billing_friday", as_of))
+    q = _ls.exclude_non_payable(                       # §COMMCALC-32, same reason as the list above
+        client.schema("commcalc").table("device_payable_ledger")
+        .select("store,bill_path,owed,imei,device_model,due_date")
+        .eq("org_id", org_id).eq("billing_friday", as_of))
     if carrier_id:
         q = q.eq("carrier_id", carrier_id)
     # SIBLING OF THE SAME DEFECT (2026-10-22). This endpoint narrowed by store with a string equality
@@ -535,71 +580,9 @@ def due(as_of: str = "", store: str = "", carrier_id: str = "", org_id: str = OR
             "note": "aging.owed matches /api/v1/asset/owed-weekly due_this_week.aging.owed"}
 
 
-_VENDOR_FEED_TABLE = "raw_ma_daily_tx"
-
-
-def _owed_from_vendor_feed(client, org_id, win):
-    """Daily owed straight from the PROCESSOR'S OWN feed — `raw_ma_daily_tx.due_date`.
-
-    OWNER 2026-08-10: "if we have the actual due date build that and ship it."  We do. This is the
-    fallback for a tenant whose per-IMEI ledger carries no amounts, which is every Total/MA tenant:
-    their source map has no owed_field because the MA reports record what was ACTIVATED, never what was
-    INVOICED, so Daily Owed grouped nothing at all.
-
-    The earlier plan was to ESTIMATE the due date as ship + 20 days off the handset fulfillment report.
-    That is not needed and would have been less accurate: the daily-tx feed already carries the
-    vendor's own `due_date` on every row (all 45,525 luxelink rows, 2026-02-02..2026-09-24). A positive
-    `retail_cost` is money the DEALER OWES (negative = paid to the dealer — the same sign convention
-    the canonical commission ledger books from), so the owed side is the positive rows.
-
-    GRAIN, stated out loud: this is per ORDER LINE, not per device. The feed carries no IMEI, and
-    neither does the fulfillment report — there is no device identity on this path at all, which is
-    exactly why the per-IMEI ledger cannot be priced from it. So these rows answer "how much is due on
-    what date", not "which handset". They are NOT mixed into the ledger.
-
-    Returns (rows, meta). Never raises — a tenant without the table just gets no fallback."""
-    rows, page, start_at = [], 1000, 0
-    by_date, entities = {}, set()
-    try:
-        while True:
-            q = (client.schema("commcalc").table(_VENDOR_FEED_TABLE)
-                 .select("due_date,retail_cost,account_name")
-                 .eq("org_id", org_id).not_.is_("due_date", "null"))
-            # The SAME window home the ledger path reads (2026-10-22) — this fallback used to carry
-            # its own gte/lte pair, which is how one screen ends up with two meanings of "inclusive".
-            if win:
-                q = date_window.apply_window(q, "due_date", win)
-            chunk = q.range(start_at, start_at + page - 1).execute().data or []
-            for r in chunk:
-                amt = r.get("retail_cost")
-                try:
-                    amt = float(amt)
-                except (TypeError, ValueError):
-                    continue
-                if amt <= 0:                     # negative / zero = paid TO the dealer, not owed BY it
-                    continue
-                d = str(r.get("due_date") or "")[:10]
-                if not d:
-                    continue
-                e = by_date.setdefault(d, {"due_date": d, "count": 0, "owed": 0.0})
-                e["count"] += 1
-                e["owed"] += amt
-                nm = (r.get("account_name") or "").strip()
-                if nm:
-                    entities.add(nm)
-            if len(chunk) < page:
-                break
-            start_at += page
-    except Exception as e:
-        print(f"WARN owed-by-date vendor feed unavailable: {e}")
-        return [], {}
-    rows = [dict(v, owed=round(v["owed"], 2)) for v in by_date.values()]
-    rows.sort(key=lambda x: x["due_date"])
-    return rows, {"entities": sorted(entities)}
-
-
 @router.get("/owed-by-date")
-def owed_by_date(start: str = "", end: str = "", store: str = "", org_id: str = ORG_ID):
+def owed_by_date(start: str = "", end: str = "", store: str = "", all_dates: bool = False,
+                 market: str = "", org_id: str = ORG_ID):
     """Consolidated daily owed: net_owed grouped by due_date.
 
     Two possible sources, and the response always names which one answered:
@@ -610,50 +593,69 @@ def owed_by_date(start: str = "", end: str = "", store: str = "", org_id: str = 
     client = sb()
     # The window is the SAME one home every other surface here reads, so "both ends inclusive" is
     # stated once (date_window) instead of three times as a gte/lte pair.
-    win = date_window.resolve_window(start, end, 0) if (start or end) else None
+    win = _due_window(start, end, all_dates)
     skey = _store_key_resolver(client, org_id)
     want_store = _store_selected(skey, store)
-    q = (client.schema("commcalc").table("device_payable_ledger")
-         .select("due_date,net_owed,owed,store").eq("org_id", org_id))
-    if win:
-        q = date_window.apply_window(q, "due_date", win)
-    rows = q.limit(50000).execute().data or []
-    by_date = {}
-    for r in rows:
-        if want_store and not want_store(r.get("store")):   # canonical identity, not a string eq
-            continue
-        d = r.get("due_date")
-        if not d:
-            continue
-        amt = r.get("net_owed")
-        if amt is None:
+    # The market half of the same filter bar, through the SAME market home the list uses (RULE FIVE),
+    # so "North" means one thing on both surfaces.
+    mmap = _market_by_store(client, org_id)
+    # The bar's market half is MULTI-select (StandardFilterValue.markets is a list), so this accepts a
+    # comma-separated list and matches ANY of them. One value is just a list of one — there is no
+    # second single-market code path to drift from.
+    want_markets = {m.strip().lower() for m in str(market or "").split(",") if m.strip()} or None
+    # THE MONEY IS READ ONCE, HERE AND FOR THE WEEKLY ROLL-UP ALIKE (§COMMCALC-34). This endpoint used
+    # to hold the ledger read, the status filter, the amount precedence and the vendor-feed fallback
+    # itself — and `Weekly Owed` could not reuse any of it, which is exactly why that report read one
+    # carrier's own column instead. All of it now lives in `payables/owed_read`; what is left here is
+    # the GROUPING BY DATE, which is this surface's own question.
+    got = _owed.dated_owed(client, org_id, win, want_store=want_store, want_markets=want_markets,
+                           market_of=(lambda st: _market_of(mmap, st)),
+                           store_filtered=bool(store))
+    if got["source"] == _owed.SOURCE_DEVICE_LEDGER:
+        by_date = {}
+        for r in got["rows"]:
+            d = r.get("due_date")
+            if not d:
+                continue
             amt = r.get("owed") or 0
-        e = by_date.setdefault(d, {"due_date": d, "count": 0, "owed": 0.0})
-        e["count"] += 1
-        e["owed"] += float(amt or 0)
-    out = [dict(v, owed=round(v["owed"], 2)) for v in by_date.values()]
-    out.sort(key=lambda x: x["due_date"])
-    if out:
+            e = by_date.setdefault(d, {"due_date": d, "count": 0, "owed": 0.0, "_by_store": {}})
+            e["count"] += 1
+            e["owed"] += float(amt)
+            # WHO OWES WHAT ON THIS DATE (owner 2026-10-26: "who owes what for eveyr date mentioned on
+            # that list , to make sure thee correct account is debited"). A date total cannot answer
+            # that — the money is paid per store, so the per-store split rides WITH the date rather
+            # than needing a second request that could be filtered differently and disagree.
+            st = (r.get("store") or "").strip()
+            skey_v = _store_key(skey, st)
+            b = e["_by_store"].setdefault(skey_v or "", {
+                "store": st or None, "store_key": skey_v, "market": r.get("market"),
+                "count": 0, "owed": 0.0})
+            b["count"] += 1
+            b["owed"] += float(amt)
+        out = []
+        for v in by_date.values():
+            stores = sorted(v.pop("_by_store").values(), key=lambda x: -x["owed"])
+            out.append(dict(v, owed=round(v["owed"], 2),
+                            by_store=[dict(b, owed=round(b["owed"], 2)) for b in stores],
+                            stores=len(stores)))
+        out.sort(key=lambda x: x["due_date"])
         return {"rows": out, "total_owed": round(sum(x["owed"] for x in out), 2),
-                "source": "device_ledger", "grain": "device", "window": win}
+                "source": got["source"], "grain": got["grain"], "window": win,
+                # The unattributed money, said out loud: a store the build could not resolve cannot
+                # be debited, so it is never folded into another store's figure.
+                "unassigned_owed": round(sum(b["owed"] for x in out for b in x["by_store"]
+                                             if not b["store"]), 2)}
 
     # The ledger produced nothing — which for a Total/MA tenant is not "you owe nothing", it is "no
-    # device carries an amount". Fall back to the processor's own dated amounts and SAY so, including
-    # the grain change, rather than showing an empty table.
-    vrows, vmeta = _owed_from_vendor_feed(client, org_id, win)
-    if not vrows:
+    # device carries an amount". The shared read has already fallen back to the processor's own dated
+    # amounts; it SAYS so, including the grain change, rather than showing an empty table.
+    if not got["rows"]:
         return {"rows": [], "total_owed": 0.0, "source": None, "grain": None}
-    note = ("Dated from the processor's own feed (MA Daily Tx `due_date`), not from the per-IMEI "
-            "payable ledger — this tenant's carrier source map carries no owed field, because the MA "
-            "reports record what was activated, never what was invoiced. These are ORDER LINES, not "
-            "devices, so there is no IMEI to drill into"
-            + (" · entities: " + ", ".join(vmeta["entities"]) if vmeta.get("entities") else "") + ".")
-    if store:
-        note += (" The store filter does not apply here: the feed carries no store — an order is placed "
-                 "against the dealer account.")
-    return {"rows": vrows, "total_owed": round(sum(x["owed"] for x in vrows), 2),
-            "source": "vendor_feed", "grain": "order_line", "note": note,
-            "entities": vmeta.get("entities") or []}
+    rows = [{k: v for k, v in r.items() if k in ("due_date", "count", "owed")}
+            for r in got["rows"]]
+    return {"rows": rows, "total_owed": round(sum(x["owed"] for x in rows), 2),
+            "source": got["source"], "grain": got["grain"], "note": got["note"],
+            "entities": got["entities"]}
 
 
 # ── Part C — per-store priority list ──────────────────────────────────────────

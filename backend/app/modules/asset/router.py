@@ -1566,6 +1566,7 @@ async def get_owed_weekly(
         .range(offset, offset + limit - 1).execute()
     week_rows = _attach_vip_invoices(client, org_id, rows_resp.data or [])
 
+    from app.modules.payables import billing_period as _bp
     out = {
         "thursday": thursday,
         "filters": {"store": store or None, "market": market or None},
@@ -1576,7 +1577,83 @@ async def get_owed_weekly(
         "total_due_rows": len(due_rows),
         "offset": offset,
         "limit": limit,
+        # WHAT ANSWERED, NAMED (§COMMCALC-34). The consignment ledger stamps the billing day itself,
+        # so where it has rows for this period that stamp IS the period and nothing recomputes it.
+        "period_source": "stored_column",
+        "period_basis": _bp.BASIS_PERIOD_FIELD,
     }
+
+    # ── A WEEKLY FRIDAY IS NOT A UNIVERSAL FACT ABOUT OWING MONEY (owner report: "Weekly Owed to
+    #    Distributor does not show anything in luxelink"). Everything above reads
+    #    `asset_ledger.billing_friday` — one carrier's weekly consignment rhythm, stamped by one
+    #    carrier's portal sweep, on one carrier's table. MEASURED 2026-10-26: Luxelink has 0 rows
+    #    there, so every figure above was a sum over an empty set and the screen said so by saying
+    #    nothing. §COMMCALC-26.1's class, arriving on a fifth surface.
+    #
+    #    THE DECLARATION WINS WHERE IT EXISTS; A MEASUREMENT DECIDES WHERE IT DOES NOT. A carrier
+    #    that declares the column carrying its billing day keeps the path above, byte for byte. For
+    #    any other carrier the money is read through the ONE shared owed read — the SAME read the
+    #    Daily Owed surface uses, so the week cannot total what the day disagrees with — and grouped
+    #    by that carrier's own declared cadence. Nothing here derives the money a second time.
+    if not due_rows:
+        try:
+            from app.modules.payables import owed_read as _owed_r
+            from app.modules.payables import unsold_inventory as _unsold_w
+            from app.modules.commcalc import date_window as _dw_w
+            _, maps = _unsold_w.load_policies(client, org_id)
+            # The period the reader selected, as a window: for a weekly carrier the seven days
+            # ending on the chosen day, and for a per-invoice carrier the same seven days, because
+            # that is the span the reader asked about either way. The cadence decides how the money
+            # inside it is GROUPED, never which days were asked for.
+            cad = _bp.resolve_cadence(maps[0] if maps else None)
+            w_start, w_end = _bp.week_window(thursday)
+            win = _dw_w.resolve_window(w_start or "", w_end or thursday, 0)
+            # The market half of the same filter bar, resolved through the canonical
+            # store->market home (§13a / RULE FIVE) rather than a column — the ledger rows carry no
+            # `market`, exactly as §COMMCALC-26.5 found on the aging report. A market selection the
+            # resolver cannot answer narrows nothing rather than silently dropping every row.
+            _market_of_store = None
+            if market_list:
+                try:
+                    from app.core import scope as _cscope
+                    _resolve_mkt_w, _ = _cscope.store_market_resolver(client, org_id)
+                    _market_of_store = lambda st: _resolve_mkt_w(st)
+                except Exception as _mex:
+                    print(f"WARN owed-weekly fallback market filter unresolved: {_mex}")
+            got = _owed_r.dated_owed(client, org_id, win,
+                                     want_store=((lambda st: str(st or "").strip().lower() in
+                                                  {x.lower() for x in store_list})
+                                                 if store_list else None),
+                                     want_markets=({m.lower() for m in market_list}
+                                                   if (market_list and _market_of_store) else None),
+                                     market_of=_market_of_store,
+                                     store_filtered=bool(store_list))
+            rolled = _bp.roll_up(got["rows"], cad,
+                                  amount_of=lambda r: r.get("owed"),
+                                  count_of=lambda r: r.get("count") or 1)
+            out["declared_period"] = {
+                "cadence": rolled["cadence"], "weekday": rolled["weekday"],
+                "declared": rolled["cadence_declared"],
+                "window": {"start": w_start, "end": w_end},
+                "periods": rolled["periods"], "total_owed": rolled["total"],
+                "unplaced_rows": rolled["unplaced_rows"],
+                "unplaced_amount": rolled["unplaced_amount"],
+                "bases": rolled["bases"], "note": rolled["note"],
+                # The grain CHANGES on the fallback source and that is said out loud: the processor's
+                # feed carries no IMEI, so these are order lines and there is no device to drill to.
+                "source": got["source"], "grain": got["grain"], "source_note": got["note"],
+                "entities": got["entities"],
+            }
+            if got["source"]:
+                out["period_source"] = "shared_owed_read"
+                out["period_basis"] = (rolled["periods"][0]["basis"] if rolled["periods"]
+                                       else _bp.BASIS_NO_DATE)
+        except Exception as ex:
+            # A fallback that cannot be read is REPORTED, never read as "nothing is owed"
+            # (§COMMCALC-29). The consignment figures above are unaffected.
+            print(f"WARN owed-weekly declared-cadence roll-up unavailable: {ex}")
+            out["declared_period"] = {"error": "unavailable", "periods": [], "total_owed": None}
+
     # §CORE-17.3l — the three KPIs open to the By-Store rows for THIS billing Friday. The device
     # COUNTS beside them carry no panel of their own: every panel row already states both of them.
     out["drilldown"] = _dd.owed_weekly_drilldowns(out)
@@ -1825,7 +1902,7 @@ async def get_aging(
     by_model_total = len(by_model)
     by_model_shown = by_model[:_AGING_MODEL_CAP]
 
-    return {
+    out = {
         "today": today.isoformat(),
         "data_as_of": fd,
         "buckets": buckets,
@@ -1871,6 +1948,14 @@ async def get_aging(
         "filters": {"store": store or None, "market": market or None, "month": month, "year": year,
                     "date_from": date_from or None, "date_to": date_to or None},
     }
+    # §CORE-17.3y — EVERY BAND OPENS TO ITS OWN DEVICES (owner ask 2026-10-26, quoting this page's
+    # own banner: "124 devices in the 9-12 day window ... need a drill donw for these , whic store
+    # market date range etc"). The declaration is `device_asset_drilldown`'s, folded over
+    # `all_rows` — the UNCAPPED population this endpoint just built — rather than over the response,
+    # whose zero-owed and unknown-age lists are capped for payload size. Pass the response instead
+    # and every panel still works; its tie-out is then honestly over a page of the devices.
+    out["drilldown"] = _dd.aging_drilldowns(out, all_rows)
+    return out
 
 
 def _attach_investigation(client, org_id, rows):

@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo, useCallback, Suspense } from 'react'
+import { useState, useEffect, useMemo, useCallback, Suspense, Fragment } from 'react'
 import { useUrlTab } from '@/lib/useUrlTab'
 import { api, fmt } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
@@ -49,6 +49,11 @@ function MapRow({ cand, carriers, onSave }: any) {
   )
 }
 
+/** One store's share of a date's owed total (`/payables/owed-by-date` → `by_store`, §COMMCALC-32).
+ *  `store` empty means the build could not resolve the store, so the money cannot be debited to an
+ *  account — it is shown as its own line rather than folded into a resolved store's figure. */
+type OwedByStore = { store?: string | null; store_key?: string | null; market?: string | null; count: number; owed: number }
+
 export default function PayablesPage() {
   return <Suspense fallback={null}><PayablesPageBody /></Suspense>
 }
@@ -78,13 +83,22 @@ function PayablesPageBody() {
   const [pRows, setPRows] = useState<any[]>([])
   // The payables response's own meta, not its rows: `undated_excluded` is how many ledger rows the
   // date window could not judge, which the screen SAYS rather than silently dropping (§COMMCALC-25).
-  const [pMeta, setPMeta] = useState<{ undated_excluded?: number }>({})
+  const [pMeta, setPMeta] = useState<{ undated_excluded?: number; no_device_excluded?: number | null;
+    no_device_note?: string }>({})
   // The rebuild's own complaints: a table or column the carrier's SETUP declares that the build
   // could not read. Silence here is what let a mis-declared cost source write 2,923 devices with no
   // price that looked exactly like a carrier nobody had configured (§COMMCALC-29).
   const [warns, setWarns] = useState<string[]>([])
+  // WHICH DAYS THE SERVER ACTUALLY MEASURED. The default (today -> +3 days) is computed by the
+  // endpoint and returned, so the pickers show what was applied instead of this page holding a
+  // second copy of the default that could drift from it (§COMMCALC-32).
+  const [appliedWin, setAppliedWin] = useState<{ start?: string; end?: string; basis?: string } | null>(null)
+  const [allDates, setAllDates] = useState(false)
+  const [openDate, setOpenDate] = useState('')
   const [drill, setDrill] = useState<any | null>(null)
-  // owed-by-date
+  // owed-by-date. WHO OWES WHAT on a date (§COMMCALC-32): the per-store split rides WITH the date
+  // row, so it is shaped here rather than left untyped — a blank `store` is money whose store the
+  // build could not resolve, which must stay visible instead of being folded into another store.
   const [oRows, setORows] = useState<any[]>([])
   const [oMeta, setOMeta] = useState<any>({})
   const [loading, setLoading] = useState(false)
@@ -102,6 +116,10 @@ function PayablesPageBody() {
   // caller's JWT — never hardcoded.
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const owedStore = filt.stores.length === 1 ? filt.stores[0] : ''
+  // The market half of the bar is MULTI-select, and the Daily Owed tab applies it SERVER-side (a date
+  // aggregate carries no store dimension for a client-side predicate to read). One joined key, so the
+  // effect below depends on a plain value and the query sends exactly what the effect watched.
+  const marketKey = filt.markets.join(',')
 
   // The ledger rows carry a store but NO market, so the cascade's market vocabulary comes from the
   // org roster (the same org-scoped pick-don't-type source /core/filter-options serves every other bar).
@@ -139,8 +157,8 @@ function PayablesPageBody() {
   // query that builds it. Payables/Daily Owed window on `due_date` for the same consistency, which
   // also means `limit` counts rows inside the range instead of rows before it.
   useEffect(() => { if (tab === 'forecast') loadForecast() }, [tab, lookback, horizon, filt.period, filt.periodTo])
-  useEffect(() => { if (tab === 'payables') loadPayables() }, [tab, status, filt.period, filt.periodTo])
-  useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, owedStore, filt.period, filt.periodTo])
+  useEffect(() => { if (tab === 'payables') loadPayables() }, [tab, status, filt.period, filt.periodTo, allDates])
+  useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, owedStore, filt.period, filt.periodTo, marketKey, allDates])
   useEffect(() => { if (tab === 'map') loadMap() }, [tab])
 
   async function rebuild() {
@@ -194,7 +212,9 @@ function PayablesPageBody() {
       if (status) qs.set('status', status)
       if (filt.period) qs.set('start', filt.period)      // windows on due_date
       if (filt.periodTo) qs.set('end', filt.periodTo)
+      if (allDates) qs.set('all_dates', 'true')
       const d = await api(`/api/v1/payables/payables${qs.toString() ? `?${qs}` : ''}`); setPRows(d.rows || []); setPMeta(d || {})
+      setAppliedWin(d.window || null)
     } catch (e) { console.error(e) }
     setLoading(false)
   }
@@ -205,7 +225,10 @@ function PayablesPageBody() {
       if (owedStore) qs.set('store', owedStore)   // date-aggregate has no store dim → single-store server filter
       if (filt.period) qs.set('start', filt.period)
       if (filt.periodTo) qs.set('end', filt.periodTo)
+      if (marketKey) qs.set('market', marketKey)   // the same bar's market half (RULE FIVE), multi-select
+      if (allDates) qs.set('all_dates', 'true')
       const d = await api(`/api/v1/payables/owed-by-date${qs.toString() ? `?${qs}` : ''}`); setORows(d.rows || []); setOMeta(d || {})
+      setAppliedWin(d.window || null)
     } catch (e) { console.error(e) }
     setLoading(false)
   }
@@ -346,6 +369,23 @@ function PayablesPageBody() {
               onBlur={e => saveSettings({ priority_window_pct: +e.target.value })} style={{ ...sel, width: 70 }} />
           </label>
           <span style={{ fontSize: 12, color: 'var(--muted)' }}>The % applies on the next Rebuild.</span>
+        </div>
+      )}
+      {/* WHICH DAYS YOU ARE LOOKING AT, and that nobody typed them (owner 2026-10-26: "should
+          auaomatically pick teh dates from today and 3 days ahead ... the month and date shoudl not be
+          entered manually"). The dates come from the RESPONSE, so this line can never claim a window
+          the server did not apply. */}
+      {(tab === 'payables' || tab === 'owed') && (
+        <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, color: 'var(--text2)' }}>
+          {appliedWin?.start ? (
+            <span>Showing payments due <b>{appliedWin.start}</b> to <b>{appliedWin.end}</b>
+              {appliedWin.basis === 'default_ahead' && <> — picked automatically (today plus the next 3 days); use the date range above for any other period</>}
+            </span>
+          ) : <span>Showing <b>all dates</b></span>}
+          <button onClick={() => setAllDates(v => !v)}
+            style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid var(--border)', background: allDates ? 'var(--accent, var(--c-bg-2563eb))' : 'var(--surface)', color: allDates ? 'var(--c-fg-ffffff)' : 'var(--text)', cursor: 'pointer', fontSize: 12 }}>
+            {allDates ? '✓ All dates' : 'All dates'}
+          </button>
         </div>
       )}
       {msg && <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, background: 'var(--surface)', border: '1px solid var(--border)', fontSize: 13 }}>{msg}</div>}
@@ -557,6 +597,14 @@ function PayablesPageBody() {
             <><br /><b style={{ color: 'var(--c-fg-d97706)' }}>{pMeta.undated_excluded}</b> row(s) carry
             {' '}<b>no due date</b> and are therefore outside the date range you picked — clear the range to see them.</>
           )}
+          {/* THE LINES THAT ARE NOT PAYABLES AT ALL (§COMMCALC-32). "Product Not Available" was never
+              missing data: the customer brought their own phone, so no handset was bought and nothing
+              can be owed. They are counted here rather than dropped, because a list that silently
+              sheds rows is how a real one goes missing unnoticed. */}
+          {(pMeta.no_device_excluded ?? 0) > 0 && (
+            <><br /><b>{pMeta.no_device_excluded}</b> line(s) are <b>not device payables</b> and are not
+            listed: {pMeta.no_device_note}</>
+          )}
         </div>
       )}
       {tab === 'payables' && !loading && (
@@ -609,6 +657,13 @@ function PayablesPageBody() {
               and ship it"). When the amounts come from the processor's own feed rather than the
               per-IMEI ledger, the rows are ORDER LINES and there is no device to drill into — the
               reader has to know that before comparing this to the Payables tab. */}
+          {(oMeta.unassigned_owed ?? 0) > 0 && (
+            <div style={{ fontSize: 12, color: 'var(--c-fg-d97706)', marginBottom: 10 }}>
+              <b>{fmt(oMeta.unassigned_owed)}</b> of this is on devices whose store could not be resolved,
+              so it cannot be debited to an account yet. It is shown on its own line inside each date
+              rather than added to another store.
+            </div>
+          )}
           {oMeta.source === 'vendor_feed' && oMeta.note && (
             <div style={{ fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)', borderRadius: 8, padding: '8px 11px', marginBottom: 10, maxWidth: 980 }}>
               ℹ️ {oMeta.note}
@@ -620,8 +675,29 @@ function PayablesPageBody() {
               <SortableTh field="count" sort={oSort.sort} onSort={oSort.toggle} style={th}>{oMeta.grain === 'order_line' ? 'Order lines' : 'Devices'}</SortableTh>
               <SortableTh field="owed" sort={oSort.sort} onSort={oSort.toggle} style={th}>Owed</SortableTh>
             </tr></thead>
+            {/* WHO OWES WHAT ON EACH DATE (owner 2026-10-26: "who owes what for eveyr date mentioned
+                on that list , to make sure thee correct account is debited"). A date total cannot
+                answer that, so each date opens into its stores — the split comes down WITH the date
+                from one request, so it is always the same money the date row totals. */}
             <tbody>{oSort.sorted.map((r: any, i: number) => (
-              <tr key={i}><td style={td}>{r.due_date}</td><td style={td}>{r.count}</td><td style={{ ...td, fontWeight: 600 }}>{fmt(r.owed)}</td></tr>
+              <Fragment key={i}>
+                <tr onClick={() => setOpenDate(d => d === r.due_date ? '' : r.due_date)}
+                  style={{ cursor: (r.by_store || []).length ? 'pointer' : 'default' }}>
+                  <td style={td}>{(r.by_store || []).length ? (openDate === r.due_date ? '▾ ' : '▸ ') : ''}{r.due_date}</td>
+                  <td style={td}>{r.count}{r.stores ? ` · ${r.stores} store${r.stores === 1 ? '' : 's'}` : ''}</td>
+                  <td style={{ ...td, fontWeight: 600 }}>{fmt(r.owed)}</td>
+                </tr>
+                {openDate === r.due_date && ((r.by_store || []) as OwedByStore[]).map((b, j) => (
+                  <tr key={`${i}-${j}`} style={{ background: 'var(--surface2)' }}>
+                    <td style={{ ...td, paddingLeft: 28 }}>
+                      {b.store || <i>store not resolved — cannot be debited to an account</i>}
+                      {b.market && <span style={{ color: 'var(--muted)' }}> · {b.market}</span>}
+                    </td>
+                    <td style={td}>{b.count}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>{fmt(b.owed)}</td>
+                  </tr>
+                ))}
+              </Fragment>
             ))}</tbody>
             <tfoot><tr>
               <td style={{ ...td, fontWeight: 800 }}>TOTAL</td>

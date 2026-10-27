@@ -23,6 +23,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app.modules.payables import declared_source as ds          # noqa: E402
+from app.modules.payables import recovered_amount as _rec           # noqa: E402
 from app.modules.payables import unsold_inventory as ui          # noqa: E402
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -112,7 +113,13 @@ ck("C5 a fully priced set is NOT flagged incomplete",
 ck("C6 the 2026-10-23 shape: everything flagged, nothing priced, $0.00 and SAYS so",
    ui.stamp_aging([dev("1", 30), dev("2", 30)], POL, today=TODAY),
    {"devices": 2, "out_of_pocket": 2, "out_of_pocket_amount": 0.0, "not_measured": 0,
-    "out_of_pocket_unpriced": 2, "amount_incomplete": True})
+    "out_of_pocket_unpriced": 2,
+    # §COMMCALC-33's netting keys. These rows carry no recovery basis, so the figure is flagged as
+    # not netted — a SECOND doubt, kept on its own flag so `amount_incomplete` still means exactly
+    # "flagged devices with no price", which is what this proof is about.
+    "recovered_amount": 0.0, "netted_devices": 0, "recovery_unmeasured": 2,
+    "recovery_unmeasured_amount": 0.0, "recovery_note": _rec.UNMEASURED_NOTE,
+    "amount_not_netted": True, "amount_incomplete": True})
 
 # ── D — the ratchet: no declared read may go back to swallowing its failure ──────────────────────
 SRC = open(ENGINE).read()

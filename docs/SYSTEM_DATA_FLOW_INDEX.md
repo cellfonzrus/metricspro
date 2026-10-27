@@ -154,8 +154,12 @@ Primary code homes:
 | COMMCALC-28 | **A poll's cadence is a gap between responses, never a timer rate** | "It is very laggy" — said after the input fix had shipped and deployed. The live view asked for a new frame every 300ms on a fixed timer, across three hops that take longer than that, and fanned out three more requests per click. What happens to a poll whose request outlives its own interval, and whose connection budget is it spending? |
 | COMMCALC-30 | **A human who is watching is not idle** | His live session was not failing, it was being closed on him: "Live session closed after inactivity", eight minutes into a captcha he was working through. Only commands reset the activity clock; the frame and state polls never did. Which question is that clock actually answering, and which budget had no business being applied to a person who is demonstrably there? |
 | COMMCALC-31 | **Detection is off the operator's input path too, and the session says what it is doing** | "It does not go past it, it is very slow to react" — and "it should show what is going on, it seems nothing is moving", four days after the click fix shipped. The loop stops every 1.2s to re-read every frame of the page, and it did so BEFORE servicing the human's clicks. What else was left on the latency path the last fix cleared, and what fact does a standing instruction fail to tell the person watching? |
-| COMMCALC-32 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
-| COMMCALC-33 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
+| COMMCALC-32 | **A line that bought no device is not a device payable** | "product not available , it shoudl show the product" — every payables row read Product Not Available, two of them as `discrepancy`, the status that means he is carrying a handset cost. 869 of those lines are the customer's own phone, and the carrier feed declares it. Which blank means "I could not price this", which means "nothing was bought", and what does a ledger keyed on ACTIVATIONS assume about purchases? |
+| COMMCALC-33 | **What the carrier already recovered is read, and a placeholder is not a measurement** | "the payments for all phones automatically are done from commission and rebates received and auto adjusted" — said to a banner billing him $544,447.78 of his own cash. The deductions were on the row the build already read, −$834,234.25 of them, and the engine wrote `rebate_amount = 0.0` as a placeholder. What does a zero assert that an unwired source has no right to, and which way should the default point when being wrong deletes a liability? |
+| COMMCALC-34 | **A billing period is declared, and the money is read once** | "Weekly Owed to Distributor does not show anything in luxelink" — the report read one carrier's weekly consignment column on one carrier's table, so a tenant whose carrier raises an invoice per order and has no weekly batch at all saw every figure summed over an empty set. Which billing rhythm is a universal fact about owing money, and which is one carrier's arrangement that has to be declared? |
+| STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
+| COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
+| COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
 
 ---
 
@@ -7169,7 +7173,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `commcalc.raw_ma_fulfillment` | upload `/upload/ma_fulfillment` (slice-scoped replace, `ingest_slice.py` §2) | `device_cogs.ma_unit_price_map` (handset price list), MA overview/recon, **mig `314` account→store map source** (`tspid`+`business_address` → `ma_store_pnl.account_store_index`; canonical-spelling wrapper `ma_store_pnl.canonical_store_index` = index ∪ `coa.store_resolver`, the ONE account→store answer, consumed by `payables/engine.ma_store_resolution` — forecast/payables Total-side store attribution, 2026-09-04 §15 — and by `residual_subs.compute` for the §7a report's store names) |
 | `commcalc.ma_account_store_map` (mig `314`) | owner-pinned rows (SQL seed / future admin UI) | `ma_store_pnl.load_store_index` — wins over the fulfillment-derived map; covers accounts fulfillment never names (luxelink `170405`) |
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
-| `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert; **upload via `/upload-mapped` report_key `pos_inventory_listing` (mig `1004`, §25)** — adds `status`/`quantity`/`total_cost`/`category` so an on-hand SNAPSHOT is fully representable and a valuation can be summed from the table | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`); **device-grain store source for `payables/engine.ma_store_resolution`** (forecast/payables Total-side attribution, 2026-09-04 §15 — its `store` is the store_mapping vocabulary, measured 20/20); **the onboarding intake's inventory landing (`write_inventory_devices`, §30.6) — CONFIRMED the same table the inventory module reads (§30.8)**; **`GET /commcalc/my-shelf`, the rep's shelf card (§COMMCALC-32)** — and `commcalc/inventory_stock_age.py` is now the ONE home for the `received_date` / `days_in_stock` / `as_of_date` / `on_hand` reading of these rows: the receipt date, the current-snapshot shelf test and the age-to-today (§COMMCALC-31) |
+| `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert; **upload via `/upload-mapped` report_key `pos_inventory_listing` (mig `1004`, §25)** — adds `status`/`quantity`/`total_cost`/`category` so an on-hand SNAPSHOT is fully representable and a valuation can be summed from the table | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`); **device-grain store source for `payables/engine.ma_store_resolution`** (forecast/payables Total-side attribution, 2026-09-04 §15 — its `store` is the store_mapping vocabulary, measured 20/20); **the onboarding intake's inventory landing (`write_inventory_devices`, §30.6) — CONFIRMED the same table the inventory module reads (§30.8)**; **`GET /commcalc/my-shelf`, the rep's shelf card (§COMMCALC-35)** — and `commcalc/inventory_stock_age.py` is now the ONE home for the `received_date` / `days_in_stock` / `as_of_date` / `on_hand` reading of these rows: the receipt date, the current-snapshot shelf test and the age-to-today (§COMMCALC-31) |
 | `commcalc.journal_entries` | `PUT /account/journal/{period}` (`account/router.py` — delete+insert per period; echoes `rejected`/`resolved`) | `statement_engine._journal_rows` (BOTH period spellings) → `balance_sheet.journal_scope_entries` (fixed company scoping, mig `933`) → **`balance_sheet.journal_grain_entries`** (mig `954` GRAIN rule: store / company / tenant-total entries, a coarser row booked NET of the finer rows inside it — no double count; conflicts surfaced in `bs['journal_grains']`); legacy `engine.compute_and_store` exact-period read; staleness probe |
 | `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview` (company scopes cross-checked against `coa.org_companies` via `coa.filter_org_scopes` — §13b; **the stored `scope_label` is NOT the display name — every read stamps `scope_display` from `coa.scope_display_label`, §13b.1, 2026-10-03**), `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet`/**`account_pl_range`**; **the P&L month range (§4c, 2026-09-26)** — `router.pl_single_month` (THE single-month read, `get_pl` returns it) looped by `router.get_pl_range` over `_period.month_range`; **the Account hub's Expenses column + per-scope drill-down (2026-09-21)** — `analysis.pl_totals` is the ONE home for the headline figures incl. `expenses` (Σ `analysis.EXPENSE_SECTIONS`), read by `/account/overview` and by the drill-down through `GET /account/pl/{period}?scope=`; **Print each store (§4d, 2026-10-01)** — `GET /account/pl/{period}?stores=<one store>` per store via `accounts/_components/plStatement.plQuery` / `PLPerStorePrint.tsx` |
 | `commcalc.companies` | `POST/PATCH /account/companies` (org_id in payload/filter; mig `952` removed the two 2026-06-27 wrong-org LuxeLink rows) | ONLY `coa.org_companies` (§13b canonical fail-closed enumeration; CI-pinned by `harness_org_scope_guard.py`) → `list_companies`/`list_stores`/journal echo/`overview`/`analysis`/`finance_attention`/`store_company_map`⇒`company_assignment`; billing `per_entity` org-scoped count probe |
@@ -7510,10 +7514,13 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /device-cost-recon` | `27338` | §11 |
 | `GET /account/residual-per-sub` | `account/router.py:~1042` → `account/residual_subs.compute` | §7a Residual per Subscriber; Boost stores via `residual_subs.canonical_salesforce_store_index` — THE same door→store home the P&L's residual books through (§7b), so this report and `mi_income` cannot place one door on two stores — per-tenant residual source (Boost `raw_mi` / MA `raw_ma_daily_tx` mig-309 union); MA stores via the mig-314 account→store index; §13c `market_options`; grant `residual_per_sub` OR `account_trends` |
 | `GET /payables/forecast` | `payables/router.py` `forecast` (sales window via `commcalc/date_window.resolve_window`; `store_key` stamped) | §15 (module 095), §COMMCALC-25 |
-| `GET /payables/payables` | `payables/router.py` `list_payables` (`start`/`end` window `due_date`; `undated_excluded` reported) | §15 (module 095), §COMMCALC-25 |
+| `GET /payables/payables` | `payables/router.py` `list_payables` (`start`/`end` window `due_date`, defaulting to today→+3 via `commcalc/date_window.ahead_window` unless `all_dates`; `undated_excluded` and `no_device_excluded` reported; non-payable statuses excluded through `payables/ledger_status.exclude_non_payable`) | §15 (module 095), §COMMCALC-25, §COMMCALC-32 |
+| `GET /payables/owed-by-date` | `payables/router.py` `owed_by_date` — net owed per `due_date`, each date row carrying its own per-store split (`by_store`, keyed on the §64 store identity) so the right account is debited; `market` accepts a comma-separated list through `_market_by_store`/`_market_of` (RULE FIVE); unresolved money reported as `unassigned_owed`; source named `device_ledger` or `vendor_feed` | §15 (module 095), §COMMCALC-25, §COMMCALC-32 |
+| `GET /payables/due` | `payables/router.py` `due_payables` (same window home; non-payable statuses excluded) | §15 (module 095), §COMMCALC-32 |
+| `POST /payables/rebuild` (the ledger it writes) | `payables/engine.py` → `device_payable_ledger`: `rebate_amount` + `rebate_basis` through `payables/recovered_amount.py` (the one home for what the carrier already recovered, under the sign declared on `payable_source_map.reimbursement_sign`); an unwired source stores NULL and is FLAGGED, never 0.00 | §15 (module 095), §COMMCALC-33 |
 | `GET /payables/filter-options` | `payables/router.py` `payables_filter_options` (canonical §13c; every option carries `store_key`) | §15 (module 095), §COMMCALC-25 |
 | `POST /payables/rebuild` | `payables/router.py` → `engine.build_ledger` | §15 (module 095) |
-| `GET /commcalc/my-shelf` | `commcalc/router.py` `my_shelf` — the rep's own shelf: composes `storeops.scope_keyset` (span), `commcalc/inventory_stock_age` (arrival + shelf test), `device_aging_policy` over declared `payable_source_map` (window) and `asset/inventory_buckets.inv_bucket` (device type). Owns NO arithmetic; reads `inventory_aging_device` and deliberately NOT `device_payable_ledger` (§COMMCALC-32.3) | §COMMCALC-31, §COMMCALC-32 |
+| `GET /commcalc/my-shelf` | `commcalc/router.py` `my_shelf` — the rep's own shelf: composes `storeops.scope_keyset` (span), `commcalc/inventory_stock_age` (arrival + shelf test), `device_aging_policy` over declared `payable_source_map` (window) and `asset/inventory_buckets.inv_bucket` (device type). Owns NO arithmetic; reads `inventory_aging_device` and deliberately NOT `device_payable_ledger` (§COMMCALC-35.3) | §COMMCALC-31, §COMMCALC-35 |
 | `GET /plan-installments` | `10726` | §8 |
 | `GET /payout-schedule` | `11948` | §7 |
 | `GET/POST /management-incentive/plans` | `28527/28534` | §9 |
@@ -26040,6 +26047,7 @@ status word rather than a blank that reads as nil.
 | 15.2 | notify |
 | 15.3 | notify |
 | NOTIFY-01 | notify |
+| STOREOPS-01 | storeops |
 | COMMCALC-01 | commcalc |
 | CORE-01 | core |
 | CORE-02 | core |
@@ -26077,6 +26085,9 @@ status word rather than a blank that reads as nil.
 | COMMCALC-31 | commcalc |
 | COMMCALC-32 | commcalc |
 | COMMCALC-33 | commcalc |
+| COMMCALC-34 | commcalc |
+| COMMCALC-35 | commcalc |
+| COMMCALC-36 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -33559,7 +33570,7 @@ poll that carries the activity line), §COMMCALC-30 (who is there), §COMMCALC-1
 session leaves on the row), §COMMCALC-24 (which process may answer at all). Neighbours:
 §COMMCALC-10 (the no-progress budgets), §COMMCALC-11 (the human check), §COMMCALC-07 (the UPS pull
 this login exists to feed).
-## §COMMCALC-32. A DEVICE'S ARRIVAL ON THE SHELF HAS ONE DATE (owner ask 2026-10-26)
+## §COMMCALC-35. A DEVICE'S ARRIVAL ON THE SHELF HAS ONE DATE (owner ask 2026-10-26)
 
 Owner, verbatim: *"invenotry aging in luxeliunk shodul say sell within 10 days of receiving the
 phones in stock and it should be on every sales reps daSHBOARDS WHEN TEHY LOG IN"*.
@@ -33568,9 +33579,9 @@ phones in stock and it should be on every sales reps daSHBOARDS WHEN TEHY LOG IN
 `backend/app/modules/commcalc/device_history.py` (`build_aging_inventory`, the caller that disagreed)
 **Lock:** `backend/harness_inventory_stock_age.py` — 36 checks · and
 `backend/harness_inventory_stock_age_guard.py` — the build gate, run by `carrier-vocab-guard.yml`
-**Migration:** none. The window itself is a config ROW (§COMMCALC-32.6).
+**Migration:** none. The window itself is a config ROW (§COMMCALC-35.6).
 
-### COMMCALC-32.1 THE CLASS, NOT THE INSTANCE
+### COMMCALC-35.1 THE CLASS, NOT THE INSTANCE
 
 The ask looks like a number change. It is not: it names a fact the platform had no single answer for
 — **the date a handset was received into stock.** `commcalc.inventory_aging_device.received_date`
@@ -33592,7 +33603,7 @@ other two reported **102**. The MI gate's own comment already recorded the share
 luxelink aging export carries age, not a received date"* — beside its own private copy of it, which
 is the §19.18 shape this index has now logged four times.
 
-### COMMCALC-32.2 THE ONE HOME
+### COMMCALC-35.2 THE ONE HOME
 
 `backend/app/modules/commcalc/inventory_stock_age.py` — PURE, standard library plus
 `device_aging_policy`. No DB, no I/O.
@@ -33612,18 +33623,18 @@ is the §19.18 shape this index has now logged four times.
   `device_history` crossed.
 - `days_left(row, policy, today)` — the window minus the age. Negative is RETURNED, not clamped:
   "4 days over" and "due today" are different conversations.
-- `resolve_window(carrier_id, policies, maps)` → `(policy | None, reason | None)` — §COMMCALC-32.4.
+- `resolve_window(carrier_id, policies, maps)` → `(policy | None, reason | None)` — §COMMCALC-35.4.
 - `shelf_row` / `summarise` — the render shape and its headline.
 
-### COMMCALC-32.3 THE AGE IS NEVER THE FILE'S AGE
+### COMMCALC-35.3 THE AGE IS NEVER THE FILE'S AGE
 
 Stated separately because it is the half most likely to be undone by a well-meaning edit. A reader
 that wants "days in stock" will find the column sitting right there, already an integer, already
 named for the question. It answers only for the day the file was pulled. Every surface asking a rep
-or a manager to act TODAY must count to today, and the guard (§COMMCALC-32.5) fails the build on the
+or a manager to act TODAY must count to today, and the guard (§COMMCALC-35.5) fails the build on the
 one assignment that re-introduces it.
 
-### COMMCALC-32.4 AN UNESTABLISHED DEADLINE IS NOT THE HOUSE DEFAULT
+### COMMCALC-35.4 AN UNESTABLISHED DEADLINE IS NOT THE HOUSE DEFAULT
 
 `resolve_window` deliberately does **not** fall back to the house 60 days the way
 `unsold_inventory.policy_for` does:
@@ -33640,7 +33651,7 @@ rep's card, where printing "45 days left" over a 10-day carrier's phone is the e
 §COMMCALC-26 was opened for. Two callers, two needs, one window resolver that is explicit about
 which it is serving.
 
-### COMMCALC-32.5 Locked so it cannot un-wire
+### COMMCALC-35.5 Locked so it cannot un-wire
 
 `backend/harness_inventory_stock_age_guard.py` — the build gate. Three axes:
 
@@ -33666,7 +33677,7 @@ stated as arithmetic (a unit received 16 days ago reads **6 days over** a declar
 **4 over** the previous 12, so the CONFIG ROW moves the number and no literal in code does) and the
 stale-snapshot defect stated as a measurement (102, not 9).
 
-### COMMCALC-32.6 What is owner-gated
+### COMMCALC-35.6 What is owner-gated
 
 `/mnt/project-files/inventory-aging-window/RUN_luxelink_sell_within_10_2026-10-26.sql` — one Run, one
 column, one row: `payable_source_map.sell_within_days` 12 → 10 on the Luxelink Total/MA map. No code
@@ -33675,32 +33686,32 @@ rows, which writes a disjoint column set, so neither reverts the other.
 
 ---
 
-## §COMMCALC-33. A REP'S SHELF, ON THE SCREEN A REP LANDS ON (owner ask 2026-10-26)
+## §COMMCALC-36. A REP'S SHELF, ON THE SCREEN A REP LANDS ON (owner ask 2026-10-26)
 
-Owner, verbatim, same sentence as §COMMCALC-32: the selling deadline *"should be on every sales reps
+Owner, verbatim, same sentence as §COMMCALC-35: the selling deadline *"should be on every sales reps
 daSHBOARDS WHEN TEHY LOG IN"*.
 
 **Module:** `backend/app/modules/commcalc/router.py` (`GET /commcalc/my-shelf`) ·
 `frontend/src/app/(platform)/commcalc/targets/my/_components/ShelfAging.tsx`
-**Lock:** the pure logic is §COMMCALC-32's two harnesses; the endpoint composes them and owns no
+**Lock:** the pure logic is §COMMCALC-35's two harnesses; the endpoint composes them and owns no
 arithmetic of its own.
 **Migration:** none.
 
-### COMMCALC-33.1 WHY THAT SCREEN
+### COMMCALC-36.1 WHY THAT SCREEN
 
 `/commcalc/targets/my` is the configured `home` for the `sales_rep` role (mig `015`), so it is the
 first screen after sign-in rather than a page a rep would have to find. Management Overview reports
 are dashboard TILES and a new sidebar row is where reports go to be unfound (the 2026-10-08 ruling),
 so the deadline goes on the landing screen itself.
 
-### COMMCALC-33.2 FOUR FACTS, FOUR EXISTING HOMES
+### COMMCALC-36.2 FOUR FACTS, FOUR EXISTING HOMES
 
 Nothing is derived in the endpoint. It composes:
 
 | fact | home |
 | --- | --- |
 | which stores does this login reach | `storeops.router.scope_keyset` (§14x — evidence: scheduled or clocked in) |
-| when did this unit arrive, is it still here | `commcalc/inventory_stock_age.py` (§COMMCALC-32) |
+| when did this unit arrive, is it still here | `commcalc/inventory_stock_age.py` (§COMMCALC-35) |
 | how long may it sit | `commcalc/device_aging_policy.py` over declared `payable_source_map` (§COMMCALC-26) |
 | is this a device at all | `asset/inventory_buckets.inv_bucket` (§11a — the ONE classifier) |
 | which store is this address | `account/store_identity` via `_store_code_resolver` (§13a) |
@@ -33709,7 +33720,7 @@ The span being EVIDENCE-based is load-bearing, not incidental: **9 of Luxelink's
 carry no `store_code`** (measured 2026-10-26), and the card sits above the targets and OUTSIDE that
 page's "no store assigned" early return so those reps still see their shelf.
 
-### COMMCALC-33.3 THE POS SNAPSHOT, NOT THE PAYABLE LEDGER
+### COMMCALC-36.3 THE POS SNAPSHOT, NOT THE PAYABLE LEDGER
 
 `commcalc.device_payable_ledger` is the carrier's PAYMENT story. Measured 2026-10-26: its Luxelink
 unsold set (**3,095** units) and the POS on-hand set (**888**) overlap by **twelve**, and for several
@@ -33718,14 +33729,15 @@ it is the activation/transaction date (`raw_ma_commission.tx_date`), independent
 payables thread the same day. Counting a SELLING window from it would be wrong twice over: wrong
 anchor, wrong population. A rep asked what is on their shelf is told what is on their shelf. The
 card never reads the ledger, which is also why it cannot disagree with the dealer-owned-device
-(BYOP) exclusion landing on another branch (PR #561 — deliberately unnumbered here, because that
-branch is itself renumbering after #559 took §COMMCALC-31; whoever lands second supplies the
-reference).
+(BYOP) exclusion now in §COMMCALC-32 (PR #561, merged 2026-10-26): a line whose own carrier feed
+declares no handset was bought leaves the payable totals under its own status. That section and this
+one answer different questions about the same devices — which units the carrier will pay for, versus
+which units are physically on a rep's shelf — and neither reads the other's source.
 
-### COMMCALC-33.4 WHAT IT REFUSES TO INVENT
+### COMMCALC-36.4 WHAT IT REFUSES TO INVENT
 
 - A unit whose carrier cannot be identified shows its AGE and names why the deadline is missing
-  (§COMMCALC-32.4). It never inherits the house 60.
+  (§COMMCALC-35.4). It never inherits the house 60.
 - A unit with no age is counted as `undated`, apart from both "overdue" and "fine"; `no_window` is
   counted apart from `undated`, because an unknown age and an unknown deadline are different gaps
   with different fixes (a feed versus a config row).
@@ -33736,12 +33748,12 @@ reference).
   BYOT SIM Kit" (7) — so no handset is lost to the filter, and they were drowning the real signal:
   **442 of the 689 overdue rows, carrying $1,326 of the $71,268**.
 - "Received" is labelled on the card as derived from the POS age in stock, because no vendor receipt
-  date exists in this platform (§COMMCALC-32.1). Calling it a receipt date would be the quiet
+  date exists in this platform (§COMMCALC-35.1). Calling it a receipt date would be the quiet
   overstatement the house rules treat as a defect.
 - An empty card prints the server's REASON — no snapshot, no span, no devices, or no declared window
   — never a zero (the §29.12 "never blank" rule).
 
-### COMMCALC-33.5 Verified against production, not only in a harness
+### COMMCALC-36.5 Verified against production, not only in a harness
 
 Driving the real pure modules over the real rows at the 2026-10-26 snapshot: **446** phones,
 tablets, watches and hotspots on hand at Luxelink, **247** already past a 10-day window
@@ -33754,6 +33766,445 @@ worth $55,482.32; at 10 days it reads **247** worth $69,941.61, so **77** units 
 read "due today" at 12 are already past at 10. The config row, not code, carries the number. Counting
 the SIM kits in, the figures are 612 and 689 — which is the measurement that decided they stay out of
 the card.
+
+## §COMMCALC-32. A LINE THAT BOUGHT NO DEVICE IS NOT A DEVICE PAYABLE (owner report 2026-10-26)
+
+**What he saw.** Every row on the payables tab read `Product Not Available`, with `—` under Owed,
+Rebate, Net owed and Due, and two of them carried the status **discrepancy** — which the legend on
+that same screen defines as *"the device was sold but no equipment rebate came back — the dealer is
+still carrying its cost"*. His words: *"product not available , it shoudl show the product"*.
+
+**What was true.** There was no product to show, because no handset was bought on those lines. The
+carrier feed says so itself: `commcalc.raw_ma_commission.activation_type2` declares `branded` on
+3,567 rows (every one of them naming a model) and `byop` on 869 (every one of them naming none); 59
+rows declare nothing at all. Zero of those 928 unnamed lines carry `device_margin`,
+`consumer_financing` or `is_financed = Yes`. Two other feeds were checked for a recoverable model
+and ruled out, which is worth recording so nobody re-derives it: `inventory_aging_device` covers 1 of
+888, and `raw_sales.serial_1` covers 260 — with PLAN descriptions ("Total MAX 5G BYO Plan $30"),
+confirming rather than contradicting the declaration.
+
+So the screen was not failing to look up a product. It was asserting a cost the owner never incurred,
+on the one status whose whole meaning is "you are out of pocket for this handset".
+
+### COMMCALC-32.1 THE CLASS, NOT THE INSTANCE
+
+The instance is 869 BYOP rows on one Luxelink feed. The general fact that was wrong:
+**a ledger that writes one row per ACTIVATION has assumed that every activation bought a device, and
+an activation is not a purchase.** A payable must be able to say "nothing is owed here because
+nothing was bought" as a positive answer, distinct from "something is owed and I could not price it".
+Before this change those two collapsed into the same blank, so a missing price and a missing purchase
+looked identical — and whichever way the row then fell, one of them was a lie.
+
+The second half of the class is the one §66 already names: **the absence of a value is not evidence.**
+A line that merely fails to name a product proves nothing — the feed may simply have omitted it. Only
+the feed's OWN declaration counts. That is why the 59 rows that declare nothing stay unclassified and
+keep their payable status, and why the harness's §A9 is the test that matters.
+
+### COMMCALC-32.2 DUPLICATE CHECK (the build gate) — what was REUSED, not rebuilt
+
+| the question | who already answered it | what this change did |
+| --- | --- | --- |
+| did this line sell a device? | `commcalc/product_mix.py` — the device-class vocabulary, §COMMCALC-03.21 | **EXTENDED** it with `no_device_declared()` + `DECLARED_NO_DEVICE_BASIS`; `product_class_of` now dereferences the same predicate instead of re-reading the tokens |
+| which dates is a surface showing, both ends inclusive? | `commcalc/date_window.py` — the window one home, §COMMCALC-25 | **EXTENDED** with `ahead_window()`; no second date arithmetic was written |
+| which store is this address? | `account/store_identity` (§64), via `_store_key` | **REUSED** verbatim as the key of the per-store split |
+| which market is this store in? | `_market_by_store` / `_market_of` (RULE FIVE) | **REUSED** — the owed tab's new market filter resolves through the same home the list tab does, so "North" means one thing on both |
+| is a placement evidence or a fallback? | `carrier_dollar_class.component_is_evidence` (§66) | **REUSED as doctrine**: only the declared basis excludes a row |
+
+Nothing new was created to answer a question already answered. What IS new is a vocabulary that did
+not exist anywhere: which ledger statuses are payable at all.
+
+### COMMCALC-32.3 ONE FACT, ONE HOME, DEREFERENCED
+
+`backend/app/modules/payables/ledger_status.py` — the ONE home for *"is this ledger row money that is
+owed?"*. Pure, and deliberately **zero imports**, because `engine` reaches `asset.router` which
+reaches `unsold_inventory`, and a status vocabulary that cannot be imported from either end is a
+vocabulary nobody can dereference.
+
+- `PAYABLE_STATUSES` = open · due · discrepancy · offset; `NON_PAYABLE_STATUSES` = no_device.
+- `is_payable(status)` is **fail-open**: a status this module has never heard of counts as payable, so
+  a future status cannot quietly delete money from a total.
+- `exclude_non_payable(q, column)` is the one place a QUERY expresses the exclusion, so every reader
+  excludes by the same `not.in` rather than by its own list of strings.
+- `EXCLUDED_NOTE` is the sentence the screens show. One wording, one home.
+- `OWED_SOURCE_NO_DEVICE = "no_device_declared"` keeps the reason ON the row: the blank Owed now says
+  *why* it is blank, next to §COMMCALC-29's `unconfigured` / `price_source_unreadable`.
+
+Callers wired, all three in the same PR: `payables/engine.py` (writes the status),
+`payables/router.py` (list · `/due` · `/owed-by-date` · the drill-down's `is_payable`),
+`payables/unsold_inventory.py` (the out-of-pocket read, which is the one that would otherwise have
+headlined a BYOP phone as unrecovered cost).
+
+**The row is kept, not dropped.** A dropped row cannot be audited and cannot be argued with, so the
+lines stay listed under their own status and the count of them is reported — `no_device_excluded` plus
+`no_device_note` on the response, shown in the legend. A count that cannot be read comes back `None`
+and the screen says nothing rather than claiming zero.
+
+### COMMCALC-32.4 THE DATES PICK THEMSELVES
+
+Owner, same day: *"should auaomatically pick teh dates from today and 3 days ahead as the payment
+terms are 21 days from the date of invoice, the month and date shoudl not be entered manually"*.
+
+`commcalc/date_window.py::ahead_window(today, days=3)` → today through today+3, four days inclusive,
+basis `default_ahead`. It is the window home's own arithmetic, so "both ends inclusive" is still
+stated once. The router's `_due_window(start, end, all_dates)` is the only place that decides:
+an explicit window wins, `all_dates=True` means no window, otherwise the automatic one. The screen
+prints the window it was actually given (`window` on the response) instead of implying it, and keeps
+an **All dates** toggle — an automatic default that cannot be escaped is a different defect.
+
+The 21 days themselves are NOT in code. They are `payable_source_map.net_terms_days`, declared per
+carrier (§COMMCALC-26), and the harness's §D2 fails the build if a carrier's feed column name ever
+appears in engine code (RULE TWO).
+
+### COMMCALC-32.5 WHO OWES WHAT, ON THE SAME FOLD
+
+Owner: *"filtered by market and store and who owes what for eveyr date mentioned on that list , to
+make sure thee correct account is debited."* A date total cannot answer that — the money is paid per
+store. So the per-store split rides **with** the date row (`by_store`, `stores`) rather than being a
+second request that could be filtered differently and silently disagree; the date row expands into it.
+The split keys on the canonical store identity (§64), not on a spelling, so two spellings of one store
+are one line to debit. Money whose store did not resolve is reported as `unassigned_owed` and labelled
+*"store not resolved — cannot be debited to an account"*; it is never folded into another store's
+figure, because a wrong account debited is worse than an unattributed one.
+
+### COMMCALC-32.6 LOCKED SO IT CANNOT UN-WIRE
+
+`backend/harness_payables_device_rows.py` — **51 passed, 0 failed**. §A the one no-device predicate
+(A9: an unnamed product with no declaration must NEVER read as no-device). §B the status vocabulary
+(B4: an unknown status is payable). §C the automatic window. §D the RATCHET: `activation_type2` may
+not appear in engine code (RULE TWO), no literal status string may survive in the engine,
+`_due_window(start, end, all_dates)` must be the only window decision, the per-store split must stay
+on the date fold, and unattributed money must stay named.
+
+### COMMCALC-32.7 WHAT IS OWNER-GATED
+
+- `database/migrations/1093_payable_device_class_field.sql` — additive, nullable
+  (`device_class_field`, `no_device_tokens`), with COMMENTs and a `-- REVERT:` block. Applied with
+  both left NULL, behaviour is exactly as before: the question is simply not asked.
+- The one-Run config SQL: `net_terms_days = 21` and `device_class_field = 'activation_type2'` on the
+  two Total rows, then one **Rebuild ledger** press. The rebuild is what re-statuses lines; applying
+  the migration moves no money.
+- **The clock start is still a question to the owner, and there are now TWO candidates.** 21 days
+  runs from the invoice date. The ledger's own `invoice_date` is the ACTIVATION date
+  (`raw_ma_commission.tx_date`) — measured here and confirmed independently by the rep-dashboard
+  thread on 2026-10-26. `inventory_aging_device.received_date` is NULL on all 4,742 Luxelink rows
+  (10,525 house-wide), so there is no stored receipt date; but the same row carries `days_in_stock`
+  (the POS export's own "Age in Store") and `as_of_date`, so a receipt-anchored date IS derivable as
+  `as_of_date − days_in_stock`. **Corrected 2026-10-26** — an earlier reading of this section said no
+  per-device receipt date existed anywhere, which was wrong: the platform already derives one in
+  three places (`commcalc/router.py::_derived_received`, `::_mi_ever_over_days`,
+  `device_history.build_aging_inventory`, the last of which reads `days_in_stock` as-is and so ages a
+  stale snapshot wrongly). Measured coverage against this ledger: **3,064 of 4,364 unsold IMEIs
+  (70.2%)** have a derivable receipt date, 3,175 appear in the inventory feed at all, and only 388
+  are on hand at the current snapshot — so a receipt-anchored window is buildable but leaves ~30% of
+  devices with no clock start, which is a different answer from "fall back to activation". Nothing
+  here is wired to either until the owner rules; whichever is chosen, it is read through the one home
+  that thread is collapsing those three derivations into, never a fourth derivation.
+
+### COMMCALC-32.8 Cross-references
+
+Same home, other axes: §COMMCALC-29 (why a blank Owed must name its reason), §COMMCALC-26 (the
+declared terms this reads), §COMMCALC-25 (the window and store filter on the same screen),
+§COMMCALC-03.21 (the device-class vocabulary extended here). Same class: §66 (an absence read as
+evidence), §19.18 (a mechanism written and its callers left unwired). Neighbours: §64 (the store
+identity the per-store split keys on), §13e (store-spelling folding), §19.36 (the notice boundary the
+excluded-count note crosses). Still open and NOT fixed here: **Weekly Owed to Distributor** reads
+`commcalc.asset_ledger` and `billing_friday`, which are Boost-only, so it is blank for every Total
+tenant — it must roll up each carrier's own declared cadence off the SAME daily owed home as
+`/payables/owed-by-date`, not derive the money a second way.
+
+---
+
+## §COMMCALC-33. WHAT THE CARRIER ALREADY RECOVERED IS READ, AND A PLACEHOLDER IS NOT A MEASUREMENT (owner report 2026-10-26)
+
+**What he said.** Against a banner reading *"2656 unsold devices must be paid OUT OF POCKET —
+$544,447.78 … These are past their payment due date and still unsold, so the invoice is funded from
+your own cash rather than from the sale"*:
+
+> *"the payments for all phones automatically are done from commission and rebates received and auto
+> adjusted"*
+
+**He was right, and the netting was never missing.** It sits on the row the build already reads:
+`commcalc.raw_ma_commission.rebate` is **negative on 3,442 of 4,495** Luxelink lines, totalling
+**−$834,234.25** — the device cost deducted from his commission, line by line. Measured 2026-10-26
+against the live ledger, on the very 2,656 devices the banner named:
+
+| | devices | amount |
+| --- | --- | --- |
+| fully deducted already | 1,070 | $228,779.70 |
+| partly deducted | 957 | owed $305,380.43 vs $277,294.00 deducted |
+| no deduction found | 37 | $10,287.65 |
+
+So roughly **$38,374** is genuinely unrecovered where the screen said **$544,447.78** — an
+overstatement of about fourteen times, in the direction that tells an owner he is short half a
+million dollars of cash. (The $28,086 shortfall inside the partly-deducted group compares two
+sources — the ordering sheet's price against the statement's deduction — so part of it will be price
+differences or a deduction landing on a later statement. That caveat is published with the figure
+rather than filed off it.)
+
+### COMMCALC-33.1 THE CLASS, and it is not "we forgot to read a column"
+
+`payables/engine.py` held this, for every carrier whose recovery is matched by IMEI:
+
+```python
+elif rebate_source == "imei_match":
+    mt = cfg.get("reimbursement_match_table")
+    if mt:   # pending until a Total reimbursement report exists -> stays 0 when unset
+        rebate_amount = 0.0
+```
+
+**A placeholder that returns a NUMBER is a claim.** `0.0` does not say "not wired yet"; it says
+*nothing was recovered against this device*, and it said it in all 4,495 rows of the ledger. Every
+reader downstream believed it: 1,400 lines went to `discrepancy` — the status whose own legend says
+the dealer is still carrying the cost — and the out-of-pocket banner presented the gross as cash. The
+honest value for an unwired source is **unknown**, and unknown must be labelled, never billed.
+
+The single float could not hold the three states the question actually has, which is why the fix is a
+type and not a line:
+
+| state | what it means | what a surface may say |
+| --- | --- | --- |
+| **recovered** | measured, amount known | already settled by the carrier |
+| **uncovered** | measured, recovery falls short | THIS is out of pocket |
+| **unmeasured** | nothing wired, or the declared source could not be read | the figure is NOT NETTED — never "$0.00 recovered" |
+
+### COMMCALC-33.2 DUPLICATE CHECK (the build gate) — what was REUSED, not rebuilt
+
+| the question | who already answered it | what this change did |
+| --- | --- | --- |
+| is a basis evidence, or a last resort? | `commcalc/carrier_dollar_class.py::component_is_evidence` (§66) | **REUSED as doctrine** — `is_measured` is the same allowlist shape, so an unruled basis is not evidence |
+| a declared source that cannot be READ | `payables/declared_source.py` (§COMMCALC-29) | **REUSED** — `source_unreadable` stays distinguishable from "nothing declared", which is that section's whole lesson |
+| which ledger rows are payable at all | `payables/ledger_status.py` (§COMMCALC-32) | **REUSED** unchanged; a no-device line never reaches this arithmetic |
+| the selling window and the out-of-pocket verdict | `commcalc/device_aging_policy.py` (§COMMCALC-26) | **REUSED** — the verdict is independent of the recovery and was not touched |
+| the ePay and Boost/VIP recovery reads | `_epay_reimb_amount`, `_classify_rma` | **REUSED**, now folded through the same home so all three sources answer in one vocabulary |
+
+Nothing new was created to answer a question already answered. What is new is the vocabulary for
+*"do we know what was recovered?"*, which existed nowhere.
+
+### COMMCALC-33.3 ONE FACT, ONE HOME, DEREFERENCED
+
+`backend/app/modules/payables/recovered_amount.py` — PURE, standard library only.
+
+- `MEASURED_BASES` + `is_measured(basis)` — the ALLOWLIST. **Fail-CLOSED**, deliberately the opposite
+  of `ledger_status.is_payable`: there an unknown status must stay payable so money cannot vanish
+  from a total; here an unknown basis must not count as proof, because a wrong "measured" **deletes a
+  real liability**. The two live side by side and their defaults point opposite ways on purpose.
+- `sign_of(cfg)` / `from_value` / `from_row` — **the sign is declared, never guessed.** On the MA
+  statement a recovery is a deduction and arrives negative; on Boost/VIP and ePay a reimbursement
+  arrives positive. `abs()` would turn a charge into a credit; `> 0` reads a deduction as nothing,
+  which is exactly how $834,234.25 went unseen. So it is config
+  (`payable_source_map.reimbursement_sign`), and an undeclared sign keeps the historic meaning
+  rather than inventing one.
+- `resolve(amount, basis)` — an absent amount forces the basis back to unmeasured, so no stale basis
+  survives on a row behind it, and an amount cannot smuggle in a basis nobody ruled.
+- `out_of_pocket(owed, recovered, basis)` / `split(rows)` — ONE convention for the arithmetic.
+- `UNMEASURED_NOTE`, `RECOVERED_NOTE` — one wording, so "deducted from commission" and "not netted"
+  read the same on every screen.
+
+Callers wired in the same PR: `payables/engine.py` (all three recovery sources; writes
+`rebate_basis`, and `rebate_amount` as **NULL** where nothing measured it) and
+`payables/unsold_inventory.py::stamp_aging` (the exposure figure every surface headlines).
+
+### COMMCALC-33.4 THE HALF I GOT WRONG FIRST, recorded because the next person will reach for it too
+
+The first draft **dropped** unmeasured devices from the exposure total — "unknown is not a bill".
+That is the same defect reversed: a second claim nobody measured. Worse, it was a cross-tenant
+regression. The Boost/VIP aging rows carry **no recovery basis at all**, so they would all have read
+as unmeasured and **Boost's real exposure would have gone to $0.00** — the identical shape to the
+2026-10-23 defect in §COMMCALC-29, introduced by the fix for it.
+
+Two existing proofs caught it (`harness_device_aging_policy.py` §E1/§E1b and
+`harness_payables_declared_source.py` §C6, which compare the WHOLE summary dict precisely so that
+unannounced drift fails the build). The corrected rule:
+
+> **An unnetted liability is reported IN FULL and flagged. It is never silently settled, and never
+> silently dropped.**
+
+A second lesson from the same pass: `amount_incomplete` already meant "flagged devices with no
+price". Overloading it with "not netted" quietly changed what every existing reader believed, so the
+new doubt got its **own** flag, `amount_not_netted`. Two doubts, two booleans.
+
+### COMMCALC-33.5 WHAT A SURFACE MAY NOW SAY
+
+`stamp_aging` returns `recovered_amount`, `netted_devices`, `recovery_unmeasured`,
+`recovery_unmeasured_amount`, `recovery_note`, `amount_not_netted`. `out_of_pocket_amount` is the
+whole liability — the GAP where the recovery was measured, the GROSS where it was not — and
+`recovery_unmeasured_amount` says how much of that figure has never been netted. A screen can
+therefore state exactly what it knows instead of choosing a side.
+
+`discrepancy` now requires a MEASUREMENT: sold, and something measured that no rebate came back. An
+unchecked rebate is no longer an accusation.
+
+### COMMCALC-33.6 LOCKED SO IT CANNOT UN-WIRE
+
+`backend/harness_payables_recovered_amount.py` — **66 passed, 0 failed**, DB-free. §A the sign
+convention (A8: no number at all is unmeasured, never a recovery of 0.00). §B the allowlist (B4 an
+unruled basis is not measured; B8 unreadable stays distinguishable from absent). §C the arithmetic
+(C3 the corrected unmeasured rule; C4 a MEASURED zero IS out of pocket in full — the distinction the
+whole section exists for). §D the split. §E the live 2026-10-26 shapes. §F the RATCHET: **no
+`rebate_amount = 0.0` may survive in the engine**, every source must fold through `resolve`, the
+basis must be WRITTEN to the row, an unmeasured recovery must be stored NULL, `discrepancy` must
+require `rebate_measured`, nothing may `abs()` a recovery value, and the recovery path may name no
+carrier column.
+
+### COMMCALC-33.7 WHAT IS OWNER-GATED, AND ONE DEFECT REPORTED NOT FIXED
+
+- `database/migrations/1094_payable_recovery_sign_and_basis.sql` — additive, nullable
+  (`payable_source_map.reimbursement_sign`, `device_payable_ledger.rebate_basis`), COMMENTs,
+  `-- REVERT:` block, both grants restated. Applying it moves no money; the ledger re-statuses only
+  on the owner's next **Rebuild ledger** press.
+- The one-Run config SQL: `reimbursement_field = 'rebate'` and
+  `reimbursement_sign = 'negative_is_recovery'` on the two Total / MA rows. Until it is run, the
+  banner keeps its $544,447.78 — but now says that figure is **not netted**, which is the honest
+  version of the same screen.
+- **REPORTED, not repaired here (pre-existing RULE TWO violation).** `payables/engine.py` reads the
+  table name `raw_ma_commission` **literally** in the store-account fallback (the mig-314 index
+  path), which is a carrier feed name in code. It predates this change and sits in a different code
+  path; widening a money fix to reach it is how a PR stops being reviewable. The new ratchet
+  therefore binds the recovery path, and this line is named here so it is not lost.
+
+### COMMCALC-33.8 Cross-references
+
+Same home, other axes: §COMMCALC-32 (the no-device status, whose rows never reach this arithmetic),
+§COMMCALC-29 (a declared source that cannot be read — the sibling whose vocabulary is reused),
+§COMMCALC-26 (the declared window and cost source), §COMMCALC-25 (the filters on the same screen).
+Same class: §66 (a last-resort placement read as evidence), §19.18 (a mechanism written and its
+callers left unwired), §COMMCALC-29.1 (an empty result standing in for a broken declaration).
+Neighbours: §11 (the aging report this exposure figure headlines), §64 (the store identity the same
+rebuild stamps). The **Weekly Owed to Distributor** defect this section left open — it read
+`commcalc.asset_ledger` and `billing_friday`, both one carrier's, so it was blank for every Total
+tenant — is FIXED in §COMMCALC-34.
+
+---
+
+## §COMMCALC-34. A BILLING PERIOD IS DECLARED, AND THE MONEY IS READ ONCE (owner report 2026-10-26)
+
+**What he said**, verbatim:
+
+> *"Weekly Owed to Distributor does not show anything in luxelink"*
+
+### COMMCALC-34.1 WHY IT WAS BLANK — two causes, and only one of them is code
+
+Measured 2026-10-26 against production (read-only):
+
+| cause | measurement | whose fix |
+| --- | --- | --- |
+| **the report reads one carrier's column** | `asset/router.get_owed_weekly` read `commcalc.asset_ledger` filtered on `billing_friday`, and nothing else. That is ONE carrier's weekly consignment rhythm, stamped by ONE carrier's portal sweep, on ONE carrier's table. The Total tenant has **0** `asset_ledger` rows, so every figure on the report was Σ over an empty set. | **this PR** |
+| **no due dates exist to group** | `commcalc.device_payable_ledger` holds **4,495** rows for that tenant and **0 with a `due_date`** (`due_source` NULL on every one), because `commcalc.payable_source_map` has `net_terms_days` NULL **and** `due_date_field` NULL for its carrier. Nothing says when a device falls due. | **REPORTED, not coded around.** The owner's `net_terms_days = 21` config run (queued with mig 1093) is the missing declaration. Defaulting 21 days in code would be RULE TWO and would put a deadline on real money no feed states. |
+
+The house org, by contrast, carries a due date on all **11,000** of its rows (`due_source = 'report'`).
+So the structural fix below lands first and the figures arrive when the config run does — the report
+says which, rather than printing $0.00 either way.
+
+**THE CLASS, named rather than the instance.** Not *"Luxelink's weekly report is empty"* but: *"which
+billing period does this dated money fall in" is a DECLARED cadence over the carrier's own payable
+rows* — never one carrier's column on one carrier's table. This is §COMMCALC-26.1's class arriving on
+a fifth surface, and §COMMCALC-33.8 named it as still open.
+
+### COMMCALC-34.2 THE DUPLICATE CHECK (build gate — what was searched for, what was reused)
+
+| searched | found | what was done |
+| --- | --- | --- |
+| is there a home for "what is owed, on which date"? | `payables/router.owed_by_date` held a ledger query AND a vendor-feed fallback, both private to it | **FACTORED OUT** into `payables/owed_read.py` and REUSED by both surfaces. Giving the weekly report its own read was the obvious repair and would have been two paths answering *"what do I owe"* — free to disagree the moment either learned something the other did not. The money is now read ONCE and grouped twice: by due date for the daily surface, by billing period for the weekly one. |
+| is there a home for "when is this device due"? | §COMMCALC-26 (`net_terms_days` / `due_date_field` on `payable_source_map`) | **REUSED whole.** No due date is derived here; the cadence groups dates the build already stamped. |
+| is there a home for "did this line buy a device"? | §COMMCALC-32 `ledger_status` | **REUSED** — `exclude_non_payable` gates the shared read, so a line that bought no device never reaches this arithmetic. |
+| is there a home for "is this vendor line a debt"? | §COMMCALC-25 `vendor_invoice.is_debt_line`, whose own docstring says a change to it must reach both grains | **DEREFERENCED** — the read it absorbed carried an inline copy of the comparison, which is exactly the drift that docstring warned about. One test now, both grains. |
+| is there a window home, a market home, a store-identity home? | §COMMCALC-24 `commcalc/date_window.py` (`apply_window`, so both ends stay inclusive the same way), RULE FIVE `core/scope.py::store_market_resolver`, §64 `account/store_identity.py` | **REUSED, injected by the caller.** The shared read holds no copy of any of them — the vendor fallback it absorbed carried its own `gte`/`lte` pair, which is how one screen ends up with two meanings of "inclusive". |
+| a cadence column anywhere? | none | **CREATED** — mig 1095, on the config spine that already carries the selling window and the cost source. |
+
+### COMMCALC-34.3 THE TWO ONE-HOMES
+
+**`backend/app/modules/payables/billing_period.py`** — the ONE home for *"which billing period does
+this dated money fall in, and what says so"*. Pure, stdlib only, no clock of its own.
+
+Three ways a period can be known, kept apart and each NAMED in the answer's `basis`:
+
+| basis | what said so |
+| --- | --- |
+| `period_field` | the feed already stamps the period on the row. **This WINS and is never recomputed** — a derived billing day that disagreed with the sweep's own would move a figure every other surface reconciles against, and the two would drift exactly as §19.18 describes. |
+| `weekly_declared` | the carrier declares a weekly cadence and a weekday, so a due date rolls forward to the first such day **on or after** it. Not *after*: money due ON the billing day bills that day, and rolling it would postpone a real liability by seven days. |
+| `due_date` / `house_default` | each invoice falls due on its own date; the period IS that date. **The house default asserts no rhythm**, which is byte-identical to today's behaviour. |
+| `weekday_undeclared` | cadence `weekly` with no weekday declared. The money is still shown and still counted under its own due date, and the screen says the grouping is **not the carrier's own**. Dropping it would hide a real liability behind a missing config row (§COMMCALC-29); guessing Friday would be the same defect in a config column instead of in code (§COMMCALC-26.3). |
+| `no_date` | no date was recorded. **NOT MEASURED** — reported beside the periods, never folded into one. |
+
+`is_measured(basis)` is an ALLOWLIST (the §66 shape), so an unruled basis reads as NOT measured.
+`week_window` returns the seven days **ENDING** on the billing day, as ISO strings, so a screen states
+the range it rolled up instead of leaving a reader to guess whether the six days before it are in. It
+takes **no weekday** — a span is seven days ending on its billing day whatever weekday that is, so the
+parameter would have been a validity gate and nothing more, which is exactly what made the first draft
+of the caller pass a literal `4`. A guessed Friday in a caller is the same defect as a guessed Friday
+in the home, one import away.
+
+**`backend/app/modules/payables/owed_read.py`** — the ONE read, `dated_owed`, returning
+`{rows, source, grain, note, entities, truncated}`. Two sources, named per tenant:
+
+- `device_ledger` — `commcalc.device_payable_ledger`, grain a **DEVICE**, gated by `ledger_status`.
+- `vendor_feed` — the processor's own dated amounts, used only when the ledger produced **nothing**,
+  which for a Total / MA tenant is not *"you owe nothing"* but *"no device carries an amount"*. Grain
+  an **ORDER LINE** — there is no IMEI on this path at all, and the response says so rather than
+  serving a drill-down that cannot exist.
+
+Both empty is `source: None`, never a $0.00 total dressed as a measurement (§COMMCALC-29.1).
+
+### COMMCALC-34.4 WHAT THE SURFACES NOW DO
+
+- **`/payables/owed-by-date`** (daily) keeps its behaviour exactly and holds **no ledger query of its
+  own**; the grouping by date is all that remains of it. Its private vendor fallback
+  (`_owed_from_vendor_feed`, `_VENDOR_FEED_TABLE`) is **DELETED, not left beside the new one** — a
+  dead second reader is a future divergence that compiles (§19.18).
+- **`/asset/owed-weekly`** answers from the consignment column FIRST and unchanged, so a consignment
+  tenant sees exactly the figures it saw before, with `period_source: "stored_column"`. Only where
+  that found nothing does it resolve the declared cadence and roll the SHARED read up, reporting
+  `period_source: "shared_owed_read"` and the basis that answered. The fallback is fail-soft and
+  REPORTS (`declared_period.error`) rather than reading a failure as *"nothing is owed"*.
+- **THE SCREEN SAYS IT.** A server that serves a figure to a screen that renders none has moved the
+  blank report one layer down, not fixed it. `commcalc/asset/owed-weekly` gains an *Owed in this
+  period* block: the total, the period count with the basis in WORDS, the money that could not be
+  dated, the cadence sentence and the grain sentence (both from the server, one home each), and a
+  table of the periods with the span each covers. A period the server did not measure prints **not
+  measured**, never $0.00 — a measured zero is exactly what this report's whole defect looked like.
+  The three consignment cards, *By Store*, *Upcoming Fridays* and the device table are suppressed
+  **only** where the declared roll-up really answered, because three $0.00 cards and *"Nothing bills
+  on this Friday"* printed under a real total would contradict the figure above them. The export
+  carries the same figures, with the same words instead of a zero a spreadsheet would total.
+
+### COMMCALC-34.5 LOCKED SO IT CANNOT UN-WIRE
+
+`backend/harness_billing_period.py` — **84 passed, 0 failed**, DB-free, stdlib only, with mutation
+controls. §A the cadence
+vocabulary and the fail-CLOSED allowlist, including a **config row handed straight in where a
+resolved cadence was expected** (a config row is also a dict — the trap that raised `KeyError` while
+this was built). §B the weekly roll forward and the on-the-day case. §C the stamped period wins. §D
+the undeclared weekday is shown and counted. §E nothing is dated that carries no date, and the
+unplaceable money is reported beside the periods. §F **ONE READ**, locked by AST: exactly one
+definition of the shared read may exist in the whole triangle, the daily endpoint may hold no ledger
+query, and the dead fallback must stay gone. §G the debt test is dereferenced. §H RULE TWO, scanned
+over the **executable text only** — a carrier name that explains behaviour is not one that decides it,
+so the owner's own report stays quoted in the prose while `if carrier == "…"` would still fail. §I the
+consignment path is untouched. §J registration. §K the SCREEN — it reads the roll-up, prints the
+span and the basis, shows an unmeasured period without a figure, suppresses the consignment sections
+only where something really answered, and reports a failed roll-up in words.
+
+### COMMCALC-34.6 WHAT IS OWNER-GATED
+
+`database/migrations/1095_payable_billing_cadence.sql` — additive, idempotent, nullable:
+`payable_source_map.billing_cadence` / `billing_weekday` / `billing_period_field`, two CHECK
+constraints pinning the vocabulary the home rules on, a COMMENT on every column, a `-- REVERT:` block
+and the grant restated. **Every column is NULL after it runs, which is byte-identical to today** — the
+resolver's house default asserts no rhythm. The VALUES are a separate, approval-gated data step, and
+the `net_terms_days = 21` run in §COMMCALC-34.1 is the one that makes the figures appear.
+
+### COMMCALC-34.7 Cross-references
+
+Same home, other axes: §COMMCALC-26 (the declared window, net terms and cost source — the config
+spine this extends), §COMMCALC-32 (the no-device status that gates the shared read), §COMMCALC-33
+(the per-device recovery netted off the same ledger), §COMMCALC-25 (the vendor debt test and the
+filters on the daily screen). Same class: §COMMCALC-26.1 (a carrier's arrangement written into code
+instead of declared), §19.18 (a mechanism written and its callers left unwired), §COMMCALC-29.1 (an
+empty result standing in for a broken declaration), §66 (an allowlist so an unruled basis is not
+evidence). Neighbours: §11 (the aging report), §CORE-17.3y (the aging drill-down at device grain),
+§13a (the market home the shared read is handed), §64 (store identity, likewise injected).
+
+---
 
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
 
@@ -37110,6 +37561,122 @@ Files: `backend/app/modules/storeops/payroll_hours_drilldown.py` (**new**),
 `frontend/src/app/(platform)/storeops/hours-budget/page.tsx`,
 `.github/workflows/carrier-vocab-guard.yml`, `docs/SYSTEM_DATA_FLOW_INDEX.md`.
 
+### §CORE-17.3y INVENTORY AGING, AT DEVICE GRAIN (2026-10-26, batch 25)
+
+**Route:** `/commcalc/asset/aging` (Inventory Aging). **Endpoint:** `GET /asset/aging`
+(`app/modules/asset/router.py::get_aging`). **Declaration:** `app/modules/asset/device_asset_drilldown.py`
+§8 — `aging_catalogue` / `aging_drilldowns` / `aging_totals` / `aging_rows` / `band_rows` /
+`device_tables` / `device_keys`. **Lock:** `backend/harness_batch25_drilldown.py` (79 checks).
+
+**OWNER ASK 2026-10-26, verbatim**, quoting this page's own banner: *"124 devices in the 9-12 day
+window - sell before day 12 / $29,598.76 at risk of being billed unsold. These have days left; act
+now., need a drill donw for these , whic store market date range etc"*.
+
+#### .1 THE DUPLICATE CHECK — what was searched for, and what was REUSED rather than rebuilt
+
+The build gate in `CLAUDE.md` is a search before a build, so: the index was searched for an existing
+mechanism answering *"which devices are behind this aging figure, by store and date"*, and three
+candidates were read before anything was written.
+
+| searched | found | what happened |
+|---|---|---|
+| §CORE-17 — is there a home for "the rows behind a figure"? | `core/report_drilldown.py` (`tile_panel`, `tiles`, `tie_out`, `panel`) | **REUSED whole.** No fold, no tie-out and no panel shape is written here. |
+| §CORE-17.3l — does the device-asset family already declare this report? | `asset/device_asset_drilldown.py`, SEVEN catalogues, none of them this report | **EXTENDED**, as an eighth declaration in the same module. A second module would be a second answer to "which relation was this device-asset figure read out of", which is the sibling defect §CORE-17.3l was itself written to refuse. |
+| §COMMCALC-26 — who decides the band, and which feed answers "still unsold"? | `commcalc/device_aging_policy.py` (the ladder) and `payables/unsold_inventory.py` (the shape, the source and the stamp) | **DEREFERENCED, never re-derived.** The declaration reads the producer's own `_bucket` stamp; it re-applies no ladder and re-decides no source. |
+| §COMMCALC-33 — is the out-of-pocket headline Σ of this report's amount column? | No: it is that cost NET of the per-device carrier recovery | **REFUSED a panel** (see .5). |
+
+Nothing new was created but the declaration, its lock, one registry NAME constant and one label.
+
+#### .2 THE SEVENTH GRAIN, AND WHY THE SIX WERE NOT ENOUGH
+
+§CORE-17.3l measured six grains across its seven producers and every one of them is keyed by a
+**store**, a **loan** or a weekly **batch**. This report's bands are Σ over **one row per unsold
+IMEI**, and the grain is the row a figure is summed over rather than the subject the report is
+about. Stretching the store-keyed On-Inventory catalogue over it would have declared a store's
+exposure as the evidence for a device's, and `tie_out` would have said so out loud. The header's own
+grain table now carries eight rows.
+
+#### .3 ONE PANEL PER BAND, OVER THAT BAND'S OWN DEVICES
+
+This is the one place in the family that does **not** hand `tiles()` a single row list. Everywhere
+else each tile folds over the same rows, so the rows a tile does not count stay beside it as the
+context that makes the figure readable (§CORE-17.3l's own rule). A device belongs to exactly **one**
+band, so doing that here would serve the warning band a panel of 1,755 devices with 124 counted —
+and `ROW_CAP` (400) would then very likely omit the 124 the owner clicked on, which is worse than
+losing the context. So the declaration carries a `rows_of` accessor naming the band each tile is
+folded over, and `aging_drilldowns` folds each tile over its own devices. Band isolation is locked in
+**both** directions (harness §C).
+
+#### .4 TWO RELATIONS, DECIDED PER ROW — AND THE IMEI IS SPELLED TWICE
+
+Since §COMMCALC-26 this report serves two tenants off two different relations: a consignment device
+is read out of `commcalc.asset_ledger` and a device the platform owes for out of
+`commcalc.device_payable_ledger`. A panel naming one of them for every row would be wrong on every
+row of the other tenant, so `device_tables` reads the producer's own stamp per row. The keys are per
+row too, because the two relations do not spell the IMEI the same way — `esn_imei` on the
+consignment ledger and `imei` on the payable ledger — and naming one for both would hand a support
+query a column half the rows' table does not have.
+
+**ONE FACT, ONE HOME, BOTH HALVES.** `device_payable_ledger` became a NAME constant in
+`commcalc/data_lineage_registry.py` (`DEVICE_PAYABLE_LEDGER`) with a `sourceLabels.ts` entry, so no
+database name reaches a screen. The provenance stamp itself was a literal in the module that writes
+it: `payables/unsold_inventory.py` now declares `SOURCE_FIELD` and **writes through it** in the same
+commit, and the declaration dereferences both it and `SOURCE_LEDGER`. Writing a registry and leaving
+the caller on its literal is not a fix at all (§19.18, taken for the fourth time here).
+
+#### .5 THE FOUR REFUSALS, each with a ruling behind it
+
+- **The device COUNT beside every band**, and **Total Phones Outstanding**. Each is the cardinality
+  of the money panel beside it — the band's own panel lists exactly those devices and serves
+  `rows_total_count` — so a second tile proving how many there are is a tautology dressed as
+  evidence (the batch-11 `store_count` ruling). The page carries the reason in a comment where the
+  missing button would be.
+- **`flagged_owed` / `flagged_count`.** Σ of the three band tiles, so a tie-out against either could
+  not fail (§CORE-17.3h as batch 10 extended it). All three halves get panels instead.
+- **The out-of-pocket headline.** Since §COMMCALC-33 it is the cost NET of what the carrier already
+  recovered per device, and the netting is the payables module's verdict rather than a column on
+  these rows. A fold over this report's own amount column would explain a DIFFERENT number and the
+  tie-out would say so — correctly, and uselessly. It is declared in the PR that carries the
+  per-device recovery onto these rows, not guessed at here.
+- **`age_buckets`.** The same bands over the same devices, counted rather than priced — a second
+  shape of a figure already drillable, which would be two answers to one question.
+
+#### .6 A COST NOBODY RECORDED IS NOT $0.00
+
+The report's own footer reads the device cost as `float(x or 0)`, so a device whose cost was never
+recorded and a device that genuinely owes nothing enter the total identically. The declaration tells
+them apart: the unrecorded one is **shown without a figure**, carries `amount_not_recorded`, and is
+**not counted**, while the real $0.00 is counted as the measurement it is. The figure still ties,
+because a blank adds zero either way — the point is that the gap is now **visible** rather than
+averaged away, which is the §CORE-17.3i posture applied to a cost instead of to an absence.
+
+#### .7 THE ROUTE WAS RE-CLASSIFIED FROM `flat`, AND THAT IS REPORTED
+
+The 2026-10-24 audit pinned `/commcalc/asset/aging` as `flat` — *"already shows the source rows;
+nothing is summarised above them"*. The first half is true and the second never was: three band
+tiles, two footer totals and two alert banners sit above those tables, every one of them a fold the
+reader had no way into. That is exactly the state the audit existed to find, so it is REPORTED here
+rather than quietly re-pinned — a mis-classified route is how a ratchet stops ratcheting, and this
+one hid the owner's own question for two days. **`OWES_MAX` does not move** (18): a `flat` route was
+never counted as owing a drill-down, and lowering the pin here would claim a debt was paid that was
+never on the books.
+
+#### .8 ONE MORE DEFECT FIXED IN PASSING, because it is the same class
+
+The three band tiles were still printing `Under 45 Days` / `45–60 Days` / `sell before day 60` —
+one carrier's contract shown to every tenant — while the banner immediately above them had resolved
+the carrier's **declared** window since §COMMCALC-26 (owner 2026-10-22: *"it should not say sell
+before 60 days as that is boost requirement , total is sell before 12 days"*). The tiles now read
+`windowLabel`, the same resolution, so one page no longer states two windows. The drill key on each
+tile is the SERVER'S total key rather than the bucket name, so a renamed bucket cannot silently open
+another band's panel.
+
+Neighbours: §CORE-17.3l (the family this extends, and its grain rule), §COMMCALC-26 (the declared
+window, which feed answers "still unsold", and the stamp), §COMMCALC-33 (the netting
+that the out-of-pocket refusal points at), §CORE-17.3h (a composed figure gets no panel),
+§CORE-17.3i (an absence is not a zero), §CORE-17.3c (the offer rule — a link only where the server
+served a panel).
+
 ### §CORE-17.4 THE AUDIT, MEASURED 2026-10-24
 
 Three parallel sweeps over all **136** report routes in `REPORT_DIRECTORY` (plus `/closing/cash-variance`):
@@ -37170,7 +37737,7 @@ has not forked, the page hand-rolls no panel, RULE TWO holds in both files.
 `backend/harness_drilldown_coverage.py` — **17 checks**, the ratchet: every report route declared
 exactly once, no ledger route has stopped existing, every excused state carries a written reason,
 every `shared` route really renders the shared panel (writing the registry without wiring the caller
-is not a fix at all — §19.18), and **`OWES_MAX`, which may only go DOWN** (**93** at the audit, **18** since §CORE-17.3x — batches 23 and 24 were built in parallel off a base of 25, so the pin is re-taken from the merged ledger, not from either side). Re-pin it downward in
+is not a fix at all — §19.18), and **`OWES_MAX`, which may only go DOWN** (**93** at the audit, **18** since §CORE-17.3x — batches 23 and 24 were built in parallel off a base of 25, so the pin is re-taken from the merged ledger, not from either side). **§CORE-17.3y leaves it at 18 deliberately**: it re-classified a route the audit had pinned `flat`, and a `flat` route was never counted as owing one, so lowering the pin there would claim a debt was paid that was never on the books. Re-pin it downward in
 the same PR that builds a drill-down; a change that raises it is a report shipped without evidence.
 
 ### §CORE-17.6 WHAT IS DELIBERATELY NOT HERE
@@ -37202,7 +37769,7 @@ the same PR that builds a drill-down; a change that raises it is a report shippe
 `GET /commcalc/targets/{period}/action-plan`, `GET /commcalc/targets/{period}/report-cards`, `GET /commcalc/billpay-extract/{period}`, `GET /commcalc/epay/fee-recon`, `GET /commcalc/processor-ledger`, `GET /commcalc/accessory-target-plan/{period}`, `GET /commcalc/accessory-cost-audit/{period}`, `GET /commcalc/accessory-flags`, `GET /commcalc/vip/summary`, `GET /commcalc/device-line-reimbursement`, `GET /commcalc/financing/{period}`, `GET /commcalc/exec-overview/{period}`, `GET /commcalc/exec-mtd/{period}`, `GET /commcalc/month-focus/{period}`, `GET /commcalc/comp/rep-pay-trend`, `GET /commcalc/gp/{period}`, `GET /commcalc/sales-analyzer/{period}`, `GET /commcalc/sales-comparison`, `GET /commcalc/zero-sales`, `GET /commcalc/mdf-entitlement-coverage`, `GET /activation-counts/{period}`, `GET /storeops/hours-budgets` →
 `drilldown`; `GET /storeops/payroll/drilldown` — a SIBLING endpoint, because the payroll report returns a bare JSON list every export and the approval board already iterate (§CORE-17.3x); `GET /commcalc/commissions/{period}/drilldown` — a SIBLING endpoint, because the report it explains returns a bare JSON list with nowhere to hang the key), §18 ("where is this figure from" → `panel.sources` → `sourceLabel`; "did the
 carrier pay what we computed, and out of which legs" → §CORE-17.3k; "which devices is this
-store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p; "how is the month going, against what, and is anybody being paid for it" → §CORE-17.3q; "what did we sell, at what margin, and which upload or feed actually answered for it" → §CORE-17.3r; "what did we expect the carrier to pay, what did it pay, and what is being clawed back or is missing" → §CORE-17.3s; "how are reps and stores performing, and who needs coaching" → §CORE-17.3t; "what is each rep being paid this month and what for" → §CORE-17.3v; "which store-month of this entitlement never arrived, and what was it worth" → §CORE-17.3v; "how many devices did this store activate, and which upload says so" → §CORE-17.3v; "what hours is this person being paid for this period, and what measured them" → §CORE-17.3x; "how many hours has this store scheduled this week, against its budget" → §CORE-17.3x), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
+store charged for, and did the distributor's ledger or our own POS count say so" → §CORE-17.3l; "which unsold devices are in this aging band, in which store and market, and when was each one bought" → §CORE-17.3y; "where did this target-vs-actual figure come from, and did anybody actually set that target" → §CORE-17.3m; "what did the processor owe us for bill payments, what actually landed, and which of the two reads answered" → §CORE-17.3n; "what did the carrier reimburse us for financing this handset, what did the distributor CLAIM for it, and which relation answered each" → §CORE-17.3p; "how is the month going, against what, and is anybody being paid for it" → §CORE-17.3q; "what did we sell, at what margin, and which upload or feed actually answered for it" → §CORE-17.3r; "what did we expect the carrier to pay, what did it pay, and what is being clawed back or is missing" → §CORE-17.3s; "how are reps and stores performing, and who needs coaching" → §CORE-17.3t; "what is each rep being paid this month and what for" → §CORE-17.3v; "which store-month of this entitlement never arrived, and what was it worth" → §CORE-17.3v; "how many devices did this store activate, and which upload says so" → §CORE-17.3v; "what hours is this person being paid for this period, and what measured them" → §CORE-17.3x; "how many hours has this store scheduled this week, against its budget" → §CORE-17.3x), §72 (cash variance itself), §4e (the P&L drill this generalises), §19.38
 (`sourceLabel`), §2 / `data_lineage_registry.py` (which table is which feed), §15 (the B2B ↔ MA
 activation recon these three reports read), §66 / §COMMCALC-09 (is a value evidence at all), §50 (the
 module graph).
@@ -37395,3 +37962,114 @@ both `sent` and `failed` fails the build unless it also carries `outcome`** (so 
 go back to two integers); the digest leg must dereference the same home; no module but the one home
 may rule on a provider error code; every surface must render the one view; and no remedy sentence may
 appear in the browser. In CI as **"A failed send names who, why and the fix"**.
+
+---
+
+## §STOREOPS-01. A TYPED PAYROLL FIGURE SAVES ON ITS OWN, AND A SAVE SAYS WHAT IT WILL COST BEFORE IT LANDS (owner report 2026-10-26)
+
+**What he said**, of Hours Approval, pay period 2026-10-05 → 10-18, payable 10-23:
+
+> *"tehere is a lag in saving andf updating the hours when a change is done m teh ssystem shoudl
+> confirm that the new hours will be this after teh change and to save it every time , if multiple
+> hours are adjusted it shoudl show mnultiple hours before saving what the neew payroll will be"*
+> … *"if you see i havd to enter hours for simarjyot 3 times to get the correct horus and still i
+> cannot see the correnct hours"* … *"i selected mohammed sami but nothing showed up in filters"*
+> … *"tehre shoudl eba button of refresh also so only the data we are working on shoudl refreshed"*
+
+**He typed three times and the system recorded once.** Measured read-only against production on
+2026-10-26: `storeops.payroll_approval` for **E043** / 2026-10-05..18 holds ONE adjustment (−10.97)
+and `storeops.payroll_change_log` holds exactly ONE matching row. Two of his three attempts never
+reached the server, and nothing on screen said so.
+
+### STOREOPS-01.1 THE CLASS — five mechanisms, one symptom
+
+Not "the save is slow". Five independent faults, each of which on its own loses a typed number:
+
+| # | the mechanism | what the reviewer saw |
+| --- | --- | --- |
+| 1 | **there was no save.** `storeops/payroll_approval.py` wrote `hours_approved` only alongside a DM *approval*; the board had no Save button. A figure typed and not approved in the same click was never sent. | "it did not save" |
+| 2 | **a reload wiped the typed boxes** — `load()` ran `setEdits({})` **including after a REFUSED save**, so a missing reason cost the whole batch with no error beside the cleared cells. | "I had to type it 3 times" |
+| 3 | **the board's boldest column ignored the save.** `Payable` rendered `hours_payable` (worked − lunch ± adjustment), which does not contain `hours_approved`; the saved correction appeared only as the input's grey **placeholder**. The server was right and the screen was stale. | "still i cannot see the correct hours" |
+| 4 | **the person filter could not match anybody, ever.** `GET /core/filter-options` keys its `reps` options by NAME (a `{name: email}` fold), and this board alone sent that value as `employee_id` — compared against `E043`. Not a wrong answer: a guaranteed empty one. | "nothing showed up in filters" |
+| 5 | **the lag was a 200k-row scan nobody asked for.** `storeops/payroll_approval.py::_worked_days_from_sales` reads up to 200,000 `commcalc.raw_sales` rows on every GET, and its only consumer is the evidence list on a row the clock holds nothing for. One save paid for two full scans (the POST's own derivation, then the UI's reload). | "there is a lag in saving" |
+
+**And a sixth fault that is upstream of all of them, REPORTED and not repaired here:** `GET
+/storeops/payroll` does not read `storeops.manual_hours` (`storeops/router.py` says so at `~:2051`; §14y and
+`payroll_hours_drilldown` both record it as a live defect). So the DM's own corrections never reach
+this board's `Worked`, and the reviewer rebuilds them by hand. E043 carries **six** correction rows
+totalling **−16.00 h**, every one reasoned *"wrong clock out"*, filed 2026-10-19 — against the
+102.84 h the board showed as the only truth. The hand-rebuilt figure landed **5.03 h** away from the
+one the system already held.
+
+### STOREOPS-01.2 WHAT THIS COSTS, measured on the live period
+
+Three rows of 2026-10-05..18 were hand-corrected against force-closed punches. **E029 (Mohammed
+Sami) has never once clocked out**: all 8 punches were closed by `force_clockout_cron` at 02:00,
+~12 h each.
+
+| employee | clock says | hand adjustment | payable today | intended | error |
+| --- | --- | --- | --- | --- | --- |
+| E029 | 125.18 | **+18.49** | **143.67** | 88.20 | **+55.47 h / $943.00** — sign inverted, and already DM+HR approved |
+| E043 | 102.84 | −10.97 | 91.87 | 86.84 (−16.00 already filed) | +5.03 h / $85.51 |
+| E282 | 339.56 | −273.56 | 66.00 | — | a fortnight cannot hold 339.56 h |
+
+A confirmation stating *"125.18 → 143.67, pay $2,442.39"* in words stops the first row dead. That is
+the feature, and this is why it is not cosmetic.
+
+### STOREOPS-01.3 THE FIX, one home each
+
+- **`frontend/src/lib/hours-approval-preview.ts` — THE one home for "what will this save do to the
+  payroll?"** Pure (no React, no fetch, no clock, no tenant/store/person name, no rate of its own).
+  The dialog renders this object AND `previewToRows` builds the request from the SAME object, so the
+  confirmation cannot describe a write that differs from the one that lands. `payableNow` /
+  `payableAfter` are the single restatement of the server's own precedence (`storeops/payroll_approval.py::list_approvals`:
+  `approved if approved is not None else payable`) — not a second rule.
+- **`save`, an ACTION on the existing `storeops/payroll_approval.py::decide` path**, deliberately not a sibling endpoint: the reason
+  gate, the negative-payable guard, the org scoping and the `payroll_change_log` write are the same
+  rules, and a second write path for one field is the duplicate defect §19.18 names. It records the
+  figure and moves **neither** approval stage — a correction typed into an approved row must not
+  quietly re-sign it in the corrector's name.
+- **A correction can be taken back.** An explicit empty `hours_approved` CLEARS it back to the
+  computed figure, reason-gated and logged exactly like the correction it removes. A payroll number
+  may not move anonymously in either direction.
+- **The person filter in `storeops/payroll_approval.py::list_approvals` dereferences
+  `core/person_identity.py::folded_token_key`** (§owner report
+  2026-10-14, the one home for "is this the same human") so an id OR a name matches, order-free and
+  accent-folded. An existing caller passing `E043` stays byte-identical. Registered on the
+  `person_identity` fact in `core/module_graph.py`, so a caller that goes back to a local name rule
+  fails the build.
+- **The uncounted corrections are SHOWN on the row** — signed total, day count, and each day's reason
+  on hover — carrying `manual_hours_counted: false` by name, and folded into **nothing**. Proved: the
+  payable figure is byte-identical to before they were visible. Folding them moves a pay figure,
+  which is the owner's call, not a side effect of a display fix.
+- **`⟳ Refresh` on both boards** (Hours Approval and Salary Advances) re-reads the range on screen and
+  changes no filter, drops no selection and keeps every unsaved figure — the browser's own refresh is
+  what loses the filters, which is the only reason it was being used.
+- **Salary Advances awaits both reloads before saying "recorded"**, and when the advance's `paid_date`
+  falls outside the range on screen it SAYS so: `cash_paid_total` is windowed on `paid_date`
+  (`get_salary_owed`), so such an advance is recorded correctly and still changes nothing here (`storeops/router.py`).
+  Silently showing no change is what reads as a failed save.
+
+**Locks.** `backend/harness_payroll_approval_save.py` (41 checks, DB-free, recording fake) and
+`frontend/prove_hours_approval_preview.mjs` (34 checks, the real TS through the project's own `tsc`).
+Between them they pin: `save` stamps no status and no signature; the reason gates and the
+negative-payable guard are unchanged; a clear is logged with the figure it reverts to; an HR approval
+survives a DM save while `send_back` still invalidates it; `approve` is byte-identical to before; the
+person filter matches a name in any order or case and an unknown person yields an EMPTY board;
+`manual_hours` moves no figure; and the sales scan is skipped when every employee has a clock record.
+
+**Duplicate check, per the index rules.** Searched before building: §14y (`payroll_hours_basis`, the
+one home for paid hours and its basis — not touched, this board reads `GET /storeops/payroll` as it
+always did), §14z (clock variances), §CORE-17.3x (`storeops/payroll_hours_drilldown.py`, which already REPORTS
+the `manual_hours` gap — extended in spirit, not duplicated), §19.45 (`storeops/payroll_log_identity.py`, the one
+writer of the change log — reused), §64 (store identity — untouched), and `person_identity`
+(dereferenced rather than re-derived). No new endpoint, no new table, **no migration**, and no second
+derivation of any figure.
+
+**Still open, and the owner's decision, not ours.** (a) Whether `storeops.manual_hours` should be
+FOLDED into paid hours rather than reported beside them — it moves money, and the router's own
+comment forbids doing it as a side effect. (b) `force_clockout_cron` is manufacturing ~12 h punches
+for anybody who never clocks out (E029: 8 of 8 days), which is the upstream cause of all three
+hand-corrections above; the auto-closed punch is already `punch_unusable` in §14y's vocabulary, but
+`schedule_fallback` mode still pays it. (c) **E029's live row is overstated by $943 and is
+DM+HR-approved** — a data repair, reported here, never "fixed" in code.

@@ -10,6 +10,7 @@
   /commcalc/asset/inventory-recon  On-Inventory vs the POS snapshot — unit counts, per store.
   /commcalc/asset/borrowed         Inter-store Borrowed Money — one row per loan.
   /commcalc/asset/lending          Asset Lending (Distributor PayGo) — one row per weekly batch.
+  /commcalc/asset/aging            Inventory Aging — the aging bands, at DEVICE grain (batch 25).
 
 HOW MANY GRAINS THIS FAMILY REALLY HAS — MEASURED, NOT ASSUMED
 ──────────────────────────────────────────────────────────────
@@ -27,6 +28,10 @@ is the row a figure is Σ OVER, not the subject the report is about:
   5. a STORE compared between TWO inventories   `/commcalc/asset/inventory-recon`
   6. an inter-store LOAN                        `/commcalc/asset/borrowed`
   7. a weekly PayGo BATCH                       `/commcalc/asset/lending`
+  8. an unsold DEVICE                           `/commcalc/asset/aging` — added by batch 25, and the
+                                                SEVENTH grain: every producer above it is keyed by a
+                                                store, a loan or a batch, and this report's bands
+                                                are Σ over one row per unsold IMEI. See §8.
 
 Four of those are keyed by a store and are still four grains: a store's unsold exposure, a store's
 Friday bill, a store's unit disagreement with the POS and a store's share of one charge group are
@@ -112,6 +117,10 @@ Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §CORE-17.3l.
 """
 from app.modules.commcalc import data_lineage_registry as _lineage
 from app.modules.core import report_drilldown
+# The ONE home for the shape and the provenance of an unsold-device row (§COMMCALC-26). Imported
+# for its two NAME constants only — the stamp it writes and the value it writes — so this module
+# holds no second copy of either. Pure, like everything else here.
+from app.modules.payables import unsold_inventory as _unsold
 
 #: THE THREE PROVENANCE ANSWERS THIS FAMILY HAS, dereferenced from the one home and never spelled
 #: here as literals.
@@ -120,6 +129,9 @@ POS_INVENTORY = _lineage.POS_INVENTORY_SNAPSHOT
 STORE_BORROWINGS = _lineage.STORE_BORROWINGS
 STORE_BORROWING_PAYMENTS = _lineage.STORE_BORROWING_PAYMENTS
 PAYGO_BATCHES = _lineage.PAYGO_BATCHES
+#: The carrier-agnostic per-IMEI payable ledger — the OTHER relation the aging report reads since
+#: §COMMCALC-26, for a tenant that has no consignment ledger of its own. Dereferenced, never spelled.
+DEVICE_PAYABLE_LEDGER = _lineage.DEVICE_PAYABLE_LEDGER
 
 #: Every relation on this batch lives in the commcalc schema, so one schema serves every panel —
 #: `tile_panel` takes ONE schema per tile and a row whose tables spanned two would have to name none.
@@ -195,6 +207,14 @@ _OUTSTANDING_NOTE = (
     "One row per loan, each carrying its OWN amount minus its OWN paybacks. The report's headline "
     "subtracts the two totals instead, so this tie-out compares the two ways of reaching the same "
     "number rather than restating one of them.")
+
+_AGING_NOTE = (
+    "One row per unsold device, as the band tables below list them — each naming the store, the "
+    "market, the day it was purchased and how many days it has been held. Every band is measured "
+    "AS OF TODAY, so a band total moves as days pass even when no ledger changed, and a date filter "
+    "narrows which devices are INCLUDED rather than when the age was taken. Each row also says "
+    "which relation it was read out of: a consignment device comes off the distributor's unit "
+    "ledger and a device the platform owes for off the per-device payable ledger.")
 
 _LENDING_NOTE = (
     "One row per approved weekly billing batch from the distributor's lending portal. A batch the "
@@ -647,3 +667,226 @@ def lending_drilldowns(summary, *, cap=None):
         return {}
     return report_drilldown.tiles(lending_catalogue(), rows, summary.get("totals") or {},
                                   schema=SCHEMA, cap=cap or report_drilldown.ROW_CAP)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# §8  INVENTORY AGING — the bands, at DEVICE grain (batch 25, §CORE-17.3y).
+#
+# OWNER ASK 2026-10-26, verbatim, quoting the banner on this page: *"124 devices in the 9-12 day
+# window - sell before day 12 / $29,598.76 at risk of being billed unsold. These have days left; act
+# now., need a drill donw for these , whic store market date range etc"*.
+#
+# WHY THIS IS A SEVENTH GRAIN AND NOT ONE OF THE SIX. The header's count was taken over the six
+# producers this module already declared, and none of them is a device: four are keyed by a STORE,
+# one by a loan and one by a weekly batch. This report's bands are Σ OVER DEVICES — one row per
+# unsold IMEI — and the grain is the row a figure is summed over, not the subject the report is
+# about. Stretching the store-keyed On-Inventory catalogue over it would have declared a store's
+# exposure as the evidence for a device's, and `tie_out` would have said so out loud.
+#
+# WHY THE LEDGER SAID THIS REPORT WAS `flat`, AND WHY THAT PIN WAS WRONG. The 2026-10-24 audit
+# recorded `/commcalc/asset/aging` as "already shows the source rows; nothing is summarised above
+# them". The first half is true and the second is not: the page shows a band tile per bucket, two
+# footer totals and two alert banners above its tables, every one of them a fold the reader had no
+# way into — which is exactly the state the audit existed to find. REPORTED here rather than quietly
+# re-pinned, because a mis-classified route is how a ratchet stops ratcheting.
+#
+# ONE PANEL PER BAND, OVER THAT BAND'S OWN DEVICES — and this is the one place this module does not
+# hand `tiles()` a single row list. Every other report here folds each tile over the SAME rows, so
+# the rows a tile does not count are shown beside it as context (§CORE-17.3l's own rule). A device
+# belongs to exactly ONE band, so doing that here would serve the warning band a panel of 1,755
+# devices with 124 of them counted — and `ROW_CAP` would then very likely omit the 124 the owner
+# clicked on, which is worse than losing the context. So each band tile is folded over its own
+# devices and the declaration carries a `rows_of` accessor saying which.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+#: Which relation a shaped aging row was read out of, dereferenced from the module that stamps it —
+#: a literal here would be a second copy of the same fact and would stop matching the day it moved.
+_SOURCE_LEDGER = _unsold.SOURCE_LEDGER
+_SOURCE_FIELD = _unsold.SOURCE_FIELD
+
+#: The producer's own bucket keys, stamped on every row it returns (`_bucket`). Named once here so
+#: the catalogue and the row filter cannot come to mean different populations.
+BAND_FIELD = "_bucket"
+BAND_SAFE = "under45"
+BAND_WARN = "warn"
+BAND_MISSED = "missed"
+BAND_UNKNOWN_AGE = "unknown_age"
+#: Not a band: every unsold device, which is what the footer totals are over.
+BAND_ALL = "*"
+
+
+def band_rows(rows, band):
+    """PURE: the devices in ONE band, or every device for `BAND_ALL`.
+
+    Reads the producer's own stamp. Nothing here re-decides which band a device is in — the ladder
+    is the carrier's declared window (§COMMCALC-26) and re-applying it would be a second verdict."""
+    if band == BAND_ALL:
+        return [r for r in (rows or []) if r]
+    return [r for r in (rows or []) if r and (r.get(BAND_FIELD) or "") == band]
+
+
+def device_tables(r):
+    """WHICH RELATION THIS DEVICE WAS READ OUT OF, per row.
+
+    This report serves two tenants off two different relations since §COMMCALC-26, so a panel that
+    named one of them for every row would be wrong on every row of the other. The producer already
+    stamps its answer; this reads it rather than forming a second one. PURE."""
+    r = r or {}
+    return ((DEVICE_PAYABLE_LEDGER,) if (r.get(_SOURCE_FIELD) or "") == _SOURCE_LEDGER
+            else (ASSET_LEDGER,))
+
+
+def device_keys(r):
+    """How a human finds this device row again IN THE RELATION IT CAME FROM.
+
+    The two relations do not spell the IMEI the same way — the consignment ledger's column is
+    `esn_imei` and the payable ledger's is `imei` — so the keys are per row too. Naming one for both
+    would hand a support query a column that half the rows' table does not have. PURE."""
+    r = r or {}
+    if (r.get(_SOURCE_FIELD) or "") == _SOURCE_LEDGER:
+        return {"imei": r.get("esn_imei"), "store": r.get("store")}
+    return {"id": r.get("id"), "esn_imei": r.get("esn_imei")}
+
+
+def _device_fields(r):
+    """WHICH STORE, WHICH MARKET, WHICH DATE — the owner's three words, on every row."""
+    r = r or {}
+    held = r.get("days_aged")
+    held = r.get("days_held") if held is None else held
+    acquired = r.get("acquired_date")
+    return {"market": r.get("market"),
+            "detail": "%s · %s" % (
+                ("%s day(s) held" % held) if held is not None else "no usable purchase date",
+                ("purchased %s" % str(acquired)[:10]) if acquired else "purchase date not recorded"),
+            "device_model": r.get("device_model"),
+            "purchased": (str(acquired)[:10] if acquired else None),
+            "days_held": held,
+            "due_date": r.get("due_date"),
+            # The deadline and the verdict the page already prints per row, carried so a reader who
+            # opened the band from the banner does not have to go back to the table for them.
+            "sell_within_days": r.get("sell_within_days"),
+            "days_overdue": r.get("days_overdue"),
+            "out_of_pocket": r.get("out_of_pocket")}
+
+
+def _device_amount(r):
+    """The device's exposure, or None where nobody recorded one.
+
+    NOT `float(x or 0)`, which is how the report's own footer reads it: a device whose cost was never
+    recorded and a device that genuinely owes nothing are different facts, and coercing the first to
+    $0.00 makes a gap in the data look like a measurement. Such a row is SHOWN here, with its reason,
+    and is not counted — so the figure it is missing from is visible rather than averaged away."""
+    v = (r or {}).get(COL_OWED)
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def aging_totals(out):
+    """The five money figures this page folds, flattened out of the endpoint's OWN response.
+
+    A dereference, not a recomputation: nothing here adds anything up. A figure the response did not
+    carry is absent rather than zero, and `tiles()` then serves no panel for it."""
+    out = out or {}
+    buckets = out.get("buckets") or {}
+    totals = out.get("totals") or {}
+    got = {}
+    if "total_amount" in totals:
+        got["total_amount"] = totals.get("total_amount")
+    for band, key in ((BAND_SAFE, "under45_owed"), (BAND_WARN, "warn_owed"),
+                      (BAND_MISSED, "missed_owed")):
+        b = buckets.get(band)
+        if isinstance(b, dict) and "owed" in b:
+            got[key] = b.get("owed")
+    unknown = out.get("unknown_age")
+    if isinstance(unknown, dict) and "owed" in unknown:
+        got["unknown_age_owed"] = unknown.get("owed")
+    return got
+
+
+def aging_rows(out):
+    """Every unsold device the RESPONSE carries, across its bands.
+
+    The response caps its zero-owed and unknown-age lists for payload size, so this is what a reader
+    holding only the response can see — and the panel's own `capped` / `rows_total_count` say so. The
+    producer passes its UNCAPPED population instead (see `aging_drilldowns`), which is why the live
+    screen's tie-out is over every device and not over a page of them."""
+    out = out or {}
+    buckets = out.get("buckets") or {}
+    rows = []
+    for band in (BAND_SAFE, BAND_WARN, BAND_MISSED):
+        rows.extend((buckets.get(band) or {}).get("rows") or [])
+    rows.extend(((out.get("zero_inventory") or {}).get("rows")) or [])
+    rows.extend(((out.get("unknown_age") or {}).get("rows")) or [])
+    return [r for r in rows if r]
+
+
+def aging_catalogue():
+    """Every figure this page folds above its tables, declared — with the band each is folded over.
+
+    WHAT GETS NO PANEL HERE, and each refusal has a ruling behind it:
+
+      · **The device COUNT beside every band** ("124 devices", "Total Phones Outstanding"). Each is
+        the cardinality of the panel immediately beside it — the money tile for the same band lists
+        exactly those devices and serves `rows_total_count` — so a second tile proving how many
+        there are is a tautology dressed as evidence (the On-Inventory catalogue's `store_count`
+        ruling, batch 11).
+      · **`flagged_owed` / `flagged_count`.** Σ of the three band tiles, so no set of records adds
+        up to it that is not already under one of them; a tie-out against it could not fail
+        (§CORE-17.3h as batch 10 extended it). All three halves get panels instead.
+      · **The out-of-pocket headline.** It is NOT Σ(`owed_to_vip`) over the flagged devices: since
+        §COMMCALC-33 it is that cost NET of what the carrier already recovered per device, and the
+        netting is the payables module's verdict rather than a column on these rows. A panel folded
+        over this report's own amount column would therefore explain a DIFFERENT number than the one
+        on screen and the tie-out would say so — correctly, and uselessly. It is declared in the PR
+        that carries the per-device recovery onto these rows, not guessed at here.
+      · **`age_buckets`.** The same bands over the same devices, counted rather than priced — a
+        second shape of a figure already drillable, which would be two answers to one question.
+    """
+    common = {"row_label": ("store", "esn_imei"), "keys": device_keys, "fields": _device_fields,
+              "tables": device_tables, "column": COL_OWED, "note": _AGING_NOTE,
+              "value": _device_amount, "reason": lambda r: (None if _device_amount(r) is not None
+                                                            else "amount_not_recorded")}
+    return (
+        {"key": "total_amount", "label": "Total amount owed (every unsold device)",
+         "total": "total_amount", "rows_of": BAND_ALL, **common},
+        {"key": "under45_owed", "label": "Inside the selling window — owed",
+         "total": "under45_owed", "rows_of": BAND_SAFE, **common},
+        {"key": "warn_owed", "label": "In the warning window — owed, still sellable",
+         "total": "warn_owed", "rows_of": BAND_WARN, **common},
+        {"key": "missed_owed", "label": "Past the selling window — owed",
+         "total": "missed_owed", "rows_of": BAND_MISSED, **common},
+        {"key": "unknown_age_owed", "label": "No usable purchase date — owed",
+         "total": "unknown_age_owed", "rows_of": BAND_UNKNOWN_AGE, **common},
+    )
+
+
+def aging_drilldowns(out, rows=None, *, cap=None):
+    """PURE: one panel per band, over THAT band's own devices.
+
+    `rows` is the producer's uncapped population; a caller holding only the response passes nothing
+    and gets the devices the response carries (see `aging_rows`). Either way the figure each panel
+    explains is the response's own, read through `aging_totals` and never recomputed.
+
+    A figure the response did not produce is skipped rather than served with a zero, and a band with
+    no devices at all gets no panel — `tiles()`' own rule applied to the row list instead of the
+    total, which is what stops an unloaded ledger from drilling to a reassuring empty tie."""
+    totals = aging_totals(out)
+    if not totals:
+        return {}
+    pool = rows if rows is not None else aging_rows(out)
+    if not pool:
+        return {}
+    panels = {}
+    for spec in aging_catalogue():
+        spec = dict(spec)
+        band = spec.pop("rows_of", BAND_ALL)
+        mine = band_rows(pool, band)
+        if not mine:
+            continue
+        panels.update(report_drilldown.tiles(
+            (spec,), mine, totals, schema=SCHEMA, cap=cap or report_drilldown.ROW_CAP))
+    return panels

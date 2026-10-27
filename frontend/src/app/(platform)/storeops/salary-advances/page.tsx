@@ -87,16 +87,22 @@ export default function SalaryAdvancesPage() {
     apiCached('/api/v1/storeops/employees', LOOKUP).then((r: any) => setEmployees(Array.isArray(r) ? r : [])).catch(() => {})
   }, [])
 
-  const load = useCallback(() => {
+  // AWAITABLE, so a caller can finish reloading BEFORE it tells the user the advance is recorded
+  // (owner report 2026-10-26: *"when salary advance is given it does not update directly, you need to
+  // refresh teh screen"*). It changes no filter and resets nothing — the only reason to reach for the
+  // browser's refresh was that this never completed in a known order, and the browser's refresh is
+  // what loses the filters.
+  const load = useCallback(async () => {
     if (!rangeReady || !filt.period || !filt.periodTo) return
     setLoading(true)
-    api(`/api/v1/storeops/salary-owed?start=${filt.period}&end=${filt.periodTo}`)
+    const owedP = api(`/api/v1/storeops/salary-owed?start=${filt.period}&end=${filt.periodTo}`)
       .then((r: any) => setOwed(Array.isArray(r?.employees) ? r.employees : []))
       .catch((e: any) => { setOwed([]); setMsg(setupFailed('Load failed: ' + (e?.message || e))) })
       .finally(() => setLoading(false))
-    api(`/api/v1/storeops/salary-advance/history?start=${filt.period}&end=${filt.periodTo}`)
+    const histP = api(`/api/v1/storeops/salary-advance/history?start=${filt.period}&end=${filt.periodTo}`)
       .then((r: any) => { setHistory(r?.items || []); setHistoryAvailable(r?.available !== false) })
       .catch(() => { setHistory([]); setHistoryAvailable(false) })
+    await Promise.all([owedP, histP])
   }, [rangeReady, filt.period, filt.periodTo])
   useEffect(() => { load() }, [load])
 
@@ -106,10 +112,10 @@ export default function SalaryAdvancesPage() {
     if (filt.periodTo) setAddlPeriod(String(filt.periodTo).slice(0, 7))
   }, [filt.periodTo])
 
-  const loadAddl = useCallback(() => {
+  const loadAddl = useCallback(async () => {
     if (!addlPeriod) return
     setAddlLoading(true)
-    api(`/api/v1/storeops/salary-advance/additional-payroll/${addlPeriod}`)
+    await api(`/api/v1/storeops/salary-advance/additional-payroll/${addlPeriod}`)
       .then((r: any) => setAddl(r))
       .catch(() => setAddl(null))
       .finally(() => setAddlLoading(false))
@@ -197,9 +203,18 @@ export default function SalaryAdvancesPage() {
         method: 'POST',
         body: JSON.stringify({ employee_id: fEmp, amount: amt, paid_date: fDate, store_code: fStore, withdrawal_ref: fRef || undefined }),
       })
-      setMsg('✅ Advance recorded.')
       setFAmount(''); setFRef(''); setShowForm(false)
-      load(); loadAddl()
+      // REAL TIME, and the user is told which. Both tables are re-read and AWAITED before the
+      // success line appears, so when it says "recorded" the figures beside it are the new ones.
+      await Promise.all([load(), loadAddl()])
+      // AND THE ONE CASE A RELOAD CANNOT MAKE VISIBLE, said out loud rather than looking like a
+      // failed save: `cash_paid_total` is windowed on `paid_date` within the range on screen (see
+      // get_salary_owed), so an advance dated outside that range is recorded correctly and still
+      // changes nothing here. Silently showing no change is what reads as "it did not save".
+      const outside = !!(fDate && filt.period && filt.periodTo && (fDate < filt.period || fDate > filt.periodTo))
+      setMsg(outside
+        ? `✅ Advance recorded for ${fDate} — that date is outside the range on screen (${filt.period} → ${filt.periodTo}), so it is not in the figures here. Move the From/To dates to see it.`
+        : '✅ Advance recorded — the balances below are updated.')
     } catch (e: any) {
       setMsg('❌ ' + (e?.message || e))
     } finally {
@@ -227,6 +242,10 @@ export default function SalaryAdvancesPage() {
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
             <button style={chip} onClick={() => { const r = monthRange(0); setRange(r.start, r.end) }}>This month</button>
             <button style={chip} onClick={() => { const r = monthRange(-1); setRange(r.start, r.end) }}>Last month</button>
+            {/* Re-reads the range on screen and nothing else — the filters, the open drill-down and the
+                half-filled form all stay. The browser's own refresh is what resets them. */}
+            <button style={chip} disabled={loading} title="Re-read the rows on screen, keeping your filters"
+              onClick={() => { load(); loadAddl() }}>{loading ? '⟳ Refreshing…' : '⟳ Refresh'}</button>
             <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={() => setShowForm(s => !s)}>
               {showForm ? 'Cancel' : '➕ Record Advance'}
             </button>

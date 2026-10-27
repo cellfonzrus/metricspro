@@ -84,7 +84,8 @@ FACTS: dict[str, dict] = {
                   'harness_batch19_drilldown.py',
                   'harness_batch20_drilldown.py',
                   'harness_batch21_drilldown.py',
-                  'harness_batch22_drilldown.py'),
+                  'harness_batch22_drilldown.py',
+                  'harness_batch25_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
@@ -766,8 +767,8 @@ FACTS: dict[str, dict] = {
         "question": 'What price band did the CUSTOMER pay for this device, which model was it, and is '
                     'this rep low on accessory $ per box AND on port-ins at the same time?',
         "homes": ('app/modules/commcalc/product_mix.py',),
-        "index": ('62',),
-        "locks": ('harness_product_mix.py',),
+        "index": ('62', 'COMMCALC-32'),
+        "locks": ('harness_product_mix.py', 'harness_payables_device_rows.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         "callers": {
@@ -784,6 +785,76 @@ FACTS: dict[str, dict] = {
             # spells no verdict and holds no floor; `harness_batch21_drilldown.py` §A7/§A8c fail the
             # build if either becomes a literal there again.
             'app/modules/commcalc/sales_outcome_drilldown.py': ('_pmix',),
+            # §COMMCALC-32 — the payables ledger asks this home whether the line sold a DEVICE AT ALL
+            # (`no_device_declared`, the declared-basis half of `product_class_of`) instead of
+            # inferring it from a missing product name. A line the feed declares as the customer's own
+            # phone is not a device payable, and `harness_payables_device_rows.py` §A9/§D2 fail the
+            # build if that question is answered here again by a literal token or a blank-name guess.
+            'app/modules/payables/engine.py': ('_pm',),
+        },
+    },
+    'device_recovery_amount': {
+        "question": 'How much has the carrier ALREADY recovered against this device - deducted on '
+                    'its own statement or reimbursed - and does anything actually MEASURE that, or '
+                    'is the answer unknown?',
+        "homes": ('app/modules/payables/recovered_amount.py',),
+        "index": ('COMMCALC-33',),
+        "locks": ('harness_payables_recovered_amount.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04, and rewrote 51 of them on 2026-10-26). The lock verifies it against the
+        # real import graph.
+        "callers": {
+            # The ledger WRITER. All three recovery sources (the device's own declared column, the
+            # Boost/VIP classification, the ePay feed) fold through `resolve` here, so the amount
+            # and its basis cannot disagree, and the `rebate_amount = 0.0` placeholder that billed
+            # $544,447.78 of netted devices to the owner cannot return — §F of the lock fails the
+            # build if it does. §COMMCALC-33.
+            'app/modules/payables/engine.py': ('_rec',),
+            # The EXPOSURE figure every surface headlines. `stamp_aging` nets through this home
+            # rather than re-deriving the subtraction, and reports what was NOT netted beside the
+            # total instead of dropping it — which an earlier draft did, zeroing Boost's real
+            # exposure. §COMMCALC-33.4.
+            'app/modules/payables/unsold_inventory.py': ('_rec',),
+        },
+    },
+    'payable_billing_period': {
+        "question": 'Which BILLING PERIOD does this dated payable money fall in, and WHAT SAID SO - '
+                    'a period the carrier stamped, a declared weekly rhythm, or no rhythm at all?',
+        "homes": ('app/modules/payables/billing_period.py',),
+        "index": ('COMMCALC-34',),
+        "locks": ('harness_billing_period.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04, and rewrote 51 of them on 2026-10-26). The lock verifies it against the
+        # real import graph.
+        "callers": {
+            # `Weekly Owed to Distributor` (§COMMCALC-34). The report used to BE the answer: it read
+            # one carrier's weekly consignment column and nothing else, so a tenant whose carrier
+            # raises an invoice per order saw a sum over an empty set. It now dereferences the
+            # cadence — `resolve_cadence` / `week_window` / `roll_up` — and derives no rhythm of its
+            # own. A carrier's stamped period still WINS through this home, never recomputed.
+            'app/modules/asset/router.py': ('_bp',),
+        },
+    },
+    'payable_dated_owed': {
+        "question": 'What is OWED, on which date, at which grain, and which source said so - the '
+                    'per-device payable ledger or the processor\'s own dated feed?',
+        "homes": ('app/modules/payables/owed_read.py',),
+        "index": ('COMMCALC-34',),
+        "locks": ('harness_billing_period.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04, and rewrote 51 of them on 2026-10-26). The lock verifies it against the
+        # real import graph.
+        "callers": {
+            # The DAILY surface, `/payables/owed-by-date`. Its own ledger query and its own vendor
+            # fallback are DELETED, not left beside this one — a dead second reader is a future
+            # divergence that compiles (§19.18). All that remains of it here is the grouping by date.
+            'app/modules/payables/router.py': ('_owed',),
+            # The WEEKLY roll-up, which groups the SAME rows by billing period instead. Giving the
+            # weekly report its own read was the obvious repair and would have been the duplicate
+            # defect the house rules gate on: two paths answering "what do I owe", free to disagree
+            # the moment either learned something the other did not. §F13 of the lock fails the
+            # build if a second definition of the read appears anywhere in the triangle.
+            'app/modules/asset/router.py': ('_owed_r',),
         },
     },
     'kpi_column_meaning': {
@@ -1034,6 +1105,12 @@ FACTS: dict[str, dict] = {
             # The clock feed's employee matcher. THIS MODULE USED TO BE THE HOME (clock_feed.py said
             # so), and the accent fold that makes its key the strongest was found here.
             'app/modules/storeops/payroll_identity.py': ('_person_identity',),
+            # THE HOURS APPROVAL BOARD'S PERSON FILTER. `GET /core/filter-options` keys its `reps`
+            # options by NAME, and this board alone sent that value as `employee_id` — compared
+            # against 'E043', so the filter matched NOBODY, ever (owner report 2026-10-26: *"i
+            # selected mohammed sami but nothing showed up"*). The token is now resolved here
+            # instead of by a seventh local name rule.
+            'app/modules/storeops/payroll_approval.py': ('_pkey',),
         },
     },
     'store_identity': {
@@ -1463,6 +1540,11 @@ FACTS: dict[str, dict] = {
             # constants and re-keyed every map that had spelled `asset_ledger` or
             # `vip_paygo_payments` as a literal, because naming a fact is only half the fix.
             'app/modules/asset/device_asset_drilldown.py': ('_lineage',),
+            # §COMMCALC-34 — the ONE dated-owed read names the processor's feed through the
+            # registry rather than spelling it: the read it absorbed carried that table name as a
+            # LITERAL, and naming a fact is only half the fix (§19.18), so the copy went in the same
+            # commit. `harness_billing_period.py` §H2 fails the build if the literal reappears.
+            'app/modules/payables/owed_read.py': ('_lineage',),
             # The targets drill-down asks the registry WHICH TABLES the sales feeds and the
             # daily closing are, so a target-vs-actual panel never spells a relation name of
             # its own (§CORE-17.3m). The four relations it names that are NOT registered
@@ -1751,7 +1833,7 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_bt',),
         },
     },
-    # ── §COMMCALC-32 (owner ask 2026-10-26) — a device's arrival on the shelf has ONE date ──────
+    # ── §COMMCALC-35 (owner ask 2026-10-26) — a device's arrival on the shelf has ONE date ──────
     'device_stock_age': {
         "question": 'WHEN DID THIS DEVICE ARRIVE ON THE SHELF, HOW LONG HAS IT SAT THERE, AND IS IT '
                     'STILL THERE? `inventory_aging_device.received_date` is NULL on all 10,525 rows '
@@ -1768,7 +1850,7 @@ FACTS: dict[str, dict] = {
                     'NOT inherit the house 60, because printing someone else\'s deadline over a rep\'s '
                     'phone is the defect that section was opened for.',
         "homes": ('app/modules/commcalc/inventory_stock_age.py',),
-        "index": ('COMMCALC-32', 'COMMCALC-33'),
+        "index": ('COMMCALC-35', 'COMMCALC-36'),
         "locks": ('harness_inventory_stock_age.py', 'harness_inventory_stock_age_guard.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`. Hand-written for
         # the reason recorded in §COMMCALC-01: --bless strips per-caller comments, and the three

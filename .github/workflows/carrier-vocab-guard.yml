@@ -472,6 +472,31 @@ on:
       # nothing measured is shown WITHOUT a figure and is not counted. A pay-gated caller is served
       # NEITHER money panel, not a panel of zeros. The employee record and hand-entered hours became
       # registry NAME constants with their pre-existing literal copies re-keyed in the SAME commit.
+      # BATCH 25 (index CORE-17.3y) - INVENTORY AGING, at DEVICE grain, and the family's SEVENTH
+      # grain: every producer before it is keyed by a store, a loan or a weekly batch, while this
+      # report's bands are the sum over one row per unsold IMEI. Each band is folded over ITS OWN
+      # devices rather than over one shared row list, because a device belongs to exactly one band
+      # and the row cap would otherwise omit the very devices the owner clicked on. Two relations,
+      # decided PER ROW, each spelling the IMEI the way its own table spells it. A cost nobody
+      # recorded is shown WITHOUT a figure and not counted, where the report's own footer reads it
+      # as $0.00. The route was RE-CLASSIFIED from `flat`, which the 2026-10-24 audit got wrong.
+      # WEEKLY OWED (index COMMCALC-34) - a billing period is DECLARED per carrier, and the money
+      # behind the daily and the weekly surface is read ONCE. The weekly report used to read one
+      # carrier's weekly consignment column and nothing else, so a tenant whose carrier invoices per
+      # order saw a sum over an empty set.
+      - "backend/harness_billing_period.py"
+      - "backend/app/modules/payables/billing_period.py"
+      - "backend/app/modules/payables/owed_read.py"
+      - "backend/app/modules/payables/router.py"
+      - "backend/app/modules/payables/vendor_invoice.py"
+      - "database/migrations/1095_payable_billing_cadence.sql"
+      - "backend/harness_payables_device_rows.py"
+      - "frontend/src/app/(platform)/commcalc/asset/owed-weekly/page.tsx"
+      - "backend/harness_batch25_drilldown.py"
+      - "backend/app/modules/asset/device_asset_drilldown.py"
+      - "backend/app/modules/asset/router.py"
+      - "backend/app/modules/payables/unsold_inventory.py"
+      - "frontend/src/app/(platform)/commcalc/asset/aging/page.tsx"
       - "backend/harness_batch24_drilldown.py"
       - "backend/app/modules/storeops/payroll_hours_drilldown.py"
       - "backend/app/modules/storeops/scheduled_hours_drilldown.py"
@@ -1057,6 +1082,15 @@ on:
       - "backend/harness_clock_feed.py"
       - "backend/harness_clock_variance.py"
       - "backend/harness_clock_variance_api.py"
+      # index §STOREOPS-01 — Hours Approval: a typed figure saves on its own and a save states its
+      # cost first. The harness names itself (same §13e reason as above), plus the three files whose
+      # change must re-run it: the board's write path, the pure preview the dialog and the request
+      # are BOTH built from, and the screen that renders them.
+      - "backend/harness_payroll_approval_save.py"
+      - "backend/app/modules/storeops/payroll_approval.py"
+      - "frontend/prove_hours_approval_preview.mjs"
+      - "frontend/src/lib/hours-approval-preview.ts"
+      - "frontend/src/app/(platform)/storeops/payroll/approvals/page.tsx"
       - "frontend/src/lib/setup-gate.ts"
       - "frontend/prove_confinement.mjs"
       - "frontend/src/app/(platform)/layout.tsx"
@@ -1376,7 +1410,7 @@ on:
       - "backend/harness_payables_declared_source.py"
       - "backend/app/modules/payables/declared_source.py"
       - "frontend/src/lib/owed-source.ts"
-      # index COMMCALC-32 - A DEVICE'S ARRIVAL ON THE SHELF HAS ONE DATE. The one home, its proof and
+      # index COMMCALC-35 - A DEVICE'S ARRIVAL ON THE SHELF HAS ONE DATE. The one home, its proof and
       # the build gate that stops a second copy of the receipt-date derivation appearing. device_history
       # and the commcalc router are already named above, so a change to either collapsed caller re-runs
       # both proofs too - which is the point: the gate exists to catch a caller un-wiring itself.
@@ -1385,6 +1419,22 @@ on:
       - "backend/app/modules/commcalc/inventory_stock_age.py"
       - "backend/app/modules/asset/inventory_buckets.py"
       - "frontend/src/app/(platform)/commcalc/targets/my/_components/ShelfAging.tsx"
+      # index §COMMCALC-32 — A LINE THAT BOUGHT NO DEVICE IS NOT A DEVICE PAYABLE. Named
+      # individually for the same reason: the lock itself, the status one home, and the device-class
+      # vocabulary it dereferences. The readers it ratchets (payables/engine.py, router.py,
+      # unsold_inventory.py) and the screen are already named above, so a change to any of them
+      # re-runs this proof too.
+      # index §COMMCALC-33 — WHAT THE CARRIER ALREADY RECOVERED IS READ, AND A PLACEHOLDER IS NOT A
+      # MEASUREMENT. The lock and the one home, named individually; the readers it ratchets
+      # (payables/engine.py, unsold_inventory.py) are already named above, so a change to either
+      # re-runs this proof too.
+      - "backend/harness_payables_recovered_amount.py"
+      - "backend/app/modules/payables/recovered_amount.py"
+      - "database/migrations/1094_payable_recovery_sign_and_basis.sql"
+      - "backend/harness_payables_device_rows.py"
+      - "backend/app/modules/payables/ledger_status.py"
+      - "backend/app/modules/commcalc/product_mix.py"
+      - "database/migrations/1093_payable_device_class_field.sql"
       # index §47.17 — the DM visit plan proof. Its harness sits at the backend ROOT and it parses the
       # seed out of migration 1050, so a change to EITHER must run the proof that guards them (same
       # §13e lesson as the three above).
@@ -1756,6 +1806,12 @@ jobs:
       - name: Run the batch-24 drill lock (the payroll-and-workforce set - the Payroll Report, StoreOps Reports Hours and Payroll, and the Hours Budget; TWO declarations and not one, because a PERSON over a PAY PERIOD whose hours may come out of the clock, the plan or nothing is not a STORE over a WORK-WEEK whose hours come out of the plan alone, while the two payroll screens share that grain exactly and therefore share ONE catalogue rather than a sibling derivation; both declarations are driven FOR REAL in this file and the five grains in two row shapes are MEASURED off the panels as a SET compared for EQUALITY, with a ghost swapped in at unchanged size to prove the comparison is stricter than the bound it replaces; what was WORKED names the time clock and what was PLANNED names the schedule, decided per row by the payroll engine's OWN basis word rather than by reading the number beside it, which is how a reader sees that two grains here share a row and a unit and differ only in which relation answered (CORE-17.3n); a person nothing measured is shown WITHOUT a figure, names NO relation and is not counted, never as somebody who worked and produced nothing, and a person whose only punch is OPEN or auto-closed carries the engine's own word for that instead, because a punch that exists and may not be counted is a thing to go and fix (CORE-17.3i); thin punch coverage is SURFACED rather than smoothed - every hours panel carries the measured shortfall in words and the panel's own sources list counts the rows per relation, so a month that rests mostly on the plan says so; PAY VISIBILITY is the report's own gate asked again, so a gated caller is served the two HOURS panels and NEITHER money panel, never a panel of zeros folded out of stripped rows; the fix for the store-week figure is AT THE READ - the week read now returns the shifts it summed and says which column of each answered, the plain form is a thin wrapper so the over-budget check is byte-identical, and a shift whose hours were worked out from its start and end times names NO column rather than an empty one; the EMPLOYEE RECORD and HAND-ENTERED HOURS became registry NAME constants and the pre-existing literal copies were DELETED in the same commit, which is the half of a design fix that has been skipped three times here; the shared fold learned additively that the COLUMN a figure was read out of can differ per row; the paid-hours basis finally has a graph block of its own with its eleven pre-existing callers named by hand; TWO live defects are REPORTED and not coded around - hand-entered hours never reach this report's figure so the panels deliberately never name that relation, and a manager's correction is indistinguishable from the schedule it was typed over; A PANEL EXPLAINS THE FIGURE, NOT THE TABLE decided by READING each page - the two payroll screens fold their own tiles in the browser and read each off its narrowed panel, the hours budget prints one store's own server fold and drill-narrow is absent from it, and the lock fails the build in BOTH directions - index CORE-17.3x)
         working-directory: backend
         run: python3 harness_batch24_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the batch-25 drill lock (INVENTORY AGING at DEVICE grain - every aging band and the footer total open to the devices behind them, each row naming the store, the market, the purchase date and the days held, which is the owner ask of 2026-10-26 said against the warning banner itself; the family's SEVENTH grain, because every one of the six producers before it is keyed by a store, a loan or a weekly batch while this report's bands are the sum over one row per unsold IMEI, and the grain is the row a figure is summed over rather than the subject the report is about; the ONE place in this family that does not hand the shared fold a single row list - a device belongs to exactly one band, so folding every tile over every device would serve the warning band a panel of seventeen hundred devices with a hundred and twenty-four counted and the row cap would then very likely omit the ones the owner clicked on, so each band is folded over its own devices and the declaration carries an accessor saying which; TWO relations decided PER ROW, because this report has served a consignment tenant off the distributor unit ledger and a tenant the platform owes for off the per-device payable ledger since the unsold-source declaration, and naming one of them for every row would be wrong on every row of the other, with the IMEI key spelled the way EACH relation spells it so a support query is never handed a column half the rows table does not have; a cost NOBODY RECORDED is shown WITHOUT a figure and with its reason and is not counted, where the report's own footer coerces it to a measured zero, so the gap is visible rather than averaged away and the total still ties because a blank adds zero either way; FOUR refusals each with a ruling behind it - the device count beside every band and Total Phones Outstanding are each the cardinality of the money panel beside them, the flagged figures are composed from the three band tiles, the out-of-pocket headline is netted per device by the recovered-amount home so a fold over this report's own amount column would explain a different number, and the age buckets are the same bands counted rather than priced; the provenance stamp and its value are DEREFERENCED from the module that writes them and the writer was re-pointed at the name in the same commit; the three band tiles on the page stopped printing one carrier's day count to every tenant and now read the declared window the banner beside them already resolved; the route was RE-CLASSIFIED from `flat` and the finding is REPORTED rather than quietly re-pinned - the 2026-10-24 audit recorded it as showing its source rows with nothing summarised above them, and three band tiles, two footer totals and two alert banners are all folds - index CORE-17.3y)
+        working-directory: backend
+        run: python3 harness_batch25_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the declared-billing-cadence lock (a BILLING PERIOD is declared per carrier and the money is read ONCE - the weekly owed report read one carrier's weekly consignment column on one carrier's table and nothing else, so a tenant whose carrier raises an invoice per order and has no weekly batch at all saw every figure summed over an empty set, which is the carrier's arrangement written into code instead of declared arriving on a fifth surface; the rhythm now lives on the config spine that already carries the selling window and the cost source, with a house default that asserts NO rhythm because a guessed billing day puts a date on real money no feed ever stated; a period the carrier STAMPED on its own feed WINS and is never recomputed, since a derived billing day that disagreed with the sweep's own would move a figure every other surface reconciles against; an UNDECLARED weekday is shown and counted under its own due date with the basis saying the grouping is not the carrier's own, because dropping it would hide a real liability behind a missing config row and guessing Friday would be the same defect in a config column instead of in code; the shared read is the other half - giving the weekly report its own query of the payable ledger was the obvious repair and would have been two paths answering what do I owe, so the money is read once and grouped twice, the daily endpoint's own ledger query and its own vendor fallback are DELETED rather than left beside it, and the debt test is dereferenced from its one home instead of restated as the inline comparison that home's own docstring warned about; the cadence home is PURE and holds no payability, no window and no store identity, and the shared read decides no rhythm, so the two cannot both answer which period and disagree; RULE TWO is scanned over the EXECUTABLE text only, so the owner's own report stays quoted in the prose where it belongs - index COMMCALC-34)
+        working-directory: backend
+        run: python3 harness_billing_period.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the envelope-count basis lock (a count of the WHOLE envelope is never scored against a netted expectation; the write path and the read path share ONE gate; the bill-pay sibling stays scoreable without a column — index §74)
         working-directory: backend
         run: python3 harness_envelope_count_basis.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -2095,6 +2151,12 @@ jobs:
       - name: Run the Account-hub expenses-column proof (the display contract behind the Expenses column)
         working-directory: frontend
         run: node prove_accounts_expenses_column.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+      # THE HOURS-APPROVAL SAVE CONFIRMATION (index §STOREOPS-01). Here, not in a prove job that
+      # installs nothing, because it transpiles the real src/lib/hours-approval-preview.ts with the
+      # repo's own tsc — the same reason the two proofs above live in this job.
+      - name: Prove the hours-approval save confirmation (the dialog states the save that actually goes, over the live figures, and refuses the writes the server would)
+        working-directory: frontend
+        run: node prove_hours_approval_preview.mjs | tee -a "$GITHUB_STEP_SUMMARY"
       # ONE FOLD FOR A FIGURE AND ITS EVIDENCE (index §CORE-17.3d). Runs HERE because it transpiles
       # the real src/lib/drill-narrow.ts with the repo's own tsc, so it needs the frontend's
       # dependencies — the same reason the setup-gate proof below lives in this job.
@@ -2324,6 +2386,12 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_deposit_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      # THE HOURS-APPROVAL SAVE PROOF (index §STOREOPS-01). HERE, not in the lock job, because it
+      # imports app/modules/storeops/payroll_approval.py, which imports fastapi —
+      # harness_ci_pipefail_lock names exactly this class of step and this is the fix it asks for.
+      - name: Run the hours-approval save proof (a typed figure saves without signing anything, a correction can be taken back, an HR approval survives a DM save, the person filter matches a NAME, and the corrections the figure does not contain move no money)
+        working-directory: backend
+        run: python3 harness_payroll_approval_save.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the DM-Verify parity proof (the real /closing/summary over the in-memory client — filters, range mode, the era-aware ePay breakdown, and the named cash figures in both column eras — owner 2026-07-28 / 2026-10-02, index §47.9)
         working-directory: backend
         shell: bash
@@ -2440,15 +2508,39 @@ jobs:
       # consumers. Two steps, deliberately: the first proves the arithmetic (including the owner's
       # 10-day regression and the stale-snapshot defect device_history shipped), the second is the
       # BUILD GATE that fails if any caller stops dereferencing the shared fact or a fourth copy of
-      # `as_of_date - days_in_stock` appears. Both DB-free, seconds. Index COMMCALC-32.
-      - name: Run the shelf-age proof (a device's receipt date has ONE derivation and its age is counted to TODAY, never read off the snapshot file - index COMMCALC-32)
+      # `as_of_date - days_in_stock` appears. Both DB-free, seconds. Index COMMCALC-35.
+      - name: Run the shelf-age proof (a device's receipt date has ONE derivation and its age is counted to TODAY, never read off the snapshot file - index COMMCALC-35)
         working-directory: backend
         shell: bash
         run: python3 harness_inventory_stock_age.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the shelf-age BUILD GATE (no second copy of the receipt-date derivation, and every collapsed caller still dereferences the one home - index COMMCALC-32.5)
+      - name: Run the shelf-age BUILD GATE (no second copy of the receipt-date derivation, and every collapsed caller still dereferences the one home - index COMMCALC-35.5)
         working-directory: backend
         shell: bash
         run: python3 harness_inventory_stock_age_guard.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # AND the third half of the same spine: the terms lock proves the declared numbers are READ,
+      # the declared-source lock proves an unreadable declaration is REPORTED, and this one proves a
+      # line the feed itself says bought no handset is not reported as a device payable at all - the
+      # 2026-10-26 defect where 869 bring-your-own-phone lines read as unpriced payables and two of
+      # them as `discrepancy`, i.e. a handset cost the owner never had. It also locks the automatic
+      # due-date window and the per-store split that says which account to debit. DB-free, seconds.
+      # Index §COMMCALC-32.
+      - name: Run the device-payable row lock (a line whose own feed declares no handset was bought leaves the payable totals under its own status, the due window picks itself from one home, and who owes what is split per store on the date row - index COMMCALC-32)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_payables_device_rows.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # AND the fourth of the same spine. The terms lock proves the declared numbers are READ; the
+      # declared-source lock proves an unreadable declaration is REPORTED; the device-row lock proves
+      # a line that bought no handset is not a payable; this one proves that what the carrier has
+      # ALREADY RECOVERED is read, and that an unwired recovery source reads as UNKNOWN rather than
+      # as "nothing was recovered" - the 2026-10-26 defect where a `rebate_amount = 0.0` placeholder
+      # billed $544,447.78 of netted devices to the owner as his own cash and turned 1,400 lines into
+      # `discrepancy`. Its §F also guards the correction's own trap: an unnetted liability is
+      # reported IN FULL and flagged, never dropped, because dropping it zeroed Boost's exposure.
+      # DB-free, seconds. Index §COMMCALC-33.
+      - name: Run the recovered-amount lock (what the carrier already deducted or reimbursed is read through one home under a DECLARED sign, an unwired source reads as unknown and is flagged rather than billed, and a placeholder zero cannot return - index COMMCALC-33)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_payables_recovered_amount.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # AND the FRONTEND proof of the forecast grid, in the same job for the same reason: it locks
       # the same screen, and a wiring check nothing runs is not a gate. Node only, seconds.
       - uses: actions/setup-node@v4

@@ -27,11 +27,19 @@ THE WINDOW AND THE VERDICT ARE NOT DECIDED HERE either — they are `device_agin
 numbers, and "unsold and payable = out of pocket" means the same thing on every screen that shows it.
 """
 from app.modules.commcalc import device_aging_policy as _aging
+from app.modules.payables import ledger_status as _ls
+from app.modules.payables import recovered_amount as _rec
 
 PAGE = 1000
 
 SOURCE_TABLE = "source_table"
 SOURCE_LEDGER = "payable_ledger"
+
+#: THE FIELD THIS MODULE STAMPS ITS ANSWER INTO, named once so a reader of a shaped row does not
+#: carry a second copy of the key. `asset/device_asset_drilldown` dereferences it to decide WHICH
+#: relation each aging row was read out of (§CORE-17.3y) — a literal there would be the copied fact
+#: the house rules forbid, and it would silently stop matching the day this key changed.
+SOURCE_FIELD = "_source"
 
 
 def load_policies(client, org_id):
@@ -81,10 +89,14 @@ def fetch_unsold_from_ledger(client, org_id, carrier_ids=(), date_from="", date_
         # A FRESH builder per page (postgrest builders carry their last range), and the paging
         # order is applied by the one home — an unordered paged read serves some rows twice and
         # others never (§19.48 / core/feed_read.py).
-        q = (client.schema("commcalc").table("device_payable_ledger")
-             .select("imei,store,device_model,carrier_id,owed,net_owed,invoice_date,due_date,"
-                     "sold_flag,sold_date,status,owed_source,due_source")
-             .eq("org_id", org_id).eq("sold_flag", False))
+        # A line that bought no device is not unsold INVENTORY — there is no device to hold, so it
+        # can never age and can never be paid out of pocket (§COMMCALC-32). Excluded through the one
+        # home, the same filter the payables list makes.
+        q = _ls.exclude_non_payable(
+            client.schema("commcalc").table("device_payable_ledger")
+            .select("imei,store,device_model,carrier_id,owed,net_owed,invoice_date,due_date,"
+                    "sold_flag,sold_date,status,owed_source,due_source")
+            .eq("org_id", org_id).eq("sold_flag", False))
         if carrier_ids:
             q = q.in_("carrier_id", list(carrier_ids))
         if date_from or date_to:
@@ -109,7 +121,7 @@ def fetch_unsold_from_ledger(client, org_id, carrier_ids=(), date_from="", date_
             "reimbursement": None,
             # PROVENANCE, carried so the screen can say where each figure came from instead of
             # implying it came from a consignment ledger this tenant does not have.
-            "_source": SOURCE_LEDGER,
+            SOURCE_FIELD: SOURCE_LEDGER,
             "_owed_source": r.get("owed_source"),
             "_due_source": r.get("due_source"),
         })
@@ -138,6 +150,7 @@ def stamp_aging(rows, policies, today=None):
     the one boolean a screen reads before presenting the sum as a total.
     """
     n_oop, amt, n_unknown, n_unpriced = 0, 0.0, 0, 0
+    recovered, n_netted, n_unmeasured, unmeasured_amt = 0.0, 0, 0, 0.0
     for r in rows or []:
         pol = policy_for(policies, r.get("carrier_id"))
         held = _aging.days_held(r.get("acquired_date"), today)
@@ -160,9 +173,47 @@ def stamp_aging(rows, policies, today=None):
                 one = float(r.get("owed_to_vip") or r.get("owed") or 0)
             except (TypeError, ValueError):
                 one = 0.0
+            # WHAT THE CARRIER ALREADY RECOVERED COMES OFF THE BILL (§COMMCALC-33). Owner, 2026-10-26:
+            # "the payments for all phones automatically are done from commission and rebates
+            # received and auto adjusted". This summed the GROSS cost, so on Luxelink it headlined
+            # $544,447.78 of "your own cash" against about $38,374 genuinely unrecovered. The
+            # recovery and its basis are the ledger row's, read through the one home — never
+            # re-derived here, and never assumed to be zero because a column was blank.
+            net = _rec.out_of_pocket(one, r.get("rebate_amount"), r.get("rebate_basis"))
+            r["recovered_amount"] = net["recovered"]
+            r["recovered_basis"] = net["basis"]
+            r["recovered_measured"] = net["measured"]
+            r["recovery_netted"] = net["netted"]
+            if net["measured"]:
+                recovered += net["recovered"] or 0.0
+                if net["covered"]:
+                    n_netted += 1
+            else:
+                # The liability stays in the figure at its GROSS and is FLAGGED. Dropping it would
+                # be the same defect in the other direction — and the Boost/VIP rows carry no
+                # recovery basis at all, so dropping them would zero a real exposure.
+                n_unmeasured += 1
+                unmeasured_amt += one
+            one = net["amount"] if net["amount"] is not None else one
             amt += one
-            if not one:
+            if not one and not net["covered"]:
                 n_unpriced += 1
     return {"devices": len(rows or []), "out_of_pocket": n_oop,
             "out_of_pocket_amount": round(amt, 2), "not_measured": n_unknown,
-            "out_of_pocket_unpriced": n_unpriced, "amount_incomplete": bool(n_unpriced)}
+            "out_of_pocket_unpriced": n_unpriced,
+            # The netting, said out loud rather than silently subtracted: how much the carrier has
+            # already taken back, how many devices that settles outright, and how much nobody
+            # measured — which is NOT in `out_of_pocket_amount` and must be shown beside it.
+            "recovered_amount": round(recovered, 2), "netted_devices": n_netted,
+            "recovery_unmeasured": n_unmeasured,
+            "recovery_unmeasured_amount": round(unmeasured_amt, 2),
+            # The figure is not netted where this is set: the sentence has one home.
+            "recovery_note": (_rec.UNMEASURED_NOTE if n_unmeasured else None),
+            # TWO flags, because they are two different doubts and one boolean cannot carry both.
+            # `amount_incomplete` keeps its original meaning exactly — flagged devices with NO price,
+            # the §COMMCALC-29 defect — and `amount_not_netted` is the new one: the figure has not
+            # been reduced by what the carrier already recovered, because nothing measured it.
+            # Overloading the first would have quietly changed what every existing reader of it
+            # believes, and two of its proofs caught that when I tried.
+            "amount_not_netted": bool(n_unmeasured),
+            "amount_incomplete": bool(n_unpriced)}
