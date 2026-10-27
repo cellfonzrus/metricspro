@@ -218,6 +218,14 @@ def classify_build(result):
     """
     r = result if isinstance(result, dict) else {}
     status = str(r.get("status") or "").strip().lower()
+    # A REFUSAL IS ITS OWN VERDICT, never a crash and never a success. A build refuses when the platform
+    # cannot do what was asked and SAYS SO — the payable build's write preflight refusing because the
+    # database is behind the code (§PAYABLES-01) is the live case. It is kept apart from `failed` because
+    # the fix is a migration somebody has to apply, not a retry: `run_one` re-queues nothing, so a refusal
+    # waits for the next landing rather than burning the debounce window in a loop.
+    if status == "refused":
+        msg = str(r.get("error") or "the build refused with no message").strip()
+        return "refused", msg[:1200]
     if status == "done":
         warn = [str(w) for w in (r.get("warnings") or [])]
         if warn:

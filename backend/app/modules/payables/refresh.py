@@ -15,6 +15,13 @@ DECLARED `payable_source_map` columns. It is the registry's `inputs_fn`, so decl
 pointing one at a different feed — changes which landings refresh the ledger with no code change at all
 (RULE TWO). The fixed inputs every carrier's build reads live in the registry beside it, named by identity.
 
+A REFUSAL IS PROPAGATED, NEVER SWALLOWED, AND NEVER RETRIED. §PAYABLES-01 made the build refuse before it
+deletes when the table cannot take the rows it would write. An automatic refresh that read that refusal as
+"nothing to do" would restore exactly the silence that PR removed, so `blocked` travels out as
+`status: "refused"` — which the hook records as a refusal and does not re-queue, because a block is a
+schema fact and a retry cannot clear it. The discrepancy flags are not restated after a block either: they
+read the ledger, and this run did not write it.
+
 A FAILED REFRESH IS REPORTED, NEVER SWALLOWED. The return carries `status`, so the hook's `classify_build`
 reads a verdict rather than inferring one from a row count (§COMMCALC-40): a build that legitimately wrote
 zero rows is `done`, and a build that wrote zero because its insert failed is `error`. `engine.build_ledger`
@@ -104,8 +111,32 @@ def refresh(client, org_id, carrier_id=None):
     except Exception as e:
         return {"status": "error", "error": f"{type(e).__name__}: {e}"}
     out = dict(built or {})
-    out["status"] = "done"
     warnings = [str(w) for w in (out.get("warnings") or [])]
+
+    # A REFUSED REBUILD IS NOT A SUCCESS, AND NOT A RETRY EITHER (§PAYABLES-01, carried through here).
+    # `blocked` names the carriers the write preflight refused BEFORE any delete — the database is behind
+    # the code, so their rows are exactly as they were. Two consequences, and both matter more on the
+    # automatic path than on the button:
+    #   · the flags are NOT restated. They read the ledger, and a ledger this run did not write must not
+    #     have its discrepancy flags recomputed off a refusal. That ordering lives HERE, in the one home
+    #     that owns both steps, rather than in whichever caller remembered it.
+    #   · `status` is `refused`, not `error`, so the hook records a REFUSAL and does not re-queue. A block
+    #     is a schema fact: a retry cannot clear it, and retrying would burn the debounce window over and
+    #     over until somebody applies a migration. The sentence an operator reads names the missing
+    #     columns, which is the thing that actually has to happen.
+    if out.get("blocked"):
+        names = ", ".join(f"{b.get('label') or b.get('carrier_id')} "
+                          f"({b.get('relation')}: {', '.join(b.get('missing_columns') or []) or 'see reason'})"
+                          for b in out["blocked"] if isinstance(b, dict))
+        out["status"] = "refused"
+        out["error"] = (f"REFUSED: the database is behind the code, so the rebuild was not attempted for "
+                        f"{names}. Nothing was deleted and every carrier is exactly as it was. Apply the "
+                        f"migration that adds those columns, and this rebuilds itself on the next landing.")
+        if warnings:
+            out["warnings"] = warnings
+        return out
+
+    out["status"] = "done"
     for pc in (out.get("per_carrier") or []):
         if isinstance(pc, dict) and pc.get("error"):
             warnings.append(f"{pc.get('label') or pc.get('carrier_id')}: {pc['error']}")

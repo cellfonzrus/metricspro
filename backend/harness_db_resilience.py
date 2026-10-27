@@ -1291,7 +1291,18 @@ _all_routes = _flatten_routes(real_app.routes)
 # `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
 # one added, NONE removed, 1803 + 1 = 1804. So the pin was re-taken on a counted, named addition,
 # never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1804"))
+# Re-pinned 1804 -> 1805 on 2026-10-27 for §COMMCALC-41, a derived snapshot rebuilding itself when its
+# inputs land. The delta is ONE route and it is named: GET /payables/auto-build (when the device payable
+# ledger last rebuilt itself and whether a rebuild is queued, so the screen can say so instead of leaving
+# a tenant to guess whether the button needs pressing). It is READ-ONLY — it writes nothing, queues
+# nothing and starts no build; it serves `derived_builds.read_view`, which reads one row. It adds no input
+# to any report, statement, GP, commission or tax figure, and it adds no route to db_resilience itself
+# (I0b proves that independently of this number). Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` lists ONE added decorator on a real
+# route and none removed — the four other `+` lines it prints are a comment and two string literals
+# inside `harness_derived_build_lock.py`'s negative control, not routes. 1804 + 1 = 1805. So the pin was
+# re-taken on a counted, named addition, never relaxed to make CI green.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1805"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

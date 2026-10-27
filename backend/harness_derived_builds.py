@@ -238,7 +238,15 @@ check("C4 a refusal is kept apart from a crash",
 check("C5 a per-carrier warning rides out with the result instead of dying in a log line",
       db.classify_build({"status": "done", "written": 9, "warnings": ["Total: no price list"]})
       == ("built_with_warnings", "Total: no price list"))
-check("C6 a runner that returned nothing recognisable is a failure, never a success",
+check("C6 a REFUSAL is its own verdict — the write preflight refusing because the database is behind "
+      "the code (§PAYABLES-01) is neither a crash nor a success",
+      db.classify_build({"status": "refused", "error": "REFUSED: the database is behind the code",
+                         "blocked": [{"carrier_id": "C1"}]})[0] == "refused")
+check("C6b …and its sentence tells the reader the figures on screen are the last good build's",
+      "last good build" in db.sentence("refused", "the device payable ledger", [], "REFUSED: x"))
+check("C6c a refusal is NOT re-queued — a block is a schema fact and a retry cannot clear it",
+      "_queue" not in (db.run_one.__doc__ or "") and "requeue" not in (db.run_one.__doc__ or "").lower())
+check("C7 a runner that returned nothing recognisable is a failure, never a success",
       db.classify_build({})[0] == "failed" and db.classify_build(None)[0] == "failed")
 
 # ═══ §D the queue ═══════════════════════════════════════════════════════════════════════════════════════════

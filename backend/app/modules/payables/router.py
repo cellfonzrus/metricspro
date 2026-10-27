@@ -160,9 +160,21 @@ def rebuild(carrier_id: str = "", org_id: str = ORG_ID):
     client = sb()
     # ONE COMPOSITION OF A REBUILD (§COMMCALC-41.2). The post-landing hook rebuilds this ledger too, and a
     # button that rebuilt it differently from the hook would be two answers to one question — so both arrive
-    # at `payables/refresh.refresh` and neither knows what a rebuild is made of.
+    # at `payables/refresh.refresh` and neither knows what a rebuild is made of. `refresh` carries §PAYABLES-01's
+    # contract through: when the preflight BLOCKED a carrier it returns `blocked` and does NOT go on to
+    # restate the discrepancy flags off a ledger it did not write.
     from app.modules.payables import refresh as _refresh
     built = _refresh.refresh(client, org_id, carrier_id or None)
+    # A REFUSED REBUILD IS NOT A SUCCESS (§PAYABLES-01). Before 2026-10-27 this returned 200 with
+    # `written: 0` after the build had already emptied a carrier; the delete is now held back until
+    # the write is known to be possible, and the remaining half of that defect is this status code —
+    # a screen must not be able to render "rebuilt" over a rebuild that did not happen. The ordering that
+    # matters (no `sync_payable_flags` after a block) is enforced inside `refresh`, which is where the two
+    # steps now live; this raise is what the caller sees.
+    if built.get("blocked"):
+        raise HTTPException(409, {"message": "rebuild refused — the database is behind the code; "
+                                             "nothing was deleted and every carrier is as it was",
+                                  "blocked": built["blocked"], "result": built})
     built["auto"] = _build_state(client, org_id)
     return built
 

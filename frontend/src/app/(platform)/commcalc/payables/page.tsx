@@ -165,16 +165,18 @@ function PayablesPageBody() {
   useEffect(() => { if (tab === 'payables') loadPayables() }, [tab, status, filt.period, filt.periodTo, allDates])
   useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, owedStore, filt.period, filt.periodTo, marketKey, allDates])
   useEffect(() => { if (tab === 'map') loadMap() }, [tab])
+  // WHEN THIS LEDGER LAST REBUILT ITSELF (§COMMCALC-41) — read on the same tab change the rest of the
+  // page reads on, deliberately not in an effect of its own.
+  useEffect(() => { loadAuto() }, [tab])
 
-  const loadAuto = useCallback(async () => {
+  async function loadAuto() {
     try {
       const r = await api(`/api/v1/payables/auto-build`)
       setAuto(r?.auto || null)
     } catch {
       setAuto(null)          // the page works without it; freshness is never guessed from the client
     }
-  }, [])
-  useEffect(() => { loadAuto() }, [loadAuto])
+  }
 
   async function rebuild() {
     setBusy(true); setMsg('Rebuilding ledger… (may take a minute for a full rebuild)')
