@@ -172,6 +172,11 @@ on:
       - "frontend/prove_one_domain.mjs"
       - "frontend/package-lock.json"
       - "backend/harness_one_domain_lock.py"
+      # §COMMCALC-42 — one read per tenant for the target-field registry: the one home, its two
+      # consumers, the page that surfaced the fan-out, and the lock itself.
+      - "backend/app/modules/commcalc/target_registry.py"
+      - "backend/app/modules/commcalc/column_mapping.py"
+      - "backend/harness_target_registry_one_read.py"
       # §COMMCALC-24 — the gate's NAME-LIST lives here and three locks dereference it, so a change
       # to it must re-run all of them.
       - "backend/app/core/service_role.py"
@@ -3058,3 +3063,30 @@ jobs:
       - name: Run the rebuild write-preflight lock (a REBUILD NEVER DELETES WHAT IT CANNOT REPLACE - the payable ledger rebuild deleted a carrier's rows and then inserted the rebuilt ones, so a relation that refused the row shape left the carrier with nothing; run for real on 2026-10-27 it deleted all eleven thousand rows of one carrier and inserted none, and because the build catches per carrier so one bad config cannot abort the rest it RETURNED NORMALLY, which through the endpoint was an HTTP 200 describing the table it had just emptied; the instance was two migrations applied by hand out of order so the code wrote a column the relation did not have, but the CLASS is that this backend reaches the database only through PostgREST and therefore cannot wrap a delete and an insert in one transaction, so ANY write the relation refuses - a dropped column, a renamed one, a revoked grant - turns the pair into a delete; the order is now refuse, delete, insert, with the live column set read from a sample row of the relation itself because the catalogue is not reachable over PostgREST and a row's KEYS are its columns, NULL ones included; an EMPTY relation answers unknown rather than no columns, deliberately, so a build with nothing to lose proceeds exactly as before and a fresh environment is never blocked by the guard meant to protect a full one; the delete was lifted into ONE home that is not reached before the check, and the other half of the defect is the status code - a refusal is reported apart from an ordinary error with the rows declared intact, counts in neither the carrier nor the written tally, and becomes a 409 BEFORE the discrepancy flags refresh so a rebuild that did not happen cannot go on to restate the flags off a ledger it did not write; the lock drives the REAL build against a recording client and asserts that on a refusal not one delete is issued - index PAYABLES-01)
         working-directory: backend
         run: python3 harness_payable_rebuild_preflight.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE ONE-READ-PER-TENANT LOCK (index §COMMCALC-42, found by the 1,000-user load test 2026-10-28).
+  # `commcalc.target_field_registry` was the busiest table in the platform — 19,658 reads in one load
+  # run, more than every other table combined — because the registry was fetched ONE report_key at a
+  # time and the readiness matrix walks every key twice. GET /commcalc/column-mapping/readiness cost
+  # 88 PostgREST round trips for one page and the count GREW with the number of report types a tenant
+  # declares; each round trip is held on one of the app's (workers x 40) request threads, so the
+  # fan-out came straight out of the platform's concurrency budget. target_registry is now the one
+  # home that reads the table, once per tenant, and its three accessors filter that read in memory.
+  # This job FAILS THE BUILD if the query count ever grows with the number of report keys again, if
+  # the single read is narrowed to one report_key, if a write stops invalidating, if a failed read
+  # starts being cached, or if one tenant's cache can answer for another. Section F drives the REAL
+  # readiness endpoint through the shared in-memory client, so it needs the backend's dependencies.
+  # DB-free.
+  target-registry-one-read:
+    name: Target-registry one-read lock (a per-tenant config table is read once per tenant)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the one-read-per-tenant lock (88 round trips to render one page, growing with the tenant's report types - index COMMCALC-42)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_target_registry_one_read.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
