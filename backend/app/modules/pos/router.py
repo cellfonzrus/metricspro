@@ -2156,6 +2156,7 @@ from app.modules.pos import receipt_escpos as _escpos
 from app.modules.pos import receipt_remit as _remit
 from app.modules.pos import customer_bill_to as _bill_to
 from app.modules.pos import receipt_pdf_render as _rpdf_out
+from app.modules.pos import receipt_store_block as _shop
 from app.modules.notify import whatsapp_window as _wa_window
 from app.modules.core import tenant_identity as _tenant
 
@@ -2239,16 +2240,18 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
             customer = crows[0] if crows else {}
         except Exception:
             customer = {}
-    store_lines, store_name = [], store_code
+    # This store's own row, read through the columns that table ACTUALLY has (`_shop.STORE_COLUMNS`,
+    # §POS-10). It used to ask for a `name` column `storeops.stores` does not have: PostgREST
+    # answered 42703, the `except` below swallowed it, and every receipt printed in the tenant's own
+    # POS layout went out with no address on it. The row is the FALLBACK — the receipt-branding rows
+    # win — so a read that fails again costs the receipt nothing the admin has filled in.
+    store_row, store_name = {}, store_code
     try:
-        srows = (client.schema("storeops").table("stores").select("store_code,name,address,phone")
+        srows = (client.schema("storeops").table("stores").select(_shop.STORE_COLUMNS)
                  .eq("org_id", org_id).eq("store_code", store_code).limit(1).execute().data) or []
-        if srows:
-            store_name = (srows[0].get("name") or store_code or "").strip() or store_code
-            store_lines = [x for x in (store_name, (srows[0].get("address") or "").strip(),
-                                       (srows[0].get("phone") or "").strip()) if x]
+        store_row = srows[0] if srows else {}
     except Exception:
-        pass
+        store_row = {}
     fmt = _declared_format(client, org_id)
     snap = _sr.snapshot_view(sale.get("receipt"), sale)
     printer = _poscfg.printer(rows, store_code)
@@ -2278,7 +2281,7 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
         snap, template,
         render_document=_rrender.render_html, fmt=fmt["module"],
         brand=brand, disclaimer_blocks=blocks,
-        store_name=store_name, store_lines=store_lines,
+        store_name=store_name, store_row=store_row,
         fold_discount=fold_discount,
         tenant_name=tenant_name,
         employee_name=employee_name,
@@ -2295,7 +2298,7 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
             pdf_bytes = _rpdf_out.receipt_pdf(
                 snap, template, fmt=fmt["module"], render_words=_rrender.render_words,
                 brand=brand, disclaimer_blocks=blocks,
-                store_name=store_name, store_lines=store_lines,
+                store_name=store_name, store_row=store_row,
                 fold_discount=fold_discount, tenant_name=tenant_name,
                 employee_name=employee_name,
                 short_customer_name=_poscfg.flag(rows, "receipt_customer_short_name", store_code),
@@ -2385,6 +2388,12 @@ PREVIEW_SNAPSHOT = {
 PREVIEW_CUSTOMER = {"address_1": "42 Example Avenue", "address_2": "Apt 3B",
                     "city": "Anytown", "state": "NY", "zip": "11219"}
 
+#: The sample STORE the preview's header block is drawn from — a row shaped like `storeops.stores`
+#: (its real columns, §POS-10), so the admin sees the block their branding actually produces and the
+#: preview exercises the same fallback a shop with no branding address gets. RULE TWO: invented.
+PREVIEW_STORE = {"store_code": "STORE 1", "address": "1 Example Street", "market": "NY",
+                 "phone": "(555) 010-0100"}
+
 
 @router.post("/receipt-template/preview")
 def preview_receipt_template(body: dict = None, org_id: str = ORG_ID):
@@ -2408,7 +2417,7 @@ def preview_receipt_template(body: dict = None, org_id: str = ORG_ID):
     html = _sr.html(
         snap, template, render_document=_rrender.render_html, fmt=fmt["module"], brand=brand,
         disclaimer_blocks=_poscfg.disclaimers(rows, ""),
-        store_name="Your store", store_lines=["Your store", "1 Example Street"],
+        store_name="Your store", store_row=PREVIEW_STORE,
         fold_discount=_poscfg.flag(rows, "receipt_coupon_in_retail_price", ""),
         tenant_name=tenant_name,
         employee_name="A. Rep" if template["show_employee"] else "",

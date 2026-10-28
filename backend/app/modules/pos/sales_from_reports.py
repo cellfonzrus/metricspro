@@ -418,10 +418,15 @@ def _store_header_fn(client, org_id):
     """store string → the receipt's store block from the store master: the POS's own store name (the
     string), the roster's address and phone for the resolved store code (§13a chain)."""
     from app.modules.commcalc import router as _cr
+    from app.modules.pos import receipt_store_block as _shop
     resolve = _cr._intake_store_resolver(client, org_id)
     roster = {}
     try:
-        for s in (client.schema("storeops").table("stores").select("store_code,address,phone").eq("org_id", org_id).execute().data) or []:
+        # The columns that table HAS, from the one home (§POS-10) — the sibling of this read spelled
+        # them itself and asked for a `name` column `storeops.stores` does not have, which is how a
+        # printed receipt lost its address. Two reads of one table is one spelling, here.
+        for s in (client.schema("storeops").table("stores").select(_shop.STORE_COLUMNS)
+                  .eq("org_id", org_id).execute().data) or []:
             roster[_s(s.get("store_code")).upper()] = s
     except Exception:
         roster = {}
@@ -429,10 +434,13 @@ def _store_header_fn(client, org_id):
     def fn(store_str):
         code, how = resolve(store_str)
         row = roster.get(_s(code).upper()) if code else None
-        lines = [store_str] if _s(store_str) else []
-        if row and _s(row.get("address")):
-            lines.append(_s(row.get("address")))
-        return {"lines": lines, "phone": _s(row.get("phone")) or None if row else None, "store_code": code, "how": how}
+        # DELIBERATELY the store as the POS itself printed it, not this tenant's receipt BRANDING: a
+        # receipt rebuilt from a landed report reproduces the document that POS produced, and the
+        # branding block belongs to the receipts this platform prints (§POS-10). The assembly is the
+        # one home's all the same, so "address then phone, blanks dropped" has a single answer.
+        block = _shop.block({}, row, store_code=store_str)
+        return {"lines": [ln for ln in ([store_str] if _s(store_str) else []) + block["address_lines"]],
+                "phone": block["phone"] or None, "store_code": code, "how": how}
     return fn
 
 

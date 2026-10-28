@@ -101,3 +101,33 @@ def test_an_unknown_relation_reads_empty_rather_than_raising():
     # postgrest 404s, but a test that reads a table it never seeded is almost always asserting
     # "nothing is there" — raising would make the double harder to use than the thing it doubles.
     assert FakeSupabase({}).schema("commcalc").table("nope").select("*").execute().data == []
+
+
+# ── or_ : the shape a per-store setting is read with ─────────────────────────────────────────────
+# `pos/router._pos_settings_rows` asks for "this store's rows OR the org-wide ones" as PostgREST's
+# own `or=(store_code.is.null,store_code.eq.S1)` string. Until the double understood it the call
+# raised, the router's `except` swallowed it, and a receipt integration test saw an org with no
+# settings at all — the suite agreeing with the defect instead of catching it.
+def _settings():
+    return FakeSupabase({"pos.pos_settings": [
+        {"org_id": ORG, "store_code": None, "key": "brand_company_name", "value": "Org Co"},
+        {"org_id": ORG, "store_code": "S1", "key": "brand_company_name", "value": "Store Co"},
+        {"org_id": ORG, "store_code": "S2", "key": "brand_company_name", "value": "Other Co"},
+    ]})
+
+
+def test_or_reads_this_store_s_rows_and_the_org_wide_ones():
+    rows = (_settings().schema("pos").table("pos_settings").select("*").eq("org_id", ORG)
+            .or_("store_code.is.null,store_code.eq.S1").execute().data)
+    assert sorted(r["value"] for r in rows) == ["Org Co", "Store Co"]
+
+
+def test_or_is_anded_with_the_filters_around_it():
+    rows = (_settings().schema("pos").table("pos_settings").select("*").eq("org_id", "other-org")
+            .or_("store_code.is.null,store_code.eq.S1").execute().data)
+    assert rows == []
+
+
+def test_an_or_term_the_double_cannot_read_raises_rather_than_matching_nothing():
+    with pytest.raises(NotImplementedError):
+        _settings().table("pos_settings").select("*").or_("store_code.like.S%").execute()
