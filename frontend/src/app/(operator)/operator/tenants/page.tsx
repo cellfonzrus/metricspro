@@ -26,6 +26,7 @@
 // stops being true.
 import { useCallback, useEffect, useState } from 'react'
 import { api, setActiveOrg } from '@/lib/client'
+import { reloadAs } from '@/lib/navigate-away'
 import { OPS, can, fmtWhen } from '@/lib/operator'
 import { useOperator } from '@/lib/operator-context'
 import { H1, Panel, Table, td, Btn, Field, inputStyle, Err, Empty, Note, Lamp } from '@/lib/operator-ui'
@@ -80,7 +81,8 @@ export default function OperatorTenants() {
       // operator into the tenant application. The server has already written the session and the
       // sealed audit row; this line only tells the client which org to send from now on.
       setActiveOrg(r.active_org)
-      window.location.href = '/commcalc'
+      // The acting tenant has changed, so the document goes with it — see lib/navigate-away.
+      reloadAs('/commcalc')
     } catch (e: any) {
       setErr(e?.message || 'Could not open the session'); setBusy(false)
     }

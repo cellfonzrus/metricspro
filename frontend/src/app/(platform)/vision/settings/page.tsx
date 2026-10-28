@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { redirectToProvider } from '@/lib/navigate-away'
 import { absoluteApiUrl } from '@/lib/apiBase'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { panel, btn, btnPrimary, cell, th, fmtDateTime, type Camera, type VisionConfig, visionError,
@@ -565,8 +566,10 @@ function GoogleLink({ canEdit, google, onSaved }: {
       })
       const r = await api(`/api/v1/vision/google/auth-url?redirect_uri=${encodeURIComponent(redirectUri())}`)
       // Same tab, on purpose. A new tab means the code comes back somewhere the operator was not
-      // looking, and on a phone it means a tab they cannot easily get back to.
-      window.location.href = r.url
+      // looking, and on a phone it means a tab they cannot easily get back to. The destination is
+      // handed to the ONE navigator, which refuses anything that is not absolute https — see
+      // lib/navigate-away.
+      redirectToProvider(r.url)
     } catch (e: any) { setErr(visionError(e)); setBusy(false) }
   }
 

@@ -26533,6 +26533,87 @@ them would be noise. What it registers is a CI gate, a runner, a register and a 
 - CORE-02.9 (the owner's rewording ruling, 2026-10-12) registers **one** artefact: `frontend/src/lib/setupNotice.tsx` → `<PlatformDetail detail />`, a second export of the §19.36 home gated by the same `useSetupDetailVisible()`. Its one caller today is `app/(platform)/commcalc/connectors/page.tsx`. Still no table, endpoint, metric or report. Locked by `harness_carrier_vocab_guard.py` §SETUP / §INFRA, which is what fails the build if a page writes an internal name in copy instead of dereferencing this home.
 - CORE-02.8 (the follow-up) registers no new artefact either: it changes only JSX text escaping in 74 files, a ternary-to-`if/else` transliteration in 16, `frontend/eslint_pending.txt` (932 → 842 entries) and `PINNED_TOTAL` in the lock (5917 → 5645). Still no table, endpoint, metric or report, so §16–18 stay correctly empty for CORE-02.
 
+### CORE-02.10 A DESTINATION HANDED TO THE BROWSER — one home, three characters (2026-10-28)
+
+Found by the **Next.js 16.4.3 security bump** (§CORE-19's sibling PR), not by a reviewer. The bump
+brought a new lint rule, `@next/next/no-location-assign-relative-destination`, and it reported
+**seven** hand-rolled `window.location.href = '/page'` assignments across five files. The rule's own
+message says to use `useRouter().push()` instead. **Doing that at all seven would have been a
+security regression**, and that is the whole finding.
+
+**The class, not the instance.** The seven were three different kinds of code wearing one spelling:
+
+| character | sites | what it must do | why |
+|---|---|---|---|
+| **identity boundary** | `startImpersonation`, `stopImpersonation`, `onImpersonationInvalid` (`lib/auth-context.tsx`), operator `enter()` (`app/(operator)/operator/tenants/page.tsx`), operator `leave()` (`components/PlatformBanners.tsx`) | discard the document | the acting identity the next request carries has just changed; `router.push()` keeps every mounted component, cached lookup and piece of state the previous identity put there, so an admin would open the employee's app still holding the admin's rows and an operator would leave a tenant with that tenant's numbers on screen |
+| **row click** | `commcalc/asset/purchase-orders`, `crm/lookup` | `router.push()` | ordinary in-app navigation; a full document load here is only a slower way to arrive |
+| **external provider** | `vision/settings` (Google OAuth consent) | leave the app, https only | the destination is built by our own backend and is an absolute URL; the lint rule never saw it, because its destination is a variable |
+
+So the general fact that was wrong is not "this line uses the wrong navigation". It is that **the app
+had no way to say *discard everything and come back as someone else*, so five call sites each spelled
+it out by hand** — which is exactly why a rule aimed at the spelling could not tell the five from the
+two. Each of the five already carried its own prose explaining the reload; one of them said it
+outright: *"A soft refresh would leave components holding the admin's data."*
+
+**The fix.** `frontend/src/lib/navigate-away.ts` is now the only place in the frontend that hands a
+destination to the browser.
+
+- `reloadAs(path: \`/${string}\`)` — the identity boundary. Full document load, no-op on the server
+  so no caller needs its own `typeof window` guard. **No linter suppression**, and that is the point
+  rather than luck: the rule reports a destination it can READ as a literal relative path, and this
+  one arrives as a parameter. A rule-named, justified disable was written first and then removed —
+  keeping it would have pushed the frontend's directive count 92 → 93, over the ceiling
+  `harness_frontend_lint_lock.PINNED_SUPPRESSIONS` pins, **to buy nothing at all**.
+- `redirectToProvider(url)` — the external hop, and a small hardening that came free. It parses the
+  URL and **throws unless it is absolute `https:`**. Today the URL comes from our own backend, so
+  this is not an open redirect; the check is there because the failure it prevents is severe. A
+  destination that reached it having lost its scheme would navigate *relative to the current page*
+  (`evil.test/x` → `/vision/settings/evil.test/x`), and one carrying `javascript:` or `data:` would
+  execute **in the app's own origin**, with the signed-in session's storage in reach. The refusal is
+  loud, not a silent no-op, so the operator sees an error rather than a dead button.
+
+**Lock it so it cannot un-wire** (the CLAUDE.md requirement, and the §19.18 failure mode).
+`backend/harness_navigate_away_one_home.py` — **39 checks, DB-free, stdlib only**, written failing
+first. It compares DERIVED sets against DECLARED ones in both directions (§CORE-10: a lower bound
+lets a subject leave the scan and take its assertion with it), so a sixth file that starts navigating
+fails the build and a caller that stops dereferencing the one home **names itself**. §A the one home
+really does leave the page (a registry that quietly became a `router.push()` would defeat the point)
+and does not import `next/navigation`; §B it suppresses nothing; §C the files that navigate are
+exactly `{navigate-away.ts}`; §D the identity boundaries and the provider hop are exactly the
+declared callers; §E the two row clicks use the router and must NOT dereference the one home
+(pointing a row click at a full document load is a regression dressed as a fix); §F
+`redirectToProvider` parses rather than string-matches, so `https:evil` cannot pass; §N 15 controls.
+
+Its scan is **stricter than the lint rule** on purpose: a destination it cannot read as a literal is
+REPORTED rather than waved through, which is how the `vision/settings` provider hop was found at all.
+Two of its own negative controls went red on the first run and both were real defects in it — a naive
+`//`-comment stripper was eating `'//example.test/x'` and `'https://a.test'` as comments, blinding
+the scan on exactly the absolute URLs it exists to tell apart from internal paths. The stripper is a
+quote-aware scanner now. Comment stripping is needed at all for the reason
+`harness_anonymous_write_surface` hit the same day and `encryption_backfill`'s AST scan hit before
+it: **every one of these files explains in a comment what it used to do, quoting the very expression
+being forbidden.**
+
+**Measured.** `frontend/eslint_pending.txt` 834 → **833** entries, `PINNED_TOTAL` 5583 → **5582**
+findings — a `react-hooks/immutability` finding in `crm/lookup` was paid off as a side effect of the
+router change, so the register had to shrink or it would have read as worse than reality and quietly
+re-admitted debt already paid. Suppressions **unchanged at 92**. `npx tsc --noEmit` clean.
+
+**Register.**
+- `frontend/src/lib/navigate-away.ts` → `reloadAs`, `redirectToProvider`, `type InternalPath`. The
+  ONE home for handing a destination to the browser. Six callers, all declared in the lock.
+- `backend/harness_navigate_away_one_home.py` → the lock.
+- `.github/workflows/security.yml` → job `navigate-away-one-home`, **enforcing** (not report-only).
+- Duplicate check (the build gate): searched this index and `backend/harness_*.py` for an existing
+  mechanism answering "where does the app hand a destination to the browser" — **there is none**;
+  the closest is this section's own note that `<a>` → `<Link>` changes a full reload into a client
+  navigation, which is the observation this home now makes enforceable. `frontend/src/lib/client.ts`
+  owns the session and the acting org but does no navigation, and was left untouched.
+- Same class: §19.18 (a mechanism written, its callers left unwired), §CORE-10 (a derived subject set
+  compared with a declared one), §CORE-19 (its sibling: a security decision keyed on a string the
+  caller typed).
+- No table, endpoint, metric or report, so §16–18 stay correctly empty for CORE-02.
+
 ## §COMMCALC-01. WHICH RECORD SAYS A TRADE-IN HAPPENED — the till, declared, with one home (owner ruling 2026-10-12)
 
 Owner, on a decision card asking which record should count: **"Point of sale."** The trade-in spiff

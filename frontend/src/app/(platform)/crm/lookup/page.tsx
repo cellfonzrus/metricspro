@@ -6,6 +6,7 @@
 // saying nothing.
 import { useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { api } from '@/lib/client'
 import { panel, input, btn, btnPrimary, th, cell, fmtMoney, fmtDate, fmtPhone } from '@/lib/crm'
 
@@ -58,6 +59,7 @@ function renderCell(col: string, v: any) {
 
 export default function CustomerLookupPage() {
   const [phone, setPhone] = useState('')
+  const router = useRouter()
   const [data, setData] = useState<Result | null>(null)
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState('')
@@ -102,7 +104,7 @@ export default function CustomerLookupPage() {
           notes: `Started from a customer lookup: ${action?.label || ''}`,
         }),
       })
-      window.location.href = `/crm/leads/${r.lead.id}`
+      router.push(`/crm/leads/${r.lead.id}`)
     } catch (err: any) { setMsg(err?.message || String(err)) }
   }
 
