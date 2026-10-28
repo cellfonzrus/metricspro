@@ -127,7 +127,8 @@ Primary code homes:
 | CORE-17 | **A figure names the rows behind it** | "Where is this number coming from? Open a reported figure and see the rows it was summed from, and which report, feed or upload each row came out of. Which reports still have no drill-down, and what stops the next one shipping without one?" |
 | CORE-14 | **One palette, dereferenced** | "Make the colours of the side menu alternate between the logo colours so each item stands out. Where does a colour used by the chrome live, how many places spell it, and what proves a row stays readable once it is coloured?" |
 | CORE-16 | **A self-call carries the tenant it is acting as** | "The envelope payout screen says the commission accrual and salary-owed fetches failed with 409 Conflict. What identity does a call the platform makes to itself carry, which company does it say it is acting for, and what stops the next such call from dropping it?" |
-| CORE-19 | **A request path is not evidence of which route it reached** | "Act as a security agent and find the vulnerability in the code. Which paths does the platform let through without a login, what declares that list, and what stops a route the list never meant to name from satisfying it?" |
+| CORE-19 | **A test is a gate, or it is a file** | "We need to define all development we do to follow the following: unit testing, integration testing, test-driven development. What runs a test in this repo, what stops a test reaching the live database when there is no staging one, and what fails the build the day the framework quietly comes undone?" |
+| CORE-20 | **A request path is not evidence of which route it reached** | "Act as a security agent and find the vulnerability in the code. Which paths does the platform let through without a login, what declares that list, and what stops a route the list never meant to name from satisfying it?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -26113,6 +26114,7 @@ status word rather than a blank that reads as nil.
 | CORE-17 | core |
 | CORE-18 | core |
 | CORE-19 | core |
+| CORE-20 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
 | POS-01 | pos |
@@ -38515,13 +38517,13 @@ Same class: §COMMCALC-16 (the diagnostic this one was silencing), §19.26 (miss
 
 ---
 
-## §CORE-19. A REQUEST PATH IS NOT EVIDENCE OF WHICH ROUTE IT REACHED (found 2026-10-28)
+## §CORE-20. A REQUEST PATH IS NOT EVIDENCE OF WHICH ROUTE IT REACHED (found 2026-10-28)
 
 **Owner ask 2026-10-28, verbatim:** *"act as a security agent to find the vulnerability in the code"*.
 Full review: `/mnt/project-files/security-review-2026-10-28/FINDINGS.md` (ten findings; the two the
-owner must act on are not code — the `anon` grants of §CORE-19.6 and a Next.js RCE bump).
+owner must act on are not code — the `anon` grants of §CORE-20.6 and a Next.js RCE bump).
 
-### CORE-19.1 The class, not the instance
+### CORE-20.1 The class, not the instance
 
 > **A decision about a REQUEST must be keyed on the thing that declares the answer, not on a string
 > the caller typed. The route table declares which paths are self-authenticating; the request path
@@ -38551,7 +38553,7 @@ this middleware. The hijacked segment becomes the parameter's value, so the READ
 empty (`period = "run-due"` matches no stored month) — the damage was on the WRITE and TRIGGER side,
 and it was one route name away from being a disclosure.
 
-### CORE-19.2 The one home
+### CORE-20.2 The one home
 
 `app/core/tenant_middleware.cron_paths_for_app(app)` — the LITERAL (parameter-free) route templates
 ending in `/run-due` or `/promote-due`, read off the app's own route table and cached per app. It
@@ -38566,7 +38568,7 @@ sweeps", so `_is_public` falls back to the historical suffix test there — 37 c
 start 401-ing because a FastAPI internal changed shape. Break-glass `CRON_PATH_LITERAL_ONLY=0`
 restores the pre-fix behaviour exactly, one env change, no code rollback (the REQUIRE_AUTH posture).
 
-### CORE-19.3 The siblings, found and fixed in the same change
+### CORE-20.3 The siblings, found and fixed in the same change
 
 Three more surfaces answered a security question from something the caller controls.
 
@@ -38574,7 +38576,7 @@ Three more surfaces answered a security question from something the caller contr
 |---|---|---|
 | `core/rate_limit` (per-IP limiter), `core/ip_block` (ban list), `core/access_log.ip`, `core/session_guard`, `core/impersonation_api` journal | the **leftmost** `X-Forwarded-For` entry — four separate copies of one line. A proxy APPENDS, so the leftmost entry is whatever the CLIENT sent: one header gave a fresh "IP" per request, walked through a ban, and wrote a chosen address into the audit trail | **`app/core/client_ip.py`** — the ONE home. The trustworthy entry is counted **from the right**: with N trusted proxies the client's address is `parts[len(parts) - N]`, and forged entries all sit to its left. `TRUSTED_PROXY_HOPS` is N; the unforgeable ASGI peer is the floor |
 | `main._log_system_error` | `request.query_params.get("org_id")` — so anyone who could provoke a 500 wrote `core.failure_log` rows, each with a truncated traceback, into **any tenant's** Failure Logs page | `_PLATFORM_ORG_ID`, the same fact `tenant_middleware._log_identity_outage` was ALREADY fixed to use, with the acting tenant kept in `detail` for triage |
-| `POST /core/auth/login-record` (anonymous; the frontend asserts the sign-in outcome because sign-in goes straight to Supabase) | an unverified `{email, success:false}`, five of which soft-lock any email a stranger knows, indefinitely | its own `RATE_LIMIT_LOGIN_RECORD_PER_HOUR` tier (12/hour/IP). **Labelled a cost increase, not a fix** — see §CORE-19.5 |
+| `POST /core/auth/login-record` (anonymous; the frontend asserts the sign-in outcome because sign-in goes straight to Supabase) | an unverified `{email, success:false}`, five of which soft-lock any email a stranger knows, indefinitely | its own `RATE_LIMIT_LOGIN_RECORD_PER_HOUR` tier (12/hour/IP). **Labelled a cost increase, not a fix** — see §CORE-20.5 |
 
 **`TRUSTED_PROXY_HOPS` is deliberately UNSET by default**, and `core/security_posture` reports that as
 a boot finding rather than guessing: N is a property of the deploy, this API is reached both directly
@@ -38583,7 +38585,7 @@ hole open (too low) or collapses every browser user into one shared rate-limit b
 access log with a proxy's address (too high) — that second failure is an outage. Measuring N takes one
 curl: `/mnt/project-files/security-review-2026-10-28/SET_TRUSTED_PROXY_HOPS.md`.
 
-### CORE-19.4 Locks
+### CORE-20.4 Locks
 
 | harness | checks | what fails the build |
 |---|---|---|
@@ -38601,7 +38603,7 @@ WIDEN, compared by behaviour over probe paths against main's own allowlists. Sam
 `harness_portal_secret_lock` F5 (§19.18): *a harness that pins a literal shape breaks when that shape
 becomes derived; rewrite it to read the fact.*
 
-### CORE-19.5 What this change deliberately does NOT fix, and why
+### CORE-20.5 What this change deliberately does NOT fix, and why
 
 - **The login-lockout claim.** `login_guard` counts an outcome the client asserted, because sign-in
   bypasses the backend entirely. The honest fix is for the API to observe the sign-in itself, which is
@@ -38617,7 +38619,7 @@ becomes derived; rewrite it to read the fact.*
   ratchet in the shape of §CORE-13's `CUTOFF`, and turning them red before the dependency bump lands
   would block every PR, so it is a separate change.
 
-### CORE-19.6 The finding this review could NOT close in code
+### CORE-20.6 The finding this review could NOT close in code
 
 **74 relations are `GRANT`ed to the PUBLIC `anon` role**, 56 of them also carrying
 `CREATE POLICY … FOR ALL TO anon, authenticated USING (true) WITH CHECK (true)`, and at least five
@@ -38636,7 +38638,7 @@ this).
 
 **REPORTED, NOT APPLIED.** This is a schema change, so it is surfaced for owner approval per the house
 rules; the read-only confirmation query and the drafted revoke are in the review folder. Until it
-lands, every gate in §CORE-19.1–19.3 can be reached around.
+lands, every gate in §CORE-20.1–19.3 can be reached around.
 
 
 ## §COMMCALC-40. THE STATUS WORD IS THE SENTENCE'S OWN VERDICT, NEVER A LITERAL (found 2026-10-27)
@@ -38950,3 +38952,119 @@ returning a partial feed. Placed where it is, that raise reaches the caller **be
 an unreadable source leaves the old snapshot standing — the same guarantee as the write preflight,
 on the other side: *a rebuild never deletes what it cannot replace, and it cannot establish it can
 replace from half the source.* `harness_feed_read_lock.py`'s unordered-read ratchet drops 98 → 95.
+
+## §CORE-19. A TEST IS A GATE, OR IT IS A FILE — unit, integration and TDD as the house standard (owner directive 2026-10-28)
+
+**Owner directive 2026-10-28, verbatim:** *"We need to define all development we do to follow the
+following / Unit testing / Integration testing / Test driven development"*.
+
+**Full guide: `docs/TESTING.md`.** This section is the index entry: what exists, where it lives, and
+what fails the build.
+
+### CORE-19.1 What was measured before building
+
+- **597** `backend/harness_*.py` proof programs, of which **330 are run by no workflow**
+  (`harness_unrun_pending.txt`) — the §19.25 class, already named.
+- **One** pytest-shaped file (`backend/tests/test_assignment_audit_flags.py`, now moved into `tests/unit/`), collected by nothing
+  and run by no job.
+- **No** pytest configuration, no conftest, no fixtures, no test runner of any kind.
+- **No frontend TEST job anywhere.** `npm run typecheck` and `npm run lint:gate` were already
+  gated — inside `carrier-vocab-guard.yml`, whose name says nothing about either, and locked by
+  `harness_frontend_typecheck_lock.py` / `harness_frontend_lint_lock.py`. What did not exist was any
+  job that runs a test. The 12 `frontend/tools/*-proof.mjs` programs were executed by **no workflow
+  at all**; 8 pass today and 4 do not.
+- **Duplicate check (CLAUDE.md build gate):** the index was searched for `pytest`, `unit test`,
+  `integration test`, `test framework`, `vitest`, `jest`. **Zero hits.** No existing mechanism serves
+  this purpose, so nothing was duplicated. The harnesses and the `*-proof.mjs` programs are the
+  adjacent mechanism and were **extended, not replaced**: the proofs are now run by CI behind a
+  shrink-only register, and `pytest.ini` deliberately does not collect harnesses so the two lanes
+  stay separate.
+
+### CORE-19.2 The class, not the instance
+
+> **A test that no workflow runs, or that can pass while the thing it guards is gone, is not a gate
+> — it is a file.** The same fact the house already established for harnesses applies to a test
+> suite, and a suite fails that way faster: a `testpaths` that drifts, a network guard deleted to
+> debug one thing, a CI job that installs a runner and never calls it. Each leaves the suite green
+> and meaningless.
+
+So the framework ships with the lock that fails the build when any load-bearing piece comes undone.
+
+### CORE-19.3 The one homes
+
+| Fact | Its one home |
+|---|---|
+| How the backend suite is configured | `backend/pytest.ini` |
+| Test-only dependencies | `backend/requirements-dev.txt` |
+| Fixtures, credential blanking, the network guard, suite auto-marking | `backend/tests/conftest.py` |
+| The in-memory database double | `backend/tests/fakes/supabase.py` |
+| How the frontend suite is configured | `frontend/vitest.config.ts` |
+| The frontend's fetch blocker | `frontend/tests/setup.ts` |
+| Running the standalone frontend proofs + their ratchet | `frontend/tools/run-proofs.mjs` + `tools/proof_red_pending.txt` |
+| The written standard | `docs/TESTING.md` |
+| The lock on all of the above | `backend/harness_test_discipline.py` |
+
+`backend/tests/unit/` is pure logic; `backend/tests/integration/` is the real `app.main:app` under
+Starlette's `TestClient`. Markers are applied **by directory** in `conftest.pytest_collection_modifyitems`,
+so `-m unit` / `-m integration` are right without anyone remembering a decorator.
+
+### CORE-19.4 Production is unreachable from a test, by construction
+
+There is no staging database in this project: every environment points at the same live Supabase. So
+the suite does not ask authors to be careful, it removes the capability. Two independent barriers in
+`conftest.py`, and the credential one fires first:
+
+1. **Credentials are blanked** before the app is imported — `create_client` refuses outright.
+2. **Outbound sockets are blocked** for the whole session; loopback stays open for `TestClient`.
+   Anything else raises `OutboundNetworkBlocked` naming the host and pointing at `docs/TESTING.md`.
+
+`frontend/tests/setup.ts` is the mirror: `fetch` throws unless a test stubs it deliberately.
+
+Checking something against live data remains a separate activity, done by **reading** production
+through the Supabase REST API — never by a test, never by writing.
+
+### CORE-19.5 The double refuses the shape that emptied a live table
+
+`tests/fakes/supabase.py` raises `OutboundWriteRefused` on an `update()` or `delete()` carrying **no
+filter** — the shape that emptied 11,000 live payable rows (§PAYABLES-01). A test cannot certify that
+shape as working. The double is itself unit-tested (`tests/unit/test_supabase_double.py`, 12 checks)
+because every integration test's honesty rests on its chain semantics matching postgrest's.
+
+### CORE-19.6 The lock — `harness_test_discipline.py`
+
+Run by `.github/workflows/tests.yml` job `test-discipline`. Stdlib only. It fails the build when:
+
+- `pytest.ini` stops pointing at the suite, or drops `--strict-markers`, or its declared markers stop
+  being exactly `{unit, integration}`;
+- `requirements-dev.txt` stops pinning pytest or stops building on the real `requirements.txt`;
+- the network guard is removed **or stops working** — it is given a real production hostname and must
+  refuse it, and given loopback and must let it through. Run, not read;
+- the credentials conftest blanks are not **exactly** the declared set, compared both ways (§CORE-10),
+  so a variable leaving the list names itself instead of quietly going live;
+- either suite directory disappears or empties;
+- a **second** in-memory Supabase double appears anywhere under `tests/`;
+- a declared CI command is not actually run by `tests.yml`, or the workflow omits the top-level
+  `shell: bash` the pipefail lock requires (§19.25);
+- the frontend loses its test scripts, its setup file, or its fetch blocker;
+- RULE TWO: a tenant or carrier name appears anywhere in the framework.
+
+### CORE-19.7 CI — `.github/workflows/tests.yml`, five enforcing jobs
+
+| Job | Command |
+|---|---|
+| Backend unit tests | `python -m pytest tests -m unit` |
+| Backend integration tests | `python -m pytest tests -m integration` |
+| Frontend unit and component tests | `npm run test` |
+| Frontend proofs (shrink-only register) | `npm run test:proofs` |
+| The test framework stays wired (lock) | `python harness_test_discipline.py` |
+
+None is `continue-on-error`. A red job blocks the merge.
+
+### CORE-19.8 The second shrink-only register
+
+`frontend/tools/proof_red_pending.txt` is the frontend's counterpart to
+`harness_unrun_pending.txt`: a proof **not** on it must pass, a proof **on** it that starts passing
+fails the build until its line is deleted, and `PINNED_MAX` in `run-proofs.mjs` is its length today
+(**4**) and may only go down. The four entries are declared with what is actually wrong with each —
+one real assertion failure, three whose runner lost the `@/` tsconfig path alias when transpiling to
+a temp directory. They are **reported, not hidden**, and fixing them is its own change.
