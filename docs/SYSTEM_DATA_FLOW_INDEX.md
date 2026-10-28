@@ -26112,6 +26112,7 @@ status word rather than a blank that reads as nil.
 | CORE-16 | core |
 | CORE-17 | core |
 | CORE-18 | core |
+| CORE-19 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
 | POS-01 | pos |
