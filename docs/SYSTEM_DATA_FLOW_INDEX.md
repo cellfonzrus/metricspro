@@ -129,6 +129,7 @@ Primary code homes:
 | CORE-16 | **A self-call carries the tenant it is acting as** | "The envelope payout screen says the commission accrual and salary-owed fetches failed with 409 Conflict. What identity does a call the platform makes to itself carry, which company does it say it is acting for, and what stops the next such call from dropping it?" |
 | CORE-19 | **A test is a gate, or it is a file** | "We need to define all development we do to follow the following: unit testing, integration testing, test-driven development. What runs a test in this repo, what stops a test reaching the live database when there is no staging one, and what fails the build the day the framework quietly comes undone?" |
 | CORE-20 | **A request path is not evidence of which route it reached** | "Act as a security agent and find the vulnerability in the code. Which paths does the platform let through without a login, what declares that list, and what stops a route the list never meant to name from satisfying it?" |
+| CORE-21 | **An in-process cache keyed by something a client can mint is bounded by construction** | "Simulate a thousand users and see what breaks. What does the platform keep in each worker's memory while they are signed in, what decides when an entry leaves, and what fails the build the day a new cache ships without a bound?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -26117,6 +26118,7 @@ status word rather than a blank that reads as nil.
 | CORE-18 | core |
 | CORE-19 | core |
 | CORE-20 | core |
+| CORE-21 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
 | COMMCALC-42 | commcalc |
@@ -39117,9 +39119,9 @@ fails the build until its line is deleted, and `PINNED_MAX` in `run-proofs.mjs` 
 (**4**) and may only go down. The four entries are declared with what is actually wrong with each —
 one real assertion failure, three whose runner lost the `@/` tsconfig path alias when transpiling to
 a temp directory. They are **reported, not hidden**, and fixing them is its own change.
-## §CORE-20. AN IN-PROCESS CACHE KEYED BY SOMETHING A CLIENT CAN MINT IS BOUNDED BY CONSTRUCTION (load test 2026-10-28)
+## §CORE-21. AN IN-PROCESS CACHE KEYED BY SOMETHING A CLIENT CAN MINT IS BOUNDED BY CONSTRUCTION (load test 2026-10-28)
 
-### CORE-20.1 How it was found
+### CORE-21.1 How it was found
 
 The 1,000-user load test (rig and findings in `/mnt/project-files/load-test-2026-10-28/`) read the
 worker's memory climbing while a thousand distinct login tokens went through it, and the code said
@@ -39129,7 +39131,7 @@ which the auth service re-mints on every refresh, so the key space is NOT bounde
 users — 1,000 logins refreshing through a day is tens of thousands of dead entries per worker per
 day, held until the next deploy.
 
-### CORE-20.2 The class, not the instance
+### CORE-21.2 The class, not the instance
 
 The defect is not "that one dict leaks". It is **a module-level dict used as a TTL cache, with no
 cap and no eviction** — and the platform had several, each with its own hand-written
@@ -39146,7 +39148,7 @@ cap and no eviction** — and the platform had several, each with its own hand-w
 
 Capping one of them is the patchwork the house rules forbid.
 
-### CORE-20.3 The one home
+### CORE-21.3 The one home
 
 `app/core/ttl_cache.TTLCache` — a dict with a time-to-live and a hard entry cap, thread-safe,
 with an injectable clock so a proof can move time without sleeping. On insert, **expired entries
@@ -39161,7 +39163,7 @@ All six caches above now dereference it. **No TTL, no semantics and no behaviour
 identity cache still holds for 60 s, still caches positive results only, and still lets a failed
 read self-heal.
 
-### CORE-20.4 Siblings checked and excused
+### CORE-21.4 Siblings checked and excused
 
 - `core/rate_limit.RateLimiter` — a fixed-window **counter**, not a value cache, and already bounded
   (`max_keys=100_000` with its own sweep). Different mechanism, already safe.
@@ -39170,7 +39172,7 @@ read self-heal.
 - `core/identity._store_cache` / `_emp_cache` and `commcalc/target_registry._cache` (§COMMCALC-42) —
   keyed by ORG, so bounded by the tenant count, which a client cannot inflate.
 
-### CORE-20.5 Lock
+### CORE-21.5 Lock
 
 `backend/harness_ttl_cache_bounded.py`, CI job `ttl-cache-bounded` in
 `.github/workflows/org-scope-guard.yml`. §A pins the cache's own behaviour (TTL, cap, expired-first
