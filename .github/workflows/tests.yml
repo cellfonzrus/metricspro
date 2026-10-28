@@ -1,0 +1,110 @@
+name: tests
+
+# THE TEST GATE (project directive 2026-10-28, docs/TESTING.md).
+#
+# Owner, verbatim: *"We need to define all development we do to follow the following / Unit testing /
+# Integration testing / Test driven development"*.
+#
+# WHAT WAS HERE BEFORE: nothing. The repo had 597 `backend/harness_*.py` proof programs (330 run by
+# no workflow), one pytest-shaped file that no job executed, and NOT ONE workflow touching the
+# frontend — no tests, no typecheck, no lint. This workflow is the gate that makes a test a gate.
+#
+# ENFORCING, not report-only. A red job blocks the merge. That is the point: a suite that cannot
+# fail a build is documentation with a stopwatch.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+# REQUIRED by backend/harness_ci_pipefail_lock.py (index §19.25): without an explicit bash shell,
+# GitHub's default `bash -e` has NO pipefail, so `python x.py | tee …` passes on a red program.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  backend-unit:
+    # Pure logic, no app, no I/O. Fast — this is the job a developer's inner loop mirrors.
+    name: Backend unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements-dev.txt }
+      - name: install
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+      - name: pytest -m unit
+        working-directory: backend
+        run: python -m pytest tests -m unit
+
+  backend-integration:
+    # The REAL FastAPI app over Starlette's TestClient, against the in-memory database double.
+    # There is no staging Supabase, so conftest blocks every outbound socket and blanks every
+    # credential: this job CANNOT reach production, by construction rather than by convention.
+    name: Backend integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements-dev.txt }
+      - name: install
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+      - name: pytest -m integration
+        working-directory: backend
+        run: python -m pytest tests -m integration
+
+  frontend-tests:
+    name: Frontend unit and component tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: "20", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - name: install
+        working-directory: frontend
+        run: npm ci
+      - name: vitest
+        working-directory: frontend
+        run: npm run test
+
+  frontend-proofs:
+    # The 12 standalone `tools/*-proof.mjs` programs, which no workflow ran until today. Behind a
+    # register that may only shrink (tools/proof_red_pending.txt): 8 are gated, 4 are declared red.
+    name: Frontend proofs (shrink-only register)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: "20", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - name: install
+        working-directory: frontend
+        run: npm ci
+      - name: proofs
+        working-directory: frontend
+        run: npm run test:proofs
+
+  test-discipline:
+    # The lock: the framework above cannot quietly come undone. It RUNS conftest's network guard
+    # against a production hostname rather than reading the source for it.
+    name: The test framework stays wired (lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: install (pytest only — the lock itself is stdlib)
+        run: pip install pytest
+      - name: harness_test_discipline
+        working-directory: backend
+        run: python harness_test_discipline.py

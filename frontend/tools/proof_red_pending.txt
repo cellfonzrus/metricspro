@@ -1,0 +1,22 @@
+# FRONTEND PROOFS THAT ARE CURRENTLY RED — the debt list, and it may only SHRINK.
+#
+# Before 2026-10-28 NO workflow ran any frontend proof, and no workflow ran the frontend at all:
+# `tools/*-proof.mjs` were 12 programs nobody executed. Measured on this branch, 8 of the 12 pass
+# and 4 do not. Wiring all 12 as a hard gate would land a red build on the first PR, which is how a
+# gate gets switched off; refusing to wire any of them leaves 8 working proofs as decoration.
+#
+# So the rule is the one the house already uses for exactly this (backend/harness_unrun_pending.txt,
+# frontend/table_sort_pending.txt): a proof NOT listed here must pass, a listed proof that STARTS
+# passing fails the build until its line is deleted, and the list may never grow.
+#
+# The four, with what is actually wrong — REPORTED, not hidden:
+#   · asset-borrowed-registry-proof.mjs — a real assertion failure
+#     ("filter-options return statement found"). A genuine red, pre-dating this change.
+#   · commission-export-proof.mjs, google-ratings-proof.mjs, people-export-proof.mjs — each
+#     transpiles a source file to a temp dir and runs it under bare Node, where the `@/…` tsconfig
+#     path alias no longer resolves (ERR_MODULE_NOT_FOUND: Cannot find package '@/lib'). The proofs
+#     are sound; their runner lost the alias. Fixing them is its own change.
+asset-borrowed-registry-proof.mjs
+commission-export-proof.mjs
+google-ratings-proof.mjs
+people-export-proof.mjs
