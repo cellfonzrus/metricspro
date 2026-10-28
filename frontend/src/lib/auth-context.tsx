@@ -10,6 +10,7 @@ import { setCacheIdentity } from './cache'
 import type { Permissions, CarrierRef } from './rbac'
 import { carrierCode, defaultActiveCarrier, type VerticalInfo } from './rbac'
 import { apiUrl } from './apiBase'
+import { reloadAs } from './navigate-away'
 
 
 export type AppUser = {
@@ -425,9 +426,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       target_name: d.session?.target_name, target_email: d.session?.target_email,
       target_role: d.session?.target_role, expires_at: d.session?.expires_at,
     })
-    // Hard reload: every page, every cached lookup and the whole nav must re-resolve as the employee.
-    // (A soft refresh would leave components holding the admin's data.)
-    if (typeof window !== 'undefined') window.location.href = '/'
+    // Every page, every cached lookup and the whole nav must re-resolve as the employee, so this
+    // discards the document rather than re-rendering it — see lib/navigate-away.
+    reloadAs('/')
   }, [session])
 
   // Exit. The grant is dropped LOCALLY FIRST so the very next request is already the admin's own,
@@ -447,7 +448,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         })
       }
     } catch { /* the local grant is already gone — the server sweep/expiry closes the row regardless */ }
-    if (typeof window !== 'undefined') window.location.href = '/'
+    reloadAs('/')
   }, [session])
 
   // THE OWNER'S CARVE-OUT. Clock in / clock out is the one thing an admin may not do on someone's
@@ -489,7 +490,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (impHandledRef.current) return
     impHandledRef.current = true
     setImpersonationState(null); setImpersonationInfo(null)
-    if (typeof window !== 'undefined') window.location.href = '/'
+    reloadAs('/')
   }), [])
 
   // The identity (auth user id) we last ran a full profile `settle` for. `undefined` until the first

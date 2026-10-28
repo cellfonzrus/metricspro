@@ -8,6 +8,7 @@
 // below is a full ReportShell (RULE FOUR exports) over every PO already created.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { api, fmt, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
@@ -43,6 +44,7 @@ const numInput: React.CSSProperties = { width: 76, padding: '4px 6px', borderRad
 
 export default function PurchaseOrdersHubPage() {
   const { user } = useAuth()
+  const router = useRouter()
   const buyerName = user?.full_name || user?.email || ''
 
   // RULE FIVE — period isn't meaningful here (lookback/horizon drive the recommendation window instead,
@@ -348,7 +350,7 @@ export default function PurchaseOrdersHubPage() {
             title="Purchase Orders" filename="purchase_orders"
             columns={poColumns}
             rows={pos}
-            onRowClick={(r: PoRow) => { window.location.href = `/commcalc/asset/purchase-orders/${r.id}` }}
+            onRowClick={(r: PoRow) => { router.push(`/commcalc/asset/purchase-orders/${r.id}`) }}
           />
         )}
       </div>
