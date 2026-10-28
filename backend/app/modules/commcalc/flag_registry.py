@@ -279,6 +279,18 @@ TYPES: dict[str, dict] = {
         "area": "fraud", "sev": HIGH, "writer": "commcalc/multi_handset_day.py",
         "grain": "store_day",
     },
+    # A BYOD ACTIVATION AND AN UPGRADE ON ONE NUMBER IN ONE DAY (owner ask 2026-10-28, index
+    # §COMMCALC-42). `store_day` for the same reason the row above carries it: the finding IS a set
+    # of transactions keyed on the store and the day — a manager drills into that store-day and the
+    # phone line and the receipt split sit inside the evidence — so `transaction` would promise a
+    # single sale to click through to that does not exist. The unit counted is an ACTIVATION EVENT
+    # (`line_class.activation_events`), never a line: every line of a receipt carries the receipt's
+    # contract type, so counting lines read 456 live number-days where counting events reads 95.
+    "BYOD_AND_UPGRADE_SAME_NUMBER": {
+        "label": "A brought device and an upgrade on one number in one day",
+        "area": "fraud", "sev": HIGH, "writer": "commcalc/byod_upgrade_day.py",
+        "grain": "store_day",
+    },
 
     # ── Port-outs & Churn ───────────────────────────────────────────────────────────────────────
     "PORT_OUT_30DAY": {
@@ -568,6 +580,15 @@ DEFAULT_PARAMS: dict[str, dict] = {
     # carrier statement (index COMMCALC-03), kept identical here so one question has one answer
     # across both feeds; a tenant moves it with a watchdog_rule row, never a code change.
     "MULTI_HANDSET_ONE_BUYER": {"max_handsets": 2},
+    # WHICH ACTIVATION CLASSES MUST BOTH APPEAR on one phone line at one store on one day before a
+    # human should look. The owner's question is byod + upgrade; the pair is a config row rather
+    # than a code branch so a tenant who wants byod + port, or all three, edits a row (RULE TWO) —
+    # and the words are `line_class` CLASS names, which are the platform's own vocabulary and name
+    # no carrier, tenant or product. A "must be on separate receipts" key was written here and
+    # REMOVED the same day: `activation_events` keys an event on (invoice, phone line), so a pair is
+    # always on two receipts already and the key could never change an outcome. The reasoning is kept
+    # on `byod_upgrade_day.CLASSES_KEY` so nobody adds it back.
+    "BYOD_AND_UPGRADE_SAME_NUMBER": {"classes": ["byod", "upgrade"]},
 }
 
 

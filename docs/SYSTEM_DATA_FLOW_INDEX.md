@@ -162,6 +162,7 @@ Primary code homes:
 | COMMCALC-39 | **A declaration is read off the page, and a declared report resolves to itself** | Fourteen reports were asked for by name, and every one of them would have resolved to NOTHING: the pull passed a source's own declaration back to its adapter as a FILTER, squashed under a different rule from the one the reports were keyed by, so a fully configured source read as "No reports are enabled". And the filters those reports need are behind framework-generated control ids nobody can guess. Where should a declaration come from, and what does one argument meaning two things to two callers cost? |
 | COMMCALC-40 | **The status word is the sentence's own verdict, never a literal** | The sweep said "⚠ PARTIAL — a column stopped arriving" in one column and stored `ok` in the column next to it, so every screen that colours on the word showed green over October 2026's missing KPI counts for ten days. What does a verdict cost when it is computed as prose and then discarded at the one place a machine reads it? |
 | COMMCALC-41 | **A derived snapshot rebuilds itself when its inputs land** | "The rebuild ledger or recalculate should be real time all across, then tenant would not know when to run" — and the payable ledger had last been built 53 days earlier while the feed it is built from was four days old, so every "what is owed next week" surface read EMPTY and nothing on the page said why. Which derived things are live, which are on a button nobody knows to press, and what is a tenant doing scheduling a rebuild at all? |
+| COMMCALC-42 | **Two kinds of activation on one number in one day, counted as events** | "Check if a byod and an upgrade is done on the same day for the same phone number at the same store." Counting LINES the live feed showed 456 such number-days; counting activation EVENTS it shows 95, and the 46 lines reading 'BYOD Upgrade' are one sale rather than a pair. What is one activation, which phone line is it on, and how does a report say "we could not measure this" when 94% of a tenant's sales carry no number at all? |
 | PAYABLES-01 | **A rebuild never deletes what it cannot replace** | "Rebuild via sql let me know what permissions to add" — and the rebuild, run for real, deleted all 11,000 Boost rows and inserted none, then returned HTTP 200 describing the table it had just emptied. Two migrations had been skipped while later-numbered ones landed. What is a delete+insert worth without a transaction, and which half of that pair is the one you can afford to run first? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
@@ -26113,6 +26114,7 @@ status word rather than a blank that reads as nil.
 | CORE-18 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
+| COMMCALC-42 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -38822,3 +38824,135 @@ returning a partial feed. Placed where it is, that raise reaches the caller **be
 an unreadable source leaves the old snapshot standing — the same guarantee as the write preflight,
 on the other side: *a rebuild never deletes what it cannot replace, and it cannot establish it can
 replace from half the source.* `harness_feed_read_lock.py`'s unordered-read ratchet drops 98 → 95.
+
+## §COMMCALC-42. TWO KINDS OF ACTIVATION ON ONE NUMBER IN ONE DAY, COUNTED AS EVENTS (owner ask 2026-10-28)
+
+Owner, verbatim: *"Need to create a new flag report to check if a byod and an upgrade is done on the
+same day for the same phone number at the same store, add standard filters and send options"*.
+
+**Module:** `backend/app/modules/commcalc/byod_upgrade_day.py` (THE one home — pure, DB-free, no I/O)
+**Endpoint:** `GET /commcalc/watchdog/byod-upgrade` (`commcalc/watchdog_router.py`) — the drill-down
+**Sweep:** the `byod_upgrade` block of `watchdog_router._run_for_org` — the EXISTING tick and the
+existing `cron.schedule` line; no new cron, no new entrypoint
+**Flag:** `BYOD_AND_UPGRADE_SAME_NUMBER`, area `fraud`, grain `store_day`, severity HIGH, source
+`byod_upgrade_watchdog` (registered in `commcalc/flag_registry.py`)
+**Config:** `commcalc.watchdog_rule.params.classes` — house `["byod", "upgrade"]`
+**Screen:** `/watchdog/byod-upgrade`, a tile on the Flags & Compliance hub (`rbac.ts`, `tileOnly`)
+**Proof:** `backend/harness_byod_upgrade_day.py` — 51 checks, DB-free, the detector's logic
+**Integration proof:** `backend/harness_byod_upgrade_wiring.py` — 40 checks, the real endpoint and the
+real sweep against a stand-in PostgREST client (the query, its columns, the config resolution, the
+span filter, the written row)
+**Migration:** NONE. `commcalc.watchdog_rule` and `commcalc.flags` both already exist.
+
+### COMMCALC-42.1 DUPLICATE CHECK — what was searched, and what is reused rather than re-derived
+
+Searched `flag_registry.TYPES`, this index and `core/module_graph.py` for anything answering "did one
+phone line take two different kinds of activation in one day".
+
+| already exists | why it is not extended |
+| --- | --- |
+| `MULTI_HANDSET_ONE_BUYER` (§COMMCALC-05) | Keys on the bill-to NAME and counts HANDSETS. Same area, adjacent question, different key and different unit — one detector cannot carry two keys without lying about one. Its SHAPE is copied wholesale: source ownership, injected predicates, stated gaps. |
+| `DUPLICATE_IMEI` (§53) | One DEVICE on many lines — the mirror of one LINE with many activations. |
+| §19.28 BYOD-Swap exclusion | Already knows a BYOD line can be a re-paper and excludes it from the activation count. That is a PAY rule and is untouched: this counts what was rung, not what pays. |
+
+**Reused, so this module writes almost no logic of its own:**
+
+- **what ONE activation is, its phone key and its class** — `line_class.activation_events` (§19.28,
+  §59). It folds each invoice's activation-type lines into events keyed on the line's own phone
+  number and resolves each event's class by the org's declared precedence.
+- **the phone number** — `pos/customer_identity.norm_phone`, reached *through* that home. There is no
+  digit-stripping in this module; `harness_byod_upgrade_day` §G3 fails the build if one appears.
+- **which classes make a pair** — `flag_registry.rule_params` (RULE TWO).
+- **severity / area / label** — `flag_registry`. One scale, one board.
+- **which line is a handset** — the per-org `accessory_config.box_departments` set the box count
+  already uses, INJECTED as `is_box` and never read here.
+- **the filters and the send button** — `components/ReportShell.tsx`, which already owns the By-rep /
+  By-store / By-date-range / By-month filters, "＋ Add filter" on any column, Group-by with
+  subtotals, the three exports and `lib/send-report.SendReportButton` (§COMMCALC-19, THE one sender).
+  The owner's "standard filters and send options" needed a report built ON the frame, not a second
+  frame.
+
+**New here and nowhere else:** grouping activation EVENTS by (store, day, phone number), and the pair
+test over the classes present on one such number-day.
+
+### COMMCALC-42.2 THE UNIT IS AN EVENT, NEVER A LINE — the regression the module exists around
+
+Every line of a receipt carries the receipt's contract type, so one upgrade lands as five or six
+lines reading 'Upgrade' (plan, autopay, protection, handset, set-up fee). **Counting LINES, the live
+house feed for Aug–Oct 2026 shows 456 number-days carrying both words. Counting EVENTS it shows 95.**
+The other 361 were one sale counted several times.
+
+The sharper trap: **46 live lines read 'BYOD Upgrade'**, which is a single sale. `activation_class`
+resolves it to `byod`, because the org's precedence puts byod first — so it is ONE event and cannot
+pair with itself. A detector looking for the two WORDS would report a pair on every one of them.
+Nothing in this module reads a contract type; §A3/§A4 of the lock are that regression.
+
+### COMMCALC-42.3 MEASURED BEFORE IT SHIPPED, read-only against production 2026-10-28
+
+`commcalc.daily_sales_feed`, Aug–Oct 2026, through the REAL module:
+
+| | Cellfonz R Us | Luxelink Wireless |
+| --- | --- | --- |
+| activation events | 5,005 | 3,484 |
+| **keyed on a phone number** | **4,988 (99.7%)** | **213 (6.1%)** |
+| cases | **95** (Oct 48 / Sep 25 / Aug 22) | 0 |
+| value of flagged lines | $5,978.83 | — |
+
+**All 95 carry the identical shape**: the BYOD event carries NO handset line, and an upgrade event on
+a SEPARATE receipt the same day carries a promo handset ('… Q4 Promo Upgrade') plus a $35 upgrade
+set-up charge. Concentrated: 31 of 95 at one store, one rep on 190 of the flagged lines.
+
+**Luxelink's 0 is NOT a clean period** — 93.9% of its events key on a DEVICE because its feed leaves
+`mdn` empty, so nothing on those sales can be grouped to a phone line. `summary.numbered_share` is
+the honest headline and the screen states it in an amber panel above any count (§19.26, "missing
+beats wrong").
+
+### COMMCALC-42.4 THREE THINGS THIS SHIPPED THAT WERE NOT THE ASK
+
+1. **A SILENT ZERO, found and fixed.** The watchdog tick's shared sales read did not select
+   `contract_type`, and `line_class.HOUSE_FIELDS` is exactly that column. Without it every line
+   classifies as `None`, no activation event exists, and the sweep reports a clean period it never
+   looked at — no error, no warning. `harness_byod_upgrade_wiring` §B now fails the build if any
+   field a tenant's resolved rules can classify on leaves either select, and §B4 proves the detector
+   really does go silent without it so §B2/§B3 are not decoration.
+2. **A CONFIG KNOB REMOVED THE DAY IT WAS WRITTEN.** `separate_receipts_only` was in the first draft.
+   Mutation-testing the lock showed it could never change an outcome: `activation_events` keys an
+   event on (invoice, phone line), so two activations of one number on one receipt are ONE event and
+   can never be a pair. Every case is therefore on two or more receipts by construction. §D8 asserts
+   the structural fact and fails the build if the key is added back. *A config row a tenant can set
+   and that cannot do anything is the same class of defect as a fake zero: it reads as a control and
+   is not one.*
+3. **A FAKE ZERO THAT IS REACHABLE IN PRODUCTION, reported rather than rewritten.**
+   `router._accessory_config` has fallen back to the house department labels since mig 218 whenever
+   an org declared none, to keep the house box numbers byte-identical. So an org with no declaration
+   is handed a vocabulary that may match nothing, and `is_box` then answers a confident "no handset"
+   instead of "we cannot tell". Changing that fallback would move box counts on the money paths, so
+   it is **not** touched here. Instead `summary.box_vocabulary_matched` / `handset_lines` MEASURE
+   whether the declared set matched any line in the period, and the screen says so in an amber panel
+   — measured rather than declared, which is the only version a surface can rely on. **This is a
+   platform-wide gap: every other surface reading `box_departments` has the same exposure and none of
+   them measures it. Named here so the next reader can close it at the config layer.**
+
+### COMMCALC-42.5 IT REPORTS AND DOES NOT CONCLUDE
+
+No function returns a verdict, no case carries a verdict field, and §E of the lock walks every
+user-facing string in the module and fails the build if one calls anything fraud, abuse or a scheme.
+A customer who activates a line on a phone they brought in and then buys a handset the same day is an
+ordinary sale and reads identically on this screen. `KEY_CANNOT_ANSWER` states the four limits on the
+module itself, and the screen renders them under the table.
+
+### COMMCALC-42.6 CROSS-REFERENCES
+
+- §53 / §COMMCALC-05 — the flag registry, the Management Watchdog board and the sibling detector
+  whose shape this copies.
+- §19.16 — `router._open_month_source`, the one home for which sales table answers for a period,
+  reached through `watchdog_router._read_sales`. §C of the wiring proof reproduces the void sweep's
+  2026-10-12 defect (a surface naming the month-end archive reads zero rows for the month in
+  progress, the only month anybody can act on).
+- §19.28 / §59 — `line_class`: the activation event, its phone key, the class precedence.
+- §19.40 — `pos/customer_identity`: THE phone key and the phone-vs-device rule.
+- §64 — store identity. The report's store filter derives its options from the ROWS it was handed, so
+  option and value are the same string by construction and the 2026-10-22 label-vs-key defect cannot
+  occur; §D3 of the wiring proof bans the bare `.eq("store", …)` form in the endpoint anyway.
+- §COMMCALC-19 — `SendReportButton`, the one sender, reached through `ReportShell`.
+- §CORE-13 — no migration here, so no grant.

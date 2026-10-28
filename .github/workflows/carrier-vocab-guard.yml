@@ -1071,6 +1071,14 @@ on:
       # departments and the void filter, writes under the detector's own `source`, and names no
       # sales table literally. A change here must re-run that proof.
       - "backend/app/modules/commcalc/watchdog_router.py"
+      # §COMMCALC-42 — a brought device and an upgrade on one number in one day. Named with its
+      # home, its two proofs, and `line_class.py`, which is the home it dereferences for what one
+      # activation IS and what phone line it is on: a change to the class precedence or to the
+      # event key changes what this detector pairs, so it must re-run both proofs.
+      - "backend/harness_byod_upgrade_day.py"
+      - "backend/harness_byod_upgrade_wiring.py"
+      - "backend/app/modules/commcalc/byod_upgrade_day.py"
+      - "backend/app/modules/commcalc/line_class.py"
       - "backend/app/modules/commcalc/prospect_eval.py"
       - "backend/app/modules/account/device_cogs.py"
       - "backend/app/modules/account/ma_store_pnl.py"
@@ -2714,6 +2722,44 @@ jobs:
       - name: Run the multi-handset lock (a plan is not a handset; one case across eight receipts; the threshold is config; evidence, never a verdict)
         working-directory: backend
         run: python3 harness_multi_handset_day.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+
+  # §COMMCALC-42 — A BROUGHT DEVICE AND AN UPGRADE ON ONE NUMBER IN ONE DAY (owner ask 2026-10-28).
+  # TWO harnesses, deliberately, because they fail for different reasons and a house rule says the
+  # logic and the wiring are both proved:
+  #
+  #   · harness_byod_upgrade_day.py (51 checks) drives the REAL detector over fixtures shaped like
+  #     the live daily sales feed. Its regressions are the ones measurement forced: a single
+  #     'BYOD Upgrade' line is ONE byod event and not a pair (46 such lines live); the unit is an
+  #     activation EVENT, so one upgrade's six receipt lines are one activation (counting lines read
+  #     456 live number-days where counting events reads 95); an event the one home keyed on a
+  #     DEVICE carries no number and is reported as unmeasurable rather than clean; and §D8 refuses
+  #     a config key that cannot change an outcome.
+  #   · harness_byod_upgrade_wiring.py (40 checks) drives the REAL endpoint and the REAL sweep
+  #     against a stand-in PostgREST client. It is the half a pure test cannot reach, and its §B is
+  #     an actual defect this PR fixed: the tick's shared sales read did not select `contract_type`,
+  #     which is `line_class.HOUSE_FIELDS`, so every line classified as None and the sweep would
+  #     have reported a clean period it never looked at — silently, with no error.
+  #
+  # Both import app.modules.commcalc.flag_registry, which reaches app/core/config.py ->
+  # pydantic_settings, and the wiring half imports FastAPI, so they run with the backend's
+  # dependencies installed (harness_ci_pipefail_lock enforces exactly this). DB-free: no database is
+  # reached in either, and the wiring half proves that by substituting the client.
+  byod-upgrade-same-number-lock:
+    name: Brought device then upgrade on one number (DB-free, the real detector and the real wiring)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: The detector (one line is not a pair; the event is the unit; a device-keyed sale is not measured; evidence, never a verdict)
+        working-directory: backend
+        run: python3 harness_byod_upgrade_day.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: The wiring (the select carries every field the class predicate reads; the open month is asked for; the span filter runs first; the row is written under its own source)
+        working-directory: backend
+        run: python3 harness_byod_upgrade_wiring.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
 
   # THE STORE-TAKEOVER EVALUATION PROOF (index COMMCALC-03) drives the real prospect_eval rules over the

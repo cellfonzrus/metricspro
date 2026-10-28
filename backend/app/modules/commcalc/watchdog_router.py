@@ -47,6 +47,8 @@ from app.core.run_secret import verify_notify_secret
 from app.modules.commcalc import flag_registry as _reg
 from app.modules.commcalc import void_watchdog as _void
 from app.modules.commcalc import multi_handset_day as _handsets
+from app.modules.commcalc import byod_upgrade_day as _byod_upg
+from app.modules.commcalc import line_class as _lc
 from app.modules.closing import cash_watchdog as _cash
 
 router = APIRouter(prefix="/commcalc", tags=["Management Watchdog"])
@@ -321,6 +323,92 @@ def watchdog_multi_handset(period: str = Query(default=""), authorization: str =
             "cases": out}
 
 
+# ── A brought device and an upgrade on one number in one day (index §COMMCALC-42). ──────────────
+@router.get("/watchdog/byod-upgrade")
+def watchdog_byod_upgrade(period: str = Query(default=""), authorization: str = Header(default=""),
+                          org_id: str = ORG_ID):
+    """Every phone line that took BOTH a brought-device activation AND an upgrade at one store on one
+    day, with the two receipts, the handsets on each side, the device, the dollars and the rep.
+
+    OWNER ASK 2026-10-28, verbatim: *"Need to create a new flag report to check if a byod and an
+    upgrade is done on the same day for the same phone number at the same store, add standard filters
+    and send options"*.
+
+    THE READS ARE ALL SOMEBODY ELSE'S, on purpose — this endpoint resolves nothing of its own:
+      · which sales table answers for the period — `_read_sales` above, the ONE home (§19.16), so
+        the month in progress is read from the daily feed and a closed month from the archive. The
+        void sweep's 2026-10-12 defect was exactly a surface naming a table itself.
+      · which store a manager may see — `storeops.scope_keyset` / `in_keyset`, the same span filter
+        `get_flags` applies, run BEFORE anything is counted.
+      · what one activation is, its phone line and its class — `line_class.activation_events`
+        through the detector, with the org's OWN resolved rules (`router._line_rules_of`).
+      · which line is a handset — the per-org `box_departments` set the box count uses.
+
+    IT REPORTS AND DOES NOT CONCLUDE. A customer who activates a line on a phone they brought in and
+    then buys a handset the same day is an ordinary sale and reads identically. `signal` names what
+    was observed, never what it means.
+
+    `numbered_share` IS THE HEADLINE WHEN IT IS LOW, and the screen must say so rather than show a
+    clean zero: measured 2026-10-28, one live tenant's feed keys 93.9% of its activation events on a
+    DEVICE because it carries no `mdn`, so nothing on those sales can be grouped to a phone line.
+    """
+    p = _s(period) or _period_now()
+    client = get_supabase()
+    try:
+        rows, tbl = _read_sales(
+            client, org_id, p,
+            "store,salesperson,ext_price,trans_id,trans_date,product_desc,serial_1,"
+            "mdn,voided,trans_type,department,category,contract_type")
+    except Exception as e:
+        raise HTTPException(503, f"sales feed unavailable: {str(e)[:200]}")
+
+    # The SAME district-manager span filter the findings use, applied BEFORE anything is counted, so
+    # a market manager's report can never show a store their flag queue hides.
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, None, r.get("store"))]
+
+    from app.modules.commcalc.router import _accessory_config, _line_rules_of
+    _acfg = _accessory_config(client, org_id)
+    rules = _line_rules_of(_acfg) or _lc.HOUSE_RULES
+    box = _acfg.get("box_departments") or set()
+    # REFUSED, not defaulted: an org that has declared no box departments gets handset counts of
+    # None ("not measured"), never a house-labelled guess that would disagree with its own box count.
+    is_box = ((lambda r, _b=box: _s(r.get("department")) in {_s(d) for d in _b}) if box else None)
+
+    rule_rows = _read_rules(client, org_id)
+    grouped = _byod_upg.number_days(rows, rules)
+    params = _reg.rule_params(_byod_upg.FLAG_TYPE, rule_rows)
+    found = _byod_upg.cases(grouped, params, is_box=is_box)
+
+    out = []
+    for c in found:
+        signal = []
+        if c.get("first_handsets") == 0 and (c.get("second_handsets") or 0) > 0:
+            signal.append("no handset on the first activation, one on the second")
+        if c["all_zero_dollars"]:
+            signal.append("every line at $0.00")
+        if c["events"] > len(c.get("classes") or ()):
+            signal.append("more than two activations on the number")
+        out.append({**c,
+                    "description": _byod_upg.describe(c),
+                    "coaching_note": _byod_upg.coaching_note(c),
+                    "signal": signal})
+    return {"org_id": org_id, "period": p, "as_of": _now(),
+            "enabled": _reg.is_enabled(_byod_upg.FLAG_TYPE, rule_rows),
+            "classes": list(params.get(_byod_upg.CLASSES_KEY) or ()),
+            "class_labels": [_lc.CLASS_LABELS.get(x, x)
+                             for x in (params.get(_byod_upg.CLASSES_KEY) or ())],
+            "box_departments": sorted(box),
+            "sales_table": tbl,
+            # The feed genuinely carrying nothing for this period is NOT "no cases" — it is
+            # "not reported", and a screen must be able to say which.
+            "has_feed": bool(rows),
+            "summary": _byod_upg.summary(grouped, found, is_box=is_box),
+            "cases": out}
+
+
 # ── The config surface: thresholds are rows, never code (RULE TWO). ─────────────────────────────
 @router.get("/watchdog/rules")
 def watchdog_rules(org_id: str = ORG_ID):
@@ -424,8 +512,14 @@ def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 
             client, org_id, p,
             # `category` is here for the accessory predicate, which reads department OR category:
             # a feed that spells accessories only in Category (measured live) is invisible without it.
+            # `contract_type` is here for the activation CLASS predicate, and leaving it out is a
+            # SILENT ZERO rather than an error: `line_class.HOUSE_FIELDS` is ("contract_type",), so
+            # without the column every line classifies as None, the §COMMCALC-42 detector finds no
+            # activation events at all, and the sweep reports a clean period it never looked at.
+            # Locked by harness_byod_upgrade_wiring §B — every field any tenant's resolved rules can
+            # read must be in this select.
             "store,salesperson,ext_price,trans_id,trans_date,product_desc,serial_1,"
-            "mdn,voided,trans_type,department,category,customer")
+            "mdn,voided,trans_type,department,category,customer,contract_type")
     except Exception as e:
         sales_err = str(e)[:300]
 
@@ -512,6 +606,51 @@ def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 
                                 "detail": f"run migration 287 first: {str(e)[:200]}"}
     except Exception as e:
         out["multi_handset"] = {"error": str(e)[:300]}
+
+    # ── A brought device and an upgrade on one number in one day (index §COMMCALC-42). ──────────
+    #
+    # Rides the SAME `sales_rows` read above — one feed read serves every detector on this tick, so
+    # adding a watchdog costs no extra pass over the biggest table in the schema. Three facts are
+    # INJECTED rather than decided here, each already having a home:
+    #   • the org's line_class rules — `router._line_rules_of(_accessory_config(...))`, so "which
+    #     kind of activation is this" is answered by that company's own declared vocabulary and
+    #     cannot disagree with its activation count or its per-activation payout.
+    #   • the box-department set — the same membership test the box count uses. REFUSED, not
+    #     defaulted: no declaration means handset counts of None ("not measured").
+    #   • voided and returned lines — `byod_upgrade_day.line_skip`, the display skip rule, applied
+    #     inside the detector. `countable_sale_skip_reason` is deliberately NOT used: its third rule
+    #     drops a line with a blank or 'admin' rep, which is a PAY question, and an activation
+    #     nobody is credited for still happened to a phone line.
+    try:
+        if sales_err:
+            raise RuntimeError(sales_err)
+        from app.modules.commcalc.router import _accessory_config, _line_rules_of
+        _bcfg = _accessory_config(client, org_id)
+        _brules = _line_rules_of(_bcfg) or _lc.HOUSE_RULES
+        _bbox = _bcfg.get("box_departments") or set()
+        _bis_box = ((lambda r, _b=_bbox: _s(r.get("department")) in {_s(d) for d in _b})
+                    if _bbox else None)
+        pm, py = _month_year(p)
+        bu_flags, bu_summary = _byod_upg.findings(
+            sales_rows, _brules, org_id=org_id, period=p, period_month=pm, period_year=py,
+            rule_rows=rules, is_box=_bis_box)
+        # The ONE home that turns a POS store spelling into a store_code a district manager's board
+        # can filter on (mig 285). Visibility only — it writes no amount and no pay field.
+        try:
+            flag_store_resolver.stamp_flags(client, org_id, bu_flags)
+        except Exception as e:
+            print(f"WARN byod-upgrade store_code unresolved, address kept: {e}")
+        out["byod_upgrade"] = flag_persist.sync(
+            client, org_id, bu_flags, periods=_pvariants(p), sources=[_byod_upg.SOURCE],
+            reason="the day no longer shows both kinds of activation on that number")
+        out["byod_upgrade"].pop("run_id", None)
+        out["byod_upgrade"]["summary"] = bu_summary
+        out["byod_upgrade"]["sales_table"] = sales_table
+    except flag_persist.FlagPersistUnavailable as e:
+        out["byod_upgrade"] = {"skipped": "findings cannot be recorded yet",
+                               "detail": f"run migration 287 first: {str(e)[:200]}"}
+    except Exception as e:
+        out["byod_upgrade"] = {"error": str(e)[:300]}
 
     return out
 
