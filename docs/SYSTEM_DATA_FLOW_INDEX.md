@@ -127,6 +127,7 @@ Primary code homes:
 | CORE-17 | **A figure names the rows behind it** | "Where is this number coming from? Open a reported figure and see the rows it was summed from, and which report, feed or upload each row came out of. Which reports still have no drill-down, and what stops the next one shipping without one?" |
 | CORE-14 | **One palette, dereferenced** | "Make the colours of the side menu alternate between the logo colours so each item stands out. Where does a colour used by the chrome live, how many places spell it, and what proves a row stays readable once it is coloured?" |
 | CORE-16 | **A self-call carries the tenant it is acting as** | "The envelope payout screen says the commission accrual and salary-owed fetches failed with 409 Conflict. What identity does a call the platform makes to itself carry, which company does it say it is acting for, and what stops the next such call from dropping it?" |
+| CORE-19 | **A test is a gate, or it is a file** | "We need to define all development we do to follow the following: unit testing, integration testing, test-driven development. What runs a test in this repo, what stops a test reaching the live database when there is no staging one, and what fails the build the day the framework quietly comes undone?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -26111,6 +26112,7 @@ status word rather than a blank that reads as nil.
 | CORE-16 | core |
 | CORE-17 | core |
 | CORE-18 | core |
+| CORE-19 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
 | POS-01 | pos |
@@ -38822,3 +38824,119 @@ returning a partial feed. Placed where it is, that raise reaches the caller **be
 an unreadable source leaves the old snapshot standing — the same guarantee as the write preflight,
 on the other side: *a rebuild never deletes what it cannot replace, and it cannot establish it can
 replace from half the source.* `harness_feed_read_lock.py`'s unordered-read ratchet drops 98 → 95.
+
+## §CORE-19. A TEST IS A GATE, OR IT IS A FILE — unit, integration and TDD as the house standard (owner directive 2026-10-28)
+
+**Owner directive 2026-10-28, verbatim:** *"We need to define all development we do to follow the
+following / Unit testing / Integration testing / Test driven development"*.
+
+**Full guide: `docs/TESTING.md`.** This section is the index entry: what exists, where it lives, and
+what fails the build.
+
+### CORE-19.1 What was measured before building
+
+- **597** `backend/harness_*.py` proof programs, of which **330 are run by no workflow**
+  (`harness_unrun_pending.txt`) — the §19.25 class, already named.
+- **One** pytest-shaped file (`backend/tests/test_assignment_audit_flags.py`, now moved into `tests/unit/`), collected by nothing
+  and run by no job.
+- **No** pytest configuration, no conftest, no fixtures, no test runner of any kind.
+- **No frontend TEST job anywhere.** `npm run typecheck` and `npm run lint:gate` were already
+  gated — inside `carrier-vocab-guard.yml`, whose name says nothing about either, and locked by
+  `harness_frontend_typecheck_lock.py` / `harness_frontend_lint_lock.py`. What did not exist was any
+  job that runs a test. The 12 `frontend/tools/*-proof.mjs` programs were executed by **no workflow
+  at all**; 8 pass today and 4 do not.
+- **Duplicate check (CLAUDE.md build gate):** the index was searched for `pytest`, `unit test`,
+  `integration test`, `test framework`, `vitest`, `jest`. **Zero hits.** No existing mechanism serves
+  this purpose, so nothing was duplicated. The harnesses and the `*-proof.mjs` programs are the
+  adjacent mechanism and were **extended, not replaced**: the proofs are now run by CI behind a
+  shrink-only register, and `pytest.ini` deliberately does not collect harnesses so the two lanes
+  stay separate.
+
+### CORE-19.2 The class, not the instance
+
+> **A test that no workflow runs, or that can pass while the thing it guards is gone, is not a gate
+> — it is a file.** The same fact the house already established for harnesses applies to a test
+> suite, and a suite fails that way faster: a `testpaths` that drifts, a network guard deleted to
+> debug one thing, a CI job that installs a runner and never calls it. Each leaves the suite green
+> and meaningless.
+
+So the framework ships with the lock that fails the build when any load-bearing piece comes undone.
+
+### CORE-19.3 The one homes
+
+| Fact | Its one home |
+|---|---|
+| How the backend suite is configured | `backend/pytest.ini` |
+| Test-only dependencies | `backend/requirements-dev.txt` |
+| Fixtures, credential blanking, the network guard, suite auto-marking | `backend/tests/conftest.py` |
+| The in-memory database double | `backend/tests/fakes/supabase.py` |
+| How the frontend suite is configured | `frontend/vitest.config.ts` |
+| The frontend's fetch blocker | `frontend/tests/setup.ts` |
+| Running the standalone frontend proofs + their ratchet | `frontend/tools/run-proofs.mjs` + `tools/proof_red_pending.txt` |
+| The written standard | `docs/TESTING.md` |
+| The lock on all of the above | `backend/harness_test_discipline.py` |
+
+`backend/tests/unit/` is pure logic; `backend/tests/integration/` is the real `app.main:app` under
+Starlette's `TestClient`. Markers are applied **by directory** in `conftest.pytest_collection_modifyitems`,
+so `-m unit` / `-m integration` are right without anyone remembering a decorator.
+
+### CORE-19.4 Production is unreachable from a test, by construction
+
+There is no staging database in this project: every environment points at the same live Supabase. So
+the suite does not ask authors to be careful, it removes the capability. Two independent barriers in
+`conftest.py`, and the credential one fires first:
+
+1. **Credentials are blanked** before the app is imported — `create_client` refuses outright.
+2. **Outbound sockets are blocked** for the whole session; loopback stays open for `TestClient`.
+   Anything else raises `OutboundNetworkBlocked` naming the host and pointing at `docs/TESTING.md`.
+
+`frontend/tests/setup.ts` is the mirror: `fetch` throws unless a test stubs it deliberately.
+
+Checking something against live data remains a separate activity, done by **reading** production
+through the Supabase REST API — never by a test, never by writing.
+
+### CORE-19.5 The double refuses the shape that emptied a live table
+
+`tests/fakes/supabase.py` raises `OutboundWriteRefused` on an `update()` or `delete()` carrying **no
+filter** — the shape that emptied 11,000 live payable rows (§PAYABLES-01). A test cannot certify that
+shape as working. The double is itself unit-tested (`tests/unit/test_supabase_double.py`, 12 checks)
+because every integration test's honesty rests on its chain semantics matching postgrest's.
+
+### CORE-19.6 The lock — `harness_test_discipline.py`
+
+Run by `.github/workflows/tests.yml` job `test-discipline`. Stdlib only. It fails the build when:
+
+- `pytest.ini` stops pointing at the suite, or drops `--strict-markers`, or its declared markers stop
+  being exactly `{unit, integration}`;
+- `requirements-dev.txt` stops pinning pytest or stops building on the real `requirements.txt`;
+- the network guard is removed **or stops working** — it is given a real production hostname and must
+  refuse it, and given loopback and must let it through. Run, not read;
+- the credentials conftest blanks are not **exactly** the declared set, compared both ways (§CORE-10),
+  so a variable leaving the list names itself instead of quietly going live;
+- either suite directory disappears or empties;
+- a **second** in-memory Supabase double appears anywhere under `tests/`;
+- a declared CI command is not actually run by `tests.yml`, or the workflow omits the top-level
+  `shell: bash` the pipefail lock requires (§19.25);
+- the frontend loses its test scripts, its setup file, or its fetch blocker;
+- RULE TWO: a tenant or carrier name appears anywhere in the framework.
+
+### CORE-19.7 CI — `.github/workflows/tests.yml`, five enforcing jobs
+
+| Job | Command |
+|---|---|
+| Backend unit tests | `python -m pytest tests -m unit` |
+| Backend integration tests | `python -m pytest tests -m integration` |
+| Frontend unit and component tests | `npm run test` |
+| Frontend proofs (shrink-only register) | `npm run test:proofs` |
+| The test framework stays wired (lock) | `python harness_test_discipline.py` |
+
+None is `continue-on-error`. A red job blocks the merge.
+
+### CORE-19.8 The second shrink-only register
+
+`frontend/tools/proof_red_pending.txt` is the frontend's counterpart to
+`harness_unrun_pending.txt`: a proof **not** on it must pass, a proof **on** it that starts passing
+fails the build until its line is deleted, and `PINNED_MAX` in `run-proofs.mjs` is its length today
+(**4**) and may only go down. The four entries are declared with what is actually wrong with each —
+one real assertion failure, three whose runner lost the `@/` tsconfig path alias when transpiling to
+a temp directory. They are **reported, not hidden**, and fixing them is its own change.
