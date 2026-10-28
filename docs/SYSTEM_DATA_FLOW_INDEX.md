@@ -163,6 +163,7 @@ Primary code homes:
 | COMMCALC-39 | **A declaration is read off the page, and a declared report resolves to itself** | Fourteen reports were asked for by name, and every one of them would have resolved to NOTHING: the pull passed a source's own declaration back to its adapter as a FILTER, squashed under a different rule from the one the reports were keyed by, so a fully configured source read as "No reports are enabled". And the filters those reports need are behind framework-generated control ids nobody can guess. Where should a declaration come from, and what does one argument meaning two things to two callers cost? |
 | COMMCALC-40 | **The status word is the sentence's own verdict, never a literal** | The sweep said "⚠ PARTIAL — a column stopped arriving" in one column and stored `ok` in the column next to it, so every screen that colours on the word showed green over October 2026's missing KPI counts for ten days. What does a verdict cost when it is computed as prose and then discarded at the one place a machine reads it? |
 | COMMCALC-41 | **A derived snapshot rebuilds itself when its inputs land** | "The rebuild ledger or recalculate should be real time all across, then tenant would not know when to run" — and the payable ledger had last been built 53 days earlier while the feed it is built from was four days old, so every "what is owed next week" surface read EMPTY and nothing on the page said why. Which derived things are live, which are on a button nobody knows to press, and what is a tenant doing scheduling a rebuild at all? |
+| COMMCALC-42 | **A per-tenant config table is read once per tenant, never once per key** | A 1,000-user load test named `commcalc.target_field_registry` the busiest table in the platform — 19,658 reads, more than every other table combined — because the registry was fetched one `report_key` at a time and the readiness matrix walks every key twice. One page cost 88 PostgREST round trips, growing with the number of report types a tenant declares. How much of the platform's fixed concurrency budget is being spent asking the same small config table the same question over and over? |
 | PAYABLES-01 | **A rebuild never deletes what it cannot replace** | "Rebuild via sql let me know what permissions to add" — and the rebuild, run for real, deleted all 11,000 Boost rows and inserted none, then returned HTTP 200 describing the table it had just emptied. Two migrations had been skipped while later-numbered ones landed. What is a delete+insert worth without a transaction, and which half of that pair is the one you can afford to run first? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
@@ -26115,6 +26116,7 @@ status word rather than a blank that reads as nil.
 | CORE-19 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
+| COMMCALC-42 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -38824,6 +38826,51 @@ returning a partial feed. Placed where it is, that raise reaches the caller **be
 an unreadable source leaves the old snapshot standing — the same guarantee as the write preflight,
 on the other side: *a rebuild never deletes what it cannot replace, and it cannot establish it can
 replace from half the source.* `harness_feed_read_lock.py`'s unordered-read ratchet drops 98 → 95.
+
+## §COMMCALC-42. A PER-TENANT CONFIG TABLE IS READ ONCE PER TENANT, NEVER ONCE PER KEY (load test 2026-10-28)
+
+**How it was found.** A 1,000-user load test against the real app (rig and findings in
+`/mnt/project-files/load-test-2026-10-28/`) counted every PostgREST round trip the platform makes.
+`commcalc.target_field_registry` came back as the single busiest table in the system — **19,658
+reads**, more than every other table combined — and `GET /commcalc/column-mapping/readiness` cost
+**88 round trips to render one page**, a number that GREW with the number of report types a tenant
+declares.
+
+**The class, not the instance.** The defect is not "that page is slow". It is *a per-tenant config
+table read one key at a time*. `target_registry.load_registry(client, org, report_key)` issued one
+query per `report_key`, and `column_mapping._registry_overlay` calls it for every key the readiness
+matrix walks — twice per key, once for `target_fields` and once for `period_source_field`.
+
+**Why it costs more than it looks.** The app's endpoints are blocking `def` handlers (the
+`harness_nav_perf.py` discipline), so each request holds one of the platform's
+`(workers × 40)` request threads for its whole chain of round trips. Fan-out is spent directly out
+of the concurrency budget: the load test measured a hard ceiling of 80 in-flight requests at the
+production default of `WEB_CONCURRENCY=2`.
+
+**The one home.** `app/modules/commcalc/target_registry.py` is now the only place that reads
+`commcalc.target_field_registry`, and it reads **the whole org's registry in one query**
+(`_org_rows`), org-keyed, 30-second TTL, positive results only, expired entries pruned on write.
+Its three accessors — `load_registry`, `registry_tuples`, `registry_report_keys` — all filter that
+one read in memory, so every caller inherits the fix and a future caller cannot reintroduce the
+fan-out by accident. `add_field` / `remove_field` call `invalidate(org_id)`, so a saved field is
+visible at once. A read that FAILS is never cached, so an un-run migration 070 self-heals on the
+next call — the same posture as `app/core/identity.py` and
+`tenant_middleware._resolve_identity`, which is also where the cache shape comes from (one pattern
+in the platform, not two).
+
+**Measured, end to end, against the real app:** `GET /commcalc/column-mapping/readiness`
+**88 → 10** round trips, 1,549 ms → 665 ms. `GET /closing/readiness` 21 → 16.
+
+**The lock.** `backend/harness_target_registry_one_read.py`, CI job
+`target-registry-one-read` in `.github/workflows/carrier-vocab-guard.yml`. §A FAILS THE BUILD if
+the query count ever grows with the number of report keys again, or if the single read is narrowed
+to one `report_key`; §B pins the answers unchanged; §C pins write-invalidation; §D pins
+failure-is-never-cached; §E pins tenant isolation of the cache; §F drives the REAL readiness
+endpoint through `_harness_dbfree` and asserts one registry read. Verified red before green: with
+the per-key query restored, §A1/A2/A3/A5 fail.
+
+Same class: §19.18 (a registry written and its callers not wired to it), §CORE-05 (one complete
+paged read), §COMMCALC-24 (one pooled client, not one per request).
 
 ## §CORE-19. A TEST IS A GATE, OR IT IS A FILE — unit, integration and TDD as the house standard (owner directive 2026-10-28)
 
