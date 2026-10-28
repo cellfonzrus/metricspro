@@ -172,7 +172,7 @@ on:
       - "frontend/prove_one_domain.mjs"
       - "frontend/package-lock.json"
       - "backend/harness_one_domain_lock.py"
-      # §COMMCALC-42 — one read per tenant for the target-field registry: the one home, its two
+      # §COMMCALC-43 — one read per tenant for the target-field registry: the one home, its two
       # consumers, the page that surfaced the fan-out, and the lock itself.
       - "backend/app/modules/commcalc/target_registry.py"
       - "backend/app/modules/commcalc/column_mapping.py"
@@ -1076,6 +1076,14 @@ on:
       # departments and the void filter, writes under the detector's own `source`, and names no
       # sales table literally. A change here must re-run that proof.
       - "backend/app/modules/commcalc/watchdog_router.py"
+      # §COMMCALC-43 — a brought device and an upgrade on one number in one day. Named with its
+      # home, its two proofs, and `line_class.py`, which is the home it dereferences for what one
+      # activation IS and what phone line it is on: a change to the class precedence or to the
+      # event key changes what this detector pairs, so it must re-run both proofs.
+      - "backend/harness_byod_upgrade_day.py"
+      - "backend/harness_byod_upgrade_wiring.py"
+      - "backend/app/modules/commcalc/byod_upgrade_day.py"
+      - "backend/app/modules/commcalc/line_class.py"
       - "backend/app/modules/commcalc/prospect_eval.py"
       - "backend/app/modules/account/device_cogs.py"
       - "backend/app/modules/account/ma_store_pnl.py"
@@ -2721,6 +2729,44 @@ jobs:
         run: python3 harness_multi_handset_day.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
 
+  # §COMMCALC-43 — A BROUGHT DEVICE AND AN UPGRADE ON ONE NUMBER IN ONE DAY (owner ask 2026-10-28).
+  # TWO harnesses, deliberately, because they fail for different reasons and a house rule says the
+  # logic and the wiring are both proved:
+  #
+  #   · harness_byod_upgrade_day.py (51 checks) drives the REAL detector over fixtures shaped like
+  #     the live daily sales feed. Its regressions are the ones measurement forced: a single
+  #     'BYOD Upgrade' line is ONE byod event and not a pair (46 such lines live); the unit is an
+  #     activation EVENT, so one upgrade's six receipt lines are one activation (counting lines read
+  #     456 live number-days where counting events reads 95); an event the one home keyed on a
+  #     DEVICE carries no number and is reported as unmeasurable rather than clean; and §D8 refuses
+  #     a config key that cannot change an outcome.
+  #   · harness_byod_upgrade_wiring.py (40 checks) drives the REAL endpoint and the REAL sweep
+  #     against a stand-in PostgREST client. It is the half a pure test cannot reach, and its §B is
+  #     an actual defect this PR fixed: the tick's shared sales read did not select `contract_type`,
+  #     which is `line_class.HOUSE_FIELDS`, so every line classified as None and the sweep would
+  #     have reported a clean period it never looked at — silently, with no error.
+  #
+  # Both import app.modules.commcalc.flag_registry, which reaches app/core/config.py ->
+  # pydantic_settings, and the wiring half imports FastAPI, so they run with the backend's
+  # dependencies installed (harness_ci_pipefail_lock enforces exactly this). DB-free: no database is
+  # reached in either, and the wiring half proves that by substituting the client.
+  byod-upgrade-same-number-lock:
+    name: Brought device then upgrade on one number (DB-free, the real detector and the real wiring)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: The detector (one line is not a pair; the event is the unit; a device-keyed sale is not measured; evidence, never a verdict)
+        working-directory: backend
+        run: python3 harness_byod_upgrade_day.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: The wiring (the select carries every field the class predicate reads; the open month is asked for; the span filter runs first; the row is written under its own source)
+        working-directory: backend
+        run: python3 harness_byod_upgrade_wiring.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+
   # THE STORE-TAKEOVER EVALUATION PROOF (index COMMCALC-03) drives the real prospect_eval rules over the
   # live booking one-homes it dereferences (ma_commission_bookings / ma_tx_bookings, ma_unit_price_from_rows
   # / ma_sold_cost_from_rows, route_expense_line, PL_SPEC) and AST-scans the prospect endpoints to prove they
@@ -3064,7 +3110,7 @@ jobs:
         working-directory: backend
         run: python3 harness_payable_rebuild_preflight.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
 
-  # THE ONE-READ-PER-TENANT LOCK (index §COMMCALC-42, found by the 1,000-user load test 2026-10-28).
+  # THE ONE-READ-PER-TENANT LOCK (index §COMMCALC-43, found by the 1,000-user load test 2026-10-28).
   # `commcalc.target_field_registry` was the busiest table in the platform — 19,658 reads in one load
   # run, more than every other table combined — because the registry was fetched ONE report_key at a
   # time and the readiness matrix walks every key twice. GET /commcalc/column-mapping/readiness cost
@@ -3086,7 +3132,7 @@ jobs:
         with: { python-version: "3.11" }
       - name: Install the backend's dependencies
         run: pip install -r backend/requirements.txt
-      - name: Run the one-read-per-tenant lock (88 round trips to render one page, growing with the tenant's report types - index COMMCALC-42)
+      - name: Run the one-read-per-tenant lock (88 round trips to render one page, growing with the tenant's report types - index COMMCALC-43)
         working-directory: backend
         shell: bash
         run: python3 harness_target_registry_one_read.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

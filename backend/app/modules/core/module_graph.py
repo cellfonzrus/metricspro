@@ -1335,6 +1335,10 @@ FACTS: dict[str, dict] = {
             'app/modules/asset/router.py': ('_reg',),
             'app/modules/closing/cash_watchdog.py': ('_reg',),
             'app/modules/closing/ops_chargebacks.py': ('_reg',),
+            # §COMMCALC-43. The byod-and-upgrade detector spells no severity, area or label of its
+            # own — `harness_byod_upgrade_day` §G1 fails the build if it declares one — so the
+            # Management Watchdog board gains a page for it by this registration alone.
+            'app/modules/commcalc/byod_upgrade_day.py': ('_reg',),
             'app/modules/commcalc/flags.py': ('_reg',),
             'app/modules/commcalc/multi_handset_day.py': ('_reg',),
             'app/modules/commcalc/portout_flags.py': ('_reg',),
@@ -1866,9 +1870,24 @@ FACTS: dict[str, dict] = {
         "homes": ('app/modules/commcalc/line_class.py',),
         "index": ('6', 'COMMCALC-03.23'),
         "locks": ('harness_line_class_lock.py', 'harness_activation_event_lock.py'),
-        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`, but CHECK THE
+        # DIFF: the rewriter strips the hand-written comments out of these `callers` dicts, so the
+        # two §COMMCALC-43 entries below were added by hand.
         "callers": {
             'app/modules/asset/router.py': ('_lc',),
+            # §COMMCALC-43. "A BYOD activation and an upgrade on one number" is a question about
+            # ACTIVATION EVENTS, and this home is the only thing that knows what one is: it folds an
+            # invoice's activation-type lines into events keyed on the line's own phone number and
+            # resolves each event's class by the org's declared precedence. The detector therefore
+            # owns no class vocabulary and no phone normaliser of its own (§D7 / §G3 of its lock
+            # fail the build if either appears), and the 'BYOD Upgrade' line that is ONE byod event
+            # rather than a pair is correct here for free.
+            'app/modules/commcalc/byod_upgrade_day.py': ('_lc',),
+            # The §COMMCALC-43 endpoint and the watchdog tick resolve the ORG's rules
+            # (`router._line_rules_of`) and hand them to the detector, so a tenant whose POS spells
+            # the activation kind in `category` is classified by its own declaration rather than by
+            # the house default — and they fall back to HOUSE_RULES by name, never by re-deriving.
+            'app/modules/commcalc/watchdog_router.py': ('_lc',),
             'app/modules/closing/router.py': ('_lcls',),
             'app/modules/commcalc/calculator.py': ('_lc',),
             'app/modules/commcalc/commission_engine.py': ('_lc',),

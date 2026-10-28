@@ -390,6 +390,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/watchdog' },
   { path: '/watchdog/void-register' },
   { path: '/watchdog/multi-handset' },
+  { path: '/watchdog/byod-upgrade' },
 ]
 
 /** The destinations search may offer: every page except the ones declared pre-auth. The CALLER still
