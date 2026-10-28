@@ -118,6 +118,12 @@ ALL_ON = sr.template_view({"header_text": "Authorised retailer", "footer_text": 
 BRAND = {"company_name": "Example Wireless", "address_lines": ["1 Example St", "Queens NY"],
          "license_tax_ids": "Lic 123456"}
 
+#: A row shaped like the live `storeops.stores` — its REAL columns (§POS-10). There is no `name`
+#: column on that table, which is how a receipt in the tenant's own POS layout came to print the
+#: company name and no address at all.
+STORE_ROW = {"store_code": "STORE 1", "address": "1 Example St", "market": "NY",
+             "phone": "(555) 010-0100"}
+
 print("\n§A  the till slip — every toggle reaches the paper, and it adds up")
 html = sr.thermal_html(SNAP, ALL_ON, brand=BRAND, store_name="STORE 1",
                        disclaimer_blocks=[{"text": "Return policy", "signature": True}],
@@ -244,7 +250,7 @@ print("\n§D  the tenant's own POS layout — the same Document an import is par
 from app.modules.pos.receipt_formats import rq as _rq  # noqa: E402
 from app.modules.pos.receipt_formats import render as _render  # noqa: E402
 
-doc = sr.document(SNAP, _rq, ALL_ON, brand=BRAND, store_lines=["STORE 1", "1 Example St"],
+doc = sr.document(SNAP, _rq, ALL_ON, brand=BRAND, store_row=STORE_ROW,
                   employee_name="A. Rep")
 check("D1 it is that POS's own document (source and columns come from the format, not from here)",
       doc["pos_source"] == _rq.POS_SOURCE and doc["columns"] == _rq.COLUMNS)
@@ -917,7 +923,7 @@ check("O7 the printer's byte stream carries it too — the same model, no change
       and "customer_lines" not in ESC_SRC)
 check("O8 the paper copy and the emailed copy carry it (one renderer of that model)",
       all(ln in sr.thermal_html(SNAP, ALL_ON, customer_lines=CUST_LINES) for ln in CUST_LINES))
-doc = sr.document(SNAP, RQ_ROW["module"], ALL_ON, store_lines=["STORE 1"], customer_lines=CUST_LINES)
+doc = sr.document(SNAP, RQ_ROW["module"], ALL_ON, store_row=STORE_ROW, customer_lines=CUST_LINES)
 check("O9 the tenant's own POS layout bills to the same block",
       doc["bill_to"]["lines"] == ["John Smith"] + CUST_LINES
       and doc["bill_to"]["name"] == "John Smith")
@@ -1016,7 +1022,7 @@ check("P6 the customer's own address rides into it too (§POS-07)",
       all(ln in SLIP_ALL for ln in CUST_LINES))
 
 DOC_PDF = rpdf.receipt_pdf(SNAP, T_POS, fmt=RQ_ROW["module"], render_words=_render.render_words,
-                           store_lines=["STORE 1", "1 Example St"], customer_lines=CUST_LINES)
+                           store_row=STORE_ROW, customer_lines=CUST_LINES)
 DOC_SIZES, DOC_TEXT = pdf_pages(DOC_PDF)
 check("P7 the tenant's own POS layout is the file's layout too, on its own page size",
       len(DOC_SIZES) == 1 and DOC_SIZES[0] == (612.0, 792.0)
@@ -1030,7 +1036,7 @@ _long["items"] = [{"description": f"Item {i}", "serial": "", "qty": 1, "unit_pri
                    "discount": 0, "line_total": 10.0} for i in range(120)]
 _long_pdf = rpdf.receipt_pdf(sr.snapshot_view(_long, {"status": "completed"}), T_POS,
                              fmt=RQ_ROW["module"], render_words=_render.render_words,
-                             store_lines=["STORE 1"])
+                             store_row=STORE_ROW)
 _long_sizes, _long_text = pdf_pages(_long_pdf)
 _long_all = "\n".join(_long_text)
 check("P9 a receipt longer than the page continues onto the next one and drops no line",
@@ -1159,6 +1165,95 @@ check("Q17 a different sale is a different panel, so no address can be carried o
       and panel.count("useState(view.whatsapp.to)") == 1
       and reg.count("<SendReceiptPanel key={lastSaleId} saleId={lastSaleId}") == 1
       and reg.count(REPRINT_MOUNT) == 1)
+
+
+
+def _slip_fits(template_v):
+    """Does every word of the till slip land INSIDE the page it is drawn on? A thermal printer fits
+    its whole character grid across the roll; the file was set at a fixed point size and the right
+    hand column walked off the edge, so a customer's receipt read 'Subtotal 8' where the slip says
+    'Subtotal 808.75'. Measured off the rendered file, never off the geometry that drew it."""
+    data = rpdf.receipt_pdf(SNAP, template_v, brand=BRAND, store_name="STORE 1",
+                            store_row=STORE_ROW, remit_block=REMIT_BLOCK)
+    with pdfplumber.open(io.BytesIO(data)) as d:
+        pg = d.pages[0]
+        text = pg.extract_text() or ""
+        return (max((w["x1"] for w in pg.extract_words()), default=0) <= pg.width + 0.5
+                and f'{SNAP["total"]:,.2f}' in text and f'{SNAP["tax_total"]:,.2f}' in text)
+
+print("\n§R  WHAT THE SHOP IS — one home, every layout (§POS-10)")
+# Owner 2026-10-28, verbatim: *"see the rq receipt email to the customer, it does not show the
+# address and looks fake , make sure all teh details are on the recipt like the original receipt
+# from rq , the till thermal printer receipt came out ok"*.
+#
+# THE CLASS, not the instance. "What does a receipt say the shop IS?" had TWO answers: the till slip
+# read the receipt-branding rows; the tenant's own POS layout read a `store_lines` list the router
+# assembled for it alone out of `storeops.stores`. The second one selected a `name` column that
+# table does not have, PostgREST answered 42703, the router swallowed it, and the emailed copy went
+# out with the company name and nothing else. One tenant SAW it; every tenant on that layout had it.
+from app.modules.pos import receipt_store_block as shop  # noqa: E402
+
+SHOP_SRC = read("backend/app/modules/pos/receipt_store_block.py")
+SHOP = shop.block(BRAND, STORE_ROW, tenant_name="Example Wireless Inc", store_code="STORE 1")
+
+check("R1 the block is the branding an admin typed — name, address, licence — plus the store's phone",
+      SHOP["name"] == "Example Wireless" and SHOP["address_lines"] == BRAND["address_lines"]
+      and SHOP["license"] == "Lic 123456" and SHOP["phone"] == "(555) 010-0100")
+check("R2 a shop that filled in no branding address falls back to its OWN row, one line, never blank "
+      "— and the market column is NOT folded in (it is a market name, not reliably a state)",
+      shop.block({"company_name": "C"}, STORE_ROW)["address_lines"] == ["1 Example St"]
+      and shop.block({"company_name": "C"}, {"store_code": "S"})["address_lines"] == []
+      and shop.block({}, {"address": "1 Test St Testville NY 10000",
+                          "market": "NY"})["address_lines"] == ["1 Test St Testville NY 10000"])
+check("R3 nothing is invented for a shop that declared neither",
+      shop.block({}, None, store_code="STORE 1")
+      == {"name": "STORE 1", "address_lines": [], "phone": "", "license": "",
+          "lines": ["STORE 1"]})
+check("R4 the columns that read the store row are the ones that table HAS, declared once",
+      "name" not in shop.STORE_COLUMNS.split(",")
+      and set(shop.STORE_COLUMNS.split(",")) <= set(STORE_ROW)
+      and "_shop.STORE_COLUMNS" in router
+      and not re.search(r'table\("stores"\)\.select\("[^"]*name', code_only(router)))
+
+_slip_heads = [h["text"] for h in sr.slip_model(SNAP, ALL_ON, brand=BRAND, store_name="STORE 1",
+                                                store_row=STORE_ROW)["head_lines"]]
+_pos_doc = sr.document(SNAP, _rq, ALL_ON, brand=BRAND, store_row=STORE_ROW, store_name="STORE 1")
+_pos_block = _pos_doc["store"]["lines"] + [_pos_doc["store"]["phone"]]
+check("R5 THE REGRESSION — the tenant's own POS layout carries the address and the licence, not the "
+      "company name alone (this is receipt 4605)",
+      "1 Example St" in _pos_block and "Queens NY" in _pos_block and "Lic 123456" in _pos_block
+      and len(_pos_doc["store"]["lines"]) > 1)
+check("R6 the two layouts say the SAME thing about the shop — one fact, dereferenced twice",
+      all(ln in _slip_heads for ln in SHOP["lines"])
+      and all(ln in _pos_block for ln in SHOP["lines"]))
+check("R7 a store read that FAILS costs the receipt nothing the admin filled in (the branding wins, "
+      "the row is only the fallback)",
+      sr.document(SNAP, _rq, ALL_ON, brand=BRAND, store_row=None)["store"]["lines"]
+      == [BRAND["company_name"]] + BRAND["address_lines"] + [BRAND["license_tax_ids"]])
+check("R8 the legal blocks reach the POS layout too — the return policy was on the slip and NOT on "
+      "the emailed copy of the same sale",
+      "Return policy" in sr.document(SNAP, _rq, ALL_ON, brand=BRAND, store_row=STORE_ROW,
+                                     disclaimer_blocks=[{"text": "Return policy"}])["footer_text"])
+check("R9 a block that asks for a signature gets its line, in this layout too",
+      "Customer signature" in sr.document(SNAP, _rq, ALL_ON, disclaimer_blocks=[
+          {"text": "I agree", "signature": True}])["footer_text"])
+check("R10 a receipt with no blocks grows no footer of its own",
+      sr.document(SNAP, _rq, ALL_ON)["footer_text"] == ALL_ON["footer_text"])
+check("R11 LOCK — the store block is ASSEMBLED in one file and read everywhere else",
+      len([f for f in ("backend/app/modules/pos/sale_receipt.py",
+                       "backend/app/modules/pos/router.py",
+                       "backend/app/modules/pos/receipt_pdf_render.py")
+           if re.search(r"""brand(\.get\(|\[)\s*["'](address_lines|license_tax_ids)"""
+                        r"|license_tax_ids", code_only(read(f)))]) == 0
+      and "_shop.block(" in code_only(SR_SRC)
+      and code_only(SHOP_SRC).count("address_lines") > 0)
+check("R12 RULE TWO — the one home names no tenant, carrier or store, and branches on none",
+      not re.search(r"(?i)\b(vzone|boost|verizon|luxelink|cellfonz|total\s|rq)\b",
+                    code_only(SHOP_SRC)))
+check("R13 the slip's PDF fits the roll it declares — every figure, not the first character of it",
+      _slip_fits(ALL_ON) and _slip_fits(T58))
+check("R14 §POS-10 is registered in the index with its one home",
+      "POS-10" in idx and "receipt_store_block" in idx)
 
 print("\n§J  negative controls")
 check("neg-B a default that drifted on one side only is RED",

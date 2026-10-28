@@ -86,6 +86,32 @@ class _Query:
     def is_(self, col: str, val: Any) -> "_Query":
         self._filters.append(("is", col, val)); return self
 
+    def or_(self, expr: str, **_kw) -> "_Query":
+        """PostgREST's `or=(a.eq.1,b.is.null)` — a comma-separated list of `col.op.value` terms, of
+        which ONE must hold. The real client takes it as the raw string the caller composed, so the
+        double parses that same string rather than inventing a kinder signature: a test that proves
+        a route works has to prove it works with what the route actually sends.
+
+        Only the term forms this codebase composes are understood (`eq`, `is`, `neq`, `in`); an
+        unknown one raises rather than quietly matching nothing, which is how a row filter that
+        stopped filtering would otherwise pass a suite.
+        """
+        terms = []
+        for part in str(expr or "").split(","):
+            bits = part.strip().split(".", 2)
+            if len(bits) != 3:
+                raise NotImplementedError(f"the Supabase double cannot read or_ term {part!r}")
+            col, op, raw = bits
+            if op == "is":
+                terms.append(("is", col, None if raw == "null" else raw))
+            elif op in ("eq", "neq"):
+                terms.append((op, col, raw))
+            elif op == "in":
+                terms.append(("in", col, [v.strip('"') for v in raw.strip("()").split(",")]))
+            else:
+                raise NotImplementedError(f"the Supabase double cannot read or_ operator {op!r}")
+        self._filters.append(("or", None, terms)); return self
+
     # ── shaping ──────────────────────────────────────────────────────────────────────────────
     def order(self, col: str, desc: bool = False, **_kw) -> "_Query":
         self._order = (col, desc); return self
@@ -108,30 +134,37 @@ class _Query:
 
     def _matches(self, row: dict) -> bool:
         for op, col, val in self._filters:
-            got = row.get(col, _MISSING)
-            if op == "eq" and got != val:
+            if op == "or":
+                if not any(self._term(row, *t) for t in val):
+                    return False
+                continue
+            if not self._term(row, op, col, val):
                 return False
-            if op == "neq" and got == val:
-                return False
-            if op == "in" and got not in val:
-                return False
-            if op == "is":
-                if val is None and got not in (None, _MISSING):
-                    return False
-                if val is not None and got != val:
-                    return False
-            if op in ("gt", "gte", "lt", "lte"):
-                if got is _MISSING or got is None:
-                    return False
-                if op == "gt" and not got > val:
-                    return False
-                if op == "gte" and not got >= val:
-                    return False
-                if op == "lt" and not got < val:
-                    return False
-                if op == "lte" and not got <= val:
-                    return False
         return True
+
+    def _term(self, row: dict, op: str, col: str, val: Any) -> bool:
+        """One `col op value` test. Shared by the AND chain and by `or_`, so the two can never
+        disagree about what `is null` or `eq` means."""
+        got = row.get(col, _MISSING)
+        if op == "eq":
+            return got == val
+        if op == "neq":
+            return got != val
+        if op == "in":
+            return got in val
+        if op == "is":
+            return (got in (None, _MISSING)) if val is None else (got == val)
+        if op in ("gt", "gte", "lt", "lte"):
+            if got is _MISSING or got is None:
+                return False
+            if op == "gt":
+                return got > val
+            if op == "gte":
+                return got >= val
+            if op == "lt":
+                return got < val
+            return got <= val
+        raise NotImplementedError(f"the Supabase double does not implement filter '{op}'")
 
     def execute(self) -> FakeResponse:
         if self._verb == "select":
