@@ -228,8 +228,21 @@ _PROMOTE_DUE_SUFFIX = "/promote-due"
 # a FastAPI internal changed shape. Break-glass CRON_PATH_LITERAL_ONLY=0 restores the pre-fix
 # behaviour exactly, with one env change and no code rollback (same posture as REQUIRE_AUTH).
 # Locked by harness_public_allowlist_lock.py.
-_cron_path_cache: dict = {}
-_FALLBACK_CRON_PATHS = None          # most recent successful derivation; derived, never hardcoded
+# The derivation is memoised for ONE app, not in a dict keyed by app. A process serves a single
+# FastAPI app whose route table is fixed once the app is built, so a dict here would be a map that
+# only ever holds one entry and can only ever grow — which is the shape the bounded-cache
+# lock exists to retire. Two module-level slots say the same thing in O(1), with nothing to evict and
+# no TTL to forget. `_FALLBACK_CRON_PATHS` keeps the most recent SUCCESSFUL derivation so a later
+# failure to read the route table falls back to a real answer instead of an empty one; it is derived,
+# never hardcoded.
+#
+# The one thing the dict did that this does not: hold answers for SEVERAL apps at once. If two app
+# objects alternated, each call would recompute instead of hitting. That is a trade made on purpose
+# — a process serves one app, and the test suites that build a second one do so once — and the cost
+# of being wrong is a recomputation, where the cost of the dict being wrong was unbounded memory.
+_CRON_PATHS_FOR_APP_ID = None        # id() of the app the memo below was derived from
+_CRON_PATHS_MEMO = None              # that app's literal cron paths
+_FALLBACK_CRON_PATHS = None          # most recent successful derivation, from any app
 
 
 def _cron_literal_only() -> bool:
@@ -237,22 +250,22 @@ def _cron_literal_only() -> bool:
 
 
 def cron_paths_for_app(app):
-    """The LITERAL cron entrypoints this app declares, as a frozenset of full paths. Cached per app.
+    """The LITERAL cron entrypoints this app declares, as a frozenset of full paths. Memoised.
 
     Empty frozenset when the route table cannot be read — `_is_public` reads that as "fall back",
     never as "there are no sweeps". Never raises (it runs on every request)."""
-    global _FALLBACK_CRON_PATHS
+    global _FALLBACK_CRON_PATHS, _CRON_PATHS_FOR_APP_ID, _CRON_PATHS_MEMO
     try:
         if app is None:
             return _FALLBACK_CRON_PATHS or frozenset()
         key = id(app)
-        hit = _cron_path_cache.get(key)
+        hit = _CRON_PATHS_MEMO if key == _CRON_PATHS_FOR_APP_ID else None
         if hit is None:
             from app.core.path_redact import route_templates
             hit = frozenset(t for t in route_templates(app)
                             if isinstance(t, str) and "{" not in t
                             and (t.endswith(_RUN_DUE_SUFFIX) or t.endswith(_PROMOTE_DUE_SUFFIX)))
-            _cron_path_cache[key] = hit
+            _CRON_PATHS_FOR_APP_ID, _CRON_PATHS_MEMO = key, hit
             if hit:
                 _FALLBACK_CRON_PATHS = hit
         return hit
