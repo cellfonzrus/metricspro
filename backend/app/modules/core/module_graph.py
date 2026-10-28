@@ -327,6 +327,11 @@ FACTS: dict[str, dict] = {
             'app/modules/account/device_billing_drilldown.py': ('report_drilldown',),
             'app/modules/account/inventory_value_drilldown.py': ('report_drilldown',),
             'app/modules/account/memo_recon_drilldown.py': ('report_drilldown',),
+            # §COMMCALC-43 — the brought-device-then-upgrade flag, TWO grains in one catalogue
+            # because its two money figures are Σ over the same row out of DIFFERENT feeds: the
+            # sales feed for what the store rang, the carrier's payment feed for the chargeback
+            # amount. One panel for both would attribute a carrier payment to the sales feed.
+            'app/modules/commcalc/byod_upgrade_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1034,6 +1039,45 @@ FACTS: dict[str, dict] = {
             # forms no opinion of its own about any device: it declares which column each figure was
             # read out of and which relation held it.
             'app/modules/commcalc/device_financing_drilldown.py': ('_drr',),
+            # §COMMCALC-44 — the one home for the DOLLARS against a device binds this fact's pure
+            # fold to the org's config and the paged feed read. Both reports that want the figure
+            # go through it, so neither re-derives this fact's verdict vocabulary.
+            'app/modules/commcalc/carrier_device_money.py': ('_drr',),
+        },
+    },
+    # ══════════════════════════════════════════════════════════════════════════════════════════
+    # Factored out of `router._device_line_reimb_run` on 2026-10-28 when §COMMCALC-43's chargeback
+    # amount needed the same figure. It is NOT a sibling of the fact above: that one owns the
+    # VERDICT (paid here, paid elsewhere, never paid, not measured) and this one owns only the
+    # DOLLARS against one device and the I/O that binds the §58/§66/§27 questions to them. Two
+    # reports read this; both read the verdict fact through it.
+    'carrier_device_money': {
+        "question": 'How much device-financing money has the carrier already paid against THIS '
+                    'device? It binds the org\'s own declarations to §58\'s classification, asks '
+                    '§66 whether a classification is evidence at all, asks §27 how long either '
+                    'side of the event the money may arrive, reads the per-line feed paged, and '
+                    'folds it per device through §65\'s pure `carrier_line_side`. It answers None '
+                    'and never 0.00 for a device the feed carries no row for, because a rebate '
+                    'lands months after the sale and a confident zero there is the fake-zero '
+                    'class.',
+        "homes": ('app/modules/commcalc/carrier_device_money.py',),
+        "index": ('COMMCALC-44',),
+        "locks": ('harness_carrier_device_money.py',
+                  'harness_device_line_reimbursement.py'),
+        # SNAPSHOT — written BY HAND, multi-line, not blessed (see the note on the fact above).
+        "callers": {
+            # The P&L's equipment-reimbursement side: one row per device, the figure the statement
+            # is booked on.
+            'app/modules/commcalc/router.py': ('_cdm',),
+            # §COMMCALC-43's CHARGEBACK AMOUNT — the carrier money standing against the handset on
+            # a flagged brought-device-then-upgrade pair. It reads the SAME verdict the P&L books
+            # on, which is the point: a watchdog screen and the statement must not quote two
+            # different rebates for one phone.
+            'app/modules/commcalc/watchdog_router.py': ('_cdm',),
+            # §COMMCALC-43's drill-down catalogue names the relation this home reads the chargeback
+            # amount out of, by dereferencing `FEED_TABLE` rather than spelling it — so a panel
+            # cannot attribute the figure to the feed the ROW was found in (§CORE-17.3j).
+            'app/modules/commcalc/byod_upgrade_drilldown.py': ('_cdm',),
         },
     },
     'device_cost_store': {
@@ -1307,6 +1351,13 @@ FACTS: dict[str, dict] = {
             # evidence, so a last-resort basis added later cannot start presenting itself as a fact.
             'app/modules/commcalc/sales_margin_drilldown.py': ('_cdc',),
             'app/modules/commcalc/router.py': ('_cdc', '_cdc_gp', '_cdc_leg'),
+            # §COMMCALC-44 — the device-money home asks this fact THREE of its questions at once:
+            # which components are the device-financing side (`device_reimb_components`, §69),
+            # whether a classification is evidence at all (`component_is_evidence`, §66) and the
+            # classification itself (`classify`). It carries no payment-type vocabulary and no basis
+            # allowlist of its own; the POLICY of declining a non-evidence component belongs to its
+            # per-device grain and lives there.
+            'app/modules/commcalc/carrier_device_money.py': ('_cdc',),
         },
     },
     'installment_month_of_life': {
@@ -2449,6 +2500,10 @@ FACTS: dict[str, dict] = {
             'app/modules/payables/engine.py': ('_feed_read',),
             'app/modules/payables/unsold_inventory.py': ('_feed_read',),
             'app/modules/payables/vendor_invoice.py': ('_feed_read',),
+            # §COMMCALC-44 — the carrier's per-line payment feed, ~30,000 rows a month and growing.
+            # It was already read through this home inline in the router; the read moved WITH the
+            # question rather than reverting to a private page loop.
+            'app/modules/commcalc/carrier_device_money.py': ('_feed_read',),
         },
     },
     'payment_category_map': {

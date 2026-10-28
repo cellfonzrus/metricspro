@@ -57,6 +57,12 @@ from app.modules.commcalc import imei_rebate_report as IRR
 
 MOD = "app/modules/commcalc/device_reimb_recon.py"
 ROUTER = "app/modules/commcalc/router.py"
+#: §COMMCALC-44, the ONE home for "the device-financing dollars against this device".
+#: The decisions below used to sit inline in `_device_line_reimb_run`; they were factored
+#: out whole on 2026-10-28 when a second report (§COMMCALC-43's chargeback amount) needed
+#: the same figure. So these locks now assert the SAME properties one dereference away:
+#: the router must ASK the home, and the home must ask §58, §27 and the paged read.
+CDM = "app/modules/commcalc/carrier_device_money.py"
 COA_MOD = "app/modules/account/coa.py"
 GRAPH = "app/modules/core/module_graph.py"
 INDEX = "../docs/SYSTEM_DATA_FLOW_INDEX.md"
@@ -174,10 +180,16 @@ ok("A6. it classifies NOTHING of its own: the only thing that says a line is dev
    and "carrier_dollar_class" not in _code_only(_mod)
    and "carrier_map" not in _code_only(_mod))
 _rt = _fn_src(ROUTER, "_device_line_reimb_run")
-ok("A7. the ROUTER binds that callable to §58's one home and to the org's OWN component routing — "
-   "never a keyword guess and never a hard-coded component",
-   "carrier_dollar_class" in _rt and "_cdc.classify(" in _rt
-   and 'component_lines' in _rt)
+_cdm_all = _code_only(_src(CDM))
+ok("A7. the device-money predicate is bound to §58's one home and to the org's OWN component "
+   "routing — never a keyword guess and never a hard-coded component",
+   "carrier_dollar_class" in _cdm_all and "_cdc.classify(" in _cdm_all
+   and 'component_lines' in _cdm_all)
+ok("A7b. and the ROUTER no longer binds it itself — it ASKS §COMMCALC-44, so the P&L's "
+   "reimbursement line and the watchdog's chargeback amount cannot be two derivations of one "
+   "money question",
+   "_cdm.per_device(" in _rt
+   and "_cdc.classify(" not in _rt and "carrier_line_side" not in _rt)
 ok("A8. the router reuses the store-month layer's own input assembly (config, store resolver, "
    "coverage) instead of re-reading them",
    "_device_reimb_recon_inputs(" in _rt)
@@ -200,8 +212,10 @@ ok("A9b. and the ROUTER hands it §64's resolver and §64's own predicate rather
    "resolve_store" in _rt and "split(" not in _rt
    and not any(t in _rt for t in _SID_DERIVERS)
    and "may_be_one_store" in _rt)
-ok("A10. the LAG WINDOW is §27's own enumeration, dereferenced — no second lag rule in the router",
-   "imei_rebate_report import period_window" in _rt and callable(IRR.period_window))
+ok("A10. the LAG WINDOW is §27's own enumeration, dereferenced — no second lag rule anywhere on "
+   "this path",
+   "imei_rebate_report import period_window" in _cdm_all and callable(IRR.period_window)
+   and "period_window" not in _rt)
 ok("A11. the module graph carries the device grain on the EXISTING fact, not a 45th one",
    "'19.53', '65'" in _src(GRAPH)
    and "harness_device_line_reimbursement.py" in _src(GRAPH))
@@ -361,10 +375,15 @@ ok("F2. a tenant widens or narrows it with ONE config row, and a typo cannot unb
    and R.normalize_config({"lag_months": 99})["lag_months"] == 24
    and R.normalize_config({"lag_months": -5})["lag_months"] == 0
    and R.normalize_config({"lag_months": "nonsense"})["lag_months"] == CFG["lag_months"])
-_win = _rt[_rt.index("_lag_window"):]
-ok("F3. the router asks §27 for the window starting LAG MONTHS BEFORE the claim month and twice as "
-   "wide — the symmetry is in the code, not in a comment",
-   "_lag * 2" in _win and "- _lag" in _win)
+_win = _fn_src(CDM, "lag_periods")
+ok("F3. the one home asks §27 for the window starting LAG MONTHS BEFORE the claim month and twice "
+   "as wide — the symmetry is in the code, not in a comment",
+   "lag * 2" in _win and "- lag" in _win)
+ok("F3b. and it is really symmetric when RUN, not only when read — two months either side of "
+   "September is July through November",
+   (lambda w: len(w) == 5 and w[0] == "July 2026" and w[-1] == "November 2026")(
+       __import__("app.modules.commcalc.carrier_device_money", fromlist=["x"])
+       .lag_periods({"lag_months": 2}, "September 2026")))
 _bw = IRR.period_window("2026-08", 2)
 eq("F4. §27's own enumeration, asked that way, really does include the month before the anchor",
    _bw[:3], ["August 2026", "September 2026", "October 2026"])
@@ -452,7 +471,7 @@ ok("I3. it is org-scoped like every other sensitive read",
    "require_org(org_id)" in _fn_src(ROUTER, "device_line_reimbursement"))
 ok("I4. the per-line feed is read through the PAGED one home — no literal row ceiling on a feed "
    "that grows by ~30,000 rows a month",
-   "_feed_read.read_all(" in _rt)
+   "_feed_read.read_all(" in _cdm_all)
 _rbac = _src_opt(RBAC)
 ok("I5. the report is in the INVENTORY (Assets) module the owner asked for",
    "'/commcalc/device-line-reimbursement', label: 'Reimbursement per Line', icon: '📱', module: 'asset'"
@@ -607,13 +626,16 @@ ok("K13. control: a predicate that links NO pair withholds nothing, so the guard
 # this call site DEREFERENCES it. The POLICY is unchanged and still lives here, where the grain is:
 # at one row per phone an unreliable component is DECLINED. §66's own lock fails the build if the
 # copy comes back, in this module or any other.
-_IDD = _src(ROUTER).split("def is_device_dollar")[1].split("return hit")[0]
+# The predicate moved WITH the rest of the device-money question into §COMMCALC-44 on 2026-10-28.
+# The policy is unchanged and still lives at the CALL SITE — it is just that the call site is now
+# the one home both reports read, rather than one report's own run function.
+_IDD = _src(CDM).split("def is_device_dollar")[1].split("return hit")[0]
 ok("K14. a dollar §58 placed on a category the component vocabulary has no row for is DECLINED as "
-   "device money — the router asks §58's own home whether the component is evidence, and keeps no "
-   "copy of which bases those are",
+   "device money — the predicate asks §58's own home whether the component is evidence, and keeps "
+   "no copy of which bases those are",
    "component_is_evidence(" in _IDD
-   and "BASIS_DECLARED_UNMAPPED" not in _src(ROUTER)
-   and "BASIS_UNRESOLVED" not in _src(ROUTER))
+   and not any(t in _src(f) for f in (ROUTER, CDM)
+               for t in ("BASIS_DECLARED_UNMAPPED", "BASIS_UNRESOLVED")))
 ok("K15. …and that decision lives at the CALL SITE, not as a second classifier in the pure layer",
    not any(t in _code_only(_src(MOD)) for t in ("declared_category_unmapped", "payment_categories",
                                                 "carrier_category_map")))

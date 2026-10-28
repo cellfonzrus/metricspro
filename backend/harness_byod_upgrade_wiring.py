@@ -44,6 +44,7 @@ import sys
 sys.path.insert(0, ".")
 
 from app.modules.commcalc import byod_upgrade_day as M          # noqa: E402
+from app.modules.commcalc import byod_upgrade_drilldown as _byod_drill  # noqa: E402
 from app.modules.commcalc import flag_registry as REG           # noqa: E402
 
 PASS, FAIL = [], []
@@ -191,6 +192,30 @@ def line(**kw):
     return base
 
 
+#: The handset's device identifier, and the carrier money standing against it.
+MEID = "351449743101051"
+PAID = 61.00
+
+#: THE CARRIER'S PER-LINE PAYMENT FEED, the other half of the chargeback amount. `payment_type` is
+#: a type the org has DECLARED as device money below; `imei` is the key it is paid against.
+def paid_line(**kw):
+    base = {"org_id": ORG, "period": PERIOD, "business_address": "1 S 60th street",
+            "amount": PAID, "payment_type": "2026 Q4 Promo Upgrade", "imei": MEID,
+            "payment_date": "2026-10-20", "rep_username": "akhila"}
+    base.update(kw)
+    return base
+
+
+#: The org's own declaration of what that payment type IS, and the routing that makes the
+#: reimbursement component device money (§58/§69 — empty routing means "nothing declared", which is
+#: `configured: false`, not a measured zero).
+DECLARED = [{"org_id": ORG, "description": "2026 Q4 Promo Upgrade", "category": "Device Rebate"}]
+ROUTED = [{"org_id": ORG,
+           "carrier_class_category_components": {"device rebate": "REIMBURSEMENT"},
+           "carrier_component_lines": {"REIMBURSEMENT": "vip_reimb"},
+           "device_reimb_recon_config": {}}]
+
+
 #: The live case, as the 95 measured ones carry it: a BYOD activation with no handset, then a
 #: SEPARATE receipt the same day upgrading the same number onto a promo device.
 LIVE_CASE = [
@@ -199,13 +224,20 @@ LIVE_CASE = [
     line(trans_id="215350", contract_type="Upgrade", product_desc="Unlimited+ $50"),
     line(trans_id="215350", contract_type="Upgrade", product_desc="Autopay"),
     line(trans_id="215350", contract_type="Upgrade", department="Android - XP",
-         product_desc="moto g play - 2026 Q4 Promo Upgrade", ext_price=0.99),
+         product_desc="moto g play - 2026 Q4 Promo Upgrade", ext_price=0.99,
+         # THE DEVICE IDENTIFIER. It is the key the carrier pays against, so without it on the
+         # fixture no chargeback amount could ever be found and §H would prove nothing.
+         serial_1=MEID),
     line(trans_id="215350", contract_type="Upgrade", ext_price=35.0,
          product_desc="Device Setup Charge Upgrade (non-refundable)"),
 ]
 
 
-def tables(rows=None, *, box=BOX, adr=None, rule_rows=None, archive=None):
+def tables(rows=None, *, box=BOX, adr=None, rule_rows=None, archive=None,
+           paid=None, declared=None, routed=None):
+    """`paid` / `declared` / `routed` default to EMPTY, so every section written before the
+    chargeback amount sees exactly the world it saw before: an org that has declared no device-money
+    routing, whose amounts are therefore unmeasured rather than zero."""
     return {
         ("commcalc", "daily_sales_feed"): list(rows if rows is not None else LIVE_CASE),
         ("commcalc", "raw_sales"): list(archive or ()),
@@ -219,6 +251,9 @@ def tables(rows=None, *, box=BOX, adr=None, rule_rows=None, archive=None):
         ("storeops", "tenants"): [{"org_id": ORG}],
         ("commcalc", "closing_attempt"): [],
         ("commcalc", "daily_closing"): [],
+        ("commcalc", "raw_payment_detail"): list(paid or ()),
+        ("commcalc", "payment_categories"): list(declared or ()),
+        ("commcalc", "commission_org_config"): list(routed or ()),
     }
 
 
@@ -448,6 +483,149 @@ check("G2 migration 287 not run → the tick SAYS the finding cannot be recorded
       str(SW2.get("byod_upgrade"))[:140])
 check("G3 and every other detector on the tick still ran",
       {"cash", "voids", "multi_handset"} <= set(SW2))
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("H. the chargeback amount, and the drill-down of both transactions")
+# OWNER ASK 2026-10-28, verbatim: *"inmclude the $ amount of the rebate and title it as chargeback
+# amount, make it oneline summary top show the sales rep teh store the phone sold and the phone
+# number meim and teh $ amount and thebn drill down like other menus to get mroe detail sof both
+# trasnactions"*.
+#
+# EVERY CHECK HERE IS ABOUT A FIGURE THAT IS NOT MEASURED, because that is the state most rows are
+# in: a rebate lands months after the sale, so on a recent day the honest answer is "not yet" and a
+# $0.00 would be a measurement nobody made (§19.26). The amount is proved to arrive when the feed
+# carries it, and proved to stay ABSENT in all four ways it can be absent.
+_full = Client(tables(paid=[paid_line()], declared=DECLARED, routed=ROUTED))
+R_full = call_endpoint(_full)
+_c0 = (R_full.get("cases") or [{}])[0]
+
+check("H1 THE ONE-LINE SUMMARY carries a person, a place, a phone and a figure — the four things "
+      "the owner asked the top line to show",
+      _c0.get("rep") == "Jaladhi, Akhila" and _c0.get("store")
+      and _c0.get("number") == "2674832829" and _c0.get("meid") == MEID
+      and "moto g play" in (_c0.get("phone_sold") or ""),
+      str({k: _c0.get(k) for k in ("rep", "store", "number", "meid", "phone_sold")})[:200])
+check("H2 the phone named is the one the store SOLD — the handset on the UPGRADE side. The first "
+      "side is the device the customer brought in, and naming that would report the phone the "
+      "store did not sell, the opposite of the question",
+      _c0.get("phone_sold") == "moto g play - 2026 Q4 Promo Upgrade")
+check("H3 THE CHARGEBACK AMOUNT is the carrier money recorded against that handset, read through "
+      "the one home (§COMMCALC-44) — the same verdict the P&L books its reimbursement line on, so "
+      "a watchdog screen and the statement cannot quote two different rebates for one phone",
+      _c0.get("chargeback_amount") == PAID and _c0.get("chargeback_measured") is True,
+      str(_c0.get("chargeback_amount")))
+check("H4 it is NOT partial — one handset was sold and the feed answered for it",
+      _c0.get("chargeback_partial") is False and _c0.get("chargeback_phones_measured") == 1)
+check("H5 and the summary's total is that money, not a recount of the sale",
+      (R_full.get("summary") or {}).get("chargeback_dollars") == PAID
+      and (R_full.get("summary") or {}).get("chargeback_measured_cases") == 1)
+check("H6 the feed the figure was read from is STATED, not assumed — a reader can see which "
+      "relation answered and over which months",
+      (R_full.get("chargeback_source") or {}).get("feed_table") == "raw_payment_detail"
+      and (R_full.get("chargeback_source") or {}).get("configured") is True
+      and len((R_full.get("chargeback_source") or {}).get("lag_window") or ()) >= 1,
+      str(R_full.get("chargeback_source"))[:200])
+
+# ── THE FOUR WAYS THE AMOUNT CAN BE ABSENT, and none of them is a zero. ────────────────────────
+_nopay = call_endpoint(Client(tables(paid=[], declared=DECLARED, routed=ROUTED)))
+_n0 = (_nopay.get("cases") or [{}])[0]
+check("H7 NO PAYMENT HAS ARRIVED → None, never 0.00. This is the common state on a recent day and "
+      "it must not read as 'the carrier paid nothing for this phone'",
+      _n0.get("chargeback_amount") is None and _n0.get("chargeback_measured") is False
+      and (_nopay.get("summary") or {}).get("chargeback_unmeasured_cases") == 1)
+check("H8 and the case is still REPORTED — the pair is the finding, the money is context, so an "
+      "absent amount never suppresses a row",
+      len(_nopay.get("cases") or ()) == 1)
+
+_unconf = call_endpoint(Client(tables(paid=[paid_line()], declared=DECLARED, routed=[])))
+check("H9 NOTHING DECLARED → `configured: false` and every amount unmeasured, even though the feed "
+      "carries a payment. With no routing declared there is no declaration that this money is not "
+      "commission, and guessing would put a lump sum in a bucket a reader takes for device money",
+      (_unconf.get("chargeback_source") or {}).get("configured") is False
+      and (_unconf.get("cases") or [{}])[0].get("chargeback_amount") is None,
+      str(_unconf.get("chargeback_source"))[:160])
+
+_nomeid = call_endpoint(Client(tables(
+    rows=[(dict(r, serial_1="") if r.get("department") else r) for r in LIVE_CASE],
+    paid=[paid_line()], declared=DECLARED, routed=ROUTED)))
+_m0 = (_nomeid.get("cases") or [{}])[0]
+check("H10 NO DEVICE IDENTIFIER ON THE SALE → no amount, because the identifier IS the key the "
+      "carrier pays against. The row still names the phone it sold",
+      _m0.get("meid") is None and _m0.get("chargeback_amount") is None
+      and _m0.get("phone_sold") == "moto g play - 2026 Q4 Promo Upgrade")
+
+_broken = Client(tables(paid=[paid_line()], declared=DECLARED, routed=ROUTED),
+                 missing=[("commcalc", "raw_payment_detail")])
+R_broken = call_endpoint(_broken)
+check("H11 A CARRIER FEED THAT CANNOT BE READ degrades: the report still answers, every amount is "
+      "unmeasured, and `chargeback_source` SAYS the feed was not read — so a reader can tell that "
+      "from a carrier that has genuinely paid nothing",
+      len(R_broken.get("cases") or ()) == 1
+      and (R_broken.get("chargeback_source") or {}).get("available") is False
+      and (R_broken.get("cases") or [{}])[0].get("chargeback_amount") is None,
+      str(R_broken.get("chargeback_source"))[:160])
+
+# ── THE DRILL-DOWN, on the house mechanism rather than a private one. ──────────────────────────
+_p = R_full.get("panels") or {}
+check("H12 'DRILL DOWN LIKE OTHER MENUS' IS THE SHARED PANEL (§CORE-17) — the endpoint serves a "
+      "panel catalogue, so this screen keeps no private drill of its own",
+      isinstance(_p, dict) and {"dollars", "chargeback_dollars"} <= set(_p), str(sorted(_p)))
+def _sources(panel):
+    """The relations a panel's rows actually CITE — the served shape, not the declaration."""
+    return sorted({t for r in (panel.get("rows") or ()) for t in (r.get("sources") or ())})
+
+
+check("H13 BOTH GRAINS ARE SERVED, because the two figures rest on DIFFERENT feeds: the flagged "
+      "sale comes from the sales feed and the chargeback amount from the carrier's payment feed. "
+      "One panel for both would attribute a carrier payment to the sales feed (§CORE-17.3j)",
+      _sources(_p["dollars"]) == ["daily_sales_feed"]
+      and _sources(_p["chargeback_dollars"]) == ["raw_payment_detail"],
+      f"{_sources(_p['dollars'])} vs {_sources(_p['chargeback_dollars'])}")
+check("H14 each panel's figure TIES to the summary figure it explains — a panel that opens to rows "
+      "summing to something else is worse than no panel",
+      abs(float(_p["chargeback_dollars"]["figure"]["amount"] or 0)
+          - float((R_full["summary"] or {}).get("chargeback_dollars") or 0)) < 0.005
+      and abs(float(_p["dollars"]["figure"]["amount"] or 0)
+              - float((R_full["summary"] or {}).get("dollars") or 0)) < 0.005,
+      f"{_p['chargeback_dollars']['figure']} / {_p['dollars']['figure']}")
+check("H15 the chargeback row's ADDRESS is the device and the line, not the store and the day — "
+      "the carrier's payment feed carries neither of those columns, so keying it that way would "
+      "hand a reader an address that relation cannot be looked up by",
+      set((_p["chargeback_dollars"]["rows"][0]["origins"][0].get("keys") or {})) == {"meid", "number"}
+      and set((_p["dollars"]["rows"][0]["origins"][0].get("keys") or {})) == {"store", "day", "number"},
+      str(_p["chargeback_dollars"]["rows"][0]["origins"][0].get("keys")))
+
+# ── THE REASON MUST NAME THE RIGHT ABSENCE. Found by writing this lock: with nothing declared, every
+#    row blamed the carrier feed for a lookup that had never happened — a confident statement about
+#    an unmeasured thing, which is the fake zero in words instead of in a number (§19.26).
+check("H16 an absent amount still SERVES its panel — the rows then name each handset and the feed "
+      "they looked in, and a link that explains an absence is worth more than no link",
+      "chargeback_dollars" in (_nopay.get("panels") or {})
+      and (_nopay["panels"]["chargeback_dollars"]["rows"][0].get("measured") is False),
+      str(sorted((_nopay.get("panels") or {}))))
+
+def _reason(payload):
+    _pp = (payload.get("panels") or {}).get("chargeback_dollars") or {}
+    return ((_pp.get("rows") or [{}])[0]).get("reason")
+
+
+check("H17 NO PAYMENT, FEED READ → the reason is the carrier's, because the feed really was looked "
+      "at and really carries nothing for this handset",
+      _reason(_nopay) == _byod_drill.REASON_NOT_PAID_YET, str(_reason(_nopay)))
+check("H18 NOTHING DECLARED → the reason is the DECLARATION's, never the carrier's. No payment "
+      "could be called a rebate, so none was looked for, and blaming the feed would assert "
+      "something about rows nobody read",
+      _reason(_unconf) == _byod_drill.REASON_NOT_DECLARED, str(_reason(_unconf)))
+check("H19 FEED UNREADABLE → the reason says nothing was looked at, which a reader must be able to "
+      "tell from a carrier that has genuinely paid nothing",
+      _reason(R_broken) == _byod_drill.REASON_FEED_UNREAD, str(_reason(R_broken)))
+check("H20 NO HANDSET ON THE SALE → the reason is the SALE's: there is no device to look up, which "
+      "is not a carrier that has not paid",
+      _reason(_nomeid) == _byod_drill.REASON_NO_DEVICE, str(_reason(_nomeid)))
+check("H21 and the four reasons are four DIFFERENT sentences — collapsing any two would lose the "
+      "distinction this section exists to keep",
+      len({_byod_drill.REASON_NOT_PAID_YET, _byod_drill.REASON_NOT_DECLARED,
+           _byod_drill.REASON_FEED_UNREAD, _byod_drill.REASON_NO_DEVICE}) == 4)
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 print("\n" + "═" * 100)

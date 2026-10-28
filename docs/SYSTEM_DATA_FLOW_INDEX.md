@@ -168,6 +168,7 @@ Primary code homes:
 | COMMCALC-41 | **A derived snapshot rebuilds itself when its inputs land** | "The rebuild ledger or recalculate should be real time all across, then tenant would not know when to run" — and the payable ledger had last been built 53 days earlier while the feed it is built from was four days old, so every "what is owed next week" surface read EMPTY and nothing on the page said why. Which derived things are live, which are on a button nobody knows to press, and what is a tenant doing scheduling a rebuild at all? |
 | COMMCALC-42 | **A per-tenant config table is read once per tenant, never once per key** | A 1,000-user load test named `commcalc.target_field_registry` the busiest table in the platform — 19,658 reads, more than every other table combined — because the registry was fetched one `report_key` at a time and the readiness matrix walks every key twice. One page cost 88 PostgREST round trips, growing with the number of report types a tenant declares. How much of the platform's fixed concurrency budget is being spent asking the same small config table the same question over and over? |
 | COMMCALC-43 | **Two kinds of activation on one number in one day, counted as events** | "Check if a byod and an upgrade is done on the same day for the same phone number at the same store." Counting LINES the live feed showed 456 such number-days; counting activation EVENTS it shows 95, and the 46 lines reading 'BYOD Upgrade' are one sale rather than a pair. What is one activation, which phone line is it on, and how does a report say "we could not measure this" when 94% of a tenant's sales carry no number at all? |
+| COMMCALC-44 | **How much device money has the carrier paid against this phone** | "Include the $ amount of the rebate and title it as chargeback amount." The figure already existed, inline in the P&L's reimbursement run, so a second report wanting it made it a home rather than a copy: the P&L and a watchdog screen must not quote two different rebates for one phone. A rebate lands months after the sale, so the amount is allowed to be ABSENT — 41 of October's 48 cases — and naming which of four absences it is matters as much as the number. |
 | PAYABLES-01 | **A rebuild never deletes what it cannot replace** | "Rebuild via sql let me know what permissions to add" — and the rebuild, run for real, deleted all 11,000 Boost rows and inserted none, then returned HTTP 200 describing the table it had just emptied. Two migrations had been skipped while later-numbered ones landed. What is a delete+insert worth without a transaction, and which half of that pair is the one you can afford to run first? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
@@ -26125,6 +26126,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-41 | commcalc |
 | COMMCALC-42 | commcalc |
 | COMMCALC-43 | commcalc |
+| COMMCALC-44 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -39481,4 +39483,133 @@ module itself, and the screen renders them under the table.
   option and value are the same string by construction and the 2026-10-22 label-vs-key defect cannot
   occur; §D3 of the wiring proof bans the bare `.eq("store", …)` form in the endpoint anyway.
 - §COMMCALC-19 — `SendReportButton`, the one sender, reached through `ReportShell`.
+- §CORE-13 — no migration here, so no grant.
+
+## §COMMCALC-44. HOW MUCH DEVICE MONEY HAS THE CARRIER PAID AGAINST THIS PHONE (owner ask 2026-10-28)
+
+Owner, verbatim: *"inmclude the $ amount of the rebate and title it as chargeback amount, make it
+oneline summary top show the sales rep teh store the phone sold and the phone number meim and teh $
+amount and thebn drill down like other menus to get mroe detail sof both trasnactions"*.
+
+**Module:** `backend/app/modules/commcalc/carrier_device_money.py` — THE one home for "the
+device-financing dollars against THIS device"
+**Catalogue:** `backend/app/modules/commcalc/byod_upgrade_drilldown.py` — §COMMCALC-43's two §CORE-17
+panel grains
+**Callers:** `router._device_line_reimb_run` (the P&L's equipment-reimbursement side, §19.53/§65) and
+`watchdog_router.watchdog_byod_upgrade` (the chargeback amount, §COMMCALC-43)
+**Proof:** `backend/harness_carrier_device_money.py` — 37 checks, DB-free, the one-home lock
+**Integration proof:** `harness_byod_upgrade_wiring.py` §H — 21 checks over the real endpoint
+**House test gate (§CORE-19):** `tests/unit/test_carrier_device_money.py` (9) and the five added
+cases in `tests/integration/test_byod_upgrade_endpoint.py`
+**Migration:** NONE — it reads relations that already exist.
+**Money:** `$0.00`. The existing device-line reimbursement report was verified byte-identical on
+live September 2026 data after the refactor: 1,029 devices, `carrier_paid_here` $265,017.30,
+`distributor_claimed` $305,876.13.
+
+### COMMCALC-44.1 DUPLICATE CHECK — the figure already existed, and that is exactly why this is a home
+
+The chargeback amount is not a new measurement. "What did the carrier pay for device financing
+against this device" was ALREADY answered — by §65's pure `device_reimb_recon.carrier_line_side`,
+with about sixty lines in `router._device_line_reimb_run` binding the I/O to it.
+
+| already exists | what was done |
+| --- | --- |
+| `device_reimb_recon.carrier_line_side` (§65) — the pure per-device fold | REUSED unchanged. It is still the only thing that folds a feed row onto a device. |
+| the router's inline binding of §58/§66/§27 + the paged read to that fold | **EXTRACTED WHOLE** into this home, and the router now dereferences it. Copying it would have been two derivations of one money question. |
+| `imei_rebate_report.period_window` (§27) | REUSED. The lag window is asked, never re-spelled. |
+| `carrier_dollar_class.device_reimb_components` (§58/§69) / `component_is_evidence` (§66) | REUSED. This module carries no payment-type vocabulary and no basis allowlist. |
+| `core/feed_read.read_all` (§19.48) | REUSED. The read moved with the question rather than reverting to a private page loop. |
+
+Nothing new was derived. The decisions, their order and their reasons are the ones that were already
+in that block, moved whole — which is what makes the extraction provable: the live report's figures
+did not move by a cent.
+
+### COMMCALC-44.2 WHY TWO REPORTS QUOTING ONE REBATE HAD TO BE ONE HOME
+
+The P&L books its equipment-reimbursement line on this figure. The watchdog screen prints it as the
+chargeback amount beside a flagged sale. Had the block been copied, the day the two drifted they
+would both be quoting "the rebate on that phone" with different numbers and neither would say so —
+the duplicate defect the index rules forbid, on money.
+
+`harness_carrier_device_money.py` is the lock that keeps it one: §B fails the build if anything in
+app code calls §65's fold directly but this home and the module that defines it, §C that the §58/§66/
+§27 questions are asked rather than re-spelled, §D that both callers still dereference it, and §E
+that the watchdog caller spells none of the facts this home owns.
+
+### COMMCALC-44.3 NONE IS NOT $0.00 — the whole reason this figure is allowed to be absent
+
+A rebate routinely lands **months** after the sale. So "no carrier payment has arrived against this
+handset" and "the carrier paid $0.00 for it" are DIFFERENT facts, and `amount_for` returns `None` —
+never `0.00` — for a device the feed carries no row for (§19.26).
+
+Measured live 2026-10-28 over the flagged cases, and the shape is the argument:
+
+| month | cases | chargeback total | measured | not yet |
+| --- | --- | --- | --- | --- |
+| August 2026 | 22 | $5,764.97 | 22 | 0 |
+| September 2026 | 25 | $5,961.50 | 24 | 1 |
+| October 2026 | 48 | $1,901.50 | 7 | 41 |
+
+October is 41 of 48 **not yet**. Rendered as `$0.00` that month would read as "nothing is at stake
+on 41 recent sales", which is the opposite of the truth.
+
+### COMMCALC-44.4 FOUR WAYS THE AMOUNT CAN BE ABSENT, AND NAMING THE WRONG ONE IS THE SAME DEFECT
+
+Found by writing §H of the wiring proof: with no routing declared, every row said *"the carrier's
+feed carries no payment against this handset yet"* — a confident statement about rows nobody had
+read. That is the fake zero in words rather than in a number, so the reason is bound to WHAT WAS
+LOOKED AT (`chargeback_reason_for`), outside in:
+
+1. **the feed could not be read** — nothing was looked at; this is not a carrier that paid nothing.
+2. **nothing declared** — the org has declared no device money, so no payment could be called a
+   rebate and none was looked for. A CONFIG row fixes it, never code (RULE TWO).
+3. **no handset on the sale** — there is no device identifier to look up, which is a fact about the
+   sale, not the carrier.
+4. **handset known, feed read, nothing paid** — the carrier's absence, and the only one of the four
+   that is about the carrier.
+
+The panel is still SERVED in all four: its rows name each handset and the feed they looked in, and a
+link that explains an absence is worth more than no link.
+
+### COMMCALC-44.5 THE ONE-LINE SUMMARY AND THE DRILL-DOWN
+
+The report's table went from twelve columns to the seven the owner named — date, sales rep, store,
+phone sold, phone number, MEID, chargeback amount. **Nothing was deleted**: the activation and
+receipt counts, the per-side handset counts and devices, what each receipt rang and what stands out
+all moved into the row's own drill-down, one click away instead of eleven columns wide.
+
+"Drill down like other menus" IS §CORE-17's shared panel, with **two grains** because the two money
+figures are Σ over the same row out of DIFFERENT feeds — the sales feed for what the store rang, the
+carrier's payment feed for the chargeback amount. One catalogue over both would attribute a carrier
+payment to the sales feed (§CORE-17.3j). The chargeback panel is therefore keyed on `("meid",
+"number")`: `raw_payment_detail` carries no store or day column, so keying it that way would hand a
+reader an address that relation cannot be looked up by.
+
+**The phone named is the one the store SOLD** — the handset on the second (positional, never
+class-named) side of the pair. The first side is the device the customer brought in; naming that
+would report the phone the store did not sell. Every handset on that side is summed, with
+`chargeback_partial` true when the feed answered for only some of them: all 95 live cases carry
+exactly one handset, but naming only the first would understate the exposure the day a second
+appears.
+
+### COMMCALC-44.6 CROSS-REFERENCES
+
+- §19.53 / §65 — `device_reimb_recon`: the per-device verdict (paid here, paid elsewhere, never
+  paid, not measured) and the pure fold this home binds I/O to. That fact owns the VERDICT; this one
+  owns only the DOLLARS and the reads that produce them.
+- §58 / §69 — `carrier_dollar_class`: which components ARE the device-financing side, asked as
+  `device_reimb_components` rather than inferred from "routed off the generic commission line".
+- §66 — `component_is_evidence`, an allowlist, so an unruled basis reads as NOT evidence. The POLICY
+  of declining such a dollar belongs to this per-device grain and lives here.
+- §27 — `imei_rebate_report.period_window`: the lag window, asked SYMMETRICALLY because a payment
+  routinely lands before the claim is settled and a forward-only window reported paid devices as
+  never-paid.
+- §19.48 / §CORE-05 — `core/feed_read.read_all`: the paged read, on a feed growing ~30,000 rows a
+  month.
+- §COMMCALC-43 — the brought-device-then-upgrade flag this figure was added to.
+- §CORE-17 — the shared drill-down; §CORE-17.4 — `/watchdog` is still outside `REPORT_DIRECTORY`, so
+  this report is named in `harness_drilldown_coverage.EXTRA_REPORTS` and its three siblings are the
+  named candidates for the next batch.
+- §50 — `core/module_graph.py`: the fact `carrier_device_money`, its two callers and the three facts
+  it dereferences, added BY HAND.
 - §CORE-13 — no migration here, so no grant.

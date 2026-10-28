@@ -60,6 +60,8 @@ from app.modules.commcalc import flag_registry as FR
 
 MOD = "app/modules/commcalc/device_reimb_recon.py"
 ROUTER = "app/modules/commcalc/router.py"
+#: §COMMCALC-44 — the one home the device-money reads moved into on 2026-10-28.
+CDM = "app/modules/commcalc/carrier_device_money.py"
 REG = "app/modules/commcalc/flag_registry.py"
 MIG = "../database/migrations/1063_device_reimb_recon_config.sql"
 WORKFLOW = "../.github/workflows/carrier-vocab-guard.yml"
@@ -482,11 +484,20 @@ eq("G11 the house defaults inherit and a tenant row overrides them key by key",
    (R.config_from_rows({"tolerance": 0.5}, {"severity_high_at": 10.0})["tolerance"],
     R.config_from_rows({"tolerance": 0.5}, {"severity_high_at": 10.0})["severity_high_at"]),
    (0.5, 10.0))
-# Counted rather than eyeballed: EVERY `.table(...)` in the reader carries an org filter, so a read
+# Counted rather than eyeballed: EVERY `.table(...)` on this path carries an org filter, so a read
 # added later without one changes the balance and fails this.
+#
+# THE PATH IS TWO FILES SINCE 2026-10-28 (§COMMCALC-44). The config read and the per-line feed read
+# moved into `commcalc/carrier_device_money.py` when the device-money question was factored into one
+# home for a second report. So the balance is counted over BOTH — a read added without an org filter
+# in EITHER file fails this, which is the property the check always meant.
 _inp_g = _fn_src(ROUTER, "_device_reimb_recon_inputs")
-ok("G12 the reconciliation is org-scoped at every read — one org filter per table touched",
-   _inp_g.count(".table(") >= 3 and _inp_g.count(".table(") == _inp_g.count('.eq("org_id"'))
+_cdm_g = _code_only(_src(CDM))
+_tables_g = _inp_g.count(".table(") + _cdm_g.count(".table(")
+_orgs_g = _inp_g.count('.eq("org_id"') + _cdm_g.count('.eq("org_id"')
+ok("G12 the reconciliation is org-scoped at every read — one org filter per table touched, across "
+   "the reader AND the device-money home it reads through",
+   _tables_g >= 3 and _tables_g == _orgs_g, f"{_tables_g} tables / {_orgs_g} org filters")
 ok("G13 the migration is additive, idempotent, reversible and declares no money decision",
    all(w in _src_opt(MIG) for w in ("ADD COLUMN IF NOT EXISTS", "-- REVERT:", "IS NULL",
                                 '"carrier_sources": []'))
@@ -531,9 +542,25 @@ ok("H4 every feed read goes through the ONE complete paged read — no literal r
    and "range(" not in _inp
    # the only `.limit(` allowed is the single-row CONFIG read; a feed read may never carry one
    and _inp.count(".limit(") == _inp.count(".limit(1)"))
+# The two-level config read moved WITH the question into §COMMCALC-44, so both halves are proved:
+# the home does the read, and the reader DEREFERENCES it rather than resolving the config a second
+# way. Two callers resolving one config row two ways is the drift this whole file exists against.
 ok("H5 the config is read from the org's own row with the house row behind it (RULE TWO)",
-   "config_from_rows" in _inp and "commission_org_config" in _inp
-   and "device_reimb_recon_config" in _inp)
+   all(t in _cdm_g for t in ("config_from_rows", "commission_org_config",
+                             "device_reimb_recon_config")))
+ok("H5b ...and the reader asks the one home for it instead of resolving it itself",
+   "_cdm.load_recon_config(" in _inp
+   and "device_reimb_recon_config" not in _inp)
+# CONTROLS for the two checks above, because both are COUNTS over source text and a count that can
+# only ever pass is not a check. The balance must break when a read arrives without an org filter,
+# in EITHER file, and H5b must break when the reader stops asking the home.
+ok("G12c control: an unfiltered read added on the reader's side breaks the balance",
+   (_tables_g + 1) != _orgs_g)
+ok("G12d control: ...and so does one added inside the device-money home — the count really does "
+   "span both files, rather than one of them carrying the other",
+   (_cdm_g + '.table("sneaky")').count(".table(") + _inp_g.count(".table(") != _orgs_g)
+ok("H5bc control: a reader that resolved the config itself would fail H5b",
+   not ("_cdm.load_recon_config(" in "cfg = _drr.config_from_rows(_blob(org_id), None)"))
 ok("H6 NO second classification mechanism exists anywhere in this change",
    _code_only(_src(MOD)).count("component") > 0
    and "COMPONENTS" not in _code_only(_src(MOD))
