@@ -128,6 +128,7 @@ Primary code homes:
 | CORE-14 | **One palette, dereferenced** | "Make the colours of the side menu alternate between the logo colours so each item stands out. Where does a colour used by the chrome live, how many places spell it, and what proves a row stays readable once it is coloured?" |
 | CORE-16 | **A self-call carries the tenant it is acting as** | "The envelope payout screen says the commission accrual and salary-owed fetches failed with 409 Conflict. What identity does a call the platform makes to itself carry, which company does it say it is acting for, and what stops the next such call from dropping it?" |
 | CORE-19 | **A test is a gate, or it is a file** | "We need to define all development we do to follow the following: unit testing, integration testing, test-driven development. What runs a test in this repo, what stops a test reaching the live database when there is no staging one, and what fails the build the day the framework quietly comes undone?" |
+| CORE-20 | **A request path is not evidence of which route it reached** | "Act as a security agent and find the vulnerability in the code. Which paths does the platform let through without a login, what declares that list, and what stops a route the list never meant to name from satisfying it?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -163,6 +164,7 @@ Primary code homes:
 | COMMCALC-39 | **A declaration is read off the page, and a declared report resolves to itself** | Fourteen reports were asked for by name, and every one of them would have resolved to NOTHING: the pull passed a source's own declaration back to its adapter as a FILTER, squashed under a different rule from the one the reports were keyed by, so a fully configured source read as "No reports are enabled". And the filters those reports need are behind framework-generated control ids nobody can guess. Where should a declaration come from, and what does one argument meaning two things to two callers cost? |
 | COMMCALC-40 | **The status word is the sentence's own verdict, never a literal** | The sweep said "⚠ PARTIAL — a column stopped arriving" in one column and stored `ok` in the column next to it, so every screen that colours on the word showed green over October 2026's missing KPI counts for ten days. What does a verdict cost when it is computed as prose and then discarded at the one place a machine reads it? |
 | COMMCALC-41 | **A derived snapshot rebuilds itself when its inputs land** | "The rebuild ledger or recalculate should be real time all across, then tenant would not know when to run" — and the payable ledger had last been built 53 days earlier while the feed it is built from was four days old, so every "what is owed next week" surface read EMPTY and nothing on the page said why. Which derived things are live, which are on a button nobody knows to press, and what is a tenant doing scheduling a rebuild at all? |
+| COMMCALC-42 | **A per-tenant config table is read once per tenant, never once per key** | A 1,000-user load test named `commcalc.target_field_registry` the busiest table in the platform — 19,658 reads, more than every other table combined — because the registry was fetched one `report_key` at a time and the readiness matrix walks every key twice. One page cost 88 PostgREST round trips, growing with the number of report types a tenant declares. How much of the platform's fixed concurrency budget is being spent asking the same small config table the same question over and over? |
 | PAYABLES-01 | **A rebuild never deletes what it cannot replace** | "Rebuild via sql let me know what permissions to add" — and the rebuild, run for real, deleted all 11,000 Boost rows and inserted none, then returned HTTP 200 describing the table it had just emptied. Two migrations had been skipped while later-numbered ones landed. What is a delete+insert worth without a transaction, and which half of that pair is the one you can afford to run first? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
@@ -26113,8 +26115,10 @@ status word rather than a blank that reads as nil.
 | CORE-17 | core |
 | CORE-18 | core |
 | CORE-19 | core |
+| CORE-20 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
+| COMMCALC-42 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -38594,6 +38598,132 @@ now uses spellings that are substrings of no old field name. A negative control 
 Same class: §COMMCALC-16 (the diagnostic this one was silencing), §19.26 (missing beats wrong), §19.21
 (a status that reports what was pulled rather than what was written).
 
+---
+
+## §CORE-20. A REQUEST PATH IS NOT EVIDENCE OF WHICH ROUTE IT REACHED (found 2026-10-28)
+
+**Owner ask 2026-10-28, verbatim:** *"act as a security agent to find the vulnerability in the code"*.
+Full review: `/mnt/project-files/security-review-2026-10-28/FINDINGS.md` (ten findings; the two the
+owner must act on are not code — the `anon` grants of §CORE-20.6 and a Next.js RCE bump).
+
+### CORE-20.1 The class, not the instance
+
+> **A decision about a REQUEST must be keyed on the thing that declares the answer, not on a string
+> the caller typed. The route table declares which paths are self-authenticating; the request path
+> declares nothing.**
+
+`tenant_middleware._is_public` ended:
+
+```python
+if path.endswith("/run-due") or path.endswith("/promote-due"):
+    return True
+```
+
+The intent was right — `pg_cron` calls the sweeps with no JWT and authenticates with its own
+`x-notify-secret`, so the auth requirement must not fire before the handler — but it read the
+**request path**. Measured against the real route table: **249 of the app's 1805 routes end in a path
+PARAMETER**, so asking for one with the literal value `run-due` produced a path ending in
+`/run-due`, and the allowlist fired. Allowlisting skips **both** the authentication requirement
+**and** the `org_id` rewrite, so with no token at all:
+
+```
+PUT  /api/v1/commcalc/config/run-due?org_id=<any tenant>      → router.save_config upserts payout_config
+POST /api/v1/commcalc/calculate/run-due?org_id=<any tenant>   → a background commission recalculation
+```
+
+`save_config` carries no permission gate of its own, and nor do most of the other 248: they rely on
+this middleware. The hijacked segment becomes the parameter's value, so the READS mostly came back
+empty (`period = "run-due"` matches no stored month) — the damage was on the WRITE and TRIGGER side,
+and it was one route name away from being a disclosure.
+
+### CORE-20.2 The one home
+
+`app/core/tenant_middleware.cron_paths_for_app(app)` — the LITERAL (parameter-free) route templates
+ending in `/run-due` or `/promote-due`, read off the app's own route table and cached per app. It
+**dereferences `core/path_redact.route_templates`** rather than walking the router a second time:
+that module already derives "which URL segments are secrets" from the same table (§19 — a route
+written `/public/onboarding/{token}` names its own sensitive parameter), and this is the same fact
+asked a different question. `_is_public(path, cron_paths=…)` tests MEMBERSHIP in that set; a
+parameterised template can never enter it, whatever is typed into it.
+
+**Never a lockout.** An empty derivation means "the route table could not be read", not "there are no
+sweeps", so `_is_public` falls back to the historical suffix test there — 37 cron entrypoints must not
+start 401-ing because a FastAPI internal changed shape. Break-glass `CRON_PATH_LITERAL_ONLY=0`
+restores the pre-fix behaviour exactly, one env change, no code rollback (the REQUIRE_AUTH posture).
+
+### CORE-20.3 The siblings, found and fixed in the same change
+
+Three more surfaces answered a security question from something the caller controls.
+
+| surface | what it read | what it reads now |
+|---|---|---|
+| `core/rate_limit` (per-IP limiter), `core/ip_block` (ban list), `core/access_log.ip`, `core/session_guard`, `core/impersonation_api` journal | the **leftmost** `X-Forwarded-For` entry — four separate copies of one line. A proxy APPENDS, so the leftmost entry is whatever the CLIENT sent: one header gave a fresh "IP" per request, walked through a ban, and wrote a chosen address into the audit trail | **`app/core/client_ip.py`** — the ONE home. The trustworthy entry is counted **from the right**: with N trusted proxies the client's address is `parts[len(parts) - N]`, and forged entries all sit to its left. `TRUSTED_PROXY_HOPS` is N; the unforgeable ASGI peer is the floor |
+| `main._log_system_error` | `request.query_params.get("org_id")` — so anyone who could provoke a 500 wrote `core.failure_log` rows, each with a truncated traceback, into **any tenant's** Failure Logs page | `_PLATFORM_ORG_ID`, the same fact `tenant_middleware._log_identity_outage` was ALREADY fixed to use, with the acting tenant kept in `detail` for triage |
+| `POST /core/auth/login-record` (anonymous; the frontend asserts the sign-in outcome because sign-in goes straight to Supabase) | an unverified `{email, success:false}`, five of which soft-lock any email a stranger knows, indefinitely | its own `RATE_LIMIT_LOGIN_RECORD_PER_HOUR` tier (12/hour/IP). **Labelled a cost increase, not a fix** — see §CORE-20.5 |
+
+**`TRUSTED_PROXY_HOPS` is deliberately UNSET by default**, and `core/security_posture` reports that as
+a boot finding rather than guessing: N is a property of the deploy, this API is reached both directly
+at `api.metricspro.tech` and same-origin through the site's proxy, and a wrong N either leaves the
+hole open (too low) or collapses every browser user into one shared rate-limit bucket and fills the
+access log with a proxy's address (too high) — that second failure is an outage. Measuring N takes one
+curl: `/mnt/project-files/security-review-2026-10-28/SET_TRUSTED_PROXY_HOPS.md`.
+
+### CORE-20.4 Locks
+
+| harness | checks | what fails the build |
+|---|---|---|
+| `harness_public_allowlist_lock.py` | 80 | a parameterised route reachable through the sweep rule — asserted against the **real 1805-route table**, with a pre-fix control proving all 249 were |
+| `harness_client_ip.py` | 45 | a FIFTH copy of the leftmost-`X-Forwarded-For` parse anywhere in `app/`, or a wired call site that stops dereferencing the one home; plus the hop arithmetic for chains shorter, equal and longer than N |
+| `harness_anonymous_write_surface.py` | 43 | any audit/diagnostic write (`failure_log`, `access_log`, `log`, `auth_event`, `impersonation_action`) that takes its `org_id` from the query string; plus the login-record cap's existence, tier separation and bite |
+
+All three are **enforcing** jobs in `.github/workflows/security.yml` (not `continue-on-error`), so the
+pipefail lock counts them as gates rather than debt.
+
+**A pin that had outlived itself, retired in the same change.** `harness_identity_backend_503` asserted
+`_is_public`'s body **byte-identical to main**, which forbids ever fixing the function — and on
+2026-10-28 it did. Replaced with the property it existed to defend: the allowlist may NARROW but never
+WIDEN, compared by behaviour over probe paths against main's own allowlists. Same lesson as
+`harness_portal_secret_lock` F5 (§19.18): *a harness that pins a literal shape breaks when that shape
+becomes derived; rewrite it to read the fact.*
+
+### CORE-20.5 What this change deliberately does NOT fix, and why
+
+- **The login-lockout claim.** `login_guard` counts an outcome the client asserted, because sign-in
+  bypasses the backend entirely. The honest fix is for the API to observe the sign-in itself, which is
+  an architecture decision for the owner, not something to change unasked. The cap raises the cost and
+  only bites once `TRUSTED_PROXY_HOPS` is set — which is why both halves ship together. Scope, stated:
+  `login_guard.check` is read ONLY by the pre-login probe the frontend consults, so this is a denial of
+  service against the **login screen** for a named person, not a true account lock.
+- **`/docs`, `/redoc`, `/openapi.json` stay public.** They hand an anonymous caller the whole API
+  surface — which is how the 249 routes above were found from outside. Gating them is a UX decision.
+- **The report-only `security` workflow.** bandit / semgrep / pip-audit / npm audit / trufflehog all
+  run `continue-on-error: true`, so none can fail a build — which is why four critical Next.js RCE
+  advisories sat on `main` while `npm audit` reported them on every PR. The fix is a shrink-only
+  ratchet in the shape of §CORE-13's `CUTOFF`, and turning them red before the dependency bump lands
+  would block every PR, so it is a separate change.
+
+### CORE-20.6 The finding this review could NOT close in code
+
+**74 relations are `GRANT`ed to the PUBLIC `anon` role**, 56 of them also carrying
+`CREATE POLICY … FOR ALL TO anon, authenticated USING (true) WITH CHECK (true)`, and at least five
+(`commcalc.journal_entries`, `commcalc.companies`, `commcalc.gp_snapshot`,
+`commcalc.account_statements`, `commcalc.vip_invoices`) granted to `anon` with **no RLS enabled at
+all**. The anon key is `NEXT_PUBLIC_SUPABASE_ANON_KEY` — public by construction. Among the 74:
+`storeops.payroll_gross_ledger`, `storeops.tenants` (including `twofa_policy`), `core.auth_otp`,
+`core.twofa_device`, `core.account_link_invite`, `commcalc.mtd_commission_payout`.
+
+Early migrations copied Supabase's quickstart snippet. §CORE-13's guard already says `service_role`
+**only** — and its `CUTOFF = 1089` grandfathers every table below it, which is the whole exposed set.
+No `anon` grant here is load-bearing: `app/core/database.py` reaches every relation as
+`service_role` through PostgREST, and the browser uses `supabase-js` for auth and realtime channels
+only (no `.from()` / `.rpc()` call site exists in `frontend/src` or `mobile/src` — §CORE-13 measured
+this).
+
+**REPORTED, NOT APPLIED.** This is a schema change, so it is surfaced for owner approval per the house
+rules; the read-only confirmation query and the drafted revoke are in the review folder. Until it
+lands, every gate in §CORE-20.1–19.3 can be reached around.
+
+
 ## §COMMCALC-40. THE STATUS WORD IS THE SENTENCE'S OWN VERDICT, NEVER A LITERAL (found 2026-10-27)
 
 > **Numbered COMMCALC-40.** Checked against `origin/main` immediately before pushing, per §CORE-17's
@@ -38905,6 +39035,51 @@ returning a partial feed. Placed where it is, that raise reaches the caller **be
 an unreadable source leaves the old snapshot standing — the same guarantee as the write preflight,
 on the other side: *a rebuild never deletes what it cannot replace, and it cannot establish it can
 replace from half the source.* `harness_feed_read_lock.py`'s unordered-read ratchet drops 98 → 95.
+
+## §COMMCALC-42. A PER-TENANT CONFIG TABLE IS READ ONCE PER TENANT, NEVER ONCE PER KEY (load test 2026-10-28)
+
+**How it was found.** A 1,000-user load test against the real app (rig and findings in
+`/mnt/project-files/load-test-2026-10-28/`) counted every PostgREST round trip the platform makes.
+`commcalc.target_field_registry` came back as the single busiest table in the system — **19,658
+reads**, more than every other table combined — and `GET /commcalc/column-mapping/readiness` cost
+**88 round trips to render one page**, a number that GREW with the number of report types a tenant
+declares.
+
+**The class, not the instance.** The defect is not "that page is slow". It is *a per-tenant config
+table read one key at a time*. `target_registry.load_registry(client, org, report_key)` issued one
+query per `report_key`, and `column_mapping._registry_overlay` calls it for every key the readiness
+matrix walks — twice per key, once for `target_fields` and once for `period_source_field`.
+
+**Why it costs more than it looks.** The app's endpoints are blocking `def` handlers (the
+`harness_nav_perf.py` discipline), so each request holds one of the platform's
+`(workers × 40)` request threads for its whole chain of round trips. Fan-out is spent directly out
+of the concurrency budget: the load test measured a hard ceiling of 80 in-flight requests at the
+production default of `WEB_CONCURRENCY=2`.
+
+**The one home.** `app/modules/commcalc/target_registry.py` is now the only place that reads
+`commcalc.target_field_registry`, and it reads **the whole org's registry in one query**
+(`_org_rows`), org-keyed, 30-second TTL, positive results only, expired entries pruned on write.
+Its three accessors — `load_registry`, `registry_tuples`, `registry_report_keys` — all filter that
+one read in memory, so every caller inherits the fix and a future caller cannot reintroduce the
+fan-out by accident. `add_field` / `remove_field` call `invalidate(org_id)`, so a saved field is
+visible at once. A read that FAILS is never cached, so an un-run migration 070 self-heals on the
+next call — the same posture as `app/core/identity.py` and
+`tenant_middleware._resolve_identity`, which is also where the cache shape comes from (one pattern
+in the platform, not two).
+
+**Measured, end to end, against the real app:** `GET /commcalc/column-mapping/readiness`
+**88 → 10** round trips, 1,549 ms → 665 ms. `GET /closing/readiness` 21 → 16.
+
+**The lock.** `backend/harness_target_registry_one_read.py`, CI job
+`target-registry-one-read` in `.github/workflows/carrier-vocab-guard.yml`. §A FAILS THE BUILD if
+the query count ever grows with the number of report keys again, or if the single read is narrowed
+to one `report_key`; §B pins the answers unchanged; §C pins write-invalidation; §D pins
+failure-is-never-cached; §E pins tenant isolation of the cache; §F drives the REAL readiness
+endpoint through `_harness_dbfree` and asserts one registry read. Verified red before green: with
+the per-key query restored, §A1/A2/A3/A5 fail.
+
+Same class: §19.18 (a registry written and its callers not wired to it), §CORE-05 (one complete
+paged read), §COMMCALC-24 (one pooled client, not one per request).
 
 ## §CORE-19. A TEST IS A GATE, OR IT IS A FILE — unit, integration and TDD as the house standard (owner directive 2026-10-28)
 

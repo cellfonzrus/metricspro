@@ -43,6 +43,13 @@ def evaluate() -> dict:
         "RBAC_SCOPE_FAILCLOSED": _on("RBAC_SCOPE_FAILCLOSED", "1"),
         "ADMIN_2FA_ENFORCE": _on("ADMIN_2FA_ENFORCE", "0"),
         "FIELD_ENCRYPTION_STRICT": _on("FIELD_ENCRYPTION_STRICT", "0"),
+        # How many trusted proxies sit in front of this app (app/core/client_ip.py). 0 = unset = the
+        # client address is still read from the LEFTMOST X-Forwarded-For entry, which the caller
+        # chooses. Reported rather than guessed: the right number is a property of the deploy, and a
+        # wrong one either keeps the hole open or collapses every browser user into one rate-limit
+        # bucket.
+        "TRUSTED_PROXY_HOPS": int((os.environ.get("TRUSTED_PROXY_HOPS", "") or "0").strip() or 0)
+        if (os.environ.get("TRUSTED_PROXY_HOPS", "") or "0").strip().lstrip("-").isdigit() else 0,
         "field_key_set": _set("FIELD_ENCRYPTION_KEY") or _set("FIELD_ENCRYPTION_KEYS"),
         "notify_secret_set": _set("NOTIFY_RUN_SECRET"),
     }
@@ -62,6 +69,12 @@ def evaluate() -> dict:
         if not posture["ADMIN_2FA_ENFORCE"]:
             findings.append("ADMIN_2FA_ENFORCE is OFF — super-admins bypass 2FA. Have super-admins enroll "
                             "2FA, then enable it to require 2FA (and time-box their standing access).")
+        if posture["TRUSTED_PROXY_HOPS"] <= 0:
+            findings.append("TRUSTED_PROXY_HOPS is NOT set — the client address is read from the "
+                            "leftmost X-Forwarded-For entry, which the CALLER chooses, so the per-IP "
+                            "rate limiter, the IP block list and the access log's `ip` column can all "
+                            "be defeated with one header. Set it to the number of trusted proxies in "
+                            "front of this service (see docs: SET_TRUSTED_PROXY_HOPS).")
         if posture["field_key_set"] and not posture["FIELD_ENCRYPTION_STRICT"]:
             findings.append("FIELD_ENCRYPTION_STRICT is OFF — a future key removal would silently fall "
                             "back to plaintext. Enable it now that the key is set.")
