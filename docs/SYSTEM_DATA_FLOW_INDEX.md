@@ -26111,6 +26111,7 @@ status word rather than a blank that reads as nil.
 | CORE-16 | core |
 | CORE-17 | core |
 | CORE-18 | core |
+| CORE-19 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
 | POS-01 | pos |
@@ -38822,3 +38823,69 @@ returning a partial feed. Placed where it is, that raise reaches the caller **be
 an unreadable source leaves the old snapshot standing — the same guarantee as the write preflight,
 on the other side: *a rebuild never deletes what it cannot replace, and it cannot establish it can
 replace from half the source.* `harness_feed_read_lock.py`'s unordered-read ratchet drops 98 → 95.
+
+## §CORE-19. AN IN-PROCESS CACHE KEYED BY SOMETHING A CLIENT CAN MINT IS BOUNDED BY CONSTRUCTION (load test 2026-10-28)
+
+### CORE-19.1 How it was found
+
+The 1,000-user load test (rig and findings in `/mnt/project-files/load-test-2026-10-28/`) read the
+worker's memory climbing while a thousand distinct login tokens went through it, and the code said
+why: `tenant_middleware._cache` maps a bearer token to its resolved identity with a 60-second TTL,
+and entries **expired but were never deleted**. There was no size cap either. The key is the TOKEN,
+which the auth service re-mints on every refresh, so the key space is NOT bounded by the number of
+users — 1,000 logins refreshing through a day is tens of thousands of dead entries per worker per
+day, held until the next deploy.
+
+### CORE-19.2 The class, not the instance
+
+The defect is not "that one dict leaks". It is **a module-level dict used as a TTL cache, with no
+cap and no eviction** — and the platform had several, each with its own hand-written
+`(value, expires_at)` tuple and its own missing prune:
+
+| | key space | before |
+|---|---|---|
+| `tenant_middleware._cache` | bearer token | unbounded, never pruned |
+| `tenant_middleware._entry_cache` | uid + org | unbounded, never pruned |
+| `tenant_middleware._twofa_cache` | org | tenant-bounded, never pruned |
+| `impersonation._policy_cache` | org | tenant-bounded, never pruned |
+| `impersonation._session_cache` | session id | unbounded, never pruned |
+| `impersonation._brief_cache` | session id | unbounded, never pruned |
+
+Capping one of them is the patchwork the house rules forbid.
+
+### CORE-19.3 The one home
+
+`app/core/ttl_cache.TTLCache` — a dict with a time-to-live and a hard entry cap, thread-safe,
+with an injectable clock so a proof can move time without sleeping. On insert, **expired entries
+are dropped first** (they are free) and only then the oldest live ones, so pressure never evicts
+something fresh while something dead is still held. Eviction lives there and nowhere else; callers
+hold an instance instead of re-deriving the bookkeeping, so forgetting to prune stops being
+possible. Caps are operator-tunable (`IDENTITY_CACHE_MAX`, `ENTRY_SESSION_CACHE_MAX`,
+`TENANT_POLICY_CACHE_MAX`, `IMPERSONATION_CACHE_MAX`); an unparseable value falls back rather than
+failing a boot.
+
+All six caches above now dereference it. **No TTL, no semantics and no behaviour changed** — the
+identity cache still holds for 60 s, still caches positive results only, and still lets a failed
+read self-heal.
+
+### CORE-19.4 Siblings checked and excused
+
+- `core/rate_limit.RateLimiter` — a fixed-window **counter**, not a value cache, and already bounded
+  (`max_keys=100_000` with its own sweep). Different mechanism, already safe.
+- `core/import_health._ATTN_MEMO` — already hard-capped at 128 and pinned by `harness_nav_perf.py`
+  D10. Converting it would churn a proven lock for no behaviour change.
+- `core/identity._store_cache` / `_emp_cache` and `commcalc/target_registry._cache` (§COMMCALC-42) —
+  keyed by ORG, so bounded by the tenant count, which a client cannot inflate.
+
+### CORE-19.5 Lock
+
+`backend/harness_ttl_cache_bounded.py`, CI job `ttl-cache-bounded` in
+`.github/workflows/org-scope-guard.yml`. §A pins the cache's own behaviour (TTL, cap, expired-first
+eviction, thread safety under 8 writers); §B asserts the six live caches ARE the one home and that
+50,000 distinct tokens leave the identity cache bounded; §C pins that a bounded cache still caches;
+**§D FAILS THE BUILD if a new bare dict appears beside a TTL constant anywhere under `app/core/`** —
+which is how the three `impersonation.py` siblings were found during this very change, after the
+first draft fixed only `tenant_middleware`.
+
+Same class: §COMMCALC-42 (a per-tenant config table read once per tenant), §19.18 (a registry
+written and its callers not wired to it).

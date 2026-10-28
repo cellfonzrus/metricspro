@@ -411,7 +411,7 @@ ck("nothing cached during the outage", "GOOD" not in M._cache)
 
 fresh()
 c = run_request(token="GOOD", rows=MEMBER)
-M._cache["GOOD"] = (M._cache["GOOD"][0], 0.0)          # expire it
+M._cache.put("GOOD", M._cache.get("GOOD"), ttl=0.0)   # expire it (index §CORE-19: the cache is a TTLCache, not a dict)
 calls = []
 c = run_request(token="GOOD", rows=MEMBER, auth_calls=calls)
 ck("an expired cache entry re-verifies", len(calls) == 1 and c.reached_app is True)
