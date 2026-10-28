@@ -413,7 +413,17 @@ ok("K3 every caller is named in the snapshot (the GROSS PROFIT engine joined the
    set((f.get("callers") or {})) == {"app/modules/account/coa.py",
                                      "app/modules/commcalc/gp_report.py",
                                      "app/modules/commcalc/sales_margin_drilldown.py",
-                                     "app/modules/commcalc/router.py"}, f.get("callers"))
+                                     "app/modules/commcalc/router.py",
+                                     # §COMMCALC-44 joined them on 2026-10-28: the one home for
+                                     # "how much device money has the carrier paid against THIS
+                                     # device" asks this fact THREE questions at once —
+                                     # `device_reimb_components` (§69), `component_is_evidence`
+                                     # (§66) and `classify`. It was factored out of the router's
+                                     # reimbursement run so a second report could read the SAME
+                                     # verdict the P&L books on, which is why the router still
+                                     # appears above: it asks this fact other questions of its own.
+                                     "app/modules/commcalc/carrier_device_money.py"},
+   f.get("callers"))
 ok("K4 this lock is the fact's lock", "harness_carrier_dollar_class.py" in (f.get("locks") or ()))
 ok("K5 the index section it points at exists",
    all(re.search(r"^#+\s*(§\s*)?%s[.\s]" % re.escape(s.split(".")[0]), INDEX, re.M)
