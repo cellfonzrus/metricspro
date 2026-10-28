@@ -202,6 +202,61 @@ _PUBLIC_PREFIXES = (
 _RUN_DUE_SUFFIX = "/run-due"
 _PROMOTE_DUE_SUFFIX = "/promote-due"
 
+# ── WHICH PATHS ARE SELF-AUTHENTICATING SWEEPS — DERIVED, NEVER GUESSED (security review 2026-10-28) ─
+# The two suffixes above used to be tested against the REQUEST PATH. That reads the wrong thing: a path
+# is not evidence of which ROUTE it reached. 315 routes in this app end in a path PARAMETER, so asking
+# for one of them with the literal value `run-due` produced a path ending in "/run-due" and the
+# allowlist fired — skipping BOTH the auth requirement and the org_id rewrite:
+#
+#     PUT  /api/v1/commcalc/config/run-due?org_id=<any tenant>      (no token at all)
+#     POST /api/v1/commcalc/calculate/run-due?org_id=<any tenant>   (no token at all)
+#
+# `save_config` and most of the other 314 carry no permission gate of their own — they rely on this
+# middleware — so that was an unauthenticated write into, and an unauthenticated recalculation of,
+# any tenant's data.
+#
+# THE FACT ALREADY HAS A HOME: the app's own route table declares exactly which paths are sweeps. A
+# LITERAL (parameter-free) template ending in one of the suffixes is a cron entrypoint; a
+# parameterised template can never become one, whatever is typed into it. So this dereferences
+# `path_redact.route_templates` — the same walk that module already uses to derive "which URL
+# segments are secrets" — rather than keeping a second list that would drift the day a sweep is added.
+#
+# NEVER A LOCKOUT. An empty derivation means "the route table could not be read", not "there are no
+# sweeps", so `_is_public` falls back to the old suffix test there — 37 cron jobs must not 401 because
+# a FastAPI internal changed shape. Break-glass CRON_PATH_LITERAL_ONLY=0 restores the pre-fix
+# behaviour exactly, with one env change and no code rollback (same posture as REQUIRE_AUTH).
+# Locked by harness_public_allowlist_lock.py.
+_cron_path_cache: dict = {}
+_FALLBACK_CRON_PATHS = None          # most recent successful derivation; derived, never hardcoded
+
+
+def _cron_literal_only() -> bool:
+    return os.environ.get("CRON_PATH_LITERAL_ONLY", "1").lower() not in ("0", "false", "no", "off")
+
+
+def cron_paths_for_app(app):
+    """The LITERAL cron entrypoints this app declares, as a frozenset of full paths. Cached per app.
+
+    Empty frozenset when the route table cannot be read — `_is_public` reads that as "fall back",
+    never as "there are no sweeps". Never raises (it runs on every request)."""
+    global _FALLBACK_CRON_PATHS
+    try:
+        if app is None:
+            return _FALLBACK_CRON_PATHS or frozenset()
+        key = id(app)
+        hit = _cron_path_cache.get(key)
+        if hit is None:
+            from app.core.path_redact import route_templates
+            hit = frozenset(t for t in route_templates(app)
+                            if isinstance(t, str) and "{" not in t
+                            and (t.endswith(_RUN_DUE_SUFFIX) or t.endswith(_PROMOTE_DUE_SUFFIX)))
+            _cron_path_cache[key] = hit
+            if hit:
+                _FALLBACK_CRON_PATHS = hit
+        return hit
+    except Exception:
+        return _FALLBACK_CRON_PATHS or frozenset()
+
 # token -> (identity, expiry_epoch), positive results only. identity is the 4-tuple returned by
 # _resolve_identity: (authenticated, super_admin, member_orgs, default_org). Caching the whole
 # membership SET (not a single org) lets a login switch active tenants — a new x-active-org header on
@@ -237,11 +292,12 @@ def _raw_header(scope, name: str) -> str:
 
 
 def _client_ip_from(scope, headers) -> str:
-    fwd = (headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    if fwd:
-        return fwd[:64]
-    cl = scope.get("client") or ()
-    return (str(cl[0]) if cl else "")[:64]
+    """This request's client address. DEREFERENCES `app.core.client_ip` — the ONE home for the
+    question (security review 2026-10-28). It used to read the LEFTMOST `X-Forwarded-For` entry,
+    which is whatever the client typed, so the rate limiter, the IP block list and the access log's
+    `ip` column were all attacker-controlled. See that module for the hop-count switch."""
+    from app.core import client_ip as _cip
+    return _cip.from_scope(scope, headers)
 
 
 async def _reject_impersonation(send, reason: str):
@@ -468,15 +524,21 @@ async def _session_guard_verdict(token, uid, org, role, scope, headers):
         return "ok"
 
 
-def _is_public(path: str) -> bool:
+def _is_public(path: str, cron_paths=None) -> bool:
+    """Is this path on the public allowlist? PURE.
+
+    `cron_paths` is the DERIVED set of literal cron entrypoints (see `cron_paths_for_app`). When it is
+    non-empty the sweep allowlist is membership in that set, so a parameterised route can never be
+    reached unauthenticated by typing a sweep's name into it. None/empty ⇒ the route table could not be
+    read ⇒ fall back to the historical suffix test rather than stranding the cron jobs."""
     if path in _PUBLIC_EXACT:
         return True
     for p in _PUBLIC_PREFIXES:
         if path == p or path.startswith(p + "/"):
             return True
-    if path.endswith(_RUN_DUE_SUFFIX) or path.endswith(_PROMOTE_DUE_SUFFIX):
-        return True
-    return False
+    if cron_paths and _cron_literal_only():
+        return path in cron_paths
+    return path.endswith(_RUN_DUE_SUFFIX) or path.endswith(_PROMOTE_DUE_SUFFIX)
 
 
 # METHOD SCOPING for allowlisted paths. An entry here means "public for THESE methods only"; every other
@@ -1027,7 +1089,7 @@ class TenantScopeMiddleware:
         _imp_raw = _raw_header(scope, _IMPERSONATE_HEADER)
         if _imp_raw:
             return await self._handle_impersonated(scope, receive, send, path, method, _imp_raw)
-        if _is_public(path):
+        if _is_public(path, cron_paths=cron_paths_for_app(scope.get("app"))):
             # Allowlisting skips BOTH the auth requirement and the org_id rewrite, so a path that only
             # needs ONE public method must not hand every method away. `_PUBLIC_METHODS` scopes those:
             # /core/auth-config is public for GET only (the PUT flips the global enforce-login flag and
