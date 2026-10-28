@@ -103,6 +103,8 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from app.core import ttl_cache as _ttl_cache   # index §CORE-19 — THE bounded in-process TTL cache
+
 from fastapi import HTTPException
 
 # ── Wire protocol ───────────────────────────────────────────────────────────────────────────────
@@ -128,7 +130,10 @@ _POLICY_BOUNDS = {
     "reauth_token_max_age_s": (30, 600),
 }
 _POLICY_TTL_S = 30.0
-_policy_cache: dict = {}
+# org_id -> policy dict, through THE bounded in-process cache (index §CORE-19). It was a bare dict:
+# keyed by tenant it could not run away, but eviction lives in one home now, not once per cache.
+_policy_cache = _ttl_cache.TTLCache(ttl=_POLICY_TTL_S,
+                                    cap=_ttl_cache.cap_from_env("TENANT_POLICY_CACHE_MAX", 1024))
 
 
 def normalize_policy(raw) -> dict:
@@ -149,10 +154,9 @@ def normalize_policy(raw) -> dict:
 def load_policy(client, org_id: str) -> dict:
     """Cached, best-effort read of a tenant's impersonation policy. Any error / un-run mig 730 ⇒
     DEFAULT_POLICY (the feature keeps working with sane bounds). Never raises."""
-    now = time.time()
     hit = _policy_cache.get(org_id)
-    if hit and hit[1] > now:
-        return hit[0]
+    if hit is not None:
+        return hit
     raw = None
     try:
         rows = (client.schema("storeops").table("tenants").select("impersonation_policy")
@@ -161,7 +165,7 @@ def load_policy(client, org_id: str) -> dict:
     except Exception:
         raw = None
     pol = normalize_policy(raw)
-    _policy_cache[org_id] = (pol, now + _POLICY_TTL_S)
+    _policy_cache.put(org_id, pol)
     return pol
 
 
@@ -169,7 +173,7 @@ def invalidate_policy(org_id: str = None) -> None:
     if org_id is None:
         _policy_cache.clear()
     else:
-        _policy_cache.pop(org_id, None)
+        _policy_cache.invalidate(org_id)
 
 
 # ── Signed grant / re-auth marker (PURE — no DB, unit-provable) ─────────────────────────────────
@@ -302,14 +306,17 @@ def effective_uid(real_uid: str):
 
 # ── Session validity (DB-anchored, fail-closed) ─────────────────────────────────────────────────
 _SESSION_TTL_S = 10.0        # short: "Exit" must take effect fast (same-process invalidate is instant)
-_session_cache: dict = {}
+# session_id -> 'ok'. A session id is minted per impersonation, so this key space grows with use —
+# bounded through the one home (index §CORE-19). POSITIVE results only, exactly as before.
+_session_cache = _ttl_cache.TTLCache(ttl=_SESSION_TTL_S,
+                                     cap=_ttl_cache.cap_from_env("IMPERSONATION_CACHE_MAX", 2048))
 
 
 def invalidate_session(session_id: str = None) -> None:
     if session_id is None:
         _session_cache.clear()
     else:
-        _session_cache.pop(str(session_id), None)
+        _session_cache.invalidate(str(session_id))
 
 
 def _iso_to_ts(v) -> float:
@@ -337,8 +344,8 @@ def session_state(client, session_id: str, target_uid_: str, org_id: str, now: f
     now = now if now is not None else time.time()
     key = str(session_id)
     hit = _session_cache.get(key)
-    if hit and hit[1] > now:
-        return hit[0]
+    if hit is not None:
+        return hit
     try:
         rows = (client.schema("core").table("impersonation_session")
                 .select("id,org_id,actor_auth_id,target_auth_id,ended_at,expires_at")
@@ -365,12 +372,14 @@ def session_state(client, session_id: str, target_uid_: str, org_id: str, now: f
         return "unavailable"
     if not urows or urows[0].get("is_active") is False:
         return "target_revoked"
-    _session_cache[key] = ("ok", now + _SESSION_TTL_S)
+    _session_cache.put(key, "ok")
     return "ok"
 
 
 _BRIEF_TTL_S = 30.0
-_brief_cache: dict = {}
+# session_id -> the banner's display summary. Same key space as _session_cache, same bound.
+_brief_cache = _ttl_cache.TTLCache(ttl=_BRIEF_TTL_S,
+                                   cap=_ttl_cache.cap_from_env("IMPERSONATION_CACHE_MAX", 2048))
 
 
 def session_brief(client, session_id: str) -> dict:
@@ -380,10 +389,9 @@ def session_brief(client, session_id: str) -> dict:
     key = str(session_id or "")
     if not key:
         return {"active": True}
-    now = time.time()
     hit = _brief_cache.get(key)
-    if hit and hit[1] > now:
-        return hit[0]
+    if hit is not None:
+        return hit
     out = {"active": True, "session_id": key}
     try:
         rows = (client.schema("core").table("impersonation_session")
@@ -399,7 +407,7 @@ def session_brief(client, session_id: str) -> dict:
                         "reason": r.get("reason")})
     except Exception:
         return out
-    _brief_cache[key] = (out, now + _BRIEF_TTL_S)
+    _brief_cache.put(key, out)
     return out
 
 

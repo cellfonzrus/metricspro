@@ -90,6 +90,8 @@ import asyncio
 import contextvars
 from urllib.parse import parse_qs, urlencode
 
+from app.core import ttl_cache as _ttl_cache   # index §CORE-19 — THE bounded in-process TTL cache
+
 # Exact full paths that are public (matched literally, no prefix semantics).
 _PUBLIC_EXACT = frozenset({
     "/health",                            # Railway / uptime health probe (no auth by design)
@@ -261,8 +263,15 @@ def cron_paths_for_app(app):
 # _resolve_identity: (authenticated, super_admin, member_orgs, default_org). Caching the whole
 # membership SET (not a single org) lets a login switch active tenants — a new x-active-org header on
 # the SAME token — with no re-auth and no cache bust; the per-request header pick is pure/cheap.
-_cache: dict = {}
+#
+# BOUNDED BY CONSTRUCTION (index §CORE-19, load test 2026-10-28). This was a bare dict: entries
+# expired but were never deleted and there was no cap, so it grew for the life of the worker. The
+# key is the TOKEN, which the auth service re-mints on every refresh, so the key space is not
+# bounded by the number of users — 1,000 logins refreshing through a day is tens of thousands of
+# dead entries per worker, held until the next deploy. `TTLCache` is the one home for that
+# bookkeeping; the TTL and the semantics below are unchanged. `IDENTITY_CACHE_MAX` tunes the cap.
 _TTL = 60.0
+_cache = _ttl_cache.TTLCache(ttl=_TTL, cap=_ttl_cache.cap_from_env("IDENTITY_CACHE_MAX", 8192))
 
 # Header by which the client declares which of its tenants it is acting as. Client-supplied and
 # therefore UNTRUSTED — always verified against the login's membership set before it is honored.
@@ -405,8 +414,11 @@ class IdentityBackendUnavailable(Exception):
 # Break-glass: TWOFA_ENFORCE default ON, but per-tenant policy defaults OFF (NULL twofa_policy → mode
 # 'off'), so a deploy locks NObody out. Set TWOFA_ENFORCE=0 to kill enforcement globally (a bad deploy
 # can't strand the owner). A missing mig 711 column → the policy read errors → treated 'off' → no-op.
-_twofa_cache: dict = {}          # org_id -> (policy_dict, expiry_epoch)
 _TWOFA_TTL = 60.0
+# org_id -> policy_dict. Keyed by tenant, so it was never the unbounded one — but it reads the same
+# one home as its neighbours so there is a single eviction rule in this module, not three.
+_twofa_cache = _ttl_cache.TTLCache(ttl=_TWOFA_TTL,
+                                   cap=_ttl_cache.cap_from_env("TENANT_POLICY_CACHE_MAX", 1024))
 
 
 def _twofa_enforce() -> bool:
@@ -418,8 +430,8 @@ def _tenant_2fa_policy(org: str) -> dict:
     (→ no enforcement). Normalized to a safe shape here (independent of the router's copy)."""
     now = time.time()
     hit = _twofa_cache.get(org)
-    if hit and hit[1] > now:
-        return hit[0]
+    if hit is not None:
+        return hit
     policy = {"mode": "off", "required_roles": []}
     try:
         from app.core.database import get_supabase
@@ -434,7 +446,7 @@ def _tenant_2fa_policy(org: str) -> dict:
                 policy["required_roles"] = [str(r) for r in rr if str(r).strip()]
     except Exception:
         policy = {"mode": "off", "required_roles": []}
-    _twofa_cache[org] = (policy, now + _TWOFA_TTL)
+    _twofa_cache.put(org, policy)
     return policy
 
 
@@ -618,8 +630,8 @@ def _resolve_identity(token: str):
     IdentityBackendUnavailable cached: the next request re-tries, so recovery is automatic."""
     now = time.time()
     hit = _cache.get(token)
-    if hit and hit[1] > now:
-        return hit[0]
+    if hit is not None:
+        return hit
     # ── STEP 1 — TOKEN VERIFICATION. Missing / expired / forged / unverifiable, or the auth service
     # itself refusing: ALL of these are genuine authentication failures and return the SAME
     # unauthenticated tuple this function has always returned, so the caller emits the byte-identical
@@ -666,7 +678,7 @@ def _resolve_identity(token: str):
     except Exception:
         return (False, False, (), None, {}, None)
     result = (True, super_admin, member_orgs, default_org, org_info, uid)
-    _cache[token] = (result, now + _TTL)
+    _cache.put(token, result)
     return result
 
 
@@ -829,7 +841,11 @@ def _tenant_is_ambiguous(member_orgs, requested, default_org) -> bool:
 # opened and where this requirement is switched back off). OPERATOR_ENTRY_ENFORCE=0 kills it outright
 # with no database access at all.
 _ENTRY_TTL = 30.0
-_entry_cache: dict = {}
+# "policy" -> the operator policy row, and "s:<uid>:<org>" -> that caller's entry session. The
+# session keys carry a uid, so this grew with every operator who ever reached a foreign tenant.
+# Bounded through the one home; per-entry TTLs are passed to `put` exactly as before.
+_entry_cache = _ttl_cache.TTLCache(ttl=_ENTRY_TTL,
+                                   cap=_ttl_cache.cap_from_env("ENTRY_SESSION_CACHE_MAX", 4096))
 
 
 def _entry_enforce() -> bool:
@@ -839,8 +855,8 @@ def _entry_enforce() -> bool:
 def _entry_policy():
     """The operator policy row, cached. None on any error ⇒ POLICY_DEFAULTS ⇒ requirement OFF."""
     now = time.time()
-    hit = _entry_cache.get("policy")
-    if hit and hit[1] > now:
+    hit = _entry_cache.get("policy", _ttl_cache.MISS)
+    if hit is not _ttl_cache.MISS:
         return hit[0]
     row = None
     try:
@@ -850,7 +866,7 @@ def _entry_policy():
         row = rows[0] if rows else None
     except Exception:
         row = None
-    _entry_cache["policy"] = (row, now + _ENTRY_TTL)
+    _entry_cache.put("policy", (row,))
     return row
 
 
@@ -860,8 +876,8 @@ def _entry_session_row(uid, org):
     key = "s:%s:%s" % (uid, org)
     now = time.time()
     hit = _entry_cache.get(key)
-    if hit and hit[1] > now:
-        return hit[0]
+    if hit is not None:
+        return hit
     out = (None, True)
     try:
         from app.core.database import get_supabase_admin
@@ -876,7 +892,7 @@ def _entry_session_row(uid, org):
     # out a TTL — the answer to "may I be here" must track the ledger closely, in both directions.
     from app.modules.core import operator as _OP
     fresh = _ENTRY_TTL if (not out[1] and _OP.session_state(out[0]) == "active") else 2.0
-    _entry_cache[key] = (out, now + fresh)
+    _entry_cache.put(key, out, ttl=fresh)
     return out
 
 
