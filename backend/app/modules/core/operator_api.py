@@ -451,11 +451,9 @@ def exit_tenant(body: ExitIn, authorization: str = Header(default=""),
 
 
 def _ip(request):
-    try:
-        fwd = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-        return (fwd or (request.client.host if request.client else ""))[:64]
-    except Exception:
-        return ""
+    """DEREFERENCES `app.core.client_ip` (the ONE home; security review 2026-10-28)."""
+    from app.core import client_ip as _cip
+    return _cip.from_request(request)
 
 
 def _ua(request):

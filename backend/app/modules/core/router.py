@@ -1327,11 +1327,11 @@ OTP_RATE_WINDOW_MIN = 15
 
 
 def _client_ip(request):
-    try:
-        xff = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-        return xff or (request.client.host if request and request.client else None)
-    except Exception:
-        return None
+    """DEREFERENCES `app.core.client_ip` (the ONE home; security review 2026-10-28). Returns None
+    rather than "" when nothing is known, because the callers here write it straight into a nullable
+    `ip` column."""
+    from app.core import client_ip as _cip
+    return _cip.from_request(request) or None
 
 
 def _issue_otp(client, *, email, purpose, channel, org_id=None, auth_id=None, dest=None, ip=None):

@@ -25,7 +25,9 @@ of AccessLog (a throttled request is still recorded in the access log, so the sc
 import os
 import time
 
-from app.core.tenant_middleware import _client_ip_from   # reuse the exact forwarded-IP parse
+# The client address comes from the ONE home (app/core/client_ip.py) — see its header for why
+# the leftmost X-Forwarded-For entry could not be trusted, which is exactly the value this
+# limiter keys on. Imported lazily inside the dispatcher so this module stays stdlib-loadable.
 
 # Auth-sensitive path prefixes get the strict per-IP limit. Boundary-matched (== p or startswith p+"/")
 # so we never over-match a sibling route.
@@ -40,6 +42,23 @@ _AUTH_PREFIXES = (
 _RESET_PREFIXES = (
     "/api/v1/core/auth/forgot-password",
     "/api/v1/core/auth/reset-password",
+)
+
+# THE CLIENT-ASSERTED LOGIN OUTCOME (security review 2026-10-28) — its own, much stricter cap.
+# Sign-in happens directly against Supabase, so the backend never observes whether a password was
+# right; the frontend TELLS it, by posting {email, success:false} to /auth/login-record, and that
+# endpoint is anonymous by necessity. `login_guard` counts those claims, so five posts put any email
+# a stranger knows into the soft-locked state and repeating it keeps it there — a denial of service
+# against the login SCREEN for a named person (nothing server-side refuses the sign-in itself, see
+# the finding write-up).
+#
+# THIS IS A COST INCREASE, NOT THE FIX, and it is labelled as one deliberately: the real fix is for
+# the backend to observe the sign-in itself so an unverified client claim never counts toward a
+# lockout, which is an architecture decision for the owner. Until then the claim is capped per IP —
+# which only bites once TRUSTED_PROXY_HOPS is set, because the limiter's key is the client address
+# (app/core/client_ip.py). Both halves ship together for that reason.
+_LOGIN_RECORD_PREFIXES = (
+    "/api/v1/core/auth/login-record",
 )
 
 # Never rate-limit infrastructure/probe paths.
@@ -71,6 +90,15 @@ def _reset_limit():
     return (_int_env("RATE_LIMIT_RESET_PER_HOUR", 3), 3600)
 
 
+def _login_record_limit():
+    """(requests, window_seconds) for the client-asserted login outcome — 12/hour/IP by default.
+
+    Sized against the honest worst case for a real human: a handful of mistyped passwords, a tenant
+    switch, a couple of page reloads. Twelve is comfortably above that and comfortably below what a
+    script needs to keep an email locked around the clock."""
+    return (_int_env("RATE_LIMIT_LOGIN_RECORD_PER_HOUR", 12), 3600)
+
+
 def _match(path: str, prefixes) -> bool:
     for p in prefixes:
         if path == p or path.startswith(p + "/"):
@@ -84,6 +112,10 @@ def _is_reset_path(path: str) -> bool:
 
 def _is_auth_path(path: str) -> bool:
     return _match(path, _AUTH_PREFIXES)
+
+
+def _is_login_record_path(path: str) -> bool:
+    return _match(path, _LOGIN_RECORD_PREFIXES)
 
 
 def _skip(path: str) -> bool:
@@ -163,7 +195,8 @@ class RateLimitMiddleware:
             if method == "OPTIONS" or _skip(path):
                 return await self.app(scope, receive, send)
             headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
-            ip = _client_ip_from(scope, headers) or "unknown"
+            from app.core import client_ip as _cip
+            ip = _cip.from_scope(scope, headers) or "unknown"
             # Incident containment: a super-admin-blocked IP is refused outright (mig 860). Fail-open.
             try:
                 from app.core import ip_block
@@ -176,6 +209,9 @@ class RateLimitMiddleware:
             if _is_reset_path(path):
                 limit, window = _reset_limit()               # 3/hour/IP (plan §1.2)
                 key = "reset:" + ip
+            elif _is_login_record_path(path):
+                limit, window = _login_record_limit()        # 12/hour/IP (security review 2026-10-28)
+                key = "loginrec:" + ip
             else:
                 is_auth = _is_auth_path(path)
                 limit = auth_lim if is_auth else general
@@ -212,4 +248,7 @@ if __name__ == "__main__":
     assert _skip("/health") is True and _skip("/api/v1/core/me") is False
     assert _is_reset_path("/api/v1/core/auth/forgot-password") is True
     assert _is_reset_path("/api/v1/core/auth/login-precheck") is False
+    assert _is_login_record_path("/api/v1/core/auth/login-record") is True
+    assert _is_login_record_path("/api/v1/core/auth/login-precheck") is False
+    assert _is_reset_path("/api/v1/core/auth/login-record") is False
     print("rate_limit self-tests passed")

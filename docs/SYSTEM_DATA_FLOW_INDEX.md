@@ -128,6 +128,7 @@ Primary code homes:
 | CORE-14 | **One palette, dereferenced** | "Make the colours of the side menu alternate between the logo colours so each item stands out. Where does a colour used by the chrome live, how many places spell it, and what proves a row stays readable once it is coloured?" |
 | CORE-16 | **A self-call carries the tenant it is acting as** | "The envelope payout screen says the commission accrual and salary-owed fetches failed with 409 Conflict. What identity does a call the platform makes to itself carry, which company does it say it is acting for, and what stops the next such call from dropping it?" |
 | CORE-19 | **A test is a gate, or it is a file** | "We need to define all development we do to follow the following: unit testing, integration testing, test-driven development. What runs a test in this repo, what stops a test reaching the live database when there is no staging one, and what fails the build the day the framework quietly comes undone?" |
+| CORE-20 | **A request path is not evidence of which route it reached** | "Act as a security agent and find the vulnerability in the code. Which paths does the platform let through without a login, what declares that list, and what stops a route the list never meant to name from satisfying it?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -26114,6 +26115,7 @@ status word rather than a blank that reads as nil.
 | CORE-17 | core |
 | CORE-18 | core |
 | CORE-19 | core |
+| CORE-20 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
 | COMMCALC-42 | commcalc |
@@ -38514,6 +38516,132 @@ now uses spellings that are substrings of no old field name. A negative control 
 
 Same class: §COMMCALC-16 (the diagnostic this one was silencing), §19.26 (missing beats wrong), §19.21
 (a status that reports what was pulled rather than what was written).
+
+---
+
+## §CORE-20. A REQUEST PATH IS NOT EVIDENCE OF WHICH ROUTE IT REACHED (found 2026-10-28)
+
+**Owner ask 2026-10-28, verbatim:** *"act as a security agent to find the vulnerability in the code"*.
+Full review: `/mnt/project-files/security-review-2026-10-28/FINDINGS.md` (ten findings; the two the
+owner must act on are not code — the `anon` grants of §CORE-20.6 and a Next.js RCE bump).
+
+### CORE-20.1 The class, not the instance
+
+> **A decision about a REQUEST must be keyed on the thing that declares the answer, not on a string
+> the caller typed. The route table declares which paths are self-authenticating; the request path
+> declares nothing.**
+
+`tenant_middleware._is_public` ended:
+
+```python
+if path.endswith("/run-due") or path.endswith("/promote-due"):
+    return True
+```
+
+The intent was right — `pg_cron` calls the sweeps with no JWT and authenticates with its own
+`x-notify-secret`, so the auth requirement must not fire before the handler — but it read the
+**request path**. Measured against the real route table: **249 of the app's 1805 routes end in a path
+PARAMETER**, so asking for one with the literal value `run-due` produced a path ending in
+`/run-due`, and the allowlist fired. Allowlisting skips **both** the authentication requirement
+**and** the `org_id` rewrite, so with no token at all:
+
+```
+PUT  /api/v1/commcalc/config/run-due?org_id=<any tenant>      → router.save_config upserts payout_config
+POST /api/v1/commcalc/calculate/run-due?org_id=<any tenant>   → a background commission recalculation
+```
+
+`save_config` carries no permission gate of its own, and nor do most of the other 248: they rely on
+this middleware. The hijacked segment becomes the parameter's value, so the READS mostly came back
+empty (`period = "run-due"` matches no stored month) — the damage was on the WRITE and TRIGGER side,
+and it was one route name away from being a disclosure.
+
+### CORE-20.2 The one home
+
+`app/core/tenant_middleware.cron_paths_for_app(app)` — the LITERAL (parameter-free) route templates
+ending in `/run-due` or `/promote-due`, read off the app's own route table and cached per app. It
+**dereferences `core/path_redact.route_templates`** rather than walking the router a second time:
+that module already derives "which URL segments are secrets" from the same table (§19 — a route
+written `/public/onboarding/{token}` names its own sensitive parameter), and this is the same fact
+asked a different question. `_is_public(path, cron_paths=…)` tests MEMBERSHIP in that set; a
+parameterised template can never enter it, whatever is typed into it.
+
+**Never a lockout.** An empty derivation means "the route table could not be read", not "there are no
+sweeps", so `_is_public` falls back to the historical suffix test there — 37 cron entrypoints must not
+start 401-ing because a FastAPI internal changed shape. Break-glass `CRON_PATH_LITERAL_ONLY=0`
+restores the pre-fix behaviour exactly, one env change, no code rollback (the REQUIRE_AUTH posture).
+
+### CORE-20.3 The siblings, found and fixed in the same change
+
+Three more surfaces answered a security question from something the caller controls.
+
+| surface | what it read | what it reads now |
+|---|---|---|
+| `core/rate_limit` (per-IP limiter), `core/ip_block` (ban list), `core/access_log.ip`, `core/session_guard`, `core/impersonation_api` journal | the **leftmost** `X-Forwarded-For` entry — four separate copies of one line. A proxy APPENDS, so the leftmost entry is whatever the CLIENT sent: one header gave a fresh "IP" per request, walked through a ban, and wrote a chosen address into the audit trail | **`app/core/client_ip.py`** — the ONE home. The trustworthy entry is counted **from the right**: with N trusted proxies the client's address is `parts[len(parts) - N]`, and forged entries all sit to its left. `TRUSTED_PROXY_HOPS` is N; the unforgeable ASGI peer is the floor |
+| `main._log_system_error` | `request.query_params.get("org_id")` — so anyone who could provoke a 500 wrote `core.failure_log` rows, each with a truncated traceback, into **any tenant's** Failure Logs page | `_PLATFORM_ORG_ID`, the same fact `tenant_middleware._log_identity_outage` was ALREADY fixed to use, with the acting tenant kept in `detail` for triage |
+| `POST /core/auth/login-record` (anonymous; the frontend asserts the sign-in outcome because sign-in goes straight to Supabase) | an unverified `{email, success:false}`, five of which soft-lock any email a stranger knows, indefinitely | its own `RATE_LIMIT_LOGIN_RECORD_PER_HOUR` tier (12/hour/IP). **Labelled a cost increase, not a fix** — see §CORE-20.5 |
+
+**`TRUSTED_PROXY_HOPS` is deliberately UNSET by default**, and `core/security_posture` reports that as
+a boot finding rather than guessing: N is a property of the deploy, this API is reached both directly
+at `api.metricspro.tech` and same-origin through the site's proxy, and a wrong N either leaves the
+hole open (too low) or collapses every browser user into one shared rate-limit bucket and fills the
+access log with a proxy's address (too high) — that second failure is an outage. Measuring N takes one
+curl: `/mnt/project-files/security-review-2026-10-28/SET_TRUSTED_PROXY_HOPS.md`.
+
+### CORE-20.4 Locks
+
+| harness | checks | what fails the build |
+|---|---|---|
+| `harness_public_allowlist_lock.py` | 80 | a parameterised route reachable through the sweep rule — asserted against the **real 1805-route table**, with a pre-fix control proving all 249 were |
+| `harness_client_ip.py` | 45 | a FIFTH copy of the leftmost-`X-Forwarded-For` parse anywhere in `app/`, or a wired call site that stops dereferencing the one home; plus the hop arithmetic for chains shorter, equal and longer than N |
+| `harness_anonymous_write_surface.py` | 43 | any audit/diagnostic write (`failure_log`, `access_log`, `log`, `auth_event`, `impersonation_action`) that takes its `org_id` from the query string; plus the login-record cap's existence, tier separation and bite |
+
+All three are **enforcing** jobs in `.github/workflows/security.yml` (not `continue-on-error`), so the
+pipefail lock counts them as gates rather than debt.
+
+**A pin that had outlived itself, retired in the same change.** `harness_identity_backend_503` asserted
+`_is_public`'s body **byte-identical to main**, which forbids ever fixing the function — and on
+2026-10-28 it did. Replaced with the property it existed to defend: the allowlist may NARROW but never
+WIDEN, compared by behaviour over probe paths against main's own allowlists. Same lesson as
+`harness_portal_secret_lock` F5 (§19.18): *a harness that pins a literal shape breaks when that shape
+becomes derived; rewrite it to read the fact.*
+
+### CORE-20.5 What this change deliberately does NOT fix, and why
+
+- **The login-lockout claim.** `login_guard` counts an outcome the client asserted, because sign-in
+  bypasses the backend entirely. The honest fix is for the API to observe the sign-in itself, which is
+  an architecture decision for the owner, not something to change unasked. The cap raises the cost and
+  only bites once `TRUSTED_PROXY_HOPS` is set — which is why both halves ship together. Scope, stated:
+  `login_guard.check` is read ONLY by the pre-login probe the frontend consults, so this is a denial of
+  service against the **login screen** for a named person, not a true account lock.
+- **`/docs`, `/redoc`, `/openapi.json` stay public.** They hand an anonymous caller the whole API
+  surface — which is how the 249 routes above were found from outside. Gating them is a UX decision.
+- **The report-only `security` workflow.** bandit / semgrep / pip-audit / npm audit / trufflehog all
+  run `continue-on-error: true`, so none can fail a build — which is why four critical Next.js RCE
+  advisories sat on `main` while `npm audit` reported them on every PR. The fix is a shrink-only
+  ratchet in the shape of §CORE-13's `CUTOFF`, and turning them red before the dependency bump lands
+  would block every PR, so it is a separate change.
+
+### CORE-20.6 The finding this review could NOT close in code
+
+**74 relations are `GRANT`ed to the PUBLIC `anon` role**, 56 of them also carrying
+`CREATE POLICY … FOR ALL TO anon, authenticated USING (true) WITH CHECK (true)`, and at least five
+(`commcalc.journal_entries`, `commcalc.companies`, `commcalc.gp_snapshot`,
+`commcalc.account_statements`, `commcalc.vip_invoices`) granted to `anon` with **no RLS enabled at
+all**. The anon key is `NEXT_PUBLIC_SUPABASE_ANON_KEY` — public by construction. Among the 74:
+`storeops.payroll_gross_ledger`, `storeops.tenants` (including `twofa_policy`), `core.auth_otp`,
+`core.twofa_device`, `core.account_link_invite`, `commcalc.mtd_commission_payout`.
+
+Early migrations copied Supabase's quickstart snippet. §CORE-13's guard already says `service_role`
+**only** — and its `CUTOFF = 1089` grandfathers every table below it, which is the whole exposed set.
+No `anon` grant here is load-bearing: `app/core/database.py` reaches every relation as
+`service_role` through PostgREST, and the browser uses `supabase-js` for auth and realtime channels
+only (no `.from()` / `.rpc()` call site exists in `frontend/src` or `mobile/src` — §CORE-13 measured
+this).
+
+**REPORTED, NOT APPLIED.** This is a schema change, so it is surfaced for owner approval per the house
+rules; the read-only confirmation query and the drafted revoke are in the review folder. Until it
+lands, every gate in §CORE-20.1–19.3 can be reached around.
+
 
 ## §COMMCALC-40. THE STATUS WORD IS THE SENTENCE'S OWN VERDICT, NEVER A LITERAL (found 2026-10-27)
 
