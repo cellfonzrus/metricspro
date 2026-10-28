@@ -245,8 +245,30 @@ check("E3 the case carries no verdict field",
 check("E4 the sentence a manager reads describes the sale and asks for a check",
       CASES and "2674832829" in M.describe(CASES[0])
       and all(w not in M.coaching_note(CASES[0]).lower() for w in FORBIDDEN))
-check("E5 what the check CANNOT answer is stated on the module, not left to be discovered",
-      len(M.KEY_CANNOT_ANSWER) >= 3 and all(isinstance(s, str) for s in M.KEY_CANNOT_ANSWER))
+# DECLARED, never bounded. `len(...) >= 3` was the first draft and `harness_subject_set_lock` was
+# right to refuse it: a lower bound lets a stated limit be DELETED in silence, and these four
+# sentences are the promises the screen makes to a manager about what it did not measure. Asserted as
+# the exact set, so a limit that leaves names itself in the failure.
+EXPECTED_CANNOT_ANSWER = {
+    "Groups the activations on one phone line at one store on one day, so it cannot see the same "
+    "line activated across different days, at different stores, or recorded under a different "
+    "number.",
+    "A sale whose activation lines carry no phone number of their own cannot be grouped to a line "
+    "at all. Those are counted separately and reported, and a company whose feed never carries the "
+    "number has nothing measured here rather than nothing to find.",
+    "Which kind of activation a line is comes from the company's own declared vocabulary. A sale "
+    "the company has not taught the platform to recognise is not classified, so it joins no pair.",
+    "It says what was rung on one day, not whether it was right. A line activated on a phone the "
+    "customer brought and upgraded onto a new handset the same day is an ordinary sale and looks "
+    "exactly like this.",
+}
+check("E5 the limits the check CANNOT answer are EXACTLY the four declared — stated on the module, "
+      "not left to be discovered, and not removable in silence",
+      set(M.KEY_CANNOT_ANSWER) == EXPECTED_CANNOT_ANSWER,
+      str(sorted(set(M.KEY_CANNOT_ANSWER) ^ EXPECTED_CANNOT_ANSWER))[:200])
+check("E5b and the screen is handed them, so they are not a comment nobody reads",
+      list(M.summary(*found(byod_side() + upgrade_side()))["cannot_answer"])
+      == list(M.KEY_CANNOT_ANSWER))
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("F. the gaps are stated — a measured zero is not an unmeasured one")

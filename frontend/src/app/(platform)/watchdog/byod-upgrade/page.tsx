@@ -215,10 +215,10 @@ export default function ByodUpgradeSameNumberPage() {
           )}
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-            <StatTile label="Numbers to check" value={s.cases ?? 0} accent="#d97706"
+            <StatTile label="Numbers to check" value={s.cases ?? 0} accent="var(--amber)"
                       sub={`both kinds of activation in one day at one store`} />
             <StatTile label="Nothing handed over, then a handset"
-                      value={num(s.cases_upgrade_device_only)} accent="#dc2626"
+                      value={num(s.cases_upgrade_device_only)} accent="var(--red)"
                       sub="the shape worth opening first" />
             <StatTile label="More than two activations" value={s.multi_event_cases ?? 0}
                       sub="on the same number, the same day" />
