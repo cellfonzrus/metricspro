@@ -38646,8 +38646,8 @@ module-level slots — an app id and its answer. NOT a dict keyed by app: a proc
 whose route table is fixed once built, so a dict there would only ever hold one entry and could only
 ever grow, which is the shape the bounded-cache lock (`harness_ttl_cache_bounded.py`, added by #579)
 exists to retire. It was a dict when this section first landed; that gate caught it, and the
-correction landed with #580 (#581 carried the identical change until #580 absorbed it). The derivation and the fallback are unchanged — 37 cron paths, verified against the real
-app. It
+correction landed with #580 (#581 proposed the identical change and was closed as superseded). The
+derivation and the fallback are unchanged — 37 cron paths, verified against the real app. It
 **dereferences `core/path_redact.route_templates`** rather than walking the router a second time:
 that module already derives "which URL segments are secrets" from the same table (§19 — a route
 written `/public/onboarding/{token}` names its own sensitive parameter), and this is the same fact
