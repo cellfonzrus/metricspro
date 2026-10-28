@@ -1,6 +1,6 @@
 """
 PROOF — A BYOD ACTIVATION AND AN UPGRADE ON THE SAME NUMBER, SAME STORE, SAME DAY
-(owner ask 2026-10-28, index §COMMCALC-42).
+(owner ask 2026-10-28, index §COMMCALC-43).
 
 Owner, verbatim: *"Need to create a new flag report to check if a byod and an upgrade is done on the
 same day for the same phone number at the same store"*.

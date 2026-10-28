@@ -1335,7 +1335,7 @@ FACTS: dict[str, dict] = {
             'app/modules/asset/router.py': ('_reg',),
             'app/modules/closing/cash_watchdog.py': ('_reg',),
             'app/modules/closing/ops_chargebacks.py': ('_reg',),
-            # §COMMCALC-42. The byod-and-upgrade detector spells no severity, area or label of its
+            # §COMMCALC-43. The byod-and-upgrade detector spells no severity, area or label of its
             # own — `harness_byod_upgrade_day` §G1 fails the build if it declares one — so the
             # Management Watchdog board gains a page for it by this registration alone.
             'app/modules/commcalc/byod_upgrade_day.py': ('_reg',),
@@ -1872,10 +1872,10 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_line_class_lock.py', 'harness_activation_event_lock.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`, but CHECK THE
         # DIFF: the rewriter strips the hand-written comments out of these `callers` dicts, so the
-        # two §COMMCALC-42 entries below were added by hand.
+        # two §COMMCALC-43 entries below were added by hand.
         "callers": {
             'app/modules/asset/router.py': ('_lc',),
-            # §COMMCALC-42. "A BYOD activation and an upgrade on one number" is a question about
+            # §COMMCALC-43. "A BYOD activation and an upgrade on one number" is a question about
             # ACTIVATION EVENTS, and this home is the only thing that knows what one is: it folds an
             # invoice's activation-type lines into events keyed on the line's own phone number and
             # resolves each event's class by the org's declared precedence. The detector therefore
@@ -1883,7 +1883,7 @@ FACTS: dict[str, dict] = {
             # fail the build if either appears), and the 'BYOD Upgrade' line that is ONE byod event
             # rather than a pair is correct here for free.
             'app/modules/commcalc/byod_upgrade_day.py': ('_lc',),
-            # The §COMMCALC-42 endpoint and the watchdog tick resolve the ORG's rules
+            # The §COMMCALC-43 endpoint and the watchdog tick resolve the ORG's rules
             # (`router._line_rules_of`) and hand them to the detector, so a tenant whose POS spells
             # the activation kind in `category` is classified by its own declaration rather than by
             # the house default — and they fall back to HOUSE_RULES by name, never by re-deriving.

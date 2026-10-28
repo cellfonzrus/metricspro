@@ -1,4 +1,4 @@
-"""Unit: the BYOD-and-upgrade-on-one-number-in-one-day detector (index §COMMCALC-42).
+"""Unit: the BYOD-and-upgrade-on-one-number-in-one-day detector (index §COMMCALC-43).
 
 Pure logic over fixtures shaped like the live sales feed. No app, no I/O, no database.
 

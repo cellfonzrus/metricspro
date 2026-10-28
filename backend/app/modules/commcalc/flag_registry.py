@@ -280,7 +280,7 @@ TYPES: dict[str, dict] = {
         "grain": "store_day",
     },
     # A BYOD ACTIVATION AND AN UPGRADE ON ONE NUMBER IN ONE DAY (owner ask 2026-10-28, index
-    # §COMMCALC-42). `store_day` for the same reason the row above carries it: the finding IS a set
+    # §COMMCALC-43). `store_day` for the same reason the row above carries it: the finding IS a set
     # of transactions keyed on the store and the day — a manager drills into that store-day and the
     # phone line and the receipt split sit inside the evidence — so `transaction` would promise a
     # single sale to click through to that does not exist. The unit counted is an ACTIVATION EVENT

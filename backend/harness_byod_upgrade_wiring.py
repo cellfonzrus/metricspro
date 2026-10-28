@@ -1,7 +1,7 @@
 """
-INTEGRATION PROOF — the BYOD-and-upgrade watchdog, END TO END (index §COMMCALC-42).
+INTEGRATION PROOF — the BYOD-and-upgrade watchdog, END TO END (index §COMMCALC-43).
 
-This is the WIRING half of the §COMMCALC-42 pair. `harness_byod_upgrade_day.py` proves the detector's
+This is the WIRING half of the §COMMCALC-43 pair. `harness_byod_upgrade_day.py` proves the detector's
 logic over fixtures; this one drives the REAL endpoint and the REAL sweep against a stand-in
 Supabase/PostgREST client, so what is proved here is the part a pure test cannot reach: the query,
 the columns it selects, the config it resolves, the scope filter, and the row it writes.

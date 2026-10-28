@@ -610,7 +610,7 @@ export const NAV: NavGroup[] = [
     // scopes mean this changes what is REACHABLE and nothing about who may see it; the endpoint
     // applies the district-manager span filter before it counts anything.
     { href: '/watchdog/multi-handset', label: 'Several Handsets To One Buyer', icon: '📱', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
-    // A BROUGHT DEVICE AND AN UPGRADE ON ONE NUMBER (owner ask 2026-10-28, index §COMMCALC-42:
+    // A BROUGHT DEVICE AND AN UPGRADE ON ONE NUMBER (owner ask 2026-10-28, index §COMMCALC-43:
     // "check if a byod and an upgrade is done on the same day for the same phone number at the same
     // store"). Same group, same module and byte-identical scopes to the two entries above, for the
     // same reason: the Fraud area page already shows the finding, and this shows the two sales

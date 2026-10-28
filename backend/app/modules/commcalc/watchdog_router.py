@@ -323,7 +323,7 @@ def watchdog_multi_handset(period: str = Query(default=""), authorization: str =
             "cases": out}
 
 
-# ── A brought device and an upgrade on one number in one day (index §COMMCALC-42). ──────────────
+# ── A brought device and an upgrade on one number in one day (index §COMMCALC-43). ──────────────
 @router.get("/watchdog/byod-upgrade")
 def watchdog_byod_upgrade(period: str = Query(default=""), authorization: str = Header(default=""),
                           org_id: str = ORG_ID):
@@ -514,7 +514,7 @@ def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 
             # a feed that spells accessories only in Category (measured live) is invisible without it.
             # `contract_type` is here for the activation CLASS predicate, and leaving it out is a
             # SILENT ZERO rather than an error: `line_class.HOUSE_FIELDS` is ("contract_type",), so
-            # without the column every line classifies as None, the §COMMCALC-42 detector finds no
+            # without the column every line classifies as None, the §COMMCALC-43 detector finds no
             # activation events at all, and the sweep reports a clean period it never looked at.
             # Locked by harness_byod_upgrade_wiring §B — every field any tenant's resolved rules can
             # read must be in this select.
@@ -607,7 +607,7 @@ def _run_for_org(client, org_id: str, *, period: str = "", lookback_days: int = 
     except Exception as e:
         out["multi_handset"] = {"error": str(e)[:300]}
 
-    # ── A brought device and an upgrade on one number in one day (index §COMMCALC-42). ──────────
+    # ── A brought device and an upgrade on one number in one day (index §COMMCALC-43). ──────────
     #
     # Rides the SAME `sales_rows` read above — one feed read serves every detector on this tick, so
     # adding a watchdog costs no extra pass over the biggest table in the schema. Three facts are

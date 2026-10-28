@@ -1,4 +1,4 @@
-"""Integration: GET /commcalc/watchdog/byod-upgrade through the REAL app (index §COMMCALC-42).
+"""Integration: GET /commcalc/watchdog/byod-upgrade through the REAL app (index §COMMCALC-43).
 
 Real routing, real middleware, the real endpoint body — over the in-memory database double, with
 conftest blocking every outbound socket. There is no staging Supabase, so "integration" here means

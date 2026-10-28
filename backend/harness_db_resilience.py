@@ -1303,7 +1303,7 @@ _all_routes = _flatten_routes(real_app.routes)
 # inside `harness_derived_build_lock.py`'s negative control, not routes. 1804 + 1 = 1805. So the pin was
 # re-taken on a counted, named addition, never relaxed to make CI green.
 #
-# Re-pinned 1805 -> 1806 on 2026-10-28 for §COMMCALC-42, the BYOD-and-upgrade-on-one-number report:
+# Re-pinned 1805 -> 1806 on 2026-10-28 for §COMMCALC-43, the BYOD-and-upgrade-on-one-number report:
 # ONE added GET, `/commcalc/watchdog/byod-upgrade`, the drill-down behind the new fraud-area finding.
 # It is READ-ONLY — it reads the sales feed through `watchdog_router._read_sales` and writes nothing;
 # the finding itself is written by the existing watchdog tick, which adds no route. It adds no input

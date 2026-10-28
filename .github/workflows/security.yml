@@ -115,6 +115,53 @@ jobs:
       - name: harness_data_api_grant_guard
         run: python backend/harness_data_api_grant_guard.py
 
+  public-allowlist:
+    # Enforcing (security review 2026-10-28). The public allowlist used to treat ANY path ending in
+    # "/run-due" as a self-authenticating cron entrypoint. 249 routes in this app end in a path
+    # PARAMETER, so asking for one with the literal value `run-due` skipped BOTH the auth requirement
+    # and the org_id rewrite — an unauthenticated write into, and recalculation of, any tenant's data.
+    # The set is now DERIVED from the app's own route table; this fails the build if a parameterised
+    # route can ever be reached that way again.
+    name: A parameterised route can never be public (allowlist lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r backend/requirements.txt
+      - name: harness_public_allowlist_lock
+        run: python backend/harness_public_allowlist_lock.py
+
+  client-ip:
+    # Enforcing (security review 2026-10-28). Four modules each read the LEFTMOST X-Forwarded-For
+    # entry, which is the value the CLIENT typed — so the per-IP rate limiter, the IP block list and
+    # the access log's `ip` column were all attacker-controlled. `app/core/client_ip.py` is now the
+    # ONE home; this fails the build if a fifth copy appears or a wired site stops dereferencing it.
+    name: The client address has one home (X-Forwarded-For lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r backend/requirements.txt
+      - name: harness_client_ip
+        run: python backend/harness_client_ip.py
+
+  anonymous-write-surface:
+    # Enforcing (security review 2026-10-28). The crash logger filed its core.failure_log row under
+    # the CALLER-DECLARED ?org_id= — the exact thing the middleware's own outage logger was already
+    # fixed not to do — so an anonymous caller who could provoke a 500 wrote rows into any tenant's
+    # Failure Logs. Also pins the cap on the client-asserted login outcome.
+    name: What an anonymous caller may write, and under whose name
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r backend/requirements.txt
+      - name: harness_anonymous_write_surface
+        run: python backend/harness_anonymous_write_surface.py
+
   ci-pipefail:
     # Enforcing: a failing harness must fail CI (index §19.25). Before 2026-09-24 every
     # `python3 harness_x.py | tee …` step ran without pipefail and passed on a red harness.
