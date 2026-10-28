@@ -38839,8 +38839,11 @@ what fails the build.
 - **One** pytest-shaped file (`backend/tests/test_assignment_audit_flags.py`, now moved into `tests/unit/`), collected by nothing
   and run by no job.
 - **No** pytest configuration, no conftest, no fixtures, no test runner of any kind.
-- **No frontend CI workflow at all** — not tests, not typecheck, not the lint ratchet. The 12
-  `frontend/tools/*-proof.mjs` programs were executed by nobody; 8 pass today and 4 do not.
+- **No frontend TEST job anywhere.** `npm run typecheck` and `npm run lint:gate` were already
+  gated — inside `carrier-vocab-guard.yml`, whose name says nothing about either, and locked by
+  `harness_frontend_typecheck_lock.py` / `harness_frontend_lint_lock.py`. What did not exist was any
+  job that runs a test. The 12 `frontend/tools/*-proof.mjs` programs were executed by **no workflow
+  at all**; 8 pass today and 4 do not.
 - **Duplicate check (CLAUDE.md build gate):** the index was searched for `pytest`, `unit test`,
   `integration test`, `test framework`, `vitest`, `jest`. **Zero hits.** No existing mechanism serves
   this purpose, so nothing was duplicated. The harnesses and the `*-proof.mjs` programs are the

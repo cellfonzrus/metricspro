@@ -4,10 +4,11 @@ OWNER DIRECTIVE 2026-10-28, verbatim: *"We need to define all development we do 
 following / Unit testing / Integration testing / Test driven development"*.
 
 THE CLASS THIS EXISTS TO PREVENT. This repo has 597 `harness_*.py` proof programs and, before this
-change, **no unit-test runner, no integration-test runner, and no CI workflow for the frontend at
-all** — 330 of those harnesses are run by nothing (`harness_unrun_pending.txt`). The general fact
-behind that is the one the house already named in §19.25: *a proof that nothing executes is not a
-gate, it is a file.* A test framework is the same shape and fails the same way, only faster — a
+change, **no unit-test runner, no integration-test runner, and no CI job anywhere that runs a
+test** — 330 of those harnesses are run by nothing (`harness_unrun_pending.txt`), and so were all 12
+frontend proofs. (The frontend's typecheck and lint ratchet were already gated, inside
+`carrier-vocab-guard.yml`; it was tests that had no job.) The general fact behind that is the one
+the house already named in §19.25: *a proof that nothing executes is not a gate, it is a file.* A test framework is the same shape and fails the same way, only faster — a
 `pytest.ini` whose `testpaths` drifts, a conftest whose network guard is deleted "to debug one
 thing", a CI job that installs the runner but never calls it. Each of those leaves the suite green
 and meaningless, and nobody finds out until production is wrong.

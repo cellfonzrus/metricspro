@@ -5,9 +5,11 @@ name: tests
 # Owner, verbatim: *"We need to define all development we do to follow the following / Unit testing /
 # Integration testing / Test driven development"*.
 #
-# WHAT WAS HERE BEFORE: nothing. The repo had 597 `backend/harness_*.py` proof programs (330 run by
-# no workflow), one pytest-shaped file that no job executed, and NOT ONE workflow touching the
-# frontend — no tests, no typecheck, no lint. This workflow is the gate that makes a test a gate.
+# WHAT WAS HERE BEFORE: no test job of any kind. The repo had 597 `backend/harness_*.py` proof
+# programs (330 run by no workflow), one pytest-shaped file that no job executed, and 12
+# `frontend/tools/*-proof.mjs` programs that no workflow ran at all. (The frontend's typecheck and
+# lint ratchet WERE already gated — inside `carrier-vocab-guard.yml`, whose name says nothing about
+# either.) This workflow is the gate that makes a test a gate.
 #
 # ENFORCING, not report-only. A red job blocks the merge. That is the point: a suite that cannot
 # fail a build is documentation with a stopwatch.
