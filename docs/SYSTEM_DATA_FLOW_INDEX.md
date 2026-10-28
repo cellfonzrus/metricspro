@@ -26117,6 +26117,7 @@ status word rather than a blank that reads as nil.
 | CORE-18 | core |
 | CORE-19 | core |
 | CORE-20 | core |
+| CORE-21 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
 | COMMCALC-42 | commcalc |
@@ -39117,9 +39118,9 @@ fails the build until its line is deleted, and `PINNED_MAX` in `run-proofs.mjs` 
 (**4**) and may only go down. The four entries are declared with what is actually wrong with each —
 one real assertion failure, three whose runner lost the `@/` tsconfig path alias when transpiling to
 a temp directory. They are **reported, not hidden**, and fixing them is its own change.
-## §CORE-20. AN IN-PROCESS CACHE KEYED BY SOMETHING A CLIENT CAN MINT IS BOUNDED BY CONSTRUCTION (load test 2026-10-28)
+## §CORE-21. AN IN-PROCESS CACHE KEYED BY SOMETHING A CLIENT CAN MINT IS BOUNDED BY CONSTRUCTION (load test 2026-10-28)
 
-### CORE-20.1 How it was found
+### CORE-21.1 How it was found
 
 The 1,000-user load test (rig and findings in `/mnt/project-files/load-test-2026-10-28/`) read the
 worker's memory climbing while a thousand distinct login tokens went through it, and the code said
@@ -39129,7 +39130,7 @@ which the auth service re-mints on every refresh, so the key space is NOT bounde
 users — 1,000 logins refreshing through a day is tens of thousands of dead entries per worker per
 day, held until the next deploy.
 
-### CORE-20.2 The class, not the instance
+### CORE-21.2 The class, not the instance
 
 The defect is not "that one dict leaks". It is **a module-level dict used as a TTL cache, with no
 cap and no eviction** — and the platform had several, each with its own hand-written
@@ -39146,7 +39147,7 @@ cap and no eviction** — and the platform had several, each with its own hand-w
 
 Capping one of them is the patchwork the house rules forbid.
 
-### CORE-20.3 The one home
+### CORE-21.3 The one home
 
 `app/core/ttl_cache.TTLCache` — a dict with a time-to-live and a hard entry cap, thread-safe,
 with an injectable clock so a proof can move time without sleeping. On insert, **expired entries
@@ -39161,7 +39162,7 @@ All six caches above now dereference it. **No TTL, no semantics and no behaviour
 identity cache still holds for 60 s, still caches positive results only, and still lets a failed
 read self-heal.
 
-### CORE-20.4 Siblings checked and excused
+### CORE-21.4 Siblings checked and excused
 
 - `core/rate_limit.RateLimiter` — a fixed-window **counter**, not a value cache, and already bounded
   (`max_keys=100_000` with its own sweep). Different mechanism, already safe.
@@ -39170,7 +39171,7 @@ read self-heal.
 - `core/identity._store_cache` / `_emp_cache` and `commcalc/target_registry._cache` (§COMMCALC-42) —
   keyed by ORG, so bounded by the tenant count, which a client cannot inflate.
 
-### CORE-20.5 Lock
+### CORE-21.5 Lock
 
 `backend/harness_ttl_cache_bounded.py`, CI job `ttl-cache-bounded` in
 `.github/workflows/org-scope-guard.yml`. §A pins the cache's own behaviour (TTL, cap, expired-first
