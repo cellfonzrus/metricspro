@@ -109,3 +109,106 @@ def test_a_missing_sales_table_is_a_503_not_a_500(monkeypatch, api_client):
                         lambda: (_ for _ in ()).throw(RuntimeError("no client")))
     r = api_client.get(PATH, params={"period": PERIOD})
     assert r.status_code in (500, 503)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE CHARGEBACK AMOUNT AND THE DRILL-DOWN (owner ask 2026-10-28)
+#
+# Owner, verbatim: *"inmclude the $ amount of the rebate and title it as chargeback amount, make it
+# oneline summary top show the sales rep teh store the phone sold and the phone number meim and teh
+# $ amount and thebn drill down like other menus to get mroe detail sof both trasnactions"*.
+#
+# These prove the PAYLOAD CONTRACT the screen reads. The four-way reason distinction and the
+# per-grain provenance are proved end to end in `harness_byod_upgrade_wiring.py` §H, against a
+# client that records the select string; what is proved here is that the real app, through real
+# routing and middleware, hands the screen the keys it binds to.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+MEID = "351449743101051"
+
+#: The same pair, with a device identifier on the handset the store sold — the key the carrier pays
+#: against, and without it no amount could ever be found.
+A_PAIR_WITH_DEVICE = [
+    dict(r, serial_1=MEID) if r["id"] == "r4" else dict(r) for r in A_PAIR
+]
+
+#: THE ORG'S DECLARED DEVICE VOCABULARY. Without it the handset columns are "not measured" rather
+#: than zero (which is itself the right behaviour, and the subject of the tests above), so a test
+#: about the handset the store SOLD has to declare one — a fixture that relied on a house default
+#: would be asserting against a guess.
+ACCESSORY_CONFIG = [{"org_id": "00000000-0000-0000-0000-000000000001",
+                     "box_departments": ["Handsets"], "activation_details_rules": {},
+                     "contract_type_map": {}, "activation_rules": []}]
+
+
+def _seed_with_device(wired):
+    wired.seed("commcalc.daily_sales_feed", A_PAIR_WITH_DEVICE)
+    wired.seed("commcalc.accessory_config", ACCESSORY_CONFIG)
+
+
+def test_the_one_line_summary_fields_are_all_on_the_case(wired, api_client):
+    """A person, a place, a phone and a figure — the four things the owner asked the top line to
+    show. The screen's columns bind to exactly these keys, so a rename here blanks the table."""
+    _seed_with_device(wired)
+    c = api_client.get(PATH, params={"period": PERIOD}).json()["cases"][0]
+    assert c["rep"] == "Arora, Tanish"
+    assert c["store"] == "B-1115"
+    assert c["number"] == "2155550143"
+    assert c["meid"] == MEID
+    # THE PHONE NAMED IS THE ONE THE STORE SOLD — the handset on the upgrade side. The first side is
+    # the device the customer brought in; naming that would report the phone the store did not sell.
+    assert c["phone_sold"] == "moto g play - 2026 Q4 Promo Upgrade"
+    assert c["meids"] == [MEID] and c["phones_sold"] == 1
+
+
+def test_no_carrier_payment_reads_as_unmeasured_never_as_zero(wired, api_client):
+    """A rebate lands months after the sale, so "nothing has arrived" and "$0.00 was paid" are
+    DIFFERENT facts. The screen prints "not yet" off `None`; a 0.0 here would make it print $0.00
+    and state a measurement nobody made (§19.26)."""
+    _seed_with_device(wired)
+    body = api_client.get(PATH, params={"period": PERIOD}).json()
+    c = body["cases"][0]
+    assert c["chargeback_amount"] is None          # None, NOT 0.0 — the whole point
+    assert c["chargeback_measured"] is False
+    assert c["chargeback_partial"] is False
+    assert body["summary"]["chargeback_unmeasured_cases"] == 1
+    assert body["summary"]["chargeback_measured_cases"] == 0
+    # And the case is still reported: the pair is the finding, the money is context.
+    assert len(body["cases"]) == 1
+
+
+def test_the_payload_states_which_feed_the_amount_was_read_from(wired, api_client):
+    """`chargeback_source` is how the screen tells "the carrier paid nothing" from "nothing was
+    looked at" — it raises a warning card on either absence rather than leaving the reader to infer
+    it from a column of dashes."""
+    _seed_with_device(wired)
+    src = api_client.get(PATH, params={"period": PERIOD}).json()["chargeback_source"]
+    assert set(src) >= {"available"}
+    if src.get("available"):
+        assert src["feed_table"] == "raw_payment_detail"
+        assert "configured" in src and "lag_window" in src
+
+
+def test_the_drill_panels_are_served_on_the_shared_mechanism(wired, api_client):
+    """"Drill down like other menus" IS the house panel (§CORE-17). The page renders whatever keys
+    arrive here, so an endpoint that served none would silently drop the drill-down."""
+    _seed_with_device(wired)
+    panels = api_client.get(PATH, params={"period": PERIOD}).json()["panels"]
+    assert "dollars" in panels
+    p = panels["dollars"]
+    assert p["figure"]["label"] and p["rows"]
+    # A PANEL NAMES THE FEED THE FIGURE WAS READ FROM, per row — that is what makes it evidence
+    # rather than a second rendering of the same table.
+    assert all(r["sources"] for r in p["rows"])
+    assert {t for r in p["rows"] for t in r["sources"]} == {"daily_sales_feed"}
+    # The row's label is the owner's one-line summary, so the panel reads like the table above it.
+    assert "Arora, Tanish" in p["rows"][0]["label"]
+
+
+def test_every_served_panel_ties_to_the_summary_figure_it_explains(wired, api_client):
+    """A panel that opens to rows summing to something other than the tile is worse than no panel:
+    it looks like evidence and disagrees with the number it is under."""
+    _seed_with_device(wired)
+    body = api_client.get(PATH, params={"period": PERIOD}).json()
+    for key, panel in (body["panels"] or {}).items():
+        assert abs(float(panel["figure"]["amount"] or 0)
+                   - float(body["summary"].get(key) or 0)) < 0.005, key

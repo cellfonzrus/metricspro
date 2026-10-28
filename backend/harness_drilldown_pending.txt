@@ -30,6 +30,7 @@
 # (index CORE-17.3w).
 
 /closing/cash-variance	shared	owner ask 2026-10-24, the first report on the shared mechanism
+/watchdog/byod-upgrade	shared	owner ask 2026-10-28 (§COMMCALC-43); tile and row panels over report_drilldown
 /accounts	own	the reference's other half (ScopeDrillDown)
 /accounts/pl	own	the reference drill (PR #408, index 4e); drill rows still name no source feed
 /commcalc/commission-ledger	own	category tile to ledger rows; provenance panel names each source_table

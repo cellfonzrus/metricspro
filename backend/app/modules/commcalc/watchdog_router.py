@@ -48,6 +48,8 @@ from app.modules.commcalc import flag_registry as _reg
 from app.modules.commcalc import void_watchdog as _void
 from app.modules.commcalc import multi_handset_day as _handsets
 from app.modules.commcalc import byod_upgrade_day as _byod_upg
+from app.modules.commcalc import byod_upgrade_drilldown as _byod_drill
+from app.modules.commcalc import carrier_device_money as _cdm
 from app.modules.commcalc import line_class as _lc
 from app.modules.closing import cash_watchdog as _cash
 
@@ -380,7 +382,30 @@ def watchdog_byod_upgrade(period: str = Query(default=""), authorization: str = 
     rule_rows = _read_rules(client, org_id)
     grouped = _byod_upg.number_days(rows, rules)
     params = _reg.rule_params(_byod_upg.FLAG_TYPE, rule_rows)
-    found = _byod_upg.cases(grouped, params, is_box=is_box)
+
+    # ── THE CHARGEBACK AMOUNT — read, never derived (owner ask 2026-10-28) ────────────────────────
+    # "include the $ amount of the rebate and title it as chargeback amount". How much carrier money
+    # stands against a handset has ONE home (§COMMCALC-44), bound to this org's own declarations —
+    # the same verdict the P&L books its reimbursement line on, which is the point: a watchdog screen
+    # and the statement must not quote two different rebates for one phone. The lookup is INJECTED,
+    # so the detector itself still classifies no carrier dollar and reads no feed.
+    #
+    # A FEED THAT CANNOT BE READ LEAVES EVERY AMOUNT UNMEASURED, and the screen says so. It does NOT
+    # fail the report and it does NOT render $0.00: the cases are the finding, the money is context,
+    # and a zero there would be a measurement nobody made (§19.26).
+    rebate_of = None
+    rebate_meta = {"available": False, "reason": "the carrier payment feed was not read"}
+    try:
+        from app.modules.commcalc.router import _pvariants as _pv
+        _rx, _rmeta = _cdm.per_device(client, org_id, p, pvariants=_pv)
+        rebate_of = (lambda meid, _i=_rx: _cdm.amount_for(_i, meid))
+        rebate_meta = {"available": True, **_rmeta}
+    except Exception as e:
+        print(f"WARN byod-upgrade chargeback amount unavailable: {e}")
+        rebate_meta = {"available": False,
+                       "reason": f"the carrier payment feed could not be read: {str(e)[:160]}"}
+
+    found = _byod_upg.cases(grouped, params, is_box=is_box, rebate_of=rebate_of)
 
     out = []
     for c in found:
@@ -395,6 +420,7 @@ def watchdog_byod_upgrade(period: str = Query(default=""), authorization: str = 
                     "description": _byod_upg.describe(c),
                     "coaching_note": _byod_upg.coaching_note(c),
                     "signal": signal})
+    _summary = _byod_upg.summary(grouped, found, is_box=is_box)
     return {"org_id": org_id, "period": p, "as_of": _now(),
             "enabled": _reg.is_enabled(_byod_upg.FLAG_TYPE, rule_rows),
             "classes": list(params.get(_byod_upg.CLASSES_KEY) or ()),
@@ -405,7 +431,18 @@ def watchdog_byod_upgrade(period: str = Query(default=""), authorization: str = 
             # The feed genuinely carrying nothing for this period is NOT "no cases" — it is
             # "not reported", and a screen must be able to say which.
             "has_feed": bool(rows),
-            "summary": _byod_upg.summary(grouped, found, is_box=is_box),
+            "chargeback_source": rebate_meta,
+            "summary": _summary,
+            # ── THE DRILL-DOWN, ON THE HOUSE MECHANISM (§CORE-17) ────────────────────────────────
+            # "then drill down like other menus to get more details of both transactions". "Like
+            # other menus" IS this: the shared panel every other report opens, declared in
+            # `byod_upgrade_drilldown` and served through the one home's own rules — including which
+            # figures may be explained at all, so this endpoint keeps no copy of that judgement.
+            "panels": _byod_drill.panels(out, _summary, sales_table=tbl,
+                                         # WHAT WAS LOOKED AT, so a row with no amount names the
+                                         # RIGHT absence. Without this the panel blamed the
+                                         # carrier feed for a lookup that never happened.
+                                         source=rebate_meta),
             "cases": out}
 
 

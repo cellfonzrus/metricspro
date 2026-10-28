@@ -1083,6 +1083,13 @@ on:
       - "backend/harness_byod_upgrade_day.py"
       - "backend/harness_byod_upgrade_wiring.py"
       - "backend/app/modules/commcalc/byod_upgrade_day.py"
+      # §COMMCALC-44 — the one home for the device money the chargeback amount is read from, its
+      # own lock, and the §CORE-17 catalogue. Named here because the wiring proof's §H drives all
+      # three: a change to the money home moves a figure the P&L is booked on as well as this
+      # screen, and a change to the catalogue changes which absence a row names.
+      - "backend/harness_carrier_device_money.py"
+      - "backend/app/modules/commcalc/carrier_device_money.py"
+      - "backend/app/modules/commcalc/byod_upgrade_drilldown.py"
       - "backend/app/modules/commcalc/line_class.py"
       - "backend/app/modules/commcalc/prospect_eval.py"
       - "backend/app/modules/account/device_cogs.py"
@@ -2740,7 +2747,13 @@ jobs:
   #     456 live number-days where counting events reads 95); an event the one home keyed on a
   #     DEVICE carries no number and is reported as unmeasurable rather than clean; and §D8 refuses
   #     a config key that cannot change an outcome.
-  #   · harness_byod_upgrade_wiring.py (40 checks) drives the REAL endpoint and the REAL sweep
+  #   · harness_carrier_device_money.py (38 checks) locks §COMMCALC-44, the one home for "how much
+  #     device-financing money has the carrier paid against THIS device". The figure was factored out
+  #     of the P&L's reimbursement run when this report needed it, so the lock's job is that it stays
+  #     ONE: nothing else folds §65 directly, the §58/§66/§27 questions are asked rather than
+  #     re-spelled, both callers still dereference it, and a device the feed carries no row for reads
+  #     None and never $0.00 — a rebate lands months after the sale.
+  #   · harness_byod_upgrade_wiring.py (61 checks) drives the REAL endpoint and the REAL sweep
   #     against a stand-in PostgREST client. It is the half a pure test cannot reach, and its §B is
   #     an actual defect this PR fixed: the tick's shared sales read did not select `contract_type`,
   #     which is `line_class.HOUSE_FIELDS`, so every line classified as None and the sweep would
@@ -2765,6 +2778,9 @@ jobs:
       - name: The wiring (the select carries every field the class predicate reads; the open month is asked for; the span filter runs first; the row is written under its own source)
         working-directory: backend
         run: python3 harness_byod_upgrade_wiring.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: The device-money one home (§COMMCALC-44 — nothing else folds §65 directly; the §58/§66/§27 questions are asked; both callers dereference it; None is never $0.00)
+        working-directory: backend
+        run: python3 harness_carrier_device_money.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
 
 
   # THE STORE-TAKEOVER EVALUATION PROOF (index COMMCALC-03) drives the real prospect_eval rules over the

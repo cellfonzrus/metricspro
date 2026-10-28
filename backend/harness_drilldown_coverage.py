@@ -71,6 +71,18 @@ PAGE_OVERRIDE = {
 #: recorded as such in §CORE-17.4.
 EXTRA_REPORTS = {
     "/closing/cash-variance": "a report, reached from the Closing dashboard tile, not the directory",
+    # The brought-device-then-upgrade flag (§COMMCALC-43). A report, reached from the Flags &
+    # Compliance hub rather than the directory, and it renders the shared panel — so it is declared
+    # here rather than escaping the population because the directory is the incomplete half.
+    #
+    # ITS THREE SIBLINGS ARE NOT DECLARED, AND THAT IS NAMED, NOT OVERLOOKED. `/watchdog`,
+    # `/watchdog/void-register` and `/watchdog/multi-handset` summarise figures with no shared
+    # drill, so declaring them would RAISE `OWES_MAX` from 18 to 21. The pin may only shrink, and
+    # relaxing it to enlarge the measured set would cost exactly the thing it buys. They are the
+    # named candidates for the next batch; building their panels lowers the pin instead of lifting
+    # it. The whole /watchdog tree being outside `REPORT_DIRECTORY` is the pre-existing §CORE-17.4
+    # debt, not something the byod-upgrade work introduced.
+    "/watchdog/byod-upgrade": "a report, reached from the Flags & Compliance hub tile, not the directory",
 }
 
 # ── Read the ledger. ───────────────────────────────────────────────────────────────────────────

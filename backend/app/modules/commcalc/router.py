@@ -25,6 +25,7 @@ from app.modules.commcalc import prospect_feed_tally as _pft   # 2026-10-16 — 
 from app.modules.core import feed_read as _feed_read   # 2026-10-06 — THE complete paged feed read; no literal row ceiling (index §19.48)
 from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE pay-feed balance: placed, or reported unplaced (index §19.48)
 from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
+from app.modules.commcalc import carrier_device_money as _cdm   # THE device-financing dollars per device (index §COMMCALC-44)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10-10 — THE daily-incentive shapes (mig 1072); every rule is a config row (index §74)
@@ -11607,16 +11608,10 @@ def _device_reimb_recon_inputs(client, org_id: str, period: str):
         return _feed_read.read_all(_make)      # PAGED through the one home — no row ceiling (§19.48)
 
     # ── config: house defaults ← house org row ← this tenant's row (RULE TWO, mig 1063) ──────────
-    def _cfg_blob(oid):
-        try:
-            rows = (client.schema("commcalc").table("commission_org_config")
-                    .select("device_reimb_recon_config").eq("org_id", oid).limit(1).execute().data) or []
-        except Exception as e:                 # column/table absent → house defaults (contract §5)
-            print(f"WARN device_reimb_recon config unavailable (run migration 1063?): {e}")
-            return None
-        return (rows[0] if rows else {}).get("device_reimb_recon_config")
-
-    cfg = _drr.config_from_rows(_cfg_blob(org_id), _cfg_blob(ORG_ID) if org_id != ORG_ID else None)
+    # Read through §COMMCALC-44, which owns this config for every caller of the device-financing
+    # money. A second copy of the inherit-the-house-row read here is how the two sides of one money
+    # question start answering it differently.
+    cfg = _cdm.load_recon_config(client, org_id, ORG_ID)
     cols = cfg["columns"]
 
     # ── the ONE classification home, bound to this org's own rules ────────────────────────────────
@@ -11776,86 +11771,17 @@ def _device_line_reimb_run(client, org_id: str, period: str, store: str = ""):
         _device_reimb_recon_inputs(client, org_id, period)
     cols = cfg["columns"]
 
-    # ── §58's one home, bound to this org ────────────────────────────────────────────────────────
-    from app.modules.commcalc import carrier_dollar_class as _cdc
-    cdc_cfg = _cdc.load_config(client, org_id)
-    try:
-        cdc_rules = carrier_map.load_rules(client, org_id)
-    except Exception:
-        cdc_rules = []
-    cdc_decl = _cdc.load_declarations(client, org_id)
-    _lines_map = (cdc_cfg or {}).get("component_lines") or {}
-    # WHICH COMPONENTS' DOLLARS ARE THE DEVICE-FINANCING SIDE — §58's own question, asked, not
-    # derived here (§69). This read used to be "every component this org routed OFF the generic
-    # carrier-commission line", which was an INFERENCE that held only while exactly one component
-    # was routed anywhere. A second component routed to a line of ITS own is not device money: under
-    # the owner's 2026-10-10 MDF ruling that inference would have re-admitted $91,000.00 a month of
-    # per-store lump sums — no device named, and nothing for one to name — to this per-DEVICE report
-    # minutes after §65.5 cleared it of exactly that money. The home answers the question as it is
-    # meant: the components that book to the line the device-financing reimbursement books to.
-    _device_components = _cdc.device_reimb_components(_lines_map, "carrier_comm")
-    configured = bool(_device_components)
-    _cache: dict = {}
-
-    # A dollar §58 placed on a category the component vocabulary has NO row for is not evidence of a
-    # device payment, however the keyword ladder then booked it. §58 says so itself — it returns the
-    # fallback component with `basis: declared_category_unmapped` precisely so a caller can decline
-    # it — and this layer declines, because its grain is one row per PHONE. Measured live (house org,
-    # Aug-Oct 2026): 'Ramp Up Subsidy' is declared into MDF, which has no component row, and its 14
-    # monthly per-store lump sums ($91,000.00 in the September window, $287,500.00 across the feed)
-    # are correctly identifier-less — there is no phone for a ramp subsidy to name. Counting them as
-    # device money put $91,000.00 in a bucket a reader would take for unattributable device money.
-    # WHICH BASES THOSE ARE IS NOT DECIDED HERE (§66). "Is a component reached on this basis
-    # evidence about the dollar, or a placement of last resort" has ONE home — the module that owns
-    # `basis` — and this layer asks it (`_cdc.component_is_evidence`) rather than keeping its own
-    # tuple of basis names. The POLICY stays here, because it is this layer's and nobody else's: at
-    # a per-PHONE grain an unreliable component is DECLINED. A statement that must book every dollar
-    # answers the same False differently, by naming a column or a line for it, which is why the home
-    # answers only the question.
-    def is_device_dollar(raw_type):
-        key = str(raw_type or "")
-        hit = _cache.get(key)
-        if hit is None:
-            c = _cdc.classify(cdc_decl, cdc_rules, raw_type, cdc_cfg) or {}
-            hit = _cache[key] = (str(c.get("component") or "").upper() in _device_components
-                                 and _cdc.component_is_evidence(c.get("basis")))
-        return hit
-
-    # The carrier's PER-LINE feed over the REIMBURSEMENT LAG WINDOW. The lag LENGTH and the month
-    # enumeration are §27's (`imei_rebate_report.period_window`), the ONE home for "how long either
-    # side of the event may this money arrive"; this report states no lag rule of its own.
-    #
-    # THE ANCHOR IS THE ONE THING THAT DIFFERS, and it has to, so it is said rather than assumed.
-    # §27 anchors on the ACTIVATION, which the money can only follow, so its window runs FORWARD.
-    # This layer anchors on the distributor's CLAIM DATE, and a claim is made when the distributor
-    # settles — which is routinely AFTER the carrier paid. Measured live (store 652, September
-    # 2026): two devices were paid in August and claimed in September, so a forward-only window
-    # called them never-paid. The window is therefore SYMMETRIC — the same lag either side, both
-    # months enumerated by §27's own function.
-    from app.modules.commcalc.imei_rebate_report import period_window as _lag_window
-    _lag = int(cfg.get("lag_months") or 0)
-    _anchor = _drr.month_key(period) if period else None
-    if _anchor and _lag:
-        _y, _m = int(_anchor[:4]), int(_anchor[5:7]) - _lag
-        _y, _m = _y + (_m - 1) // 12, (_m - 1) % 12 + 1
-        _pw = _lag_window(f"{_y:04d}-{_m:02d}", _lag * 2)
-    else:
-        _pw = _lag_window(period, 0) if period else None
-    _line_periods = sorted({v for p in (_pw or [period]) for v in (_pvariants(p) or [p])}) \
-        if period else None
-
-    # PAGED through the one home (§19.48) — 245,195 live house rows unnarrowed, 21,943 for one month.
-    def _line_q():
-        q = (client.schema("commcalc").table("raw_payment_detail")
-             .select(",".join(sorted({cols["line_store"], cols["line_amount"],
-                                      cols["line_category"], cols["line_device_id"],
-                                      cols["line_date"], cols["line_rep"]})))
-             .eq("org_id", org_id))
-        return q.in_("period", _line_periods) if _line_periods else q
-    line_rows = _feed_read.read_all(_line_q)
-
-    carrier_lines = _drr.carrier_line_side(line_rows, cfg,
-                                           is_device_dollar if configured else None, resolve_store)
+    # ── THE DEVICE-FINANCING MONEY PER DEVICE — §COMMCALC-44, dereferenced, not built here ───────
+    # This was ~60 lines inline: §58's classification bound to this org, which components ARE the
+    # device-financing side under its own routing, §66's refusal of a component reached on a basis
+    # that is not evidence, §27's symmetric lag window, the paged read of the per-line feed, and
+    # §65's pure per-device fold. §COMMCALC-43's chargeback amount needed the same figure, so it is
+    # ONE home now and both callers read it. Not one decision changed: they moved whole.
+    carrier_lines, _cdm_meta = _cdm.per_device(client, org_id, period, cfg=cfg,
+                                               resolve_store=resolve_store, pvariants=_pvariants)
+    configured = _cdm_meta["configured"]
+    _device_components = set(_cdm_meta["components"])
+    _pw = _cdm_meta["lag_window"]
     # The distributor ledger is a whole-table snapshot with no period column, so the month filter is
     # the reimbursement DATE's month and the pure layer applies it — never a second period rule here.
     mk = _drr.month_key(period) if period else None

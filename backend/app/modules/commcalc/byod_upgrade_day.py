@@ -129,6 +129,9 @@ KEY_CANNOT_ANSWER = (
     "It says what was rung on one day, not whether it was right. A line activated on a phone the "
     "customer brought and upgraded onto a new handset the same day is an ordinary sale and looks "
     "exactly like this.",
+    "The chargeback amount is the carrier money already recorded against that handset, not a "
+    "charge anybody has made. A rebate usually arrives months after the sale, so a case on a recent "
+    "day shows no amount because none has arrived yet, never because nothing is at stake.",
 )
 
 
@@ -212,12 +215,18 @@ def _devices(rows, is_box):
     return out
 
 
-def cases(grouped, params, *, is_box=None):
+def cases(grouped, params, *, is_box=None, rebate_of=None):
     """PURE: the number-days whose events cover EVERY class in `params['classes']`, with evidence.
 
     Evidence only — there is no verdict field, by design (see the module docstring). Sorted by day
     descending then store then number, so the list is stable between runs and the newest day a
     manager can still act on is first.
+
+    `rebate_of(device_id) -> amount | None` is INJECTED, like `is_box`, and for the same reason: how
+    much carrier money stands against a handset is §COMMCALC-44's answer, read off the org's own
+    declarations, and a second derivation of it here would be a report quoting a different rebate
+    from the one the P&L books. None from the lookup means the feed carries no row for that device
+    yet — UNMEASURED, never $0.00, because a rebate lands months after the sale (§19.26).
     """
     want = [c for c in (((params or {}).get(CLASSES_KEY)) or ()) if _s(c)]
     if len(want) < 2:
@@ -292,6 +301,67 @@ def cases(grouped, params, *, is_box=None):
                 c[f"{pos}_{field}"] = per_cls[cls][field]
                 c[f"{cls}_{field}"] = per_cls[cls][field]
             c[f"{pos}_class"] = cls
+
+        # ── THE ONE-LINE SUMMARY (owner ask 2026-10-28) ──────────────────────────────────────────
+        # Owner: *"make it one line summary top show the sales rep the store the phone sold and the
+        # phone number meid and the $ amount and then drill down ... to get more details of both
+        # transactions"*. So the table above the drill-down names a PERSON, a PLACE, a PHONE and a
+        # FIGURE, and everything else moved underneath it.
+        #
+        # THE PHONE IS THE ONE ON THE SECOND SIDE OF THE PAIR, positionally — the side the store
+        # SOLD. The first side is the brought device, which is the customer's own phone: naming that
+        # as "the phone sold" would report the handset the store did not sell, the opposite of the
+        # question. Positional and never by class name, so a tenant that declares a different pair
+        # still gets the side it declared second (RULE TWO — see the two spellings above).
+        second = per_cls[want[-1]]
+        sold = _devices([r for e in by_cls[want[-1]] for r in e["rows"]], is_box)
+        # None, not "", when no box vocabulary was injected: a handset nobody could identify is not
+        # a sale with no handset on it, and a blank cell reads as the latter.
+        c["phone_sold"] = None if sold is None else (
+            _s((sold[0] or {}).get("product_desc")) or None if sold else None)
+        c["meid"] = None if sold is None else (
+            _s((sold[0] or {}).get("serial_1")) or None if sold else None)
+        # EVERY handset on that side, in the order the receipt rang them. All 95 live cases measured
+        # 2026-10-28 carry exactly one, so `phone_sold` / `meid` name it and these are a list of
+        # one — but a second handset must not be silently dropped: naming only the first would
+        # UNDERSTATE the exposure the day one appears, and an understated money figure that looks
+        # complete is worse than one that says it is partial.
+        c["meids"] = ([] if sold is None else
+                      sorted({_s((r or {}).get("serial_1")) for r in sold
+                              if _s((r or {}).get("serial_1"))},
+                             key=lambda s: [_s((r or {}).get("serial_1")) for r in sold].index(s)))
+        c["phones_sold"] = None if sold is None else len(c["meids"])
+        # Every rep on the pair, joined — never the first one found. Two people on one number-day is
+        # itself worth seeing, and picking one would hide the other from the person reading the row.
+        c["rep"] = " + ".join(c["reps"]) or None
+        # ── THE CHARGEBACK AMOUNT ────────────────────────────────────────────────────────────────
+        # The carrier money standing against the handset the store sold — what a chargeback on this
+        # sale would take back. `rebate_of` is the injected one home (§COMMCALC-44); this module
+        # neither classifies a carrier dollar nor reads a feed.
+        # Σ over EVERY handset on that side, counting only the ones the feed actually answered for.
+        # A total that silently covered one of two handsets would read as the whole exposure.
+        total, measured_phones = None, 0
+        if callable(rebate_of):
+            for meid in (c["meids"] or ()):
+                try:
+                    one = rebate_of(meid)
+                except Exception:
+                    one = None
+                if one is None:
+                    continue
+                total = round(safe_float(one) + (total or 0.0), 2)
+                measured_phones += 1
+        c["chargeback_amount"] = total
+        # The screen must be able to tell "no rebate has landed for this phone yet" from "$0.00 was
+        # paid for it", and a reader cannot tell those apart from the amount alone.
+        c["chargeback_measured"] = total is not None
+        c["chargeback_phones_measured"] = measured_phones
+        # A real figure that covers only SOME of the handsets sold. True is not a defect — it is the
+        # honest state while a rebate for the other handset has not arrived — and the screen says it
+        # rather than printing a complete-looking total.
+        c["chargeback_partial"] = bool(total is not None
+                                       and measured_phones < len(c["meids"] or ()))
+        c["second_dollars"] = second["dollars"]
         out.append(c)
     out.sort(key=lambda c: (c["day"], c["store"], c["number"]), reverse=True)
     return out
@@ -345,6 +415,17 @@ def summary(grouped, found, *, is_box=None):
         "multi_event_cases": sum(1 for c in found if c["events"] > len(c.get("classes") or ())),
         "zero_dollar_cases": sum(1 for c in found if c["all_zero_dollars"]),
         "dollars": round(sum(c["dollars"] for c in found), 2),
+        # ── THE CHARGEBACK AMOUNT, SUMMED — and what it could NOT be summed over ─────────────────
+        # Σ of only the cases whose handset the carrier feed actually carries a row for. A case with
+        # no row yet contributes nothing to the total and is COUNTED instead, because adding it as
+        # 0.00 would make the headline read as a measured exposure of that much less. A rebate lands
+        # months after the sale, so on the newest day — the one a manager can still act on — most
+        # cases are legitimately unmeasured, and a screen that hides that is lying about its own
+        # coverage (§19.26).
+        "chargeback_dollars": round(sum(c["chargeback_amount"] for c in found
+                                        if c.get("chargeback_amount") is not None), 2),
+        "chargeback_measured_cases": sum(1 for c in found if c.get("chargeback_measured")),
+        "chargeback_unmeasured_cases": sum(1 for c in found if not c.get("chargeback_measured")),
         # THE live discriminator, counted: the shape all 95 measured cases carry — nothing handed
         # over on the first activation, a handset handed over on the second. None where no box
         # predicate was injected: not measured, which is not "none like that".

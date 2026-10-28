@@ -261,6 +261,9 @@ EXPECTED_CANNOT_ANSWER = {
     "It says what was rung on one day, not whether it was right. A line activated on a phone the "
     "customer brought and upgraded onto a new handset the same day is an ordinary sale and looks "
     "exactly like this.",
+    "The chargeback amount is the carrier money already recorded against that handset, not a "
+    "charge anybody has made. A rebate usually arrives months after the sale, so a case on a recent "
+    "day shows no amount because none has arrived yet, never because nothing is at stake.",
 }
 check("E5 the limits the check CANNOT answer are EXACTLY the four declared — stated on the module, "
       "not left to be discovered, and not removable in silence",
