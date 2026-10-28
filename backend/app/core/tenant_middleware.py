@@ -230,11 +230,16 @@ _PROMOTE_DUE_SUFFIX = "/promote-due"
 # Locked by harness_public_allowlist_lock.py.
 # The derivation is memoised for ONE app, not in a dict keyed by app. A process serves a single
 # FastAPI app whose route table is fixed once the app is built, so a dict here would be a map that
-# only ever holds one entry and can only ever grow — which is the shape index §CORE-21's bounded-cache
+# only ever holds one entry and can only ever grow — which is the shape the bounded-cache
 # lock exists to retire. Two module-level slots say the same thing in O(1), with nothing to evict and
 # no TTL to forget. `_FALLBACK_CRON_PATHS` keeps the most recent SUCCESSFUL derivation so a later
 # failure to read the route table falls back to a real answer instead of an empty one; it is derived,
 # never hardcoded.
+#
+# The one thing the dict did that this does not: hold answers for SEVERAL apps at once. If two app
+# objects alternated, each call would recompute instead of hitting. That is a trade made on purpose
+# — a process serves one app, and the test suites that build a second one do so once — and the cost
+# of being wrong is a recomputation, where the cost of the dict being wrong was unbounded memory.
 _CRON_PATHS_FOR_APP_ID = None        # id() of the app the memo below was derived from
 _CRON_PATHS_MEMO = None              # that app's literal cron paths
 _FALLBACK_CRON_PATHS = None          # most recent successful derivation, from any app
