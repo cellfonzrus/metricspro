@@ -38956,7 +38956,13 @@ existing `cron.schedule` line; no new cron, no new entrypoint
 `byod_upgrade_watchdog` (registered in `commcalc/flag_registry.py`)
 **Config:** `commcalc.watchdog_rule.params.classes` — house `["byod", "upgrade"]`
 **Screen:** `/watchdog/byod-upgrade`, a tile on the Flags & Compliance hub (`rbac.ts`, `tileOnly`)
-**Proof:** `backend/harness_byod_upgrade_day.py` — 51 checks, DB-free, the detector's logic
+**Proof:** `backend/harness_byod_upgrade_day.py` — 55 checks, DB-free, the detector's logic
+**House test gate (§CORE-19):** `backend/tests/unit/test_byod_upgrade_day.py` (10) and
+`backend/tests/integration/test_byod_upgrade_endpoint.py` (6) — the two regressions and the real
+endpoint over the in-memory double, so the detector is gated by `tests.yml` as well as by its own
+harnesses. Both were mutation-checked: pairing on `any` instead of `all` reddens four of them, and
+removing the two-class floor reddens one. The harnesses stay the exhaustive proof; these are the
+facts a reader of `tests/` can see without opening one
 **Integration proof:** `backend/harness_byod_upgrade_wiring.py` — 40 checks, the real endpoint and the
 real sweep against a stand-in PostgREST client (the query, its columns, the config resolution, the
 span filter, the written row)
