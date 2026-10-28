@@ -1,0 +1,266 @@
+"""An in-memory stand-in for the Supabase/postgrest client — the ONE database double for tests.
+
+WHY IT EXISTS. There is no staging database (project memory, 2026-10-08): every environment points
+at the same live Supabase, so a test that builds a real client is one typo away from writing to
+production commission money. The double gives an integration test the real FastAPI app, the real
+routers and the real request cycle over rows the test itself seeded.
+
+WHY ONE HOME AND NOT A STUB PER TEST FILE. A hand-rolled stub per test is the duplicate defect the
+house rules forbid, wearing a test's hat: two doubles answering "what does .eq() do" will drift, and
+the day they disagree the suite lies in the direction nobody is looking. Every double lives here and
+its semantics are pinned by tests/unit/test_supabase_double.py.
+
+WHAT IT PROMISES (and nothing beyond it — an unimplemented verb raises rather than guessing):
+  • `.schema(name).table(name)` keys a relation as "schema.table"; bare `.table()` means `public`.
+  • filters `.eq .neq .in_ .gte .lte .gt .lt .is_` chain and AND together, in any order.
+  • `.order(col, desc=) .limit(n) .range(a, b) .single() .maybe_single()`.
+  • writes `.insert .upsert .update .delete`, each returning the affected rows.
+  • **a `.delete()` or `.update()` with NO filter is REFUSED** (OutboundWriteRefused). A rebuild
+    that lost its filter emptied 11,000 live payable rows once (index §PAYABLES-01); the double will
+    not let a test certify that shape as working.
+  • reads return deep copies, so a caller cannot mutate the seeded store through a result.
+
+Stdlib only. No network, no credentials, no postgrest import.
+"""
+from __future__ import annotations
+
+import copy
+from typing import Any, Dict, Iterable, List, Optional
+
+
+class OutboundWriteRefused(RuntimeError):
+    """An unfiltered update/delete — the shape that empties a table. Refused, never simulated."""
+
+
+class FakeResponse:
+    """Mirrors postgrest's APIResponse surface as far as this codebase uses it: `.data` / `.count`."""
+
+    def __init__(self, data: Any, count: Optional[int] = None):
+        self.data = data
+        self.count = count
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"FakeResponse(data={self.data!r}, count={self.count!r})"
+
+
+_MISSING = object()
+
+
+class _Query:
+    """One request builder. Filters accumulate; `.execute()` applies them to the seeded rows."""
+
+    def __init__(self, store: Dict[str, List[dict]], key: str, verb: str, payload: Any = None):
+        self._store = store
+        self._key = key
+        self._verb = verb
+        self._payload = payload
+        self._filters: List[tuple] = []
+        self._order: Optional[tuple] = None
+        self._limit: Optional[int] = None
+        self._range: Optional[tuple] = None
+        self._single = False
+        self._maybe_single = False
+
+    # ── filters ──────────────────────────────────────────────────────────────────────────────
+    def eq(self, col: str, val: Any) -> "_Query":
+        self._filters.append(("eq", col, val)); return self
+
+    def neq(self, col: str, val: Any) -> "_Query":
+        self._filters.append(("neq", col, val)); return self
+
+    def gt(self, col: str, val: Any) -> "_Query":
+        self._filters.append(("gt", col, val)); return self
+
+    def gte(self, col: str, val: Any) -> "_Query":
+        self._filters.append(("gte", col, val)); return self
+
+    def lt(self, col: str, val: Any) -> "_Query":
+        self._filters.append(("lt", col, val)); return self
+
+    def lte(self, col: str, val: Any) -> "_Query":
+        self._filters.append(("lte", col, val)); return self
+
+    def in_(self, col: str, vals: Iterable[Any]) -> "_Query":
+        self._filters.append(("in", col, list(vals))); return self
+
+    def is_(self, col: str, val: Any) -> "_Query":
+        self._filters.append(("is", col, val)); return self
+
+    # ── shaping ──────────────────────────────────────────────────────────────────────────────
+    def order(self, col: str, desc: bool = False, **_kw) -> "_Query":
+        self._order = (col, desc); return self
+
+    def limit(self, n: int) -> "_Query":
+        self._limit = n; return self
+
+    def range(self, start: int, end: int) -> "_Query":
+        self._range = (start, end); return self
+
+    def single(self) -> "_Query":
+        self._single = True; return self
+
+    def maybe_single(self) -> "_Query":
+        self._maybe_single = True; return self
+
+    # ── execution ────────────────────────────────────────────────────────────────────────────
+    def _rows(self) -> List[dict]:
+        return self._store.setdefault(self._key, [])
+
+    def _matches(self, row: dict) -> bool:
+        for op, col, val in self._filters:
+            got = row.get(col, _MISSING)
+            if op == "eq" and got != val:
+                return False
+            if op == "neq" and got == val:
+                return False
+            if op == "in" and got not in val:
+                return False
+            if op == "is":
+                if val is None and got not in (None, _MISSING):
+                    return False
+                if val is not None and got != val:
+                    return False
+            if op in ("gt", "gte", "lt", "lte"):
+                if got is _MISSING or got is None:
+                    return False
+                if op == "gt" and not got > val:
+                    return False
+                if op == "gte" and not got >= val:
+                    return False
+                if op == "lt" and not got < val:
+                    return False
+                if op == "lte" and not got <= val:
+                    return False
+        return True
+
+    def execute(self) -> FakeResponse:
+        if self._verb == "select":
+            out = [copy.deepcopy(r) for r in self._rows() if self._matches(r)]
+            if self._order:
+                col, desc = self._order
+                out.sort(key=lambda r: (r.get(col) is None, r.get(col)), reverse=desc)
+            if self._range:
+                a, b = self._range
+                out = out[a:b + 1]
+            if self._limit is not None:
+                out = out[: self._limit]
+            if self._single:
+                if len(out) != 1:
+                    raise ValueError(f"single() expected exactly 1 row for {self._key}, got {len(out)}")
+                return FakeResponse(out[0], count=1)
+            if self._maybe_single:
+                return FakeResponse(out[0] if out else None, count=len(out))
+            return FakeResponse(out, count=len(out))
+
+        if self._verb in ("insert", "upsert"):
+            payload = self._payload if isinstance(self._payload, list) else [self._payload]
+            rows = self._rows()
+            written = []
+            for rec in payload:
+                rec = copy.deepcopy(rec)
+                if self._verb == "upsert":
+                    existing = next((r for r in rows if "id" in rec and r.get("id") == rec.get("id")), None)
+                    if existing is not None:
+                        existing.update(rec)
+                        written.append(copy.deepcopy(existing))
+                        continue
+                rows.append(rec)
+                written.append(copy.deepcopy(rec))
+            return FakeResponse(written, count=len(written))
+
+        if self._verb == "update":
+            if not self._filters:
+                raise OutboundWriteRefused(
+                    f"update on {self._key} with no filter would rewrite every row — refused")
+            touched = []
+            for r in self._rows():
+                if self._matches(r):
+                    r.update(copy.deepcopy(self._payload))
+                    touched.append(copy.deepcopy(r))
+            return FakeResponse(touched, count=len(touched))
+
+        if self._verb == "delete":
+            if not self._filters:
+                raise OutboundWriteRefused(
+                    f"delete on {self._key} with no filter would empty the table — refused "
+                    "(see index §PAYABLES-01)")
+            rows = self._rows()
+            removed = [copy.deepcopy(r) for r in rows if self._matches(r)]
+            self._store[self._key] = [r for r in rows if not self._matches(r)]
+            return FakeResponse(removed, count=len(removed))
+
+        raise NotImplementedError(f"the Supabase double does not implement '{self._verb}'")
+
+
+class _Table:
+    def __init__(self, store: Dict[str, List[dict]], key: str):
+        self._store = store
+        self._key = key
+
+    def select(self, *_cols, **_kw) -> _Query:
+        return _Query(self._store, self._key, "select")
+
+    def insert(self, payload: Any, **_kw) -> _Query:
+        return _Query(self._store, self._key, "insert", payload)
+
+    def upsert(self, payload: Any, **_kw) -> _Query:
+        return _Query(self._store, self._key, "upsert", payload)
+
+    def update(self, payload: dict, **_kw) -> _Query:
+        return _Query(self._store, self._key, "update", payload)
+
+    def delete(self, **_kw) -> _Query:
+        return _Query(self._store, self._key, "delete")
+
+
+class _Schema:
+    def __init__(self, store: Dict[str, List[dict]], schema: str, rpc_handlers: Dict[str, Any]):
+        self._store = store
+        self._schema = schema
+        self._rpc = rpc_handlers
+
+    def table(self, name: str) -> _Table:
+        return _Table(self._store, f"{self._schema}.{name}")
+
+    from_ = table
+
+    def rpc(self, name: str, params: Optional[dict] = None):
+        handler = self._rpc.get(f"{self._schema}.{name}", self._rpc.get(name))
+        if handler is None:
+            raise NotImplementedError(
+                f"no rpc handler seeded for {self._schema}.{name}() — seed one with "
+                "FakeSupabase(..., rpc={'name': lambda params: rows})")
+        return FakeResponse(handler(params or {}))
+
+
+class FakeSupabase:
+    """Seed with {"schema.table": [rows]} and optionally {"fn": callable} for rpc().
+
+    `rows` is the test's own data. Nothing is shared between FakeSupabase instances, so one test
+    cannot leak state into another.
+    """
+
+    def __init__(self, tables: Optional[Dict[str, List[dict]]] = None,
+                 rpc: Optional[Dict[str, Any]] = None):
+        self._store: Dict[str, List[dict]] = {k: copy.deepcopy(v) for k, v in (tables or {}).items()}
+        self._rpc = dict(rpc or {})
+
+    def schema(self, name: str) -> _Schema:
+        return _Schema(self._store, name, self._rpc)
+
+    def table(self, name: str) -> _Table:
+        return self.schema("public").table(name)
+
+    def from_(self, name: str) -> _Table:
+        return self.table(name)
+
+    def rpc(self, name: str, params: Optional[dict] = None):
+        return self.schema("public").rpc(name, params)
+
+    # ── test affordances (not part of the real client) ───────────────────────────────────────
+    def rows(self, key: str) -> List[dict]:
+        """Read the seeded store directly, to assert on what a route WROTE."""
+        return copy.deepcopy(self._store.get(key, []))
+
+    def seed(self, key: str, rows: List[dict]) -> None:
+        self._store[key] = copy.deepcopy(rows)

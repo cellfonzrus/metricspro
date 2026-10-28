@@ -1,7 +1,7 @@
 """Pure-logic harness for commission_engine.audit_flags — the core value of the Plan Assignment Audit.
 
 Feeds fake `winner` + `considered` structures (the shape _resolve_plan_for(explain=True) returns) and
-asserts the flag decision. No DB, no network — pure. Run: python backend/tests/test_assignment_audit_flags.py
+asserts the flag decision. No DB, no network — pure. Run: python backend/tests/unit/test_assignment_audit_flags.py
 """
 import os
 import sys
