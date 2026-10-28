@@ -65,6 +65,23 @@ jobs:
         working-directory: frontend
         run: npm audit --audit-level=high || true
 
+  frontend-dep-floor:
+    # Enforcing (security review 2026-10-28). The `npm audit` step above had reported FOUR critical
+    # unauthenticated-RCE advisories in next@16.2.7 on every PR for weeks and nothing failed, because
+    # every scanner in this file runs continue-on-error. This is the part with teeth: an advisory we
+    # have ALREADY paid to fix may not be silently re-opened by a revert, a bad lockfile merge or a
+    # widened pin. Deliberately NOT a full npm-audit gate — see the harness header for why that is a
+    # separate change (jspdf and xlsx have no non-breaking fix, so turning the step above red today
+    # would block every PR).
+    name: A fixed dependency advisory stays fixed (frontend version floor)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: harness_frontend_dep_floor
+        run: python backend/harness_frontend_dep_floor.py
+
   semgrep:
     name: SAST (semgrep)
     runs-on: ubuntu-latest
