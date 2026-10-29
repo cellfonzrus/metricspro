@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import DrillDownPanel, { useDrillTile, type DrillPanel } from '@/components/DrillDownPanel'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 import { DrillStat } from '../_lib/DrillStat'
 
 // DECLARED vs CAPTURED (mig 1102, index §CLOSING-02). Owner ask 2026-10-29: a rep is paid per
@@ -64,6 +65,33 @@ const inp: React.CSSProperties = {
 
 function firstOfMonth(d: string) { return d.slice(0, 8) + '01' }
 
+// CLICK-A-HEADER SORTING (owner directive 2026-08-10) through `useTableSort` and nothing of this
+// page's own. Both readers are module scope so the memo inside the hook stays stable across renders,
+// and both read the SAME cell the column renders — a sort that reorders by something the manager
+// cannot see is worse than no sort. The verdict column sorts on the WORDS on screen, not the raw
+// key, so 'Numbers differ' and 'Declared, not captured' group as the reader sees them.
+const FINDING_COLS: [string, string][] = [
+  ['date', 'Date'], ['store_code', 'Store'], ['rep', 'Employee'], ['label', 'Category'],
+  ['units_declared', 'Declared #'], ['units_captured', 'Captured #'],
+  ['amount_declared', 'Declared $'], ['amount_captured', 'Captured $'],
+  ['verdict', 'Verdict'], ['reason', 'Why'],
+]
+function findingCell(r: Row, field: string): unknown {
+  if (field === 'verdict') return VERDICT[r.verdict]?.label || r.verdict
+  if (field === 'rep') return r.rep || ''
+  return (r as unknown as Record<string, unknown>)[field]
+}
+const REP_COLS: [string, string][] = [
+  ['rep', 'Employee'], ['store_code', 'Store'], ['days', 'Days'],
+  ['units_declared', 'Declared #'], ['units_captured', 'Captured #'],
+  ['amount_declared', 'Declared $'], ['amount_captured', 'Captured $'],
+  ['ok', 'Agree'], ['gaps', 'Disagree'], ['pending', 'Could not check'],
+]
+function repCell(r: RepRow, field: string): unknown {
+  if (field === 'rep') return r.rep || ''
+  return (r as unknown as Record<string, unknown>)[field]
+}
+
 export default function DeclaredVsCapturedPage() {
   const today = localToday()
   const [from, setFrom] = useState(() => firstOfMonth(today))
@@ -105,12 +133,18 @@ export default function DeclaredVsCapturedPage() {
   // whole and `lib/drill-narrow` is deliberately not wired in here.
   const drills: Record<string, DrillPanel> = data?.drilldown || {}
   const drill = useDrillTile(drills)
+  // The findings table sorts the rows the filter already produced; by_rep sorts its own. Neither
+  // seeds a starting sort — the server's order (gaps first) is the report's own default, and
+  // `useTableSort` returns it untouched until a header is clicked.
+  const repRows = useMemo(() => data?.by_rep || [], [data])
+  const fs = useTableSort<Row>(rows, findingCell)
+  const rs = useTableSort<RepRow>(repRows, repCell)
 
   function buildPayload(): ExportPayload {
     return {
       title: 'Declared vs captured', subtitle: `${from} to ${to}`,
       filename: `declared-vs-captured_${from}_${to}`,
-      sheets: [{ name: 'Findings', rows, columns: [
+      sheets: [{ name: 'Findings', rows: fs.sorted, columns: [
         { header: 'Date', get: (r: Row) => r.date },
         { header: 'Store', get: (r: Row) => r.store_code },
         { header: 'Employee', get: (r: Row) => r.rep || '(store)' },
@@ -210,12 +244,12 @@ export default function DeclaredVsCapturedPage() {
           <div className="card table-wrapper" style={{ marginTop: 12, padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['Employee', 'Store', 'Days', 'Declared #', 'Captured #', 'Declared $',
-                  'Captured $', 'Agree', 'Disagree', 'Could not check'].map(h =>
-                  <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
+                {REP_COLS.map(([f, h]) =>
+                  <SortableTh key={f} field={f} sort={rs.sort} onSort={rs.toggle}
+                    style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</SortableTh>)}
               </tr></thead>
               <tbody>
-                {data.by_rep.map(r => (
+                {rs.sorted.map(r => (
                   <tr key={r.store_code + '|' + r.rep_key}>
                     <td style={cell}><strong>{r.rep || '(store-level)'}</strong></td>
                     <td style={cell}>{r.store_code}</td>
@@ -237,12 +271,12 @@ export default function DeclaredVsCapturedPage() {
         <div className="card table-wrapper" style={{ marginTop: 12, padding: 0 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>
-              {['Date', 'Store', 'Employee', 'Category', 'Declared #', 'Captured #', 'Declared $',
-                'Captured $', 'Verdict', 'Why'].map(h =>
-                <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
+              {FINDING_COLS.map(([f, h]) =>
+                <SortableTh key={f} field={f} sort={fs.sort} onSort={fs.toggle}
+                  style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</SortableTh>)}
             </tr></thead>
             <tbody>
-              {rows.map((r, i) => (
+              {fs.sorted.map((r, i) => (
                 <tr key={i}>
                   <td style={cell}>{r.date}</td>
                   <td style={cell}>{r.store_code}</td>
