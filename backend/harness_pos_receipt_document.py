@@ -44,6 +44,15 @@ RENDER_SRC = (ROOT / "app/modules/pos/receipt_formats/render.py").read_text()
 RPD_SRC = (ROOT / "app/modules/pos/receipt_formats/render_pdf.py").read_text()
 RPDF_SRC = (ROOT / "app/modules/pos/receipt_pdf_render.py").read_text()
 
+#: The rules this document draws, DECLARED here by hand rather than counted off `doc_style.RULES`.
+#: A size bound would let a rule leave silently (a nine-entry list with `frame` swapped for anything
+#: still measures nine); an equality makes the departing rule name itself. Adding one here is a
+#: deliberate line of this file, which is the point.
+EXPECTED_RULES = {
+    "frame", "header_rule", "items_top", "items_header", "items_row",
+    "items_bottom", "totals_box", "total_heavy", "footer_rule",
+}
+
 _passed = 0
 _failed = 0
 
@@ -105,21 +114,24 @@ STROKES = len(PAGE["lines"]) + len(PAGE["rects"]) + len(PAGE["curves"])
 # ── §A one description ───────────────────────────────────────────────────────────────────────────
 print("\n§A  the document is described ONCE")
 
-ok("A1. the style home names every rule it draws", len(ST.RULES) >= 8)
-ok("A2. the stylesheet is BUILT from the style home, not written beside it",
+ok("A1. the style home names EXACTLY the rules this document draws",
+   set(ST.RULES) == EXPECTED_RULES,
+   f"{sorted(set(ST.RULES) ^ EXPECTED_RULES)}")
+ok("A2. no rule is named twice in the contract", len(ST.RULES) == len(set(ST.RULES)))
+ok("A3. the stylesheet is BUILT from the style home, not written beside it",
    "_style.css()" in RENDER_SRC and "def css(" in STYLE_SRC)
-ok("A3. no second stylesheet survives in the renderer",
+ok("A4. no second stylesheet survives in the renderer",
    '_CSS = """' not in RENDER_SRC,
    "a private CSS string here is the copy the PDF never saw")
-ok("A4. the PDF reads the SAME measurements, not its own",
+ok("A5. the PDF reads the SAME measurements, not its own",
    "from . import doc_style as st" in RPD_SRC
    and not re.search(r"^\s*(FONT|BODY_PT|RULE_PT|HAIRLINE_PT)\s*=", RPD_SRC, re.M),
    "a measurement defined in the drawing module is a second description")
-ok("A5. the greys and weights are numbers in ONE file",
+ok("A6. the greys and weights are numbers in ONE file",
    all(n in STYLE_SRC for n in ("HAIRLINE_PT", "RULE_PT", "HEAVY_PT", "RULE_GREY", "BAND_GREY")))
-ok("A6. the page rule is still §POS-11's and is not re-spelled here",
+ok("A7. the page rule is still §POS-11's and is not re-spelled here",
    "@page" not in STYLE_SRC and "PAGE_CSS" in RENDER_SRC)
-ok("A7. RULE TWO — no tenant, carrier or product in the style home",
+ok("A8. RULE TWO — no tenant, carrier or product in the style home",
    not re.search(r"(?i)\b(boost|total wireless|luxelink|cellfonz|verizon|vzone|samsung)\b", STYLE_SRC))
 
 

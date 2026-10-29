@@ -33179,11 +33179,11 @@ stopped being asked a question it was never answering.
 
 | | |
 | --- | --- |
-| New | `receipt_formats/doc_style.py` · `receipt_formats/render_pdf.py` · `harness_pos_receipt_document.py` (49 checks) |
+| New | `receipt_formats/doc_style.py` · `receipt_formats/render_pdf.py` · `harness_pos_receipt_document.py` (50 checks) |
 | Changed | `receipt_formats/render.py` (dereferences `doc_style.css()`; its private `_CSS` DELETED; drops unfilled columns; marks the grand-total and payment rows; the store block weighted) · `receipt_pdf_render.py` (delegates, refuses by name without a renderer) · `sale_receipt.py` (`method_label`, used by both layouts) · `pos/router.py` (injects `render_pdf`) · `harness_pos_receipt_render.py` §S4 re-pointed and strengthened · `tests/unit/test_pos_receipt_print_page.py` |
 | Endpoints | **NONE** |
 | Migration | **NONE** |
-| Locks | §A one description, no second stylesheet, no measurement in the drawing module · §B the rules are DRAWN, measured off the rendered PDF with pdfplumber (the regression: 0 strokes → framed, banded, boxed) · §C phrases whole, and no 3-space gap inside a line — the old defect's signature · §D the round-trip proof untouched and still reading every declared column · §E the unfilled column, with money and quantity never dropped · §F the method label · §G drawing is not deciding · §H six controls |
+| Locks | §A one description — the drawn rules are DECLARED as an exact set (a size bound would let one leave silently), no second stylesheet, no measurement in the drawing module · §B the rules are DRAWN, measured off the rendered PDF with pdfplumber (the regression: 0 strokes → framed, banded, boxed) · §C phrases whole, and no 3-space gap inside a line — the old defect's signature · §D the round-trip proof untouched and still reading every declared column · §E the unfilled column, with money and quantity never dropped · §F the method label · §G drawing is not deciding · §H six controls |
 | MONEY IMPACT | **NONE.** Nothing about what a receipt SAYS changed — same figures, same totals, same legal blocks, same transaction number. This is how it is set on the page |
 
 Same class: §POS-02 (the one renderer this extends), §POS-08 (the PDF as a third medium, whose
