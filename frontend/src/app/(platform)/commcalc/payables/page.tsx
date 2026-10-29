@@ -818,7 +818,13 @@ function PayablesPageBody() {
                       <td style={td}>
                         <button disabled={busy || !dirty} onClick={() => saveTerms(key, shown)}
                           style={{ padding: '5px 13px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, cursor: dirty && !busy ? 'pointer' : 'default',
-                            background: dirty && !busy ? 'var(--accent, #2563eb)' : 'var(--surface)', color: dirty && !busy ? '#fff' : 'var(--muted)' }}>
+                            /* TOKENS ONLY, no literal and no `var(--x, #hex)` fallback. The tab buttons
+                               above still carry a literal inside a var() fallback and the §B1 theme lock
+                               does not see it; it saw these two, which is the lock being right about the
+                               newer code rather than the older. A hex here would also not come down for
+                               the dark theme, since only a token is redefined under [data-theme="dark"]. */
+                            background: dirty && !busy ? 'var(--accent)' : 'var(--surface)',
+                            color: dirty && !busy ? 'var(--c-fg-ffffff)' : 'var(--muted)' }}>
                           Save
                         </button>
                       </td>
