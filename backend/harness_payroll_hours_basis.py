@@ -85,10 +85,13 @@ section("A. the basis vocabulary is an ALLOWLIST")
 check("A1 every ruled basis is in ALL_BASES", sorted(B.BASIS_REASONS) == sorted(B.ALL_BASES), True)
 # The list is spelled out HERE, by hand, on purpose: it is the allowlist, so adding a basis to the
 # module must break this line and make somebody say out loud whether the new basis pays.
-check("A2 the paying bases are exactly the six ruled payable ones",
+# CLOCKED_TRIMMED_TO_SCHEDULE joined the allowlist 2026-10-29 (owner ask: an early clock-in pays from
+# the scheduled start). It PAYS: the figure is still a measurement of the day, trimmed at one end by a
+# declared rule — the same standing as CLOCKED_RECONCILED, which trims the other end.
+check("A2 the paying bases are exactly the seven ruled payable ones",
       sorted(B.PAYING_BASES),
       sorted([B.CLOCKED, B.CLOCKED_CORRECTED, B.CLOCKED_RECONCILED, B.CLOCKED_OVERRIDE,
-              B.MEASURED_ZERO, B.SCHEDULE_OPT_IN]))
+              B.CLOCKED_TRIMMED_TO_SCHEDULE, B.MEASURED_ZERO, B.SCHEDULE_OPT_IN]))
 check("A3 NON_PAYING_BASES is DERIVED, so it cannot drift from the allowlist",
       sorted(B.NON_PAYING_BASES),
       sorted([b for b in B.ALL_BASES if b not in B.PAYING_BASES]))
@@ -101,10 +104,10 @@ check("A6 an UNRULED basis does not pay (allowlist, not denylist)",
 check("A7 a missing basis does not pay", B.basis_pays_hours(None), False)
 # A reconciled day and an overridden day ARE measurements: in both cases somebody — the two clock
 # records agreeing, or a named DM — observed the day. Only the schedule opt-in pays without observing.
-check("A8 measurement bases are the five that observed the day",
+check("A8 measurement bases are the six that observed the day",
       sorted(B.MEASURED_BASES),
       sorted([B.CLOCKED, B.CLOCKED_CORRECTED, B.CLOCKED_RECONCILED, B.CLOCKED_OVERRIDE,
-              B.MEASURED_ZERO]))
+              B.CLOCKED_TRIMMED_TO_SCHEDULE, B.MEASURED_ZERO]))
 check("A9 schedule_opt_in PAYS but is NOT a measurement — the distinction the `or` destroyed",
       (B.basis_pays_hours(B.SCHEDULE_OPT_IN), B.basis_is_measurement(B.SCHEDULE_OPT_IN)),
       (True, False))
@@ -694,6 +697,211 @@ check("Q24 a malformed date reads as NO FLOOR rather than as some guessed day",
       [B.resolve_config({"clocked_basis_effective_from": v})["clocked_basis_effective_from"]
        for v in ("", "not-a-date", "2026-10", None)], [None, None, None, None])
 
+
+section("EC. THE EARLY CLOCK-IN RULE (owner ask 2026-10-29)")
+# *"we need to calculate their time from their schedules time not when they clock in"* — and his
+# belief that it already existed. It did not: NARROWEST_WINDOW takes the later clock-IN but only
+# between two CLOCK RECORDS, and only when the feed is a pay source, which no org has on.
+#
+# The fixtures are the MEASURED pattern (2026-10-05..10-18, 502 punches): a 10:00 scheduled start
+# against a 09:45 clock-in, which is 31 of the 110 early rows and every one of the repeat offenders.
+EC_START = "2026-10-09T10:00:00-04:00"                 # the shift's start, as an INSTANT
+def _p(ci, hours, day="2026-10-09", auto=False):
+    return {"employee_id": "E1", "work_date": day, "hours": hours, "clock_in": ci,
+            "clock_out": f"{day}T19:00:00-04:00", "auto_clocked_out": auto}
+def _sh(day="2026-10-09", sched=9.0, start=EC_START):
+    return {"employee_id": "E1", "shift_date": day, "scheduled_hours": sched,
+            "actual_hours": 0.0, "scheduled_start_at": start}
+def ec(cfg, ci="2026-10-09T09:45:00-04:00", hours=9.25, start=EC_START, sched=9.0, auto=False):
+    ev = B.build_evidence(shifts=[_sh(sched=sched, start=start)], punches=[_p(ci, hours, auto=auto)])
+    return B.resolve_day(ev.get(("E1", "2026-10-09")), cfg)
+
+TRIM0 = B.resolve_config({"hours_basis_mode": B.MODE_CLOCKED_ONLY,
+                          "early_clockin_rule": B.EARLY_FROM_SCHEDULE,
+                          "early_clockin_grace_hours": 0.0})
+TRIM15 = B.resolve_config({"hours_basis_mode": B.MODE_CLOCKED_ONLY,
+                           "early_clockin_rule": B.EARLY_FROM_SCHEDULE})
+
+# ── the shipped default moves nothing, which is the whole posture of this module ────────────────
+check("EC1 the house default is TODAY: an early clock-in pays as clocked",
+      B.resolve_config(None)["early_clockin_rule"], B.EARLY_AS_CLOCKED)
+check("EC2 ...so the 09:45-against-10:00 punch is paid WHOLE under the default",
+      ec(CLOCKED)[0], 9.25)
+check("EC3 ...on basis `clocked`, not a trimmed one", ec(CLOCKED)[1], B.CLOCKED)
+check("EC4 ...and nothing was trimmed", ec(CLOCKED)[2]["early_clockin_trimmed_hours"], 0.0)
+
+# ── the grace window: the measured opening-up case is PAID ──────────────────────────────────────
+check("EC5 the default grace is 15 minutes — the measured opening-up window",
+      B.resolve_config(None)["early_clockin_grace_hours"], 0.25)
+check("EC6 15 minutes early is INSIDE the grace, so the opener is paid in full",
+      ec(TRIM15)[0], 9.25)
+check("EC7 ...on basis `clocked`, because nothing was trimmed", ec(TRIM15)[1], B.CLOCKED)
+check("EC8 ...and the row still SAYS the grace covered it rather than staying silent",
+      "grace" in (ec(TRIM15)[2].get("early_clockin_reasons") or [""])[0], True)
+
+# ── past the grace, the paid day starts at the schedule ─────────────────────────────────────────
+# 08:30 against a 10:00 start = 90 min early, 1.5h past a 15-minute grace.
+EARLY90 = {"ci": "2026-10-09T08:30:00-04:00", "hours": 10.5}
+check("EC9 90 minutes early trims to the scheduled start",
+      ec(TRIM15, **EARLY90)[0], 9.0)
+check("EC10 ...on its OWN basis, so no reader sees a trimmed figure labelled as the clock's",
+      ec(TRIM15, **EARLY90)[1], B.CLOCKED_TRIMMED_TO_SCHEDULE)
+check("EC11 ...which PAYS and IS a measurement", (B.basis_pays_hours(B.CLOCKED_TRIMMED_TO_SCHEDULE),
+      B.basis_is_measurement(B.CLOCKED_TRIMMED_TO_SCHEDULE)), (True, True))
+check("EC12 ...the trim is reported as a figure, never a silent subtraction",
+      ec(TRIM15, **EARLY90)[2]["early_clockin_trimmed_hours"], 1.5)
+check("EC13 ...and the sentence names the minutes, the grace and what it cost",
+      all(x in ec(TRIM15, **EARLY90)[2]["rule_reason"] for x in ("90 minute", "15-minute", "1.50h")), True)
+
+# ── the rule has nothing to say about anything else ─────────────────────────────────────────────
+check("EC14 a LATE clock-in is untouched — this rule only ever trims, never extends",
+      ec(TRIM15, ci="2026-10-09T10:30:00-04:00", hours=8.5)[:2], (8.5, B.CLOCKED))
+check("EC15 an exactly-on-time clock-in is untouched",
+      ec(TRIM15, ci=EC_START, hours=9.0)[:2], (9.0, B.CLOCKED))
+check("EC16 a day with NO scheduled start instant is untouched — a shift nobody rostered "
+      "cannot be started early",
+      ec(TRIM15, start=None, **EARLY90)[:2], (10.5, B.CLOCKED))
+check("EC17 a zero grace still pays the opener's scheduled hours, never less",
+      ec(TRIM0)[0], 9.0)
+check("EC18 ...and that is the $8-of-$173 case the 15-minute default deliberately leaves alone",
+      round(ec(TRIM0)[0] - ec(TRIM15)[0], 2), -0.25)
+
+# ── the guards ──────────────────────────────────────────────────────────────────────────────────
+check("EC19 a punch entirely before its scheduled start floors at ZERO, never negative",
+      ec(TRIM15, ci="2026-10-09T06:00:00-04:00", hours=1.0)[0], 0.0)
+check("EC20 ...and reads as a measured zero, not as trimmed-but-paying",
+      ec(TRIM15, ci="2026-10-09T06:00:00-04:00", hours=1.0)[1], B.MEASURED_ZERO)
+check("EC21 an UNRULED rule value falls back to TODAY, not to trimming (allowlist posture)",
+      B.resolve_config({"early_clockin_rule": "trim_everything"})["early_clockin_rule"],
+      B.EARLY_AS_CLOCKED)
+check("EC22 a NEGATIVE grace clamps to zero rather than trimming a LATE punch",
+      B.resolve_config({"early_clockin_grace_hours": -2})["early_clockin_grace_hours"], 0.0)
+check("EC23 a non-numeric grace falls back to the house default",
+      B.resolve_config({"early_clockin_grace_hours": "soon"})["early_clockin_grace_hours"], 0.25)
+# An auto-closed punch is not a measurement, so the trim never even runs on it. In clocked-only mode
+# with the org still opted into the schedule, the day falls to SCHEDULE_OPT_IN and the punch is
+# REPORTED — what matters here is that its 10.5 clocked hours never become pay by either route.
+check("EC24 an AUTO-CLOCKED-OUT punch is still not evidence — the trim never resurrects one",
+      (ec(TRIM15, auto=True, **EARLY90)[0] != 10.5,
+       B.PUNCH_AUTO in ec(TRIM15, auto=True, **EARLY90)[2]["unusable_punches"],
+       ec(TRIM15, auto=True, **EARLY90)[2]["early_clockin_trimmed_hours"]),
+      (True, True, 0.0))
+check("EC25 a correction still OUT-RANKS the trim: a DM who fixed the day is not overridden by it",
+      B.resolve_day(B.build_evidence(shifts=[_sh()], punches=[_p(**EARLY90)],
+                                     manual_rows=[{"employee_id": "E1", "work_date": "2026-10-09",
+                                                   "hours": 7.75}]).get(("E1", "2026-10-09")),
+                    TRIM15)[:2], (7.75, B.CLOCKED_CORRECTED))
+check("EC26 a manager OVERRIDE still out-ranks it too — the labour-law escape hatch survives",
+      B.resolve_day({"day": "2026-10-09", "scheduled": 9.0, "scheduled_start_at": EC_START,
+                     "_raw_punches": [_p(**EARLY90)],
+                     "_override": {"hours": 10.5, "reason": "opened early at my request",
+                                   "by": "dm@example.test"}}, TRIM15)[:2],
+      (10.5, B.CLOCKED_OVERRIDE))
+check("EC27 the EARLIEST of two scheduled starts is the one trimmed to — a double shift is not "
+      "docked its whole first half",
+      B.resolve_day(B.build_evidence(
+          shifts=[_sh(sched=4.0, start="2026-10-09T14:00:00-04:00"),
+                  _sh(sched=5.0, start=EC_START)],
+          punches=[_p(**EARLY90)]).get(("E1", "2026-10-09")), TRIM15)[0], 9.0)
+check("EC28 both config fields travel on EVERY row, so a reader can always see which rule ran",
+      (ec(CLOCKED)[2]["early_clockin_rule"], ec(CLOCKED)[2]["early_clockin_grace_hours"]),
+      (B.EARLY_AS_CLOCKED, 0.25))
+check("EC29 the rule's own sentence is ruled, not blank",
+      len(B.EARLY_RULE_REASONS[B.EARLY_FROM_SCHEDULE]) > 80, True)
+check("EC30 EVERY declared rule has a sentence", sorted(B.EARLY_RULE_REASONS), sorted(B.EARLY_CLOCKIN_RULES))
+
+# THE REGRESSION, stated as the defect it reproduces: the shortcut of comparing the stored UTC
+# instant against the LOCAL start_time string. Measured 2026-10-29: it made 1 of 502 punches look
+# 9.63h early and the other 501 look four hours late.
+check("EC31 REGRESSION the rule is driven by an INSTANT, so a UTC punch and a local start agree",
+      B.trim_early_clockin({"clock_in": "2026-10-09T13:45:00+00:00", "hours": 9.25},
+                           EC_START, TRIM15)[1], 0.0)
+# And the OTHER half of the same regression, stated honestly: the function cannot know a caller
+# passed the wrong zone, so the same digits read as UTC are a genuinely 4h15m-early arrival and are
+# trimmed as one. That is exactly WHY the instant is the parameter and the zone is the caller's job —
+# `router._biz_tz_for_store`, the one home for it.
+check("EC32 ...and the same digits read as UTC really ARE 4h15m early, which is why the caller "
+      "must resolve the zone and this function must not guess it",
+      B.trim_early_clockin({"clock_in": "2026-10-09T09:45:00+00:00", "hours": 9.25},
+                           EC_START, TRIM15)[1], 4.25)
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("EW. THE CALLER WIRING — a wall-clock shift start becomes the instant the rule needs")
+# A registry nothing dereferences is not a fix (§19.18, three times in this repo). `trim_early_clockin`
+# takes an INSTANT; `storeops.shifts.start_time` is `HH:MM` in the STORE's zone. The conversion lives
+# in `payroll_evidence.stamp_scheduled_starts`, on the assembly all four pay paths already go through,
+# and `period_evidence` calls it — so the rule is reachable rather than merely present.
+from datetime import timezone as _tzmod, timedelta as _td            # noqa: E402
+
+_EASTERN = _tzmod(_td(hours=-4))        # a fixed offset stands in for the store's zone here: this
+_CENTRAL = _tzmod(_td(hours=-5))        # proof is about the CONVERSION, not about zone data.
+_TZ = {"B-1": _EASTERN, "B-2": _CENTRAL}
+_resolver = lambda _org, sc: _TZ.get(sc)            # noqa: E731
+
+def _stamp(rows):
+    return PE.stamp_scheduled_starts("org", rows, tz_for_store=_resolver)
+
+_sh = {"employee_id": "E1", "shift_date": "2026-10-09", "scheduled_hours": 9.0,
+       "start_time": "09:00", "store_code": "B-1"}
+
+check("EW1 a shift gains the instant it was due to begin, in ITS OWN store's zone",
+      _stamp([_sh])[0]["scheduled_start_at"], "2026-10-09T09:00:00-04:00")
+check("EW2 the SAME wall-clock time in a different zone is a different instant — the whole reason "
+      "the rule refuses a bare string",
+      _stamp([dict(_sh, store_code="B-2")])[0]["scheduled_start_at"], "2026-10-09T09:00:00-05:00")
+check("EW3 seconds on the column are kept, not rounded away",
+      _stamp([dict(_sh, start_time="09:30:45")])[0]["scheduled_start_at"], "2026-10-09T09:30:45-04:00")
+check("EW4 no start_time means NO stamp — never a guessed start",
+      "scheduled_start_at" in _stamp([dict(_sh, start_time=None)])[0], False)
+check("EW5 a blank start_time likewise",
+      "scheduled_start_at" in _stamp([dict(_sh, start_time="")])[0], False)
+check("EW6 an unparseable start_time likewise",
+      "scheduled_start_at" in _stamp([dict(_sh, start_time="half past nine")])[0], False)
+check("EW7 an out-of-range start_time likewise",
+      "scheduled_start_at" in _stamp([dict(_sh, start_time="25:00")])[0], False)
+check("EW8 no shift_date likewise — a day we cannot name has no instant",
+      "scheduled_start_at" in _stamp([dict(_sh, shift_date=None)])[0], False)
+check("EW9 a store with no resolvable zone gets no stamp rather than a house-default guess",
+      "scheduled_start_at" in _stamp([dict(_sh, store_code="B-NOPE")])[0], False)
+check("EW10 a caller that already resolved its own instant is NOT overruled",
+      _stamp([dict(_sh, scheduled_start_at="2026-10-09T07:00:00-04:00")])[0]["scheduled_start_at"],
+      "2026-10-09T07:00:00-04:00")
+check("EW11 the caller's own rows are COPIED, never mutated — several callers render the list after",
+      "scheduled_start_at" in _sh, False)
+check("EW12 an empty list is an empty list", _stamp([]), [])
+check("EW13 a None list does not throw", _stamp(None), [])
+
+# The stamp has to survive into the EVIDENCE, or the rule still never sees it.
+_ev = B.build_evidence(shifts=_stamp([_sh]))
+check("EW14 build_evidence carries the stamped instant onto the day's cell",
+      _ev[("E1", "2026-10-09")].get("scheduled_start_at"), "2026-10-09T09:00:00-04:00")
+_ev2 = B.build_evidence(shifts=_stamp([dict(_sh, start_time="13:00"), dict(_sh, start_time="09:00")]))
+check("EW15 …and two shifts in one day keep the EARLIEST — trimming to the later one would dock the "
+      "whole first shift",
+      _ev2[("E1", "2026-10-09")].get("scheduled_start_at"), "2026-10-09T09:00:00-04:00")
+
+# END TO END, on the measured shape: a 09:00 Eastern opener who taps in at 07:30 local.
+_EARLY_CFG = dict(DEFAULT, early_clockin_rule=B.EARLY_FROM_SCHEDULE, early_clockin_grace_hours=0.25)
+_punch = {"employee_id": "E1", "work_date": "2026-10-09", "hours": 9.5,
+          "clock_in": "2026-10-09T11:30:00+00:00", "clock_out": "2026-10-09T21:00:00+00:00"}
+_cell = B.build_evidence(shifts=_stamp([_sh]), punches=[_punch])[("E1", "2026-10-09")]
+_h, _basis, _detail = B.resolve_day(_cell, _EARLY_CFG)
+check("EW16 end to end: 90 minutes early is trimmed to the scheduled start", _h, 8.0)
+check("EW17 …on its own basis, so the figure says why it is not the clock's",
+      _basis, B.CLOCKED_TRIMMED_TO_SCHEDULE)
+check("EW18 …and the trimmed amount is on the row", _detail.get("early_clockin_trimmed_hours"), 1.5)
+check("EW19 …with the sentence that explains it", bool(_detail.get("early_clockin_reasons")), True)
+check("EW20 THE SHIPPED DEFAULT changes nothing: the same punch pays whole on basis `clocked`",
+      B.resolve_day(_cell, DEFAULT)[0], 9.5)
+
+# THE REGRESSION. Before the conversion existed, the first measurement of this exposure compared the
+# stored UTC clock_in against the local start_time STRING. Here the same punch and the same shift,
+# with the stamp WITHHELD, pays whole — which is what an un-wired registry looks like from the row.
+_bare = B.build_evidence(shifts=[_sh], punches=[_punch])[("E1", "2026-10-09")]
+check("EW21 REGRESSION: with no stamped instant the rule cannot fire, and the punch pays whole",
+      B.resolve_day(_bare, _EARLY_CFG)[0], 9.5)
+check("EW22 …and the row SAYS there was no scheduled start, rather than implying the clock agreed",
+      B.resolve_day(_bare, _EARLY_CFG)[2].get("scheduled_start_at"), None)
 
 section("Z. ARMED negative control")
 _f0 = len(FAIL)
