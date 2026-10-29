@@ -1159,14 +1159,14 @@ on:
       - "backend/harness_payroll_approval_save.py"
       - "backend/app/modules/storeops/payroll_approval.py"
       - "frontend/prove_hours_approval_preview.mjs"
-      # index §CORE-24 — ONE component decides how a date is picked. The guard names itself (same
+      # index §CORE-23 — ONE component decides how a date is picked. The guard names itself (same
       # §13e reason as above) plus its register, the one home, and the two SHARED shells whose
       # From/To pair every range-filtered report renders: a change to any of them must re-run it.
       # It also scans all of frontend/src, so the page globs below already reach it on most PRs.
       - "frontend/prove_date_field.mjs"
       - "frontend/date_field_pending.txt"
       - "frontend/src/components/DateField.tsx"
-      # index §CORE-23 — a total names the rows it is over. The guard names itself, the one home for
+      # index §CORE-24 — a total names the rows it is over. The guard names itself, the one home for
       # total arithmetic, and the two surfaces that dereference it: ReportShell (already listed just
       # below) and the Time Clock screen.
       - "frontend/prove_report_totals_scope.mjs"
@@ -2215,10 +2215,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
-      - name: Prove one component decides how a date is picked (the calendar opens on a click, typing is never removed, showPicker is guarded three ways, and the 169th bare date input fails the build — index §CORE-24)
+      - name: Prove one component decides how a date is picked (the calendar opens on a click, typing is never removed, showPicker is guarded three ways, and the 169th bare date input fails the build — index §CORE-23)
         working-directory: frontend
         run: node prove_date_field.mjs | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Prove a total names the rows it is over (the filtered figure and the loaded-set figure come from ONE aggregation decision, the second is drawn only where a filter cuts rows, and no hand-rolled sum returns to the Time Clock page — index §CORE-23)
+      - name: Prove a total names the rows it is over (the filtered figure and the loaded-set figure come from ONE aggregation decision, the second is drawn only where a filter cuts rows, and no hand-rolled sum returns to the Time Clock page — index §CORE-24)
         working-directory: frontend
         run: node prove_report_totals_scope.mjs | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the tile-snapshot proof (the real tile-snapshot.ts; the ± 0% regression; negative controls)

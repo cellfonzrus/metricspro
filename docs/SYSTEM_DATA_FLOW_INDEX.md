@@ -135,8 +135,8 @@ Primary code homes:
 | CORE-20 | **A request path is not evidence of which route it reached** | "Act as a security agent and find the vulnerability in the code. Which paths does the platform let through without a login, what declares that list, and what stops a route the list never meant to name from satisfying it?" |
 | CLOSING-02 | **A declared category names what in the sales feed should agree with it** | "Add a field in as no of edge for total and no of financicing in thr daily closing for all employees to declare along with the $amount of edge and acima as they get paid for each transcoding they do, this would then be checked with our system if our system is capturing the sales as declared by the sales rep." Which half of that already existed as config, what had no home at all, and what stops the next category from being checked against a number nobody measured? |
 | CORE-21 | **An in-process cache keyed by something a client can mint is bounded by construction** | "Simulate a thousand users and see what breaks. What does the platform keep in each worker's memory while they are signed in, what decides when an entry leaves, and what fails the build the day a new cache ships without a bound?" |
-| CORE-24 | **One component decides how a date is picked, and the calendar opens on a click** | "for payroll hours approval the calendor should open up instead of enetring it manuallu" — said of a field that already HAD a calendar, reachable only from a glyph a few pixels wide at its right-hand edge, so a click anywhere else put a caret in mm/dd/yyyy and the date got typed digit by digit, on all 168 of them. When is a control's default behaviour the defect, and what stops the 169th from bringing it back? |
-| CORE-23 | **A total names the rows it is over — filtered and unfiltered, from one arithmetic** | "need the total below the hours on the time clock when filtered and without filter" — said of a column whose total lived in a badge above the table and only ever counted the rows a filter had left visible, without saying so, on every report in the product. What is a total of an unnamed population worth, and what does "without filter" honestly mean on a screen whose date range is a server query? |
+| CORE-23 | **One component decides how a date is picked, and the calendar opens on a click** | "for payroll hours approval the calendor should open up instead of enetring it manuallu" — said of a field that already HAD a calendar, reachable only from a glyph a few pixels wide at its right-hand edge, so a click anywhere else put a caret in mm/dd/yyyy and the date got typed digit by digit, on all 168 of them. When is a control's default behaviour the defect, and what stops the 169th from bringing it back? |
+| CORE-24 | **A total names the rows it is over — filtered and unfiltered, from one arithmetic** | "need the total below the hours on the time clock when filtered and without filter" — said of a column whose total lived in a badge above the table and only ever counted the rows a filter had left visible, without saying so, on every report in the product. What is a total of an unnamed population worth, and what does "without filter" honestly mean on a screen whose date range is a server query? |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -40585,7 +40585,7 @@ rather than what was written), mig 244 / `portal_backoff` (the cooldown a portal
 
 ---
 
-## §CORE-24. ONE COMPONENT DECIDES HOW A DATE IS PICKED, AND THE CALENDAR OPENS ON A CLICK (owner ask 2026-10-29)
+## §CORE-23. ONE COMPONENT DECIDES HOW A DATE IS PICKED, AND THE CALENDAR OPENS ON A CLICK (owner ask 2026-10-29)
 
 **What he said**, of the Hours Approval From/To pair:
 
@@ -40598,7 +40598,7 @@ Nothing was missing: **typing was the control's default behaviour**, and it was 
 one of the **168** date inputs across **89** files in `frontend/src` when this was measured
 (2026-10-29).
 
-### CORE-24.1 THE CLASS, and why the instance was the wrong place to fix it
+### CORE-23.1 THE CLASS, and why the instance was the wrong place to fix it
 
 The instance is two fields on one payroll screen. The class is *how this product asks for a date* — and
 a per-screen fix is the patchwork the house rules forbid: it would leave the same complaint waiting on
@@ -40616,7 +40616,7 @@ every such report at once, Hours Approval (§STOREOPS-01) among them, without to
 all. The payroll and workforce family the ask came from is converted outright: Time Clock, Payroll Tax,
 Hours Budget, Shift Extensions, Time Off, Salary Advances.
 
-### CORE-24.2 TYPING IS NEVER REMOVED, and the three ways `showPicker` is guarded
+### CORE-23.2 TYPING IS NEVER REMOVED, and the three ways `showPicker` is guarded
 
 The picker is an **addition**. No `readOnly`, no `preventDefault` on the click path: a keyboard user
 tabbing a form, a screen-reader user who is never shown a calendar at all, and anyone who finds four
@@ -40631,7 +40631,7 @@ would trade a blank payroll screen for a convenience. Hence an existence check, 
 and nothing a user could act on. The component reads `el.readOnly` / `el.disabled` to decide not to pop
 a calendar, which is the opposite of setting them.
 
-### CORE-24.3 THE RATCHET — the 169th bare date input fails the build
+### CORE-23.3 THE RATCHET — the 169th bare date input fails the build
 
 A one-home that nothing defends un-wires itself; it has happened three times here (§19.18). So
 `frontend/prove_date_field.mjs` (33 checks) proves the component's contract **and** scans the tree:
@@ -40657,7 +40657,7 @@ spread straight to the input.
 table, **no migration**, no backend change, and no figure anywhere moves: the value this control
 produces is the same ISO string it produced before.
 
-## §CORE-23. A TOTAL NAMES THE ROWS IT IS OVER — FILTERED AND UNFILTERED, FROM ONE ARITHMETIC (owner ask 2026-10-29)
+## §CORE-24. A TOTAL NAMES THE ROWS IT IS OVER — FILTERED AND UNFILTERED, FROM ONE ARITHMETIC (owner ask 2026-10-29)
 
 **What he said**, of the Time Clock screen:
 
@@ -40665,7 +40665,7 @@ produces is the same ISO string it produced before.
 
 Two separate things, and the second is the one that generalises.
 
-### CORE-23.1 THE CLASS — a total that does not name its population
+### CORE-24.1 THE CLASS — a total that does not name its population
 
 The instance is the Hours column on Time Clock: its total lived in a badge *above* the table
 (`{totalHours} hrs`) and nowhere under the column it totalled. That part is markup.
@@ -40676,7 +40676,7 @@ from the screen whether that is the fortnight or a tenth of it — so a filter l
 exactly like a quiet month. Asking for "filtered and without filter" is asking a total to name its own
 population, and that answer belongs in the arithmetic, not in one screen's markup.
 
-### CORE-23.2 THE ONE HOME, extended rather than sibling-ed
+### CORE-24.2 THE ONE HOME, extended rather than sibling-ed
 
 `frontend/src/lib/report-totals.ts` already owned total arithmetic for `ReportShell`'s `<tfoot>` and
 its export payload (RULE FOUR: what you see is what you export). It gains
@@ -40695,7 +40695,7 @@ the figure is "everything in range", never "everything ever", and both callers s
 cell's tooltip. Claiming otherwise would make the second number the same kind of unsourced figure as
 the first.
 
-### CORE-23.3 THE DEFECT THE SHARED AGGREGATION DECISION EXISTS FOR
+### CORE-24.3 THE DEFECT THE SHARED AGGREGATION DECISION EXISTS FOR
 
 `resolveAgg` reads the rows it is handed to decide whether a numeric-*looking* column is really
 summable (that guard is what stops a right-aligned text column being summed to zero). Over an **empty**
@@ -40709,7 +40709,7 @@ new optional `aggs` argument. Existing callers are unaffected: omitting it resol
 loaded with that argument stripped on its way through `prove_load_ts`, and the blanked cell duly comes
 back, so the guard is shown load-bearing rather than asserted to be.
 
-### CORE-23.4 WHO DEREFERENCES IT
+### CORE-24.4 WHO DEREFERENCES IT
 
 - **`ReportShell`** builds its pinned footer from `computeTotalScope(cols, filtered, rows)`, so **every
   report that opts into `totals` inherits the pair** without being touched. Its export path still calls
@@ -40721,7 +40721,7 @@ back, so the guard is shown load-bearing rather than asserted to be.
   carried are deleted**, and the proof fails if one returns. The page's header ribbon and its footer are
   now generated from ONE column list, so a column cannot gain a heading without gaining a total slot.
 
-### CORE-23.5 WHAT IS NOT DONE
+### CORE-24.5 WHAT IS NOT DONE
 
 Only the two surfaces above draw the pair. A page with its own bespoke table and its own hand-rolled
 sum still shows a single unnamed total; those are not converted here and are not pretended to be. The
