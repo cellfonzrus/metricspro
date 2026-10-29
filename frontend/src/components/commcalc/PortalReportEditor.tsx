@@ -128,9 +128,9 @@ export default function PortalReportEditor(
           value and the report runs once per day.
         </div>
 
-        {err && <div style={{ background: '#fef2f2', color: '#991b1b', borderRadius: 8, padding: '8px 10px',
+        {err && <div style={{ background: 'var(--c-bg-fef2f2)', color: 'var(--c-fg-991b1b)', borderRadius: 8, padding: '8px 10px',
           fontSize: 12, marginBottom: 10 }}>{err}</div>}
-        {note && <div style={{ background: '#f0fdf4', color: '#166534', borderRadius: 8, padding: '8px 10px',
+        {note && <div style={{ background: 'var(--c-bg-f0fdf4)', color: 'var(--c-fg-166534)', borderRadius: 8, padding: '8px 10px',
           fontSize: 12, marginBottom: 10 }}>{note}</div>}
 
         {!meta ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div> : (
