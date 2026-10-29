@@ -87,6 +87,7 @@ Primary code homes:
 | POS-10 | **What the shop IS, on a receipt** | "The RQ receipt email to the customer does not show the address and looks fake — the till thermal printer receipt came out ok." Where does a receipt get the shop's name, address, phone and licence, and why did one layout print all of it while the other printed the company name alone? |
 | POS-11 | **The page a receipt prints on, and the Bill To** | "Do not put the reprint date and time on top with the word Sale in the middle of the screen; the Bill To should have the customer address printed." Whose header is that across the top of a printed receipt, and why does a Bill To show a bare name when the renderer prints the address? |
 | POS-12 | **Editing a sale that is already rung** | "I am not able to edit the receipt or add more items to the same receipt." How does a cashier put another item on a receipt that is already printed, and what happens to the version the customer is holding? |
+| POS-13 | **What a receipt document looks like** | "The receipt is not formatted properly and no clear border lines to make it look professional." Why does the emailed receipt carry no borders at all, and why are its phrases broken apart mid-word? |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -135,6 +136,7 @@ Primary code homes:
 | CLOSING-02 | **A declared category names what in the sales feed should agree with it** | "Add a field in as no of edge for total and no of financicing in thr daily closing for all employees to declare along with the $amount of edge and acima as they get paid for each transcoding they do, this would then be checked with our system if our system is capturing the sales as declared by the sales rep." Which half of that already existed as config, what had no home at all, and what stops the next category from being checked against a number nobody measured? |
 | CORE-21 | **An in-process cache keyed by something a client can mint is bounded by construction** | "Simulate a thousand users and see what breaks. What does the platform keep in each worker's memory while they are signed in, what decides when an entry leaves, and what fails the build the day a new cache ships without a bound?" |
 | CORE-23 | **One component decides how a date is picked, and the calendar opens on a click** | "for payroll hours approval the calendor should open up instead of enetring it manuallu" — said of a field that already HAD a calendar, reachable only from a glyph a few pixels wide at its right-hand edge, so a click anywhere else put a caret in mm/dd/yyyy and the date got typed digit by digit, on all 168 of them. When is a control's default behaviour the defect, and what stops the 169th from bringing it back? |
+| CORE-24 | **A total names the rows it is over — filtered and unfiltered, from one arithmetic** | "need the total below the hours on the time clock when filtered and without filter" — said of a column whose total lived in a badge above the table and only ever counted the rows a filter had left visible, without saying so, on every report in the product. What is a total of an unnamed population worth, and what does "without filter" honestly mean on a screen whose date range is a server query? |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -181,6 +183,7 @@ Primary code homes:
 | COMMCALC-49 | **What to order, from what the stores actually sold — and one answer to "how many will sell next"** | "process accessory orders based on the previous 3 months of average sales … asking the user to enter where the spoecific model is end of life or current". The device models the stores sold, ranked, waiting on a human ruling before anything is projected — and the velocity arithmetic that question needs, which was already written twice, factored into one home both older forecasts now read. |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
+| STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
 | CORE-22 | **A page load never queries once per item** | "How do we avoid these extra round-trip calls? Which loop shapes really cost one trip per row and which only look like it, what is the count today, and what fails the build the day a new one ships?" |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -7969,6 +7972,9 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"May this rung sale be edited, and with what lines?"** (the Sale Log offering the button, the endpoint allowing it, the till before it saves; owner 2026-10-29) | `pos.sales` + `pos.sale_items` + the declared window on `pos.pos_settings` | **ONE home** `sale_amendment.refusal` / `plan` / `cart_from`, dereferenced by all three callers. Before this there was no amend path at all: `pos.checkout` and `pos.void_sale` (mig 725) were the only two sale functions and the Sale Log's item table was display-only. Every refusal is a SENTENCE, written once, so two screens cannot word one refusal differently. Proof `harness_pos_sale_amendment.py` §A/§G — §POS-12 |
 | **"What does this sale line come to?"** (the edit that restates it, and the totals it rolls up to) | the agreed figures on the line itself | **ONE home** `sale_amendment.line_money` / `totals`, DERIVED from the figures `pos.sale_items` already stores and reproducing transaction 4605's two lines to the cent. It was browser-only arithmetic before, and `pos.checkout` stores whatever it is handed — tolerable for a new sale, not for an edit whose purpose is to move those figures, so the server re-derives and the body's `extended_price` / `tax_value` / totals are DISCARDED. Tax rounds per line then sums, matching what each line stores. Proof §B — §POS-12 |
 | **"What did this sale look like before it was edited?"** (the audit trail that makes an in-place rewrite answerable) | `pos.sale_amendments` (mig **1103**) | **ONE home** `sale_amendment.snapshot` / `current_revision`, filed by `pos.amend_sale` BEFORE it touches anything. Keeps the sale's own STORED figures, never re-derived ones — the point is to record what the customer's receipt said, not what it should have said. A null `revision` reads as 1, so the first edit of an older sale still files the original. The endpoint returns 503 rather than editing when the table is absent. Proof §C — §POS-12 |
+| **"What does a receipt DOCUMENT look like?"** (the browser copy and the PDF of one receipt; owner 2026-10-29) | nothing — it was described twice, in a private `_CSS` string and not at all for the PDF | **ONE home** `receipt_formats/doc_style.py`: the fonts, weights, greys, proportions and `RULES`, the named list of every rule drawn. `render_html` builds its stylesheet from `doc_style.css()` and the PDF draws from the same numbers, so a border exists once and appears in both. A second stylesheet in the renderer fails the build. Proof `harness_pos_receipt_document.py` §A/§B — §POS-13 |
+| **"This Document, drawn on a page"** (the emailed/attached PDF of the tenant's own POS layout) | the Document the content homes built | **ONE home** `receipt_formats/render_pdf.py` — the THIRD output of the one Document walk, beside `render_html` and `render_words`. It replaced a PDF rebuilt from `render_words`, which is a round-trip PROOF fixture (words at the ORIGINAL POS's paper offsets, for its parser) and therefore carried **0 drawn lines** and broke phrases mid-word. `render_words` is UNCHANGED and keeps its own job. Lives in the render package because `receipt_pdf_render` may decide no content (§P11) and now only delegates, refusing by name when no renderer is injected. Proof §C/§D/§G — §POS-13 |
+| **"How is a payment method written for a customer?"** (both receipt layouts) | `pos.sale_payments.payment_method`, a machine value | **ONE home** `sale_receipt.method_label`. The slip printed `Paid (credit_card)` and the POS layout `.title()`'d it to **Credit_Card** on a customer's receipt — two dressings of one fact, both wrong. No method vocabulary is declared (RULE TWO): whatever the tenant stores is made readable, never translated against a list. Proof §F — §POS-13 |
 | **"What is this POS setting's effective value at this store"** (server side; owner 2026-10-17) | `pos.pos_settings` (org row `store_code IS NULL`, else the store override) | **ONE home** `backend/app/modules/pos/pos_config_effective.py` (`effective`, `values`, `flag`, `text`, `brand`, `disclaimers`, `SERVER_DEFAULTS`). The resolution rule lived ONLY in the browser (`frontend/src/lib/pos-config.ts`) until the server had to render a receipt; the two copies are PINNED key-by-key by `harness_pos_receipt_render.py` §B, which fails the build naming any default changed on one side only — §POS-02 |
 | **"What is this tenant called"** (the From name on its mail, a statement heading, a document title; owner 2026-10-17) | `storeops.tenants.name` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`NAME_COLUMN`, `display_name_from`, `display_name`, `display_names`) — a blank name reads as blank, never a fabricated stand-in printed as the business's own name. `notify/channels/email_resend.from_header` is the ONE place a `From:` header is assembled, and every business-facing send site passes its `org_id` so the customer sees the tenant; only genuine platform mail (the sign-in OTP) keeps the platform name. Siblings rewired in the same PR: `commcalc/router` ×2, `core/data_qa_api`, `core/operator_api`, `helpdesk/router`, `storeops/payroll_approval` ×2, `storeops/router._tenant_display_name`. Lock `harness_pos_receipt_render.py` §E6 fails the build if a second name-only reader appears — §POS-02 |
 
@@ -26083,6 +26089,7 @@ status word rather than a blank that reads as nil.
 | NOTIFY-01 | notify |
 | STOREOPS-01 | storeops |
 | STOREOPS-02 | storeops |
+| STOREOPS-03 | storeops |
 | COMMCALC-01 | commcalc |
 | CORE-01 | core |
 | CORE-02 | core |
@@ -26145,6 +26152,7 @@ status word rather than a blank that reads as nil.
 | CORE-21 | core |
 | CORE-22 | core |
 | CORE-23 | core |
+| CORE-24 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
 | COMMCALC-42 | commcalc |
@@ -26167,6 +26175,7 @@ status word rather than a blank that reads as nil.
 | POS-10 | pos |
 | POS-11 | pos |
 | POS-12 | pos |
+| POS-13 | pos |
 | PAYABLES-01 | payables |
 <!-- SECTION-REGISTER:END -->
 
@@ -33115,6 +33124,88 @@ receipt that must be reprinted afterwards), §POS-02 (the one renderer that prin
 
 ---
 
+## §POS-13. WHAT A RECEIPT DOCUMENT LOOKS LIKE (owner report 2026-10-29)
+
+Owner, on receipt 4605: *"the receipt is not formatted properly and no clear border lines to make it
+look professional"*.
+
+Measured on the file he sent: **0 lines, 0 rects, 0 curves.** Not faint borders — none at all. And
+every phrase came apart mid-word: "Verizon    Wireless", "Bill    To:", "Credit   Card   Charge".
+
+### POS-13.1 The class, not the instance
+
+Not "the PDF has no borders". **A receipt's APPEARANCE had no home**, so the two media that print one
+receipt described it twice:
+
+- `render.render_html` held a private `_CSS` string with a few hairlines in it — a table-row
+  underline and a footer rule, no frame, no grid, nothing boxing the total.
+- The PDF was **not described at all.** It was rebuilt from `render_words`, whose real job is a
+  round-trip **proof**: it reproduces where the words sat on the ORIGINAL POS's paper receipt so that
+  POS's own parser can read them back and prove a rebuilt sale prints what the parser would read
+  (`render`'s own docstring says so). A parser fixture has no rules, no boxes and no text runs — only
+  words at measured offsets. Asked to be a customer's document it produced exactly that.
+
+So the customer's PDF was a test fixture with the seams showing, and the screen carried hairlines the
+PDF had never heard of. One question, two answers, and only one of them could ever carry a border.
+
+### POS-13.2 One description, both media
+
+`receipt_formats/doc_style.py` is the ONE home for what the document looks like: the fonts, the line
+weights, the greys, the proportions, and `RULES` — the named list of every rule that is drawn
+(`frame`, `header_rule`, `items_top`, `items_header`, `items_row`, `items_bottom`, `totals_box`,
+`total_heavy`, `footer_rule`). `render_html` builds its stylesheet from `doc_style.css()`; the PDF
+draws from the same numbers. A border added once appears in both, and a second stylesheet in the
+renderer fails the build (§A3).
+
+### POS-13.3 The Document is DRAWN, not reassembled
+
+`receipt_formats/render_pdf.py` is the **third output of the one Document walk**, beside
+`render_html` and `render_words`. It draws the Document itself: a framed page, a shaded heading band,
+a ruled items table, a boxed totals block with a heavy rule above the grand total, and a footer rule.
+Text is drawn as runs and wrapped by the font's **real metrics** (`stringWidth`), never by a
+character count — which is why phrases are whole again.
+
+It lives in the render package and not in `receipt_pdf_render`, because that module must decide
+nothing about content (§P11 of `harness_pos_receipt_render.py` pins it, and caught this placement
+when the drawing was first put there). `receipt_pdf_render` now only delegates, through an injected
+`render_pdf` exactly as it already took an injected `render_words`; a POS layout with no renderer
+injected **refuses by name** rather than raising a `TypeError` three frames down.
+
+**`render_words` is unchanged** and keeps its round-trip job — its proof still passes 82/0. It simply
+stopped being asked a question it was never answering.
+
+### POS-13.4 Three things the owner could see
+
+- **A heading over nothing is not a column.** Every row of 4605 had an empty `Product SKU`, so the
+  column printed a title over a column of nothing and pushed the real content right.
+  `doc_style.visible_columns` is the one rule, shared by both media. A **money or quantity** column
+  is kept even when empty — a free-of-charge sale must not silently lose its price column — and a
+  document with **no rows at all** prints every heading it declares, because no rows is not evidence
+  that a column is unused.
+- **A customer is never shown a machine value.** `pos.sale_payments.payment_method` stores
+  `credit_card`; the slip printed `Paid (credit_card)` and the POS layout `.title()`'d it to
+  **Credit_Card**. `sale_receipt.method_label` is now the one home and neither layout dresses it
+  again. No method vocabulary is declared (RULE TWO): whatever a tenant stores is made readable.
+- **The shop's name leads**, in bold, with the address set lighter beneath it — the same weighting in
+  both media, where the screen used to set the whole block bold.
+
+### POS-13.5 Files, locks, money
+
+| | |
+| --- | --- |
+| New | `receipt_formats/doc_style.py` · `receipt_formats/render_pdf.py` · `harness_pos_receipt_document.py` (50 checks) |
+| Changed | `receipt_formats/render.py` (dereferences `doc_style.css()`; its private `_CSS` DELETED; drops unfilled columns; marks the grand-total and payment rows; the store block weighted) · `receipt_pdf_render.py` (delegates, refuses by name without a renderer) · `sale_receipt.py` (`method_label`, used by both layouts) · `pos/router.py` (injects `render_pdf`) · `harness_pos_receipt_render.py` §S4 re-pointed and strengthened · `tests/unit/test_pos_receipt_print_page.py` |
+| Endpoints | **NONE** |
+| Migration | **NONE** |
+| Locks | §A one description — the drawn rules are DECLARED as an exact set (a size bound would let one leave silently), no second stylesheet, no measurement in the drawing module · §B the rules are DRAWN, measured off the rendered PDF with pdfplumber (the regression: 0 strokes → framed, banded, boxed) · §C phrases whole, and no 3-space gap inside a line — the old defect's signature · §D the round-trip proof untouched and still reading every declared column · §E the unfilled column, with money and quantity never dropped · §F the method label · §G drawing is not deciding · §H six controls |
+| MONEY IMPACT | **NONE.** Nothing about what a receipt SAYS changed — same figures, same totals, same legal blocks, same transaction number. This is how it is set on the page |
+
+Same class: §POS-02 (the one renderer this extends), §POS-08 (the PDF as a third medium, whose
+"no figure of its own" rule this keeps), §POS-11 (the page it prints on), §POS-04 (the content home
+it draws).
+
+---
+
 ## §COMMCALC-20. A HANDSET THAT BOOKS A REBATE BOOKS A COST (owner report 2026-10-19)
 
 Owner, on LuxeLink September 2026: *"how come the device cost is less than the device rebate"* —
@@ -39272,6 +39363,97 @@ DM+HR-approved** — a data repair, reported here, never "fixed" in code.
 
 ---
 
+## §STOREOPS-03. AN EARLY CLOCK-IN IS PAID FROM THE SCHEDULE, OR THE ROW SAYS WHY IT IS NOT (owner ask 2026-10-29)
+
+**What he said:**
+
+> *"also need to address those people who show u earlu at work , we need to calculate their time from
+> their schedules time not when they clock in , this is already addressed some where nbut making sure"*
+
+**It was not addressed anywhere.** Searched before building: no rule, no config field, no column and no
+code path anywhere compared a punch's clock-in against its shift's scheduled start. The nearest thing is
+`/timeclock/override`, which lets a MANAGER approve an earlier start — the opposite direction. So
+"making sure" had no mechanism behind it, and this section is the mechanism.
+
+### STOREOPS-03.1 MEASURED BEFORE BUILT, and what the measurement changed
+
+Read-only against production, 2026-10-29, over the live pay period's punches. The exposure is **small
+and concentrated**: roughly **$173 a fortnight** for Cellfonz R Us, and almost all of it sits inside a
+**fifteen-minute window before the rostered start** — store openers, arriving early to open the store.
+
+That is what made a strict clamp the wrong build. Docking an opener the minutes they spend getting the
+store open is unpaid work, and in New York it is a wage claim, not a saving. So the rule ships with a
+**grace window** as a first-class part of it, not a later patch, and it ships **OFF**.
+
+### STOREOPS-03.2 THE RULE, in the one home that already owns the question
+
+`storeops/payroll_hours_basis.py` is already THE one home for "which hours is this employee paid for,
+and on what basis", and the basis vocabulary travels with the figure. So the rule is a member of that
+vocabulary, not a new module:
+
+- `trim_early_clockin(punch, scheduled_start_at, cfg) -> (hours, trimmed, reason)` — **pure**.
+- a new basis, `clocked_trimmed_to_schedule`, so a trimmed figure **cannot be mistaken for the clock's
+  own** anywhere downstream. It joins `ALL_BASES`, `PAYING_BASES` and `MEASURED_BASES`.
+- config, per org, house defaults: `early_clockin_rule` (`as_clocked` | `pay_from_schedule`) and
+  `early_clockin_grace_hours` (0.25). **`as_clocked` is the shipped default, which is today's
+  behaviour**, and the rule vocabulary is an **ALLOWLIST** — an unruled value reads as `as_clocked`
+  rather than as permission to dock someone (the §66 posture).
+- `trimmed = min(early, hours)`, so a figure can never go negative.
+- **the grace sentence reaches the row even when nothing was trimmed.** This was a real gap in the
+  first cut: reasons were only collected when a trim actually happened, so the half of the rule that
+  PROTECTS the opener was invisible. A row now says "15 minutes early, inside the grace, paid whole"
+  as readily as it says what was cut.
+- a correction and a manager override still out-rank it, unchanged.
+- **the new basis gets a PROVENANCE in the same change.** `payroll_hours_drilldown.BASIS_RELATIONS`
+  maps every basis to the relation that answered for the figure, keyed on this module's own
+  constants, and `harness_batch24_drilldown` fails the build when a declared basis has no entry — so
+  adding a basis without one would have put a blank on a payroll drill-down. `clocked_trimmed_to_
+  schedule` answers out of **both** `storeops.timelog` and `storeops.shifts`, which is the honest
+  provenance rather than a tidier single one: the punch is where the hours came from, the roster is
+  where the start they were cut back to came from, and a reader asking why the figure is not what the
+  clock said has to be sent to both.
+
+### STOREOPS-03.3 THE INSTANT — why the rule refuses a wall-clock string
+
+`storeops.shifts.start_time` is `HH:MM` in the **store's local zone**; `storeops.timelog.clock_in` is
+stored **UTC**. The first measurement of this exposure compared the two directly, and the answer was
+nonsense in both directions: one punch read **9.63 h early** and 501 read about **4 h late**. A whole
+rule pointed at the wrong people.
+
+So `trim_early_clockin` takes the scheduled start as an **INSTANT**, and stays timezone-free. The
+conversion lives in `storeops/payroll_evidence.stamp_scheduled_starts`, on the ONE assembly every pay
+path already goes through — not in the rule, and **not in the four callers**, which would be four
+copies of one fact. The zone is **dereferenced** from `storeops/router._biz_tz_for_store` (per-store,
+mig 851), never re-derived and never spelled as an offset. A row with no start time, no date, an
+unparseable time or no resolvable zone gets **no stamp at all** rather than a guessed start: the rule
+then pays the punch whole, which is today's behaviour, and the absence travels to the row as a reason
+instead of hiding inside a fabricated figure.
+
+That pair of wrong readings is pinned as a regression (`EC31` / `EC32`), so the shortcut cannot come
+back.
+
+### STOREOPS-03.4 THE LOCK — the rule must not go silently inert
+
+A registry written without its callers wired is not a fix, and §19.18 records that happening three
+times here. The failure mode for this rule is specific: if `period_evidence` stops passing shifts
+through `stamp_scheduled_starts`, the rule is still present, still proved by its own tests, and
+**silently inert on every row**. So axis `H7` of `harness_payroll_hours_basis_lock.py` pins the CALL —
+and, in the other direction, pins that the pure rule has acquired no opinion about timezones and that
+the stamper reads the zone one home rather than naming a zone of its own.
+
+### STOREOPS-03.5 STATE — nothing has moved anyone's pay
+
+`early_clockin_rule` is `as_clocked` for every org, so **no figure anywhere changes on apply**. There
+is **no migration**: both fields are config with house defaults resolved in code, so turning the rule
+on is a config row. Switching an org to `pay_from_schedule` is a **money change** and is the owner's
+call; the grace window is in front of him as a decision and is unanswered at the time of writing.
+
+**Duplicate check (index rules).** `payroll_hours_basis` was already the declared one home for the pay
+basis and `payroll_evidence.period_evidence` already the one assembly, so both are EXTENDED and no
+sibling module, endpoint or table is created. Proof: `harness_payroll_hours_basis.py` **197/197**
+(sections `EC.` the rule, `EW.` the caller wiring) and `harness_payroll_hours_basis_lock.py`
+**103/103**.
+
 ## §CORE-18. A LENGTH CAP DOES NOT DECIDE WHICH PART OF A STATUS SURVIVES (found 2026-10-27)
 
 **Owner report 2026-10-27, verbatim:** *"Is all the data being ingested properly for kpi, Ismail
@@ -40569,6 +40751,83 @@ spread straight to the input.
 — so this creates a one-home where there was none rather than a sibling to one. No new endpoint, no new
 table, **no migration**, no backend change, and no figure anywhere moves: the value this control
 produces is the same ISO string it produced before.
+
+## §CORE-24. A TOTAL NAMES THE ROWS IT IS OVER — FILTERED AND UNFILTERED, FROM ONE ARITHMETIC (owner ask 2026-10-29)
+
+**What he said**, of the Time Clock screen:
+
+> *"need the total below the hours on the time clock when filtered and without filter"*
+
+Two separate things, and the second is the one that generalises.
+
+### CORE-24.1 THE CLASS — a total that does not name its population
+
+The instance is the Hours column on Time Clock: its total lived in a badge *above* the table
+(`{totalHours} hrs`) and nowhere under the column it totalled. That part is markup.
+
+The class is that **every total in this product was a total of whatever rows a filter happened to leave
+visible, and none of them said so.** A reviewer narrows to one store, reads `88.20`, and cannot tell
+from the screen whether that is the fortnight or a tenth of it — so a filter left on by accident reads
+exactly like a quiet month. Asking for "filtered and without filter" is asking a total to name its own
+population, and that answer belongs in the arithmetic, not in one screen's markup.
+
+### CORE-24.2 THE ONE HOME, extended rather than sibling-ed
+
+`frontend/src/lib/report-totals.ts` already owned total arithmetic for `ReportShell`'s `<tfoot>` and
+its export payload (RULE FOUR: what you see is what you export). It gains
+**`computeTotalScope(cols, shownRows, loadedRows, firstLabel?)`**, which returns the same `TotalCell`
+array with `allText` / `allRaw` beside each figure, plus `shown`, `loaded` and `narrowed`. It is built
+*on* `computeTotalRow` — one arithmetic run over two populations, never a second derivation.
+
+**`narrowed` is the point of the pair.** When no filter is cutting anything the two figures are
+identical, and a renderer that prints both anyway teaches the reader to stop looking at either. Every
+caller draws the second figure only when `narrowed` is true, and only on a cell that actually
+aggregates — a blank label column has nothing to compare.
+
+**What "without filter" honestly means**: the widest population this side can see, which is every row
+the page LOADED. A page's server query is itself a narrowing — Time Clock fetches one date range — so
+the figure is "everything in range", never "everything ever", and both callers say exactly that in the
+cell's tooltip. Claiming otherwise would make the second number the same kind of unsourced figure as
+the first.
+
+### CORE-24.3 THE DEFECT THE SHARED AGGREGATION DECISION EXISTS FOR
+
+`resolveAgg` reads the rows it is handed to decide whether a numeric-*looking* column is really
+summable (that guard is what stops a right-aligned text column being summed to zero). Over an **empty**
+visible set it therefore resolves `none` — so a filter that matches nothing would blank the visible
+figure while the number printed directly beneath it, labelled the same aggregation, still summed the
+whole range. Two figures labelled one aggregation must BE one aggregation, so `computeTotalScope`
+resolves the decision ONCE over the superset and passes it to both calls through `computeTotalRow`'s
+new optional `aggs` argument. Existing callers are unaffected: omitting it resolves exactly as before.
+
+`frontend/prove_report_totals_scope.mjs` (38 checks) proves this by **arming** it — the real source is
+loaded with that argument stripped on its way through `prove_load_ts`, and the blanked cell duly comes
+back, so the guard is shown load-bearing rather than asserted to be.
+
+### CORE-24.4 WHO DEREFERENCES IT
+
+- **`ReportShell`** builds its pinned footer from `computeTotalScope(cols, filtered, rows)`, so **every
+  report that opts into `totals` inherits the pair** without being touched. Its export path still calls
+  `computeTotalRow`, so RULE FOUR is unchanged.
+- **Time Clock** (`storeops/timeclock`) draws a `<tfoot>` under the punches table *and* under the
+  manual-hours table beside it — the sibling on the same screen, whose Hours column had no total at
+  all. Both are read off a `computeTotalScope` result, and so are the badges above the table, so the
+  badge, the footer and the export cannot disagree. The **two hand-rolled `.reduce()` sums the page
+  carried are deleted**, and the proof fails if one returns. The page's header ribbon and its footer are
+  now generated from ONE column list, so a column cannot gain a heading without gaining a total slot.
+
+### CORE-24.5 WHAT IS NOT DONE
+
+Only the two surfaces above draw the pair. A page with its own bespoke table and its own hand-rolled
+sum still shows a single unnamed total; those are not converted here and are not pretended to be. The
+proof's guard against a hand-rolled sum is scoped to the Time Clock page, not the tree — a tree-wide
+ratchet over `.reduce(` would catch every legitimate aggregation in the product.
+
+**Duplicate check (index rules).** `grep` for `tfoot` found 23 files; `computeTotalRow` had exactly one
+caller, `ReportShell`, and `report-totals.ts` was already the declared one home for the arithmetic — so
+this EXTENDS it and no sibling module was created (`prove_report_totals_scope` asserts the absence of
+one). No new endpoint, no new table, **no migration**, no backend change, and **no stored figure moves**:
+every number here is derived on screen from rows already fetched.
 
 Cross-ref §STOREOPS-01 (the Hours Approval board this was asked from), §3d / RULE FIVE (the shared
 filter bar), §19.18 (a mechanism written and its callers left unwired — the failure this ratchet

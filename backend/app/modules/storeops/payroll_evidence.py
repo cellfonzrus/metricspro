@@ -69,7 +69,7 @@ Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §14y. Proof: `backend/harness_payr
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 from app.modules.storeops import payroll_hours_basis as _hb
 
@@ -150,6 +150,88 @@ def read_pay_evidence(client, org_id, lo, hi):
     return {"punches": punches, "manual": manual}, blockers
 
 
+# ── THE INSTANT A SHIFT WAS DUE TO BEGIN (owner ask 2026-10-29) ────────────────────────────────────
+#
+# OWNER ASK, verbatim: *"also need to address those people who show u earlu at work , we need to
+# calculate their time from their schedules time not when they clock in , this is already addressed
+# some where nbut making sure"*.
+#
+# `payroll_hours_basis.trim_early_clockin` is the rule, and it takes the scheduled start as an
+# **INSTANT** — not a wall-clock string — deliberately: `storeops.shifts.start_time` is `HH:MM` in
+# the STORE's local zone, and `storeops.timelog.clock_in` is stored UTC. Comparing the two directly
+# is the mistake that made one punch read 9.63 h early and 501 others read ~4 h LATE when this was
+# first measured (2026-10-29), which is a whole rule pointed at the wrong people.
+#
+# So the conversion lives HERE, once, on the assembly every pay path already goes through — not in
+# the rule (which stays pure and timezone-free) and not in the four callers (four copies of one fact
+# is the divergence the house rules forbid). The zone comes from
+# `storeops/router._biz_tz_for_store`, the one home for "which zone is this store in" — read, never
+# re-derived, and imported lazily because `router` imports this module.
+
+def _hhmm(v):
+    """`HH:MM` / `HH:MM:SS` → a `time`, or None. A row with no start time simply has no instant."""
+    parts = str(v or "").strip().split(":")
+    try:
+        if len(parts) < 2:
+            return None
+        h, m = int(parts[0]), int(parts[1])
+        sec = int(float(parts[2])) if len(parts) > 2 and parts[2] else 0
+        return time(h, m, sec) if 0 <= h <= 23 and 0 <= m <= 59 and 0 <= sec <= 59 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def stamp_scheduled_starts(org_id, shifts, *, tz_for_store=None):
+    """Return `shifts` with `scheduled_start_at` added: the instant each shift was due to begin.
+
+    PURE given `tz_for_store` (a `(org_id, store_code) -> tzinfo` resolver), which is how the proof
+    harness drives it without a database. The default resolver is the one home,
+    `storeops/router._biz_tz_for_store`.
+
+    Rows are COPIED, never mutated: a caller's own shift list is its report's data and several of
+    them render it after calling here. A row already carrying `scheduled_start_at` is left exactly
+    as it is, so a caller that resolves its own instant is never overruled. A row with no
+    `start_time`, no `shift_date`, or an unparseable one gets NO stamp at all rather than a guess —
+    `trim_early_clockin` then pays the punch whole, which is today's behaviour, and the absence
+    travels to the row as a reason instead of hiding inside a fabricated start.
+    """
+    rows = list(shifts or ())
+    if not rows:
+        return rows
+    if tz_for_store is None:                       # lazy: router imports this module
+        from app.modules.storeops.router import _biz_tz_for_store as tz_for_store  # noqa: PLC0415
+    cache = {}
+    out = []
+    for s in rows:
+        s = dict(s or {})
+        if s.get("scheduled_start_at"):
+            out.append(s)
+            continue
+        t = _hhmm(s.get("start_time"))
+        day = str(s.get("shift_date") or "")[:10]
+        if t is None or not day:
+            out.append(s)
+            continue
+        try:
+            d = date.fromisoformat(day)
+        except ValueError:
+            out.append(s)
+            continue
+        sc = s.get("store_code")
+        if sc not in cache:
+            try:
+                cache[sc] = tz_for_store(org_id, sc)
+            except Exception:                      # noqa: BLE001 — no zone means no stamp, never a guess
+                cache[sc] = None
+        tz = cache[sc]
+        if tz is None:
+            out.append(s)
+            continue
+        s["scheduled_start_at"] = datetime.combine(d, t).replace(tzinfo=tz).isoformat()
+        out.append(s)
+    return out
+
+
 def period_evidence(client, org_id, lo, hi, shifts, *, employee_rows=None, cfg=None,
                     punch_rows=None):
     """THE ONE ASSEMBLY a pay path uses. Evidence AND the verdict on whether it may pay from it.
@@ -182,7 +264,10 @@ def period_evidence(client, org_id, lo, hi, shifts, *, employee_rows=None, cfg=N
         rows, blockers = dict(punch_rows), []
     if cfg is None:
         cfg = _hb.load_config(client, org_id)
-    evidence = _hb.build_evidence(shifts=shifts or (), punches=rows.get("punches") or (),
+    # Every pay path reaches the early-clock-in rule through here, so the wall-clock → instant
+    # conversion happens once, for all four callers, rather than being remembered in each.
+    evidence = _hb.build_evidence(shifts=stamp_scheduled_starts(org_id, shifts or ()),
+                                  punches=rows.get("punches") or (),
                                   manual_rows=rows.get("manual") or ())
     cov = _hb.coverage(evidence, cfg, employee_rows=employee_rows)
     lock = _hb.interlock(cov, cfg)

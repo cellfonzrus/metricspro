@@ -12,7 +12,7 @@ import DateField from '@/components/DateField'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
-import { computeTotalRow } from '@/lib/report-totals'
+import { computeTotalRow, computeTotalScope } from '@/lib/report-totals'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 type Col = ExportColumn
@@ -244,10 +244,16 @@ export function ReportShell({ title, subtitle, notice, noticeTone, filename, col
   // Opt-in pinned TOTAL row. On-screen shows the GRAND total over every filtered row (across all
   // groups); each EXPORT sheet ends with a TOTAL row summing that sheet (= the same grand total when
   // ungrouped, = each group's subtotal per sheet when grouped) so what you see is what you export.
-  const totalCells = useMemo(
-    () => (totals && filtered.length ? computeTotalRow(cols, filtered) : null),
-    [totals, cols, filtered],
+  //
+  // The row also names its own POPULATION (owner ask 2026-10-29): when a filter is cutting rows, each
+  // aggregated cell carries the same total over every row the page LOADED underneath the visible one,
+  // so "88.20 h" can never be mistaken for the whole set. `computeTotalScope` is the one home for that
+  // pair; `narrowed` is false when nothing is being cut, and then only one figure is drawn.
+  const totalScope = useMemo(
+    () => (totals && filtered.length ? computeTotalScope(cols, filtered, rows) : null),
+    [totals, cols, filtered, rows],
   )
+  const totalCells = totalScope?.cells ?? null
   // Append a synthetic TOTAL row to one export sheet. A sentinel row carries the precomputed cells;
   // each column's getter is wrapped to read them for that row and delegate to the original otherwise —
   // so export.tsx formats/serializes the total exactly like any other cell (no change to export.tsx).
@@ -491,9 +497,24 @@ export function ReportShell({ title, subtitle, notice, noticeTone, filename, col
             )})}
             {filtered.length === 0 && <tr><td style={{ ...cell, textAlign: 'center', color: 'var(--text3)', padding: 24 }} colSpan={cols.length}>No rows match the filters.</td></tr>}
           </tbody>
-          {totalCells && (
+          {totalCells && totalScope && (
             <tfoot><tr>
-              {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: (isMoney(c) || c.align === 'right') ? 'right' : 'left', borderTop: '2px solid var(--text3)', position: 'sticky', bottom: 0, zIndex: 2, background: 'var(--surface2)', ...(i === 0 ? pinFor('total') : {}) }}>{totalCells[i].text}</td>)}
+              {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: (isMoney(c) || c.align === 'right') ? 'right' : 'left', borderTop: '2px solid var(--text3)', position: 'sticky', bottom: 0, zIndex: 2, background: 'var(--surface2)', ...(i === 0 ? pinFor('total') : {}) }}>
+                {totalCells[i].text}
+                {/* The unfiltered figure, only where a filter is actually cutting rows and only on a
+                    cell that aggregates — a blank label column has nothing to compare. */}
+                {totalScope.narrowed && totalCells[i].agg !== 'none' && totalCells[i].allText !== '' && (
+                  <div style={{ fontWeight: 400, fontSize: 11, color: 'var(--text2)' }}
+                       title={`Same total over all ${totalScope.loaded} loaded row(s), before the filters on this screen. The report's own date/period query still applies.`}>
+                    {totalCells[i].allText} unfiltered
+                  </div>
+                )}
+                {totalScope.narrowed && i === 0 && (
+                  <div style={{ fontWeight: 400, fontSize: 11, color: 'var(--text2)' }}>
+                    {totalScope.shown} of {totalScope.loaded} rows
+                  </div>
+                )}
+              </td>)}
             </tr></tfoot>
           )}
           {!totals && moneyCols.length > 0 && filtered.length > 0 && (

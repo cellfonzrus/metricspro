@@ -827,6 +827,10 @@ on:
       - "backend/app/modules/core/tenant_identity.py"
       - "backend/app/modules/notify/channels/email_resend.py"
       - "backend/harness_pos_receipt_render.py"
+      - "backend/app/modules/pos/receipt_formats/doc_style.py"
+      - "backend/app/modules/pos/receipt_formats/render_pdf.py"
+      - "backend/app/modules/pos/receipt_formats/render.py"
+      - "backend/harness_pos_receipt_document.py"
       - "frontend/src/lib/pos-receipt.ts"
       - "frontend/src/lib/pos-config.ts"
       - "frontend/src/components/pos/ReceiptTemplateSection.tsx"
@@ -1162,6 +1166,13 @@ on:
       - "frontend/prove_date_field.mjs"
       - "frontend/date_field_pending.txt"
       - "frontend/src/components/DateField.tsx"
+      # index §CORE-24 — a total names the rows it is over. The guard names itself, the one home for
+      # total arithmetic, and the two surfaces that dereference it: ReportShell (already listed just
+      # below) and the Time Clock screen.
+      - "frontend/prove_report_totals_scope.mjs"
+      - "frontend/prove_load_ts.mjs"
+      - "frontend/src/lib/report-totals.ts"
+      - "frontend/src/app/(platform)/storeops/timeclock/page.tsx"
       - "frontend/src/components/StandardFilterBar.tsx"
       - "frontend/src/components/ReportShell.tsx"
       - "frontend/src/lib/hours-approval-preview.ts"
@@ -2207,6 +2218,9 @@ jobs:
       - name: Prove one component decides how a date is picked (the calendar opens on a click, typing is never removed, showPicker is guarded three ways, and the 169th bare date input fails the build — index §CORE-23)
         working-directory: frontend
         run: node prove_date_field.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Prove a total names the rows it is over (the filtered figure and the loaded-set figure come from ONE aggregation decision, the second is drawn only where a filter cuts rows, and no hand-rolled sum returns to the Time Clock page — index §CORE-24)
+        working-directory: frontend
+        run: node prove_report_totals_scope.mjs | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the tile-snapshot proof (the real tile-snapshot.ts; the ± 0% regression; negative controls)
         working-directory: frontend
         run: node prove_tile_snapshot.mjs | tee -a "$GITHUB_STEP_SUMMARY"
@@ -2533,6 +2547,9 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_pos_receipt_render.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the receipt-document proof (one description of the borders, drawn by both media; the rules measured off the rendered PDF; phrases whole; the round-trip fixture left to its own job — index §POS-13)
+        working-directory: backend
+        run: python3 harness_pos_receipt_document.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   store-identity-proof:
     name: Store identity — one store, one canonical key (DB-free, the real resolver)
