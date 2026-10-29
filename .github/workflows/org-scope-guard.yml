@@ -431,3 +431,35 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_ttl_cache_bounded.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # §CORE-22 — a page load never queries once per item. GET handlers are gated at exactly zero;
+  # every other per-item query is pinned per file and the pin may only SHRINK. Pure AST over the
+  # source, so it needs no dependencies and no network.
+  round-trip-ratchet:
+    name: Round-trip ratchet (no page load queries once per item; the backlog only shrinks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the round-trip ratchet (index CORE-22)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_round_trip_ratchet.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # §STOREOPS-02 — a card for many stores costs a fixed number of reads. Drives the real storeops
+  # functions against a counting PostgREST double, and fails the build if any caller goes back to
+  # the one-store call inside a loop. Imports app, so it needs the backend's dependencies. DB-free.
+  store-card-set-read:
+    name: Store-card set read (many stores cost a fixed number of reads, not one set each)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the store-card set-read lock (index STOREOPS-02)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_store_card_set_read.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"

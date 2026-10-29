@@ -49,10 +49,12 @@ _MISSING = object()
 class _Query:
     """One request builder. Filters accumulate; `.execute()` applies them to the seeded rows."""
 
-    def __init__(self, store: Dict[str, List[dict]], key: str, verb: str, payload: Any = None):
+    def __init__(self, store: Dict[str, List[dict]], key: str, verb: str, payload: Any = None,
+                 reads: Optional[List[tuple]] = None):
         self._store = store
         self._key = key
         self._verb = verb
+        self._reads = reads
         self._payload = payload
         self._filters: List[tuple] = []
         self._order: Optional[tuple] = None
@@ -168,6 +170,10 @@ class _Query:
 
     def execute(self) -> FakeResponse:
         if self._verb == "select":
+            # One `.execute()` on a select IS one round trip to PostgREST. Recording it is what
+            # lets a test assert a COST (index §CORE-22: a page load never queries once per item).
+            if self._reads is not None:
+                self._reads.append((self._key, tuple(self._filters)))
             out = [copy.deepcopy(r) for r in self._rows() if self._matches(r)]
             if self._order:
                 col, desc = self._order
@@ -226,24 +232,26 @@ class _Query:
 
 
 class _Table:
-    def __init__(self, store: Dict[str, List[dict]], key: str):
+    def __init__(self, store: Dict[str, List[dict]], key: str,
+                 reads: Optional[List[tuple]] = None):
         self._store = store
         self._key = key
+        self._reads = reads
 
     def select(self, *_cols, **_kw) -> _Query:
-        return _Query(self._store, self._key, "select")
+        return _Query(self._store, self._key, "select", reads=self._reads)
 
     def insert(self, payload: Any, **_kw) -> _Query:
-        return _Query(self._store, self._key, "insert", payload)
+        return _Query(self._store, self._key, "insert", payload, reads=self._reads)
 
     def upsert(self, payload: Any, **_kw) -> _Query:
-        return _Query(self._store, self._key, "upsert", payload)
+        return _Query(self._store, self._key, "upsert", payload, reads=self._reads)
 
     def update(self, payload: dict, **_kw) -> _Query:
-        return _Query(self._store, self._key, "update", payload)
+        return _Query(self._store, self._key, "update", payload, reads=self._reads)
 
     def delete(self, **_kw) -> _Query:
-        return _Query(self._store, self._key, "delete")
+        return _Query(self._store, self._key, "delete", reads=self._reads)
 
 
 class _Rpc:
@@ -265,13 +273,15 @@ class _Rpc:
 
 
 class _Schema:
-    def __init__(self, store: Dict[str, List[dict]], schema: str, rpc_handlers: Dict[str, Any]):
+    def __init__(self, store: Dict[str, List[dict]], schema: str, rpc_handlers: Dict[str, Any],
+                 reads: Optional[List[tuple]] = None):
         self._store = store
         self._schema = schema
         self._rpc = rpc_handlers
+        self._reads = reads
 
     def table(self, name: str) -> _Table:
-        return _Table(self._store, f"{self._schema}.{name}")
+        return _Table(self._store, f"{self._schema}.{name}", reads=self._reads)
 
     from_ = table
 
@@ -295,9 +305,20 @@ class FakeSupabase:
                  rpc: Optional[Dict[str, Any]] = None):
         self._store: Dict[str, List[dict]] = {k: copy.deepcopy(v) for k, v in (tables or {}).items()}
         self._rpc = dict(rpc or {})
+        #: every select that reached `.execute()`, as (schema.table, filters) — one entry per
+        #: PostgREST round trip, so a test can assert what a page COSTS, not only what it returns.
+        self.reads: List[tuple] = []
+
+    @property
+    def read_count(self) -> int:
+        """Round trips made since the last `reset_reads()`."""
+        return len(self.reads)
+
+    def reset_reads(self) -> None:
+        self.reads.clear()
 
     def schema(self, name: str) -> _Schema:
-        return _Schema(self._store, name, self._rpc)
+        return _Schema(self._store, name, self._rpc, reads=self.reads)
 
     def table(self, name: str) -> _Table:
         return self.schema("public").table(name)

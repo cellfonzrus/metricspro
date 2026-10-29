@@ -177,6 +177,8 @@ Primary code homes:
 | COMMCALC-46 | **The password is sometimes on the next page — one home for a login's first step** | "If there is no password on the first page then click to continue with username and then enter password on thr next page" — said after a two-page sign-in was reported as a form that renders unexpectedly, in a message naming a different vendor's portal. Three paths answered "what does this page want first", two by spelling one vendor's element ids and one not at all. What is a login's first step a fact ABOUT, and what does a page that asks for something we do not hold deserve to be told? |
 | COMMCALC-47 | **A frame knows what it shows — one home for where a click on the live screen lands** | "it shows the live scren but cannot click on the box to enter the user id" — the box was in the picture and clicking it did nothing. Every streamed frame arrives telling us what it shows, and that was thrown away, so a click was converted through the window instead. What is a click on a picture of a browser a fact ABOUT? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
+| STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
+| CORE-22 | **A page load never queries once per item** | "How do we avoid these extra round-trip calls? Which loop shapes really cost one trip per row and which only look like it, what is the count today, and what fails the build the day a new one ships?" |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
 
@@ -26077,6 +26079,7 @@ status word rather than a blank that reads as nil.
 | 15.3 | notify |
 | NOTIFY-01 | notify |
 | STOREOPS-01 | storeops |
+| STOREOPS-02 | storeops |
 | COMMCALC-01 | commcalc |
 | CORE-01 | core |
 | CORE-02 | core |
@@ -26137,6 +26140,7 @@ status word rather than a blank that reads as nil.
 | CORE-19 | core |
 | CORE-20 | core |
 | CORE-21 | core |
+| CORE-22 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
 | COMMCALC-42 | commcalc |
@@ -38998,6 +39002,64 @@ appear in the browser. In CI as **"A failed send names who, why and the fix"**.
 
 ---
 
+## §STOREOPS-02. A CARD FOR MANY STORES COSTS A FIXED NUMBER OF READS (load test follow-up 2026-10-29)
+
+**Owner 2026-10-29, on the round-trip findings:** *"give me the fixes"*.
+
+### STOREOPS-02.1 What was measured
+
+`_gr_store_card(client, org_id, store_code, ...)` answered for ONE store in 3 reads
+(`google_review_store`, `google_review_snapshot`, `google_review_item`), plus a 4th (`action_plan`)
+when an employee was named. Three endpoints wanted MANY stores and each looped over it:
+
+| endpoint | cost before |
+| --- | --- |
+| `GET /google-reviews/dm-dashboard` | 3 card reads + its own `action_plan` read, **per store** |
+| `GET /google-reviews/my` | 4 reads per store |
+| `GET /google-reviews/employee-summary` | 4 reads per store |
+
+On Cellfonz's 28 stores the DM dashboard was **112 round trips**, about 2.2 s of pure waiting at the
+platform's ~20 ms per trip, growing linearly with the store count — while holding one of the
+`workers x 40` worker threads for the whole of it (§CORE-21's load-test finding: round trips per
+page is a capacity decision, not a style preference).
+
+### STOREOPS-02.2 The class, not the instance
+
+Not "the DM dashboard is slow". The class is: **"one store's card" had only a one-store answer, so
+every caller that wanted many paid per store.** Fixing the dashboard alone would have left the other
+two callers on the old cost — the patchwork the 2026-09-20 directive forbids.
+
+### STOREOPS-02.3 The one home
+
+`storeops/router._gr_store_cards(client, org_id, store_codes, store_by_code, cfg, employee_id=None)`
+answers for a SET, keyed by store code, in a fixed number of reads: four `.in_` reads over the whole
+set, chunked at 200 codes so a large tenant cannot overrun the PostgREST URL. Per-store limits are
+preserved **per store** (the newest snapshot, the 10 newest reviews), applied while grouping rather
+than across the set.
+
+Two supporting homes keep the answer single:
+
+- `_gr_card_from_parts(...)` — the card SHAPE, the only place that says what a card is made of.
+- `_gr_action_plans_by_store(...)` — the DM dashboard's all-statuses plan read, same set shape.
+
+`_gr_store_card` still exists for `GET /google-reviews/store/{store_code}` and is now a one-element
+call into `_gr_store_cards`, so the single-store and many-store answers **cannot drift**.
+
+### STOREOPS-02.4 The lock
+
+`backend/harness_store_card_set_read.py` (22 checks, DB-free, written RED first). It drives the real
+functions against a counting PostgREST double:
+
+- §A the read count is **constant** in the number of stores (2/10/40 stores → 4/4/4 reads), every
+  read org-scoped.
+- §B one store's card is byte-identical whichever way it is asked for.
+- §C a store with no review data still gets a card, and an empty set reads nothing at all.
+- §D **the lock** — a static scan that FAILS THE BUILD if `_gr_store_card` is called from inside a
+  loop again, with its own planted control.
+- §E the measured win, stated as a number: 28 stores, **112 reads before → 4 now**.
+
+Registered in CI as `store-card-set-read`. See §CORE-22 for the house-wide gate.
+
 ## §STOREOPS-01. A TYPED PAYROLL FIGURE SAVES ON ITS OWN, AND A SAVE SAYS WHAT IT WILL COST BEFORE IT LANDS (owner report 2026-10-26)
 
 **What he said**, of Hours Approval, pay period 2026-10-05 → 10-18, payable 10-23:
@@ -39824,6 +39886,71 @@ fails the build until its line is deleted, and `PINNED_MAX` in `run-proofs.mjs` 
 (**4**) and may only go down. The four entries are declared with what is actually wrong with each —
 one real assertion failure, three whose runner lost the `@/` tsconfig path alias when transpiling to
 a temp directory. They are **reported, not hidden**, and fixing them is its own change.
+## §CORE-22. A PAGE LOAD NEVER QUERIES ONCE PER ITEM, AND THE BACKLOG ONLY SHRINKS (owner ask 2026-10-29)
+
+**Owner 2026-10-29:** *"how to avoid these extr rounds trip calls"*.
+
+### CORE-22.1 Why a round trip is the unit
+
+The backend never reaches Postgres directly — every read is an HTTPS call to Supabase costing
+~15-25 ms whatever it carries, and the request holds one of the `workers x 40` worker threads for
+all of it. So
+
+```
+max requests/sec  ~=  (workers x 40) / (round trips per request x round trip time)
+```
+
+Halving a page's round trips doubles how many of that page the platform can serve. The 1,000-user
+load test (2026-10-28, rig in `/mnt/project-files/load-test-2026-10-28/`) established that this
+platform QUEUES rather than crashes, and that this is the thing it queues on.
+
+### CORE-22.2 The shape refused, and the four that only look like it
+
+Refused: an **N+1** — a query inside a loop, filtered by the loop variable. It looks fine on three
+rows of test data and grows with production data, which is always bigger.
+
+Four loop shapes contain a query and cost a FIXED number of trips. Each is exempt, and each
+exemption carries its own planted control so it cannot quietly widen:
+
+1. a literal tuple/list/set — `for tbl, col in (('a','x'), ('b','y')):`
+2. `range(...)` / `while` pagination — one trip per PAGE, which is the point of paging
+3. a module-level constant collection — `for tbl, col in _UNMATCHED_SRCS:` is a list of TABLES
+4. a **chunked batch read** — `for chunk in chunks(ids): ....in_('id', chunk)`. The loop variable
+   reaches `.in_`, not `.eq`. This is the FIX, not the defect; flagging it would push people away
+   from the right answer.
+
+An earlier scan that lacked these four exemptions reported 12 GET handlers; 10 of them were the
+exempt shapes. **Reporting a correct pattern as a defect is its own defect** — it trains people to
+ignore the gate.
+
+### CORE-22.3 The two gates
+
+`backend/harness_round_trip_ratchet.py`:
+
+- **§B GET handlers: exactly zero, no allowance, no pinned list.** A page load is what a thousand
+  users wait on, so a new one fails the build the day it is written.
+- **§C everywhere else: a pinned per-file inventory that may only SHRINK** — 41 files, 101 queries
+  at the pin. Writes are one user and one click: real, but not what a queue is made of. They are
+  REPORTED, never hidden, and the count cannot grow.
+
+Pins are DERIVED — regenerate with `--bless`, never by hand. `--bless` REFUSES to run while any GET
+handler has a finding, so the strict gate cannot be blessed away.
+
+### CORE-22.4 What this shipped with
+
+Two GET handlers were at zero only after being fixed in the same PR:
+
+- `GET /google-reviews/dm-dashboard` and its two siblings — §STOREOPS-02, 112 reads → 4.
+- `GET /upload/last` — the targeted lookup for report keys the recent window missed ran two reads
+  PER KEY, up to 80 round trips on a tenant asking about forty reports. It is now two reads per
+  journal over the whole set of missing keys: four in total, whether one key is missing or forty.
+  Same answer, different cost.
+
+The four fix patterns, best first: ask for all of them in one query (`.in_`); read a small
+per-tenant table once and filter in memory (§COMMCALC-42); let the database aggregate; and only
+then cache — a cache hides a bad query shape rather than removing it, and every cache must be
+bounded (§CORE-21).
+
 ## §CORE-21. AN IN-PROCESS CACHE KEYED BY SOMETHING A CLIENT CAN MINT IS BOUNDED BY CONSTRUCTION (load test 2026-10-28)
 
 ### CORE-21.1 How it was found
