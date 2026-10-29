@@ -39400,6 +39400,14 @@ vocabulary, not a new module:
   PROTECTS the opener was invisible. A row now says "15 minutes early, inside the grace, paid whole"
   as readily as it says what was cut.
 - a correction and a manager override still out-rank it, unchanged.
+- **the new basis gets a PROVENANCE in the same change.** `payroll_hours_drilldown.BASIS_RELATIONS`
+  maps every basis to the relation that answered for the figure, keyed on this module's own
+  constants, and `harness_batch24_drilldown` fails the build when a declared basis has no entry — so
+  adding a basis without one would have put a blank on a payroll drill-down. `clocked_trimmed_to_
+  schedule` answers out of **both** `storeops.timelog` and `storeops.shifts`, which is the honest
+  provenance rather than a tidier single one: the punch is where the hours came from, the roster is
+  where the start they were cut back to came from, and a reader asking why the figure is not what the
+  clock said has to be sent to both.
 
 ### STOREOPS-03.3 THE INSTANT — why the rule refuses a wall-clock string
 

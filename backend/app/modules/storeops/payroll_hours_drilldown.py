@@ -148,6 +148,11 @@ BASIS_RELATIONS = {
     _hb.CLOCKED_RECONCILED: (TIME_CLOCK,),
     _hb.CLOCKED_OVERRIDE: (TIME_CLOCK,),
     _hb.CLOCKED_CORRECTED: (SCHEDULE,),
+    #: TRIMMED TO THE ROSTERED START (§STOREOPS-03) answers out of BOTH relations, and that is the
+    #: honest provenance rather than a tidier single one: the punch is where the hours came from, and
+    #: the schedule is where the start they were cut back to came from. A reader asking why the figure
+    #: is not what the clock said has to be sent to the roster as well as to the clock.
+    _hb.CLOCKED_TRIMMED_TO_SCHEDULE: (TIME_CLOCK, SCHEDULE),
     _hb.SCHEDULE_OPT_IN: (SCHEDULE,),
     _hb.NOT_MEASURED_UNPAID: (),
     _hb.PUNCH_UNUSABLE: (),
