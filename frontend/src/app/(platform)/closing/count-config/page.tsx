@@ -26,7 +26,7 @@ type Def = {
   field_key: string; label: string; recon_class: string; is_active: boolean; is_standard?: boolean
   value_kind: string; declared_by: string; unit_price: string; in_revenue: boolean | null
   // mig 1102 — what in the sales feed should agree with this category, so what the rep declares can
-  // be checked against what the system captured (/closing/declared-vs-captured, index §CLOSING-01).
+  // be checked against what the system captured (/closing/declared-vs-captured, index §CLOSING-02).
   feed_counterpart: string
 }
 type RawDef = Partial<Def> & { field_key: string }

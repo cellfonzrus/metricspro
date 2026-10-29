@@ -111,7 +111,7 @@ def vendor_units(rows, vendors, *, gate=None, unit_cfg=None, is_accessory=None):
 
     IT IS A FUNCTION RATHER THAN A LOOP INSIDE `build` because two callers need the same units at
     two grains: `build` folds them over a PERIOD (by vendor x store x rep), and the declared-vs-
-    captured recon (`closing/declared_feed_recon`, index §CLOSING-01) folds them by DAY. Deriving
+    captured recon (`closing/declared_feed_recon`, index §CLOSING-02) folds them by DAY. Deriving
     them twice is the duplicate defect — the path that pays a rep would drift from the path that
     accuses one. PURE: no DB, no network, and the unit collapse is injected rather than imported so
     the harness drives the real gate and the tests drive none.

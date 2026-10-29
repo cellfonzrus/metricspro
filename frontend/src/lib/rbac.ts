@@ -1056,6 +1056,9 @@ export const NAV: NavGroup[] = [
     { href: '/closing/tender-recon', label: 'X-Tender Recon', icon: '🧾', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/tender-recon-3way', label: '3-Way Tender Recon', icon: '🧮', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/accessory-recon', label: 'Accessory Recon', icon: '🔖', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    // mig 1102, index §CLOSING-02 — what each employee declared at closing vs what the sales feed
+    // captured. Same module key and scope tiers as its recon siblings above.
+    { href: '/closing/declared-vs-captured', label: 'Declared vs Captured', icon: '🔍', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/pickup', label: 'Cash Pickup', icon: '💵', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // Bill Payment Pickup (owner directive 2026-09-02, mig 942): "one more pick up for the bill
     // payment pickup and deposit menu, just under the cash pick up module, the same process same
@@ -1452,6 +1455,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/storeops/visits/plan', 'ops'],
   ['/closing', 'ops'], ['/closing/verify', 'ops'], ['/closing/management', 'ops'], ['/closing/recon', 'ops'],
   ['/closing/tender-recon', 'ops'], ['/closing/tender-recon-3way', 'ops'], ['/closing/accessory-recon', 'ops'],
+  ['/closing/declared-vs-captured', 'ops'],
   ['/closing/pickup', 'ops'], ['/closing/billpay-pickup', 'ops'],
   ['/closing/closing-pickup-status', 'ops'],
   ['/closing/cash-recon-management', 'ops'], ['/closing/epay-recon', 'ops'],

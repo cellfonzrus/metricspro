@@ -3969,7 +3969,7 @@ def put_metric_lines(payload: PutMetricLinesIn, org_id: str = ORG_ID,
     return {"ok": True, "lines": len(rows)}
 
 
-# ── DECLARED vs CAPTURED (mig 1102, index §CLOSING-01) ───────────────────────────────────────────
+# ── DECLARED vs CAPTURED (mig 1102, index §CLOSING-02) ───────────────────────────────────────────
 # "The rep says they did four Edge deals; did our system capture four?" ONE reconciler, serving every
 # declared category that NAMES a feed counterpart. Nothing here spells a carrier, a vendor or a
 # program: the counterpart dereferences the tenant's own registry, and the comparison rule lives in

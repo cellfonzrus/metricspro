@@ -62,10 +62,20 @@ def fe_files(root):
                 yield os.path.join(dirpath, f)
 
 
+_CODE_CACHE: dict = {}
+
+
 def code_only(path):
     """A file's executable text — docstrings and comments stripped. Doctrine explains WHY a rule
     exists and may quote the owner's own examples; what must not carry a second copy of the
     vocabulary is the code."""
+    if path in _CODE_CACHE:
+        return _CODE_CACHE[path]
+    _CODE_CACHE[path] = _strip(path)
+    return _CODE_CACHE[path]
+
+
+def _strip(path):
     try:
         src = open(path, encoding="utf-8").read()
     except OSError:
