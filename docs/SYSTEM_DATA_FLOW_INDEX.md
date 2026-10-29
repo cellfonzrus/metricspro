@@ -130,6 +130,7 @@ Primary code homes:
 | CORE-16 | **A self-call carries the tenant it is acting as** | "The envelope payout screen says the commission accrual and salary-owed fetches failed with 409 Conflict. What identity does a call the platform makes to itself carry, which company does it say it is acting for, and what stops the next such call from dropping it?" |
 | CORE-19 | **A test is a gate, or it is a file** | "We need to define all development we do to follow the following: unit testing, integration testing, test-driven development. What runs a test in this repo, what stops a test reaching the live database when there is no staging one, and what fails the build the day the framework quietly comes undone?" |
 | CORE-20 | **A request path is not evidence of which route it reached** | "Act as a security agent and find the vulnerability in the code. Which paths does the platform let through without a login, what declares that list, and what stops a route the list never meant to name from satisfying it?" |
+| CLOSING-02 | **A declared category names what in the sales feed should agree with it** | "Add a field in as no of edge for total and no of financicing in thr daily closing for all employees to declare along with the $amount of edge and acima as they get paid for each transcoding they do, this would then be checked with our system if our system is capturing the sales as declared by the sales rep." Which half of that already existed as config, what had no home at all, and what stops the next category from being checked against a number nobody measured? |
 | CORE-21 | **An in-process cache keyed by something a client can mint is bounded by construction** | "Simulate a thousand users and see what breaks. What does the platform keep in each worker's memory while they are signed in, what decides when an entry leaves, and what fails the build the day a new cache ships without a bound?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
@@ -7089,6 +7090,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | *(no table added)* — §19.40 "Employees & Pay" menu entry + `?tab=` deep links are frontend NAV / routing; `storeops.employees.pay_rate` is still written only from HR → Employees & Pay / Roles & Access (§19.35) | — | — |
 | `commcalc.closing_attempt` (mig `103`) — gains `refused` / `refusal_code` / `refusal_detail` (mig `1037`): a daily closing that was REFUSED is now recorded here, in the SAME audit trail the accepted and blocked tries use (no sibling table). `refused` rows are never counted as tries — `closing/submit_refusal.is_real_try` is the one rule every counter reads | `closing/router._refuse` (THE single refusal site, codes declared in `closing/submit_refusal.REFUSALS`); `closing/router._log_attempt` (the real tries, unchanged) | `GET /closing/attempts` → screen `closing/management`; `closing/router._real_attempt_count` (the 3-try close gate) — §29.11. **Also gains the rest of the submit form (mig `1052`: `acc_sale`, the three counts, `remarks`, `envelope_picture`) plus the configured-tender jsonb**, so a blocked try can be resumed — read by `closing/unfinished_day.resume_entry` via `GET /closing/resume`, and by `_closing_summary_for_date` / `closing_rollup` / `_run_closing_missing_alerts` through `unfinished_day.describe` to tell "nobody submitted" apart from "submitted and sent back to recount" — §29.12 |
 | `commcalc.closing_count_field_def` (mig `501`) — gains **`value_kind`** (`count`/`amount`/`both`), **`declared_by`** (`store`/`employee`), **`unit_price`** and **`in_revenue`** (mig `1072`): the three facts that make a declared category PAYABLE. Every default reproduces mig `501`, so no existing tenant moves | `PUT /closing/count-config` (the Count Fields editor; a client that omits the new keys has the stored values carried forward rather than reset) | ONE home `closing/metric_catalog.build` → `GET /closing/metric-catalog`, the closing form, the incentive-rule editor; lock `harness_metric_catalog_lock.py` — §76 |
+| `commcalc.closing_count_field_def` — gains **`feed_counterpart`** plus **`feed_units_tolerance`** / **`feed_amount_tolerance`** (mig `1102`): what in the sales feed answers the same question as this category, and how far the two may differ first. NULL = not reconciled, which is the ordinary case and NOT an error; a value the one parser cannot read is refused by the column's own CHECK | `PUT /closing/count-config` (the "Check against" picker, offered from the tenant's own financing vendors) | ONE parser `closing/declared_feed_recon.parse_counterpart` → `GET /closing/declared-vs-captured`; lock `harness_metric_catalog_lock.py` §G — §CLOSING-02 |
 | `commcalc.closing_metric_line` (mig `1072`) — a store-day's declarations that carry MONEY or a PERSON. `employee_name` NULL = the store's own figure. The OTHER physical store beside `daily_closing.counts`; **no caller reads either directly** | `PUT /closing/metric-lines` (the closing form, after the row is accepted — a refused closing leaves no half-day behind) | `closing/metric_catalog.declared` / `by_employee` (THE fold) → `GET /closing/declared/{date}`, `GET /commcalc/daily-incentive/{date}` — §76.3 |
 | `commcalc.incentive_rule` + `incentive_rule_assignment` (mig `1072`) — the daily-incentive rules. `rule_kind` is one of three SHAPES; every rule, category, rate, threshold and split is a ROW (RULE TWO). Assignments reuse the employee-plan scope vocabulary | `PUT /commcalc/incentive-rules` (refuses a rule naming an undeclared category); `DELETE` switches OFF, never destroys | `commcalc/daily_incentive.compute_day` via `GET /commcalc/daily-incentive/{date}`; scope by `management_incentive.resolve_plan` — §76.4 |
 | `commcalc.target_line` (mig `1074`) — a DECLARED category's target for a store-period at one grain. The four BUILT-IN categories keep their columns on `commcalc.targets` (mig `006`) and are read byte-for-byte as before; this is the other physical store and **no caller reads either directly** | `PUT /commcalc/targets/{period}/lines` (same `_require_target_edit` gate as the built-in save; refuses a built-in key, an undeclared key and a negative) | `commcalc/targets_engine.derive_monthly_by_cat` (THE fold) → `GET /commcalc/targets/{period}` / `/axis` / `/calendar` / `/backward` / `/summary` / `/action-plan` / `/report-cards`; lock `harness_target_axis_lock.py` — §COMMCALC-02 |
@@ -7351,6 +7353,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - `GET /commcalc/commission-leg-store-trend?period=&months=&market=&store=` — **the month-of-life (M1..M12) commission rungs PER STORE with the months side by side** (owner ask 2026-10-15): one row per store, one column per month, each cell carrying 1st-month / M2–M12 / Unsplit and that store's own rung ladder, plus `worst_rung` naming the rung that fell hardest between the first and last COMPLETE month — so a store shrinking NOW (M1 falling) is distinguishable from one echoing a cohort lost months ago (M1 flat, M4–M6 falling). It CALLS `router._commission_leg_trend_compute` with its store axis on and PIVOTS the result through the pure `commcalc/commission_leg_store_trend.py` — the same read, the same carrier classification (§58/§66), the same store identity (§64), the same rung convention (§4a.2) — so Σ(per-store) == the company figure to the cent (§A of the lock). An unfinished month is flagged `partial` and excluded from every delta; money matching no store is its own named row; `ties` states per month whether the displayed total equals the company series. READ-ONLY, no writer, no table, **no migration** (§COMMCALC-12).
 - `GET /commcalc/month-focus/{period}?plays=` — this month's DECLARED focus (`commcalc.month_focus`, mig `1065`): the headline, the pay type named as driving its spiffs, the temporary spiffs on the table with their status, the weekly check-ins done, and — computed, never stored — what the month still owes plus the plays its own measured numbers support. `plays=0` skips the sales read, for the two login surfaces. `PUT /commcalc/month-focus/{period}` declares or amends it (market manager or above, `month_focus.may_declare` → `core.scope.is_market_or_wider`; a partial save cannot blank the month, and check-ins are never writable from the body). `POST /commcalc/month-focus/{period}/checkin` confirms the CURRENT check-in day, computed server-side and idempotent, so a confirmation cannot be back-dated. Pays nothing; writes only `commcalc.month_focus` (§63).
 - `GET /closing/metric-catalog` — **what this business declares at the end of a day, and what a unit is worth**: every category with its `value_kind`, `declared_by`, `unit_price`, `in_revenue` and `storage`, plus `revenue_keys` / `employee_keys` and the vocabularies themselves. THE one answer; the closing form and the incentive-rule editor read it instead of listing categories. `GET /closing/declared/{date}?store_code=` folds both physical stores into one store-day (plus `by_employee`, `store_revenue`, `employee_revenue`); `PUT /closing/metric-lines` saves the money-bearing and per-employee lines (full replace per store-day, and a line naming an undeclared category is REFUSED, not stored) — `closing/metric_catalog.py`, mig `1072` (§76).
+- `GET /closing/declared-vs-captured?date_from=&date_to=&store_code=&rep=` — **did our system capture the sales the rep declared?** Per day × store × rep × category, for every declared category that NAMES a feed counterpart; the ones that do not are returned in `not_reconciled` BY NAME, so a missing category is explained rather than silently absent. Read-only, and the worst severity is `flagged` — nothing here blocks a close or changes what anyone is paid. The declared side is `closing/metric_catalog.declared` / `by_employee`; the captured side is `financing_report.vendor_units` (the derivation the Financing report and the payout share) and `_b2b_day`'s counts; the comparison is `closing/declared_feed_recon.reconcile`. A day the feed was never read for, and a counterpart whose detection is not configured, are `pending` with variance **None** and their own reason — never a $0.00 that would read as "we checked and it agreed" — `closing/declared_feed_recon.py`, mig `1102` (§CLOSING-02).
 - `GET /commcalc/incentive-rules` — the tenant's daily-incentive rules **with the catalog they may point at**, the three rule shapes, the split bases, the qualifier scopes and the comparisons. `PUT /commcalc/incentive-rules` upserts one (money-posture gated by `_require_commission_admin`; **refuses** a rule whose qualifier or payout names an undeclared category); `DELETE /commcalc/incentive-rules/{id}` switches it OFF rather than destroying its audit trail. `GET /commcalc/daily-incentive/{date}?store_code=` COMPUTES one store-day — per-employee lines, `by_employee` totals, `top_earner`, `unallocated`, and a `rules[]` why-trail carrying each qualifier verdict. **Computes only; nothing is persisted and nobody is paid by calling it** — `commcalc/daily_incentive.py`, mig `1072` (§76.4).
 - `GET /commcalc/targets/{period}/axis` — **what is targetable for this tenant**: the four built-in sales categories, then every category the admin declared on Count Fields (§76), each with the label they typed, its unit, where its target physically lives (`column` / `derived` / `line`) and whether its achievement comes from the sales feed or from a declaration. THE one list; nine screens and modules used to keep their own. `PUT /commcalc/targets/{period}/lines` saves the declared half into `commcalc.target_line` — gated on the SAME permission and store span as `PUT /targets/{period}`, and it REFUSES a built-in category key because two homes for one number is the divergence the design removes — `commcalc/targets_engine.py`, mig `1074` (§COMMCALC-02).
 - `GET /commcalc/targets/{period}/calendar?grain=week&week_starts=0` — the existing schedule-weighted calendar, plus a `windows` block giving the owner's per-day / per-week / per-month target. A window is a SUM OVER THE CALENDAR already in the response (`targets_engine.grain_windows`), at full precision, never a second calculation — so the weeks always add up to the month. Additive: omitting `grain` returns exactly what it always did (§COMMCALC-02.4).
@@ -7712,6 +7715,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **The equipment rebate on a store's P&L is thousands below the equipment reimbursement — which devices account for it, and was anything actually not paid?** Per device: the claim, the cost, what the store charged, who sold it, and which store the carrier paid. "The carrier paid a DIFFERENT store" is its own verdict and never "we were never paid"; nothing paid anywhere on a short-statement month is `not_measured` with the missing days named | `commcalc.asset_ledger` (claim, cost, sale price, device id) × `commcalc.raw_payment_detail` (the carrier's per-LINE feed — `imei`, `amount`, `payment_type`, `rep_username`), both keyed through §64 `coa.store_resolver` | the DEVICE-GRAIN layer of the §19.53 one home `commcalc/device_reimb_recon.py` (`carrier_line_side` / `device_lines` / the four `LINE_*` verdicts), wired by `router._device_line_reimb_run` → `GET /commcalc/device-line-reimbursement`; module-graph fact `device_reimbursement_paid_vs_claimed`; locks `harness_device_line_reimbursement.py` (89 checks) and `harness_batch16_drilldown.py` — §65.  **DRILL-DOWN §CORE-17.3p:** TWO GRAINS on one device row separated only by PROVENANCE (§CORE-17.3n) — the claim, the cost, the price the store charged and the two unpaid buckets out of the unit ledger, what the carrier paid HERE and at a DIFFERENT store out of its own per-line feed. A device the feed never named carries no figure and names NO table; with no routing declared the two paid panels are not served at all. NOT narrowed: the verdict picker filters the table in the browser while the tiles are the server's fold — reported. Declaration `commcalc/device_financing_drilldown.py`. Live September 2026, house org: store `652 Communipaw Avenue` claims $15,274.91, the carrier paid it $10,314.93 and paid **another store $5,004.98** on 15 of its devices, and **$0.00** was unpaid anywhere; estate-wide 135 devices and $41,548.83 sit on one store's cost with another store's money |
 | **Which store should carry a handset's cost when the ledger stocked it at one door and the carrier paid another?** The store the carrier PAID, for the devices the per-device reconciliation proved; everything it could not measure stays on the distributor ledger's store and is reported. Per-store only — the company total never moves | `commcalc.asset_ledger` (the cost and its stocking store) × §65's per-device verdict, declared per org by `commcalc.account_config.device_cost_store_basis` (mig 1069) | `account/device_cogs.cost_store` — the ONE placement — over `resolve_device_cost_store_basis` / `load_activation_index` → `device_reimb_recon.activation_store_moves`; the identity side is `store_identity.shared_identity_pairs` / `.may_be_one_store` via `coa.shared_store_identity_pairs`; called by `device_cogs._vip_sold_cost`, period handed down by `coa.build_inputs`; module-graph fact `device_cost_store`; lock `harness_device_inventory_cogs.py` §H (89 checks) — §70. Live Jun–Oct 2026, house org: **468 devices, $195,155.32** across 100 store pairs, netting to **$0.00** company-wide. OFF until declared |
 | **What does a store-day DECLARE, what was it worth, and which employee generated the most of it?** — folded across the two physical stores, with every catalog metric present (zeros and `declared: False`) so "declared nothing" is distinguishable from "has no such category"; a store-level figure is NEVER attributed to a person, and the submitter is never credited with the store's day | `commcalc.closing_count_field_def` (mig `501` + `1072`: `value_kind` / `declared_by` / `unit_price` / `in_revenue`) × `commcalc.daily_closing.counts` + the three physical columns × `commcalc.closing_metric_line` (mig `1072`) × `commcalc.closing_tender_def` (mig `111`, read-only) | ONE home `closing/metric_catalog.py` (`build` / `storage_for` / `declared` / `by_employee` / `gross_revenue` / `employee_revenue` / `revenue_keys` — pure, DB-free) → `GET /closing/metric-catalog`, `GET /closing/declared/{date}`, `PUT /closing/metric-lines`, the closing form and the Count Fields editor; lock `harness_metric_catalog_lock.py` (38) — §76. `gross_revenue` is THE definition of a day's sales, so a target and a payout rule cannot disagree about it |
+| **Did our system capture the sales the rep DECLARED?** — per day × store × rep × category, for every declared category that names a feed counterpart. The grain belongs to the CATEGORY, not to the feed, so a store-declared figure is never compared per rep (which accused a store of not declaring a sale it had declared); one human is one row through §CORE-08; and four distinct absences carry four distinct reasons rather than one $0.00 variance | `commcalc.closing_count_field_def.feed_counterpart` (mig `1102`) × the declared store-day (§76) × `commcalc.financing_vendor` + its detection rules (mig `272`) × the sales pair (`daily_sales_feed` / `raw_sales`) | ONE home `closing/declared_feed_recon.py` (`parse_counterpart` / `reconcile` / `counterpart_options` — pure, DB-free) over ONE derivation `commcalc/financing_report.vendor_units` (which `build` now FOLDS) → `GET /closing/declared-vs-captured`, screen `/closing/declared-vs-captured`; proof `harness_declared_feed_recon.py` (68) + lock `harness_metric_catalog_lock.py` §G — §CLOSING-02. **Measures only — it never pays and it never blocks a close** |
 | **What does a day's declared categories PAY each employee?** — three shapes only (`per_unit`, `percent_of_amount`, `threshold_pool`); every rule, category, rate, threshold and split is a CONFIG ROW, so no tenant vocabulary reaches the code (asserted over the stripped executable text). A gate that cannot be VERIFIED fails CLOSED, an unresolved input is zero production, and **a pool whose split cannot be measured is returned `unallocated` with a reason rather than split evenly** | `commcalc.incentive_rule` + `incentive_rule_assignment` (mig `1072`) × the declared store-day above × `storeops.shifts` (actual hours where recorded, else scheduled) | ONE home `commcalc/daily_incentive.py` (`compute_day` / `measure` / `split_pool` — pure) → `GET /commcalc/daily-incentive/{date}`; scope precedence REUSES `management_incentive.resolve_plan`, never a second ladder; screen `/commcalc/incentive-rules`; proof `harness_daily_incentive.py` (83, the owner's six live rules replayed as config) — §76.4. **Computes only — persisting and paying is not this endpoint's** |
 | **What is this store supposed to do — per day, per week, per month — and what do I still need to reach it?** — the axis is ASKED of the tenant (the four built-in sales categories plus every category declared on Count Fields), so a target exists for the thing the business actually sells. A week or day figure is a WINDOW over the one monthly spread, summed at full precision, never a second calculation — so the weeks always add up to the month | `commcalc.targets` (mig `006`, the built-ins' own columns, read byte-for-byte as before) × `commcalc.target_line` (mig `1074`, the declared half) × `storeops.shifts` (the scheduled hours the month is spread over) × the declared store-day above (the ACHIEVED figure for a declared category) | ONE home `commcalc/targets_engine.py` (`target_axis` / `derive_monthly_by_cat` — THE fold over both physical stores — `compute_scope`, `grain_windows`, `merge_declared_actuals`) → `GET /commcalc/targets/{period}` / `/axis` / `/calendar` / `/summary` / `/action-plan` / `/report-cards`; locks `harness_target_axis_lock.py` (80) + proof `harness_target_declared_axis.py` (42) — §COMMCALC-02 |
 | **Is this stored credential readable by anyone who gets the database?** — not a KPI but the same shape of question, and it had ten different answers. ONE: `core/portal_secret.TABLES` names every column that holds a credential, which primitive opens it (text, or the JSONB `{"enc": …}` envelope), which schema the table is in and which columns address one of its rows. A credential-LOOKING column that is deliberately not encrypted carries its reason in `NOT_A_SECRET` — because an excuse nobody wrote down cannot be told apart from an oversight | the ten tables in §16 above × `app/core/crypto.py` (Fernet, `enc:v1:`) × `database/migrations/**` (what §D of the lock scans) | ONE home `core/portal_secret.py` (`seal_row` / `open_row` / `open_rows` / `secret_columns` / `json_columns` / `table_schema` / `table_key` / `protection_state` / `describe`) → every reader and writer in §16; `core/encryption_backfill.backfill_portal_secrets` (iterating the registry, owning no table list of its own); lock `harness_portal_secret_lock.py` (158) — §CORE-03 |
@@ -26058,6 +26062,7 @@ status word rather than a blank that reads as nil.
 | 73 | closing |
 | 74 | closing |
 | CLOSING-01 | closing |
+| CLOSING-02 | closing |
 | 15.1 | notify |
 | 15.2 | notify |
 | 15.3 | notify |
@@ -26194,6 +26199,133 @@ plus a frozen tail, not two live schemes, and the build check in CORE-01.4 is wh
   by the check above rather than copied.
 - `.github/workflows/module-graph-guard.yml` already ran on this file and on `backend/harness_*.py`.
   **Reused**: one step added to the existing job; no new workflow, no job removed or disabled.
+## §CLOSING-02. A DECLARED CATEGORY NAMES WHAT IN THE SALES FEED SHOULD AGREE WITH IT (owner ask 2026-10-29)
+
+Owner, verbatim: *"Add a field in as no of edge for total and no of financicing in thr daily closing
+for all employees to declare along with the $amount of edge and acima as they get paid for each
+transcoding they do, this would then be checked with our system if our system is capturing the sales
+as declared by the sales rep"*.
+
+**Module:** `backend/app/modules/closing/declared_feed_recon.py` (THE one home for the comparison —
+pure) · `backend/app/modules/commcalc/financing_report.py` (`vendor_units`, THE one derivation of
+financed units by vendor × store × rep × **day**, extracted so `build` folds it) ·
+`backend/app/modules/closing/router.py` (`_counterpart_captured`, the one read of the captured side;
+`GET /closing/declared-vs-captured`) ·
+`backend/app/modules/closing/declared_feed_drilldown.py` (§CORE-17: **two** panels, because the two
+figures are Σ over the same row out of DIFFERENT feeds; the verdict counts get none)
+**Lock:** `backend/harness_declared_feed_recon.py` — 68 checks · `harness_metric_catalog_lock.py` §G
+(38 → 60 checks), both run by `carrier-vocab-guard.yml`
+**Tests:** `backend/tests/unit/test_declared_feed_recon.py` (21) ·
+`backend/tests/unit/test_financing_vendor_units.py` (10) ·
+`backend/tests/integration/test_declared_vs_captured_endpoint.py` (12)
+**Migration:** `1102_closing_feed_counterpart.sql` — one nullable config column and two tolerances.
+**Screen:** `/closing/declared-vs-captured` ("Declared vs Captured", beside the other closing recons)
+— server-folded and NOT narrowed, so `lib/drill-narrow` is deliberately absent and each panel covers
+the whole range; ledger `harness_drilldown_pending.txt` records it `shared`.
+
+### §CLOSING-02.1 HALF THE ASK WAS ALREADY BUILT, AND IS THEREFORE NOT BUILT AGAIN
+
+The duplicate check (CLAUDE.md build gate) found the declaration half complete since mig `1072`
+(§76). A tenant's declared categories already carry `value_kind='both'` (a tally AND its dollars) and
+`declared_by='employee'` (a line per person), `closing/metric_catalog.py` is the one home for that
+vocabulary, and `ClosingSubmitForm` already renders a `#` box and a `$` box per category per person
+off it. **"Edge" and "Acima" are four config rows, not four fields** — RULE TWO, and the reason no
+source file in this section spells either (asserted over the stripped executable text, §E of the
+proof).
+
+What was missing was the **link**. A declared category had no way to say WHAT in the sales feed
+answers the same question, so the only declared-vs-captured check in the platform was
+`closing/router`'s activation/upgrade count recon — hard-wired to two feed figures, unable to check a
+new category at all and unable to be reused. One column names the counterpart; ONE reconciler serves
+every category that has one.
+
+### §CLOSING-02.2 THE COUNTERPART DEREFERENCES, IT DOES NOT RESTATE
+
+`closing_count_field_def.feed_counterpart` is `'<kind>:<ref>'`, parsed in exactly one place
+(`parse_counterpart`), and the column's own CHECK constraint refuses a value that parser cannot read
+— a silently-unreconciled category is a check an owner believes is running and is not.
+
+| kind | dereferences | grain it can answer at |
+| --- | --- | --- |
+| `financing:<vendor_key>` | the tenant's own `commcalc.financing_vendor` (mig `272`), which already answers "is this line financed, and by whom" — keyed on the **TENDER**, because Edge is how the customer paid and not a Motorola model (the 2026-07-27 defect) | day × store × **rep** |
+| `recon_class:activation` / `:upgrade` | the B2B count buckets mig `501` already defines, via `_b2b_day`'s counts | day × **store** only |
+| NULL | nothing — and that is the ordinary case, not an omission | — |
+
+Because financing detection is inherited from the registry that pays, **this report cannot disagree
+with the payout about what a financed sale is**. The admin picks a counterpart from a list the server
+builds from the tenant's own vendor rows with the label they typed (pick-don't-type, RULE THREE); no
+screen may hard-code one (lock §G10).
+
+### §CLOSING-02.3 AN ABSENCE NEEDS THE RIGHT REASON — FOUR OF THEM, NEVER A CLEAN $0.00
+
+The `recon_drilldown` pending doctrine (§CORE-17), applied to a new question. Four different things
+look like "nothing captured", and one $0.00 variance for all of them would read as *we checked and it
+agreed*:
+
+| what happened | verdict | variance | whose gap |
+| --- | --- | --- | --- |
+| the sales feed was never loaded for that day | `pending` | **None** | ours |
+| the vendor's detection is not configured | `pending` | **None** | **ours** — the reason carries the registry's own note |
+| a per-employee category whose counterpart answers per store only | `pending` | **None** | ours, stated |
+| the feed WAS read and holds none of it | `not_captured` | measured | a question for the rep |
+| the feed captured it and nobody declared it | `not_declared` | measured | a question for the rep |
+| both present and they differ | `variance` | measured | a question for the rep |
+
+`pending` is kept OUT of the gap count: an accusation the report refuses to make is not a finding
+against anybody. A pending row still shows what the rep declared, because that is the only number
+anybody has.
+
+### §CLOSING-02.4 THE GRAIN BELONGS TO THE CATEGORY, NOT TO THE FEED
+
+Found by the integration test before it shipped. A store-declared category is ONE figure for the
+store-day, while the sales feed always knows a salesperson — so folding the feed per rep against a
+store declaration produced TWO rows, the store's "we captured nothing" and the rep's "nobody declared
+this", **accusing a store of failing to declare a sale it had declared**. The grain is read off the
+catalog (`metric_catalog.is_employee_declared`, dereferenced — the lock's §A8 fails the build on a
+module that decides it for itself) and applied once, in `_addr`.
+
+One human is one row: the roster spells a rep `Singh, Simarjyot` and the feed spells them
+`Simarjyot Singh`, and the identity key is dereferenced from `core/person_identity.folded_token_key`
+(§CORE-08), never re-folded here. The spelling a human typed at closing is the one displayed.
+
+### §CLOSING-02.5 MONEY POSTURE
+
+It measures; it never pays and it never blocks a close. The worst severity is `flagged` — the same
+posture mig `501`'s count recon has always had (informational, never a gate) — and the reconciler's
+executable text contains no write verb at all (locked, §G11/§G12). A rep is paid per transaction, so
+a gap **either way** is worth a manager's eye and neither direction is evidence of anything on its
+own.
+
+### §CLOSING-02.6 WHAT IS NOT DONE, STATED
+
+- **The legacy activation/upgrade recon is not rewired through the reconciler.** `closing/router`'s
+  `act_var`/`upg_var` comparison is the older expression of the same question. Routing it through
+  requires `metric_catalog.build` to fall back to `count_config.STANDARD_DEFS` when a tenant has
+  declared nothing — a mig-`1072` semantic change touching the closing form, the incentive engine and
+  the targets axis — which is its own change. What is locked instead: that site is **pinned as the one
+  remaining legacy comparison** (lock §G9, shrink-only), so a third expression cannot appear, and the
+  captured figure it compares against now has one home.
+- **`/closing/accessory-recon` is the other sibling of this class** — declared accessory dollars vs
+  the sales transactions. It is store-grain, money-only and reads the accessory config rather than a
+  declared category, so it is not a counterpart today; folding it in is the natural next step.
+- **A tenant must still pick its counterparts.** Nothing is seeded by the migration: the column is
+  NULL on every existing row, so no tenant moves and no surface changes until an admin sets one.
+
+### §CLOSING-02.7 A DEFECT FOUND IN A SIBLING, REPORTED AND NOT FIXED HERE
+
+`closing/router._declared_by_store_day` (§76, the ranged declared read the **targets** engine's
+achieved figures go through, §COMMCALC-02) keys its closing rows `rows_by[(store, day)] = r` — ONE
+row per store-day, last writer wins. **In per-rep closing mode a store-day has one `daily_closing`
+row per rep**, so a store where three reps each declared two upgrades reports two achieved, not six.
+
+This endpoint does NOT share that fold: it keeps the rows as a list and sums them (§CLOSING-02.4's
+sibling fix, caught by `test_a_store_day_closed_by_SEVERAL_reps_sums_their_counts` before shipping).
+The sibling is left as it is deliberately — correcting it RESTATES every declared-category target's
+achieved figure for every tenant in per-rep mode, which needs its own change, its own before/after
+measurement against live data and the owner's eye. It is reported here rather than quietly repaired,
+and rather than left unsaid.
+
+
 ## §CORE-02. THE CODE STYLE CHECKER IS A CHECK — and a ratchet only turns one way (owner directive 2026-10-11)
 
 Owner, verbatim: *"Run the code style checker and fix the problems"*.

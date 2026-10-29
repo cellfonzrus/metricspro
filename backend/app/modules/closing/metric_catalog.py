@@ -88,6 +88,12 @@ def build(count_defs, *, tender_defs=None):
       source        'count_field' | 'tender' — which registry owns the row
       editable      can an admin change it on the Count Fields screen
       is_standard    one of mig 501's built-in three (writes a physical daily_closing column)
+      feed_counterpart  what in the sales feed answers the same question, or None (mig 1102)
+      feed_units_tolerance / feed_amount_tolerance  how far the declaration may differ first
+
+    The counterpart travels on the entry UNPARSED and is read through
+    `declared_feed_recon.parse_counterpart` — one parser, so a surface cannot invent a second
+    reading of the same string.
     """
     out, seen = [], set()
     for i, d in enumerate(count_defs or []):
@@ -122,6 +128,13 @@ def build(count_defs, *, tender_defs=None):
             "editable": True,
             "is_standard": bool(d.get("is_standard")) or key in STANDARD_KEYS,
             "sort_order": _int(d.get("sort_order"), i),
+            # mig 1102 — what in the sales feed should agree with this category. Carried, never
+            # interpreted here: `declared_feed_recon` is the one parser.
+            "feed_counterpart": _key(d.get("feed_counterpart")) or None,
+            "feed_units_tolerance": (None if d.get("feed_units_tolerance") in (None, "")
+                                     else _int(d.get("feed_units_tolerance"))),
+            "feed_amount_tolerance": (None if d.get("feed_amount_tolerance") in (None, "")
+                                      else _num(d.get("feed_amount_tolerance"))),
         })
     for j, t in enumerate(tender_defs or []):
         key = _key(t.get("tender_key"))
@@ -143,6 +156,11 @@ def build(count_defs, *, tender_defs=None):
             "editable": False,
             "is_standard": False,
             "sort_order": 1000 + _int(t.get("sort_order"), j),
+            # A tender is HOW money arrived; the feed's own tender split is the same figure, so
+            # reconciling it here would duplicate `/closing/tender-recon`.
+            "feed_counterpart": None,
+            "feed_units_tolerance": None,
+            "feed_amount_tolerance": None,
         })
     out.sort(key=lambda m: (m["sort_order"], m["label"]))
     # Every entry carries WHERE its value lives, so no caller — backend or screen — has to work it

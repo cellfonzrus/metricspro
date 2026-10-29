@@ -25,11 +25,15 @@ const reconClasses = (pos: string) => [
 type Def = {
   field_key: string; label: string; recon_class: string; is_active: boolean; is_standard?: boolean
   value_kind: string; declared_by: string; unit_price: string; in_revenue: boolean | null
+  // mig 1102 — what in the sales feed should agree with this category, so what the rep declares can
+  // be checked against what the system captured (/closing/declared-vs-captured, index §CLOSING-02).
+  feed_counterpart: string
 }
 type RawDef = Partial<Def> & { field_key: string }
 type ConfigResp = { defs?: RawDef[]; all_defs?: RawDef[]; standard?: RawDef[] }
 // The vocabularies come from the server (closing/metric_catalog.py), never a copy kept here.
-type CatalogResp = { value_kinds?: string[]; declared_by?: string[] }
+type Counterpart = { value: string; label: string }
+type CatalogResp = { value_kinds?: string[]; declared_by?: string[]; counterpart_options?: Counterpart[] }
 const KIND_LABEL: Record<string, string> = {
   count: 'Count — a tally (drop-offs)',
   amount: 'Amount — a dollar figure (printing sales)',
@@ -49,6 +53,7 @@ export default function CountConfigPage() {
   const [defs, setDefs] = useState<Def[]>([])
   const [valueKinds, setValueKinds] = useState<string[]>([])
   const [declaredBy, setDeclaredBy] = useState<string[]>([])
+  const [counterparts, setCounterparts] = useState<Counterpart[]>([])
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -63,12 +68,15 @@ export default function CountConfigPage() {
         unit_price: (x as { unit_price?: number | null }).unit_price == null
           ? '' : String((x as { unit_price?: number }).unit_price),
         in_revenue: (x as { in_revenue?: boolean | null }).in_revenue ?? null,
+        feed_counterpart: (x as { feed_counterpart?: string | null }).feed_counterpart || '',
       }))
       setDefs(dfs)
     }).catch((e: unknown) => setMsg('❌ ' + errText(e)))
     api('/api/v1/closing/metric-catalog?include_inactive=1').then((d: CatalogResp | null) => {
       setValueKinds(d?.value_kinds || [])
       setDeclaredBy(d?.declared_by || [])
+      // Offered by the server from the tenant's own registries — never a list kept here.
+      setCounterparts(d?.counterpart_options || [])
     }).catch(() => { /* pre-migration: the selects fall back to what is already on the row */ })
   }, [])
   useEffect(() => { load() }, [load])
@@ -77,6 +85,7 @@ export default function CountConfigPage() {
   const addDef = () => setDefs(ds => [...ds, {
     field_key: '', label: '', recon_class: 'other', is_active: true,
     value_kind: 'count', declared_by: 'store', unit_price: '', in_revenue: null,
+    feed_counterpart: '',
   }])
   const delDef = (i: number) => setDefs(ds => ds.filter((_, j) => j !== i))
   const move = (i: number, dir: -1 | 1) => setDefs(ds => {
@@ -95,6 +104,7 @@ export default function CountConfigPage() {
     const cleanDefs = defs.map((d, i) => ({
       ...d, field_key: d.field_key || slug(d.label), sort_order: i,
       unit_price: d.unit_price === '' ? null : Number(d.unit_price),
+      feed_counterpart: d.feed_counterpart || null,
     })).filter(d => d.field_key)
     setBusy(true)
     try {
@@ -133,7 +143,7 @@ export default function CountConfigPage() {
       <div className="card table-wrapper" style={{ marginTop: 16, padding: 0 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>
-            {['', 'Active', 'Label (on the sheet)', 'Key', 'Measured in', 'Declared by', '$ per unit', 'Counts as revenue', 'Recon class', ''].map(h =>
+            {['', 'Active', 'Label (on the sheet)', 'Key', 'Measured in', 'Declared by', '$ per unit', 'Counts as revenue', 'Check against', 'Recon class', ''].map(h =>
               <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
           </tr></thead>
           <tbody>
@@ -178,6 +188,23 @@ export default function CountConfigPage() {
                     <option value="yes">Yes — it is a sale</option>
                     <option value="no">No — track the volume only</option>
                   </select>
+                </td>
+                <td style={cell}>
+                  {/* mig 1102. Blank is the ordinary case and is not an omission: a mailbox rental
+                      has no answer in a sales feed, and comparing it against zero would invent a
+                      finding. The choices come from the server's own registries. */}
+                  <select style={sel} value={d.feed_counterpart}
+                    title="What in the sales feed should agree with this category, so a rep's declaration can be checked against what the system captured"
+                    onChange={e => setDef(i, { feed_counterpart: e.target.value })}>
+                    <option value="">Not checked against the feed</option>
+                    {counterparts.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                    {!!d.feed_counterpart && !counterparts.some(c => c.value === d.feed_counterpart) &&
+                      <option value={d.feed_counterpart}>{d.feed_counterpart} (no longer offered)</option>}
+                  </select>
+                  {d.feed_counterpart.startsWith('recon_class:') && d.declared_by === 'employee' &&
+                    <div style={{ fontSize: 10, color: 'var(--text3)' }}>
+                      the feed answers this per store, not per person — it will report as pending
+                    </div>}
                 </td>
                 <td style={cell}>
                   <select style={sel} value={d.recon_class} onChange={e => setDef(i, { recon_class: e.target.value })}>

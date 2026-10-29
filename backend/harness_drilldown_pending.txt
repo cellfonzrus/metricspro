@@ -31,6 +31,7 @@
 
 /closing/cash-variance	shared	owner ask 2026-10-24, the first report on the shared mechanism
 /watchdog/byod-upgrade	shared	owner ask 2026-10-28 (§COMMCALC-43); tile and row panels over report_drilldown
+/closing/declared-vs-captured	shared	owner ask 2026-10-29 (§CLOSING-02); TWO panels over report_drilldown, because the declared and captured figures are the same row out of DIFFERENT feeds (§CORE-17.3m). The three verdict COUNTS get none: the table below them IS that list, one row per finding, and the VARIANCE is the subtraction of the two figures that do have panels, so a reader opening either lands on the rows the difference is made of
 /accounts	own	the reference's other half (ScopeDrillDown)
 /accounts/pl	own	the reference drill (PR #408, index 4e); drill rows still name no source feed
 /commcalc/commission-ledger	own	category tile to ledger rows; provenance panel names each source_table

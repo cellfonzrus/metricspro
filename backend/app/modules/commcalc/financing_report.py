@@ -98,95 +98,140 @@ def _collapse_units(matched, gate, unit_cfg, is_accessory):
     return list(best.values()), ["unit_fallback_per_transaction"]
 
 
-def build(rows, vendors, targets, store_index, resolve_market, period, today=None,
-          gate=None, unit_cfg=None, is_accessory=None, month_days=None, days_elapsed=None):
-    """The whole report payload. `rows` are org-scoped sale lines; `vendors` are RESOLVED vendors
-    (financing_registry.resolve_vendors); `targets` is financing_tiers.load_targets output.
+def vendor_units(rows, vendors, *, gate=None, unit_cfg=None, is_accessory=None):
+    """THE ONE DERIVATION of "which financed units did this feed capture, for whom, on which day".
 
-    Everything below is derived from those arguments only — PURE, so the harness drives it with fixtures.
+    Returns `(units, note_codes, considered)`:
+      units      — flat `{vendor_key, vendor, store, rep, day, trans_id, amount, amount_basis}`,
+                   ONE record per financed DEVICE with its final dollars already on it
+      note_codes — sorted unit-collapse notes (e.g. a transaction with no serial counted once)
+      considered — every vendor this pass looked at, with its detection status and how many lines it
+                   matched, so a caller can say "detection not configured" instead of showing a zero
+                   that reads as a business fact
+
+    IT IS A FUNCTION RATHER THAN A LOOP INSIDE `build` because two callers need the same units at
+    two grains: `build` folds them over a PERIOD (by vendor x store x rep), and the declared-vs-
+    captured recon (`closing/declared_feed_recon`, index §CLOSING-02) folds them by DAY. Deriving
+    them twice is the duplicate defect — the path that pays a rep would drift from the path that
+    accuses one. PURE: no DB, no network, and the unit collapse is injected rather than imported so
+    the harness drives the real gate and the tests drive none.
+
+    `rows` may be raw; the live-line filter is applied here so no caller has to remember it.
     """
     live = [r for r in rows if is_live_line(r)]
-    facets = tender_facets(live)
-
-    detail, by_key = [], {}
-    by_store, by_vendor = {}, {}
-    unit_notes = set()
-    totals = {"units": 0, "amount": 0.0, "transactions": 0}
-    all_trans = set()
-
+    units_out, notes, considered = [], set(), []
     for v in vendors:
-        if not v.get("enabled") or not (v.get("matchers") or []):
-            continue
-        vk, vlabel = v["vendor_key"], v["label"]
+        vk, vlabel = v.get("vendor_key"), v.get("label") or v.get("vendor_key")
         matched = []
-        for r in live:
-            for m in v["matchers"]:
-                if _reg.matcher_hits(r, m):
-                    matched.append(r)
-                    break
+        if v.get("enabled") and (v.get("matchers") or []):
+            for r in live:
+                for m in v["matchers"]:
+                    if _reg.matcher_hits(r, m):
+                        matched.append(r)
+                        break
+        considered.append({"vendor_key": vk, "vendor": vlabel,
+                           "enabled": bool(v.get("enabled")),
+                           "matched_lines": len(matched),
+                           "detection_status": v.get("detection_status"),
+                           "detection_note": v.get("detection_note")})
         if not matched:
-            by_vendor.setdefault(vk, {"vendor_key": vk, "vendor": vlabel, "units": 0, "amount": 0.0,
-                                      "transactions": 0, "stores": 0,
-                                      "detection_status": v.get("detection_status"),
-                                      "detection_note": v.get("detection_note")})
             continue
         by_tid = {}
         for r in matched:
             by_tid.setdefault(str(r.get("trans_id") or "").strip(), []).append(r)
-        units, note_codes = _collapse_units(matched, gate, unit_cfg, is_accessory)
-        unit_notes.update(note_codes or [])
+        collapsed, note_codes = _collapse_units(matched, gate, unit_cfg, is_accessory)
+        notes.update(note_codes or [])
         basis = v.get("amount_basis") or "unit_line"
         # units per transaction — used to SPLIT a transaction-basis amount evenly across the devices
         # that transaction financed, so two phones on one contract never each report the full contract.
         units_per_tid = {}
-        for u in units:
-            units_per_tid[str(u.get("trans_id") or "").strip()] = \
-                units_per_tid.get(str(u.get("trans_id") or "").strip(), 0) + 1
-        for u in units:
+        for u in collapsed:
+            t = str(u.get("trans_id") or "").strip()
+            units_per_tid[t] = units_per_tid.get(t, 0) + 1
+        for u in collapsed:
             tid = str(u.get("trans_id") or "").strip()
-            store = str(u.get("store") or "").strip()
-            code = _ftier.resolve_store_code(store, store_index)
-            rep = str(u.get("salesperson") or "").strip() or "(unattributed)"
             if basis == "transaction":
                 grp = by_tid.get(tid) or [u]
                 amt = round(sum(_f(x.get("ext_price")) for x in grp)
                             / max(1, units_per_tid.get(tid, 1)), 2)
             else:
                 amt = round(_f(u.get("ext_price")), 2)
-            k = (vk, code, rep)
-            d = by_key.get(k)
-            if d is None:
-                d = by_key[k] = {"vendor_key": vk, "vendor": vlabel, "store_code": code,
-                                 "store": store, "market": (resolve_market(store) if resolve_market else ""),
-                                 "rep": rep, "units": 0, "amount": 0.0, "transactions": set(),
-                                 "first_date": None, "last_date": None}
-                detail.append(d)
-            d["units"] += 1
-            d["amount"] = round(d["amount"] + amt, 2)
-            if tid:
-                d["transactions"].add(tid)
-                all_trans.add((vk, tid))
-            day = str(u.get("trans_date") or "")[:10]
-            if day:
-                d["first_date"] = day if not d["first_date"] else min(d["first_date"], day)
-                d["last_date"] = day if not d["last_date"] else max(d["last_date"], day)
+            units_out.append({
+                "vendor_key": vk, "vendor": vlabel,
+                "store": str(u.get("store") or "").strip(),
+                "rep": str(u.get("salesperson") or "").strip() or "(unattributed)",
+                "day": str(u.get("trans_date") or "")[:10],
+                "trans_id": tid, "amount": amt, "amount_basis": basis,
+            })
+    return units_out, sorted(notes), considered
 
-            s = by_store.setdefault(code, {"store_code": code, "store": store,
-                                           "market": (resolve_market(store) if resolve_market else ""),
-                                           "units": 0, "amount": 0.0, "by_vendor": {}})
-            s["units"] += 1
-            s["amount"] = round(s["amount"] + amt, 2)
-            sv = s["by_vendor"].setdefault(vk, {"vendor_key": vk, "vendor": vlabel,
-                                                "units": 0, "amount": 0.0})
-            sv["units"] += 1
-            sv["amount"] = round(sv["amount"] + amt, 2)
 
-            bv = by_vendor.setdefault(vk, {"vendor_key": vk, "vendor": vlabel, "units": 0,
-                                           "amount": 0.0, "transactions": 0, "stores": 0,
-                                           "detection_status": v.get("detection_status"),
-                                           "detection_note": v.get("detection_note")})
-            bv["units"] += 1
-            bv["amount"] = round(bv["amount"] + amt, 2)
+def build(rows, vendors, targets, store_index, resolve_market, period, today=None,
+          gate=None, unit_cfg=None, is_accessory=None, month_days=None, days_elapsed=None):
+    """The whole report payload. `rows` are org-scoped sale lines; `vendors` are RESOLVED vendors
+    (financing_registry.resolve_vendors); `targets` is financing_tiers.load_targets output.
+
+    Everything below is derived from those arguments only — PURE, so the harness drives it with
+    fixtures. The units themselves are DEREFERENCED from `vendor_units` (the one derivation, shared
+    with the declared-vs-captured recon); this function only FOLDS them.
+    """
+    live = [r for r in rows if is_live_line(r)]
+    facets = tender_facets(live)
+
+    detail, by_key = [], {}
+    by_store, by_vendor = {}, {}
+    totals = {"units": 0, "amount": 0.0, "transactions": 0}
+    all_trans = set()
+
+    units, unit_note_codes, considered = vendor_units(
+        rows, vendors, gate=gate, unit_cfg=unit_cfg, is_accessory=is_accessory)
+    unit_notes = set(unit_note_codes or [])
+
+    # Every vendor the pass looked at gets a by_vendor slot, so one with no usable detection renders
+    # "detection not configured" rather than a zero that reads like a business fact.
+    for c in considered:
+        by_vendor.setdefault(c["vendor_key"], {
+            "vendor_key": c["vendor_key"], "vendor": c["vendor"], "units": 0, "amount": 0.0,
+            "transactions": 0, "stores": 0,
+            "detection_status": c.get("detection_status"),
+            "detection_note": c.get("detection_note")})
+
+    for u in units:
+        vk, vlabel, tid = u["vendor_key"], u["vendor"], u["trans_id"]
+        store, rep, amt, day = u["store"], u["rep"], u["amount"], u["day"]
+        code = _ftier.resolve_store_code(store, store_index)
+        k = (vk, code, rep)
+        d = by_key.get(k)
+        if d is None:
+            d = by_key[k] = {"vendor_key": vk, "vendor": vlabel, "store_code": code,
+                             "store": store, "market": (resolve_market(store) if resolve_market else ""),
+                             "rep": rep, "units": 0, "amount": 0.0, "transactions": set(),
+                             "first_date": None, "last_date": None}
+            detail.append(d)
+        d["units"] += 1
+        d["amount"] = round(d["amount"] + amt, 2)
+        if tid:
+            d["transactions"].add(tid)
+            all_trans.add((vk, tid))
+        if day:
+            d["first_date"] = day if not d["first_date"] else min(d["first_date"], day)
+            d["last_date"] = day if not d["last_date"] else max(d["last_date"], day)
+
+        s = by_store.setdefault(code, {"store_code": code, "store": store,
+                                       "market": (resolve_market(store) if resolve_market else ""),
+                                       "units": 0, "amount": 0.0, "by_vendor": {}})
+        s["units"] += 1
+        s["amount"] = round(s["amount"] + amt, 2)
+        sv = s["by_vendor"].setdefault(vk, {"vendor_key": vk, "vendor": vlabel,
+                                            "units": 0, "amount": 0.0})
+        sv["units"] += 1
+        sv["amount"] = round(sv["amount"] + amt, 2)
+
+        bv = by_vendor.setdefault(vk, {"vendor_key": vk, "vendor": vlabel, "units": 0,
+                                       "amount": 0.0, "transactions": 0, "stores": 0,
+                                       "detection_status": None, "detection_note": None})
+        bv["units"] += 1
+        bv["amount"] = round(bv["amount"] + amt, 2)
 
     for d in detail:
         d["transactions"] = len(d["transactions"])

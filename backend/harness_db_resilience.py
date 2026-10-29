@@ -1311,7 +1311,16 @@ _all_routes = _flatten_routes(real_app.routes)
 # against a CLEAN WORKTREE of origin/main (1805) rather than against this branch's memory of it:
 # `git diff main -- backend/ | grep -E '^[+-].*@router\.'` prints exactly one added decorator and
 # none removed. 1805 + 1 = 1806.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1806"))
+# Re-pinned 1806 -> 1807 on 2026-10-29 for §CLOSING-02, declared-vs-captured: ONE added GET,
+# `/closing/declared-vs-captured`, the report behind "did our system capture what the rep declared".
+# It is READ-ONLY — it writes nothing, queues nothing and pays nobody; it reads the declared side
+# through `closing/metric_catalog` and the captured side through `financing_report.vendor_units` and
+# the existing `_b2b_day`, and its worst verdict is a flag, so it gates no close. It adds no input to
+# any report, statement, GP, commission or tax figure, and no route to db_resilience itself (I0b
+# proves that independently of this number). Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` prints exactly one added decorator
+# and none removed. 1806 + 1 = 1807. Re-taken on a counted, named addition, never relaxed for CI.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1807"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
