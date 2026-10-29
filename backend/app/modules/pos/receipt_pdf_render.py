@@ -165,7 +165,8 @@ def words_pdf(words, *, title="Receipt") -> bytes:
     return buf.getvalue()
 
 
-def receipt_pdf(snap, template_v, *, fmt=None, render_words=None, brand=None,
+def receipt_pdf(snap, template_v, *, fmt=None, render_words=None, render_pdf=None,
+                brand=None,
                 disclaimer_blocks=None, store_name="", store_row=None, fold_discount=False,
                 tenant_name="", employee_name="", short_customer_name=False, remit_block="",
                 customer_lines=None) -> bytes:
@@ -173,8 +174,13 @@ def receipt_pdf(snap, template_v, *, fmt=None, render_words=None, brand=None,
     same layout decision, taken by `sale_receipt.clean_layout` rather than again here, so the file
     and the mail it rides on can never be two different receipts.
 
-    `render_words` is injected (`receipt_formats.render.render_words`) for the same reason
-    `sale_receipt.html` injects `render_document`: this module draws, it does not choose.
+    `render_words` and `render_pdf` are injected (`receipt_formats.render.render_words`,
+    `receipt_formats.render_pdf.render_pdf`) for the same reason `sale_receipt.html` injects
+    `render_document`: this module draws, it does not choose.
+
+    §POS-13: the POS layout is DRAWN from the Document by `render_pdf`. It used to be rebuilt from
+    `render_words`, a round-trip proof fixture, which is why the file had no rules at all and broke
+    phrases mid-word.
     """
     from app.modules.pos import sale_receipt as _sr
     from app.modules.pos import receipt_escpos as _escpos
@@ -187,7 +193,18 @@ def receipt_pdf(snap, template_v, *, fmt=None, render_words=None, brand=None,
                            tenant_name=tenant_name, employee_name=employee_name,
                            remit_block=remit_block, customer_lines=customer_lines,
                            store_name=store_name, disclaimer_blocks=disclaimer_blocks)
-        return words_pdf(render_words(doc, getattr(fmt, "PRINT_LAYOUT", None)), title=title)
+        # DRAWN FROM THE DOCUMENT, not from `render_words` (§POS-13). That function places
+        # each word where the ORIGINAL POS's paper receipt had it, so its own parser can read
+        # the receipt back — a round-trip proof fixture, with no rules, no boxes and no text
+        # runs. Asked for a customer's document it produced a page with zero drawn lines and
+        # phrases broken mid-word. It keeps that job; it no longer answers this question.
+        if render_pdf is None:
+            # Named, because the alternative is a TypeError three frames down. A caller that
+            # wants the tenant's own layout must inject the Document renderer, exactly as it
+            # injects `render_words`.
+            raise ValueError("the POS layout needs render_pdf injected "
+                             "(receipt_formats.render_pdf.render_pdf)")
+        return render_pdf(doc, title=title)
     model = _sr.slip_model(snap, template_v, brand=brand, disclaimer_blocks=disclaimer_blocks,
                            store_name=store_name, fold_discount=fold_discount,
                            tenant_name=tenant_name, employee_name=employee_name,
