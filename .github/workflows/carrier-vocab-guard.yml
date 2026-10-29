@@ -1022,6 +1022,11 @@ on:
       # home, and live_login because that is where the arithmetic must NOT come back.
       - "backend/harness_live_frame.py"
       - "backend/app/modules/commcalc/live_frame.py"
+      # index §COMMCALC-48 — THE EDITABLE REPORT DECLARATION. The lock names itself, its home, and the
+      # router because that is the only caller: a second derivation of the editor shape, or a save that
+      # stops round-tripping, is exactly what this job exists to catch.
+      - "backend/harness_report_declaration.py"
+      - "backend/app/modules/commcalc/report_declaration.py"
       - "backend/harness_login_progressive.py"
       - "backend/app/modules/commcalc/login_progressive.py"
       - "backend/app/modules/commcalc/live_login.py"
@@ -1920,6 +1925,9 @@ jobs:
       - name: Run the live-frame lock (a click on the streamed live screen is translated through THAT frame's own size, scale and top offset, never through an assumed window; it reduces exactly to the old formula on a plain desktop frame - index COMMCALC-47)
         working-directory: backend
         run: python3 harness_live_frame.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the report-declaration lock (which reports a login pulls and the filters each needs are ONE editable declaration derived from the two columns the pull already reads, never a third stored copy; columns(rows(src)) is the identity, so opening the editor and saving changes nothing - index COMMCALC-48)
+        working-directory: backend
+        run: python3 harness_report_declaration.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the progressive-login lock (ONE home for what a login page wants before it will show the password, read off the page rather than spelled as one vendor's element ids; a page that asks for what we cannot supply is not submitted empty; both login families name the portal they actually tried - index COMMCALC-46)
         working-directory: backend
         run: python3 harness_login_progressive.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

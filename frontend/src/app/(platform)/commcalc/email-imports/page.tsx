@@ -13,6 +13,7 @@ import { posSquash } from '@/lib/carrier-scope'
 import { useConnectors } from '@/lib/connectors'
 import { SetupNotice } from '@/lib/setupNotice'
 import { sourceLabel } from '@/lib/sourceLabels'
+import PortalReportEditor from '@/components/commcalc/PortalReportEditor'
 
 // Generic email (IMAP) inbox sweep — sibling of the FTP sweep. Configure a mailbox (host/creds) and
 // attachment-filename → upload-type patterns; the backend polls the inbox on a schedule and routes
@@ -120,6 +121,10 @@ export default function EmailImportsPage() {
   const [code, setCode] = useState('')
   const [authBusy, setAuthBusy] = useState('')
   const [shotView, setShotView] = useState<any>(null)   // { label, loading, src, at, note } — last login screenshot
+  // WHICH REPORTS THIS LOGIN PULLS (index §COMMCALC-48). The declaration is config, not code, so it
+  // needs a screen: without one it could only be written in SQL, which is what the owner objected to
+  // on 2026-10-29. The editor reads and writes the same two columns the pull itself reads.
+  const [reportsFor, setReportsFor] = useState<any>(null)
   const [live, setLive] = useState<any>(null)           // { source } while the 🔴 Live-login modal is open
   const [liveState, setLiveState] = useState<any>(null) // { phase, message, shot, seq } — driven by the ~300ms frame poll
   const [liveCode, setLiveCode] = useState('')
@@ -1142,6 +1147,7 @@ export default function EmailImportsPage() {
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => runSource(s)}>▶ Pull now</button>{' '}
                     </>)}
                     <button className="btn btn-secondary" title="See the page the headless login browser last saw (2FA screen / bot-wall / error)" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => openShot(s)}>📷</button>{' '}
+                    <button className="btn btn-secondary" title="Which reports this login pulls, and the filters each one needs — editable, stored as this tenant's configuration" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setReportsFor(s)}>📄 Reports</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setSrcDraft({ ...s, password: '' })}>Edit</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: 'var(--c-fg-dc2626)' }} onClick={() => delSource(s)}>✕</button>
                   </td>
@@ -1700,6 +1706,12 @@ export default function EmailImportsPage() {
               : <div style={{ color: 'var(--text3)', fontSize: 13 }}>{shotView.note || 'No screenshot available yet.'}</div>}
           </div>
         </div>
+      )}
+      {reportsFor && (
+        <PortalReportEditor sourceId={reportsFor.id}
+                            label={reportsFor.label || reportsFor.username || reportsFor.processor || 'this login'}
+                            processor={reportsFor.processor}
+                            onClose={() => setReportsFor(null)} />
       )}
       {/* Stage 5 of the tenant-implementation runbook: this is where a proven upload becomes an
           automation. The prompt reads that same stage list — no second copy of the order here. */}

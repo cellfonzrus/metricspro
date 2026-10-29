@@ -43151,6 +43151,60 @@ def live_login_calibrate(sid: str, org_id: str = ORG_ID):
     return res
 
 
+@router.get("/data-sources/{sid}/reports")
+def data_source_reports(sid: str, org_id: str = ORG_ID):
+    """THIS login's declared reports, as the rows an operator edits (index §COMMCALC-48).
+
+    DERIVED from the two columns the pull already reads — `portal_reports` (which reports) and
+    `portal_calibration` (how to run each) — by `report_declaration.rows`. The editor's row shape is
+    never stored: storing it would be a third spelling of one fact, and a third spelling is how a
+    declaration and its filter came to be derived two different ways (§COMMCALC-39).
+
+    `problems` on a row is advice in the operator's words, not a refusal. A half-declared report is
+    still saved and still shown, because §COMMCALC-37 already refuses to EXPORT a report whose
+    declared filters could not be set — so a half-declared report cannot quietly produce figures."""
+    require_org(org_id)
+    from app.modules.commcalc import report_declaration as rd
+    rows = _ds_rows(sb().schema("commcalc").table("data_source")
+                    .select("id,label,processor,portal_url,portal_reports,portal_calibration")
+                    .eq("id", sid).eq("org_id", org_id).limit(1))
+    if not rows:
+        raise HTTPException(404, "That login was not found for this company.")
+    src = rows[0]
+    return {"source_id": src.get("id"), "label": src.get("label"),
+            "processor": src.get("processor"), "portal_url": src.get("portal_url"),
+            "reports": rd.rows(src), "param_kinds": list(rd.PARAM_KINDS),
+            "date_tokens": list(rd.DATE_TOKENS), "exports": list(rd.EXPORTS)}
+
+
+@router.put("/data-sources/{sid}/reports")
+def save_data_source_reports(sid: str, body: dict = Body(...), org_id: str = ORG_ID):
+    """SAVE the declared reports an operator edited (index §COMMCALC-48).
+
+    Writes the two columns the pull reads, built by `report_declaration.columns` from the rows the
+    editor sent — so what is saved is exactly what the pull will run, and a tenant who opens the editor
+    and saves without touching anything has changed nothing (the lock pins that round trip).
+
+    A calibration entry's other keys are folded through untouched: an entry may hold facts this editor
+    does not edit, and a save that dropped what it did not understand would delete working
+    configuration while looking like a no-op."""
+    require_org(org_id)
+    from app.modules.commcalc import report_declaration as rd
+    rows = _ds_rows(sb().schema("commcalc").table("data_source")
+                    .select("id,portal_calibration").eq("id", sid).eq("org_id", org_id).limit(1))
+    if not rows:
+        raise HTTPException(404, "That login was not found for this company.")
+    sent = body.get("reports")
+    if not isinstance(sent, list):
+        raise HTTPException(400, "Send the reports as a list.")
+    reports, calibration = rd.columns(sent, rows[0].get("portal_calibration"))
+    sb().schema("commcalc").table("data_source").update(
+        {"portal_reports": reports, "portal_calibration": calibration}
+    ).eq("id", sid).eq("org_id", org_id).execute()
+    saved = rd.rows({"portal_reports": reports, "portal_calibration": calibration})
+    return {"ok": True, "reports": saved, "count": len(saved)}
+
+
 @router.post("/data-sources/{sid}/live-login/cancel")
 def live_login_cancel(sid: str, org_id: str = ORG_ID):
     """Cancel + close the live session (frees the headless browser)."""
