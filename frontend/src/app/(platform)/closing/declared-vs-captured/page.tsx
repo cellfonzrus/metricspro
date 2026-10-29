@@ -43,10 +43,10 @@ type Resp = {
 // The verdicts the server can return, with the words a manager reads. `pending` is deliberately NOT
 // styled as a problem with the rep: it is a check we could not run.
 const VERDICT: Record<string, { label: string; tone: string }> = {
-  ok: { label: 'Agrees', tone: 'var(--ok, #0a7)' },
-  variance: { label: 'Numbers differ', tone: 'var(--danger, #c33)' },
-  not_captured: { label: 'Declared, not captured', tone: 'var(--danger, #c33)' },
-  not_declared: { label: 'Captured, not declared', tone: 'var(--warn, #b70)' },
+  ok: { label: 'Agrees', tone: 'var(--green)' },
+  variance: { label: 'Numbers differ', tone: 'var(--red)' },
+  not_captured: { label: 'Declared, not captured', tone: 'var(--red)' },
+  not_declared: { label: 'Captured, not declared', tone: 'var(--amber)' },
   pending: { label: 'Could not check', tone: 'var(--text3)' },
 }
 
@@ -156,8 +156,8 @@ export default function DeclaredVsCapturedPage() {
 
       {!loading && data?.configured && (<>
         <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
-          {[['Agree', t.ok, 'var(--ok, #0a7)'],
-            ['Disagree', t.gaps, 'var(--danger, #c33)'],
+          {[['Agree', t.ok, 'var(--green)'],
+            ['Disagree', t.gaps, 'var(--red)'],
             ['Could not check', t.pending, 'var(--text3)']].map(([label, n, tone]) => (
             <div key={String(label)} className="card" style={{ minWidth: 150 }}>
               <div style={{ fontSize: 12, color: 'var(--text2)' }}>{String(label)}</div>
@@ -197,7 +197,7 @@ export default function DeclaredVsCapturedPage() {
                     <td style={cell}>{fmt(r.amount_declared)}</td>
                     <td style={cell}>{fmt(r.amount_captured)}</td>
                     <td style={cell}>{r.ok}</td>
-                    <td style={{ ...cell, color: r.gaps ? 'var(--danger, #c33)' : undefined, fontWeight: r.gaps ? 700 : 400 }}>{r.gaps}</td>
+                    <td style={{ ...cell, color: r.gaps ? 'var(--red)' : undefined, fontWeight: r.gaps ? 700 : 400 }}>{r.gaps}</td>
                     <td style={{ ...cell, color: 'var(--text3)' }}>{r.pending}</td>
                   </tr>
                 ))}
