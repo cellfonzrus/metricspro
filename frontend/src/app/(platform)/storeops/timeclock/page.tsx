@@ -219,10 +219,11 @@ export default function TimeClockAdminPage() {
 
   // OWNER ASK 2026-10-29: *"need the total below the hours on the time clock when filtered and
   // without filter"*. ONE derivation of every total on this screen, through `lib/report-totals` —
-  // the same module ReportShell's footer uses — so the badges at the top, the footer under the Hours
-  // column and the export can never disagree. `computeTotalScope` carries the visible total AND the
-  // same total over every punch LOADED for the date range, which is what "without filter" can
-  // honestly mean here: the range itself is a server query, not a filter this screen applies.
+  // the same module the shared report shell's own footer uses — so the badges at the top, the footer
+  // under the Hours column and the export can never disagree. `computeTotalScope` carries the
+  // visible total AND the same total over every punch LOADED for the date range, which is what
+  // "without filter" can honestly mean here: the range itself is a server query, not a filter this
+  // screen applies.
   //
   // SCREEN_COLS is the header ribbon AND the footer: a column cannot gain a heading without gaining
   // a total slot. The two entries past SCREEN_COL_COUNT are totals-only (lunch and net), drawn as
