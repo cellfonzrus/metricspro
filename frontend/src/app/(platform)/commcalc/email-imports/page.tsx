@@ -124,7 +124,10 @@ export default function EmailImportsPage() {
   // WHICH REPORTS THIS LOGIN PULLS (index §COMMCALC-48). The declaration is config, not code, so it
   // needs a screen: without one it could only be written in SQL, which is what the owner objected to
   // on 2026-10-29. The editor reads and writes the same two columns the pull itself reads.
-  const [reportsFor, setReportsFor] = useState<any>(null)
+  // typed, not `any`: the editor needs exactly three facts off the row, and the lint ratchet may
+  // only shrink — a new `any` here would re-pin this page's debt upward by one
+  const [reportsFor, setReportsFor] = useState<
+    { id: string; label?: string | null; username?: string | null; processor?: string | null } | null>(null)
   const [live, setLive] = useState<any>(null)           // { source } while the 🔴 Live-login modal is open
   const [liveState, setLiveState] = useState<any>(null) // { phase, message, shot, seq } — driven by the ~300ms frame poll
   const [liveCode, setLiveCode] = useState('')
