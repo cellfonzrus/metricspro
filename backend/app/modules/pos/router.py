@@ -1814,6 +1814,151 @@ def void_sale(sale_id: str, authorization: str = Header(default=""), org_id: str
     return {"sale": r.data}
 
 
+# ── Editing a rung sale in place (mig 1103, index §POS-12) ────────────────────────────────────────
+# Owner 2026-10-29: "im not able to edit the receipt ot add more tiems to teh same rec3ipt", and,
+# offered three ways, he chose editing in place over re-ringing under a new number.
+#
+# BOTH endpoints dereference `pos/sale_amendment.py` for every judgement and every figure. Neither
+# decides whether a sale may be edited, what a line comes to, or what changed — a second opinion on
+# any of those here is how the Sale Log's button and the save would come to disagree.
+#
+# A SEPARATE GRANT. `pos_amend`, not `pos_void`: rewriting a tendered record is a different and
+# larger right than cancelling one, and the owner may want a shift manager to hold one without the
+# other. Unknown keys default to full-scope admin in `_pos_grant`, so this starts off manager-only
+# without a seeded row.
+#
+# ADAPTIVE, like §POS-01's held cart: until mig 1103 is applied the history table and the function
+# are absent. The plan endpoint then answers `available: false` with the setup note, so the Sale Log
+# simply does not offer the button rather than offering one that errors.
+from app.modules.pos import sale_amendment as _amend
+
+
+def _amend_window(client, org_id: str, store_code: str = ""):
+    """The declared edit window for this store, read through the ONE config home and named by the
+    one home for the setting — never a default spelled beside this call."""
+    rows = _pos_settings_rows(client, org_id, store_code)
+    return _poscfg.effective(rows, _amend.WINDOW_SETTING, store_code)
+
+
+def _sale_with_items(client, org_id: str, sale_id: str):
+    rows = (client.schema("pos").table("sales").select("*")
+            .eq("org_id", org_id).eq("id", sale_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "that sale could not be found")
+    sale = rows[0]
+    items = (client.schema("pos").table("sale_items").select("*")
+             .eq("sale_id", sale_id).order("created_at").execute().data) or []
+    return sale, items
+
+
+@router.get("/sales/{sale_id}/amend-plan")
+def sale_amend_plan(sale_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """May this sale be edited, and with what lines. READ ONLY — nothing is written here, so the
+    Sale Log can ask before it offers the button and the till can show the sentence before it saves.
+    """
+    _require_pos_perm(authorization, org_id, "pos_amend")
+    client = sb()
+    sale, items = _sale_with_items(client, org_id, sale_id)
+    if not _span_filter([{"store_code": sale.get("store_code") or ""}],
+                        _caller_store_keyset(authorization, org_id)):
+        raise HTTPException(403, "that store is outside your reporting span")
+    reason = _amend.refusal(sale, window_days=_amend_window(client, org_id,
+                                                            sale.get("store_code") or ""))
+    try:
+        cart = _amend.cart_from(items) if reason is None else []
+    except _amend.AmendmentError as e:
+        reason, cart = str(e), []
+    return {
+        "sale_id": sale_id,
+        "transaction_id": sale.get("transaction_id"),
+        "revision": _amend.current_revision(sale),
+        "allowed": reason is None,
+        "reason": reason,
+        "cart": cart,
+        "customer_id": sale.get("customer_id"),
+        "is_activation_sale": bool(sale.get("is_activation_sale")),
+        "store_code": sale.get("store_code"),
+        "available": _amend_available(client, org_id),
+    }
+
+
+def _amend_available(client, org_id: str) -> bool:
+    """Whether mig 1103 has been applied. A probe, not a claim: the Sale Log offers no edit button
+    on a database that cannot record the version it would supersede."""
+    try:
+        (client.schema("pos").table("sale_amendments").select("id")
+         .eq("org_id", org_id).limit(1).execute())
+        return True
+    except Exception:
+        return False
+
+
+@router.put("/sales/{sale_id}/items")
+def amend_sale_items(sale_id: str, body: dict, authorization: str = Header(default=""),
+                     org_id: str = ORG_ID):
+    """Save an edited sale, keeping its transaction number. Body: `{items: [...], reason?, notes?}`.
+
+    THE FIGURES ARE OURS, NOT THE BODY'S. `pos.checkout` stores the totals it is handed, which is
+    tolerable for a sale the browser just priced. It is not tolerable for an edit, whose purpose is
+    to move those figures — so every line's `tax_value` / `extended_price` and all four sale totals
+    are RE-DERIVED here through the one home, and whatever the client sent for them is discarded.
+    """
+    _require_pos_perm(authorization, org_id, "pos_amend")
+    client = sb()
+    sale, items = _sale_with_items(client, org_id, sale_id)
+    if not _span_filter([{"store_code": sale.get("store_code") or ""}],
+                        _caller_store_keyset(authorization, org_id)):
+        raise HTTPException(403, "that store is outside your reporting span")
+    if not _amend_available(client, org_id):
+        raise HTTPException(503, "editing a rung sale needs migration 1103 — it has not been "
+                                 "applied, so the version this edit would supersede could not be "
+                                 "kept on file")
+    try:
+        plan = _amend.plan(sale, items, body.get("items"),
+                           window_days=_amend_window(client, org_id, sale.get("store_code") or ""))
+    except _amend.AmendmentError as e:
+        raise HTTPException(400, str(e)) from None
+    if not plan["allowed"]:
+        raise HTTPException(400, plan["reason"])
+    patch = {**plan["totals"],
+             "change_summary": plan["diff"]["summary"],
+             "change_detail": plan["diff"],
+             "notes": (body.get("notes") or "").strip() or None}
+    try:
+        r = client.schema("pos").rpc("amend_sale", {
+            "p_org": org_id, "p_sale": sale_id,
+            "p_sale_patch": patch, "p_items": plan["items"],
+            "p_employee": _caller_employee(authorization, org_id) or None,
+            "p_reason": (body.get("reason") or "").strip() or None,
+        }).execute()
+    except Exception as e:
+        raise HTTPException(400, f"could not save the edit: {e}")
+    return {"sale": r.data, "revision": plan["revision"], "totals": plan["totals"],
+            "changed": plan["diff"]["summary"], "message": plan["sentence"]}
+
+
+@router.get("/sales/{sale_id}/amendments")
+def sale_amendments(sale_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Every version this sale has passed through, newest first. What makes an edited sale
+    answerable: the figures the customer's printed receipt was struck from are still here."""
+    _require_pos_perm(authorization, org_id, "pos_amend")
+    client = sb()
+    sale, _items = _sale_with_items(client, org_id, sale_id)
+    if not _span_filter([{"store_code": sale.get("store_code") or ""}],
+                        _caller_store_keyset(authorization, org_id)):
+        raise HTTPException(403, "that store is outside your reporting span")
+    try:
+        rows = (client.schema("pos").table("sale_amendments")
+                .select("revision,change_summary,total_before,total_after,reason,amended_by,created_at")
+                .eq("org_id", org_id).eq("sale_id", sale_id)
+                .order("revision", desc=True).limit(100).execute().data) or []
+    except Exception:
+        return {"revisions": [], "available": False,
+                "setup_note": "apply migration 1103 to keep an edit history"}
+    return {"revisions": rows, "available": True,
+            "revision": _amend.current_revision(sale)}
+
+
 # ── Register (cash drawer) sessions ────────────────────────────────────────────────────────────────
 @router.get("/register/session")
 def register_session(store_code: str, register_number: int = 1, org_id: str = ORG_ID):

@@ -86,6 +86,7 @@ Primary code homes:
 | POS-09 | **Sending a receipt — one home, two channels, every screen** | "I need the email option in the Sales Log viewer, and the send-notification option via WhatsApp also." Why could the Sale Log only PRINT a receipt it could already show, who decides which number or address a receipt goes to, and what does a customer get on WhatsApp? |
 | POS-10 | **What the shop IS, on a receipt** | "The RQ receipt email to the customer does not show the address and looks fake — the till thermal printer receipt came out ok." Where does a receipt get the shop's name, address, phone and licence, and why did one layout print all of it while the other printed the company name alone? |
 | POS-11 | **The page a receipt prints on, and the Bill To** | "Do not put the reprint date and time on top with the word Sale in the middle of the screen; the Bill To should have the customer address printed." Whose header is that across the top of a printed receipt, and why does a Bill To show a bare name when the renderer prints the address? |
+| POS-12 | **Editing a sale that is already rung** | "I am not able to edit the receipt or add more items to the same receipt." How does a cashier put another item on a receipt that is already printed, and what happens to the version the customer is holding? |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -7961,6 +7962,9 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"What shop is this receipt from?"** (the till slip, the printer's byte stream, the tenant's own POS layout, the PDF; owner 2026-10-28) | the receipt-branding rows `pos.pos_settings` (`brand_company_name`, `brand_address_line1…5`, `brand_license_tax_ids`) through `pos_config_effective.brand`, with this store's `storeops.stores` row as the FALLBACK, read through `receipt_store_block.STORE_COLUMNS` (the sibling read in `sales_from_reports._store_header_fn` dereferences the same columns; a receipt REBUILT from a landed report deliberately keeps the store block that POS printed rather than this tenant's branding) | **ONE home** `backend/app/modules/pos/receipt_store_block.block` — `{name, address_lines, phone, license, lines}`. Was TWO: the slip read the branding rows, the POS layout read a `store_lines` list the router assembled for it alone, selecting a `name` column `storeops.stores` does not have — 42703, swallowed, and every receipt in that layout printed the company name and no address. The legal blocks reach that layout now too. Proof `harness_pos_receipt_render.py` §R (14 checks; R11 fails the build on a second assembly, R13 on a slip PDF whose figures fall off the roll) — §POS-10 |
 | **"What page does a receipt print on?"** (every layout, every medium that goes through a browser; owner 2026-10-29) | nothing — it is a property of the PAGE, and no stylesheet here declared one | **ONE home** `sale_receipt.PAGE_CSS` (`@page { size: auto; margin: 0; }`), emitted by `thermal_html` and dereferenced by `receipt_formats/render._page_css`. Without it a browser stamps its own header and footer over the receipt — the date and time of the PRINTING, the document title centred above it, the URL and the page number — which is what the owner saw and read as a reprint stamp contradicting the sale's own date. Each layout then sets its own print padding so the ink does not run to the sheet's edge. Proof `harness_pos_receipt_render.py` §S (12 checks + 2 negative controls) — §POS-11 |
 | **"Does this customer's record hold an address at all?"** (the till print screen and the Sale Log reprint; owner 2026-10-29) | `pos.customers` through `customer_bill_to.FIELDS` | **ONE home** `customer_bill_to.view` → `{lines, on_file, note}`, dereferencing `lines` / `has_address` rather than re-deriving either. The Bill To already printed the address (§POS-07); what was missing was upstream — the till's quick-add customer form asked for a name, a phone and an email and NOT for an address, so a record created at the register could never carry one (measured live 2026-10-29: **1 of 1,636** customer records on the reporting tenant held one). The form now asks for every field `FIELDS` names (§S10 fails the build if it stops), and until a record has one the CASHIER is told, never the customer's receipt — §POS-11 |
+| **"May this rung sale be edited, and with what lines?"** (the Sale Log offering the button, the endpoint allowing it, the till before it saves; owner 2026-10-29) | `pos.sales` + `pos.sale_items` + the declared window on `pos.pos_settings` | **ONE home** `sale_amendment.refusal` / `plan` / `cart_from`, dereferenced by all three callers. Before this there was no amend path at all: `pos.checkout` and `pos.void_sale` (mig 725) were the only two sale functions and the Sale Log's item table was display-only. Every refusal is a SENTENCE, written once, so two screens cannot word one refusal differently. Proof `harness_pos_sale_amendment.py` §A/§G — §POS-12 |
+| **"What does this sale line come to?"** (the edit that restates it, and the totals it rolls up to) | the agreed figures on the line itself | **ONE home** `sale_amendment.line_money` / `totals`, DERIVED from the figures `pos.sale_items` already stores and reproducing transaction 4605's two lines to the cent. It was browser-only arithmetic before, and `pos.checkout` stores whatever it is handed — tolerable for a new sale, not for an edit whose purpose is to move those figures, so the server re-derives and the body's `extended_price` / `tax_value` / totals are DISCARDED. Tax rounds per line then sums, matching what each line stores. Proof §B — §POS-12 |
+| **"What did this sale look like before it was edited?"** (the audit trail that makes an in-place rewrite answerable) | `pos.sale_amendments` (mig **1103**) | **ONE home** `sale_amendment.snapshot` / `current_revision`, filed by `pos.amend_sale` BEFORE it touches anything. Keeps the sale's own STORED figures, never re-derived ones — the point is to record what the customer's receipt said, not what it should have said. A null `revision` reads as 1, so the first edit of an older sale still files the original. The endpoint returns 503 rather than editing when the table is absent. Proof §C — §POS-12 |
 | **"What is this POS setting's effective value at this store"** (server side; owner 2026-10-17) | `pos.pos_settings` (org row `store_code IS NULL`, else the store override) | **ONE home** `backend/app/modules/pos/pos_config_effective.py` (`effective`, `values`, `flag`, `text`, `brand`, `disclaimers`, `SERVER_DEFAULTS`). The resolution rule lived ONLY in the browser (`frontend/src/lib/pos-config.ts`) until the server had to render a receipt; the two copies are PINNED key-by-key by `harness_pos_receipt_render.py` §B, which fails the build naming any default changed on one side only — §POS-02 |
 | **"What is this tenant called"** (the From name on its mail, a statement heading, a document title; owner 2026-10-17) | `storeops.tenants.name` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`NAME_COLUMN`, `display_name_from`, `display_name`, `display_names`) — a blank name reads as blank, never a fabricated stand-in printed as the business's own name. `notify/channels/email_resend.from_header` is the ONE place a `From:` header is assembled, and every business-facing send site passes its `org_id` so the customer sees the tenant; only genuine platform mail (the sign-in OTP) keeps the platform name. Siblings rewired in the same PR: `commcalc/router` ×2, `core/data_qa_api`, `core/operator_api`, `helpdesk/router`, `storeops/payroll_approval` ×2, `storeops/router._tenant_display_name`. Lock `harness_pos_receipt_render.py` §E6 fails the build if a second name-only reader appears — §POS-02 |
 
@@ -26154,6 +26158,7 @@ status word rather than a blank that reads as nil.
 | POS-09 | pos |
 | POS-10 | pos |
 | POS-11 | pos |
+| POS-12 | pos |
 | PAYABLES-01 | payables |
 <!-- SECTION-REGISTER:END -->
 
@@ -32979,6 +32984,126 @@ place.
 
 Same class: §POS-07 (the customer's address, whose home this extends), §POS-10 (the shop's own block,
 the other half of the same receipt's head), §POS-02 (the one renderer both layouts go through).
+
+---
+
+## §POS-12. EDITING A SALE THAT IS ALREADY RUNG (owner ask 2026-10-29)
+
+Owner, verbatim: *"im not able to edit the receipt ot add more tiems to teh same rec3ipt"*.
+
+He was right, and it was never a defect: **the capability did not exist.** The register had exactly
+one write path for a finished sale, `POST /pos/sales/{id}/void`; `pos.checkout` and `pos.void_sale`
+(mig 725) were the only two sale functions in the database; the Sale Log's item table was
+display-only.
+
+**THE CHOICE WAS HIS, AND IT WAS PUT TO HIM.** Three ways answer this, and they differ in what
+happens to the customer's paper:
+
+1. ring the extra items as a **second sale** — nothing to build, two receipts;
+2. **void and re-ring** — one receipt with everything, under a NEW number, which is what RQ does;
+3. **edit in place, keeping the number** — what he asked for literally.
+
+Option 3 was recommended against in writing, because it rewrites a tendered financial record: the
+total and the tax move, and the receipt in the customer's hand stops matching what the system says
+was sold. He chose it anyway, so it ships — with the one property that makes it answerable.
+
+### POS-12.1 Duplicate check (the build gate)
+
+Searched the index for a mechanism that changes what a sale sold: §POS-02 (the one renderer),
+§POS-04 (one content home, every medium), §POS-07 (the customer's address), §POS-08 (the PDF),
+§POS-10 (the shop's block), §POS-11 (the page and the Bill To) — all answer *receipt* questions, and
+**none answers "change what was sold"**. §POS-01 owns the register's *cart*, and that IS reused: the
+cart-line vocabulary (`held_sale.LINE_FIELDS` / `clean_cart`) is dereferenced rather than restated,
+and the browser's map from a stored line to a cart line — previously inline in the suspended-cart
+restore — was **extracted to one function** (`cartItemFromLine`) that both loaders now share. The
+void path is reused too: `pos.amend_sale` reverses stock with `pos.void_sale`'s own loop rather than
+a second reversal.
+
+### POS-12.2 Nothing is overwritten — the property that makes this acceptable
+
+Every edit files the **superseded version whole** into `pos.sale_amendments` (mig **1103**) — the
+sale's own stored figures plus every line as stored — and bumps `pos.sales.revision`. So the version
+the customer's printed receipt was struck from survives every edit, and any figure that moved can be
+traced to the edit that moved it.
+
+Three consequences are deliberate and locked:
+
+- The snapshot keeps the **stored** figures, never re-derived ones. The point is to record what the
+  receipt *said*, not what it should have said.
+- A null `revision` (every sale rung before the column existed) reads as revision **1**, not zero —
+  otherwise the first edit of an older sale would file a snapshot of nothing.
+- The endpoint answers **503 and writes nothing** when the table is absent. A database that cannot
+  keep the superseded version is not allowed to overwrite one. This is the bargain, so it fails
+  closed.
+
+### POS-12.3 The figures are the server's, and the body's never survive
+
+`extended_price` and `tax_value` were derived in the **browser only**, and `pos.checkout` stores
+whatever it is handed. Tolerable for a sale the browser has just priced; **not** tolerable for an
+edit, whose whole purpose is to move those figures — a till could otherwise save `total: 0.01`
+against a $200 sale.
+
+So `sale_amendment.line_money` / `totals` is the one home for that arithmetic, and it is a
+**derivation, not an invention**: mig 725 documents `extended_price` as
+`(unit_price − discount + per_unit_tax) × qty`, and the formula reproduces transaction 4605's two
+real lines to the cent (a $175.00 handset at 0.08875 → $15.53 / $190.53; a $10.00 case discounted
+$1.00 at quantity 2 → $1.60 / $19.60). Tax **rounds per line and the rounded figures are summed**,
+because that is what `sale_items.tax_value` stores per line and a total computed from unrounded tax
+would not add up to the lines a customer can read off the receipt. Whatever the client sends for
+those fields is discarded.
+
+### POS-12.4 Stock is conserved by construction, not by a delta
+
+`pos.amend_sale` **reverses** every old line exactly as `pos.void_sale` does (serials back to
+`in_stock`, non-serialised quantities back on hand) and **re-applies** the new ones exactly as
+`pos.checkout` does, inside one transaction. Stock is therefore moved by the only two code paths
+that have ever moved it, rather than by a hand-computed delta. A new line with no stock raises inside
+the transaction and the **whole edit rolls back**, leaving the sale untouched. The sale row is taken
+`FOR UPDATE`, so two cashiers cannot both file revision N.
+
+### POS-12.5 A rung sale's tax rate is not restated
+
+Unlike a suspended cart (§POS-01.4, which re-derives the rate on restore because that sale has not
+happened yet), an edit touches a sale that legally **did** happen, on its date, at the rate in force
+then. An existing line keeps its stored rate; only a newly added line takes the store's current one.
+The edit path therefore maps lines **without** `recalcItem`, and the difference is stated at both
+call sites so it cannot later look like an oversight.
+
+### POS-12.6 Declared window, and a right of its own
+
+How far back a sale may be edited is **declared per org** — `pos.pos_settings` key
+`sale_reopen_window_days`, house default **1 day** (`sale_amendment.HOUSE_WINDOW_DAYS`), seeded
+nowhere. An edit changes a day's takings, and doing that to a day already reported is the one thing a
+cashier must not be able to do by accident. An unreadable declaration falls back to the house default
+and never to "forever".
+
+Editing is gated on **`pos_amend`**, not `pos_void`: rewriting a tendered record is a larger right
+than cancelling one, and unknown keys default to full-scope admin in `_pos_grant`, so this starts
+manager-only with no seeded row.
+
+### POS-12.7 What the cashier is told
+
+The register is reused rather than a second editor built — the lines land in the cart the cashier
+already knows, and every existing control works unchanged. Only the green button changes what it
+does. A standing banner says **"Editing transaction #N — this is not a new sale"**, names the
+revision, and says the thing the owner's choice costs: *the printed receipt the customer has is now
+out of date, so print them a fresh one.* The suspended-cart autosave is **off** while editing, and a
+resumed hold cannot land on top of a sale being edited — either would offer the next session a cart
+for items already sold.
+
+### POS-12.8 Files, locks, money
+
+| | |
+| --- | --- |
+| New | `pos/sale_amendment.py` · `database/migrations/1103_pos_sale_amendment.sql` · `harness_pos_sale_amendment.py` (89 checks) · `frontend/src/lib/pos-sale-amend.ts` · `backend/tests/unit/test_pos_sale_amendment.py` (28) · `backend/tests/integration/test_pos_sale_amend_endpoint.py` (16) |
+| Changed | `pos/router.py` (+3 routes, `_amend_window` / `_amend_available` / `_sale_with_items`) · the register page (Sale Log edit button, editing mode, `cartItemFromLine` extracted, autosave gated) · `tests/fakes/supabase.py` (`seed_rpc`, and `rpc()` now returns a builder needing `.execute()` like the real client) · `harness_db_resilience.py` I0 re-pinned 1807 → 1810 |
+| Endpoints | `GET /pos/sales/{id}/amend-plan` (read-only) · `PUT /pos/sales/{id}/items` · `GET /pos/sales/{id}/amendments` |
+| Migration | **1103 — NOT APPLIED.** Money-touching (it adds the ability to change a recorded sale total), surfaced for owner approval |
+| Locks | §A one home for the rules, the router holding no second opinion · §B the body's figures never survive · §C the superseded version always kept, and the edit refused without it · §D stock reversed and re-applied by the existing paths, in that order · §E one cart vocabulary, one line→cart map shared by both loaders · §F the struck tax rate not restated · §G declared window, own grant, all three routes gated and org-scoped · §H the till says what is happening · §I ten negative controls |
+| MONEY IMPACT | **The ability to change a recorded sale total, by design and by the owner's explicit choice.** No stored figure moves on apply; nothing is edited until a cashier with `pos_amend` edits it, inside the declared window, with the superseded version filed first |
+
+Same class: §POS-01 (the register's cart, whose vocabulary and line map this shares), §POS-11 (the
+receipt that must be reprinted afterwards), §POS-02 (the one renderer that prints the revised copy).
 
 ---
 
