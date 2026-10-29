@@ -10250,50 +10250,119 @@ def _gr_manager_span(authorization, org_id):
     return _caller_span_codes(authorization, org_id)
 
 
-def _gr_store_card(client, org_id, store_code, store_row, cfg, employee_id=None):
-    """One store's rating/target/status + recent reviews (+ the caller's own open action plan, when
-    `employee_id` is given). Shared by /google-reviews/my, /google-reviews/dm-dashboard and
-    /google-reviews/store/{store_code}. Never raises — every read degrades to an empty/None default."""
-    try:
-        ov = (client.table("google_review_store").select("*").eq("org_id", org_id)
-              .eq("store_code", store_code).limit(1).execute().data) or []
-    except Exception:
-        ov = []
-    ov0 = ov[0] if ov else {}
-    target = _gr.effective_target(ov0, cfg.get("target_default"))
-    try:
-        snaps = (client.table("google_review_snapshot").select("*").eq("org_id", org_id)
-                 .eq("store_code", store_code).order("fetched_at", desc=True)
-                 .limit(1).execute().data) or []
-    except Exception:
-        snaps = []
-    snap = snaps[0] if snaps else {}
-    rating, review_count = snap.get("rating"), snap.get("review_count")
-    status = _gr.rating_status(rating, target)
-    try:
-        reviews = (client.table("google_review_item").select("*").eq("org_id", org_id)
-                   .eq("store_code", store_code).order("first_seen_at", desc=True)
-                   .limit(10).execute().data) or []
-    except Exception:
-        reviews = []
-    for r in reviews:
-        r["possible_mention"] = bool(r.get("matched_employee_id"))
-    my_plan = None
-    if employee_id:
+def _gr_in_chunks(codes, size=200):
+    """`.in_` goes into the query STRING, so a tenant with hundreds of stores would overrun the URL.
+    Chunking keeps the read count effectively constant (one per 200 stores) instead of one per
+    store, which is the whole point of the set read."""
+    codes = [c for c in codes if c]
+    return [codes[i:i + size] for i in range(0, len(codes), size)] or []
+
+
+def _GR_CARD_READS(client, org_id, codes, employee_id=None):
+    """The four set reads behind a card, each over the WHOLE set of store codes.
+
+    Returns (overview_by_code, newest_snapshot_by_code, reviews_by_code, my_plan_by_code).
+    Never raises — every read degrades to empty, exactly as the per-store version did."""
+    ov_by, snap_by, rev_by, plan_by = {}, {}, {}, {}
+    for chunk in _gr_in_chunks(codes):
         try:
-            plans = (client.table("action_plan").select("*").eq("org_id", org_id)
-                     .eq("store_code", store_code).eq("employee_id", str(employee_id))
-                     .neq("status", "completed").order("created_at", desc=True)
-                     .limit(1).execute().data) or []
-            my_plan = plans[0] if plans else None
+            for r in ((client.table("google_review_store").select("*").eq("org_id", org_id)
+                       .in_("store_code", chunk).limit(len(chunk)).execute().data) or []):
+                ov_by.setdefault(r.get("store_code"), r)
         except Exception:
-            my_plan = None
-    return {"store_code": store_code, "address": store_row.get("address"),
-            "market": store_row.get("market"), "place_id": ov0.get("place_id"),
-            "rating": rating, "review_count": review_count, "target": target, "status": status,
+            pass
+        # newest first, so the FIRST row seen for a store is its newest — same rule the per-store
+        # read expressed as `.order(desc).limit(1)`.
+        try:
+            for r in ((client.table("google_review_snapshot").select("*").eq("org_id", org_id)
+                       .in_("store_code", chunk).order("fetched_at", desc=True)
+                       .limit(len(chunk) * 50).execute().data) or []):
+                snap_by.setdefault(r.get("store_code"), r)
+        except Exception:
+            pass
+        try:
+            for r in ((client.table("google_review_item").select("*").eq("org_id", org_id)
+                       .in_("store_code", chunk).order("first_seen_at", desc=True)
+                       .limit(len(chunk) * 10).execute().data) or []):
+                bucket = rev_by.setdefault(r.get("store_code"), [])
+                if len(bucket) < 10:          # the per-store read's `.limit(10)`, per store
+                    bucket.append(r)
+        except Exception:
+            pass
+        if employee_id:
+            try:
+                for r in ((client.table("action_plan").select("*").eq("org_id", org_id)
+                           .in_("store_code", chunk).eq("employee_id", str(employee_id))
+                           .neq("status", "completed").order("created_at", desc=True)
+                           .limit(len(chunk) * 5).execute().data) or []):
+                    plan_by.setdefault(r.get("store_code"), r)
+            except Exception:
+                pass
+    return ov_by, snap_by, rev_by, plan_by
+
+
+def _gr_action_plans_by_store(client, org_id, codes, per_store=50):
+    """Every store's action plans (all statuses) in a fixed number of reads, for the DM dashboard.
+    The per-store `.limit(50)` is preserved per store, not across the set."""
+    out = {}
+    for chunk in _gr_in_chunks(codes):
+        try:
+            for r in ((client.table("action_plan").select("*").eq("org_id", org_id)
+                       .in_("store_code", chunk).order("created_at", desc=True)
+                       .limit(len(chunk) * per_store).execute().data) or []):
+                bucket = out.setdefault(r.get("store_code"), [])
+                if len(bucket) < per_store:
+                    bucket.append(r)
+        except Exception:
+            pass
+    return out
+
+
+def _gr_card_from_parts(store_code, store_row, cfg, ov0, snap, reviews, my_plan):
+    """The card SHAPE — the single place that says what a card is made of. Both the one-store and
+    the many-store answers come through here, so they cannot drift."""
+    target = _gr.effective_target(ov0 or {}, cfg.get("target_default"))
+    rating, review_count = (snap or {}).get("rating"), (snap or {}).get("review_count")
+    for r in (reviews or []):
+        r["possible_mention"] = bool(r.get("matched_employee_id"))
+    return {"store_code": store_code, "address": (store_row or {}).get("address"),
+            "market": (store_row or {}).get("market"), "place_id": (ov0 or {}).get("place_id"),
+            "rating": rating, "review_count": review_count, "target": target,
+            "status": _gr.rating_status(rating, target),
             "reviews_needed": _gr.reviews_needed_for_target(rating, review_count, target),
-            "reviews": reviews, "action_plan": my_plan,
-            "fetched_at": snap.get("fetched_at")}
+            "reviews": reviews or [], "action_plan": my_plan,
+            "fetched_at": (snap or {}).get("fetched_at")}
+
+
+def _gr_store_cards(client, org_id, store_codes, store_by_code, cfg, employee_id=None):
+    """THE ONE HOME for "the review cards for THESE stores" — a fixed number of reads for any
+    number of stores, keyed by store code.
+
+    Before 2026-10-29 only a one-store answer existed, so the three endpoints that wanted many
+    looped and paid 3-4 round trips per store: 112 of them on a 28-store tenant, growing with the
+    store count. The reads are now four `.in_`s over the whole set (chunked at 200 for URL length).
+
+    `store_by_code` supplies address/market, which the caller has already read from `stores`;
+    a code missing from it still gets a card, never a hole."""
+    codes = sorted({c for c in (store_codes or []) if c})
+    if not codes:
+        return {}
+    ov_by, snap_by, rev_by, plan_by = _GR_CARD_READS(client, org_id, codes, employee_id)
+    return {c: _gr_card_from_parts(c, (store_by_code or {}).get(c) or {"store_code": c}, cfg,
+                                   ov_by.get(c), snap_by.get(c), rev_by.get(c),
+                                   plan_by.get(c) if employee_id else None)
+            for c in codes}
+
+
+def _gr_store_card(client, org_id, store_code, store_row, cfg, employee_id=None):
+    """ONE store's card. A one-element call into `_gr_store_cards`, so there is a single definition
+    of what a card is made of. Shared by /google-reviews/store/{store_code} and, through the set
+    function, by /google-reviews/my, /dm-dashboard and /employee-summary.
+    Never raises — every read degrades to an empty/None default."""
+    cards = _gr_store_cards(client, org_id, [store_code], {store_code: store_row}, cfg,
+                            employee_id=employee_id)
+    return cards.get(store_code) or _gr_card_from_parts(store_code, store_row, cfg,
+                                                        None, None, [], None)
 
 
 def _gr_set_sweep_status(client, org_id, status, detail, mark_run=False):
@@ -10748,9 +10817,9 @@ def my_google_reviews(authorization: str = Header(default="")):
         if matched:
             store_codes.add(matched)
     store_by_code = {s["store_code"]: s for s in all_stores if s.get("store_code")}
-    out = [_gr_store_card(client, org_id, sc, store_by_code.get(sc) or {"store_code": sc}, cfg,
-                          employee_id=employee_id)
-           for sc in sorted(c for c in store_codes if c)]
+    codes = sorted(c for c in store_codes if c)
+    by_code = _gr_store_cards(client, org_id, codes, store_by_code, cfg, employee_id=employee_id)
+    out = [by_code[c] for c in codes if c in by_code]
     return {"employee_id": employee_id, "stores": out,
            "note": ("Showing Google's highlighted reviews — Google Places returns a curated subset "
                     "(typically ~5), not every review ever left.")}
@@ -10776,15 +10845,17 @@ def google_reviews_dm_dashboard(authorization: str = Header(default=""), org_id:
         stores = [s for s in all_stores if (s.get("store_code") or "").upper() in keyset]
     else:
         stores = all_stores
+    codes = [s["store_code"] for s in stores if s.get("store_code")]
+    by_code = _gr_store_cards(client, org_id, codes, {s["store_code"]: s for s in stores
+                                                      if s.get("store_code")}, cfg)
+    plans_by = _gr_action_plans_by_store(client, org_id, codes)
     out = []
     for s in stores:
-        card = _gr_store_card(client, org_id, s["store_code"], s, cfg)
-        try:
-            plans = (client.table("action_plan").select("*").eq("org_id", org_id)
-                     .eq("store_code", s["store_code"]).order("created_at", desc=True)
-                     .limit(50).execute().data) or []
-        except Exception:
-            plans = []
+        code = s.get("store_code")
+        card = by_code.get(code)
+        if card is None:
+            continue
+        plans = plans_by.get(code) or []
         card["action_plans"] = plans
         card["open_action_plan_count"] = len([p for p in plans if p.get("status") != "completed"])
         card["is_active"] = s.get("is_active")
@@ -10893,9 +10964,9 @@ def google_review_employee_detail(employee_id: str, authorization: str = Header(
     except Exception:
         all_stores = []
     store_by_code = {s["store_code"]: s for s in all_stores if s.get("store_code")}
-    cards = [_gr_store_card(client, org_id, sc, store_by_code.get(sc) or {"store_code": sc}, cfg,
-                            employee_id=employee_id)
-             for sc in sorted(c for c in store_codes if c)]
+    codes = sorted(c for c in store_codes if c)
+    by_code = _gr_store_cards(client, org_id, codes, store_by_code, cfg, employee_id=employee_id)
+    cards = [by_code[c] for c in codes if c in by_code]
     return {"employee_id": employee_id, "employee_name": emp.get("name"), "stores": cards,
            "note": ("Showing Google's highlighted reviews — Google Places returns a curated subset "
                     "(typically ~5), not every review ever left.")}
