@@ -55,6 +55,7 @@ from app.modules.account import store_identity as _store_identity  # noqa: E402
 # WHO IS THIS PERSON — one fact, one home (§CORE-08). Pure, stdlib-only, no cycle.
 from app.modules.core import person_identity as _person_identity  # noqa: E402
 from . import metric_catalog as _metrics
+from . import declared_feed_recon as _declared_feed_recon
 from . import closing_refile as _refile
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
@@ -3670,8 +3671,12 @@ def put_count_config(payload: PutCountConfigIn, org_id: str = ORG_ID, authorizat
         _was = _prior.get(str(_dd.get("field_key") or ""))
         if not _was:
             continue
-        if all(_dd.get(_f) is None for _f in ("value_kind", "declared_by", "unit_price", "in_revenue")):
-            for _f in ("value_kind", "declared_by", "unit_price", "in_revenue"):
+        _CARRY = ("value_kind", "declared_by", "unit_price", "in_revenue",
+                  # mig 1102: an older client that does not know about the feed counterpart must not
+                  # silently un-wire a check an owner believes is running.
+                  "feed_counterpart", "feed_units_tolerance", "feed_amount_tolerance")
+        if all(_dd.get(_f) is None for _f in _CARRY):
+            for _f in _CARRY:
                 _dd[_f] = _was.get(_f)
     try:
         client.schema("commcalc").table("closing_count_field_def").delete().eq("org_id", org_id).execute()
@@ -3697,7 +3702,15 @@ def put_count_config(payload: PutCountConfigIn, org_id: str = ORG_ID, authorizat
                      "unit_price": (_money(_up) if str(_up if _up is not None else "").strip() != ""
                                     else None),
                      "in_revenue": (None if dd.get("in_revenue") is None
-                                    else bool(dd.get("in_revenue")))})
+                                    else bool(dd.get("in_revenue"))),
+                     # mig 1102 — the feed counterpart, VALIDATED through the one parser so an
+                     # unparseable value is refused at save rather than read as "not reconciled".
+                     "feed_counterpart": _declared_feed_recon.counterpart_key(
+                         _declared_feed_recon.parse_counterpart(dd.get("feed_counterpart"))) or None,
+                     "feed_units_tolerance": (None if str(dd.get("feed_units_tolerance") or "").strip() == ""
+                                              else _int(dd.get("feed_units_tolerance"))),
+                     "feed_amount_tolerance": (None if str(dd.get("feed_amount_tolerance") or "").strip() == ""
+                                               else _money(dd.get("feed_amount_tolerance")))})
     if rows:
         client.schema("commcalc").table("closing_count_field_def").insert(rows).execute()
     return {"ok": True, "defs": len(rows)}
@@ -3943,6 +3956,290 @@ def put_metric_lines(payload: PutMetricLinesIn, org_id: str = ORG_ID,
         raise HTTPException(400, f"Could not save — run migration "
                                  f"1072_declared_metric_catalog.sql first. [{e}]")
     return {"ok": True, "lines": len(rows)}
+
+
+# ── DECLARED vs CAPTURED (mig 1102, index §CLOSING-01) ───────────────────────────────────────────
+# "The rep says they did four Edge deals; did our system capture four?" ONE reconciler, serving every
+# declared category that NAMES a feed counterpart. Nothing here spells a carrier, a vendor or a
+# program: the counterpart dereferences the tenant's own registry, and the comparison rule lives in
+# `closing/declared_feed_recon.py` (pure).
+
+#: The sale columns the captured side needs. A superset of `financing_registry.MATCH_FIELDS` (any of
+#: which a tenant may have mapped its vendor on) plus the unit-collapse and attribution columns.
+#: Selecting a column absent from `daily_sales_feed` throws and would silently return zero rows, so
+#: this list is deliberately confined to columns present in BOTH sides of the pair.
+_COUNTERPART_SALES_COLS = ("store,salesperson,department,category,product_desc,contract_type,"
+                           "trans_id,tender_type,ext_price,voided,trans_type,serial_1,mdn,trans_date")
+
+
+def _counterpart_captured(client, org_id, date_from, date_to, counterparts, *, store_code=""):
+    """WHAT OUR SYSTEM CAPTURED for each counterpart, per day x store x rep.
+
+    THE ONE HOME for the captured side, as `metric_catalog.declared` is for the declared side.
+    Returns `(captured_rows, feed_days, status)`:
+      captured_rows — flat `{date, store_code, rep, counterpart, units, amount}`
+      feed_days     — the days a sales read ACTUALLY returned rows for. A day outside it has no
+                      counterpart at all, which the reconciler reports as `pending` rather than as a
+                      $0.00 variance that would read as "we checked and it agreed".
+      status        — `{counterpart: {status, note}}`, so a vendor whose detection we have not
+                      configured is reported as OUR gap and never as the rep's missing sale.
+
+    `financing:*` DEREFERENCES `financing_report.vendor_units` — the same derivation, with the same
+    device collapse, that the Financing report and the payout use. Deriving financed units here would
+    be the duplicate defect: the path that accuses a rep would drift from the path that pays one.
+
+    `recon_class:*` dereferences `_b2b_day`'s activation/upgrade counts, which are known PER STORE
+    only. A tenant that declares such a category per EMPLOYEE therefore gets `pending` with that
+    reason rather than a per-rep figure nothing measured — stated, never fabricated.
+
+    The day loop reuses `_b2b_sales_rows_sourced` (THE pair-selection home, which also reports which
+    side answered) rather than adding a second ranged sales reader.
+    """
+    from datetime import date as _date, timedelta as _td
+    want = {}
+    for c in (counterparts or []):
+        w = _declared_feed_recon.parse_counterpart(c)
+        if w:
+            want[_declared_feed_recon.counterpart_key(w)] = w
+    if not want:
+        return [], set(), {}
+    kinds = {w["kind"] for w in want.values()}
+
+    vendors, status, gate, ucfg, acc_fn = [], {}, None, {}, None
+    if "financing" in kinds:
+        from app.modules.commcalc import financing_registry as _finreg
+        try:
+            vendors = _finreg.resolve_vendors(client, org_id) or []
+        except Exception as e:
+            print("declared-vs-captured: financing vendors unavailable:", e)
+            vendors = []
+        by_vk = {str(v.get("vendor_key") or ""): v for v in vendors}
+        for ck, w in want.items():
+            if w["kind"] != "financing":
+                continue
+            v = by_vk.get(w["ref"])
+            if v is None:
+                status[ck] = {"status": "no_vendor",
+                              "note": ("this category points at a financing vendor that is not set "
+                                       "up for this business")}
+            elif not v.get("enabled"):
+                status[ck] = {"status": "disabled", "note": "the financing vendor is switched off"}
+            elif not (v.get("matchers") or []):
+                status[ck] = {"status": "not_configured",
+                              "note": (v.get("detection_note")
+                                       or "the vendor has no detection mapped, so no sale can match it")}
+        # The payout's own unit collapse and accessory predicate, resolved once for the whole range.
+        try:
+            from app.modules.commcalc.router import _fin_gate as _fg
+            gate, ucfg = _fg()
+            acc_fn = gate.accessory_predicate(client, org_id) if gate is not None else None
+        except Exception as e:
+            print("declared-vs-captured: unit gate unavailable, falling back:", e)
+            gate, ucfg, acc_fn = None, {}, None
+
+    try:
+        d0 = _date.fromisoformat(str(date_from)[:10])
+        d1 = _date.fromisoformat(str(date_to)[:10])
+    except ValueError:
+        raise HTTPException(400, "date_from and date_to must be YYYY-MM-DD")
+    if d1 < d0:
+        raise HTTPException(400, "date_to is before date_from")
+    if (d1 - d0).days > 92:
+        raise HTTPException(400, "Pick a range of 92 days or fewer.")
+
+    code_want = str(store_code or "").strip()
+    store_idx = _counterpart_store_index(client, org_id) if "financing" in kinds else {}
+    out, feed_days = [], set()
+    day = d0
+    while day <= d1:
+        iso = day.isoformat()
+        day += _td(days=1)
+        rows, tables = _b2b_sales_rows_sourced(client, org_id, iso, _COUNTERPART_SALES_COLS)
+        if not rows:
+            continue                     # the feed was not loaded for this day — NOT a zero
+        feed_days.add(iso)
+        if "financing" in kinds and vendors:
+            units, _notes, _considered = _finrep_vendor_units(
+                rows, vendors, gate=gate, unit_cfg=ucfg, is_accessory=acc_fn)
+            fold = {}
+            for u in units:
+                ck = "financing:" + str(u.get("vendor_key") or "")
+                if ck not in want:
+                    continue
+                code = _counterpart_store_code(store_idx, u.get("store"))
+                if code_want and code != code_want:
+                    continue
+                k = (iso, code, u.get("rep") or "", ck)
+                f = fold.setdefault(k, {"units": 0, "amount": 0.0})
+                f["units"] += 1
+                f["amount"] = round(f["amount"] + float(u.get("amount") or 0.0), 2)
+            for (dt, code, rep, ck), f in fold.items():
+                out.append({"date": dt, "store_code": code, "rep": rep, "counterpart": ck,
+                            "units": f["units"], "amount": f["amount"]})
+        if "recon_class" in kinds:
+            bb = (_b2b_day(client, org_id, iso) or {}).get("counts") or {}
+            for code, c in bb.items():
+                if code_want and code != code_want:
+                    continue
+                for ck, w in want.items():
+                    if w["kind"] != "recon_class":
+                        continue
+                    n = int(c.get("activations" if w["ref"] == "activation" else "upgrades") or 0)
+                    # Store grain: rep "" is the store's own figure, which is exactly how a
+                    # store-declared category addresses itself on the declared side.
+                    out.append({"date": iso, "store_code": code, "rep": "", "counterpart": ck,
+                                "units": n, "amount": 0.0})
+    return out, feed_days, status
+
+
+def _finrep_vendor_units(rows, vendors, **kw):
+    """Indirection kept to ONE line so the lock harness can pin that this module never derives
+    financed units itself — it dereferences `financing_report.vendor_units`, the derivation the
+    Financing report and the payout share."""
+    from app.modules.commcalc import financing_report as _finrep
+    return _finrep.vendor_units(rows, vendors, **kw)
+
+
+_STORE_INDEX_MEMO: dict = {}
+
+
+def _counterpart_store_index(client, org_id):
+    """The store index the FINANCING path already resolves its stores through
+    (`financing_tiers.load_store_index`), memoised for the life of the process.
+
+    Dereferenced rather than rebuilt so a financed unit lands on the SAME store_code in this report
+    as it does in the Financing report — if they resolved differently, a rep's declaration would be
+    compared against a store they did not sell at.
+    """
+    key = str(org_id)
+    idx = _STORE_INDEX_MEMO.get(key)
+    if idx is None:
+        from app.modules.commcalc import financing_tiers as _fintier
+        try:
+            idx = _fintier.load_store_index(client, org_id) or {}
+        except Exception as e:
+            print("declared-vs-captured: store index unavailable:", e)
+            idx = {}
+        _STORE_INDEX_MEMO[key] = idx
+    return idx
+
+
+def _counterpart_store_code(store_index, raw_store):
+    from app.modules.commcalc import financing_tiers as _fintier
+    return _fintier.resolve_store_code(raw_store, store_index)
+
+
+@router.get("/declared-vs-captured")
+def declared_vs_captured(date_from: str, date_to: str = "", store_code: str = "",
+                         rep: str = "", org_id: str = ORG_ID):
+    """DID OUR SYSTEM CAPTURE THE SALES THE REP DECLARED? Per day x store x rep x category.
+
+    Owner ask 2026-10-29: a rep is paid per Edge / per financing transaction, so what they declare at
+    closing and what the sales feed captured have to agree — and when they do not, a manager needs to
+    see which rep, which day and which of the two numbers is missing.
+
+    Read-only. It computes nothing that is paid and it blocks no close: the worst verdict is
+    `flagged`, the same posture mig 501's count recon has always had.
+
+    A category only appears if it NAMES a feed counterpart (Count Fields → "Check against"). The ones
+    that do not are returned in `not_reconciled` by name, so a category that is missing from the
+    report is explained rather than silently absent."""
+    require_org(org_id)
+    client = sb()
+    d_to = str(date_to or date_from)
+    cat = _metric_catalog(client, org_id, with_tenders=False)
+    cps = _declared_feed_recon.counterpart_keys(cat)
+    if not cps:
+        return {"date_from": str(date_from), "date_to": d_to, "store_code": store_code,
+                "rows": [], "by_rep": [], "totals": _declared_feed_recon.totals([]),
+                "metrics": [], "not_reconciled": [m["key"] for m in cat],
+                "configured": False,
+                "note": ("No declared category names a counterpart in the sales feed yet. Set one on "
+                         "Count Fields (\"Check against\") — for financing, pick the vendor the "
+                         "Financing report already uses, so this check and the payout can never "
+                         "disagree.")}
+
+    # The DECLARED side, through its own one home. `_declared_by_store_day` answers the store grain;
+    # the per-EMPLOYEE grain this report needs comes from `metric_catalog.by_employee`, so both
+    # grains are read rather than one being inferred from the other.
+    declared_rows = []
+    try:
+        rows_q = (client.schema("commcalc").table("daily_closing").select("*")
+                  .eq("org_id", org_id)
+                  .gte("close_date", str(date_from)).lte("close_date", d_to))
+        if store_code:
+            rows_q = rows_q.eq("store_code", str(store_code))
+        closings = rows_q.limit(20000).execute().data or []
+    except Exception as e:
+        print("declared-vs-captured: daily_closing read failed:", e)
+        closings = []
+    lines = _metric_lines(client, org_id, store_code, date_from, date_to=d_to, limit=50000)
+
+    def _sk(r):
+        return str((r or {}).get("store_code") or "").strip()
+
+    def _dk(r):
+        return str((r or {}).get("close_date") or "")[:10]
+
+    keyed: dict = {}
+    for r in closings:
+        keyed.setdefault((_sk(r), _dk(r)), {"row": r, "lines": []})
+    for ln in lines:
+        keyed.setdefault((_sk(ln), _dk(ln)), {"row": None, "lines": []})["lines"].append(ln)
+    for (code, dt), pair in keyed.items():
+        if not dt:
+            continue
+        per_emp = _metrics.by_employee(cat, pair["lines"])
+        for who, metrics in per_emp.items():
+            for mk, v in metrics.items():
+                declared_rows.append({"date": dt, "store_code": code, "rep": who,
+                                      "metric_key": mk, "units": v.get("units"),
+                                      "amount": v.get("amount")})
+        # The store's OWN declarations (rep ""), so a store-declared category reconciles at the grain
+        # it was declared at instead of being attributed to whoever submitted the closing.
+        folded = _metrics.declared(cat, pair["row"], pair["lines"]) or {}
+        for mk, e in folded.items():
+            if _metrics.is_employee_declared(cat, mk) or not e.get("declared"):
+                continue
+            declared_rows.append({"date": dt, "store_code": code, "rep": "", "metric_key": mk,
+                                  "units": e.get("units"), "amount": e.get("amount")})
+
+    captured, feed_days, status = _counterpart_captured(
+        client, org_id, date_from, d_to, cps, store_code=store_code)
+
+    # A per-EMPLOYEE category whose counterpart only answers per STORE cannot be checked, and says so
+    # rather than reporting the store's figure against one person's declaration.
+    for m in _declared_feed_recon.reconciled_metrics(cat):
+        cp = _declared_feed_recon.counterpart_of(m)
+        if cp["kind"] == "recon_class" and m.get("declared_by") == "employee":
+            ck = _declared_feed_recon.counterpart_key(cp)
+            status.setdefault(ck, {"status": "store_grain_only",
+                                   "note": ("the sales feed answers this count per store, not per "
+                                            "person, so a per-employee declaration cannot be "
+                                            "checked against it")})
+
+    # Tolerances are the TENANT's, taken off the strictest category in play rather than a constant.
+    ut = [m.get("feed_units_tolerance") for m in _declared_feed_recon.reconciled_metrics(cat)
+          if m.get("feed_units_tolerance") is not None]
+    at = [m.get("feed_amount_tolerance") for m in _declared_feed_recon.reconciled_metrics(cat)
+          if m.get("feed_amount_tolerance") is not None]
+    out = _declared_feed_recon.reconcile(
+        cat, declared=declared_rows, captured=captured, feed_days=feed_days,
+        counterpart_status=status,
+        units_tolerance=(min(ut) if ut else 0),
+        amount_tolerance=(min(at) if at else 0.0))
+    if rep:
+        want = _declared_feed_recon.person_key(rep)
+        out["rows"] = [r for r in out["rows"] if r["rep_key"] == want]
+        out["by_rep"] = [r for r in out["by_rep"] if r["rep_key"] == want]
+        out["totals"] = _declared_feed_recon.totals(out["rows"])
+    out.update({"date_from": str(date_from), "date_to": d_to, "store_code": store_code,
+                "rep": rep, "configured": True,
+                "feed_days": sorted(feed_days),
+                "counterpart_status": status,
+                "severity_note": ("Informational. Nothing here blocks a close or changes what anyone "
+                                  "is paid; a gap is a question for a manager, in either direction.")})
+    return out
 
 
 # ── Reconciliation sheet: every day's closing-vs-B2B errors over a period ────────────────────
