@@ -1604,6 +1604,20 @@ FACTS: dict[str, dict] = {
             'app/modules/notify/report_registry.py': ('SR',),
         },
     },
+    'sweep_due': {
+        "question": ("Should this sweep run NOW, and why — or is the only answer anybody has a stored "
+                     "clock time?"),
+        "homes": ('app/modules/commcalc/sweep_due.py',),
+        "index": ('COMMCALC-45',),
+        "locks": ('harness_sweep_due.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            # The defect was HERE and nowhere else: eight `run-due` endpoints each comparing a stored
+            # clock, four of them in SQL where no other reason can be expressed. §F of the lock reads
+            # this file as source and pins the one excused filter that remains.
+            'app/modules/commcalc/router.py': ('_sweep_due',),
+        },
+    },
     'sweep_verdict': {
         "question": ("Did this sweep run leave the feed whole — and does the stored status WORD say "
                      "the same thing as the status sentence beside it?"),

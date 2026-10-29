@@ -19,6 +19,7 @@ from app.core import import_batches as _import_batches   # DDIA Phase 1 idempote
 from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
 # THE one home of "a status line that must fit a column keeps its ends" (found 2026-10-27).
 from app.core import status_detail as _status_detail
+from app.modules.commcalc import sweep_due as _sweep_due   # THE one "is this sweep due, and why" (index §COMMCALC-45)
 from app.modules.core import portal_secret as _psec   # 2026-10-12 — THE registry of which stored columns hold a credential (index §CORE-03; pure)
 from app.modules.commcalc import prospect_feed_tally as _pft   # 2026-10-16 — THE per-feed,
 # per-month row tally, in the one shape both its readings produce (index §COMMCALC-TALLY)
@@ -3329,6 +3330,35 @@ def _vip_next_run(frequency, day_of_week, day_of_month, hour, tzname, minute=0):
     return nxt.astimezone(_timezone.utc).isoformat()
 
 
+#: Where `_sweep_due_rows` writes the reason. Underscored so it can never collide with a column, and
+#: never written back to the database — the row it rides on is read-only to every caller below.
+_DUE_REASON_KEY = "_due_reason"
+
+
+def _sweep_due_rows(rows, now_iso=None):
+    """The enabled sweep configs that are DUE, by the one verdict (index §COMMCALC-45).
+
+    Every `run-due` entrypoint used to filter in SQL — `.lte('next_run_at', now)` — which can only ask
+    the clock. This asks `commcalc.sweep_due`, so a run that came back PARTIAL and a sweep whose own
+    settings were just corrected are both due without anybody pressing anything. One row per org per
+    connector, so the read is the same size it always was."""
+    out = []
+    for r in (rows or []):
+        v = _sweep_due.verdict(r, now_iso)
+        if v.get("due"):
+            # The reason rides WITH the row, because the caller's next decision depends on it: only a
+            # clock-due run may advance `next_run_at`. A retry or a settings change runs now and
+            # leaves the scheduled slot still owed — advancing it would let one early retry swallow
+            # the day's real run, which is the same false-green the schedule is supposed to prevent.
+            out.append({**r, _DUE_REASON_KEY: v.get("reason")})
+    return out
+
+
+def _sweep_due_by_clock(cfg):
+    """Did the CLOCK make this row due? Only then is the scheduled slot satisfied by this run."""
+    return (cfg or {}).get(_DUE_REASON_KEY) in (None, _sweep_due.REASON_CLOCK)
+
+
 _VIP_CFG_DEFAULTS = {'enabled': False, 'frequency': 'weekly', 'day_of_week': 0,
                      'day_of_month': 1, 'hour': 6, 'timezone': 'America/New_York',
                      'lookback_days': 14, 'sweep_invoices': True, 'sweep_asset': False,
@@ -3458,12 +3488,20 @@ def _require_import_admin(authorization, org_id):
                              "administrator to grant your role the 'Import Health' setting.")
 
 
-def _sweep_set_status(client, table, org_id, status, detail, mark_run=False, success=None):
+def _sweep_set_status(client, table, org_id, status, detail, mark_run=False, success=None,
+                      evidence=None):
     """Record ONE portal sweep's outcome on its own *_sweep_config row.
 
     mark_run — this call ends a run (not the 'running…' heartbeat, which must stamp no timestamp).
     success  — did the run actually IMPORT data? Defaults to status in ('ok','partial'); only a success
-               advances last_run_at (the freshness trail core.import_evidence reads)."""
+               advances last_run_at (the freshness trail core.import_evidence reads).
+    evidence — the run's STRUCTURED findings, stored WHOLE in `core.job_run.detail` (jsonb) beside the
+               fitted prose. A cap belongs on a sentence a person reads, never on the evidence behind
+               it: on 2026-10-28 the DLAR status line named eight of the FORTY-ONE fields Boost sends
+               that nothing reads, and the two that answer "what was the renamed column called now"
+               were inside the "+33 more". The sentence was right to stay short; the finding needed
+               somewhere complete to live, and the history row was already jsonb (mig 701). Never
+               secrets — a caller passes findings, not a config row."""
     # A CAP MUST NOT DECIDE WHICH PART OF A STATUS SURVIVES (found 2026-10-27, index §CORE-xx).
     # This was `detail[:600]`, a HEAD cut — so the §COMMCALC-16 diagnostic's conclusion, which names
     # the portal field the carrier renamed and is written LAST, was the exact text thrown away. The
@@ -3480,8 +3518,9 @@ def _sweep_set_status(client, table, org_id, status, detail, mark_run=False, suc
         try:
             client.schema('core').table('job_run').insert({
                 'org_id': org_id, 'job_name': f'sweep:{table}', 'status': 'succeeded' if ok else 'failed',
-                'detail': {'status': status, 'detail': _status_detail.fit(detail, 600)}, 'started_at': now_iso,
-                'finished_at': now_iso}).execute()
+                'detail': {'status': status, 'detail': _status_detail.fit(detail, 600),
+                           **({'evidence': evidence} if evidence else {})},
+                'started_at': now_iso, 'finished_at': now_iso}).execute()
         except Exception as e:
             print(f'WARN sweep run history not recorded ({table}): {e}')
     _status_update(client, table, upd, lambda q: q.eq('org_id', org_id))
@@ -3761,14 +3800,16 @@ def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
-    due = client.schema('commcalc').table('vip_sweep_config').select('*') \
-        .eq('enabled', True).lte('next_run_at', now_iso).execute().data or []
+    due = _sweep_due_rows(
+        client.schema('commcalc').table('vip_sweep_config').select('*')
+        .eq('enabled', True).execute().data, now_iso)
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
-        nxt = _vip_next_run(cfg.get('frequency') or 'weekly', cfg.get('day_of_week'),
-                            cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
-        client.schema('commcalc').table('vip_sweep_config').update(
-            {'next_run_at': nxt}).eq('org_id', oid).execute()
+        if _sweep_due_by_clock(cfg):      # a retry leaves the scheduled slot owed (§COMMCALC-45)
+            nxt = _vip_next_run(cfg.get('frequency') or 'weekly', cfg.get('day_of_week'),
+                                cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
+            client.schema('commcalc').table('vip_sweep_config').update(
+                {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_vip_sweep, oid)
     return {"triggered": len(due)}
 
@@ -13806,8 +13847,13 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
             blocked.append({"org_id": oid, "kind": kind, "reason": "no_browser_service"})
             continue
         try:
+            # EVERY COLUMN THE VERDICT READS, or a reason is lost before it can be given. This
+            # select used to stop at the schedule columns, which is precisely how due-ness stayed a
+            # clock: a narrower read cannot see that the declaration changed or that the last run
+            # came back short. `_sweep_due.READS` is the one list and the lock checks it.
             cfg = (client.schema('commcalc').table(tbl)
-                   .select('enabled,next_run_at,frequency,day_of_week,day_of_month,hour,timezone')
+                   .select(','.join(('day_of_week', 'day_of_month', 'hour', 'timezone')
+                                    + _sweep_due.READS))
                    .eq('org_id', oid).limit(1).execute().data) or []
         except Exception:
             continue
@@ -13817,8 +13863,13 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
         cf = cfg[0]
         if not cf.get('enabled'):
             continue
-        nra = cf.get('next_run_at')
-        connector_due = not nra or nra <= now_iso
+        # A SWEEP IS DUE FROM ITS STATE, NOT FROM A STORED CLOCK ALONE (owner 2026-10-29, index
+        # §COMMCALC-45). This was `not nra or nra <= now_iso`, so a run that came back PARTIAL waited
+        # a full day exactly like a clean one, and correcting the sweep's own settings pushed the next
+        # run further away instead of nearer. The reason is carried into the tick's answer.
+        _dv = _sweep_due.verdict(cf, now_iso)
+        connector_due = bool(_dv.get('due'))
+        _due_reason = _dv.get('reason')
 
         # ePay is the one connector whose reports can each own a schedule slot (migration 290):
         # Comprehensive Comp runs at 23:30 while MI and payment detail stay on the connector's
@@ -13828,7 +13879,10 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
             run_now = list(slot_due) + (list(shared) if connector_due else [])
             if not run_now:
                 continue
-            if connector_due:
+            # ONLY A CLOCK-DUE RUN SATISFIES THE CLOCK. A retry or a settings change runs NOW and
+            # leaves the scheduled slot still owed; advancing it would let one early retry swallow
+            # the day's real run.
+            if connector_due and _due_reason == _sweep_due.REASON_CLOCK:
                 nxt = _vip_next_run(cf.get('frequency') or 'daily', cf.get('day_of_week'),
                                     cf.get('day_of_month'), cf.get('hour'), cf.get('timezone'))
                 try:
@@ -13842,14 +13896,15 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
 
         if not connector_due:
             continue
-        nxt = _vip_next_run(cf.get('frequency') or 'daily', cf.get('day_of_week'),
-                            cf.get('day_of_month'), cf.get('hour'), cf.get('timezone'))
-        try:
-            client.schema('commcalc').table(tbl).update({'next_run_at': nxt}).eq('org_id', oid).execute()
-        except Exception:
-            pass
+        if _due_reason == _sweep_due.REASON_CLOCK:   # see above: a retry leaves the slot owed
+            nxt = _vip_next_run(cf.get('frequency') or 'daily', cf.get('day_of_week'),
+                                cf.get('day_of_month'), cf.get('hour'), cf.get('timezone'))
+            try:
+                client.schema('commcalc').table(tbl).update({'next_run_at': nxt}).eq('org_id', oid).execute()
+            except Exception:
+                pass
         background_tasks.add_task(dispatch[kind], oid)
-        triggered.append(c.get('vendor_name'))
+        triggered.append(f"{c.get('vendor_name')} ({_due_reason})")
     return {"triggered": triggered, "checked": checked,
             # Never silent: a connector this service could not launch is named, with why.
             **({"blocked": blocked} if blocked else {}),
@@ -15351,9 +15406,11 @@ def _dlar_public_cfg(cfg, org_id=None):
     return out
 
 
-def _dlar_set_status(client, org_id, status, detail, mark_run=False, success=None):
+def _dlar_set_status(client, org_id, status, detail, mark_run=False, success=None,
+                     evidence=None):
     """See _sweep_set_status: only a run that IMPORTED data advances last_run_at."""
-    _sweep_set_status(client, 'dlar_sweep_config', org_id, status, detail, mark_run, success)
+    _sweep_set_status(client, 'dlar_sweep_config', org_id, status, detail, mark_run, success,
+                      evidence=evidence)
 
 
 def _do_dlar_sweep(org_id):
@@ -15388,7 +15445,13 @@ def _do_dlar_sweep(org_id):
         # This line used to pass 'ok' whatever `status_sentence` had just concluded, so the sweep page
         # and the connectors row stayed green over a '⚠ PARTIAL' detail for the ten days October 2026's
         # unit counts were missing. `status_verdict` is the one home both now dereference.
-        _dlar_set_status(client, org_id, dlar_sweep.status_verdict(res), detail, mark_run=True)
+        # THE WHOLE FINDING GOES WITH IT. `status_sentence` caps its lists at eight names because a
+        # person reads it; the field-arrival result is the EVIDENCE and goes to the history row whole,
+        # so "which field did the portal rename this to" is answerable without re-running the sweep.
+        _dlar_set_status(client, org_id, dlar_sweep.status_verdict(res), detail, mark_run=True,
+                         evidence={'fields': res.get('fields'), 'content': res.get('content'),
+                                   'vintage': res.get('vintage'), 'written': res.get('written'),
+                                   'skipped_guard': res.get('skipped_guard')})
     except dlar_sweep.DlarLoginError as e:
         _dlar_set_status(client, org_id, 'error', str(e), mark_run=True)
     except Exception as e:
@@ -15458,14 +15521,16 @@ def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
-    due = client.schema('commcalc').table('dlar_sweep_config').select('*') \
-        .eq('enabled', True).lte('next_run_at', now_iso).execute().data or []
+    due = _sweep_due_rows(
+        client.schema('commcalc').table('dlar_sweep_config').select('*')
+        .eq('enabled', True).execute().data, now_iso)
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
-        nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
-                            cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
-        client.schema('commcalc').table('dlar_sweep_config').update(
-            {'next_run_at': nxt}).eq('org_id', oid).execute()
+        if _sweep_due_by_clock(cfg):      # a retry leaves the scheduled slot owed (§COMMCALC-45)
+            nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
+                                cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
+            client.schema('commcalc').table('dlar_sweep_config').update(
+                {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_dlar_sweep, oid)
     return {"triggered": len(due)}
 
@@ -15618,8 +15683,9 @@ def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
-    due = client.schema('commcalc').table('b2b_sweep_config').select('*') \
-        .eq('enabled', True).lte('next_run_at', now_iso).execute().data or []
+    due = _sweep_due_rows(
+        client.schema('commcalc').table('b2b_sweep_config').select('*')
+        .eq('enabled', True).execute().data, now_iso)
     off = []
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
@@ -15628,10 +15694,11 @@ def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
         if _route_closed(_source_route_policy(client, oid, {"processor": cfg.get("connector")})):
             off.append({"org_id": oid, "skipped": "route_disabled"})
             continue
-        nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
-                            cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
-        client.schema('commcalc').table('b2b_sweep_config').update(
-            {'next_run_at': nxt}).eq('org_id', oid).execute()
+        if _sweep_due_by_clock(cfg):      # a retry leaves the scheduled slot owed (§COMMCALC-45)
+            nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
+                                cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
+            client.schema('commcalc').table('b2b_sweep_config').update(
+                {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_b2b_sweep, oid)
     return {"triggered": len(due) - len(off), "route_disabled": off}
 
@@ -15858,13 +15925,13 @@ def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
     for cfg in (client.schema('commcalc').table('epay_sweep_config').select('*')
                 .eq('enabled', True).execute().data or []):
         oid = cfg.get('org_id') or ORG_ID
-        nra = cfg.get('next_run_at')
-        connector_due = not nra or nra <= now_iso
+        _dv = _sweep_due.verdict(cfg, now_iso)            # index §COMMCALC-45, not a stored clock
+        connector_due = bool(_dv.get('due'))
         slot_due, shared = _epay_sub_schedule(client, oid, now_iso)
         run_now = list(slot_due) + (list(shared) if connector_due else [])
         if not run_now:
             continue
-        if connector_due:
+        if _dv.get('reason') == _sweep_due.REASON_CLOCK:   # a retry leaves the slot owed
             nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
                                 cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
             client.schema('commcalc').table('epay_sweep_config').update(
@@ -38900,14 +38967,16 @@ async def ftp_run_due(x_notify_secret: str = Header(default="")):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
-    due = (client.schema('commcalc').table('ftp_sweep_config').select('*')
-           .eq('enabled', True).lte('next_run_at', now_iso).execute().data) or []
+    due = _sweep_due_rows(
+        (client.schema('commcalc').table('ftp_sweep_config').select('*')
+         .eq('enabled', True).execute().data), now_iso)
     ran = []
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
         res = await _run_ftp_sweep(oid)
-        nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
-        client.schema('commcalc').table('ftp_sweep_config').update({'next_run_at': nxt}).eq('org_id', oid).execute()
+        if _sweep_due_by_clock(cfg):      # a retry leaves the scheduled slot owed (§COMMCALC-45)
+            nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
+            client.schema('commcalc').table('ftp_sweep_config').update({'next_run_at': nxt}).eq('org_id', oid).execute()
         ran.append({"org_id": oid, "result": res})
     return {"ran": len(ran), "detail": ran}
 

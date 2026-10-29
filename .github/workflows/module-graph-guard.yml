@@ -79,6 +79,9 @@ jobs:
       - name: A length cap does not decide which part of a status survives (the real 2026-10-26 DLAR line, whose finding was at the end; a growing middle cannot push the conclusion out; every length and every cap fuzzed for an over-cap result; the writer never raises — found 2026-10-27, index §CORE-18)
         working-directory: backend
         run: python3 harness_status_detail.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: A sweep is due from its own state, not a stored clock (the real production config row on 2026-10-29, where thirteen consecutive PARTIAL runs each waited a full day; the stale-attempt trap that would have made the floor on contact vacuous; and the router read as SOURCE, since the defect was eight callers each comparing a clock — index §COMMCALC-45)
+        working-directory: backend
+        run: python3 harness_sweep_due.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   impact:
     name: What else answers this question?
