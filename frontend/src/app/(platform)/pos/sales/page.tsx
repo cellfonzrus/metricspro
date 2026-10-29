@@ -34,6 +34,13 @@ import ProductFormFields, {
 import {
   AUTOSAVE_MS, clearHeldSale, fetchHeldSale, heldSaleBanner, suspendSale,
 } from '@/lib/pos-held-sale'
+import type { HeldLine } from '@/lib/pos-held-sale'
+// THE edit of a sale already rung (lib/pos-sale-amend, §POS-12) — same transaction number, every
+// superseded version kept. Owner 2026-10-29: "add more tiems to teh same rec3ipt".
+import { fetchAmendPlan, saveAmendedSale } from '@/lib/pos-sale-amend'
+import type { AmendLine, AmendPlan } from '@/lib/pos-sale-amend'
+// THE one customer sentence for unfinished setup (§19.36) — never the migration's name.
+import { SETUP_NOTICE } from '@/lib/setupNotice'
 // THE receipt (lib/pos-receipt) — rendered on the server so the till copy, the reprint and the
 // emailed copy are one thing; this screen prints what it is handed (§POS-02).
 import { fetchSaleReceipt, printReceiptHtml, printViaHelper } from '@/lib/pos-receipt'
@@ -76,6 +83,32 @@ interface CartItem {
   // Stamped from the product at add time so re-taxing (store/tax-code changes) doesn't
   // depend on the item still being present in the default 500-row catalog list.
   is_taxable?: boolean
+}
+
+// ONE mapping from a stored line to a cart line, used by both paths that load one: restoring the
+// register's suspended cart (§POS-01) and loading a rung sale for editing (§POS-12). It was inline
+// in the restore effect, and a second copy for the edit path is exactly how one path comes to read
+// a field name the other does not send.
+//
+// It does NOT re-price. The caller decides that, because the two paths legitimately differ: a
+// suspended cart has not been sold, so its tax is re-derived from the store's live rate; a rung sale
+// HAPPENED, on its date, at the rate in force then, so its lines keep the rate they were struck at.
+function cartItemFromLine(l: HeldLine | AmendLine): CartItem {
+  return {
+    product_id: l.product_id,
+    description: l.description || '',
+    product_type: l.product_type || 'Regular',
+    serial_number: l.serial_number || '',
+    qty: l.qty || 1,
+    unit_price: l.unit_price || 0,
+    list_price: l.list_price ?? l.unit_price ?? 0,
+    cost: l.cost || 0,
+    discount: l.discount || 0,
+    tax_rate: l.tax_rate || 0,
+    tax_value: l.tax_value || 0,
+    extended_price: l.extended_price || 0,
+    is_taxable: l.is_taxable,
+  }
 }
 
 interface Customer {
@@ -201,6 +234,12 @@ export default function PosSalesPage() {
   const [lastReceipt, setLastReceipt] = useState<ReceiptSnapshot | null>(null)
   const [saving, setSaving] = useState(false)
   const [voiding, setVoiding] = useState(false)
+  // Editing a rung sale (§POS-12). Non-null means this register is amending that sale rather than
+  // ringing a new one: the cart holds its lines, and the green button SAVES instead of tendering.
+  // Holding the whole plan rather than just an id keeps the transaction number and the revision the
+  // server reported, so the banner and the button never state a revision this screen inferred.
+  const [amending, setAmending] = useState<AmendPlan | null>(null)
+  const [amendSaving, setAmendSaving] = useState(false)
 
   // Sale Log filters
   const [slDateFrom, setSlDateFrom] = useState(addDays(localToday(), -30))
@@ -309,22 +348,13 @@ export default function PosSalesPage() {
     let cancelled = false
     fetchHeldSale(activeStore, getRegisterNumber()).then(({ held }) => {
       if (cancelled) return
-      if (held && held.cart.length && cart.length === 0) {
-        setCart(held.cart.map(l => recalcItem({
-          product_id: l.product_id,
-          description: l.description || '',
-          product_type: l.product_type || 'Regular',
-          serial_number: l.serial_number || '',
-          qty: l.qty || 1,
-          unit_price: l.unit_price || 0,
-          list_price: l.list_price ?? l.unit_price ?? 0,
-          cost: l.cost || 0,
-          discount: l.discount || 0,
-          tax_rate: l.tax_rate || 0,
-          tax_value: l.tax_value || 0,
-          extended_price: l.extended_price || 0,
-          is_taxable: l.is_taxable,
-        })))
+      // `!amending` as well as an empty cart: a resumed hold must never land on top of a rung sale
+      // being edited, or the cashier would save someone else's part-rung lines onto it (§POS-12).
+      if (held && held.cart.length && cart.length === 0 && !amending) {
+        // recalcItem AROUND the mapping, not inside it: a suspended cart has not been sold yet, so
+        // its tax is re-derived from the store's live rate (§POS-01.4). An EDIT of a rung sale is
+        // the opposite case and maps without it — see loadSaleForEditing.
+        setCart(held.cart.map(l => recalcItem(cartItemFromLine(l))))
         setIsActivationSale(held.is_activation_sale === true)
         setHeldBanner(heldSaleBanner(held))
         setActiveView('sale')
@@ -341,8 +371,13 @@ export default function PosSalesPage() {
   // with no customer clears the hold (the server decides that), so an idle register leaves nothing
   // behind. Suspending writes no sale, burns no transaction number and moves no stock, which is why
   // it can happen without asking.
+  //
+  // NOT WHILE EDITING A RUNG SALE (§POS-12). An edit puts a finished sale's lines in this cart, and
+  // suspending them would leave the register holding a cart that looks like an unfinished NEW sale:
+  // the next session would be offered it, resume it, and ring a second sale for items already sold.
+  // The sale is already recorded, so there is nothing here that needs saving from loss.
   useEffect(() => {
-    if (!activeStore || !heldRestored) return
+    if (!activeStore || !heldRestored || amending) return
     const t = setTimeout(() => {
       suspendSale(activeStore, getRegisterNumber(), {
         cart: cart.map(i => ({
@@ -356,7 +391,7 @@ export default function PosSalesPage() {
       })
     }, AUTOSAVE_MS)
     return () => clearTimeout(t)
-  }, [cart, selectedCustomer, isActivationSale, activeStore, heldRestored])
+  }, [cart, selectedCustomer, isActivationSale, activeStore, heldRestored, amending])
 
   /** Empty the cart — and the suspended copy with it, or coming back would restore what the cashier
    *  just threw away. The selected customer stays, which is what Clear Cart has always done. */
@@ -993,6 +1028,77 @@ export default function PosSalesPage() {
     setSaving(false)
   }
 
+  // ── EDITING A RUNG SALE (owner 2026-10-29, index §POS-12) ─────────────────────────────────────
+  // He asked to add items to a receipt already printed and chose editing in place over re-ringing
+  // under a new number. The register is reused rather than a second editor being built: the lines
+  // land in the cart the cashier already knows, every existing control (quantity, price, discount,
+  // serial, add, remove) works unchanged, and only the green button changes what it does.
+  //
+  // Every judgement is the server's. This function asks, shows the server's own sentence when the
+  // answer is no, and does not decide anything about age, status or figures for itself.
+  async function loadSaleForEditing() {
+    if (!selectedSale) { alert('Select a transaction in the list first.'); return }
+    let plan: AmendPlan
+    try {
+      plan = await fetchAmendPlan(selectedSale.id)
+    } catch (err: unknown) {
+      const m = String((err as { message?: string })?.message || '')
+      alert(/does not allow|pos_amend/i.test(m)
+        ? 'Your role does not allow editing a sale that has already been rung.'
+        : m || 'Could not load that sale for editing')
+      return
+    }
+    if (!plan.available) {
+      // The ONE customer sentence (§19.36). Which migration is missing is a technical detail, and a
+      // string has no viewer to check, so it is never named here — the server's own 503 carries it
+      // through the SetupNotice boundary, which shows it to the platform team alone.
+      alert(SETUP_NOTICE)
+      return
+    }
+    if (!plan.allowed) { alert(plan.reason || 'That sale cannot be edited.'); return }
+    if (cart.length > 0 &&
+        !confirm('There is a sale in progress on this register. Loading this one for editing will '
+                 + 'clear it. Continue?')) return
+    // NO recalcItem here, unlike the suspended-cart restore: this sale happened at the tax rate in
+    // force on its date, and re-deriving every rate would restate tax that was already struck.
+    setCart(plan.cart.map(l => cartItemFromLine(l)))
+    setIsActivationSale(plan.is_activation_sale)
+    setAmending(plan)
+    setHeldBanner('')
+    setShowPayment(false)
+    setActiveView('sale')
+  }
+
+  function stopEditing() {
+    setAmending(null)
+    setCart([])
+    setShowPayment(false)
+    setActiveView('salelog')
+  }
+
+  async function saveSaleEdit() {
+    if (!amending) return
+    if (cart.length === 0) {
+      alert('A sale needs at least one item. To cancel it, void it from the Sale Log instead.')
+      return
+    }
+    setAmendSaving(true)
+    try {
+      // The figures are sent for shape only — the server re-derives every one of them from the
+      // agreed prices, so nothing this screen computed can become what is stored (§POS-12).
+      const saved = await saveAmendedSale(amending.sale_id, cart as AmendLine[])
+      alert(saved.message || `Saved as revision ${saved.revision}.`)
+      setAmending(null)
+      setCart([])
+      setActiveView('salelog')
+      loadSales()
+      if (selectedSale) loadSaleItems(selectedSale.id)
+    } catch (err: unknown) {
+      alert(String((err as { message?: string })?.message || '') || 'Could not save the edit')
+    }
+    setAmendSaving(false)
+  }
+
   async function voidSale() {
     if (!selectedSale) { alert('Select a transaction in the list first.'); return }
     if (selectedSale.status === 'voided' || selectedSale.voided_at) { alert(`Transaction #${selectedSale.transaction_id} is already voided.`); return }
@@ -1114,6 +1220,21 @@ export default function PosSalesPage() {
             {/* A RESUMED SALE says so. The cashier at the register may not be the one who left the
                 cart, and the prices on it are as old as the hold — so the banner names both rather
                 than presenting someone else's part-rung sale as this one's work. */}
+            {/* EDITING, not ringing (§POS-12). Stated at the top of the screen for the whole edit,
+                because the one mistake this feature makes possible is a cashier believing they are
+                starting a new sale while every change lands on a receipt a customer already holds.
+                It also says the thing the owner's choice costs: that receipt is now out of date. */}
+            {amending && (
+              <div style={{ background: 'rgba(37,99,235,0.10)', borderBottom: '1px solid var(--blue, var(--c-bg-2563eb))', padding: '10px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: 'var(--text)', flex: 1, minWidth: 240 }}>
+                  ✏️ <b>Editing transaction #{amending.transaction_id ?? ''}</b> (revision {amending.revision})
+                  — this is not a new sale. Saving keeps the same transaction number, files the
+                  version you are replacing, and leaves the printed receipt the customer has out of
+                  date, so print them a fresh one afterwards.
+                </span>
+                <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px', color: 'var(--red)' }} onClick={stopEditing}>Stop editing</button>
+              </div>
+            )}
             {heldBanner && (
               <div style={{ background: 'rgba(217,119,6,0.08)', borderBottom: '1px solid var(--amber, var(--c-bg-d97706))', padding: '8px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 12, color: 'var(--text)', flex: 1, minWidth: 220 }}>⏸ {heldBanner}</span>
@@ -1324,18 +1445,29 @@ export default function PosSalesPage() {
                 </div>
               )}
 
-              <button onClick={() => {
-                if (cart.length === 0) return
-                const issues = getCheckoutBlockers()
-                if (issues.length > 0) { setBlockIssues(issues); return }
-                setShowPayment(true)
-              }} disabled={cart.length === 0 || saving}
-                style={{ width: '100%', background: cart.length === 0 ? 'var(--surface)' : 'var(--green)', border: cart.length === 0 ? '1px solid var(--border)' : 'none', color: cart.length === 0 ? 'var(--text3)' : 'white', borderRadius: 8, padding: 14, fontSize: 15, fontWeight: 700, cursor: cart.length === 0 ? 'not-allowed' : 'pointer', opacity: cart.length === 0 ? 0.6 : 1 }}>
-                ✅ Process Sale — ${total.toFixed(2)}
-              </button>
+              {/* EDITING a rung sale (§POS-12): the same button, saving instead of tendering.
+                  There is no payment step — the customer already paid, and what changed about the
+                  balance is a conversation at the counter, not a second tender on this screen. */}
+              {amending ? (
+                <button onClick={saveSaleEdit} disabled={cart.length === 0 || amendSaving}
+                  style={{ width: '100%', background: cart.length === 0 ? 'var(--surface)' : 'var(--green)', border: cart.length === 0 ? '1px solid var(--border)' : 'none', color: cart.length === 0 ? 'var(--text3)' : 'white', borderRadius: 8, padding: 14, fontSize: 15, fontWeight: 700, cursor: cart.length === 0 || amendSaving ? 'not-allowed' : 'pointer', opacity: cart.length === 0 ? 0.6 : 1 }}>
+                  {amendSaving ? 'Saving...' : `💾 Save changes to #${amending.transaction_id ?? ''} — $${total.toFixed(2)}`}
+                </button>
+              ) : (
+                <button onClick={() => {
+                  if (cart.length === 0) return
+                  const issues = getCheckoutBlockers()
+                  if (issues.length > 0) { setBlockIssues(issues); return }
+                  setShowPayment(true)
+                }} disabled={cart.length === 0 || saving}
+                  style={{ width: '100%', background: cart.length === 0 ? 'var(--surface)' : 'var(--green)', border: cart.length === 0 ? '1px solid var(--border)' : 'none', color: cart.length === 0 ? 'var(--text3)' : 'white', borderRadius: 8, padding: 14, fontSize: 15, fontWeight: 700, cursor: cart.length === 0 ? 'not-allowed' : 'pointer', opacity: cart.length === 0 ? 0.6 : 1 }}>
+                  ✅ Process Sale — ${total.toFixed(2)}
+                </button>
+              )}
 
-              <button className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center', marginTop: 8 }} onClick={() => setActiveView('home')}>
-                Cancel Sale
+              <button className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
+                onClick={() => (amending ? stopEditing() : setActiveView('home'))}>
+                {amending ? 'Discard changes' : 'Cancel Sale'}
               </button>
             </div>
           </div>
@@ -1348,6 +1480,9 @@ export default function PosSalesPage() {
           {/* Action bar */}
           <div style={{ ...panel, marginBottom: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={printSelectedSale}>🖨️ Print Receipt</button>
+            {/* Edit a rung sale (§POS-12). Its own grant, `pos_amend`: a role that may cancel a
+                sale does not automatically get to rewrite one. */}
+            <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={loadSaleForEditing}>✏️ Edit Sale / Add Items</button>
             <button onClick={voidSale} disabled={voiding} style={{ background: 'var(--red)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 6, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: voiding ? 'wait' : 'pointer', opacity: voiding ? 0.7 : 1 }}>✗ Void Sale Receipt</button>
             <button className="btn btn-secondary" style={{ fontSize: 12, marginLeft: 'auto' }} onClick={() => setActiveView('home')}>← Back to POS</button>
           </div>

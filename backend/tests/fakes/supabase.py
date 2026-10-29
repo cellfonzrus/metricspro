@@ -246,6 +246,24 @@ class _Table:
         return _Query(self._store, self._key, "delete")
 
 
+class _Rpc:
+    """What `rpc()` returns: a builder that does nothing until `.execute()`.
+
+    DELIBERATELY NOT the response itself. The real postgrest client returns a builder here, so every
+    caller in this codebase writes `.rpc(...).execute()`; a double that answered `.data` straight
+    away would let a caller that forgot `.execute()` pass its tests and fail in production. The
+    handler is not run until `.execute()` either, so a route that builds a call and abandons it
+    writes nothing — which is what the real client does.
+    """
+
+    def __init__(self, handler: Any, params: dict):
+        self._handler = handler
+        self._params = params
+
+    def execute(self) -> "FakeResponse":
+        return FakeResponse(self._handler(self._params))
+
+
 class _Schema:
     def __init__(self, store: Dict[str, List[dict]], schema: str, rpc_handlers: Dict[str, Any]):
         self._store = store
@@ -262,8 +280,8 @@ class _Schema:
         if handler is None:
             raise NotImplementedError(
                 f"no rpc handler seeded for {self._schema}.{name}() — seed one with "
-                "FakeSupabase(..., rpc={'name': lambda params: rows})")
-        return FakeResponse(handler(params or {}))
+                "FakeSupabase(..., rpc={'name': lambda params: rows}) or seed_rpc()")
+        return _Rpc(handler, params or {})
 
 
 class FakeSupabase:
@@ -297,3 +315,12 @@ class FakeSupabase:
 
     def seed(self, key: str, rows: List[dict]) -> None:
         self._store[key] = copy.deepcopy(rows)
+
+    def seed_rpc(self, name: str, handler: Any) -> None:
+        """Seed an `rpc()` handler after construction, the way `seed` does for a table.
+
+        A fixture that builds the double before it knows which function a test needs could otherwise
+        only reach into `_rpc`. `name` may be bare or schema-qualified, matching the lookup in
+        `_Schema.rpc`; `handler` takes the params dict and returns whatever the function returns.
+        """
+        self._rpc[name] = handler

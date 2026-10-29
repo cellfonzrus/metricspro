@@ -1320,7 +1320,20 @@ _all_routes = _flatten_routes(real_app.routes)
 # proves that independently of this number). Verified the same way as every pin above:
 # `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` prints exactly one added decorator
 # and none removed. 1806 + 1 = 1807. Re-taken on a counted, named addition, never relaxed for CI.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1807"))
+# Re-pinned 1807 -> 1810 on 2026-10-29 for §POS-12, editing a rung sale in place: THREE added
+# routes, counted and named — `GET /pos/sales/{id}/amend-plan` (read-only: may this sale be edited,
+# and with what lines), `PUT /pos/sales/{id}/items` (the edit itself) and
+# `GET /pos/sales/{id}/amendments` (the version history). The PUT is the one money-touching route in
+# this package and is deliberate: the owner asked for it, chose it over re-ringing when told what it
+# meant, and it is gated on its own `pos_amend` grant, refuses outside the declared window, re-derives
+# every figure through `pos/sale_amendment.py` rather than trusting the body, and cannot run at all
+# until mig 1103 lets the superseded version be kept. It adds no input to any report, statement, GP,
+# commission or tax figure — those read the carrier feeds and the X-report, not `pos.sales` — and no
+# route to db_resilience itself (I0b proves that independently of this number). Verified the same way
+# as every pin above: `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` prints exactly
+# three added decorators and none removed. 1807 + 3 = 1810. Re-taken on a counted, named addition,
+# never relaxed for CI.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1810"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
