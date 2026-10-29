@@ -105,7 +105,7 @@ def render_html(doc: dict, *, editable: bool = False) -> str:
 
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>{title}</title>
-<style>{_CSS}</style></head><body>
+<style>{_page_css()}{_CSS}</style></head><body>
 <div class="receipt" data-pos-source="{_esc(doc.get('pos_source'))}">
   <div class="head">
     <div class="head-left">{store_html}</div>
@@ -118,6 +118,17 @@ def render_html(doc: dict, *, editable: bool = False) -> str:
   {sections}
   {footer}
 </div></body></html>"""
+
+
+def _page_css() -> str:
+    """THE page a receipt prints on (§POS-11) — dereferenced, never spelled here. Without it a
+    browser stamps its own header and footer over the receipt: the date and time of the PRINTING,
+    the document title centred above it, the URL and the page number. The till slip and this layout
+    are two layouts of one receipt, so the rule is one rule. The import is local because
+    `sale_receipt` injects THIS module's renderer, and the two must not import each other at module
+    level."""
+    from app.modules.pos.sale_receipt import PAGE_CSS
+    return PAGE_CSS
 
 
 def _edit_attr(editable: bool, scope: str, key, allowed) -> str:
@@ -153,7 +164,7 @@ table.sub { border-collapse: collapse; }
 table.sub th, table.sub td { border: 1px solid #ddd; padding: 2px 8px; text-align: left; }
 .footer { margin-top: 18px; padding-top: 10px; border-top: 1px solid #ccc; color: #444; font-size: 10px; line-height: 1.4; white-space: pre-wrap; }
 [contenteditable="true"] { outline: 1px dashed #4c8bf5; background: #f5f9ff; }
-@media print { body { padding: 0; } [contenteditable] { outline: none; background: none; } }
+@media print { body { padding: 12mm 10mm; } [contenteditable] { outline: none; background: none; } }
 """
 
 

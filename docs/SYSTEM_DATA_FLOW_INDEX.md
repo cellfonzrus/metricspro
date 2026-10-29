@@ -85,6 +85,7 @@ Primary code homes:
 | POS-08 | **The emailed receipt as a file** | "The receipt is going in the body of the email — it should be a PDF attachment as well." What is in the file, is it the same receipt as the mail it rides on, and what happens to the mail when the file cannot be built? |
 | POS-09 | **Sending a receipt — one home, two channels, every screen** | "I need the email option in the Sales Log viewer, and the send-notification option via WhatsApp also." Why could the Sale Log only PRINT a receipt it could already show, who decides which number or address a receipt goes to, and what does a customer get on WhatsApp? |
 | POS-10 | **What the shop IS, on a receipt** | "The RQ receipt email to the customer does not show the address and looks fake — the till thermal printer receipt came out ok." Where does a receipt get the shop's name, address, phone and licence, and why did one layout print all of it while the other printed the company name alone? |
+| POS-11 | **The page a receipt prints on, and the Bill To** | "Do not put the reprint date and time on top with the word Sale in the middle of the screen; the Bill To should have the customer address printed." Whose header is that across the top of a printed receipt, and why does a Bill To show a bare name when the renderer prints the address? |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -7955,6 +7956,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"This receipt as a FILE"** (the emailed copy's attachment; owner 2026-10-21) | nothing of its own — `sale_receipt.slip_model` (the till slip's rows, through `receipt_escpos.lines`) or `sale_receipt.document` (the POS layout's words, through `receipt_formats.render.render_words`) | **ONE renderer** `backend/app/modules/pos/receipt_pdf_render.py` (`receipt_pdf` — the entry, `slip_pdf`, `words_pdf`, `filename`, `PT_PER_MM`). A THIRD MEDIUM of the two existing content homes, not a third receipt: it reads no toggle, no figure and no line of its own, and the LAYOUT is the one `sale_receipt.clean_layout` already chose for the mail body, so the file and the mail can never be two different receipts. The slip is ONE page as wide as the declared roll (a roll has no page break); the POS layout is the format's own geometry on letter, paginated by the words' own `top` so no line is dropped. NOT `pos/receipt_pdf.py`, which READS an uploaded PDF for the format parsers. Built only where something attaches it (`_receipt_bundle(want_pdf=True)`), and a file that cannot be built never holds up the mail. Proof `harness_pos_receipt_render.py` §P (17 + 3 negative controls, read back with pdfplumber) — §POS-08 |
 | **"Send this receipt to the customer"** (the till's completion modal AND the Sale Log reprint; email and WhatsApp; owner 2026-10-21) | `pos.customers.email` / `.phone_primary` through the receipt answer itself (`SaleReceipt.email` / `.whatsapp`), which the server resolves — the browser invents neither | **ONE sender** `frontend/src/components/pos/SendReceiptPanel.tsx`, mounted by both screens, over **ONE view home** `backend/app/modules/pos/sale_receipt.email_view` / `whatsapp_view` (the same five-field shape per channel: who it would go to, where that came from, whether it can be sent, who it comes from, what it announces itself as) and ONE client `pos-receipt.emailSaleReceipt` / `whatsappSaleReceipt`. Was INLINE in the till modal, keyed to the sale just rung, so the Sale Log could only PRINT and a second channel would have been built twice. What counts as a phone number is DEREFERENCED from `notify/whatsapp_window.digits` (`whatsapp_meta._to_number` was a second copy of that rule and now reads it), and WHEN a file may be sent stays `whatsapp_meta.send_document_detailed`. The file is the §POS-08 PDF, built once. Proof `harness_pos_receipt_render.py` §Q (17 + 2 negative controls, 247 in all) — §POS-09 |
 | **"What shop is this receipt from?"** (the till slip, the printer's byte stream, the tenant's own POS layout, the PDF; owner 2026-10-28) | the receipt-branding rows `pos.pos_settings` (`brand_company_name`, `brand_address_line1…5`, `brand_license_tax_ids`) through `pos_config_effective.brand`, with this store's `storeops.stores` row as the FALLBACK, read through `receipt_store_block.STORE_COLUMNS` (the sibling read in `sales_from_reports._store_header_fn` dereferences the same columns; a receipt REBUILT from a landed report deliberately keeps the store block that POS printed rather than this tenant's branding) | **ONE home** `backend/app/modules/pos/receipt_store_block.block` — `{name, address_lines, phone, license, lines}`. Was TWO: the slip read the branding rows, the POS layout read a `store_lines` list the router assembled for it alone, selecting a `name` column `storeops.stores` does not have — 42703, swallowed, and every receipt in that layout printed the company name and no address. The legal blocks reach that layout now too. Proof `harness_pos_receipt_render.py` §R (14 checks; R11 fails the build on a second assembly, R13 on a slip PDF whose figures fall off the roll) — §POS-10 |
+| **"What page does a receipt print on?"** (every layout, every medium that goes through a browser; owner 2026-10-29) | nothing — it is a property of the PAGE, and no stylesheet here declared one | **ONE home** `sale_receipt.PAGE_CSS` (`@page { size: auto; margin: 0; }`), emitted by `thermal_html` and dereferenced by `receipt_formats/render._page_css`. Without it a browser stamps its own header and footer over the receipt — the date and time of the PRINTING, the document title centred above it, the URL and the page number — which is what the owner saw and read as a reprint stamp contradicting the sale's own date. Each layout then sets its own print padding so the ink does not run to the sheet's edge. Proof `harness_pos_receipt_render.py` §S (12 checks + 2 negative controls) — §POS-11 |
+| **"Does this customer's record hold an address at all?"** (the till print screen and the Sale Log reprint; owner 2026-10-29) | `pos.customers` through `customer_bill_to.FIELDS` | **ONE home** `customer_bill_to.view` → `{lines, on_file, note}`, dereferencing `lines` / `has_address` rather than re-deriving either. The Bill To already printed the address (§POS-07); what was missing was upstream — the till's quick-add customer form asked for a name, a phone and an email and NOT for an address, so a record created at the register could never carry one (measured live 2026-10-29: **1 of 1,636** customer records on the reporting tenant held one). The form now asks for every field `FIELDS` names (§S10 fails the build if it stops), and until a record has one the CASHIER is told, never the customer's receipt — §POS-11 |
 | **"What is this POS setting's effective value at this store"** (server side; owner 2026-10-17) | `pos.pos_settings` (org row `store_code IS NULL`, else the store override) | **ONE home** `backend/app/modules/pos/pos_config_effective.py` (`effective`, `values`, `flag`, `text`, `brand`, `disclaimers`, `SERVER_DEFAULTS`). The resolution rule lived ONLY in the browser (`frontend/src/lib/pos-config.ts`) until the server had to render a receipt; the two copies are PINNED key-by-key by `harness_pos_receipt_render.py` §B, which fails the build naming any default changed on one side only — §POS-02 |
 | **"What is this tenant called"** (the From name on its mail, a statement heading, a document title; owner 2026-10-17) | `storeops.tenants.name` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`NAME_COLUMN`, `display_name_from`, `display_name`, `display_names`) — a blank name reads as blank, never a fabricated stand-in printed as the business's own name. `notify/channels/email_resend.from_header` is the ONE place a `From:` header is assembled, and every business-facing send site passes its `org_id` so the customer sees the tenant; only genuine platform mail (the sign-in OTP) keeps the platform name. Siblings rewired in the same PR: `commcalc/router` ×2, `core/data_qa_api`, `core/operator_api`, `helpdesk/router`, `storeops/payroll_approval` ×2, `storeops/router._tenant_display_name`. Lock `harness_pos_receipt_render.py` §E6 fails the build if a second name-only reader appears — §POS-02 |
 
@@ -26144,6 +26147,7 @@ status word rather than a blank that reads as nil.
 | POS-08 | pos |
 | POS-09 | pos |
 | POS-10 | pos |
+| POS-11 | pos |
 | PAYABLES-01 | payables |
 <!-- SECTION-REGISTER:END -->
 
@@ -32906,6 +32910,69 @@ roll**, which is what a thermal printer does.
 
 Same class: §POS-02 (the one renderer), §POS-04 (one content home, every medium), §POS-07 (the other
 party on the same receipt, fixed this way first), §POS-08 (the file this one no longer clips).
+
+---
+
+## §POS-11. THE PAGE A RECEIPT PRINTS ON, AND THE BILL TO (owner report 2026-10-29)
+
+Owner, on the Verizon RQ-format receipt: *"the receipt for verizon rq format printed correctly , d
+not put hte reprint date and time on top woith the word Slae in the middle of the screen , teh bil
+to should have the customer address printed"*.
+
+### POS-11.1 Duplicate check (the build gate)
+
+Searched the index for an existing mechanism that answers "what page does a receipt print on":
+§POS-02 (the one renderer), §POS-04 (one content home, every medium), §POS-08 (the PDF, which draws
+its own page because it is not a browser), §POS-10 (the store block). **Nothing** answered it — no
+stylesheet in the repository had an `@page` rule at all. For the Bill To, §POS-07 already owns "this
+customer's address, written out"; it is dereferenced, not reimplemented, and `view()` is added
+**to that home** rather than beside it. No migration: no new fact is stored.
+
+### POS-11.2 Neither stamp was the receipt's
+
+A browser prints its **own** header and footer over any page: the date and time of the PRINTING on
+the left, the document's `<title>` centred, the URL and the page number below. It suppresses them
+only when the page declares its own `@page` margins. So the "reprint date and time" and the centred
+"Sale" the owner saw were Chrome's, printed over a receipt that had never said what page it prints
+on — and the timestamp actively contradicts the sale's own `Tendered On` line two inches below it.
+
+The class is not "the RQ layout has a stray title". It is that **a receipt never declared its page**,
+which was true of the till slip, of the tenant's own POS layout, and of every tenant. One home,
+`sale_receipt.PAGE_CSS`, emitted by both, with each layout keeping its own print padding so the ink
+does not run to a real sheet's edge.
+
+### POS-11.3 The Bill To prints what the platform was never asked to collect
+
+The address already prints whenever the record holds one — that is §POS-07, and it works; the
+regression for it is pinned. What was missing sat one screen upstream: the till's **quick-add
+customer form** asked for a first name, a last name, a phone and an email and **not** for an
+address, and it told the cashier that "full details (address, ID, etc.) can be added later". So a
+customer created at the register could not have an address to print.
+
+**Measured live, 2026-10-29:** of **1,636** customer records on the reporting tenant, **1** holds an
+address. Transaction 4605's own customer holds a phone and nothing else. That is a data gap, REPORTED
+rather than papered over: no renderer change can print a fact nobody collected.
+
+So the till now asks for every field `customer_bill_to.FIELDS` names — the same five the receipt
+prints, pinned by §S10 so the form cannot drift from the renderer again — and until a record holds
+one, `customer_bill_to.view` hands the print/send screen one sentence saying so. Deliberately to the
+CASHIER and never onto the receipt: a customer reading "no address on file" can do nothing about it,
+and a receipt that apologises for its own contents is the thing the owner called fake in the first
+place.
+
+### POS-11.4 Files, locks, money
+
+| | |
+| --- | --- |
+| New | `sale_receipt.PAGE_CSS` · `receipt_formats/render._page_css` · `customer_bill_to.view` / `NO_ADDRESS_NOTE` · `harness_pos_receipt_render.py` §S · `backend/tests/unit/test_pos_receipt_print_page.py` |
+| Changed | `sale_receipt.thermal_html` and `receipt_formats/render` (emit the page rule; the POS layout's print padding 0 → 12mm) · `pos/router._receipt_bundle` (+`bill_to`, in `_RECEIPT_KEYS`) · `lib/pos-receipt.ts` (`ReceiptBillToView`) · `SendReceiptPanel.tsx` (shows the server's sentence) · the register's quick-add customer form (asks for the address) |
+| Endpoints | **NONE** — no new route; `POST /pos/customers` already accepted every one of those fields (§S11) |
+| Migration | **NONE** — every column already exists on `pos.customers` |
+| Locks | §S (12 checks + 2 negative controls). S3 fails the build on a second `@page` rule, S2 on a layout that stops carrying it, S4 on a page with no margin printing to the sheet's edge, S7 on a receipt that tells the CUSTOMER a record is incomplete, S10 on a till form that stops asking for a field the receipt prints |
+| MONEY IMPACT | **NONE** — a receipt restates a sale already rung |
+
+Same class: §POS-07 (the customer's address, whose home this extends), §POS-10 (the shop's own block,
+the other half of the same receipt's head), §POS-02 (the one renderer both layouts go through).
 
 ---
 
