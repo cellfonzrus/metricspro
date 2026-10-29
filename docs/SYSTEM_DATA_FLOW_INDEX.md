@@ -169,6 +169,7 @@ Primary code homes:
 | COMMCALC-42 | **A per-tenant config table is read once per tenant, never once per key** | A 1,000-user load test named `commcalc.target_field_registry` the busiest table in the platform — 19,658 reads, more than every other table combined — because the registry was fetched one `report_key` at a time and the readiness matrix walks every key twice. One page cost 88 PostgREST round trips, growing with the number of report types a tenant declares. How much of the platform's fixed concurrency budget is being spent asking the same small config table the same question over and over? |
 | COMMCALC-43 | **Two kinds of activation on one number in one day, counted as events** | "Check if a byod and an upgrade is done on the same day for the same phone number at the same store." Counting LINES the live feed showed 456 such number-days; counting activation EVENTS it shows 95, and the 46 lines reading 'BYOD Upgrade' are one sale rather than a pair. What is one activation, which phone line is it on, and how does a report say "we could not measure this" when 94% of a tenant's sales carry no number at all? |
 | COMMCALC-44 | **How much device money has the carrier paid against this phone** | "Include the $ amount of the rebate and title it as chargeback amount." The figure already existed, inline in the P&L's reimbursement run, so a second report wanting it made it a home rather than a copy: the P&L and a watchdog screen must not quote two different rebates for one phone. A rebate lands months after the sale, so the amount is allowed to be ABSENT — 41 of October's 48 cases — and naming which of four absences it is matters as much as the number. |
+| COMMCALC-45 | **A sweep schedules itself from its own state** | "I should not be running the sweep it should be automatic like the rebuild or the commission calculation" — and a sweep's due-ness was a stored clock time copied into eight places, so thirteen consecutive PARTIAL runs each waited a full day and correcting the sweep's own settings pushed the next run FURTHER away. What makes a sweep due, if not the calendar? |
 | PAYABLES-01 | **A rebuild never deletes what it cannot replace** | "Rebuild via sql let me know what permissions to add" — and the rebuild, run for real, deleted all 11,000 Boost rows and inserted none, then returned HTTP 200 describing the table it had just emptied. Two migrations had been skipped while later-numbered ones landed. What is a delete+insert worth without a transaction, and which half of that pair is the one you can afford to run first? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
@@ -26127,6 +26128,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-42 | commcalc |
 | COMMCALC-43 | commcalc |
 | COMMCALC-44 | commcalc |
+| COMMCALC-45 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -39613,3 +39615,113 @@ appears.
 - §50 — `core/module_graph.py`: the fact `carrier_device_money`, its two callers and the three facts
   it dereferences, added BY HAND.
 - §CORE-13 — no migration here, so no grant.
+
+## §COMMCALC-45. A SWEEP SCHEDULES ITSELF FROM ITS OWN STATE (owner ask 2026-10-29)
+
+Owner, verbatim: *"I should not be running the sweep it should be automatic like the rebuild or the
+commission calculation - whenever anything changes it should automatically do the sweep as required."*
+
+> **Numbered COMMCALC-45.** Checked against `origin/main` immediately before pushing, per §CORE-17's
+> note that the allocator is not a reservation.
+
+He is naming the rule the platform already applies twice. `auto_calc` (§6l) made the commission
+calculation live; `derived_builds` (§COMMCALC-41) made every other stored snapshot live. Both on one
+rule: **a derived thing's freshness is its own fact, and a tenant cannot be the scheduler for it.** A
+sweep was the one thing that rule had not reached, because its due-ness was a stored clock time and
+nothing else:
+
+```python
+connector_due = not nra or nra <= now_iso          # the shipped rule, in eight places
+```
+
+### COMMCALC-45.1 WHAT THAT COST, MEASURED
+
+| Measured on the house org | |
+|---|---|
+| A **PARTIAL** run satisfied the schedule | `next_run_at` is advanced before dispatch, so a run that came back with a column missing waited a full day exactly like a clean one. From 2026-10-16 to 2026-10-28 the DLAR sweep ran **thirteen** times, read `⚠ PARTIAL — COLUMN STOPPED ARRIVING` every time, and changed nothing about when it would next try. |
+| **Changing the declaration did not make it due** | the config PUT re-derives `next_run_at` from the calendar, which pushes it INTO THE FUTURE. Correcting a field mapping, a credential or the report list left the sweep sitting on a result computed under the old declaration until tomorrow's slot — the one moment a re-run is most obviously owed. |
+| The decision was **copied, not dereferenced** | eight places answered it: `/connectors/run-due`, four per-vendor `run-due`s, the per-report slot loop and two more. And a `.lte('next_run_at', now)` filter in SQL **cannot** express "due because the declaration changed", so the copies were not merely duplication — they were a ceiling on what due-ness could ever mean. |
+
+### COMMCALC-45.2 THE ONE HOME
+
+`commcalc/sweep_due.py` — `verdict(cfg, now)`, PURE, answering from the config row the dispatcher
+already reads. Seven declared reasons, four of them due:
+
+| Reason | Due | Why it exists |
+|---|---|---|
+| `never_run` | yes | no previous contact to protect, so it jumps the floor below |
+| `config_changed` | yes | `updated_at` is later than the last ATTEMPT, so the last result answered the old question. **This is the owner's "whenever anything changes".** |
+| `retry_incomplete` | yes | the last status was not whole, and the retry gap has passed |
+| `clock` | yes | the shipped behaviour, unchanged and still the common case |
+| `disabled` / `too_soon` / `waiting` | no | each says which, in words, so a tick's answer names why a sweep did not run |
+
+**THE FLOOR ON CONTACT** (`MIN_ATTEMPT_GAP_S`, 15 minutes) sits above every reason including the
+clock: however many facts change at once, this software knocks on somebody else's door at most once
+per gap. Two cron ticks inside the gap are now one run, which the clock rule alone permitted. A human
+pressing **Run sweep now** is not governed by it — a person asking is not the automatic schedule.
+
+**THE RETRY IS A FRACTION OF THE TENANT'S OWN CADENCE** (`RETRY_FRACTION` = ¼, capped at 6 h): an
+hourly feed that came back short is re-tried in minutes, a monthly one within the day. A daily sweep
+reading PARTIAL now tries four times a day instead of once. No new tenant knob: the cadence is
+already declared, and these two intervals are platform behaviour — how often this software may
+contact a third party — not a tenant's choice (RULE TWO).
+
+**`last_attempt_at`, NOT `last_run_at`, IS THE GUARD** — and the LATER of the two, never one with the
+other as a fallback. `_sweep_set_status` writes exactly one per run: `last_run_at` when the run
+imported (which **includes** `partial`, because a partial landed rows), `last_attempt_at` when it did
+not. So a connector that failed in August and has run partially every day since carries a fresh
+`last_run_at` beside a two-month-old `last_attempt_at`; reading the attempt column first and falling
+back took the August date as "when we last knocked" and let the floor pass on every tick. The floor
+would have existed and protected nothing. Caught in the writing, kept as §B of the lock.
+
+**ONLY A CLOCK-DUE RUN ADVANCES THE SLOT.** A retry or a settings change runs now and leaves the
+scheduled slot still owed. Advancing it would let one early retry swallow the day's real run — the
+same false green this section exists to remove.
+
+### COMMCALC-45.3 SIBLINGS — fixed, or excused in writing
+
+| Caller | |
+|---|---|
+| `/connectors/run-due` (THE dispatcher pg_cron calls) | wired; its `.select()` widened to `sweep_due.READS`, because the narrow schedule-only read was itself how due-ness stayed a clock |
+| `/vip`, `/dlar`, `/b2b`, `/epay`, `/ftp-sweep` `run-due` | wired, all five through the one `_sweep_due_rows` helper |
+| the ePay per-report slot loop | left as its own clock: a report slot is a time of day the carrier publishes at, and the connector verdict already gates everything riding the shared schedule |
+| `/email-sweep/run-due` | **EXCUSED, and the only surviving `.lte('next_run_at')`.** It advances its schedule UP FRONT on purpose: during the 2026-08-26→09-01 incident a sweep cancelled mid-flight never advanced it, so every later tick restarted the same ever-larger sweep and died at 5 s, silently, for six days. Its status is also keyed per (org, account) rather than per org, so the verdict's keying does not fit it. An incident-hardened path is not re-shaped without a reason, and nothing here needed one. |
+| `notify` / `storeops` / `closing` `next_run_at` readers | a different question: a digest that already sent must not re-send, and "incomplete" has no meaning for an alert. Named so nobody reads their absence as an oversight. |
+
+### COMMCALC-45.4 AND THE FINDING IS RECORDED WHOLE
+
+A retry is worth nothing if the partial it retries is unreadable. On 2026-10-28 the DLAR status line
+named **eight** of the **forty-one** fields Boost sends that nothing reads, and the two that answer
+*"what is the renamed column called now"* were inside the `+33 more`. The sentence was right to stay
+short — a person reads it. The finding needed somewhere complete to live, and `core.job_run.detail`
+(mig 701) is already `jsonb`, so `_sweep_set_status(..., evidence=…)` stores the whole field-arrival,
+content-arrival and vintage result beside the fitted prose. **No migration.** This is the third time
+a cap has decided which part of an answer survived (§CORE-18, and the eight-name cap here): a
+sentence is for a person, evidence goes somewhere complete.
+
+### COMMCALC-45.5 DUPLICATE CHECK (the build gate)
+
+| Searched | Found | Reused or excused |
+|---|---|---|
+| a "should this sweep run now" home | **none** — eight private copies of a clock comparison | one home; all but the excused email sweep wired to it |
+| a "when is the next slot" home | `router._vip_next_run` | REUSED unchanged; `sweep_due` never computes a next slot |
+| a "may we contact this portal now" home | `portal_backoff` (mig 244, keyed on `data_source`) | NOT duplicated — it answers a cooldown the portal imposed; the floor here answers how often we may initiate. Both apply; neither is derived from the other. |
+| a place that records a run's findings | `core.job_run.detail`, already `jsonb` | REUSED; no new table, no migration |
+
+### COMMCALC-45.6 LOCKED
+
+`backend/harness_sweep_due.py` — 47 DB-free checks in the dependency-free module-graph job (proved
+importable with the wheels genuinely blocked). §A is the **real production config row** read on
+2026-10-29, with the shipped clock rule kept as a control that says NOT due. §B is the stale-attempt
+trap. §F reads the router as SOURCE, because the defect was never in a home — it was in the callers:
+the inline rule is an armed negative control, the SQL clock filters are **pinned at one** (the excused
+email sweep, by name) and may only shrink, and the slot-advance guard and the widened `select` are
+asserted. Verified by reverting the DLAR filter: 3 checks fail, 44 pass.
+
+### COMMCALC-45.7 Cross-references
+
+Same rule, other subjects: §6l (`auto_calc` — the commission calculation), §COMMCALC-41
+(`derived_builds` — every other stored snapshot). Same class of silence: §CORE-18 (a cap deciding
+which part of a status survives), §COMMCALC-40 (the status word that was a literal), §COMMCALC-16
+(the diagnostic the retries now act on). Neighbours: §19.21 (a status reporting what was pulled
+rather than what was written), mig 244 / `portal_backoff` (the cooldown a portal imposes).

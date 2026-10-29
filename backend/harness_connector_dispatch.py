@@ -36,6 +36,9 @@ import ast
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import harnesslib as _hl   # the ONE comment/docstring stripper (§24) — a lock reads CODE, not prose
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
@@ -119,6 +122,13 @@ ok("C2 …and every one of them has a puller (the sets cannot drift apart unnoti
 ok("C3 an EXTERNALLY registered kind is not assumed to need a browser",
    "register_sweep" in RSRC and "google_closing" not in BROWSER,
    "a third-party puller must never be blocked by a guess about what it launches")
+def _refusal_block(due_src):
+    """The browser-refusal block only: from the browser test to its own `continue`. Sliced, never a
+    fixed character window, which silently measures the wrong thing the moment the block grows."""
+    blk = due_src.split("if kind in _BROWSER_SWEEP_KINDS", 1)[1]
+    return blk[:blk.index("continue") + len("continue")]
+
+
 DUE = _func_src(ROUTER, "connectors_run_due")
 ok("C4 the generic dispatcher asks before invoking a browser puller in-process",
    "_BROWSER_SWEEP_KINDS and not _browser_allowed()" in DUE)
@@ -126,12 +136,19 @@ ok("C5 with a sweeps worker configured it forwards the WHOLE tick, reusing the e
    "raise BrowserWorkProxy()" in DUE and "_browser_service_url()" in DUE)
 ok("C6 with NOWHERE to forward it, the connector's own row says so — an attempt, never a run",
    "mark_run=True, success=False" in DUE and "BROWSER_SERVICE_URL is not set" in DUE)
+# RE-AIMED 2026-10-29, NOT RELAXED (index §COMMCALC-45). This pin read
+# `DUE.index("nra = cf.get('next_run_at')")` — the line that compared the stored clock. Due-ness is now
+# one dereferenced verdict (`_sweep_due.verdict`), so the literal is gone and the pin CRASHED on a
+# substring it could no longer find. The claim it was making is unchanged and still exactly right: the
+# browser refusal must come before anything that could satisfy the schedule. It is now aimed at the
+# verdict call and, more strongly, asserts that the refusal block reaches NO schedule write at all.
 ok("C7 …and next_run_at is NOT advanced by a refusal (the schedule was not satisfied)",
-   DUE.index("blocked.append") < DUE.index("nra = cf.get('next_run_at')"))
-# Slice the REFUSAL BLOCK itself — from the browser test to its `continue` — instead of guessing a
-# character width. A fixed window silently measures the wrong thing the moment the block grows.
-_blk = DUE.split("if kind in _BROWSER_SWEEP_KINDS", 1)[1]
-_blk = _blk[:_blk.index("continue") + len("continue")]
+   DUE.index("blocked.append") < DUE.index("_sweep_due.verdict(")
+   # CODE, NOT PROSE (§24): the refusal block's own comment says "Advancing next_run_at is
+   # deliberately skipped", so a raw substring test fails on the very sentence that documents the
+   # behaviour being asserted. Caught on the first run of this re-aim.
+   and "next_run_at" not in _hl.py_code_only(_refusal_block(DUE)))
+_blk = _refusal_block(DUE)   # the same slicer C7 now uses
 ok("C8 the refusal ends in `continue`, so the non-browser sweeps in the same tick still run",
    _blk.rstrip().endswith("continue") and "dispatch[kind]" not in _blk,
    "the fan-out must not be lost because one connector needs a browser")
