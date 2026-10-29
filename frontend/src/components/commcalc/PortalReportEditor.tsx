@@ -146,17 +146,20 @@ export default function PortalReportEditor(
         {!meta ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div> : (
           <>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'left' }}>
-                  <th style={{ padding: '4px 6px' }}>Report name</th>
-                  <th style={{ padding: '4px 6px' }}>Menu words that reach it</th>
-                  <th style={{ padding: '4px 6px', width: 90 }}>Export</th>
-                  <th style={{ padding: '4px 6px', width: 86 }}>Filters</th>
-                  <th style={{ padding: '4px 6px', width: 78 }}>Per day</th>
-                  <th style={{ padding: '4px 6px', width: 40 }} />
-                </tr>
-              </thead>
+              {/* These cells LABEL the columns of a form; they are deliberately not a sortable
+                  header row, and so not marked up as one (harness_table_sort_lock: "a DATA table has
+                  a header row to click"). The row order here IS part of the configuration — it is the
+                  order the pull runs the reports in — so offering a sort would present a tenant's
+                  declaration as one view of it and lose what the order means. Nothing to sort. */}
               <tbody>
+                <tr style={{ fontSize: 11, color: 'var(--text3)', textAlign: 'left' }}>
+                  <td style={{ padding: '4px 6px' }}>Report name</td>
+                  <td style={{ padding: '4px 6px' }}>Menu words that reach it</td>
+                  <td style={{ padding: '4px 6px', width: 90 }}>Export</td>
+                  <td style={{ padding: '4px 6px', width: 86 }}>Filters</td>
+                  <td style={{ padding: '4px 6px', width: 78 }}>Per day</td>
+                  <td style={{ padding: '4px 6px', width: 40 }} />
+                </tr>
                 {rows.map((r, i) => (
                   <Fragment key={r.key || i}>
                     <tr style={{ borderTop: '1px solid var(--border)', fontSize: 12 }}>
