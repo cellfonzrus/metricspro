@@ -482,7 +482,7 @@ class LiveLoginSession:
         self.processor = (row.get("processor") or "").strip().lower()
         self._is_b2b = self.processor in _B2B_PROCESSORS
         # The source's declared calibration. Its "login" key is what `login_progressive` reads when a
-        # page's own words do not say which control takes which value (§COMMCALC-40) — config, never a
+        # page's own words do not say which control takes which value (§COMMCALC-46) — config, never a
         # branch in the login code.
         self.portal_calibration = row.get("portal_calibration") or {}
         self.persist = persist                    # callable(updates: dict) -> persists to data_source
@@ -1044,7 +1044,7 @@ class LiveLoginSession:
 
             # A progressive step may precede the password field: a page that asks for an account or
             # company id, or just the user id, and reveals the password only once that is done. Which
-            # control is which is read off the page by `login_progressive` (index §COMMCALC-40) — this
+            # control is which is read off the page by `login_progressive` (index §COMMCALC-46) — this
             # used to be one vendor's element ids spelled here, which is why every OTHER portal with
             # the same shape reported a broken login form.
             if not vp._password_frame(page)[1]:
@@ -1209,7 +1209,7 @@ class LiveLoginSession:
         its continue control, wait for the password field.
 
         ONE home for this, shared with the unattended login (`login_progressive.advance_past_first_step`,
-        index §COMMCALC-40). It used to be this method, spelling `#companyId` / `#btnSubmit` /
+        index §COMMCALC-46). It used to be this method, spelling `#companyId` / `#btnSubmit` /
         `#password` — one portal's markup, which made the step work for that portal and for nothing
         else. Best-effort: a portal without a first step is untouched, and the note is kept for the
         operator's screen rather than raised."""

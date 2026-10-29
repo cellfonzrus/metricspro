@@ -240,7 +240,7 @@ BACKEND_RULES = [
       '(r.get("connector_scope") or {}).get("applies", True)']),
     ("commcalc/router.py", "the connector-health scan reports a not-applicable connector as unmonitored, never alerted",
      ['if _sc.get("applies") is False:', '"kind": "unmonitored"', ':not_applicable"']),
-    # WIDENED 2026-10-27 (§COMMCALC-40): the label used to be passed to the b2bsoft login family ONLY,
+    # WIDENED 2026-10-27 (§COMMCALC-46): the label used to be passed to the b2bsoft login family ONLY,
     # so every other portal — the path `vp.begin_login` / `vp.complete_2fa` serves — was described to
     # its operator by one vendor's name. Both families now take `label=`, which is why the pinned
     # strings are the partial's label argument rather than one function's name: a call site that hands

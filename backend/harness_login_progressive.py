@@ -1,4 +1,4 @@
-"""PROOF + LOCK: what a login page wants before it will show the password (index §COMMCALC-40).
+"""PROOF + LOCK: what a login page wants before it will show the password (index §COMMCALC-46).
 
 WHAT THIS PROVES, DB-free and browser-free. The decision itself over fake pages of plain dicts: a
 single-page sign-in needs no step; a two-page sign-in (a user id and a Continue button, the owner's

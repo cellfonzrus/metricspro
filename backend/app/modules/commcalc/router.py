@@ -42416,7 +42416,7 @@ def _do_portal_login(sid: str, org_id: str):
         return
     s = rows[0]
     # BOTH variants name the portal from the registry now: the generic one is the path every portal
-    # but b2bsoft takes, and it used to spell one vendor's name at all of them (§COMMCALC-40).
+    # but b2bsoft takes, and it used to spell one vendor's name at all of them (§COMMCALC-46).
     _login_lab = _connector_label(client, org_id, s.get("processor"))
     _login_fn = _functools.partial(
         vp.begin_login_b2bsoft if (s.get("processor") or "").lower() in ("b2bsoft", "b2b")

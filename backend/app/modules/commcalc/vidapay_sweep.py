@@ -1771,7 +1771,7 @@ def begin_login(url, account_id, user, pw, proxy_url=None, label=None):
             if not pw_el:
                 # The password may simply be on the NEXT page: a sign-in that asks for an account id or
                 # a user id first and reveals the password once that step is taken. ONE home decides
-                # what this page wants, read off the page itself (index §COMMCALC-40). Before this, a
+                # what this page wants, read off the page itself (index §COMMCALC-46). Before this, a
                 # two-page sign-in here was reported as a form that renders unexpectedly.
                 from app.modules.commcalc import login_progressive as _lp
                 _lp.advance_past_first_step(page, {"account_id": account_id, "username": user})
@@ -1904,7 +1904,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None, label=None):
                 return True
 
             # ── STEP 1: whatever this page wants before it will show the password. ──
-            # Read off the page by `login_progressive` (index §COMMCALC-40) — THE one home for "the
+            # Read off the page by `login_progressive` (index §COMMCALC-46) — THE one home for "the
             # password is on a later page", shared with the live session and with the generic login.
             # This step used to be spelled here as #companyId / #btnSubmit / #username, and that copy
             # is why the same shape of form at any OTHER portal reported a broken login form.

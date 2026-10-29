@@ -173,7 +173,7 @@ Primary code homes:
 | COMMCALC-44 | **How much device money has the carrier paid against this phone** | "Include the $ amount of the rebate and title it as chargeback amount." The figure already existed, inline in the P&L's reimbursement run, so a second report wanting it made it a home rather than a copy: the P&L and a watchdog screen must not quote two different rebates for one phone. A rebate lands months after the sale, so the amount is allowed to be ABSENT — 41 of October's 48 cases — and naming which of four absences it is matters as much as the number. |
 | COMMCALC-45 | **A sweep schedules itself from its own state** | "I should not be running the sweep it should be automatic like the rebuild or the commission calculation" — and a sweep's due-ness was a stored clock time copied into eight places, so thirteen consecutive PARTIAL runs each waited a full day and correcting the sweep's own settings pushed the next run FURTHER away. What makes a sweep due, if not the calendar? |
 | PAYABLES-01 | **A rebuild never deletes what it cannot replace** | "Rebuild via sql let me know what permissions to add" — and the rebuild, run for real, deleted all 11,000 Boost rows and inserted none, then returned HTTP 200 describing the table it had just emptied. Two migrations had been skipped while later-numbered ones landed. What is a delete+insert worth without a transaction, and which half of that pair is the one you can afford to run first? |
-| COMMCALC-40 | **The password is sometimes on the next page — one home for a login's first step** | "If there is no password on the first page then click to continue with username and then enter password on thr next page" — said after a two-page sign-in was reported as a form that renders unexpectedly, in a message naming a different vendor's portal. Three paths answered "what does this page want first", two by spelling one vendor's element ids and one not at all. What is a login's first step a fact ABOUT, and what does a page that asks for something we do not hold deserve to be told? |
+| COMMCALC-46 | **The password is sometimes on the next page — one home for a login's first step** | "If there is no password on the first page then click to continue with username and then enter password on thr next page" — said after a two-page sign-in was reported as a form that renders unexpectedly, in a message naming a different vendor's portal. Three paths answered "what does this page want first", two by spelling one vendor's element ids and one not at all. What is a login's first step a fact ABOUT, and what does a page that asks for something we do not hold deserve to be told? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26115,7 +26115,6 @@ status word rather than a blank that reads as nil.
 | COMMCALC-37 | commcalc |
 | COMMCALC-38 | commcalc |
 | COMMCALC-39 | commcalc |
-| COMMCALC-40 | commcalc |
 | CORE-05 | core |
 | CORE-06 | core |
 | CORE-07 | core |
@@ -26139,6 +26138,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-43 | commcalc |
 | COMMCALC-44 | commcalc |
 | COMMCALC-45 | commcalc |
+| COMMCALC-46 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -34939,13 +34939,17 @@ capture writes for), §COMMCALC-38 (the one normalizer and the invoice feed). Ne
 tick, which is why a capture is a queued command and not a second thread), §COMMCALC-13 (what a
 finished session leaves on the row).
 
-## §COMMCALC-40. THE PASSWORD IS SOMETIMES ON THE NEXT PAGE — one home for a login's first step (owner ask 2026-10-27)
+> **Numbered COMMCALC-46, not COMMCALC-40.** The allocator handed out 40 through 45 while this was
+> in flight — the status-word verdict took 40. Renumbered whole on 2026-10-29; nothing outside this
+> section referenced the old number.
+
+## §COMMCALC-46. THE PASSWORD IS SOMETIMES ON THE NEXT PAGE — one home for a login's first step (owner ask 2026-10-27)
 
 Owner, verbatim: *"If there is no password on the first page then click to continue with username and
 then enter password on thr next page"* — said after his UPS billing login reported *"Could not find
 the password field on the VidaPay login page"* about a `ups.com` sign-in page.
 
-### COMMCALC-40.1 THE CLASS, not the instance
+### COMMCALC-46.1 THE CLASS, not the instance
 
 "The password is on a later page" is not a fact about one vendor's SSO. It is a SHAPE of login form:
 the page asks for something first — an account or company id, or just the user id — and reveals the
@@ -34961,7 +34965,7 @@ Two copies of one vendor's element ids, and nothing for the generic path. So the
 exactly one portal, and the next portal with the same shape read as a broken form — which is what the
 owner hit. Fixing it for UPS alone would have left the third one broken, so the MECHANISM is fixed.
 
-### COMMCALC-40.2 THE ONE HOME
+### COMMCALC-46.2 THE ONE HOME
 
 `commcalc/login_progressive.py` decides, from a page's OWN controls and OWN words, what its first step
 is. It names no portal, no tenant and no element id (RULE TWO).
@@ -34993,7 +34997,7 @@ password in it.
 `data_source.portal_calibration["login"]` = `{"fields": {...}, "press": "...", "field_words": {...}}`.
 A declared selector wins over anything read off the page.
 
-### COMMCALC-40.3 THE COPY NAMES THE PORTAL IT ACTUALLY TRIED
+### COMMCALC-46.3 THE COPY NAMES THE PORTAL IT ACTUALLY TRIED
 
 `vidapay_sweep.begin_login` and `complete_2fa` now take `label=` and dereference `_portal_label`, like
 their b2bsoft twins have since §12a.2. `router._connector_label` passes the registry label (mig 1014)
@@ -35005,7 +35009,7 @@ stopped naming three credentials at a portal that asked for two).
 Excused, with the reason: `run_vidapay_sweep`'s session-expired sentence and the `#companyId` session
 classifier are that vendor's own sweep, dispatched only for its own processor.
 
-### COMMCALC-40.4 Locked
+### COMMCALC-46.4 Locked
 
 `backend/harness_login_progressive.py` — **89 checks**, DB-free and browser-free, over fake pages of the
 exact dicts `read_page_controls` returns (this platform can reach neither portal from CI, and a
@@ -35019,14 +35023,14 @@ shrink, never higher). Nine armed negative controls, including the old press-wha
 
 `harness_connector_scope_lock.py`'s router pin was WIDENED to both login families rather than relaxed.
 
-### COMMCALC-40.5 Not built
+### COMMCALC-46.5 Not built
 
 Nothing reads `portal_calibration["login"]` on a screen yet — a tenant whose page explains nothing has
 the declaration written for it by whoever drives the live login, like §COMMCALC-39's capture. And the
 b2bsoft variant keeps its own ids as a fallback *after* the mechanism has answered: removing them needs
 a session at that portal, which nothing here has.
 
-### COMMCALC-40.6 Cross-references
+### COMMCALC-46.6 Cross-references
 
 Same home, other axes: §COMMCALC-39 (the page reader this dereferences), §COMMCALC-38 (the spelling
 rule), §12a.2 (the registry label the copy names). Neighbours: §COMMCALC-24 (which process may answer),

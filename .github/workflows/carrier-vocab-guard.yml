@@ -1014,7 +1014,7 @@ on:
       # one store key. The two migrations are named too, because the natural key the lock compares
       # lives in one of them.
       - "backend/harness_supplier_invoice_feed.py"
-      # index §COMMCALC-40 — ONE HOME FOR A LOGIN'S FIRST STEP. The lock names itself, the home, and
+      # index §COMMCALC-46 — ONE HOME FOR A LOGIN'S FIRST STEP. The lock names itself, the home, and
       # the three paths that used to answer "is the password on this page" their own way: a login path
       # that spells an element id again, or loses the registry label from its copy, is exactly what
       # this job exists to catch. The router is named because it is where the label is passed.
@@ -1913,7 +1913,7 @@ jobs:
       - name: Run the supplier-invoice lock (ONE column-vocabulary mechanism so neither feed grows its own normalizer; a blank charge is None and never 0.00; the natural key equals the migration's unique index; the distributor-only sibling is named not hidden - index COMMCALC-38)
         working-directory: backend
         run: python3 harness_supplier_invoice_feed.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the progressive-login lock (ONE home for what a login page wants before it will show the password, read off the page rather than spelled as one vendor's element ids; a page that asks for what we cannot supply is not submitted empty; both login families name the portal they actually tried - index COMMCALC-40)
+      - name: Run the progressive-login lock (ONE home for what a login page wants before it will show the password, read off the page rather than spelled as one vendor's element ids; a page that asks for what we cannot supply is not submitted empty; both login families name the portal they actually tried - index COMMCALC-46)
         working-directory: backend
         run: python3 harness_login_progressive.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the live-login progress lock (no phase can stall forever; the operator's 2FA window is not shortened; a stalled session is ended AND the row is told; the bot-wall fallback belongs to the portal it is for - index COMMCALC-10)

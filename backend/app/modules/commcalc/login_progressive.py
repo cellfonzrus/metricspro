@@ -1,4 +1,4 @@
-"""WHAT A LOGIN PAGE WANTS BEFORE IT WILL SHOW THE PASSWORD FIELD — the one home (index §COMMCALC-40).
+"""WHAT A LOGIN PAGE WANTS BEFORE IT WILL SHOW THE PASSWORD FIELD — the one home (index §COMMCALC-46).
 
 WHY THIS MODULE EXISTS. A portal's sign-in is not always one page. Plenty of them ask for something
 first — an account or company id, or just the user id — and reveal the password only after that step

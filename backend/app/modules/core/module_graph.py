@@ -530,7 +530,7 @@ FACTS: dict[str, dict] = {
             # the same cold restore, which is the whole point of the extraction: a new portal feed is
             # four functions, not a copied sweep
             'app/modules/commcalc/supplier_invoice_sweep.py': ('prp',),
-            # the login step (§COMMCALC-40) reuses this loop's PAGE READER and SELECTOR RULE whole —
+            # the login step (§COMMCALC-46) reuses this loop's PAGE READER and SELECTOR RULE whole —
             # "what controls does this page offer" is one question whether the page is a report page
             # or a sign-in page, and a second reader in the login path is the duplicate defect
             'app/modules/commcalc/login_progressive.py': ('prp',),
@@ -567,11 +567,11 @@ FACTS: dict[str, dict] = {
             # is compared under another there is the drift this home exists to prevent
             'app/modules/commcalc/portal_report_pull.py': ('norm',),
             # a login page's controls are compared against the words that say what they take
-            # (COMMCALC-40) — the same rule that compares a report header, for the same reason
+            # (COMMCALC-46) — the same rule that compares a report header, for the same reason
             'app/modules/commcalc/login_progressive.py': ('rc',),
         },
     },
-    # ── §COMMCALC-40 — what a login page wants before it will show the password ──────────────────
+    # ── §COMMCALC-46 — what a login page wants before it will show the password ──────────────────
     'login_first_step': {
         "question": 'Is the password on this login page, and if not, what does the page want first? '
                     'Every login driver must answer it before typing anything, and three of them '
@@ -585,7 +585,7 @@ FACTS: dict[str, dict] = {
                     'and own words here, and a portal whose markup explains nothing declares its '
                     'fields in portal_calibration["login"] (RULE TWO: config, never code).',
         "homes": ('app/modules/commcalc/login_progressive.py',),
-        "index": ('COMMCALC-40',),
+        "index": ('COMMCALC-46',),
         "locks": ('harness_login_progressive.py',),
         # SNAPSHOT — written BY HAND (§50). The planner is PURE and takes read_page_controls' output,
         # so the lock can prove every page shape without a browser; the driver is the only caller of
