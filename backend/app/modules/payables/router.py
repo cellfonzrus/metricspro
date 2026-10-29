@@ -703,16 +703,43 @@ def list_source_maps(org_id: str = ORG_ID):
                      .eq("org_id", org_id).execute().data) or []}
 
 
+def _source_map_changed(client, org_id, what):
+    """A DECLARATION CHANGED, so the ledger derived from it is stale (§COMMCALC-41, `config_inputs`).
+
+    The same hook every lander calls, with NO period — a payable balance is a point-in-time fact, not a
+    month's figure. This is why editing net terms does not need the Rebuild button afterwards: the owner ask
+    of 2026-10-29 was that the setting be programmable, and a setting whose figures only agree with it after
+    the next unrelated shipment is not programmable, it is a second thing to remember.
+    """
+    try:
+        from app.modules.commcalc import auto_calc as _auto
+        return _auto.landed(client, org_id, table="payable_source_map", periods=[],
+                            source="payable_source_map_edit", rows=1)
+    except Exception as e:                                   # never let bookkeeping fail the save itself
+        print(f"WARN source-map hook failed org={org_id} {what}: {type(e).__name__}: {e}")
+        return {"queued": False, "reason": "error", "error": f"{type(e).__name__}: {e}"}
+
+
 @router.post("/source-maps")
 def upsert_source_map(body: dict, org_id: str = ORG_ID):
     client = sb()
     row = dict(body or {})
     row["org_id"] = org_id
-    if not row.get("carrier_id") or not row.get("source_table") or not row.get("imei_field"):
-        raise HTTPException(400, "carrier_id, source_table, imei_field are required")
+    if not row.get("carrier_id"):
+        raise HTTPException(400, "carrier_id is required")
+    # REQUIRED ON CREATION, NOT ON EVERY EDIT. Demanding `source_table` and `imei_field` on an edit forced
+    # every caller to resend the whole declaration to change one field, which is how a settings screen
+    # overwrites a column it never showed anyone. An existing row is PATCHED: PostgREST's upsert updates only
+    # the columns present, so an absent key is left exactly as it was.
+    existing = (client.schema("commcalc").table("payable_source_map").select("id")
+                .eq("org_id", org_id).eq("carrier_id", row["carrier_id"]).limit(1).execute().data) or []
+    if not existing and not (row.get("source_table") and row.get("imei_field")):
+        raise HTTPException(400, "source_table and imei_field are required to declare a NEW carrier")
     r = (client.schema("commcalc").table("payable_source_map")
          .upsert(row, on_conflict="org_id,carrier_id").execute())
-    return {"saved": True, "row": (r.data or [None])[0]}
+    saved = (r.data or [None])[0]
+    return {"saved": True, "row": saved,
+            "auto": _source_map_changed(client, org_id, f"upsert carrier={row['carrier_id']}")}
 
 
 @router.delete("/source-maps/{map_id}")
@@ -720,7 +747,7 @@ def delete_source_map(map_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema("commcalc").table("payable_source_map").delete() \
         .eq("org_id", org_id).eq("id", map_id).execute()
-    return {"deleted": True}
+    return {"deleted": True, "auto": _source_map_changed(client, org_id, f"delete map={map_id}")}
 
 
 # ── per-tenant settings: the clock-in priority-ack gate + the priority window % ────────────────────

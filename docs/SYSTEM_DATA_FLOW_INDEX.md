@@ -39007,9 +39007,50 @@ incomplete read is still an incomplete ledger.
 - **Migration 1100 is not applied.** Until it is, the queue is per process: a landing in one worker is
   rebuilt by that worker, and two workers receiving two landings could rebuild the same snapshot
   concurrently. The durable claim is what makes that impossible, and it is one `create table`.
-- **`payable_source_map` declares `net_terms_days` NULL for Luxelink**, so 0 of its 4,495 payable rows
-  carry a due date whatever rebuilds them. Liveness does not create a date nobody declared
-  (§COMMCALC-34).
+- ~~**`payable_source_map` declares `net_terms_days` NULL for Luxelink**, so 0 of its 4,495 payable rows
+  carry a due date whatever rebuilds them.~~ **RESOLVED — re-measured against production 2026-10-29:**
+  Luxelink's Total / MA map declares 21 days and **4,563 of 4,563** of its ledger rows carry a due date,
+  as do 35,645 of 35,645 of the house's. The principle stands and is now §COMMCALC-41.8's: liveness does
+  not create a date nobody declared (§COMMCALC-34) — it restates the dates when the declaration changes.
+
+### COMMCALC-41.8 A DECLARATION IS AN INPUT (owner ask 2026-10-29)
+
+Owner, verbatim: *"Put the Net term days as 14 from the back , programmable not hard code"*.
+
+**It already was programmable, and that was not enough.** Net terms live in
+`commcalc.payable_source_map.net_terms_days`, read first by `payables/engine._terms_days`, and no number
+of days appears anywhere in code (RULE TWO was never broken here). What was missing is that **changing
+the setting did not restate the figures derived from it.** The stored due dates on
+`commcalc.device_payable_ledger` were computed with the old terms and stayed on them until some
+unrelated feed happened to land. That is §COMMCALC-41's own defect one step further back: the tenant is
+the scheduler again, only now for a settings change instead of an upload.
+
+**The rule.** A build's DECLARATION is one of its inputs. `derived_builds.BUILDS` carries
+`config_inputs` beside `inputs`, and `matches()` treats the two the same for staleness:
+
+| | `inputs` | `config_inputs` |
+|---|---|---|
+| what it is | an external feed that ARRIVES | a config table a person EDITS |
+| named by | `data_lineage_registry` identity — a literal fails §B2 of the lock | its own table name; a config table has no external feed to trace, and inventing a lineage entry for one would be a fake fact |
+| makes the build stale | yes | yes — this is the whole point |
+| who fires the hook | the lander | the endpoint that writes it (`POST /payables/source-maps` and the delete beside it, via `_source_map_changed`) |
+
+`payable_ledger` declares `config_inputs = ("payable_source_map",)`. The edit calls the SAME
+`auto_calc.landed` with **no period**, so it inherits the one debounce, claim, poller and
+`auto_calc_on_landing` switch — a terms change is not a second trigger. Its `SOURCE_LABELS` entry makes
+the operator's sentence say *a change to the carrier's payment terms or source settings* rather than
+naming an import that never happened.
+
+**Locked** so it cannot un-wire: §B5 (a declared config table must be one some endpoint here actually
+writes — a declaration nobody can edit cannot make anything stale), §B6 (declared once, never also as a
+lineage input), §C4 (every writer of a declaration fires the hook) and §C5 (the payment-terms door in
+particular), with four planted violations required RED.
+
+**The screen.** `POST /payables/source-maps` already existed, so nothing new was opened; it now PATCHES
+an existing carrier instead of demanding the whole declaration back, which is how a settings screen
+overwrites a column it never showed anyone. The Payables page gains a **Payment Terms** tab reading the
+same endpoint. A blank box means *the carrier stamps its own due date* (Boost / VIP,
+`due_date_mode='field'`) and is deliberately NOT the same as `0`.
 
 ### COMMCALC-41.7 Cross-references
 

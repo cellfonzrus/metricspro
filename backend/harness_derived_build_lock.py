@@ -260,6 +260,48 @@ def run(tree=None):
         if not hit or fn_src(tree[hit[0]], fn) is None:
             bad_run.append((p, fn))
     check("B4 every build's runner exists", not bad_run, bad_run)
+    # A DECLARATION IS AN INPUT (§COMMCALC-41.8). Held to its OWN rule, not B2's: a config table carries no
+    # lineage identity, so requiring one would force a fake feed into data_lineage_registry. What it must not
+    # be is a table that nothing in this repo writes — then the build could never be made stale by an edit.
+    bad_cfg = []
+    for b in builds:
+        for t in (b.get("config_inputs") or ()):
+            if not isinstance(t, str) or not t.strip() or t.startswith("@"):
+                bad_cfg.append((b["key"], t)); continue
+            if not any(t in src for path, src in tree.items() if path.endswith("router.py")):
+                bad_cfg.append((b["key"], t))
+    check("B5 every config_input is a real table some endpoint in this repo writes — a declaration nobody "
+          "can edit cannot make anything stale", not bad_cfg, bad_cfg)
+    overlap = [(b["key"], t) for b in builds
+               for t in (b.get("config_inputs") or ()) if t in (b.get("inputs") or ())]
+    check("B6 a config table is declared ONCE, under config_inputs, and never also as a lineage input — "
+          "two homes for one fact is the duplicate defect", not overlap, overlap)
+    # THE RULE IS DERIVED, NOT PINNED. A pinned list of config tables stays GREEN when somebody empties
+    # `config_inputs` — measured here on 2026-10-29, that exact control was the one violation 11 of 12
+    # planted ones caught. So the check reads the resolver: whatever table a build loads its DECLARATION
+    # from must be one of that build's `config_inputs`. Deleting the entry now contradicts the code that
+    # reads it, and a NEW build with a declared resolver is held to the same rule without touching this file.
+    missing_cfg = []
+    for b in builds:
+        if not b.get("inputs_fn"):
+            continue
+        mod, _, fn = str(b["inputs_fn"]).partition(":")
+        rp = mod.replace("app.", "app/", 1).replace(".", "/") + ".py"
+        hit = [k for k in tree if k.endswith(rp)]
+        node = None
+        if hit:
+            for n, nd in functions(tree[hit[0]]):
+                if n == fn:
+                    node = nd
+                    break
+        if node is None:
+            continue                                         # B3 already fails on a resolver that is missing
+        for t in sorted(table_calls(node, {"select"})):
+            if t not in (b.get("config_inputs") or ()):
+                missing_cfg.append((b["key"], b["inputs_fn"], t))
+    check("B7 the table a build reads its DECLARATION from is one of its config_inputs — derived from the "
+          "resolver, so emptying config_inputs contradicts the code rather than passing quietly",
+          not missing_cfg, missing_cfg)
 
     # ═══ §C the landing of an input table fires the hook ═════════════════════════════════════════════════
     print("\n§C A LANDING OF AN INPUT TABLE FIRES THE HOOK")
@@ -292,6 +334,30 @@ def run(tree=None):
     asset = fn_src(tree.get("app/modules/asset/router.py", ""), "process_asset_ledger_bytes") or ""
     check("C3 …and the asset-ledger landing in particular does — the measured defect, pinned",
           "landed(" in asset and "asset_ledger" in asset)
+    # THE SAME RULE FOR THE DECLARATION. Without this, somebody adds a settings screen, the terms change and
+    # the due dates stay on the old ones until an unrelated shipment lands — which is the owner-visible
+    # defect of 2026-10-29 restored, one step further back than the button.
+    cfg_tables = {t for b in builds for t in (b.get("config_inputs") or ()) if isinstance(t, str)}
+    cfg_silent = []
+    for path, src in sorted(tree.items()):
+        if path in (REG, AUTO) or path.endswith("refresh.py"):
+            continue
+        if not any(t in src for t in cfg_tables):
+            continue
+        for name, node in functions(src):
+            wrote = table_calls(node, {"insert", "upsert", "delete"}) & cfg_tables
+            if not wrote:
+                continue
+            whole = seg(src, node)
+            if "landed(" in whole or "_source_map_changed(" in whole \
+                    or (path, name) in auto_excused or (path, name) in excused:
+                continue
+            cfg_silent.append((path, name, sorted(wrote)))
+    check("C4 every writer of a build's DECLARATION fires the hook too — editing a setting must restate the "
+          "figures derived from it, not wait for an unrelated upload", not cfg_silent, cfg_silent)
+    tmap = fn_src(tree.get("app/modules/payables/router.py", ""), "upsert_source_map") or ""
+    check("C5 …and the payment-terms door in particular does — the owner ask of 2026-10-29, pinned",
+          "_source_map_changed(" in tmap, tmap[-200:])
 
     # ═══ §D the button and the hook are the same rebuild ═════════════════════════════════════════════════
     print("\n§D THE BUTTON AND THE HOOK ARE THE SAME REBUILD")
@@ -404,6 +470,18 @@ if __name__ == "__main__":
         ("an input table is spelled as a literal instead of dereferenced",
          mutate(base, REG, '"inputs": (_lineage.PAYMENT_DETAIL, _lineage.MI_RESIDUAL),',
                 '"inputs": ("raw_payment_detail", "@MI_RESIDUAL"),')),
+        ("the payment-terms door stops firing the hook, so a terms change waits for a shipment",
+         mutate(base, "app/modules/payables/router.py",
+                '"auto": _source_map_changed(client, org_id, f"upsert carrier={row[\'carrier_id\']}")',
+                '"auto": None')),
+        ("the declaration is dropped from config_inputs, so editing it makes nothing stale",
+         mutate(base, REG, '"config_inputs": ("payable_source_map",),', '"config_inputs": (),')),
+        ("the declaration is ALSO listed as a lineage input — two homes for one fact",
+         mutate(base, REG, '"config_inputs": ("payable_source_map",),',
+                '"config_inputs": ("payable_source_map", "asset_ledger"),')),
+        ("a config table nothing in this repo can edit is declared, so no edit could make it stale",
+         mutate(base, REG, '"config_inputs": ("payable_source_map",),',
+                '"config_inputs": ("payable_terms_that_do_not_exist",),')),
     ]
     reds = 0
     for label, t in controls:
