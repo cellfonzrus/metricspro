@@ -4192,11 +4192,17 @@ def declared_vs_captured(date_from: str, date_to: str = "", store_code: str = ""
     def _dk(r):
         return str((r or {}).get("close_date") or "")[:10]
 
+    # A STORE-DAY MAY HAVE SEVERAL CLOSING ROWS. In per-rep closing mode there is one
+    # `daily_closing` row PER REP, and a store-level count is the SUM of them — so the rows are kept
+    # as a LIST and folded, never keyed one-per-store-day. Keeping one of them would have reported a
+    # store where three reps each declared two upgrades as having declared two, and accused it of
+    # under-declaring four sales it had declared. (Caught 2026-10-29; `_declared_by_store_day` above
+    # still keys one row per store-day for its own callers and is reported, not changed here.)
     keyed: dict = {}
     for r in closings:
-        keyed.setdefault((_sk(r), _dk(r)), {"row": r, "lines": []})
+        keyed.setdefault((_sk(r), _dk(r)), {"rows": [], "lines": []})["rows"].append(r)
     for ln in lines:
-        keyed.setdefault((_sk(ln), _dk(ln)), {"row": None, "lines": []})["lines"].append(ln)
+        keyed.setdefault((_sk(ln), _dk(ln)), {"rows": [], "lines": []})["lines"].append(ln)
     for (code, dt), pair in keyed.items():
         if not dt:
             continue
@@ -4206,14 +4212,23 @@ def declared_vs_captured(date_from: str, date_to: str = "", store_code: str = ""
                 declared_rows.append({"date": dt, "store_code": code, "rep": who,
                                       "metric_key": mk, "units": v.get("units"),
                                       "amount": v.get("amount")})
-        # The store's OWN declarations (rep ""), so a store-declared category reconciles at the grain
-        # it was declared at instead of being attributed to whoever submitted the closing.
-        folded = _metrics.declared(cat, pair["row"], pair["lines"]) or {}
-        for mk, e in folded.items():
-            if _metrics.is_employee_declared(cat, mk) or not e.get("declared"):
+        # The store's OWN declarations (rep ""), so a store-declared category reconciles at the
+        # grain it was declared at instead of being attributed to whoever submitted the closing.
+        # Each closing row is folded through the ONE reader and the results SUMMED; the metric lines
+        # ride the first fold only, so a per-store-day line is never counted once per rep row.
+        folds = [_metrics.declared(cat, r, pair["lines"] if i == 0 else None) or {}
+                 for i, r in enumerate(pair["rows"])] or \
+                [_metrics.declared(cat, None, pair["lines"]) or {}]
+        for mk in _metrics.keys(cat):
+            if _metrics.is_employee_declared(cat, mk):
                 continue
-            declared_rows.append({"date": dt, "store_code": code, "rep": "", "metric_key": mk,
-                                  "units": e.get("units"), "amount": e.get("amount")})
+            seen = [f.get(mk) or {} for f in folds]
+            if not any(e.get("declared") for e in seen):
+                continue
+            declared_rows.append({
+                "date": dt, "store_code": code, "rep": "", "metric_key": mk,
+                "units": sum(_int(e.get("units")) for e in seen),
+                "amount": round(sum(_money(e.get("amount")) for e in seen), 2)})
 
     captured, feed_days, status = _counterpart_captured(
         client, org_id, date_from, d_to, cps, store_code=store_code)

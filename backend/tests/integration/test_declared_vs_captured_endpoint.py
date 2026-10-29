@@ -234,3 +234,58 @@ def test_the_catalog_the_report_names_is_the_one_home_s_catalog(wired, api_clien
     body = api_client.get(PATH, params={"date_from": DAY}).json()
     assert body["metrics"] == [{"key": "edge_count", "label": "Edge",
                                 "counterpart": "financing:edge", "value_kind": "both"}]
+
+
+def test_a_store_day_closed_by_SEVERAL_reps_sums_their_counts(wired, api_client):
+    """A store in per-rep closing mode has ONE daily_closing row PER REP, and the store's figure for
+    a store-level category is the SUM of them.
+
+    Caught on 2026-10-29 while writing the SQL that turns the three built-in counts into config
+    rows: keying the closing rows by (store, date) kept one of them, so a store where three reps
+    each declared two upgrades would have reported two against the feed's six and accused the store
+    of under-declaring four sales it had declared.
+    """
+    wired.seed("commcalc.closing_count_field_def", [
+        {"org_id": ORG, "field_key": "new_line_count", "label": "New Lines", "sort_order": 20,
+         "is_standard": True, "is_active": True, "recon_class": "activation",
+         "value_kind": "count", "declared_by": "store", "unit_price": None, "in_revenue": False,
+         "feed_counterpart": "recon_class:activation",
+         "feed_units_tolerance": None, "feed_amount_tolerance": None},
+    ])
+    wired.seed("commcalc.daily_closing", [
+        {"org_id": ORG, "store_code": "B-1115", "close_date": DAY,
+         "employee_name": "Rep One", "new_line_count": 2, "counts": {}},
+        {"org_id": ORG, "store_code": "B-1115", "close_date": DAY,
+         "employee_name": "Rep Two", "new_line_count": 3, "counts": {}},
+    ])
+    # Two activations on the feed against five declared — a real, measured variance of 3.
+    wired.seed("commcalc.daily_sales_feed", [
+        _sale("T-1", "356938035643809", 400.0, tender="Cash"),
+        _sale("T-2", "356938035643810", 500.0, tender="Cash"),
+    ])
+    body = api_client.get(PATH, params={"date_from": DAY}).json()
+    row = next(r for r in body["rows"] if r["metric_key"] == "new_line_count")
+    assert row["units_declared"] == 5, body            # 2 + 3, not 2 and not 3
+    assert row["rep"] == ""                            # a store-level count, not a person's
+
+
+def test_a_custom_count_in_the_jsonb_map_also_sums_across_rep_rows(wired, api_client):
+    # The same fold has to hold for a category stored in daily_closing.counts (the mig-501 jsonb),
+    # because that is where every NON-standard store-level count lives.
+    wired.seed("commcalc.closing_count_field_def", [
+        {"org_id": ORG, "field_key": "port_in_count", "label": "Port-Ins", "sort_order": 40,
+         "is_standard": False, "is_active": True, "recon_class": "activation",
+         "value_kind": "count", "declared_by": "store", "unit_price": None, "in_revenue": False,
+         "feed_counterpart": "recon_class:activation",
+         "feed_units_tolerance": None, "feed_amount_tolerance": None},
+    ])
+    wired.seed("commcalc.daily_closing", [
+        {"org_id": ORG, "store_code": "B-1115", "close_date": DAY,
+         "employee_name": "Rep One", "counts": {"port_in_count": 1}},
+        {"org_id": ORG, "store_code": "B-1115", "close_date": DAY,
+         "employee_name": "Rep Two", "counts": {"port_in_count": 4}},
+    ])
+    wired.seed("commcalc.daily_sales_feed", [_sale("T-1", "356938035643809", 400.0, tender="Cash")])
+    body = api_client.get(PATH, params={"date_from": DAY}).json()
+    row = next(r for r in body["rows"] if r["metric_key"] == "port_in_count")
+    assert row["units_declared"] == 5, body

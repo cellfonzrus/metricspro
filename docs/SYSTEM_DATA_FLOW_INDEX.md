@@ -26305,6 +26305,20 @@ own.
 - **A tenant must still pick its counterparts.** Nothing is seeded by the migration: the column is
   NULL on every existing row, so no tenant moves and no surface changes until an admin sets one.
 
+### §CLOSING-02.7 A DEFECT FOUND IN A SIBLING, REPORTED AND NOT FIXED HERE
+
+`closing/router._declared_by_store_day` (§76, the ranged declared read the **targets** engine's
+achieved figures go through, §COMMCALC-02) keys its closing rows `rows_by[(store, day)] = r` — ONE
+row per store-day, last writer wins. **In per-rep closing mode a store-day has one `daily_closing`
+row per rep**, so a store where three reps each declared two upgrades reports two achieved, not six.
+
+This endpoint does NOT share that fold: it keeps the rows as a list and sums them (§CLOSING-02.4's
+sibling fix, caught by `test_a_store_day_closed_by_SEVERAL_reps_sums_their_counts` before shipping).
+The sibling is left as it is deliberately — correcting it RESTATES every declared-category target's
+achieved figure for every tenant in per-rep mode, which needs its own change, its own before/after
+measurement against live data and the owner's eye. It is reported here rather than quietly repaired,
+and rather than left unsaid.
+
 
 ## §CORE-02. THE CODE STYLE CHECKER IS A CHECK — and a ratchet only turns one way (owner directive 2026-10-11)
 
