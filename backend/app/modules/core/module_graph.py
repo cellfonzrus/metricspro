@@ -339,6 +339,14 @@ FACTS: dict[str, dict] = {
             # sales feed for what the store rang, the carrier's payment feed for the chargeback
             # amount. One panel for both would attribute a carrier payment to the sales feed.
             'app/modules/commcalc/byod_upgrade_drilldown.py': ('report_drilldown',),
+            # §COMMCALC-48 — the Accessory Order Plan. FOUR COUNTS, not money, folded over the
+            # report's own model rows. It is the first declaration whose central figure is a
+            # PROJECTION, so the honesty rule it needs from the shared mechanism is the one about a
+            # row with no number: a model nobody has ruled on carries no projected units and is
+            # served with its reason, because a projected zero would read as a decision to stop
+            # ordering for it. It refuses the two rates and every accessory quantity — the latter
+            # being the device total times a declared per-device rate, which has no rows of its own.
+            'app/modules/commcalc/accessory_order_drilldown.py': ('_dd',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1144,6 +1152,39 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/byod_upgrade_drilldown.py': ('_cdm',),
         },
     },
+    # ── §COMMCALC-48 (owner ask 2026-10-29) — HOW MANY OF THIS WILL SELL NEXT ───────────────────
+    'demand_projection': {
+        "question": 'Given the units of something sold inside a window, how many will sell over the '
+                    'next horizon — and which sale line sold a DEVICE at all? Both facts were '
+                    'written TWICE before this home existed, and the second copy of each shipped '
+                    'with a docstring saying it was a copy (the import-cycle excuse). The home '
+                    'imports NOTHING, so that excuse cannot be revived. Velocity is per window-UNIT '
+                    'and the horizon is in the same unit, so a caller counting days and a caller '
+                    'counting months share one arithmetic without a hidden second divisor; the '
+                    'banker\'s rounding both live callers were already ordering phones on is '
+                    'preserved to the digit. A window of no days is reported as unmeasurable, never '
+                    'as a projection of zero.',
+        "homes": ('app/modules/commcalc/demand_projection.py',),
+        "index": ('COMMCALC-48',),
+        "locks": ('harness_demand_projection.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
+        # of 12 facts on 2026-10-04, and it strips exactly these reasons).
+        "callers": {
+            # The device forecast (§15, module 095). It kept its own four lines of velocity and its
+            # own device-line test; both are gone and DEV_DEPTS now reads the home's vocabulary.
+            'app/modules/payables/router.py': ('demand_projection',),
+            # The proposed-PO recommendations (§36). The other copy, excused in its docstring by the
+            # module-load cycle — answered rather than argued with, since the home imports nothing.
+            'app/modules/asset/purchase_orders.py': ('demand_projection',),
+            # The Accessory Order Plan (§COMMCALC-48) — the THIRD caller, and the one whose arrival
+            # is why the fact was factored instead of copied a third time. It counts MONTHS where
+            # the other two count days, which is exactly what the window-unit rule allows.
+            'app/modules/commcalc/accessory_order_plan.py': ('_dp',),
+            # The report's endpoint reads the device-line test directly, so the look-back counts the
+            # same lines the two ordering screens do.
+            'app/modules/commcalc/router.py': ('_dp',),
+        },
+    },
     'device_cost_store': {
         "question": 'WHICH STORE carries a handset\'s cost? The distributor ledger books it to the '
                     'store the unit was STOCKED to; the carrier pays the store it was ACTIVATED at. '
@@ -1833,6 +1874,11 @@ FACTS: dict[str, dict] = {
             # dereferenced from the targets family, the other two are named once here, the same
             # posture `targets_drilldown` takes.
             'app/modules/commcalc/accessory_money_drilldown.py': ('_lineage',),
+            # The Accessory Order Plan's declaration (§COMMCALC-48) asks the registry for ONE fact —
+            # which relations the sales DISPLAY union reads (`SALES_DISPLAY_SOURCES`) — and names no
+            # table of its own. Its figures are device-unit counts off those relations, so a
+            # restated table name there would be a provenance claim nothing checks.
+            'app/modules/commcalc/accessory_order_drilldown.py': ('_lin',),
             # The device-financing drill-down asks the registry which relation the distributor's
             # INVOICE feed is (`DISTRIBUTOR_INVOICES`, added by batch 16 — this file held no literal
             # copy of it, so there was nothing to re-key), which one its UNIT LEDGER is, and which

@@ -35,6 +35,9 @@ from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — 
 from app.modules.commcalc import product_mix as _pmix       # 2026-10-09 — THE device price mix / port discipline (index §62)
 from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 — THE DM / market-manager report card (index §59.9; pure)
 from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-09 — THE accessory company-goal allocation (index §61; pure)
+from app.modules.commcalc import accessory_order_plan as _aop          # 2026-10-29 — THE accessory ORDER plan (index §COMMCALC-48; pure)
+from app.modules.commcalc import accessory_order_drilldown as _aopdd   # 2026-10-29 — that report's drill declaration (§CORE-17.3y; declaration only, pure)
+from app.modules.commcalc import demand_projection as _dp             # 2026-10-29 — THE device velocity/horizon projection + device-line test (§COMMCALC-48; pure)
 from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
 from app.modules.commcalc import tender_recon_drilldown as _tender_recon_drilldown   # 2026-10-24 — THE X-report-vs-closing tile drill (index §CORE-17.3a; declaration only, pure)
 from app.modules.asset import device_asset_drilldown as _asset_dd   # 2026-10-25 — THE device-asset family's drill declaration (index §CORE-17.3l; declaration only, pure)
@@ -22945,8 +22948,12 @@ async def put_coverage_excluded_sellers(body: PutCoverageExcludedSellersIn, auth
     try:
         sb().schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
     except Exception as e:
-        raise HTTPException(500, "could not save the excluded-seller list (is migration "
-                                 f"248_commission_coverage_excluded_sellers.sql applied?): {e}")
+        # Said in the shape SETUP_INTERNAL recognises, so the response boundary can neutralise it
+        # for a tenant reader rather than leaking the file name verbatim. Pre-existing failure of
+        # `harness_carrier_vocab_guard.py`'s setup-internals lock on main, fixed in passing while
+        # that lock was being run for §COMMCALC-48 — one string, no behaviour change.
+        raise HTTPException(500, "could not save the excluded-seller list: migration 248 is not "
+                                 "applied") from e
     cfg = commission_engine._coverage_config(sb(), org_id)
     return {"sellers": cfg.get("excluded_sellers") or [],
             "artifact_hints": cfg.get("artifact_hints") or [], "ready": bool(cfg.get("ready"))}
@@ -50365,3 +50372,322 @@ def _prospect_pl_labels(homes):
     line names from the company's own would be unreconcilable with it on sight."""
     from app.modules.account import coa as _coa
     return _coa.PL_LABEL
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# ACCESSORY ORDER PLAN (index §COMMCALC-48; engine: commcalc/accessory_order_plan.py)
+#
+# OWNER ASK 2026-10-29, verbatim: *"for sales forecasting need to add one more report to process
+# accessory orders based on the previous 3 months of average sales and showing the best sellign models
+# on the top and asking the user to enter where the spoecific model is end of life or current , once
+# tehy check the system calculates the following accessory projected to sell in the next 2 months ,
+# the case mix will be decalred by the user but by defaul you can use this mix - Blacks and Blues -
+# 70%, pinks / red - 30% - 1 per sale / screen protectors - 1 per sale / Cables type c- type c 1 per
+# sale / Charging cubes - 1 per sale / report should have all out store filters and market filters ,
+# look back months and future planning months / use the most update planning feature so we can then
+# convert this into an automated accessory ordering system direclty fed into shopify and recurreing
+# fulfiulling ssytem when the sales happen in the store"*.
+#
+# NOTHING IS DERIVED HERE. This block FETCHES and WIRES; the arithmetic is the pure module's and the
+# projection is `demand_projection`'s, which `/payables/forecast` and `/asset/po/recommendations` now
+# read too (§COMMCALC-48 — the two copies they each kept are gone). The duplicate check is written out
+# in full in `commcalc/accessory_order_plan.py`'s header.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+_AOP_CFG_COLUMNS = ("accessory_order_case_mix", "accessory_order_attach_plan",
+                    "accessory_order_lookback_months", "accessory_order_horizon_months")
+
+
+def _accessory_order_config(client, org_id):
+    """The org's declared colour mix, attach plan and default windows, over the house defaults.
+
+    Read from the EXISTING per-org `commcalc.accessory_config` row (mig `1104`), beside
+    `portout_fraud_rules` and `activation_details_rules` — the same extension shape mig `1031` used,
+    and NOT a sibling config table. A NULL column, or a database where 1104 has not been applied yet,
+    resolves to the house defaults rather than crashing the page."""
+    raw = {}
+    try:
+        r = (client.schema("commcalc").table("accessory_config")
+             .select(",".join(_AOP_CFG_COLUMNS)).eq("org_id", org_id).limit(1).execute().data) or []
+        raw = r[0] if r else {}
+    except Exception:
+        raw = {}                      # mig 1104 not applied yet → house defaults, never a 500
+    return raw or {}
+
+
+def _device_lifecycle(client, org_id):
+    """`({canonical_model: 'current'|'eol'}, {raw_model_lower: canonical_model})`.
+
+    BOTH come off `commcalc.device_model_alias` (mig `096`), which is already the platform's per-model
+    registry — the ruling is a COLUMN on it (mig `1104`) rather than a second table that would drift
+    from the canonical-model map. The alias map is the same one `/payables/forecast` reads, so a model
+    curated once is one model on both screens."""
+    rulings, alias = {}, {}
+    try:
+        rows = (client.schema("commcalc").table("device_model_alias")
+                .select("raw_model,canonical_model,lifecycle").eq("org_id", org_id)
+                .execute().data) or []
+    except Exception:
+        try:                           # pre-1104 database: the column does not exist yet
+            rows = (client.schema("commcalc").table("device_model_alias")
+                    .select("raw_model,canonical_model").eq("org_id", org_id).execute().data) or []
+        except Exception:
+            rows = []
+    for r in rows:
+        canon = str(r.get("canonical_model") or r.get("raw_model") or "").strip()
+        raw = str(r.get("raw_model") or "").strip()
+        if raw and canon:
+            alias[raw.lower()] = canon
+        state = str(r.get("lifecycle") or "").strip().lower()
+        if canon and state in _aop.DECLARABLE_STATES:
+            rulings[canon] = state
+    return rulings, alias
+
+
+def _accessory_order_lookback_periods(period: str, months: int):
+    """The look-back as a list of canonical 'Month YYYY' periods, OLDEST FIRST, ending at `period`.
+
+    Walked with `_prior_period` — the platform's one month-before helper — rather than with a second
+    piece of month arithmetic."""
+    out = [period]
+    for _ in range(max(0, months - 1)):
+        out.append(_prior_period(out[-1]))
+    return list(reversed(out))
+
+
+class DeclareDeviceLifecycleIn(LaxModel):
+    rulings: Any = None          # [{"model": "...", "lifecycle": "current"|"eol"}] — or {"model": "state"}
+    clear: Any = None            # ["model", ...] — remove a ruling, which is NOT the same as declaring one
+
+
+class PutAccessoryOrderConfigIn(LaxModel):
+    case_mix: Any = None
+    attach_plan: Any = None
+    lookback_months: Any = None
+    horizon_months: Any = None
+
+
+@router.get("/accessory-order-plan")
+def get_accessory_order_plan(period: str = "", months: int = 0, horizon: int = 0,
+                             markets: str = "", store: str = "", stores: str = "",
+                             authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """ACCESSORY ORDER PLAN — the device models the stores actually sold, ranked, and the accessory
+    order the rulings on them imply.
+
+    THE SHAPE OF THE ANSWER, and why each half is where it is:
+
+      · THE LOOK-BACK is read through `_sales_rows_union` once per month (the display union every
+        sales report reads — so this report can never be blind on the open month, which is the
+        §19.55 / §4a.3 defect that has cost this platform three reports). A device line is
+        `demand_projection.is_device_line` and the MODEL is `product_mix.model_of`, both dereferenced.
+      · THE RANKING AND THE PROJECTION are `accessory_order_plan`'s, driven DB-free by its own tests
+        and harness.
+      · THE RULING is a human's, stored on `commcalc.device_model_alias` and read back here. A model
+        nobody has ruled on is NOT projected — the report says how much demand is waiting rather than
+        guessing in either direction.
+      · THE FILTERS are the standard ones, resolved by the same homes every other sales report uses:
+        the RBAC scope keyset, `_store_market_resolver` for the market and `_store_code_resolver` for
+        "which store is this, spelled any way".
+
+    READ-ONLY. It books nothing, writes nothing and cannot move a payout.
+    """
+    require_org(org_id)
+    client = sb()
+    cperiod = _period_or_400(period) if period else _canon_period(
+        f"{datetime.now(timezone.utc).year}-{datetime.now(timezone.utc).month:02d}")
+    cfg = _accessory_order_config(client, org_id)
+    look = _aop.clamp_months(months or cfg.get("accessory_order_lookback_months"),
+                             _aop.DEFAULT_LOOKBACK_MONTHS, _aop.MAX_LOOKBACK_MONTHS)
+    fwd = _aop.clamp_months(horizon or cfg.get("accessory_order_horizon_months"),
+                            _aop.DEFAULT_HORIZON_MONTHS, _aop.MAX_HORIZON_MONTHS)
+    periods = _accessory_order_lookback_periods(cperiod, look)
+
+    resolve_market, all_markets = _store_market_resolver(client, org_id)
+    _resolve_code = _store_code_resolver(client, org_id)
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)
+    except Exception:
+        ks, in_keyset = None, None
+    sel_markets = {m.strip() for m in (markets or "").split(",") if m.strip()}
+    sel_stores = {s.strip() for s in (stores or "").split(",") if s.strip()}
+    if (store or "").strip():
+        sel_stores.add(store.strip())
+    want_codes = {(_resolve_code(s) or s).strip().upper() for s in sel_stores}
+
+    def _in_scope(raw):
+        st = str(raw or "").strip()
+        return not (ks is not None and in_keyset is not None and not in_keyset(ks, st))
+
+    def _keep(raw):
+        st = str(raw or "").strip()
+        if not _in_scope(st):
+            return False
+        if sel_markets and (resolve_market(st) or "") not in sel_markets:
+            return False
+        if want_codes and ((_resolve_code(st) or st).strip().upper() not in want_codes
+                           and st.upper() not in want_codes):
+            return False
+        return True
+
+    rulings, alias = _device_lifecycle(client, org_id)
+    dept_vocab = None                  # house vocabulary; a tenant override is a config row, not code
+    units: dict = {}
+    opt_stores, meta_by_period, lines_read = set(), {}, 0
+    promo_tokens = None
+    for p in periods:
+        try:
+            rows, meta = _sales_rows_union(client, org_id, p, cols=_SALES_DISPLAY_COLS)
+        except Exception as e:
+            meta_by_period[p] = {"error": f"{type(e).__name__}: {e}"}
+            continue
+        meta_by_period[p] = {"rows": len(rows), "source": meta}
+        for r in rows:
+            st = str(r.get("store") or "").strip()
+            if st and _in_scope(st):
+                opt_stores.add(st)
+            if (r.get("voided") or "").strip().upper() == "YES" or (r.get("trans_type") or "") == "Return":
+                continue
+            if not _dp.is_device_line(r.get("department"), r.get("category"), depts=dept_vocab):
+                continue
+            if not _keep(st):
+                continue
+            model = _pmix.model_of(r.get("product_desc"), promo_tokens)
+            if not model:
+                continue
+            # The canonical model, through the SAME alias map the device forecast reads, so one phone
+            # is one row on both screens rather than two spellings of it here.
+            canon = alias.get(model.strip().lower(), model)
+            units.setdefault(canon, {})
+            units[canon][p] = units[canon].get(p, 0) + 1
+            lines_read += 1
+
+    out = _aop.plan(units_by_model=units, months=periods, lifecycle=rulings, horizon_months=fwd,
+                    case_mix=cfg.get("accessory_order_case_mix"),
+                    attach_plan=cfg.get("accessory_order_attach_plan"))
+    out["period"] = cperiod
+    out["store_options"] = sorted(opt_stores)
+    out["markets"] = sorted({m for m in ([resolve_market(s) for s in opt_stores]
+                                         + list(all_markets)) if m})
+    out["params"] = {"period": cperiod, "months": look, "horizon": fwd,
+                     "markets": sorted(sel_markets), "stores": sorted(sel_stores)}
+    out["source_meta"] = {"periods": meta_by_period, "device_lines": lines_read,
+                          "models": len(out["models"])}
+    # WHERE EVERY FIGURE ON THIS SCREEN CAME FROM (§CORE-17.3y) — attached LAST, after the scope
+    # keyset and both filters, so a panel can only fold rows the caller was already served.
+    out["drilldown"] = _aopdd.plan_drilldowns(out)
+    out["org_id"] = org_id
+    return out
+
+
+@router.post("/accessory-order-plan/lifecycle")
+def declare_device_lifecycle(body: Optional[DeclareDeviceLifecycleIn] = None,
+                             authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Record a human's ruling that a device model is CURRENT or END OF LIFE.
+
+    Written onto `commcalc.device_model_alias` (mig `1104`) — the per-model registry that already
+    exists — so the ruling and the canonical-model map cannot drift apart. A model the registry has
+    never seen gets a row whose `canonical_model` is the model as the report showed it, which is the
+    same fallback `/payables/forecast` applies to an unmapped model.
+
+    `clear` REMOVES a ruling, which is deliberately not the same as declaring one: a model with no
+    ruling is reported as waiting, and that is a state the user must be able to get back to."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    b = body or DeclareDeviceLifecycleIn()
+    client = sb()
+
+    pairs = []
+    raw = b.rulings
+    if isinstance(raw, dict):
+        raw = [{"model": k, "lifecycle": v} for k, v in raw.items()]
+    for item in (raw or ()):
+        if not isinstance(item, dict):
+            continue
+        model = str(item.get("model") or "").strip()
+        state = str(item.get("lifecycle") or item.get("state") or "").strip().lower()
+        if model and state in _aop.DECLARABLE_STATES:
+            pairs.append((model, state))
+    cleared = [str(m).strip() for m in (b.clear or ()) if str(m or "").strip()]
+    if not pairs and not cleared:
+        raise HTTPException(400, "Nothing to record: send `rulings` as "
+                                 f"[{{model, lifecycle}}] with lifecycle in {list(_aop.DECLARABLE_STATES)}, "
+                                 "or `clear` as a list of models.")
+
+    # A PLANNING DECISION THAT MOVES AN ORDER HAS AN AUTHOR. Resolved through the same caller
+    # resolution the gate above used; unresolvable (RBAC off) stays NULL rather than inventing a name.
+    who = None
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller
+        _uid = _uid_from_token(authorization)
+        _caller = _resolve_caller(client, _uid) if _uid else None
+        who = (_caller or {}).get("email") or (_caller or {}).get("name") or _uid
+    except Exception:
+        who = None
+    now = datetime.now(timezone.utc).isoformat()
+
+    written, failed = [], []
+    for model, state in pairs + [(m, None) for m in cleared]:
+        row = {"org_id": org_id, "raw_model": model, "canonical_model": model, "lifecycle": state,
+               "lifecycle_declared_by": (who if state else None),
+               "lifecycle_declared_at": (now if state else None)}
+        try:
+            (client.schema("commcalc").table("device_model_alias")
+             .upsert(row, on_conflict="org_id,raw_model").execute())
+            written.append({"model": model, "lifecycle": state})
+        except Exception as e:
+            # A pre-1104 database has no `lifecycle` column. Say so in words naming the migration,
+            # rather than reporting a save that did not happen.
+            failed.append({"model": model, "error": f"{type(e).__name__}: {e}"})
+    if failed and not written:
+        raise HTTPException(409, "No ruling was stored. The device model registry cannot hold a "
+                                 "current / end-of-life ruling until migration 1104 has been "
+                                 "applied; ask an administrator to run it, then try again.")
+    return {"written": written, "failed": failed, "org_id": org_id}
+
+
+@router.put("/accessory-order-plan/config")
+def put_accessory_order_config(body: Optional[PutAccessoryOrderConfigIn] = None,
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Declare the colour mix, the attach plan and the default look-back / planning months.
+
+    Stored on the org's EXISTING `commcalc.accessory_config` row. The payload comes back with the
+    RESOLVED declaration — including whether a mix had to be normalised — so the screen shows what
+    was actually stored rather than what was typed."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    b = body or PutAccessoryOrderConfigIn()
+    client = sb()
+    patch = {"org_id": org_id}
+    if b.case_mix is not None:
+        patch["accessory_order_case_mix"] = b.case_mix
+    if b.attach_plan is not None:
+        patch["accessory_order_attach_plan"] = b.attach_plan
+    if b.lookback_months is not None:
+        patch["accessory_order_lookback_months"] = _aop.clamp_months(
+            b.lookback_months, _aop.DEFAULT_LOOKBACK_MONTHS, _aop.MAX_LOOKBACK_MONTHS)
+    if b.horizon_months is not None:
+        patch["accessory_order_horizon_months"] = _aop.clamp_months(
+            b.horizon_months, _aop.DEFAULT_HORIZON_MONTHS, _aop.MAX_HORIZON_MONTHS)
+    if len(patch) == 1:
+        raise HTTPException(400, "Nothing to save: send case_mix, attach_plan, lookback_months or "
+                                 "horizon_months.")
+    try:
+        (client.schema("commcalc").table("accessory_config")
+         .upsert(patch, on_conflict="org_id").execute())
+    except Exception as e:
+        raise HTTPException(409, "The declaration was not stored. The accessory settings cannot "
+                                 "hold a colour mix, an attach plan or default planning windows "
+                                 "until migration 1104 has been applied; ask an administrator to "
+                                 "run it, then try again.") from e
+    try:
+        from app.modules.commcalc import accessory_catalog as _accat
+        _accat.invalidate(org_id)
+    except Exception:
+        pass
+    mix, mix_basis = _aop.resolve_case_mix(patch.get("accessory_order_case_mix"))
+    return {"saved": True, "case_mix": [dict(m) for m in mix], "case_mix_basis": mix_basis,
+            "attach_plan": [dict(i) for i in _aop.resolve_attach_plan(
+                patch.get("accessory_order_attach_plan"))],
+            "lookback_months": patch.get("accessory_order_lookback_months"),
+            "horizon_months": patch.get("accessory_order_horizon_months"),
+            "org_id": org_id}

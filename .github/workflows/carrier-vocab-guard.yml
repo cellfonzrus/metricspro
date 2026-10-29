@@ -3188,3 +3188,27 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_target_registry_one_read.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ── ONE HOME FOR "HOW MANY WILL SELL NEXT" (index §COMMCALC-48) ─────────────────────────────────
+  # The velocity/horizon projection and the "is this sale line a device" test were each written TWICE
+  # on this platform — `payables/router.forecast` and `asset/purchase_orders.po_recommendations` — and
+  # the second copy of each shipped WITH A DOCSTRING SAYING IT WAS A COPY. The Accessory Order Plan
+  # needed the same arithmetic a third time, so it was factored into
+  # `commcalc/demand_projection.py` and both older callers were rewired. This job is what stops the
+  # patchwork coming back: it fails the build when a second copy of either fact appears, when a caller
+  # stops dereferencing the home, and when the extraction stops agreeing to the digit with the four
+  # lines both callers used to carry (1,400 combinations). It also pins the four OLDER copies of the
+  # device-department vocabulary that sit on money paths — reported, not quietly fixed, because
+  # restating which lines those surfaces treat as a device is a change to booked figures and is the
+  # owner's call. That register may only shrink. Stdlib only, DB-free.
+  demand-projection-one-home:
+    name: Demand-projection one-home lock (one answer to "how many will sell next")
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the one-home lock (the velocity arithmetic and the device-line test, each written twice before this - index COMMCALC-48)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_demand_projection.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
