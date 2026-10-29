@@ -136,6 +136,7 @@ Primary code homes:
 | CLOSING-02 | **A declared category names what in the sales feed should agree with it** | "Add a field in as no of edge for total and no of financicing in thr daily closing for all employees to declare along with the $amount of edge and acima as they get paid for each transcoding they do, this would then be checked with our system if our system is capturing the sales as declared by the sales rep." Which half of that already existed as config, what had no home at all, and what stops the next category from being checked against a number nobody measured? |
 | CORE-21 | **An in-process cache keyed by something a client can mint is bounded by construction** | "Simulate a thousand users and see what breaks. What does the platform keep in each worker's memory while they are signed in, what decides when an entry leaves, and what fails the build the day a new cache ships without a bound?" |
 | CORE-23 | **One component decides how a date is picked, and the calendar opens on a click** | "for payroll hours approval the calendor should open up instead of enetring it manuallu" — said of a field that already HAD a calendar, reachable only from a glyph a few pixels wide at its right-hand edge, so a click anywhere else put a caret in mm/dd/yyyy and the date got typed digit by digit, on all 168 of them. When is a control's default behaviour the defect, and what stops the 169th from bringing it back? |
+| CORE-24 | **A total names the rows it is over — filtered and unfiltered, from one arithmetic** | "need the total below the hours on the time clock when filtered and without filter" — said of a column whose total lived in a badge above the table and only ever counted the rows a filter had left visible, without saying so, on every report in the product. What is a total of an unnamed population worth, and what does "without filter" honestly mean on a screen whose date range is a server query? |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -26148,6 +26149,7 @@ status word rather than a blank that reads as nil.
 | CORE-21 | core |
 | CORE-22 | core |
 | CORE-23 | core |
+| CORE-24 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
 | COMMCALC-42 | commcalc |
@@ -40654,6 +40656,83 @@ spread straight to the input.
 — so this creates a one-home where there was none rather than a sibling to one. No new endpoint, no new
 table, **no migration**, no backend change, and no figure anywhere moves: the value this control
 produces is the same ISO string it produced before.
+
+## §CORE-24. A TOTAL NAMES THE ROWS IT IS OVER — FILTERED AND UNFILTERED, FROM ONE ARITHMETIC (owner ask 2026-10-29)
+
+**What he said**, of the Time Clock screen:
+
+> *"need the total below the hours on the time clock when filtered and without filter"*
+
+Two separate things, and the second is the one that generalises.
+
+### CORE-24.1 THE CLASS — a total that does not name its population
+
+The instance is the Hours column on Time Clock: its total lived in a badge *above* the table
+(`{totalHours} hrs`) and nowhere under the column it totalled. That part is markup.
+
+The class is that **every total in this product was a total of whatever rows a filter happened to leave
+visible, and none of them said so.** A reviewer narrows to one store, reads `88.20`, and cannot tell
+from the screen whether that is the fortnight or a tenth of it — so a filter left on by accident reads
+exactly like a quiet month. Asking for "filtered and without filter" is asking a total to name its own
+population, and that answer belongs in the arithmetic, not in one screen's markup.
+
+### CORE-24.2 THE ONE HOME, extended rather than sibling-ed
+
+`frontend/src/lib/report-totals.ts` already owned total arithmetic for `ReportShell`'s `<tfoot>` and
+its export payload (RULE FOUR: what you see is what you export). It gains
+**`computeTotalScope(cols, shownRows, loadedRows, firstLabel?)`**, which returns the same `TotalCell`
+array with `allText` / `allRaw` beside each figure, plus `shown`, `loaded` and `narrowed`. It is built
+*on* `computeTotalRow` — one arithmetic run over two populations, never a second derivation.
+
+**`narrowed` is the point of the pair.** When no filter is cutting anything the two figures are
+identical, and a renderer that prints both anyway teaches the reader to stop looking at either. Every
+caller draws the second figure only when `narrowed` is true, and only on a cell that actually
+aggregates — a blank label column has nothing to compare.
+
+**What "without filter" honestly means**: the widest population this side can see, which is every row
+the page LOADED. A page's server query is itself a narrowing — Time Clock fetches one date range — so
+the figure is "everything in range", never "everything ever", and both callers say exactly that in the
+cell's tooltip. Claiming otherwise would make the second number the same kind of unsourced figure as
+the first.
+
+### CORE-24.3 THE DEFECT THE SHARED AGGREGATION DECISION EXISTS FOR
+
+`resolveAgg` reads the rows it is handed to decide whether a numeric-*looking* column is really
+summable (that guard is what stops a right-aligned text column being summed to zero). Over an **empty**
+visible set it therefore resolves `none` — so a filter that matches nothing would blank the visible
+figure while the number printed directly beneath it, labelled the same aggregation, still summed the
+whole range. Two figures labelled one aggregation must BE one aggregation, so `computeTotalScope`
+resolves the decision ONCE over the superset and passes it to both calls through `computeTotalRow`'s
+new optional `aggs` argument. Existing callers are unaffected: omitting it resolves exactly as before.
+
+`frontend/prove_report_totals_scope.mjs` (38 checks) proves this by **arming** it — the real source is
+loaded with that argument stripped on its way through `prove_load_ts`, and the blanked cell duly comes
+back, so the guard is shown load-bearing rather than asserted to be.
+
+### CORE-24.4 WHO DEREFERENCES IT
+
+- **`ReportShell`** builds its pinned footer from `computeTotalScope(cols, filtered, rows)`, so **every
+  report that opts into `totals` inherits the pair** without being touched. Its export path still calls
+  `computeTotalRow`, so RULE FOUR is unchanged.
+- **Time Clock** (`storeops/timeclock`) draws a `<tfoot>` under the punches table *and* under the
+  manual-hours table beside it — the sibling on the same screen, whose Hours column had no total at
+  all. Both are read off a `computeTotalScope` result, and so are the badges above the table, so the
+  badge, the footer and the export cannot disagree. The **two hand-rolled `.reduce()` sums the page
+  carried are deleted**, and the proof fails if one returns. The page's header ribbon and its footer are
+  now generated from ONE column list, so a column cannot gain a heading without gaining a total slot.
+
+### CORE-24.5 WHAT IS NOT DONE
+
+Only the two surfaces above draw the pair. A page with its own bespoke table and its own hand-rolled
+sum still shows a single unnamed total; those are not converted here and are not pretended to be. The
+proof's guard against a hand-rolled sum is scoped to the Time Clock page, not the tree — a tree-wide
+ratchet over `.reduce(` would catch every legitimate aggregation in the product.
+
+**Duplicate check (index rules).** `grep` for `tfoot` found 23 files; `computeTotalRow` had exactly one
+caller, `ReportShell`, and `report-totals.ts` was already the declared one home for the arithmetic — so
+this EXTENDS it and no sibling module was created (`prove_report_totals_scope` asserts the absence of
+one). No new endpoint, no new table, **no migration**, no backend change, and **no stored figure moves**:
+every number here is derived on screen from rows already fetched.
 
 Cross-ref §STOREOPS-01 (the Hours Approval board this was asked from), §3d / RULE FIVE (the shared
 filter bar), §19.18 (a mechanism written and its callers left unwired — the failure this ratchet
