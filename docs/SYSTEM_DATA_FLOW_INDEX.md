@@ -182,6 +182,7 @@ Primary code homes:
 | COMMCALC-48 | **The reports a login pulls are edited, not coded — one editable declaration** | "start defining the reports from the back end again, not hardcoded but consumer defined editable". Which reports a tenant pulls and the filters each one needs were already config — in two columns no screen could write, so in practice they were declarable only in SQL. One derived editor shape over the same two columns, with the round trip pinned as the identity. |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
+| STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
 | CORE-22 | **A page load never queries once per item** | "How do we avoid these extra round-trip calls? Which loop shapes really cost one trip per row and which only look like it, what is the count today, and what fails the build the day a new one ships?" |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26087,6 +26088,7 @@ status word rather than a blank that reads as nil.
 | NOTIFY-01 | notify |
 | STOREOPS-01 | storeops |
 | STOREOPS-02 | storeops |
+| STOREOPS-03 | storeops |
 | COMMCALC-01 | commcalc |
 | CORE-01 | core |
 | CORE-02 | core |
@@ -39358,6 +39360,97 @@ hand-corrections above; the auto-closed punch is already `punch_unusable` in §1
 DM+HR-approved** — a data repair, reported here, never "fixed" in code.
 
 ---
+
+## §STOREOPS-03. AN EARLY CLOCK-IN IS PAID FROM THE SCHEDULE, OR THE ROW SAYS WHY IT IS NOT (owner ask 2026-10-29)
+
+**What he said:**
+
+> *"also need to address those people who show u earlu at work , we need to calculate their time from
+> their schedules time not when they clock in , this is already addressed some where nbut making sure"*
+
+**It was not addressed anywhere.** Searched before building: no rule, no config field, no column and no
+code path anywhere compared a punch's clock-in against its shift's scheduled start. The nearest thing is
+`/timeclock/override`, which lets a MANAGER approve an earlier start — the opposite direction. So
+"making sure" had no mechanism behind it, and this section is the mechanism.
+
+### STOREOPS-03.1 MEASURED BEFORE BUILT, and what the measurement changed
+
+Read-only against production, 2026-10-29, over the live pay period's punches. The exposure is **small
+and concentrated**: roughly **$173 a fortnight** for Cellfonz R Us, and almost all of it sits inside a
+**fifteen-minute window before the rostered start** — store openers, arriving early to open the store.
+
+That is what made a strict clamp the wrong build. Docking an opener the minutes they spend getting the
+store open is unpaid work, and in New York it is a wage claim, not a saving. So the rule ships with a
+**grace window** as a first-class part of it, not a later patch, and it ships **OFF**.
+
+### STOREOPS-03.2 THE RULE, in the one home that already owns the question
+
+`storeops/payroll_hours_basis.py` is already THE one home for "which hours is this employee paid for,
+and on what basis", and the basis vocabulary travels with the figure. So the rule is a member of that
+vocabulary, not a new module:
+
+- `trim_early_clockin(punch, scheduled_start_at, cfg) -> (hours, trimmed, reason)` — **pure**.
+- a new basis, `clocked_trimmed_to_schedule`, so a trimmed figure **cannot be mistaken for the clock's
+  own** anywhere downstream. It joins `ALL_BASES`, `PAYING_BASES` and `MEASURED_BASES`.
+- config, per org, house defaults: `early_clockin_rule` (`as_clocked` | `pay_from_schedule`) and
+  `early_clockin_grace_hours` (0.25). **`as_clocked` is the shipped default, which is today's
+  behaviour**, and the rule vocabulary is an **ALLOWLIST** — an unruled value reads as `as_clocked`
+  rather than as permission to dock someone (the §66 posture).
+- `trimmed = min(early, hours)`, so a figure can never go negative.
+- **the grace sentence reaches the row even when nothing was trimmed.** This was a real gap in the
+  first cut: reasons were only collected when a trim actually happened, so the half of the rule that
+  PROTECTS the opener was invisible. A row now says "15 minutes early, inside the grace, paid whole"
+  as readily as it says what was cut.
+- a correction and a manager override still out-rank it, unchanged.
+- **the new basis gets a PROVENANCE in the same change.** `payroll_hours_drilldown.BASIS_RELATIONS`
+  maps every basis to the relation that answered for the figure, keyed on this module's own
+  constants, and `harness_batch24_drilldown` fails the build when a declared basis has no entry — so
+  adding a basis without one would have put a blank on a payroll drill-down. `clocked_trimmed_to_
+  schedule` answers out of **both** `storeops.timelog` and `storeops.shifts`, which is the honest
+  provenance rather than a tidier single one: the punch is where the hours came from, the roster is
+  where the start they were cut back to came from, and a reader asking why the figure is not what the
+  clock said has to be sent to both.
+
+### STOREOPS-03.3 THE INSTANT — why the rule refuses a wall-clock string
+
+`storeops.shifts.start_time` is `HH:MM` in the **store's local zone**; `storeops.timelog.clock_in` is
+stored **UTC**. The first measurement of this exposure compared the two directly, and the answer was
+nonsense in both directions: one punch read **9.63 h early** and 501 read about **4 h late**. A whole
+rule pointed at the wrong people.
+
+So `trim_early_clockin` takes the scheduled start as an **INSTANT**, and stays timezone-free. The
+conversion lives in `storeops/payroll_evidence.stamp_scheduled_starts`, on the ONE assembly every pay
+path already goes through — not in the rule, and **not in the four callers**, which would be four
+copies of one fact. The zone is **dereferenced** from `storeops/router._biz_tz_for_store` (per-store,
+mig 851), never re-derived and never spelled as an offset. A row with no start time, no date, an
+unparseable time or no resolvable zone gets **no stamp at all** rather than a guessed start: the rule
+then pays the punch whole, which is today's behaviour, and the absence travels to the row as a reason
+instead of hiding inside a fabricated figure.
+
+That pair of wrong readings is pinned as a regression (`EC31` / `EC32`), so the shortcut cannot come
+back.
+
+### STOREOPS-03.4 THE LOCK — the rule must not go silently inert
+
+A registry written without its callers wired is not a fix, and §19.18 records that happening three
+times here. The failure mode for this rule is specific: if `period_evidence` stops passing shifts
+through `stamp_scheduled_starts`, the rule is still present, still proved by its own tests, and
+**silently inert on every row**. So axis `H7` of `harness_payroll_hours_basis_lock.py` pins the CALL —
+and, in the other direction, pins that the pure rule has acquired no opinion about timezones and that
+the stamper reads the zone one home rather than naming a zone of its own.
+
+### STOREOPS-03.5 STATE — nothing has moved anyone's pay
+
+`early_clockin_rule` is `as_clocked` for every org, so **no figure anywhere changes on apply**. There
+is **no migration**: both fields are config with house defaults resolved in code, so turning the rule
+on is a config row. Switching an org to `pay_from_schedule` is a **money change** and is the owner's
+call; the grace window is in front of him as a decision and is unanswered at the time of writing.
+
+**Duplicate check (index rules).** `payroll_hours_basis` was already the declared one home for the pay
+basis and `payroll_evidence.period_evidence` already the one assembly, so both are EXTENDED and no
+sibling module, endpoint or table is created. Proof: `harness_payroll_hours_basis.py` **197/197**
+(sections `EC.` the rule, `EW.` the caller wiring) and `harness_payroll_hours_basis_lock.py`
+**103/103**.
 
 ## §CORE-18. A LENGTH CAP DOES NOT DECIDE WHICH PART OF A STATUS SURVIVES (found 2026-10-27)
 

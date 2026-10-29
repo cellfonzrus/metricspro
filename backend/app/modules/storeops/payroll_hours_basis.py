@@ -118,18 +118,27 @@ CLOCKED_RECONCILED = "clocked_reconciled"
 #: does closing duties, a cash count, or waits for a DM after the POS is shut, and those are payable
 #: hours. The rule is the default; this is the labour-law escape hatch, and it is audited.
 CLOCKED_OVERRIDE = "clocked_override"
+#: THE PUNCH STARTED BEFORE THE SHIFT WAS DUE TO, by more than this org's grace, and the org pays
+#: from the SCHEDULED start instead. Owner ask 2026-10-29, verbatim: *"also need to address those
+#: people who show u earlu at work , we need to calculate their time from their schedules time not
+#: when they clock in"*. It is its OWN basis and not a quiet adjustment to `CLOCKED`, because the
+#: figure is no longer what the clock measured and a reader must be told so — the same reason
+#: `CLOCKED_RECONCILED` exists for the clock-out end.
+CLOCKED_TRIMMED_TO_SCHEDULE = "clocked_trimmed_to_schedule"
 
-ALL_BASES = (CLOCKED, CLOCKED_CORRECTED, CLOCKED_RECONCILED, CLOCKED_OVERRIDE, MEASURED_ZERO,
+ALL_BASES = (CLOCKED, CLOCKED_CORRECTED, CLOCKED_RECONCILED, CLOCKED_OVERRIDE,
+             CLOCKED_TRIMMED_TO_SCHEDULE, MEASURED_ZERO,
              SCHEDULE_OPT_IN, NOT_MEASURED_UNPAID, PUNCH_UNUSABLE)
 
 #: THE ALLOWLIST. A basis whose hours figure may become PAID hours. An unknown or missing basis is
 #: absent from it on purpose — see the module docstring.
-PAYING_BASES = (CLOCKED, CLOCKED_CORRECTED, CLOCKED_RECONCILED, CLOCKED_OVERRIDE, MEASURED_ZERO,
-                SCHEDULE_OPT_IN)
+PAYING_BASES = (CLOCKED, CLOCKED_CORRECTED, CLOCKED_RECONCILED, CLOCKED_OVERRIDE,
+                CLOCKED_TRIMMED_TO_SCHEDULE, MEASURED_ZERO, SCHEDULE_OPT_IN)
 #: DERIVED, never re-spelled: the complement cannot drift out of step with the allowlist.
 NON_PAYING_BASES = tuple(b for b in ALL_BASES if b not in PAYING_BASES)
 #: The bases that are a MEASUREMENT of the day (the question `salary_expense`'s three states ask).
-MEASURED_BASES = (CLOCKED, CLOCKED_CORRECTED, CLOCKED_RECONCILED, CLOCKED_OVERRIDE, MEASURED_ZERO)
+MEASURED_BASES = (CLOCKED, CLOCKED_CORRECTED, CLOCKED_RECONCILED, CLOCKED_OVERRIDE,
+                  CLOCKED_TRIMMED_TO_SCHEDULE, MEASURED_ZERO)
 
 BASIS_REASONS = {
     CLOCKED: "A closed time-clock punch this org counts as evidence. These are the clocked hours.",
@@ -142,6 +151,11 @@ BASIS_REASONS = {
     CLOCKED_OVERRIDE: "A manager overrode the reconciliation for this day, with a reason, and an "
                       "override always out-ranks the rule — closing duties, a cash count or waiting "
                       "for a DM after the POS is shut are payable hours the clock cannot see.",
+    CLOCKED_TRIMMED_TO_SCHEDULE:
+        "The punch started before this shift was due to, by more than this org's grace window, so "
+        "the paid day starts at the SCHEDULED start time instead of at the clock-in. The row says "
+        "how much was trimmed and from what, because the figure is no longer the one the clock "
+        "measured.",
     MEASURED_ZERO: "A measurement exists for this day and it says zero. Zero is the truth here; it "
                    "never falls back to the schedule.",
     SCHEDULE_OPT_IN: "Nothing was measured, and this employee (or this org) is ticked to be paid "
@@ -200,6 +214,49 @@ CLOCK_RULE_REASONS = {
         "This org pays its own time-clock record and treats the clock report as a check only.",
 }
 
+# ── THE EARLY CLOCK-IN RULE (owner ask 2026-10-29) ───────────────────────────────────────────────
+#: Owner, verbatim: *"also need to address those people who show u earlu at work , we need to
+#: calculate their time from their schedules time not when they clock in , this is already addressed
+#: some where nbut making sure"*.
+#:
+#: IT WAS NOT ALREADY ADDRESSED, and the thing he was remembering is the clock-OUT ruling above:
+#: `RULE_NARROWEST_WINDOW` takes the later clock-IN, but only of TWO CLOCK RECORDS (our kiosk against
+#: the clock report) and only when the feed is a pay source, which no org has switched on. Nothing in
+#: the pay path has ever compared a punch against the SCHEDULE. Verified by reading every caller
+#: 2026-10-29; the only schedule-vs-punch comparison in the tree is `hr/letters_logic.py`, which is
+#: lateness discipline, not pay.
+#:
+#: MEASURED, production, read-only, 2026-10-05..10-18 (502 punches that matched a scheduled start,
+#: store-local timezones via `router._biz_tz_for_store`):
+#:   · 110 punches began BEFORE the scheduled start; 368 began after it.
+#:   · Only **1** was more than 15 minutes early. **NONE** was more than 30.
+#:   · The hours before the scheduled start total 15.01h = $233.28 across all tenants, 10.52h =
+#:     $172.62 for the house org — about $4,500 a year.
+#:   · The pattern is almost entirely **09:45 against a 10:00 start, exactly 15 minutes**, repeated
+#:     daily by the people who OPEN the store: Abdullah 11 days, Kellie Mark 11, Rohit 9.
+#:
+#: WHICH IS WHY THE DEFAULT GRACE IS NOT ZERO. Opening up — unlocking, lights, counting the drawer —
+#: is work performed at the employer's direction and payable as such. A rule that clamps every early
+#: punch to the scheduled start would dock the openers fifteen minutes a day for work they were told
+#: to do, and recover $8 of that $173 doing it. The grace window pays the opener and still bites on
+#: real padding, and the threshold is a CONFIG ROW so the owner can move it without a deploy.
+EARLY_AS_CLOCKED = "as_clocked"
+#: The rule he asked for, selectable by one config row.
+EARLY_FROM_SCHEDULE = "pay_from_schedule"
+EARLY_CLOCKIN_RULES = (EARLY_AS_CLOCKED, EARLY_FROM_SCHEDULE)
+
+EARLY_RULE_REASONS = {
+    EARLY_AS_CLOCKED:
+        "This org pays an early clock-in exactly as it was clocked; the scheduled start time is not "
+        "used to trim it.",
+    EARLY_FROM_SCHEDULE:
+        "This org pays from the SCHEDULED start time when somebody clocks in earlier than it by "
+        "more than the grace window, because time on the clock before the shift was due to begin is "
+        "not time anybody was asked to work. Inside the grace window the punch stands, so opening "
+        "the store is still paid.",
+}
+
+
 # ── CONFIG (RULE TWO — house defaults; storeops.payroll_hours_basis_config rows override) ────────
 HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
 MIGRATION = "1073_payroll_clocked_hours_basis.sql"
@@ -234,6 +291,13 @@ DEFAULT_CONFIG = {
     # stores whole minutes and the kiosk stores seconds. A rule that bites on 29 seconds rounds
     # against the employee for no reason; two minutes is the house default and the report states it.
     "clock_agreement_tolerance_hours": 0.034,
+    # HOW AN EARLY CLOCK-IN IS PAID (owner ask 2026-10-29). Ships as TODAY'S behaviour, so applying
+    # this change moves nobody's pay until a config row says otherwise — the same posture every other
+    # fork in this module ships with.
+    "early_clockin_rule": EARLY_AS_CLOCKED,
+    # How early is still "on time". 0.25h = 15 minutes, the measured opening-up window (see the rule
+    # note above). A punch inside it stands untrimmed even under EARLY_FROM_SCHEDULE.
+    "early_clockin_grace_hours": 0.25,
     # Does the feed decide pay at all? FALSE ships: until an org turns its clock feed on, the feed is
     # a check and `clock_source_rule` never engages.
     "clock_feed_is_pay_source": False,
@@ -322,6 +386,16 @@ def resolve_config(org_row=None, _pre_floor=False):
         eff["count_auto_clockout_punches"] = True
     rule = str(eff["clock_source_rule"] or "").strip()
     eff["clock_source_rule"] = rule if rule in CLOCK_SOURCE_RULES else RULE_NARROWEST_WINDOW
+    #: AN UNRULED VALUE FALLS BACK TO TODAY, never to the trimming rule — the allowlist posture this
+    #: module is built on. A typo in a config row must not start docking people's hours.
+    erule = str(eff["early_clockin_rule"] or "").strip()
+    eff["early_clockin_rule"] = erule if erule in EARLY_CLOCKIN_RULES else EARLY_AS_CLOCKED
+    try:
+        #: A NEGATIVE GRACE WOULD TRIM A PUNCH THAT WAS LATE, which is the opposite of the rule, so
+        #: it clamps at zero rather than being honoured.
+        eff["early_clockin_grace_hours"] = max(0.0, float(eff["early_clockin_grace_hours"]))
+    except (TypeError, ValueError):
+        eff["early_clockin_grace_hours"] = DEFAULT_CONFIG["early_clockin_grace_hours"]
     try:
         eff["clock_agreement_tolerance_hours"] = max(0.0, float(eff["clock_agreement_tolerance_hours"]))
     except (TypeError, ValueError):
@@ -452,6 +526,51 @@ def punch_usability(punch, cfg):
     return True, None
 
 
+def trim_early_clockin(punch, scheduled_start_at, cfg):
+    """PURE: `(hours, trimmed_hours, reason_or_None)` for ONE punch against its shift's scheduled start.
+
+    `scheduled_start_at` is the shift's start as an ISO INSTANT (with offset), not a wall-clock
+    string. That boundary is deliberate: `storeops.timelog.clock_in` is stored in UTC and
+    `storeops.shifts.start_time` is a LOCAL time, so comparing them needs the store's timezone — and
+    that fact already has one home, `router._biz_tz_for_store` (per-store, mig 851, falling back to
+    the tenant's `storeops.tenants.timezone` and then the house default). This module does no
+    timezone arithmetic and holds no zone name, so there is no second copy of it to drift. A caller
+    that cannot resolve the instant passes None and the punch stands untouched, which is also what
+    happens for a day with no scheduled start at all: a shift nobody rostered cannot be started
+    early.
+
+    MEASURED 2026-10-29 on 502 punches: comparing the stored UTC instant against the local
+    `start_time` STRING — the obvious shortcut — made 1 punch look 9.63h early and the other 501 look
+    late by four hours. The instant is the whole correctness of this rule, which is why it is the
+    parameter rather than something derived in here.
+    """
+    cfg = cfg if isinstance(cfg, dict) else resolve_config(None)
+    hours = _f((punch or {}).get("hours"))
+    if cfg["early_clockin_rule"] != EARLY_FROM_SCHEDULE:
+        return hours, 0.0, None
+    ci = _iso_dt((punch or {}).get("clock_in"))
+    start = _iso_dt(scheduled_start_at)
+    if ci is None or start is None or hours <= 0:
+        return hours, 0.0, None
+    early = (start - ci).total_seconds() / 3600.0
+    if early <= 0:
+        return hours, 0.0, None                       # on time or late: this rule has nothing to say
+    grace = float(cfg["early_clockin_grace_hours"])
+    if early <= grace:
+        return hours, 0.0, (
+            f"The clock-in was {early * 60:.0f} minute(s) before the scheduled start, which is "
+            f"inside this org's {grace * 60:.0f}-minute grace window, so the punch stands as "
+            f"clocked — opening the store is paid.")
+    #: TRIM, NEVER BELOW ZERO. A punch whose whole span sits before the scheduled start (a shift
+    #: rostered later in the day than the person actually worked) would otherwise go negative, and a
+    #: negative day's hours is a defect, not a deduction.
+    trimmed = min(early, hours)
+    return round(hours - trimmed, 4), round(trimmed, 4), (
+        f"The clock-in was {early * 60:.0f} minute(s) before the scheduled start, past this org's "
+        f"{grace * 60:.0f}-minute grace window, so the paid day starts at the scheduled start time: "
+        f"{trimmed:.2f}h trimmed from the {hours:.2f}h on the clock.")
+
+
 def build_evidence(shifts=None, punches=None, manual_rows=None, feed_punches=None,
                    overrides=None):
     """PURE: the per-(raw employee id, business date) evidence index every resolver reads.
@@ -504,6 +623,16 @@ def build_evidence(shifts=None, punches=None, manual_rows=None, feed_punches=Non
             continue
         c = cell(eid, day)
         c["scheduled"] += _f(s.get("scheduled_hours"))
+        #: THE EARLIEST scheduled start of the day, as an instant, for `trim_early_clockin`. Earliest
+        #: because a person rostered two shifts in one day was due at the first of them, and trimming
+        #: to the later one would dock the whole first shift. Absent when the caller supplies no
+        #: `scheduled_start_at` — every existing caller, so nothing changes for them.
+        sa = s.get("scheduled_start_at")
+        if sa:
+            prev = c.get("scheduled_start_at")
+            d_new, d_prev = _iso_dt(sa), _iso_dt(prev)
+            if d_prev is None or (d_new is not None and d_new < d_prev):
+                c["scheduled_start_at"] = sa
         a = _f(s.get("actual_hours"))
         if a > 0:
             c["shift_actual"] += a
@@ -540,20 +669,35 @@ def build_evidence(shifts=None, punches=None, manual_rows=None, feed_punches=Non
 
 
 def _apply_punch_policy(cell, cfg):
-    """Fold the cell's raw punch rows into (hours, rows, unusable[]) under this org's policy. Kept
+    """Fold the cell's raw punch rows into (hours, rows, unusable[], trimmed_hours, trim_reasons[])
+    under this org's policy. Kept
     out of `build_evidence` so the SAME evidence index can be resolved under two configs — which is
     how the harness proves a mode change moves nothing but the mode."""
     hours = 0.0
     rows = 0
     unusable = []
+    trimmed = 0.0
+    trim_reasons = []
+    start_at = (cell or {}).get("scheduled_start_at")
     for t in cell.get("_raw_punches") or ():
         ok, why = punch_usability(t, cfg)
         if ok:
-            hours += _f(t.get("hours"))
+            #: THE EARLY-CLOCK-IN RULE, APPLIED ONCE, HERE — the one place a usable punch's hours
+            #: become a number. Under the shipped `EARLY_AS_CLOCKED` it returns the punch untouched,
+            #: so this call is a no-op for every org until a config row says otherwise.
+            kept, cut, reason = trim_early_clockin(t, start_at, cfg)
+            hours += kept
             rows += 1
+            trimmed += cut
+            #: EVERY sentence the rule produced, including the one that says the GRACE COVERED IT.
+            #: A reader who can see why a punch WAS trimmed but not why another was not is being told
+            #: half the rule — and the grace is the half that protects the opener, so it is the half
+            #: most worth being able to point at.
+            if reason:
+                trim_reasons.append(reason)
         else:
             unusable.append(why)
-    return hours, rows, unusable
+    return hours, rows, unusable, round(trimmed, 4), trim_reasons
 
 
 def auto_closed_punches(cell):
@@ -719,7 +863,7 @@ def resolve_day(cell, cfg, employee_row=None, day=None):
     pre_floor = day_is_before_floor(day, cfg_all)
     cfg = config_for_day(cfg_all, day)
     scheduled = _f(cell.get("scheduled"))
-    punch_h, punch_rows, unusable = _apply_punch_policy(cell, cfg)
+    punch_h, punch_rows, unusable, early_trimmed, early_reasons = _apply_punch_policy(cell, cfg)
     feed_rows = list(cell.get("_feed_punches") or ())
     feed_h = round(sum(_f(r.get("hours")) for r in feed_rows), 4) if feed_rows else None
     detail = {"scheduled_hours": round(scheduled, 2),
@@ -728,6 +872,14 @@ def resolve_day(cell, cfg, employee_row=None, day=None):
               "feed_hours": feed_h, "feed_rows": len(feed_rows),
               "punch_hours": round(punch_h, 2), "punch_rows": punch_rows,
               "unusable_punches": list(unusable),
+              # THE EARLY-CLOCK-IN TRIM, as a FACT on every row rather than a silent subtraction
+              # (owner ask 2026-10-29 + his standing ruling of 2026-10-10: *"mention on the report
+              # why you are doing so"*). Zero under the shipped rule, which is every org today.
+              "early_clockin_trimmed_hours": round(early_trimmed, 2),
+              "early_clockin_rule": cfg["early_clockin_rule"],
+              "early_clockin_grace_hours": cfg["early_clockin_grace_hours"],
+              "early_clockin_reasons": list(early_reasons),
+              "scheduled_start_at": (cell or {}).get("scheduled_start_at"),
               "manual_rows": int(cell.get("manual_rows") or 0),
               "shift_actual_rows": int(cell.get("shift_actual_rows") or 0),
               "day": day,
@@ -803,6 +955,11 @@ def resolve_day(cell, cfg, employee_row=None, day=None):
 
     # 3. A USABLE CLOSED PUNCH on its own. Zero usable hours off a usable punch is a measured zero.
     if punch_rows > 0:
+        if early_trimmed > 0:
+            #: ITS OWN BASIS, so no reader is shown a trimmed figure labelled as what the clock said
+            #: (owner ask 2026-10-29). The sentence explaining every trimmed punch rides with it.
+            detail["rule_reason"] = " ".join(early_reasons) or EARLY_RULE_REASONS[EARLY_FROM_SCHEDULE]
+            return out(punch_h, CLOCKED_TRIMMED_TO_SCHEDULE if punch_h > 0 else MEASURED_ZERO)
         return out(punch_h, CLOCKED if punch_h > 0 else MEASURED_ZERO)
 
     # 4. A punch existed but this org does not count it. NOT a measurement, and not silently paid.

@@ -437,6 +437,11 @@ section("H. the pay path reaches the one home WITH EVIDENCE, and asks the interl
 #   H4  NO SECOND PUNCH-FETCHING PATH. One module reads `timelog` for a period on the pay path.
 #   H5  the resolvers all KNOW THE DATE, so the effective-from floor cannot be bypassed.
 #   H6  the floor is CONFIG — no date literal in app code (RULE TWO).
+#   H7  THE EARLY-CLOCK-IN RULE IS REACHABLE. `trim_early_clockin` takes an INSTANT, and the only
+#       thing that turns a shift's local `HH:MM` into one is `stamp_scheduled_starts`. If
+#       `period_evidence` stops calling it the rule is still present, still proved, and silently
+#       inert on every row — the exact "registry written but callers not wired" failure §19.18
+#       records three times. So the CALL is pinned, not the function's existence.
 _EVID_HOME = os.path.join(_MODULES, "storeops", "payroll_evidence.py")
 ok("H0 the one punch read exists where the index says it does", os.path.exists(_EVID_HOME),
    "storeops/payroll_evidence.py is gone — re-pin this axis")
@@ -581,6 +586,26 @@ ok("H6c …and the migration that carries the house org's date exists",
                                "1076_payroll_clocked_basis_effective_from.sql")))
 # NOT VACUOUS: the date search must still catch a literal if somebody writes one.
 ok("H6d …and the date search is not vacuous", bool(_DATE_LIT.search('FLOOR = "2026-10-04"')))
+
+# ── H7 the early-clock-in rule is REACHABLE from the pay path ──────────────────────────────────────
+ok("H7 the one assembly stamps the scheduled start, so the rule has an instant to trim against",
+   re.search(r"build_evidence\(\s*shifts=stamp_scheduled_starts\(", _EVID_SRC) is not None,
+   "period_evidence must pass shifts through stamp_scheduled_starts — without it "
+   "trim_early_clockin never fires and every row pays the clock whole")
+ok("H7b …and the stamper lives in that same one home, not in a caller",
+   "def stamp_scheduled_starts(" in _EVID_SRC)
+ok("H7c THE ZONE IS DEREFERENCED, never re-derived: the stamper reads the one home for a store's "
+   "timezone rather than spelling an offset or a zone name of its own",
+   "_biz_tz_for_store" in _EVID_SRC and not re.search(r'ZoneInfo\(\s*["\']', _EVID_SRC))
+# CODE only: the rule's header DOCUMENTS which one home owns the zone, and naming the right owner
+# in a comment is the opposite of the defect this check is about.
+_HOME_CODE = strip_comments_only(_HOME_NOW)
+ok("H7d the rule itself stays timezone-free — the conversion is the caller's job, so the pure "
+   "arithmetic cannot acquire an opinion about zones",
+   "ZoneInfo" not in _HOME_CODE and "_biz_tz_for_store" not in _HOME_CODE)
+ok("H7e …and it is not vacuous: the call search really matches the call",
+   re.search(r"build_evidence\(\s*shifts=stamp_scheduled_starts\(",
+             "x = _hb.build_evidence(shifts=stamp_scheduled_starts(org_id, shifts))") is not None)
 
 
 print(f"\n{'=' * 78}")
