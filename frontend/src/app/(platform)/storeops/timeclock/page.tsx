@@ -7,6 +7,7 @@ import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
+import { computeTotalScope, type TotalsCol, type TotalScope, type TotalsRow } from '@/lib/report-totals'
 import { SetupNotice } from '@/lib/setupNotice'
 import ScreenLink from '@/components/ScreenLink'
 
@@ -216,9 +217,51 @@ export default function TimeClockAdminPage() {
     rep: m => empName(m.employee_id),
   }), [manual, filt, employees])
 
-  const totalHours = visibleRows.reduce((s, r) => s + (Number(r.hours) || 0), 0)
-  const totalLunch = visibleRows.reduce((s, r) => s + (Number(r.lunch_deduction_hours) || 0), 0)
+  // OWNER ASK 2026-10-29: *"need the total below the hours on the time clock when filtered and
+  // without filter"*. ONE derivation of every total on this screen, through `lib/report-totals` —
+  // the same module ReportShell's footer uses — so the badges at the top, the footer under the Hours
+  // column and the export can never disagree. `computeTotalScope` carries the visible total AND the
+  // same total over every punch LOADED for the date range, which is what "without filter" can
+  // honestly mean here: the range itself is a server query, not a filter this screen applies.
+  //
+  // SCREEN_COLS is the header ribbon AND the footer: a column cannot gain a heading without gaining
+  // a total slot. The two entries past SCREEN_COL_COUNT are totals-only (lunch and net), drawn as
+  // sub-lines inside the Hours cell exactly as the body rows draw them.
+  const SCREEN_COL_COUNT = 10
+  const screenCols: TotalsCol[] = useMemo(() => [
+    { header: 'Employee', type: 'text', get: (r: TotalsRow) => r.employee_name || r.employee_id },
+    { header: 'Date', type: 'date', get: (r: TotalsRow) => r.work_date },
+    { header: 'In', type: 'text', get: () => '' },
+    { header: 'Out', type: 'text', get: () => '' },
+    { header: 'Hours', type: 'number', get: (r: TotalsRow) => (r.hours != null ? Number(r.hours) : null) },
+    { header: 'Store', type: 'text', get: (r: TotalsRow) => r.store_code || '' },
+    { header: 'Market', type: 'text', get: (r: TotalsRow) => r.market || '' },
+    // 'Face' holds a percentage, so it is declared `agg: 'none'` outright rather than left to be
+    // read as a number and summed into a meaningless 1,840%.
+    { header: 'Face', type: 'text', agg: 'none', get: (r: TotalsRow) => r.face_match_pct },
+    { header: 'GPS', type: 'text', get: () => '' },
+    { header: 'Selfie', type: 'text', get: () => '' },
+    { header: 'Lunch (auto)', type: 'number', get: (r: TotalsRow) => Number(r.lunch_deduction_hours) || 0 },
+    { header: 'Net Hours', type: 'number', get: (r: TotalsRow) => (r.hours != null ? Number(r.hours) - (Number(r.lunch_deduction_hours) || 0) : null) },
+  ], [])
+  const scope: TotalScope = useMemo(
+    () => computeTotalScope(screenCols, visibleRows, rowsWithMarket),
+    [screenCols, visibleRows, rowsWithMarket])
+  const HOURS_I = 4, LUNCH_I = 10, NET_I = 11
+  const totalHours = Number(scope.cells[HOURS_I].raw) || 0
+  const totalLunch = Number(scope.cells[LUNCH_I].raw) || 0
   const openCount = visibleRows.filter(r => !r.clock_out).length
+
+  // The manual-hours table is the SIBLING on this screen: its own Hours column had no total at all.
+  const manualCols2: TotalsCol[] = useMemo(() => [
+    { header: 'Employee', type: 'text', get: (m: TotalsRow) => m.employee_id },
+    { header: 'Date', type: 'date', get: (m: TotalsRow) => m.work_date },
+    { header: 'Hours', type: 'number', get: (m: TotalsRow) => Number(m.hours) || 0 },
+    { header: 'Reason', type: 'text', get: (m: TotalsRow) => m.reason },
+  ], [])
+  const manualScope: TotalScope = useMemo(
+    () => computeTotalScope(manualCols2, visibleManual, manual),
+    [manualCols2, visibleManual, manual])
 
   // RULE FOUR (§3c): export exactly what's rendered (the FILTERED set) — no PII (selfie/GPS are
   // already shown as plain links/thumbnails on this page, not Fernet-masked fields, so the export
@@ -307,8 +350,8 @@ export default function TimeClockAdminPage() {
       <div className="card" style={{ padding: 0, overflowX: 'auto', marginBottom: 18 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>
-            {['Employee', 'Date', 'In', 'Out', 'Hours', 'Store', 'Market', 'Face', 'GPS', 'Selfie'].map(h =>
-              <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
+            {screenCols.slice(0, SCREEN_COL_COUNT).map(c =>
+              <th key={c.header} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{c.header}</th>)}
           </tr></thead>
           <tbody>
             {loading ? (
@@ -345,6 +388,41 @@ export default function TimeClockAdminPage() {
             })}
             {!loading && visibleRows.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', padding: 36, color: 'var(--text3)' }}>No punches in range.</td></tr>}
           </tbody>
+          {/* THE TOTAL, UNDER THE COLUMN IT TOTALS (owner ask 2026-10-29). The visible figure, and
+              beneath it the same figure over every punch loaded for the range — drawn only when a
+              filter is actually cutting rows, because two identical numbers teach the reader to
+              ignore both. Every figure here is read off `scope`, so it cannot drift from the badges
+              above or from the export. */}
+          {!loading && scope.loaded > 0 && (
+            <tfoot><tr style={{ background: 'var(--surface2)' }}>
+              <td style={{ ...cell, fontWeight: 700, borderTop: '2px solid var(--text3)' }}>
+                TOTAL
+                <div style={{ fontWeight: 400, fontSize: 11, color: 'var(--text2)' }}>
+                  {scope.narrowed ? `${scope.shown} of ${scope.loaded} punches` : `${scope.loaded} punches`}
+                </div>
+              </td>
+              <td style={{ ...cell, borderTop: '2px solid var(--text3)' }} />
+              <td style={{ ...cell, borderTop: '2px solid var(--text3)' }} />
+              <td style={{ ...cell, borderTop: '2px solid var(--text3)' }} />
+              <td style={{ ...cell, fontWeight: 700, borderTop: '2px solid var(--text3)' }}>
+                {scope.cells[HOURS_I].text}
+                {totalLunch > 0 && (
+                  <div style={{ fontWeight: 400, fontSize: 11, color: 'var(--c-fg-b45309)' }}
+                       title="Auto lunch deduction summed over the same punches">
+                    − {scope.cells[LUNCH_I].text}h lunch (auto) = {scope.cells[NET_I].text}h net
+                  </div>
+                )}
+                {scope.narrowed && (
+                  <div style={{ fontWeight: 400, fontSize: 11, color: 'var(--text2)' }}
+                       title={`The same total over all ${scope.loaded} punches loaded for ${filt.period} → ${filt.periodTo}, before the store / market / employee filters on this screen. The date range itself is still applied.`}>
+                    {scope.cells[HOURS_I].allText} unfiltered
+                  </div>
+                )}
+              </td>
+              {screenCols.slice(5, SCREEN_COL_COUNT).map(c =>
+                <td key={'tf' + c.header} style={{ ...cell, borderTop: '2px solid var(--text3)' }} />)}
+            </tr></tfoot>
+          )}
         </table>
       </div>
 
@@ -385,6 +463,29 @@ export default function TimeClockAdminPage() {
             })}
             {visibleManual.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', padding: 18, color: 'var(--text3)', fontSize: 13 }}>No adjustments in range.</td></tr>}
           </tbody>
+          {manualScope.loaded > 0 && (
+            <tfoot><tr style={{ background: 'var(--surface2)' }}>
+              <td style={{ ...cell, fontWeight: 700, borderTop: '2px solid var(--text3)' }}>
+                TOTAL
+                <div style={{ fontWeight: 400, fontSize: 11, color: 'var(--text2)' }}>
+                  {manualScope.narrowed ? `${manualScope.shown} of ${manualScope.loaded} adjustments` : `${manualScope.loaded} adjustments`}
+                </div>
+              </td>
+              <td style={{ ...cell, borderTop: '2px solid var(--text3)' }} />
+              <td style={{ ...cell, fontWeight: 700, borderTop: '2px solid var(--text3)' }}>
+                {manualScope.cells[2].text}h
+                {manualScope.narrowed && (
+                  <div style={{ fontWeight: 400, fontSize: 11, color: 'var(--text2)' }}
+                       title={`The same total over all ${manualScope.loaded} adjustments loaded for ${filt.period} → ${filt.periodTo}, before the employee filter on this screen.`}>
+                    {manualScope.cells[2].allText}h unfiltered
+                  </div>
+                )}
+              </td>
+              <td style={{ ...cell, borderTop: '2px solid var(--text3)' }} />
+              <td style={{ ...cell, borderTop: '2px solid var(--text3)' }} />
+              <td style={{ ...cell, borderTop: '2px solid var(--text3)' }} />
+            </tr></tfoot>
+          )}
         </table>
       </div>
     </div>

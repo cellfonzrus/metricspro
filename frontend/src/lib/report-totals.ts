@@ -14,6 +14,13 @@
 
 export type Agg = 'sum' | 'avg' | 'none'
 
+/**
+ * A report row, shape unknown to this module on purpose: every value it reads comes through a
+ * column's own `get`, so the rows themselves are never inspected here. Named once rather than
+ * respelled at each signature.
+ */
+export type TotalsRow = any
+
 // Minimal structural column shape — ExportColumn (lib/export) satisfies this, so ReportShell
 // passes its own columns straight through without a cast.
 export interface TotalsCol {
@@ -57,7 +64,7 @@ const numberFmt = (n: number) =>
   Number.isInteger(n) ? n.toLocaleString('en-US') : n.toLocaleString('en-US', { maximumFractionDigits: 2 })
 
 // Decide how ONE column aggregates in the TOTAL row.
-export function resolveAgg(col: TotalsCol, rows: any[]): Agg {
+export function resolveAgg(col: TotalsCol, rows: TotalsRow[]): Agg {
   if (col.agg) return col.agg                         // explicit page override always wins
   if (AVG_RE.test(col.header || '')) return 'avg'     // ratio/%/rate → mean, never a sum
   if (isMoneyCol(col)) return 'sum'
@@ -74,12 +81,21 @@ export function resolveAgg(col: TotalsCol, rows: any[]): Agg {
 
 // Build the full TOTAL row (one cell per column) over the given rows. `firstLabel` lands in
 // the first NON-aggregated column (typically the leading label column).
-export function computeTotalRow(cols: TotalsCol[], rows: any[], firstLabel = 'TOTAL'): TotalCell[] {
-  const aggs = cols.map(c => resolveAgg(c, rows))
-  const labelIdx = aggs.findIndex(a => a === 'none')   // -1 if every column aggregates
+//
+// `aggs` pre-resolves how each column aggregates instead of deciding from `rows`. Only
+// `computeTotalScope` passes it, and it has to: `resolveAgg` reads the rows it is given to decide
+// whether a numeric-looking column is really summable, so a filter that leaves ZERO rows resolves
+// 'none' and blanks the filtered figure while the unfiltered one beside it still sums. Two figures
+// labelled the same aggregation must BE the same aggregation, so the decision is made once over the
+// superset and handed to both.
+export function computeTotalRow(
+  cols: TotalsCol[], rows: TotalsRow[], firstLabel = 'TOTAL', aggs?: Agg[],
+): TotalCell[] {
+  const resolved = aggs && aggs.length === cols.length ? aggs : cols.map(c => resolveAgg(c, rows))
+  const labelIdx = resolved.findIndex(a => a === 'none')   // -1 if every column aggregates
   return cols.map((col, i) => {
     const isMoney = isMoneyCol(col)
-    const agg = aggs[i]
+    const agg = resolved[i]
     if (agg === 'sum') {
       const total = rows.reduce((s, r) => s + (toNumber(col.get(r)) ?? 0), 0)
       return { text: isMoney ? moneyFmt(total) : numberFmt(total), raw: total, isMoney, agg }
@@ -93,4 +109,65 @@ export function computeTotalRow(cols: TotalsCol[], rows: any[], firstLabel = 'TO
     if (i === labelIdx) return { text: firstLabel, raw: firstLabel, isMoney, agg }
     return { text: '', raw: '', isMoney, agg }
   })
+}
+
+// ── A total says nothing until you know WHICH ROWS it is over (owner ask 2026-10-29) ────────────
+//
+// OWNER ASK, verbatim: *"need the total below the hours on the time clock when filtered and without
+// filter"*.
+//
+// THE CLASS, not the instance. The instance is the Hours column on Time Clock. The class is that
+// EVERY total in this product is a total of the rows a filter happened to leave visible, and none of
+// them says so. A reviewer narrows to one store, reads 88.20 h, and cannot tell from the screen
+// whether that is the whole fortnight or a tenth of it — so a filter left on by accident reads
+// exactly like a quiet month. Asking for "filtered and without filter" is asking a total to name its
+// own population, and the answer belongs here, in the one home for total arithmetic, not in one
+// screen's markup.
+//
+// WHAT "WITHOUT FILTER" HONESTLY MEANS. The widest population this side can see: every row the page
+// LOADED. A page's server query is itself a narrowing — Time Clock fetches one date range — so this
+// is "everything in range", never "everything ever", and a caller must label it that way. Claiming
+// otherwise would make the second figure the same kind of unsourced number as the first.
+//
+// `narrowed` is the whole point of the pair. When no filter is cutting anything the two figures are
+// identical, and a renderer that prints both anyway teaches the reader to stop looking at either.
+
+export interface TotalScopeCell extends TotalCell {
+  /** The same aggregation over every row the page LOADED, not only the visible ones. */
+  allText: string
+  allRaw: string | number
+}
+
+export interface TotalScope {
+  /** One cell per column, each carrying the visible figure AND the loaded-set figure. */
+  cells: TotalScopeCell[]
+  /** Rows the filters left visible. */
+  shown: number
+  /** Rows the page loaded. */
+  loaded: number
+  /** True when a filter is actually cutting rows — the only case where the second figure says anything. */
+  narrowed: boolean
+}
+
+/**
+ * The TOTAL row for `shownRows`, with the same aggregation over `loadedRows` beside it.
+ *
+ * `loadedRows` must be the SUPERSET `shownRows` was filtered out of. The aggregation decision is
+ * taken once over that superset and applied to both figures — see `computeTotalRow`'s `aggs`.
+ */
+export function computeTotalScope(
+  cols: TotalsCol[], shownRows: TotalsRow[], loadedRows: TotalsRow[], firstLabel = 'TOTAL',
+): TotalScope {
+  const shown = shownRows || []
+  const loaded = loadedRows || []
+  // Resolved over the superset so the two figures can never be different aggregations of one column.
+  const aggs = cols.map(c => resolveAgg(c, loaded))
+  const here = computeTotalRow(cols, shown, firstLabel, aggs)
+  const all = computeTotalRow(cols, loaded, firstLabel, aggs)
+  return {
+    cells: here.map((cell, i) => ({ ...cell, allText: all[i].text, allRaw: all[i].raw })),
+    shown: shown.length,
+    loaded: loaded.length,
+    narrowed: shown.length !== loaded.length,
+  }
 }
