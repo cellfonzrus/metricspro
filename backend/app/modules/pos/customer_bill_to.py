@@ -64,3 +64,22 @@ def has_address(row) -> bool:
     """Whether this record holds an address at all. The screens that ask "why is the address not on
     the receipt" need the answer to be about the RECORD, not about the receipt."""
     return bool(lines(row))
+
+
+#: What the print/send screen tells the CASHIER when the record holds no address. Deliberately not
+#: on the receipt: a customer reading "no address on file" cannot do anything about it, and a
+#: receipt that apologises for its own contents is the thing the owner called fake. The person who
+#: CAN fix it is standing at the till, so they are the one told (§POS-11).
+NO_ADDRESS_NOTE = ("No address on file for this customer, so the receipt bills to their name alone. "
+                   "Add it on their record and it prints from the next receipt on.")
+
+
+def view(row) -> dict:
+    """What a screen says about the address this receipt bills to: the lines it will print, whether
+    the RECORD holds one at all, and the sentence to show when it does not.
+
+    One shape, so the till's print screen and the Sale Log's reprint cannot word the same absence two
+    ways — and so neither of them re-derives "does this record have an address" from the lines.
+    """
+    return {"lines": lines(row), "on_file": has_address(row),
+            "note": "" if has_address(row) else NO_ADDRESS_NOTE}

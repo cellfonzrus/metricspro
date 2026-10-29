@@ -52,6 +52,23 @@ DEFAULT_PAPER_MM = 80
 #: the printer directly (§POS-04). It lives beside PAPER_PX because it is the same fact about the
 #: same paper in the other medium's units, and `paper_options` still derives the offer from PAPER_PX.
 PAPER_COLS = {58: 32, 80: 48}
+
+#: THE PAGE A RECEIPT PRINTS ON — one rule, both layouts, every medium that goes through a browser
+#: (§POS-11).
+#:
+#: Owner 2026-10-29: *"d not put hte reprint date and time on top woith the word Slae in the middle
+#: of the screen"*. Neither was the receipt's. A browser stamps its OWN header and footer on anything
+#: it prints — the date and time of the printing, the document's `<title>`, the URL, the page number
+#: — unless the page declares its own `@page` margins. No stylesheet here had one, so every receipt
+#: this platform has ever printed carried that stamp: a customer's receipt looking like a printout of
+#: a web page, with a reprint timestamp on it that contradicts the sale's own date.
+#:
+#: `margin: 0` removes the PAGE's margin, which is what suppresses the stamp; each renderer then sets
+#: its own padding so the ink does not run to the edge of a real sheet. One home, because the till
+#: slip and the tenant's own POS layout are two layouts of ONE receipt and the browser must stamp
+#: neither — and because the next layout gets it without anyone remembering.
+PAGE_CSS = "@page { size: auto; margin: 0; }"
+
 DEFAULT_FONT_PX = 12
 DEFAULT_FOOTER = "Thank you for your business!"
 
@@ -497,6 +514,8 @@ def thermal_html(snap, template_v, brand=None, disclaimer_blocks=None, store_nam
         ".nums td { color: #333; }"
         f".grand {{ font-size: {font + 2}px; font-weight: bold; }}"
         "@media print { body { width: auto; } }"
+        # The browser's own header and footer (§POS-11) — a receipt says what page it prints on.
+        + PAGE_CSS +
         "</style></head><body>"
         f'<div class="center">{"".join(header_bits)}</div>'
         f'<hr><table>{"".join(rows)}</table><hr>'

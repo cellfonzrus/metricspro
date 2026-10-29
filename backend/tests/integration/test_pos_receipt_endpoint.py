@@ -118,3 +118,35 @@ def test_a_store_row_that_cannot_be_read_still_prints_the_branding(wired, api_cl
     wired.seed("storeops.stores", [])
     _, html = _html(api_client)
     assert "2723 Example Ave" in html and "2126405-DCWP" in html
+
+
+# ── §POS-11: the page it prints on, and what the screen is told about the Bill To ────────────────
+def test_the_receipt_declares_its_own_page_so_the_browser_stamps_nothing(wired, api_client):
+    """The owner's "reprint date and time on top with the word Sale in the middle" was Chrome's own
+    print header, over a page that had never said what page it prints on."""
+    from app.modules.pos import sale_receipt as SR
+    _, html = _html(api_client)
+    assert SR.PAGE_CSS in html
+
+
+def test_the_screen_is_told_the_customer_record_holds_no_address(wired, api_client):
+    res = api_client.get(PATH, params={"org_id": ORG})
+    bill_to = res.json()["receipt"]["bill_to"]
+    assert bill_to["on_file"] is False
+    assert bill_to["lines"] == []
+    assert "address" in bill_to["note"].lower()
+
+
+def test_a_customer_with_an_address_bills_to_it_and_the_screen_says_nothing(wired, api_client):
+    wired.seed("pos.customers", [{"id": "cust-1", "org_id": ORG, "first_name": "Grand",
+                                  "last_name": "Market Intl Corporation",
+                                  "address_1": "41 Example Road", "address_2": "Unit 7",
+                                  "city": "Brooklyn", "state": "NY", "zip": "11229"}])
+    wired.seed("pos.sales", [{"id": SALE_ID, "org_id": ORG, "store_code": STORE,
+                              "employee_id": "E240", "status": "completed",
+                              "customer_id": "cust-1", "receipt": RECEIPT_SNAPSHOT}])
+    res = api_client.get(PATH, params={"org_id": ORG})
+    body = res.json()["receipt"]
+    assert body["bill_to"]["on_file"] is True and body["bill_to"]["note"] == ""
+    assert "41 Example Road Unit 7" in body["html"]
+    assert "Brooklyn NY 11229" in body["html"]

@@ -2343,6 +2343,11 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
             if choice["destination"] == _sr.DEST_DIRECT else ""),
         "email": _sr.email_view(snap, brand, template, settings_text, customer=customer,
                                 typed=typed_email, tenant_name=tenant_name),
+        # Where this receipt BILLS TO, and — for the cashier, never for the receipt — whether the
+        # record holds an address at all (§POS-11). The owner asked for the address on the Bill To;
+        # it prints whenever the record has one, and 1 of 1,636 records on the reporting tenant did.
+        # A renderer cannot print a fact nobody collected, so the screen that can collect it says so.
+        "bill_to": _bill_to.view(customer),
         # The SAME question for the other channel (§POS-09), answered by the same one home: who
         # would this receipt go to, whose number is it, and can it be sent at all. What counts as a
         # phone number is WhatsApp's own rule, dereferenced — never a second normalisation here.
@@ -2434,7 +2439,7 @@ _RECEIPT_KEYS = ("html", "layout", "layout_note", "layout_source", "paper_width_
                  "layout_options", "paper_options", "printer_label", "destination",
                  "destination_source", "destination_options", "helper_url", "escpos_base64",
                  "remit", "remit_source", "remit_available", "remit_routing_masked",
-                 "remit_account_masked", "email", "company_name")
+                 "remit_account_masked", "email", "bill_to", "company_name")
 
 
 @router.get("/sales/{sale_id}/receipt")

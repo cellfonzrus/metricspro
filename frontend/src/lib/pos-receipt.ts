@@ -50,6 +50,13 @@ export interface ReceiptWhatsappView {
   caption: string
 }
 
+/** What a screen says about the address a receipt bills to — the server's one answer (§POS-11). */
+export interface ReceiptBillToView {
+  lines: string[]
+  on_file: boolean
+  note: string
+}
+
 export interface SaleReceipt {
   html: string
   layout: string
@@ -87,6 +94,10 @@ export interface SaleReceipt {
   escpos_base64: string
   email: ReceiptEmailView
   whatsapp: ReceiptWhatsappView
+  /** Where this receipt bills to, and whether the customer's RECORD holds an address at all
+   *  (§POS-11). `note` is for the cashier, who can add one; it is never on the receipt, which the
+   *  customer cannot do anything about. */
+  bill_to: ReceiptBillToView
   company_name: string
 }
 
@@ -145,6 +156,11 @@ export async function fetchSaleReceipt(saleId: string, choice?: PrintChoice): Pr
       valid: rec.whatsapp?.valid === true,
       from_name: String(rec.whatsapp?.from_name || ''),
       caption: String(rec.whatsapp?.caption || ''),
+    },
+    bill_to: {
+      lines: Array.isArray(rec.bill_to?.lines) ? rec.bill_to.lines.map(String) : [],
+      on_file: rec.bill_to?.on_file === true,
+      note: String(rec.bill_to?.note || ''),
     },
     company_name: String(rec.company_name || ''),
   }

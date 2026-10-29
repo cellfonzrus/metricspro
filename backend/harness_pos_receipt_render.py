@@ -1255,6 +1255,66 @@ check("R13 the slip's PDF fits the roll it declares — every figure, not the fi
 check("R14 §POS-10 is registered in the index with its one home",
       "POS-10" in idx and "receipt_store_block" in idx)
 
+
+print("\n§S  THE PAGE A RECEIPT PRINTS ON, AND THE BILL TO (§POS-11)")
+# Owner 2026-10-29, verbatim: *"the receipt for verizon rq format printed correctly , d not put hte
+# reprint date and time on top woith the word Slae in the middle of the screen , teh bil to should
+# have the customer address printed"*.
+#
+# NEITHER STAMP WAS THE RECEIPT'S. A browser prints its own header and footer over any page — the
+# date and time of the PRINTING on the left, the document's <title> centred, the URL and page number
+# below — unless the page declares its own `@page` margins. No stylesheet in this repository had
+# one, so every receipt this platform has ever printed, in either layout and for every tenant,
+# carried a reprint timestamp that contradicts the sale's own date.
+#
+# THE BILL TO already prints the address (§POS-07) whenever the record holds one. What was missing
+# was upstream: the till's quick-add customer form asked for a name, a phone and an email and NOT
+# for an address, so a customer created at the register could never have one. Measured live
+# 2026-10-29: 1 of 1,636 customer records on the reporting tenant held an address.
+SALES_SRC = read(REGISTER)
+RENDER_SRC = read("backend/app/modules/pos/receipt_formats/render.py")
+_pos_html = sr.html(SNAP, T_POS, render_document=_render.render_html, fmt=_rq, brand=BRAND,
+                    store_row=STORE_ROW, customer_lines=CUST_LINES)
+_slip_html = sr.thermal_html(SNAP, ALL_ON, brand=BRAND, store_name="STORE 1")
+
+check("S1 a receipt declares its own page, so the browser stamps no date, title or URL on it",
+      "@page" in sr.PAGE_CSS and "margin: 0" in sr.PAGE_CSS)
+check("S2 BOTH layouts print on it — two layouts of one receipt, and the browser must stamp neither",
+      sr.PAGE_CSS in _pos_html and sr.PAGE_CSS in _slip_html)
+check("S3 LOCK — the rule is written ONCE and the format renderer dereferences it",
+      "@page" not in RENDER_SRC.replace("`@page`", "") and "PAGE_CSS" in RENDER_SRC
+      and code_only(SR_SRC).count("@page") == 1)
+check("S4 a page with no margin is not a page printed to the paper's edge — each layout keeps its own",
+      "padding: 12mm" in RENDER_SRC and "padding: 12px" in code_only(SR_SRC))
+
+check("S5 the bill-to view is the record's own answer: the lines, whether it HOLDS one, and the "
+      "sentence for the person who can fix it",
+      bt.view(CUST) == {"lines": CUST_LINES, "on_file": True, "note": ""}
+      and bt.view({"first_name": "A"})["on_file"] is False
+      and bt.view({"first_name": "A"})["note"] == bt.NO_ADDRESS_NOTE
+      and bt.view(None)["lines"] == [])
+check("S6 it does not re-derive 'has this record an address' — the one home answers it",
+      all(bt.view(r)["on_file"] == bt.has_address(r) for r in (CUST, {}, None, {"city": "Brooklyn"})))
+check("S7 the RECEIPT never says a record is missing an address — the customer cannot fix it",
+      "address on file" not in sr.html(SNAP, T_POS, render_document=_render.render_html, fmt=_rq,
+                                       customer_lines=[]).lower()
+      and "address on file" not in sr.thermal_html(SNAP, ALL_ON, customer_lines=[]).lower())
+check("S8 the CASHIER is, on the screen that can fix it, in the server's own words",
+      "bill_to.note" in panel and "bill_to.on_file" in panel
+      and "address on file" not in code_only(panel).lower().replace("bill_to.note", ""))
+check("S9 the wire carries it, defaulted rather than assumed",
+      '"bill_to"' in router and "_bill_to.view(customer)" in router
+      and "bill_to" in read(CLIENT))
+
+check("S10 THE CAUSE — the till asks for every field the receipt's bill-to prints, so a record "
+      "created at the register can carry one at all",
+      all(f'newCust.{f}' in SALES_SRC for f in bt.FIELDS),
+      [f for f in bt.FIELDS if f'newCust.{f}' not in SALES_SRC])
+check("S11 and the server already accepts them (no endpoint change was needed for the till to ask)",
+      set(bt.FIELDS) <= set(prouter.CUSTOMER_FIELDS))
+check("S12 §POS-11 is registered in the index with its one homes",
+      "POS-11" in idx and "PAGE_CSS" in idx)
+
 print("\n§J  negative controls")
 check("neg-B a default that drifted on one side only is RED",
       ts_default("brand_company_name")[1] == pc.SERVER_DEFAULTS["brand_company_name"]
@@ -1311,6 +1371,10 @@ check("neg-Q a seven-digit number called sendable would be RED",
 check("neg-Q2 a view that normalised the number ITSELF would be RED (it is handed the rule)",
       wa_view({}, "(212) 555-0123", None)["to"] == "(212) 555-0123"
       and not wa_view({}, "(212) 555-0123", None)["valid"])
+check("neg-S a receipt that let the browser stamp its own header would be RED",
+      "@page" not in sr.thermal_html(SNAP, ALL_ON).replace(sr.PAGE_CSS, ""))
+check("neg-S2 a bill-to note shown on a record that HAS an address would be RED",
+      bt.view(CUST)["note"] == "" and bt.NO_ADDRESS_NOTE != "")
 check("neg-P a file that re-decided the layout would be RED (it asks the one resolver)",
       rpdf.receipt_pdf(SNAP, T_POS)[:5] == b"%PDF-"
       and pdf_pages(rpdf.receipt_pdf(SNAP, T_POS))[0][0][0] == round(80 * rpdf.PT_PER_MM, 2))
