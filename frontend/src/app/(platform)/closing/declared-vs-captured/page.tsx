@@ -3,6 +3,8 @@ import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import DrillDownPanel, { useDrillTile, type DrillPanel } from '@/components/DrillDownPanel'
+import { DrillStat } from '../_lib/DrillStat'
 
 // DECLARED vs CAPTURED (mig 1102, index §CLOSING-02). Owner ask 2026-10-29: a rep is paid per
 // financing transaction, so what they declare at closing and what the sales feed captured have to
@@ -31,12 +33,14 @@ type RepRow = {
 type Resp = {
   configured?: boolean; note?: string
   rows?: Row[]; by_rep?: RepRow[]
-  totals?: { rows: number; ok: number; gaps: number; pending: number }
+  totals?: { rows: number; ok: number; gaps: number; pending: number
+             amount_declared: number; amount_captured: number }
   metrics?: { key: string; label: string; counterpart: string; value_kind: string }[]
   not_reconciled?: string[]
   feed_days?: string[]
   counterpart_status?: Record<string, { status?: string; note?: string }>
   severity_note?: string
+  drilldown?: Record<string, DrillPanel>
   error?: string
 }
 
@@ -94,7 +98,13 @@ export default function DeclaredVsCapturedPage() {
     const all = data?.rows || []
     return gapsOnly ? all.filter(r => r.verdict !== 'ok' && r.verdict !== 'pending') : all
   }, [data, gapsOnly])
-  const t = data?.totals || { rows: 0, ok: 0, gaps: 0, pending: 0 }
+  const t = { rows: 0, ok: 0, gaps: 0, pending: 0, amount_declared: 0, amount_captured: 0,
+              ...(data?.totals || {}) }
+  // THE SERVED PANELS (§CORE-17). The tiles print the server's own totals as served — the "only the
+  // ones that disagree" tick filters the table below and does NOT move them — so each panel stays
+  // whole and `lib/drill-narrow` is deliberately not wired in here.
+  const drills: Record<string, DrillPanel> = data?.drilldown || {}
+  const drill = useDrillTile(drills)
 
   function buildPayload(): ExportPayload {
     return {
@@ -155,6 +165,24 @@ export default function DeclaredVsCapturedPage() {
       )}
 
       {!loading && data?.configured && (<>
+        {/* The two figures that ARE folds out of two different feeds, each opening to the findings
+            behind it. The verdict counts below get no panel: the table IS that list, one row per
+            finding, and serving it again would print the same rows twice. */}
+        <div className="card" style={{ display: 'flex', gap: 18, marginTop: 12, flexWrap: 'wrap' }}>
+          <DrillStat label="Declared at closing" value={fmt(t.amount_declared)}
+            drill={drill} drills={drill.dl('amount_declared', 'the findings behind it')} />
+          <DrillStat label="Captured by the system" value={fmt(t.amount_captured)}
+            drill={drill} drills={drill.dl('amount_captured', 'the findings behind it')} />
+        </div>
+
+        {/* ONE panel at a time, below the strip. */}
+        {drill.open && (
+          <div style={{ marginTop: 12 }}>
+            <DrillDownPanel panel={drill.panel}
+              emptyNote="No finding contributed to this figure in this range." />
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
           {[['Agree', t.ok, 'var(--green)'],
             ['Disagree', t.gaps, 'var(--red)'],

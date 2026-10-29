@@ -121,6 +121,13 @@ FACTS: dict[str, dict] = {
             # The DM-verify chargeback strip (§CORE-17.3f) — money out of a named person's pay,
             # opening to the missed verifications it charges for.
             'app/modules/closing/ops_chargeback_drilldown.py': ('report_drilldown',),
+            # §CLOSING-02 — Declared vs Captured. TWO panels, because its two figures are Σ over the
+            # SAME row out of DIFFERENT feeds (the closing sheets and the sales pair), which is
+            # §CORE-17.3m's grain rule and this report's whole subject. The three verdict COUNTS get
+            # no panel: the table below them IS that list. The absence reason on a captured row is
+            # DEREFERENCED from `declared_feed_recon`, which is the one home for telling the four
+            # absences apart — re-deciding it here could blame a rep for a feed nobody loaded.
+            'app/modules/closing/declared_feed_drilldown.py': ('report_drilldown',),
             # The Management Envelope Receipt (§CORE-17.3g). THREE PEOPLE COUNT ONE ENVELOPE, in
             # three tables, so each figure names only the ones it was read out of — and it serves a
             # SECOND panel family, one per By-employee line, the owner's employee-level cash

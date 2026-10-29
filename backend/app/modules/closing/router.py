@@ -56,6 +56,7 @@ from app.modules.account import store_identity as _store_identity  # noqa: E402
 from app.modules.core import person_identity as _person_identity  # noqa: E402
 from . import metric_catalog as _metrics
 from . import declared_feed_recon as _declared_feed_recon
+from . import declared_feed_drilldown as _declared_feed_drilldown
 from . import closing_refile as _refile
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
@@ -3989,6 +3990,7 @@ def _counterpart_captured(client, org_id, date_from, date_to, counterparts, *, s
     THE ONE HOME for the captured side, as `metric_catalog.declared` is for the declared side.
     Returns `(captured_rows, feed_days, status)`:
       captured_rows — flat `{date, store_code, rep, counterpart, units, amount}`
+      sales_tables  — the pair side(s) the reads actually drew rows from, for the drill-down
       feed_days     — the days a sales read ACTUALLY returned rows for. A day outside it has no
                       counterpart at all, which the reconciler reports as `pending` rather than as a
                       $0.00 variance that would read as "we checked and it agreed".
@@ -4013,7 +4015,7 @@ def _counterpart_captured(client, org_id, date_from, date_to, counterparts, *, s
         if w:
             want[_declared_feed_recon.counterpart_key(w)] = w
     if not want:
-        return [], set(), {}
+        return [], set(), {}, ()
     kinds = {w["kind"] for w in want.values()}
 
     vendors, status, gate, ucfg, acc_fn = [], {}, None, {}, None
@@ -4060,7 +4062,9 @@ def _counterpart_captured(client, org_id, date_from, date_to, counterparts, *, s
 
     code_want = str(store_code or "").strip()
     store_idx = _counterpart_store_index(client, org_id) if "financing" in kinds else {}
-    out, feed_days = [], set()
+    # WHICH SIDE OF THE SALES PAIR ANSWERED, accumulated over the range (§CORE-17.3c). Read off the
+    # selection that knows, never guessed, so the drill-down names the feed the figure came out of.
+    out, feed_days, tables_seen = [], set(), set()
     day = d0
     while day <= d1:
         iso = day.isoformat()
@@ -4069,6 +4073,7 @@ def _counterpart_captured(client, org_id, date_from, date_to, counterparts, *, s
         if not rows:
             continue                     # the feed was not loaded for this day — NOT a zero
         feed_days.add(iso)
+        tables_seen.update(t for t in (tables or ()) if t)
         if "financing" in kinds and vendors:
             units, _notes, _considered = _finrep_vendor_units(
                 rows, vendors, gate=gate, unit_cfg=ucfg, is_accessory=acc_fn)
@@ -4100,7 +4105,7 @@ def _counterpart_captured(client, org_id, date_from, date_to, counterparts, *, s
                     # store-declared category addresses itself on the declared side.
                     out.append({"date": iso, "store_code": code, "rep": "", "counterpart": ck,
                                 "units": n, "amount": 0.0})
-    return out, feed_days, status
+    return out, feed_days, status, tuple(sorted(tables_seen))
 
 
 def _finrep_vendor_units(rows, vendors, **kw):
@@ -4230,7 +4235,7 @@ def declared_vs_captured(date_from: str, date_to: str = "", store_code: str = ""
                 "units": sum(_int(e.get("units")) for e in seen),
                 "amount": round(sum(_money(e.get("amount")) for e in seen), 2)})
 
-    captured, feed_days, status = _counterpart_captured(
+    captured, feed_days, status, sales_tables = _counterpart_captured(
         client, org_id, date_from, d_to, cps, store_code=store_code)
 
     # A per-EMPLOYEE category whose counterpart only answers per STORE cannot be checked, and says so
@@ -4259,9 +4264,14 @@ def declared_vs_captured(date_from: str, date_to: str = "", store_code: str = ""
         out["rows"] = [r for r in out["rows"] if r["rep_key"] == want]
         out["by_rep"] = [r for r in out["by_rep"] if r["rep_key"] == want]
         out["totals"] = _declared_feed_recon.totals(out["rows"])
+    # THE SERVED PANELS (§CORE-17). TWO, because the two figures are Σ over the same row out of
+    # DIFFERENT feeds — which is this report's whole subject. The verdict COUNTS get none: the table
+    # below them is that list, one row per finding (§CORE-17.3h's sibling).
+    out["drilldown"] = _declared_feed_drilldown.panels(
+        out["rows"], out["totals"], sales_tables=sales_tables)
     out.update({"date_from": str(date_from), "date_to": d_to, "store_code": store_code,
                 "rep": rep, "configured": True,
-                "feed_days": sorted(feed_days),
+                "feed_days": sorted(feed_days), "sales_tables": list(sales_tables),
                 "counterpart_status": status,
                 "severity_note": ("Informational. Nothing here blocks a close or changes what anyone "
                                   "is paid; a gap is a question for a manager, in either direction.")})

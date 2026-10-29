@@ -26208,7 +26208,9 @@ as declared by the sales rep"*.
 pure) · `backend/app/modules/commcalc/financing_report.py` (`vendor_units`, THE one derivation of
 financed units by vendor × store × rep × **day**, extracted so `build` folds it) ·
 `backend/app/modules/closing/router.py` (`_counterpart_captured`, the one read of the captured side;
-`GET /closing/declared-vs-captured`)
+`GET /closing/declared-vs-captured`) ·
+`backend/app/modules/closing/declared_feed_drilldown.py` (§CORE-17: **two** panels, because the two
+figures are Σ over the same row out of DIFFERENT feeds; the verdict counts get none)
 **Lock:** `backend/harness_declared_feed_recon.py` — 68 checks · `harness_metric_catalog_lock.py` §G
 (38 → 60 checks), both run by `carrier-vocab-guard.yml`
 **Tests:** `backend/tests/unit/test_declared_feed_recon.py` (21) ·
@@ -26216,6 +26218,8 @@ financed units by vendor × store × rep × **day**, extracted so `build` folds 
 `backend/tests/integration/test_declared_vs_captured_endpoint.py` (12)
 **Migration:** `1102_closing_feed_counterpart.sql` — one nullable config column and two tolerances.
 **Screen:** `/closing/declared-vs-captured` ("Declared vs Captured", beside the other closing recons)
+— server-folded and NOT narrowed, so `lib/drill-narrow` is deliberately absent and each panel covers
+the whole range; ledger `harness_drilldown_pending.txt` records it `shared`.
 
 ### §CLOSING-02.1 HALF THE ASK WAS ALREADY BUILT, AND IS THEREFORE NOT BUILT AGAIN
 
