@@ -827,6 +827,10 @@ on:
       - "backend/app/modules/core/tenant_identity.py"
       - "backend/app/modules/notify/channels/email_resend.py"
       - "backend/harness_pos_receipt_render.py"
+      - "backend/app/modules/pos/receipt_formats/doc_style.py"
+      - "backend/app/modules/pos/receipt_formats/render_pdf.py"
+      - "backend/app/modules/pos/receipt_formats/render.py"
+      - "backend/harness_pos_receipt_document.py"
       - "frontend/src/lib/pos-receipt.ts"
       - "frontend/src/lib/pos-config.ts"
       - "frontend/src/components/pos/ReceiptTemplateSection.tsx"
@@ -2533,6 +2537,9 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_pos_receipt_render.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the receipt-document proof (one description of the borders, drawn by both media; the rules measured off the rendered PDF; phrases whole; the round-trip fixture left to its own job — index §POS-13)
+        working-directory: backend
+        run: python3 harness_pos_receipt_document.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   store-identity-proof:
     name: Store identity — one store, one canonical key (DB-free, the real resolver)

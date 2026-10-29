@@ -351,6 +351,21 @@ def _esc(v) -> str:
     return _html.escape("" if v is None else str(v))
 
 
+def method_label(method) -> str:
+    """How a payment method is written FOR A CUSTOMER.
+
+    `pos.sale_payments.payment_method` stores a machine value (`credit_card`), and both receipt
+    layouts used to dress it themselves — the slip with the raw value inside "Paid (credit_card)",
+    the POS layout with `.title()`, which leaves the underscore and prints **Credit_Card** on a
+    customer's receipt (owner, 2026-10-29). Two renderings of one fact, both wrong in their own way,
+    so it is one function and neither spells it again.
+
+    No method vocabulary is declared here (RULE TWO): whatever the tenant stores is made readable,
+    never translated against a list of methods this file knows.
+    """
+    return " ".join(w for w in str(method or "").replace("_", " ").split()).title()
+
+
 def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name="",
                fold_discount=False, tenant_name="", employee_name="", remit_block="",
                customer_lines=None, store_row=None) -> dict:
@@ -423,7 +438,8 @@ def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name=
     totals.append({"label": "TOTAL", "value": snap["total"], "grand": True})
 
     tendered = snap["tendered"] if snap["tendered"] is not None else snap["total"]
-    paid = [{"label": f'Paid ({snap["method"]})' if snap["method"] else "Paid", "value": tendered}]
+    paid = [{"label": f'Paid ({method_label(snap["method"])})' if snap["method"] else "Paid",
+             "value": tendered}]
     if snap["change"] > 0:
         paid.append({"label": "Change", "value": snap["change"]})
 
@@ -616,7 +632,7 @@ def document(snap, fmt, template_v, brand=None, store_row=None, tenant_name="",
             doc["totals"].append({"key": key, "label": spec.get("label") or key,
                                   "amount": wanted[key], "editable": bool(spec.get("editable"))})
     if snap["method"]:
-        doc["payments"] = [{"label": snap["method"].title(),
+        doc["payments"] = [{"label": method_label(snap["method"]),
                             "amount": snap["tendered"] if snap["tendered"] is not None else snap["total"]}]
     doc["footer_text"] = _footer_with_blocks((template_v or {}).get("footer_text") or "",
                                              disclaimer_blocks)

@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import html
 
+from . import doc_style as _style
+
 
 def _esc(v) -> str:
     return html.escape("" if v is None else str(v))
@@ -35,7 +37,12 @@ def render_html(doc: dict, *, editable: bool = False) -> str:
     """Full standalone HTML document for printing. `editable=True` adds contenteditable hooks +
     data-attributes so a UI can turn the same markup into an inline editor (kept optional so the print
     view stays clean)."""
-    cols = doc.get("columns") or []
+    # The columns at least one row FILLS — §POS-13's one home, shared with the PDF.
+    # Receipt 4605 printed a "Product SKU" heading over a column of nothing on every row.
+    # NOT applied to `render_words` / `default_layout` below: those reproduce the ORIGINAL
+    # receipt's geometry for the parser round trip, where a column that was on the paper
+    # must stay on the paper even when empty.
+    cols = _style.visible_columns(doc)
     title = _esc(doc.get("title") or "Receipt")
     store = doc.get("store") or {}
     meta = doc.get("meta") or []
@@ -46,11 +53,20 @@ def render_html(doc: dict, *, editable: bool = False) -> str:
         f'<td class="mv"{_edit_attr(editable, "meta", m.get("key"), m.get("editable"))}>{_esc(m.get("value"))}</td></tr>'
         for m in meta
     )
-    store_html = f'<div class="store">{_lines(store)}'
+    # The shop's NAME leads in bold and the rest of the block is set lighter beneath it — the same
+    # weighting the PDF draws (§POS-13). Setting the whole block bold, as this did, is a difference
+    # the two media had no reason to have.
+    _slines = [ln for ln in (store.get("lines") or []) if str(ln or "").strip()]
     if store.get("phone"):
-        store_html += f'<br>{_esc(store["phone"])}'
+        _slines.append(str(store["phone"]))
     if store.get("fax"):
-        store_html += f' &nbsp; FAX {_esc(store["fax"])}'
+        _slines.append(f'FAX {store["fax"]}')
+    store_html = '<div class="store">'
+    if _slines:
+        store_html += _esc(_slines[0])
+        if len(_slines) > 1:
+            store_html += ('<div class="store-sub">'
+                           + "<br>".join(_esc(ln) for ln in _slines[1:]) + "</div>")
     store_html += "</div>"
 
     # parties
@@ -80,14 +96,21 @@ def render_html(doc: dict, *, editable: bool = False) -> str:
     )
 
     # totals + payments
+    def _is_grand(t) -> bool:
+        """The grand total, which the stylesheet and the PDF both weight. One test, so the heavy
+        rule cannot land on a different row in the two media."""
+        return (t.get("kind") == "money_total"
+                or str(t.get("key") or "").lower() == "total"
+                or str(t.get("label") or "").strip().lower().rstrip(":") == "total")
+
     total_rows = "".join(
-        f'<tr><td class="tl">{_esc(t.get("label"))}</td>'
+        f'<tr class="{"grand" if _is_grand(t) else ""}"><td class="tl">{_esc(t.get("label"))}</td>'
         f'<td class="tv"{_edit_attr(editable, "total", t.get("key"), t.get("editable"))}>'
         f'{_fmt_cell(t.get("amount"), "money")}</td></tr>'
         for t in (doc.get("totals") or [])
     )
     pay_rows = "".join(
-        f'<tr><td class="tl">{_esc(p.get("label"))}</td><td class="tv">{_fmt_cell(p.get("amount"), "money")}</td></tr>'
+        f'<tr class="pay"><td class="tl">{_esc(p.get("label"))}</td><td class="tv">{_fmt_cell(p.get("amount"), "money")}</td></tr>'
         for p in (doc.get("payments") or [])
     )
     totals_block = f'<table class="totals">{total_rows}{pay_rows}</table>'
@@ -105,7 +128,7 @@ def render_html(doc: dict, *, editable: bool = False) -> str:
 
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>{title}</title>
-<style>{_page_css()}{_CSS}</style></head><body>
+<style>{_page_css()}{_doc_css()}</style></head><body>
 <div class="receipt" data-pos-source="{_esc(doc.get('pos_source'))}">
   <div class="head">
     <div class="head-left">{store_html}</div>
@@ -131,41 +154,22 @@ def _page_css() -> str:
     return PAGE_CSS
 
 
+def _doc_css() -> str:
+    """THE document stylesheet (§POS-13) — dereferenced, never spelled here. It used to be a
+    private `_CSS` string in this file, which is exactly how the screen came to carry hairlines the
+    PDF had never heard of. Both media now read one description of the borders."""
+    return _style.css()
+
+
 def _edit_attr(editable: bool, scope: str, key, allowed) -> str:
     if not (editable and allowed):
         return ""
     return f' contenteditable="true" data-edit="{scope}" data-key="{_esc(key)}"'
 
 
-_CSS = """
-* { box-sizing: border-box; }
-body { font-family: Arial, Helvetica, sans-serif; color: #111; margin: 0; padding: 16px; font-size: 12px; }
-.receipt { max-width: 760px; margin: 0 auto; }
-.head { display: flex; justify-content: space-between; gap: 24px; margin-bottom: 12px; }
-.rtitle { font-size: 20px; font-weight: 700; text-align: right; margin-bottom: 4px; }
-.store { font-weight: 600; line-height: 1.4; }
-.meta td { padding: 1px 4px; }
-.meta .ml { color: #555; text-align: right; }
-.meta .mv { font-weight: 600; }
-.parties { display: flex; gap: 40px; margin: 8px 0 14px; }
-.plabel { color: #555; font-weight: 700; margin-bottom: 2px; }
-table.items { width: 100%; border-collapse: collapse; margin: 6px 0; }
-table.items th { border-bottom: 1.5px solid #333; text-align: left; padding: 4px 6px; font-size: 11px; }
-table.items td { padding: 3px 6px; border-bottom: 1px solid #eee; vertical-align: top; }
-.right { text-align: right; }
-.totals-wrap { display: flex; justify-content: flex-end; margin-top: 8px; }
-table.totals { min-width: 260px; }
-table.totals .tl { color: #444; padding: 2px 10px 2px 0; }
-table.totals .tv { text-align: right; font-weight: 700; }
-.comments { margin: 12px 0; }
-.section { margin: 12px 0; }
-.stitle { font-weight: 700; margin-bottom: 4px; }
-table.sub { border-collapse: collapse; }
-table.sub th, table.sub td { border: 1px solid #ddd; padding: 2px 8px; text-align: left; }
-.footer { margin-top: 18px; padding-top: 10px; border-top: 1px solid #ccc; color: #444; font-size: 10px; line-height: 1.4; white-space: pre-wrap; }
-[contenteditable="true"] { outline: 1px dashed #4c8bf5; background: #f5f9ff; }
-@media print { body { padding: 12mm 10mm; } [contenteditable] { outline: none; background: none; } }
-"""
+# The stylesheet lives in `doc_style.css()` (§POS-13). A `_CSS` string here was the SECOND
+# description of the document's borders, and the one the PDF never saw.
+
 
 
 # ── The word / text output (the round-trip side of the ONE renderer) ────────────────────────────────

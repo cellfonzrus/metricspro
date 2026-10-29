@@ -87,6 +87,7 @@ Primary code homes:
 | POS-10 | **What the shop IS, on a receipt** | "The RQ receipt email to the customer does not show the address and looks fake — the till thermal printer receipt came out ok." Where does a receipt get the shop's name, address, phone and licence, and why did one layout print all of it while the other printed the company name alone? |
 | POS-11 | **The page a receipt prints on, and the Bill To** | "Do not put the reprint date and time on top with the word Sale in the middle of the screen; the Bill To should have the customer address printed." Whose header is that across the top of a printed receipt, and why does a Bill To show a bare name when the renderer prints the address? |
 | POS-12 | **Editing a sale that is already rung** | "I am not able to edit the receipt or add more items to the same receipt." How does a cashier put another item on a receipt that is already printed, and what happens to the version the customer is holding? |
+| POS-13 | **What a receipt document looks like** | "The receipt is not formatted properly and no clear border lines to make it look professional." Why does the emailed receipt carry no borders at all, and why are its phrases broken apart mid-word? |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -7968,6 +7969,9 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"May this rung sale be edited, and with what lines?"** (the Sale Log offering the button, the endpoint allowing it, the till before it saves; owner 2026-10-29) | `pos.sales` + `pos.sale_items` + the declared window on `pos.pos_settings` | **ONE home** `sale_amendment.refusal` / `plan` / `cart_from`, dereferenced by all three callers. Before this there was no amend path at all: `pos.checkout` and `pos.void_sale` (mig 725) were the only two sale functions and the Sale Log's item table was display-only. Every refusal is a SENTENCE, written once, so two screens cannot word one refusal differently. Proof `harness_pos_sale_amendment.py` §A/§G — §POS-12 |
 | **"What does this sale line come to?"** (the edit that restates it, and the totals it rolls up to) | the agreed figures on the line itself | **ONE home** `sale_amendment.line_money` / `totals`, DERIVED from the figures `pos.sale_items` already stores and reproducing transaction 4605's two lines to the cent. It was browser-only arithmetic before, and `pos.checkout` stores whatever it is handed — tolerable for a new sale, not for an edit whose purpose is to move those figures, so the server re-derives and the body's `extended_price` / `tax_value` / totals are DISCARDED. Tax rounds per line then sums, matching what each line stores. Proof §B — §POS-12 |
 | **"What did this sale look like before it was edited?"** (the audit trail that makes an in-place rewrite answerable) | `pos.sale_amendments` (mig **1103**) | **ONE home** `sale_amendment.snapshot` / `current_revision`, filed by `pos.amend_sale` BEFORE it touches anything. Keeps the sale's own STORED figures, never re-derived ones — the point is to record what the customer's receipt said, not what it should have said. A null `revision` reads as 1, so the first edit of an older sale still files the original. The endpoint returns 503 rather than editing when the table is absent. Proof §C — §POS-12 |
+| **"What does a receipt DOCUMENT look like?"** (the browser copy and the PDF of one receipt; owner 2026-10-29) | nothing — it was described twice, in a private `_CSS` string and not at all for the PDF | **ONE home** `receipt_formats/doc_style.py`: the fonts, weights, greys, proportions and `RULES`, the named list of every rule drawn. `render_html` builds its stylesheet from `doc_style.css()` and the PDF draws from the same numbers, so a border exists once and appears in both. A second stylesheet in the renderer fails the build. Proof `harness_pos_receipt_document.py` §A/§B — §POS-13 |
+| **"This Document, drawn on a page"** (the emailed/attached PDF of the tenant's own POS layout) | the Document the content homes built | **ONE home** `receipt_formats/render_pdf.py` — the THIRD output of the one Document walk, beside `render_html` and `render_words`. It replaced a PDF rebuilt from `render_words`, which is a round-trip PROOF fixture (words at the ORIGINAL POS's paper offsets, for its parser) and therefore carried **0 drawn lines** and broke phrases mid-word. `render_words` is UNCHANGED and keeps its own job. Lives in the render package because `receipt_pdf_render` may decide no content (§P11) and now only delegates, refusing by name when no renderer is injected. Proof §C/§D/§G — §POS-13 |
+| **"How is a payment method written for a customer?"** (both receipt layouts) | `pos.sale_payments.payment_method`, a machine value | **ONE home** `sale_receipt.method_label`. The slip printed `Paid (credit_card)` and the POS layout `.title()`'d it to **Credit_Card** on a customer's receipt — two dressings of one fact, both wrong. No method vocabulary is declared (RULE TWO): whatever the tenant stores is made readable, never translated against a list. Proof §F — §POS-13 |
 | **"What is this POS setting's effective value at this store"** (server side; owner 2026-10-17) | `pos.pos_settings` (org row `store_code IS NULL`, else the store override) | **ONE home** `backend/app/modules/pos/pos_config_effective.py` (`effective`, `values`, `flag`, `text`, `brand`, `disclaimers`, `SERVER_DEFAULTS`). The resolution rule lived ONLY in the browser (`frontend/src/lib/pos-config.ts`) until the server had to render a receipt; the two copies are PINNED key-by-key by `harness_pos_receipt_render.py` §B, which fails the build naming any default changed on one side only — §POS-02 |
 | **"What is this tenant called"** (the From name on its mail, a statement heading, a document title; owner 2026-10-17) | `storeops.tenants.name` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`NAME_COLUMN`, `display_name_from`, `display_name`, `display_names`) — a blank name reads as blank, never a fabricated stand-in printed as the business's own name. `notify/channels/email_resend.from_header` is the ONE place a `From:` header is assembled, and every business-facing send site passes its `org_id` so the customer sees the tenant; only genuine platform mail (the sign-in OTP) keeps the platform name. Siblings rewired in the same PR: `commcalc/router` ×2, `core/data_qa_api`, `core/operator_api`, `helpdesk/router`, `storeops/payroll_approval` ×2, `storeops/router._tenant_display_name`. Lock `harness_pos_receipt_render.py` §E6 fails the build if a second name-only reader appears — §POS-02 |
 
@@ -26164,6 +26168,7 @@ status word rather than a blank that reads as nil.
 | POS-10 | pos |
 | POS-11 | pos |
 | POS-12 | pos |
+| POS-13 | pos |
 | PAYABLES-01 | payables |
 <!-- SECTION-REGISTER:END -->
 
@@ -33109,6 +33114,88 @@ for items already sold.
 
 Same class: §POS-01 (the register's cart, whose vocabulary and line map this shares), §POS-11 (the
 receipt that must be reprinted afterwards), §POS-02 (the one renderer that prints the revised copy).
+
+---
+
+## §POS-13. WHAT A RECEIPT DOCUMENT LOOKS LIKE (owner report 2026-10-29)
+
+Owner, on receipt 4605: *"the receipt is not formatted properly and no clear border lines to make it
+look professional"*.
+
+Measured on the file he sent: **0 lines, 0 rects, 0 curves.** Not faint borders — none at all. And
+every phrase came apart mid-word: "Verizon    Wireless", "Bill    To:", "Credit   Card   Charge".
+
+### POS-13.1 The class, not the instance
+
+Not "the PDF has no borders". **A receipt's APPEARANCE had no home**, so the two media that print one
+receipt described it twice:
+
+- `render.render_html` held a private `_CSS` string with a few hairlines in it — a table-row
+  underline and a footer rule, no frame, no grid, nothing boxing the total.
+- The PDF was **not described at all.** It was rebuilt from `render_words`, whose real job is a
+  round-trip **proof**: it reproduces where the words sat on the ORIGINAL POS's paper receipt so that
+  POS's own parser can read them back and prove a rebuilt sale prints what the parser would read
+  (`render`'s own docstring says so). A parser fixture has no rules, no boxes and no text runs — only
+  words at measured offsets. Asked to be a customer's document it produced exactly that.
+
+So the customer's PDF was a test fixture with the seams showing, and the screen carried hairlines the
+PDF had never heard of. One question, two answers, and only one of them could ever carry a border.
+
+### POS-13.2 One description, both media
+
+`receipt_formats/doc_style.py` is the ONE home for what the document looks like: the fonts, the line
+weights, the greys, the proportions, and `RULES` — the named list of every rule that is drawn
+(`frame`, `header_rule`, `items_top`, `items_header`, `items_row`, `items_bottom`, `totals_box`,
+`total_heavy`, `footer_rule`). `render_html` builds its stylesheet from `doc_style.css()`; the PDF
+draws from the same numbers. A border added once appears in both, and a second stylesheet in the
+renderer fails the build (§A3).
+
+### POS-13.3 The Document is DRAWN, not reassembled
+
+`receipt_formats/render_pdf.py` is the **third output of the one Document walk**, beside
+`render_html` and `render_words`. It draws the Document itself: a framed page, a shaded heading band,
+a ruled items table, a boxed totals block with a heavy rule above the grand total, and a footer rule.
+Text is drawn as runs and wrapped by the font's **real metrics** (`stringWidth`), never by a
+character count — which is why phrases are whole again.
+
+It lives in the render package and not in `receipt_pdf_render`, because that module must decide
+nothing about content (§P11 of `harness_pos_receipt_render.py` pins it, and caught this placement
+when the drawing was first put there). `receipt_pdf_render` now only delegates, through an injected
+`render_pdf` exactly as it already took an injected `render_words`; a POS layout with no renderer
+injected **refuses by name** rather than raising a `TypeError` three frames down.
+
+**`render_words` is unchanged** and keeps its round-trip job — its proof still passes 82/0. It simply
+stopped being asked a question it was never answering.
+
+### POS-13.4 Three things the owner could see
+
+- **A heading over nothing is not a column.** Every row of 4605 had an empty `Product SKU`, so the
+  column printed a title over a column of nothing and pushed the real content right.
+  `doc_style.visible_columns` is the one rule, shared by both media. A **money or quantity** column
+  is kept even when empty — a free-of-charge sale must not silently lose its price column — and a
+  document with **no rows at all** prints every heading it declares, because no rows is not evidence
+  that a column is unused.
+- **A customer is never shown a machine value.** `pos.sale_payments.payment_method` stores
+  `credit_card`; the slip printed `Paid (credit_card)` and the POS layout `.title()`'d it to
+  **Credit_Card**. `sale_receipt.method_label` is now the one home and neither layout dresses it
+  again. No method vocabulary is declared (RULE TWO): whatever a tenant stores is made readable.
+- **The shop's name leads**, in bold, with the address set lighter beneath it — the same weighting in
+  both media, where the screen used to set the whole block bold.
+
+### POS-13.5 Files, locks, money
+
+| | |
+| --- | --- |
+| New | `receipt_formats/doc_style.py` · `receipt_formats/render_pdf.py` · `harness_pos_receipt_document.py` (50 checks) |
+| Changed | `receipt_formats/render.py` (dereferences `doc_style.css()`; its private `_CSS` DELETED; drops unfilled columns; marks the grand-total and payment rows; the store block weighted) · `receipt_pdf_render.py` (delegates, refuses by name without a renderer) · `sale_receipt.py` (`method_label`, used by both layouts) · `pos/router.py` (injects `render_pdf`) · `harness_pos_receipt_render.py` §S4 re-pointed and strengthened · `tests/unit/test_pos_receipt_print_page.py` |
+| Endpoints | **NONE** |
+| Migration | **NONE** |
+| Locks | §A one description — the drawn rules are DECLARED as an exact set (a size bound would let one leave silently), no second stylesheet, no measurement in the drawing module · §B the rules are DRAWN, measured off the rendered PDF with pdfplumber (the regression: 0 strokes → framed, banded, boxed) · §C phrases whole, and no 3-space gap inside a line — the old defect's signature · §D the round-trip proof untouched and still reading every declared column · §E the unfilled column, with money and quantity never dropped · §F the method label · §G drawing is not deciding · §H six controls |
+| MONEY IMPACT | **NONE.** Nothing about what a receipt SAYS changed — same figures, same totals, same legal blocks, same transaction number. This is how it is set on the page |
+
+Same class: §POS-02 (the one renderer this extends), §POS-08 (the PDF as a third medium, whose
+"no figure of its own" rule this keeps), §POS-11 (the page it prints on), §POS-04 (the content home
+it draws).
 
 ---
 
