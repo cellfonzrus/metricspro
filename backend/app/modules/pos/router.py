@@ -2301,6 +2301,9 @@ from app.modules.pos import receipt_escpos as _escpos
 from app.modules.pos import receipt_remit as _remit
 from app.modules.pos import customer_bill_to as _bill_to
 from app.modules.pos import receipt_pdf_render as _rpdf_out
+# §POS-13 — the Document DRAWN, injected the same way `render_words` is, so the PDF
+# module keeps deciding nothing about content.
+from app.modules.pos.receipt_formats import render_pdf as _rpdf_doc
 from app.modules.pos import receipt_store_block as _shop
 from app.modules.notify import whatsapp_window as _wa_window
 from app.modules.core import tenant_identity as _tenant
@@ -2442,6 +2445,7 @@ def _receipt_bundle(client, org_id: str, sale: dict, *, typed_email=None,
         try:
             pdf_bytes = _rpdf_out.receipt_pdf(
                 snap, template, fmt=fmt["module"], render_words=_rrender.render_words,
+                render_pdf=_rpdf_doc.render_pdf,
                 brand=brand, disclaimer_blocks=blocks,
                 store_name=store_name, store_row=store_row,
                 fold_discount=fold_discount, tenant_name=tenant_name,

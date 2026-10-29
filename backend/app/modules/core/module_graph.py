@@ -534,6 +534,10 @@ FACTS: dict[str, dict] = {
             # "what controls does this page offer" is one question whether the page is a report page
             # or a sign-in page, and a second reader in the login path is the duplicate defect
             'app/modules/commcalc/login_progressive.py': ('prp',),
+            # the editable report declaration (§COMMCALC-48) offers a tenant only the filter KINDS and
+            # date TOKENS this loop can actually apply — an editor with its own list would offer a
+            # filter the pull silently ignores, which looks like a declared filter and is not one
+            'app/modules/commcalc/report_declaration.py': ('_prp',),
             # the live session's dispatch and the scheduled cron both ask the registry
             'app/modules/commcalc/router.py': ('_prp',),
         },
@@ -569,6 +573,9 @@ FACTS: dict[str, dict] = {
             # a login page's controls are compared against the words that say what they take
             # (COMMCALC-46) — the same rule that compares a report header, for the same reason
             'app/modules/commcalc/login_progressive.py': ('rc',),
+            # the report editor (§COMMCALC-48) folds a capture's suggested filter in only where the row
+            # has no filter meaning the same thing, and "the same thing" is this rule, not a second one
+            'app/modules/commcalc/report_declaration.py': ('_rc',),
         },
     },
     # ── §COMMCALC-47 — where a click on the live screen lands ────────────────────────────────────
@@ -619,6 +626,32 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/commcalc/live_login.py': ('lp',),
             'app/modules/commcalc/vidapay_sweep.py': ('_lp',),
+        },
+    },
+    # ── §COMMCALC-48 — a tenant's declared reports, as one editable thing ───────────────────────
+    'report_declaration': {
+        "question": 'Which reports does this login pull, and what must be set on each report\'s page '
+                    'before the export is pressed? It was already config and not code \u2014 '
+                    'pos_report_sweep.report_specs reads WHICH (portal_reports) and '
+                    'portal_report_pull.report_params reads HOW (portal_calibration) \u2014 but '
+                    'nothing could WRITE either column. No screen and no endpoint, so a tenant\'s '
+                    'reports could be declared only by somebody with SQL access against the live '
+                    'database, which from the owner\'s side is the same thing as hardcoded '
+                    '(2026-10-29: "start definig the reports fromt eh back end again not hardpcded '
+                    'but consumer defined editablke"). An editor wants ONE row per report with its '
+                    'filters attached, and that is a THIRD shape of the same fact \u2014 so it is '
+                    'DERIVED both ways and never stored, with columns(rows(src)) pinned as the '
+                    'identity: opening the editor and saving changes nothing. per_day and problems '
+                    'are derived for the same reason a stored copy could disagree with the filters '
+                    'it describes. A capture SUGGESTS and never decides.',
+        "homes": ('app/modules/commcalc/report_declaration.py',),
+        "index": ('COMMCALC-48',),
+        "locks": ('harness_report_declaration.py',),
+        # SNAPSHOT — written BY HAND (§50). The home is PURE: the router is its only caller, and it
+        # dereferences spec_key (§COMMCALC-39) and the filter vocabulary (§COMMCALC-37) rather than
+        # restating either, so there is no second rule for "which report is this".
+        "callers": {
+            'app/modules/commcalc/router.py': ('rd',),
         },
     },
     # ── §COMMCALC-38 — what a supplier billed us ─────────────────────────────────────────────────

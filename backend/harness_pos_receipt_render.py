@@ -249,6 +249,8 @@ check("C10 a template row with no layout column at all reads as the till slip (a
 print("\n§D  the tenant's own POS layout — the same Document an import is parsed into")
 from app.modules.pos.receipt_formats import rq as _rq  # noqa: E402
 from app.modules.pos.receipt_formats import render as _render  # noqa: E402
+from app.modules.pos.receipt_formats import doc_style as _style  # noqa: E402
+from app.modules.pos.receipt_formats import render_pdf as _render_pdf  # noqa: E402
 
 doc = sr.document(SNAP, _rq, ALL_ON, brand=BRAND, store_row=STORE_ROW,
                   employee_name="A. Rep")
@@ -1022,6 +1024,7 @@ check("P6 the customer's own address rides into it too (§POS-07)",
       all(ln in SLIP_ALL for ln in CUST_LINES))
 
 DOC_PDF = rpdf.receipt_pdf(SNAP, T_POS, fmt=RQ_ROW["module"], render_words=_render.render_words,
+                              render_pdf=_render_pdf.render_pdf,
                            store_row=STORE_ROW, customer_lines=CUST_LINES)
 DOC_SIZES, DOC_TEXT = pdf_pages(DOC_PDF)
 check("P7 the tenant's own POS layout is the file's layout too, on its own page size",
@@ -1036,6 +1039,7 @@ _long["items"] = [{"description": f"Item {i}", "serial": "", "qty": 1, "unit_pri
                    "discount": 0, "line_total": 10.0} for i in range(120)]
 _long_pdf = rpdf.receipt_pdf(sr.snapshot_view(_long, {"status": "completed"}), T_POS,
                              fmt=RQ_ROW["module"], render_words=_render.render_words,
+                              render_pdf=_render_pdf.render_pdf,
                              store_row=STORE_ROW)
 _long_sizes, _long_text = pdf_pages(_long_pdf)
 _long_all = "\n".join(_long_text)
@@ -1284,8 +1288,16 @@ check("S2 BOTH layouts print on it — two layouts of one receipt, and the brows
 check("S3 LOCK — the rule is written ONCE and the format renderer dereferences it",
       "@page" not in RENDER_SRC.replace("`@page`", "") and "PAGE_CSS" in RENDER_SRC
       and code_only(SR_SRC).count("@page") == 1)
+# S4 RE-POINTED 2026-10-29 for §POS-13, and STRENGTHENED in the same move. It read two literal
+# strings out of two source files; the document stylesheet has since moved into its one home
+# (`doc_style.css()`), so the subject moved. It now asserts on the RENDERED stylesheet — which a
+# string moving between files cannot fool — and still requires a NON-ZERO print padding, because
+# `@page { margin: 0 }` means the page has no margin of its own and the layout must supply one or
+# the first and last lines print off a real sheet.
+_printed_css = _style.css().split("@media print", 1)[1] if "@media print" in _style.css() else ""
 check("S4 a page with no margin is not a page printed to the paper's edge — each layout keeps its own",
-      "padding: 12mm" in RENDER_SRC and "padding: 12px" in code_only(SR_SRC))
+      bool(_printed_css) and "padding" in _printed_css and "padding: 0" not in _printed_css
+      and "padding: 12px" in code_only(SR_SRC))
 
 check("S5 the bill-to view is the record's own answer: the lines, whether it HOLDS one, and the "
       "sentence for the person who can fix it",

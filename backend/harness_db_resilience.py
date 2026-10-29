@@ -1333,7 +1333,19 @@ _all_routes = _flatten_routes(real_app.routes)
 # as every pin above: `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` prints exactly
 # three added decorators and none removed. 1807 + 3 = 1810. Re-taken on a counted, named addition,
 # never relaxed for CI.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1810"))
+# Re-pinned 1810 -> 1812 on 2026-10-29 for §COMMCALC-48, the report declaration editor: TWO added,
+# `GET /commcalc/data-sources/{sid}/reports` and `PUT /commcalc/data-sources/{sid}/reports`. Both are
+# org-scoped on the same `data_source` read every sibling route on that screen uses, and both touch
+# CONFIGURATION only — `portal_reports` and `portal_calibration`, the two columns the pull already
+# reads to decide which reports to fetch. Neither computes, books or pays anything, so neither adds
+# an input to any report, statement, GP, commission or tax figure; the PUT builds what it stores
+# through `report_declaration.columns`, whose round trip is pinned as the identity in
+# harness_report_declaration.py. Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` prints exactly two added decorators
+# and none removed. §POS-12 landed on main while this was in CI, taking the base from 1807 to 1810,
+# so the arithmetic was redone against the NEW base rather than kept: 1810 + 2 = 1812. Re-taken on a
+# counted, named addition, never relaxed for CI.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1812"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
