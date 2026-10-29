@@ -295,6 +295,13 @@ def _vp():
     return vp
 
 
+def _lf():
+    """Lazy import of the frame-geometry home (§COMMCALC-47) — where a click on the streamed image
+    lands on the live page. THE one translation; this module does not do that arithmetic itself."""
+    from app.modules.commcalc import live_frame as lf
+    return lf
+
+
 def _wall_note(vp, page):
     try:
         if vp._looks_like_bot_wall(page):
@@ -522,6 +529,10 @@ class LiveLoginSession:
         # owns the session and the watchdog stands down — so no human window is ever shortened.
         self._loop_entered = False
         self._shot = None                         # latest base64 JPEG (no data-uri prefix)
+        # What that frame SHOWS, in CSS px of the live page (§COMMCALC-47). A click is a fraction of
+        # the image, so it is translated through this and not through the window.
+        self._frame_geom = None
+        self._viewport = None                     # the context's window, once the page exists
         self._seq = 0                             # monotonic frame sequence — bumped on every new frame
         self._last_frame_at = 0.0                 # wall time of the last frame stored (liveness guarantee)
         self._human_driving = False               # True once the human sends ANY input → pauses auto-drive
@@ -606,12 +617,19 @@ class LiveLoginSession:
         except Exception:
             return False
 
-    def _store_frame(self, shot):
-        """Record a new frame (from the CDP screencast OR an explicit screenshot) + bump the sequence."""
+    def _store_frame(self, shot, metadata=None):
+        """Record a new frame (from the CDP screencast OR an explicit screenshot) + bump the sequence.
+
+        The frame's own GEOMETRY is stored beside it (§COMMCALC-47). A click arrives as a fraction of
+        the image the operator was looking at, so it must be translated through THAT image's account of
+        itself; before this, every click was translated through the configured viewport, which is a
+        different thing on any page whose visible size is not the window."""
         if not shot:
             return
+        geom = _lf().frame_geometry(metadata, self._viewport)
         with self._lock:
             self._shot = shot
+            self._frame_geom = geom
             self._seq += 1
             self._last_frame_at = time.time()
             self._updated_at = datetime.now(timezone.utc).isoformat()
@@ -861,10 +879,14 @@ class LiveLoginSession:
             try:
                 data = params.get("data") if isinstance(params, dict) else None
                 fsid = params.get("sessionId") if isinstance(params, dict) else None
+                # Chrome says what this frame SHOWS — the visible page size, the page scale and the
+                # non-page strip at the top. It used to be dropped here, which is what made a click
+                # land off target on any page whose visible size is not the window (§COMMCALC-47).
+                meta = params.get("metadata") if isinstance(params, dict) else None
             except Exception:
-                data, fsid = None, None
+                data, fsid, meta = None, None, None
             if data:
-                self._store_frame(data)
+                self._store_frame(data, metadata=meta)
             if fsid is not None:
                 with self._lock:
                     self._pending_ack = fsid
@@ -1007,6 +1029,12 @@ class LiveLoginSession:
             browser = vp._launch(p)
             ctx = vp._new_context(browser, proxy=vp._proxy_arg(self.proxy_url))
             page = ctx.new_page()
+            # The window the context was given, so a frame that carries no metadata of its own still
+            # has a stated fallback rather than a number in the click handler (§COMMCALC-47).
+            try:
+                self._viewport = dict(page.viewport_size or {})
+            except Exception:
+                self._viewport = None
             self._start_screencast(page)             # low-latency frames from the very first paint
             self._set(phase="login", message="Opening the portal…")
             self._capture(page)
@@ -1575,9 +1603,11 @@ class LiveLoginSession:
         the matching viewport pixel, then re-check whether we've landed authenticated (so an operator
         clicking the portal's Sign in / Next / Trust button completes + saves the session)."""
         try:
-            vp_size = page.viewport_size or {"width": 1366, "height": 900}
-            x = max(0.0, min(1.0, float(nx))) * vp_size["width"]
-            y = max(0.0, min(1.0, float(ny))) * vp_size["height"]
+            # THE one translation (§COMMCALC-47): the geometry of the frame the operator was looking at,
+            # falling back to the window only when that frame carried no account of itself.
+            with self._lock:
+                geom = self._frame_geom
+            x, y = _lf().click_point(nx, ny, geom or _lf().frame_geometry(None, page.viewport_size))
             page.mouse.move(x, y)      # move first so the very next frame shows the pointer where it'll land
             self._capture(page)        # instant feedback (cursor moved) — no wait
             if double:

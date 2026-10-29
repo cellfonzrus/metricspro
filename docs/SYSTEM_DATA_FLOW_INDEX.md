@@ -174,6 +174,7 @@ Primary code homes:
 | COMMCALC-45 | **A sweep schedules itself from its own state** | "I should not be running the sweep it should be automatic like the rebuild or the commission calculation" — and a sweep's due-ness was a stored clock time copied into eight places, so thirteen consecutive PARTIAL runs each waited a full day and correcting the sweep's own settings pushed the next run FURTHER away. What makes a sweep due, if not the calendar? |
 | PAYABLES-01 | **A rebuild never deletes what it cannot replace** | "Rebuild via sql let me know what permissions to add" — and the rebuild, run for real, deleted all 11,000 Boost rows and inserted none, then returned HTTP 200 describing the table it had just emptied. Two migrations had been skipped while later-numbered ones landed. What is a delete+insert worth without a transaction, and which half of that pair is the one you can afford to run first? |
 | COMMCALC-46 | **The password is sometimes on the next page — one home for a login's first step** | "If there is no password on the first page then click to continue with username and then enter password on thr next page" — said after a two-page sign-in was reported as a form that renders unexpectedly, in a message naming a different vendor's portal. Three paths answered "what does this page want first", two by spelling one vendor's element ids and one not at all. What is a login's first step a fact ABOUT, and what does a page that asks for something we do not hold deserve to be told? |
+| COMMCALC-47 | **A frame knows what it shows — one home for where a click on the live screen lands** | "it shows the live scren but cannot click on the box to enter the user id" — the box was in the picture and clicking it did nothing. Every streamed frame arrives telling us what it shows, and that was thrown away, so a click was converted through the window instead. What is a click on a picture of a browser a fact ABOUT? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26139,6 +26140,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-44 | commcalc |
 | COMMCALC-45 | commcalc |
 | COMMCALC-46 | commcalc |
+| COMMCALC-47 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -35036,6 +35038,81 @@ Same home, other axes: §COMMCALC-39 (the page reader this dereferences), §COMM
 rule), §12a.2 (the registry label the copy names). Neighbours: §COMMCALC-24 (which process may answer),
 §COMMCALC-11 (a human check gates the submit — a login this step reaches may still hand over to a
 human), §COMMCALC-10 (whose login server a retry goes to).
+
+## §COMMCALC-47. A FRAME KNOWS WHAT IT SHOWS — one home for where a click on the live screen lands (owner report 2026-10-29)
+
+Owner, verbatim: *"im trying to log in ti the billing , it shows the live scren but cannot click on the
+box to enter the user id"*. The box was in the picture. Clicking it did nothing.
+
+### COMMCALC-47.1 THE DEFECT
+
+The live login streams a real browser to the operator and lets them click the picture. The UI sends the
+click as a FRACTION of the image (0..1 per axis — DPR-proof, because the image is rendered at whatever
+size the operator's screen gives it, `normXY` in `commcalc/email-imports` and `xy` in
+`supply/LiveVendorWindow`). The worker turned that fraction into a page point with:
+
+```
+x = nx * page.viewport_size["width"]      y = ny * page.viewport_size["height"]
+```
+
+The frames are not the viewport. They come from Chrome's `Page.startScreencast`, and **every frame
+arrives with metadata saying what it actually shows**: `deviceWidth` / `deviceHeight` (the visible page
+in DIP), `pageScaleFactor` and `offsetTop` (the strip at the image's top that is not page content).
+`_on_frame` kept `data` and `sessionId` and **dropped `metadata` on the floor**.
+
+So on any page whose visible size is not the configured window, every click landed off target by that
+ratio, and the further from the top-left the operator aimed, the further off it went — the box near the
+middle of a 980-CSS-px-wide page is 193px left of where the old formula clicked, and a control near the
+right edge is over 300px out. A responsive portal is exactly that case.
+
+### COMMCALC-47.2 THE CLASS, not the instance
+
+A frame is not a guess about a viewport; it is an image that KNOWS what it shows. So the fix is not a
+correction factor for one portal: **the geometry travels with the frame**, and the click dereferences
+the geometry of the frame the operator was looking at.
+
+| fact | its one home |
+|------|--------------|
+| what one streamed frame shows, in CSS px | `commcalc/live_frame.frame_geometry(metadata, viewport)` → `{width, height, top, scale, source}` |
+| where a click on it lands on the page | `commcalc/live_frame.click_point(nx, ny, geometry)` |
+| the window to assume when a frame says nothing | `live_frame.FALLBACK_VIEWPORT` — the old assumption, now STATED |
+
+Both are PURE. `live_login._store_frame(shot, metadata=…)` stores the geometry beside the frame;
+`_do_click` reads THAT frame's geometry under the lock and calls `click_point`. `source` is kept
+(`frame` | `viewport`) because the two cases are not equally trustworthy and whoever reads a bad click
+should be able to tell which one they got.
+
+**It reduces exactly to the old formula** when a frame reports scale 1, offset 0 and device size equal
+to the window — which is every portal that works today, pinned check by check in §A of the lock. So
+this changes nothing that was working, which is the only way to ship a change to the one screen whose
+breakage an operator cannot work around.
+
+**One translation serves both live screens.** `supply`'s vendor window drives the SAME
+`commcalc/live_login` session (`supply/router` → `live_login_start`, the commcalc input endpoint), so
+there was no sibling to fix — and `harness_live_frame.py` §G fails the build if `live_login` grows the
+arithmetic back.
+
+### COMMCALC-47.3 Locked
+
+`backend/harness_live_frame.py` — **65 checks**, DB-free and browser-free. It pins the reduction to the
+old formula, the narrow / zoomed / offset / no-metadata / garbage-metadata cases, and the clamp. It
+FAILS the build if `live_login` multiplies a click by the window again, if the screencast handler stops
+taking `metadata` off the frame, if the geometry stops being stored beside the frame or read under the
+lock, if a second copy of either function appears, or if the home starts naming a portal. Six armed
+negative controls, including the old rule itself.
+
+### COMMCALC-47.4 NOT the latency
+
+The owner also reported *"it is very laggy"*. That is a different fact with a different home
+(§COMMCALC-27 / §COMMCALC-31 — the operator's input leads the tick) and this section does not touch it:
+nothing here was measured against his round-trip, and nothing here claims to have improved it.
+
+### COMMCALC-47.5 Cross-references
+
+Same home, other axes: §COMMCALC-24 (which process may answer), §COMMCALC-10 (the live-login phases),
+§COMMCALC-46 (the first step, which is what means the operator should not have had to click that box at
+all). Neighbours: §COMMCALC-27 / §COMMCALC-31 (input latency), §COMMCALC-13 (what a finished session
+leaves on the row).
 
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
 
