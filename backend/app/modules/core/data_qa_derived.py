@@ -152,7 +152,7 @@ DERIVED = [
         'params': {'period': 'period'},
         'path_params': ['period'],
         'bound': {},
-        'also': ['/api/v1/commcalc/commission-leg-trend', '/api/v1/commcalc/gp-trend'],
+        'also': ['/api/v1/commcalc/commission-leg-store-trend', '/api/v1/commcalc/commission-leg-trend', '/api/v1/commcalc/gp-trend'],
         'hand': True,
     },
     {
@@ -243,7 +243,7 @@ DERIVED = [
     {
         'key': 'commcalc_sales_comparison',
         'label': 'Sales Comparison',
-        'answers': 'Month-over-month / year-over-year % change per item sold (phones, BYOD, accessories, tablets, financing) across all stores',
+        'answers': 'Month-over-month / year-over-year change per item sold (phones, BYOD, accessories, tablets, financing) across all stores — in units AND dollars, with each store\\u2019s store expenses on the same two months beside them',
         'page': '/commcalc/sales-comparison',
         'path': '/api/v1/commcalc/sales-comparison',
         'picked': '/api/v1/commcalc/sales-comparison',
@@ -358,6 +358,23 @@ DERIVED = [
         'bound': {},
         'also': [],
         'hand': True,
+    },
+    {
+        'key': 'commcalc_accessory_order_plan',
+        'label': 'Accessory Order Plan',
+        'answers': 'What accessories to buy for the next few months, worked out from the device models the stores actually sold over the last few. Ranks every model best seller first with its month-by-month units, its own monthly average and its share of demand, then asks you to mark each one Current or End of life \\u2014 and projects ONLY the models you have ruled on, so an un-ruled model is reported as waiting rather than quietly treated as retired or as still selling. The order is one case, one screen protector, one USB-C to USB-C cable and one charging cube per projected device by default, with the case quantity split across a declared colour mix (house default: blacks and blues 70%, pinks and reds 30%) by a largest-remainder pass so the colour column always foots to the case total. Store and market filters, and both the look-back and the planning window, are yours to set. A model that launched mid-window is averaged over the months it was actually selling, not the whole look-back.',
+        'page': '/commcalc/accessory-order-plan',
+        'path': '/api/v1/commcalc/accessory-order-plan',
+        'picked': '/api/v1/commcalc/accessory-order-plan',
+        'override': None,
+        'answers_override': None,
+        'module': 'commissions',
+        'skip': None,
+        'params': {'period': 'period', 'store': 'store_code'},
+        'path_params': [],
+        'bound': {},
+        'also': ['/api/v1/commcalc/accessory-order-plan/lifecycle'],
+        'hand': False,
     },
     {
         'key': 'commcalc_comp_trend',
@@ -781,7 +798,7 @@ DERIVED = [
         'params': {},
         'path_params': [],
         'bound': {},
-        'also': ['/api/v1/commcalc/nav-config', '/api/v1/commcalc/tile-layout'],
+        'also': ['/api/v1/commcalc/tile-layout'],
         'hand': True,
     },
     {
@@ -1104,7 +1121,7 @@ DERIVED = [
         'params': {'month': 'period', 'start': 'date', 'end': 'date'},
         'path_params': [],
         'bound': {},
-        'also': ['/api/v1/storeops/payroll/over-hours'],
+        'also': ['/api/v1/storeops/payroll/drilldown', '/api/v1/storeops/payroll/over-hours'],
         'hand': True,
     },
     {
@@ -1121,7 +1138,7 @@ DERIVED = [
         'params': {'month': 'period', 'start': 'date', 'end': 'date'},
         'path_params': [],
         'bound': {},
-        'also': ['/api/v1/storeops/employees', '/api/v1/storeops/payroll/over-hours'],
+        'also': ['/api/v1/storeops/employees', '/api/v1/storeops/payroll/drilldown', '/api/v1/storeops/payroll/over-hours'],
         'hand': True,
     },
     {
