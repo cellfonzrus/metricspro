@@ -981,6 +981,13 @@ on:
       - "backend/app/modules/closing/metric_catalog.py"
       - "backend/app/modules/closing/count_config.py"
       - "backend/app/modules/commcalc/daily_incentive.py"
+      # index §CLOSING-01 (mig 1102) — DECLARED vs CAPTURED. The proof names itself for the same
+      # §13e reason as the locks above, and the two modules it proves are listed so a change to
+      # either re-runs it. `financing_report.py` is here because the ONE derivation of financed
+      # units now lives in it and BOTH callers fold it.
+      - "backend/harness_declared_feed_recon.py"
+      - "backend/app/modules/closing/declared_feed_recon.py"
+      - "backend/app/modules/commcalc/financing_report.py"
       # index §COMMCALC-01 — the TARGET AXIS: one answer to what is targetable, and a target for a
       # category the business declared. Both harnesses NAME THEMSELVES for the same §13e reason as
       # the lines above; the engine and the report card are their own subjects, and the routers and
@@ -1879,6 +1886,9 @@ jobs:
       - name: Run the declared-metric catalog lock (ONE home for what a business declares daily; no second copy of the vocabulary, no caller reaching past it - index 72)
         working-directory: backend
         run: python3 harness_metric_catalog_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the declared-vs-captured proof (one parser for a feed counterpart, one derivation of financed units, four absences with four reasons, the grain is the category's, nothing blocks a close - index CLOSING-01)
+        working-directory: backend
+        run: python3 harness_declared_feed_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the target-axis lock (ONE answer to what is targetable; no ninth copy of the category list, every fold call carries the tenant's catalog, a week is a WINDOW over the month - index COMMCALC-01)
         working-directory: backend
         run: python3 harness_target_axis_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

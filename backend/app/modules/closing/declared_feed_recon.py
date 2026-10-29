@@ -44,6 +44,7 @@ ONE PERSON IS ONE ROW. The roster spells a rep "Singh, Simarjyot" and the sales 
 "Simarjyot Singh"; a join on strings reported two reps on B-1750 on 2026-10-10. The identity key is
 DEREFERENCED from `core/person_identity.folded_token_key` (§CORE-08), never re-folded here.
 """
+from app.modules.closing import metric_catalog as _metrics
 from app.modules.core import person_identity as _person
 
 # ── Vocabulary. These constants ARE the counterpart vocabulary; nothing else may spell them. ──────
@@ -177,7 +178,7 @@ def _day(v):
     return _s(v)[:10]
 
 
-def _addr(row, metric, metric_key):
+def _addr(row, catalog, metric_key):
     """The address of one accusation, AT THE GRAIN THE CATEGORY IS DECLARED AT.
 
     This is the load-bearing line. A store-declared category is ONE figure for the whole store-day,
@@ -186,7 +187,10 @@ def _addr(row, metric, metric_key):
     this", and accused a store of failing to declare a sale it had declared. The grain belongs to
     the CATEGORY, so it is applied once here rather than by each caller building its own rows.
     """
-    rep = "" if (metric or {}).get("declared_by") != "employee" else person_key(row.get("rep"))
+    # WHO declares a category is the catalog's own answer (`metric_catalog.is_employee_declared`),
+    # dereferenced here rather than read off the entry — `harness_metric_catalog_lock.py` §A8 fails
+    # the build on a module that decides it for itself, and it is right to.
+    rep = person_key(row.get("rep")) if _metrics.is_employee_declared(catalog, metric_key) else ""
     return (_day(row.get("date")), _s(row.get("store_code")), rep, metric_key)
 
 
@@ -225,7 +229,7 @@ def reconcile(catalog, *, declared=None, captured=None, feed_days=None,
         m = by_mkey.get(_s(r.get("metric_key")))
         if m is None:
             continue
-        a = _addr(r, m, m["key"])
+        a = _addr(r, cat, m["key"])
         d = dec.setdefault(a, {"units": 0, "amount": 0.0})
         d["units"] += _i(r.get("units"))
         d["amount"] = round(d["amount"] + _f(r.get("amount")), 2)
@@ -236,7 +240,7 @@ def reconcile(catalog, *, declared=None, captured=None, feed_days=None,
     for r in (captured or []):
         ck = counterpart_key(parse_counterpart(r.get("counterpart")))
         for m in by_counterpart.get(ck, []):
-            a = _addr(r, m, m["key"])
+            a = _addr(r, cat, m["key"])
             c = cap.setdefault(a, {"units": 0, "amount": 0.0})
             c["units"] += _i(r.get("units"))
             c["amount"] = round(c["amount"] + _f(r.get("amount")), 2)

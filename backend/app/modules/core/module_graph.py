@@ -1167,6 +1167,11 @@ FACTS: dict[str, dict] = {
             # of that one rule would let a target be SET in units and MEASURED in dollars, so it
             # belongs to this question rather than being a fact of its own.
             'app/modules/commcalc/targets_engine.py': ('_figure_unit',),
+            # §CLOSING-01 (mig 1102) — the declared-vs-captured reconciler asks the catalog WHO
+            # declares a category (`is_employee_declared`), because the grain of an accusation is
+            # the category's and not the feed's: folding a per-rep capture against a store
+            # declaration accused a store of not declaring a sale it had declared.
+            'app/modules/closing/declared_feed_recon.py': ('_metrics',),
         },
     },
     'daily_incentive_shapes': {
@@ -1222,6 +1227,10 @@ FACTS: dict[str, dict] = {
             # The closing module: `_name_match` (the screening rule) AND the who-worked signal,
             # which is the surface the owner reported.
             'app/modules/closing/router.py': ('_person_identity',),
+            # §CLOSING-01 — the declared-vs-captured reconciler joins the name a rep typed at
+            # closing to the salesperson on the sales feed, which is exactly the punch-against-sale
+            # join this key exists for. It dereferences `folded_token_key` and folds nothing itself.
+            'app/modules/closing/declared_feed_recon.py': ('_person',),
             # A byte copy of the router's screening rule, kept local to dodge an import cycle the
             # pure home does not have.
             'app/modules/closing/ops_chargebacks.py': ('_person_identity',),

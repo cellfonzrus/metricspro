@@ -3861,12 +3861,23 @@ def get_metric_catalog(include_inactive: bool = False, org_id: str = ORG_ID):
     require_org(org_id)
     client = sb()
     cat = _metric_catalog(client, org_id, include_inactive=include_inactive)
+    # mig 1102 — WHAT A CATEGORY MAY BE CHECKED AGAINST, offered rather than typed (RULE THREE). The
+    # financing choices are the tenant's OWN vendor rows with the label they typed, so mapping a
+    # category to a financing program is a pick and never a spelling, and this report can never
+    # disagree with the Financing report about what a financed sale is.
+    try:
+        from app.modules.commcalc import financing_registry as _finreg
+        _vendors = _finreg.load_vendors(client, org_id) or []
+    except Exception as e:
+        print("metric-catalog: financing vendors unavailable for counterpart options:", e)
+        _vendors = []
     return {
         "metrics": cat,
         "revenue_keys": _metrics.revenue_keys(cat),
         "employee_keys": _metrics.employee_keys(cat),
         "value_kinds": list(_metrics.VALUE_KINDS),
         "declared_by": list(_metrics.DECLARED_BY),
+        "counterpart_options": _declared_feed_recon.counterpart_options(financing_vendors=_vendors),
         "configured": bool([m for m in cat if m.get("source") == "count_field"]),
     }
 
@@ -4211,7 +4222,7 @@ def declared_vs_captured(date_from: str, date_to: str = "", store_code: str = ""
     # rather than reporting the store's figure against one person's declaration.
     for m in _declared_feed_recon.reconciled_metrics(cat):
         cp = _declared_feed_recon.counterpart_of(m)
-        if cp["kind"] == "recon_class" and m.get("declared_by") == "employee":
+        if cp["kind"] == "recon_class" and _metrics.is_employee_declared(cat, m["key"]):
             ck = _declared_feed_recon.counterpart_key(cp)
             status.setdefault(ck, {"status": "store_grain_only",
                                    "note": ("the sales feed answers this count per store, not per "
