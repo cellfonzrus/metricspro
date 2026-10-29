@@ -481,6 +481,10 @@ class LiveLoginSession:
         self.proxy_url = row.get("proxy_url")
         self.processor = (row.get("processor") or "").strip().lower()
         self._is_b2b = self.processor in _B2B_PROCESSORS
+        # The source's declared calibration. Its "login" key is what `login_progressive` reads when a
+        # page's own words do not say which control takes which value (§COMMCALC-46) — config, never a
+        # branch in the login code.
+        self.portal_calibration = row.get("portal_calibration") or {}
         self.persist = persist                    # callable(updates: dict) -> persists to data_source
         self.persist_shot = persist_shot          # callable(shot_b64) -> writes login_shot/login_shot_at
         self.pull_fn = pull_fn                     # callable(page) -> pull result; runs on THIS live page
@@ -1038,9 +1042,13 @@ class LiveLoginSession:
                 self._capture(page)
                 return
 
-            # A progressive access-code (#companyId) step may precede the password field (b2bsoft / kin).
+            # A progressive step may precede the password field: a page that asks for an account or
+            # company id, or just the user id, and reveals the password only once that is done. Which
+            # control is which is read off the page by `login_progressive` (index §COMMCALC-46) — this
+            # used to be one vendor's element ids spelled here, which is why every OTHER portal with
+            # the same shape reported a broken login form.
             if not vp._password_frame(page)[1]:
-                self._companyid_step(page, vp)
+                self._progressive_first_step(page)
 
             login_fr, pw_el = vp._password_frame(page)
             if not pw_el:
@@ -1196,38 +1204,26 @@ class LiveLoginSession:
             except Exception:
                 pass
 
-    def _companyid_step(self, page, vp):
-        """b2bsoft/progressive first page: fill the access code (#companyId) and continue to reveal the
-        password field. Best-effort — a portal without it is untouched."""
+    def _progressive_first_step(self, page):
+        """The page's own first step, when the password is not on it yet: fill what it asks for, press
+        its continue control, wait for the password field.
+
+        ONE home for this, shared with the unattended login (`login_progressive.advance_past_first_step`,
+        index §COMMCALC-46). It used to be this method, spelling `#companyId` / `#btnSubmit` /
+        `#password` — one portal's markup, which made the step work for that portal and for nothing
+        else. Best-effort: a portal without a first step is untouched, and the note is kept for the
+        operator's screen rather than raised."""
+        from app.modules.commcalc import login_progressive as lp
         try:
-            cid = page.query_selector("#companyId")
+            note = lp.advance_past_first_step(
+                page,
+                {"account_id": self.account_id, "username": self.user},
+                declared=(self.portal_calibration or {}).get("login"))
         except Exception:
-            cid = None
-        if not (cid and self.account_id):
-            return
-        try:
-            cid.click()
-            cid.fill("")
-            cid.type(str(self.account_id), delay=15)
-        except Exception:
-            try:
-                cid.fill(str(self.account_id))
-            except Exception:
-                pass
-        try:
-            b = page.query_selector("#btnSubmit")
-            if b:
-                b.click()
-        except Exception:
-            pass
-        try:
-            page.wait_for_selector("#password", state="visible", timeout=15000)
-        except Exception:
-            pass
-        try:
-            vp._wait_settle(page)
-        except Exception:
-            pass
+            return ""
+        if note:
+            self._note_act(note)
+        return note
 
     def _preauth_login_url(self, vp):
         """THIS connector's own pre-auth sign-in page, or None when it has not declared one.

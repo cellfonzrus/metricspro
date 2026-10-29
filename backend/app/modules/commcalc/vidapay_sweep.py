@@ -1743,10 +1743,15 @@ def prefill_login(page, login_fr, pw_el, account_id, user, pw):
 
 
 # ── phase 1: start login ───────────────────────────────────────────────────────────────────────
-def begin_login(url, account_id, user, pw, proxy_url=None):
+def begin_login(url, account_id, user, pw, proxy_url=None, label=None):
     """Launch headless Chromium, submit Account ID + User ID + Password, report where we land.
     Returns {"status": "needs_2fa"|"authenticated", "storage_state": {...}, ...}.
-    Raises VidaPayLoginError on bot-wall/Cloudflare block, missing Chromium, or rejected creds."""
+    Raises VidaPayLoginError on bot-wall/Cloudflare block, missing Chromium, or rejected creds.
+
+    `label` is the connector's registry label (mig 1014), passed by `router._connector_label`. EVERY
+    portal that is not the b2bsoft variant signs in through this function, so copy that spelled one
+    vendor's name here described the wrong portal to everyone else: the owner's UPS billing login read
+    "could not find the password field on the VidaPay login page" about a ups.com page (2026-10-27)."""
     try:
         from playwright.sync_api import sync_playwright
     except Exception:
@@ -1764,6 +1769,14 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             _goto_login(page, base_url, login_url=LOGIN_URL)   # this module's own id-server
             login_fr, pw_el = _password_frame(page)
             if not pw_el:
+                # The password may simply be on the NEXT page: a sign-in that asks for an account id or
+                # a user id first and reveals the password once that step is taken. ONE home decides
+                # what this page wants, read off the page itself (index §COMMCALC-46). Before this, a
+                # two-page sign-in here was reported as a form that renders unexpectedly.
+                from app.modules.commcalc import login_progressive as _lp
+                _lp.advance_past_first_step(page, {"account_id": account_id, "username": user})
+                login_fr, pw_el = _password_frame(page)
+            if not pw_el:
                 diag = _snapshot(page)
                 # A rate-limit page has no password field either. Naming it correctly is what stops an
                 # operator from "fixing" a block by logging in again — which extends it.
@@ -1774,12 +1787,13 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
                         + " Diagnostic: " + str(diag))
                 if _looks_like_bot_wall(page):
                     raise VidaPayLoginError(
-                        "VidaPay served an anti-automation page (\"Something doesn't look right\") instead "
-                        "of the login form — the portal flagged this browser/IP. It must be reached from "
-                        "an allow-listed / residential IP (same WAF caveat as ePay). Diagnostic: " + str(diag))
+                        f"{_portal_label(label)} served an anti-automation page (\"Something doesn't look "
+                        "right\") instead of the login form — the portal flagged this browser/IP. It must "
+                        "be reached from an allow-listed / residential IP. Diagnostic: " + str(diag))
                 raise VidaPayLoginError(
-                    "Could not find the password field on the VidaPay login page — the form may render "
-                    "differently than expected. Diagnostic: " + str(diag))
+                    f"Could not find the password field on the {_portal_label(label)} sign-in page, and "
+                    "nothing on it takes a value we hold. If it asks for something before the password, "
+                    "declare the login fields on this source. Diagnostic: " + str(diag))
             # Fill + submit the (pinned VidaPay/T-CETRA or heuristic) login form. Extracted so the
             # live-session manager (live_login.py) drives the identical login against its live page.
             drive_typed_login(page, login_fr, pw_el, account_id, user, pw)
@@ -1808,14 +1822,14 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
                         "screenshot_b64": _shot_b64(page)}
             if state == "botwall":
                 raise VidaPayLoginError(
-                    "VidaPay served an anti-automation page after the login submit — reach it from an "
-                    "allow-listed / residential IP. Diagnostic: " + str(diag))
+                    f"{_portal_label(label)} served an anti-automation page after the login submit — "
+                    "reach it from an allow-listed / residential IP. Diagnostic: " + str(diag))
             if state == "login":
                 # Ask WHY we are still on the form before blaming the credentials (§COMMCALC-11).
                 blocked = human_check_blocked_message(page)
                 raise VidaPayLoginError(
-                    (blocked or "Login was rejected — Account ID / User ID / Password not accepted "
-                                "(still on the login form). Double-check the three credentials.")
+                    (blocked or (f"{_portal_label(label)} did not accept the sign-in — still on the "
+                                 "login form. Check the credentials saved on this source."))
                     + " Diagnostic: " + str(diag))
             return _twofa_result(page, ctx, {"_note": "post-login page not recognized as 2FA or app; if no code field appears, send this diagnostic for calibration"})
         except Exception as e:   # attach the evidence to EVERY failure, incl. Playwright timeouts
@@ -1889,22 +1903,33 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None, label=None):
                         return False
                 return True
 
-            # ── STEP 1: Access Code (Company ID). If User ID / Password aren't revealed yet, Continue. ──
-            _fill_id("#companyId", access_code)
-            uname = page.query_selector("#username")
-            if not (uname and uname.is_visible()):
-                b = page.query_selector("#btnSubmit")
-                if b:
+            # ── STEP 1: whatever this page wants before it will show the password. ──
+            # Read off the page by `login_progressive` (index §COMMCALC-46) — THE one home for "the
+            # password is on a later page", shared with the live session and with the generic login.
+            # This step used to be spelled here as #companyId / #btnSubmit / #username, and that copy
+            # is why the same shape of form at any OTHER portal reported a broken login form.
+            from app.modules.commcalc import login_progressive as _lp
+            _step_note = _lp.advance_past_first_step(
+                page, {"account_id": access_code, "username": user})
+            if not _step_note or "takes a value we hold" in _step_note:
+                # SAFETY NET for the portal this function is named after: when the page's own words say
+                # nothing the mechanism can act on, fall back to the ids this SSO has always used. It
+                # is the same step, not a second decision — the mechanism is asked first, every time.
+                _fill_id("#companyId", access_code)
+                uname = page.query_selector("#username")
+                if not (uname and uname.is_visible()):
+                    b = page.query_selector("#btnSubmit")
+                    if b:
+                        try:
+                            b.click()
+                        except Exception:
+                            pass
                     try:
-                        b.click()
+                        page.wait_for_selector("#password", state="visible", timeout=15000)
                     except Exception:
                         pass
-                try:
-                    page.wait_for_selector("#password", state="visible", timeout=15000)
-                except Exception:
-                    pass
-                page.wait_for_timeout(1500)
-                _wait_settle(page)
+            page.wait_for_timeout(1500)
+            _wait_settle(page)
 
             # ── STEP 2: re-assert ALL THREE by id (the Company ID can clear on the re-render — that was the
             #   "rejected / all fields empty" symptom), then submit with #btnSubmit. ──
@@ -2021,8 +2046,11 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None, label=None):
 
 
 # ── phase 2: submit the 2FA code ─────────────────────────────────────────────────────────────
-def complete_2fa(url, pending_state, code, proxy_url=None):
-    """Restore the mid-2FA session, submit the code, return the durable authenticated session."""
+def complete_2fa(url, pending_state, code, proxy_url=None, label=None):
+    """Restore the mid-2FA session, submit the code, return the durable authenticated session.
+
+    `label` names the portal in the copy, for the same reason `begin_login` takes one: every portal but
+    the b2bsoft variant verifies through here."""
     try:
         from playwright.sync_api import sync_playwright
     except Exception:

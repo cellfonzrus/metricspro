@@ -42375,8 +42375,10 @@ def _unattended_relogin(client, s, org_id):
         res = vp.login_unattended(
             s.get("portal_url"), s.get("account_id"), s.get("username"), s.get("password"),
             imap_cfg, _oob.rules_from_source(s), proxy_url=s.get("proxy_url"),
-            begin_fn=_functools.partial(vp.begin_login_b2bsoft, label=_lab) if is_b2b else None,
-            complete_fn=_functools.partial(vp.complete_2fa_b2bsoft, label=_lab) if is_b2b else None)
+            begin_fn=_functools.partial(vp.begin_login_b2bsoft if is_b2b else vp.begin_login,
+                                        label=_lab),
+            complete_fn=_functools.partial(vp.complete_2fa_b2bsoft if is_b2b else vp.complete_2fa,
+                                           label=_lab))
     except Exception as e:
         try:   # portal throttling? arm the escalating cooldown, same as every other login path
             _pb().record_outcome(client, s["id"], org_id, None, delivered=False, exc=e, row=s)
@@ -42413,8 +42415,12 @@ def _do_portal_login(sid: str, org_id: str):
     if not rows:
         return
     s = rows[0]
-    _login_fn = (_functools.partial(vp.begin_login_b2bsoft, label=_connector_label(client, org_id, s.get("processor")))
-                 if (s.get("processor") or "").lower() in ("b2bsoft", "b2b") else vp.begin_login)
+    # BOTH variants name the portal from the registry now: the generic one is the path every portal
+    # but b2bsoft takes, and it used to spell one vendor's name at all of them (§COMMCALC-46).
+    _login_lab = _connector_label(client, org_id, s.get("processor"))
+    _login_fn = _functools.partial(
+        vp.begin_login_b2bsoft if (s.get("processor") or "").lower() in ("b2bsoft", "b2b")
+        else vp.begin_login, label=_login_lab)
     now = datetime.now(timezone.utc)
 
     def _note_login_failure(exc, message):
@@ -42561,8 +42567,9 @@ async def data_source_login_verify(sid: str, body: LoginCodeIn, org_id: str = OR
             raise
         except Exception:
             pass
-    _verify_fn = (_functools.partial(vp.complete_2fa_b2bsoft, label=_connector_label(client, org_id, s.get("processor")))
-                  if (s.get("processor") or "").lower() in ("b2bsoft", "b2b") else vp.complete_2fa)
+    _verify_fn = _functools.partial(
+        vp.complete_2fa_b2bsoft if (s.get("processor") or "").lower() in ("b2bsoft", "b2b")
+        else vp.complete_2fa, label=_connector_label(client, org_id, s.get("processor")))
     try:
         res = await run_in_threadpool(_verify_fn, s.get("portal_url"), s.get("pending_state"),
                                       code, s.get("proxy_url"))
