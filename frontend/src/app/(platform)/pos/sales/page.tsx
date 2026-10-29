@@ -39,6 +39,8 @@ import type { HeldLine } from '@/lib/pos-held-sale'
 // superseded version kept. Owner 2026-10-29: "add more tiems to teh same rec3ipt".
 import { fetchAmendPlan, saveAmendedSale } from '@/lib/pos-sale-amend'
 import type { AmendLine, AmendPlan } from '@/lib/pos-sale-amend'
+// THE one customer sentence for unfinished setup (§19.36) — never the migration's name.
+import { SETUP_NOTICE } from '@/lib/setupNotice'
 // THE receipt (lib/pos-receipt) — rendered on the server so the till copy, the reprint and the
 // emailed copy are one thing; this screen prints what it is handed (§POS-02).
 import { fetchSaleReceipt, printReceiptHtml, printViaHelper } from '@/lib/pos-receipt'
@@ -1047,8 +1049,10 @@ export default function PosSalesPage() {
       return
     }
     if (!plan.available) {
-      alert('Editing a rung sale is not switched on yet — it needs a database update (migration '
-            + '1103) so the version your edit replaces can be kept on file.')
+      // The ONE customer sentence (§19.36). Which migration is missing is a technical detail, and a
+      // string has no viewer to check, so it is never named here — the server's own 503 carries it
+      // through the SetupNotice boundary, which shows it to the platform team alone.
+      alert(SETUP_NOTICE)
       return
     }
     if (!plan.allowed) { alert(plan.reason || 'That sale cannot be edited.'); return }
