@@ -26,6 +26,7 @@ TWO THINGS, and only one of them is in the receipt.
 from app.modules.pos import customer_bill_to as BT
 from app.modules.pos import sale_receipt as SR
 from app.modules.pos.receipt_formats import registry as REG
+from app.modules.pos.receipt_formats import doc_style as STYLE
 from app.modules.pos.receipt_formats import render as RENDER
 
 RQ = REG.get("rq")["module"]
@@ -69,16 +70,24 @@ def test_both_layouts_print_on_the_same_page():
 
 def test_the_receipt_keeps_a_margin_of_its_own_on_paper():
     """`@page { margin: 0 }` means the PAGE has no margin, not that the ink runs to the paper's edge:
-    the receipt must set its own, or the first and last lines print off a real sheet."""
-    assert "@media print" in RENDER._CSS
-    printed = RENDER._CSS.split("@media print", 1)[1].split("}", 2)[0]
+    the receipt must set its own, or the first and last lines print off a real sheet.
+
+    Reads the RENDERED stylesheet rather than a source string: the document's CSS moved into its one
+    home (`doc_style.css()`, §POS-13) and a test pinned to where the text used to live would have
+    passed by accident ever after.
+    """
+    css = STYLE.css()
+    assert "@media print" in css
+    printed = css.split("@media print", 1)[1].split("}", 2)[0]
     assert "padding" in printed and "padding: 0" not in printed, printed
 
 
 def test_the_page_rule_is_written_in_one_place():
-    """A second copy is a second answer to 'what page does a receipt print on'."""
-    assert "@page" not in RENDER._CSS
-    assert RENDER._CSS.count("@page") == 0
+    """A second copy is a second answer to 'what page does a receipt print on'. The document
+    stylesheet must not grow one of its own — `sale_receipt.PAGE_CSS` is the only home."""
+    assert "@page" not in STYLE.css()
+    import inspect
+    assert inspect.getsource(STYLE).count("@page") == 0
 
 
 # ── 2. the Bill To ───────────────────────────────────────────────────────────────────────────────
