@@ -177,6 +177,7 @@ Primary code homes:
 | PAYABLES-01 | **A rebuild never deletes what it cannot replace** | "Rebuild via sql let me know what permissions to add" — and the rebuild, run for real, deleted all 11,000 Boost rows and inserted none, then returned HTTP 200 describing the table it had just emptied. Two migrations had been skipped while later-numbered ones landed. What is a delete+insert worth without a transaction, and which half of that pair is the one you can afford to run first? |
 | COMMCALC-46 | **The password is sometimes on the next page — one home for a login's first step** | "If there is no password on the first page then click to continue with username and then enter password on thr next page" — said after a two-page sign-in was reported as a form that renders unexpectedly, in a message naming a different vendor's portal. Three paths answered "what does this page want first", two by spelling one vendor's element ids and one not at all. What is a login's first step a fact ABOUT, and what does a page that asks for something we do not hold deserve to be told? |
 | COMMCALC-47 | **A frame knows what it shows — one home for where a click on the live screen lands** | "it shows the live scren but cannot click on the box to enter the user id" — the box was in the picture and clicking it did nothing. Every streamed frame arrives telling us what it shows, and that was thrown away, so a click was converted through the window instead. What is a click on a picture of a browser a fact ABOUT? |
+| COMMCALC-48 | **The reports a login pulls are edited, not coded — one editable declaration** | "start defining the reports from the back end again, not hardcoded but consumer defined editable". Which reports a tenant pulls and the filters each one needs were already config — in two columns no screen could write, so in practice they were declarable only in SQL. One derived editor shape over the same two columns, with the round trip pinned as the identity. |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | CORE-22 | **A page load never queries once per item** | "How do we avoid these extra round-trip calls? Which loop shapes really cost one trip per row and which only look like it, what is the count today, and what fails the build the day a new one ships?" |
@@ -26150,6 +26151,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-45 | commcalc |
 | COMMCALC-46 | commcalc |
 | COMMCALC-47 | commcalc |
+| COMMCALC-48 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -35243,6 +35245,101 @@ Same home, other axes: §COMMCALC-24 (which process may answer), §COMMCALC-10 (
 §COMMCALC-46 (the first step, which is what means the operator should not have had to click that box at
 all). Neighbours: §COMMCALC-27 / §COMMCALC-31 (input latency), §COMMCALC-13 (what a finished session
 leaves on the row).
+## §COMMCALC-48. THE REPORTS A LOGIN PULLS ARE EDITED, NOT CODED — one editable declaration (owner ask 2026-10-29)
+
+> Owner, 2026-10-29: *"i signed in live , now start definig the reports fromt eh back end again not
+> hardpcded but consumer defined editablke once you build them"*.
+
+### COMMCALC-48.1 WHAT WAS ACTUALLY WRONG
+
+Not that the reports were hardcoded — they were not. §COMMCALC-07 pulls whatever a tenant declares,
+§COMMCALC-37 applies whatever filters a tenant declares, §COMMCALC-39 keys both by one `spec_key`. The
+declaration lives in two columns of `commcalc.data_source`:
+
+| column | answers | its reader |
+| --- | --- | --- |
+| `portal_reports` | WHICH reports — `[{key, label, nav[], export, line_map}]` | `pos_report_sweep.report_specs` |
+| `portal_calibration` | HOW to run one — `{<key>: {params: [{selector, kind, value, label}]}}` | `portal_report_pull.report_params` |
+
+**Nothing could write them.** No screen, no endpoint — so a tenant's reports could be declared only by
+somebody with SQL access against the live database. "Config, not code" was true of the mechanism and
+false of the product, which is the same thing as hardcoded from where the owner sits.
+
+### COMMCALC-48.2 THE CLASS, not the instance
+
+The class is *a fact declared in a column no screen can write is not configuration* — it is a constant
+with extra steps, and the only person who can change it is whoever has the credentials. Fourteen
+reports one tenant wants is the instance.
+
+So the fix is a mechanism, not a form for his fourteen: `commcalc/report_declaration.py` is the ONE home
+for "a tenant's declared reports as one editable thing", and it names no portal, no tenant and no report
+(RULE TWO — it could not tell you one of the fourteen).
+
+### COMMCALC-48.3 A DERIVED SHAPE, never a third copy
+
+An editor wants one list — one row per report with its filters attached. That is a THIRD shape of the
+same fact, and a third copy is the divergence this index forbids. So the shape is DERIVED both ways and
+never stored:
+
+```
+two columns  --rows(src_row)-->  editable rows  --columns(rows)-->  two columns
+```
+
+`columns(rows(src))` is the **identity** on anything the pull can read. That is the property that makes
+the editor safe: opening it and pressing Save without touching anything changes nothing. It is pinned,
+because an editor that quietly rewrites a working declaration into its own dialect is worse than no
+editor at all.
+
+What it dereferences rather than re-deciding: `pos_report_sweep.spec_key` (which report is this,
+§COMMCALC-39), `portal_report_pull.PARAM_KINDS` / `DATE_TOKENS` (the filter vocabulary, §COMMCALC-37 — a
+kind the pull cannot apply is not offerable, or the editor would be offering a filter that is silently
+ignored), `report_columns.norm` (comparing words, §COMMCALC-38).
+
+Two things are DERIVED and deliberately never stored beside the declaration: `per_day` (a report whose
+filters mention `{date}` IS a per-day report — a flag next to that could disagree with it) and
+`problems` (advice in the tenant's words; a half-declared report is still saved, because §COMMCALC-37
+already refuses to EXPORT a report whose filters could not be set, so it cannot quietly produce figures).
+
+`existing_calibration` is folded through untouched for every key the editor does not edit — the
+§COMMCALC-46 login declaration lives in the same column, and an editor that dropped what it did not
+understand would delete a working configuration on a save that looked like a no-op.
+
+### COMMCALC-48.4 A capture suggests; it never decides
+
+"👁 Read this page" runs §COMMCALC-39's capture against the open live session and folds its answer in
+through `merge_suggestion`: a filter the row does not already have is ADDED, and a selector a human has
+corrected is KEPT. A capture is evidence about a page, not a decision about this tenant's configuration,
+and one that overwrote corrections would be untrustworthy on exactly the pages that needed correcting.
+
+### COMMCALC-48.5 Surfaces
+
+- `GET /commcalc/data-sources/{sid}/reports` — the rows, plus the vocabulary the editor may offer.
+- `PUT /commcalc/data-sources/{sid}/reports` — builds both columns through `report_declaration.columns`
+  and returns the re-derived rows, so the screen shows what the pull will actually run. Org-scoped.
+- `frontend/src/components/commcalc/PortalReportEditor.tsx` — the modal, behind **📄 Reports** on each
+  connector row of `/commcalc/email-imports`.
+
+### COMMCALC-48.6 Locked
+
+`backend/harness_report_declaration.py` — DB-free and browser-free, 71 checks. It FAILS if
+`columns(rows(src))` stops being the identity, if the editor's own derived fields (`per_day`,
+`problems`) start being stored, if a calibration key the editor does not edit is lost on save, if a
+filter kind outside §COMMCALC-37's vocabulary becomes storable, if the module stops dereferencing
+`spec_key`, or if a portal or report name appears in the home. Nine armed negative controls.
+
+### COMMCALC-48.7 NOT done here
+
+The fourteen reports one tenant wants are config rows, not code, and are not in this PR. Nor is the
+signup preset that would let a new store of the same kind inherit a declaration by default
+(§COMMCALC-38.8 records the same gap for the shipment recon) — that needs a declared preset, read
+through this same one home, and is not built.
+
+### COMMCALC-48.8 Cross-references
+
+Same home, other axes: §COMMCALC-07 (the one pull loop), §COMMCALC-37 (declared per-report filters),
+§COMMCALC-38 (the column vocabulary), §COMMCALC-39 (`spec_key` and the capture). Neighbours:
+§COMMCALC-46 (the login declaration, which shares the calibration column), §COMMCALC-47 (the live screen
+the capture reads through).
 
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
 
