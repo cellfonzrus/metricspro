@@ -256,3 +256,89 @@ def test_the_declaration_comes_back_resolved_so_the_screen_shows_what_was_stored
 
 def test_an_empty_config_payload_is_refused(wired, api_client):
     assert api_client.put(CONFIG_PATH, json={}).status_code == 400
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# A PRE-1104 DATABASE, PROVED AGAINST A CLIENT THAT REALLY REFUSES THE COLUMN
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# The in-memory double ignores the column list a `select()` is given, so the deployability test above
+# only proves the page loads with no rows — it CANNOT prove what happens when PostgREST rejects
+# `lifecycle` because migration 1104 has not been applied. These two tests drive the readers against
+# a stub that raises on any unknown column, which is the real failure, and they are what makes the
+# two readers' use of the shared any-subset reading rule (`core.column_tolerant`, index §4b.1) load
+# bearing rather than decorative: a wide select with a narrower one behind it would answer these the
+# same way while still being the ladder the house lock forbids.
+class _StrictQuery:
+    """A select that knows which columns the table HAS and raises on any other, one query deep."""
+
+    def __init__(self, rows, known, cols):
+        self._rows, self._known = rows, known
+        asked = [c.strip() for c in str(cols).split(",") if c.strip()]
+        if asked != ["*"]:
+            for c in asked:
+                if c not in known:
+                    raise RuntimeError(f'column "{c}" does not exist')
+
+    def eq(self, *_a, **_k):
+        return self
+
+    def limit(self, *_a, **_k):
+        return self
+
+    def execute(self):
+        return type("R", (), {"data": [{k: v for k, v in r.items() if k in self._known}
+                                       for r in self._rows]})()
+
+
+class _StrictTable:
+    def __init__(self, rows, known):
+        self._rows, self._known = rows, known
+
+    def select(self, cols="*", **_k):
+        return _StrictQuery(self._rows, self._known, cols)
+
+
+class _StrictClient:
+    """`schema(...).table(...)` over ONE named table; anything else has no rows and no columns."""
+
+    def __init__(self, table, rows, known):
+        self._t, self._rows, self._known = table, rows, known
+
+    def schema(self, _s):
+        return self
+
+    def table(self, name):
+        return (_StrictTable(self._rows, self._known) if name == self._t
+                else _StrictTable([], frozenset()))
+
+
+def test_the_rulings_read_drops_the_lifecycle_column_a_pre_migration_database_lacks():
+    from app.modules.commcalc import router as _r
+    rows = [{"org_id": ORG, "raw_model": "HANDSET A 128GB", "canonical_model": "HANDSET A"}]
+    pre = _StrictClient("device_model_alias", rows, frozenset(("org_id", "raw_model",
+                                                               "canonical_model")))
+    rulings, alias = _r._device_lifecycle(pre, ORG)
+    assert rulings == {}, "a column that does not exist cannot carry a ruling"
+    assert alias == {"handset a 128gb": "HANDSET A"}, "and the alias map still arrives whole"
+
+
+def test_the_rulings_read_keeps_the_lifecycle_column_once_the_migration_has_run():
+    from app.modules.commcalc import router as _r
+    rows = [{"org_id": ORG, "raw_model": "HANDSET A 128GB", "canonical_model": "HANDSET A",
+             "lifecycle": "current"}]
+    post = _StrictClient("device_model_alias", rows, frozenset(("org_id", "raw_model",
+                                                                "canonical_model", "lifecycle")))
+    rulings, alias = _r._device_lifecycle(post, ORG)
+    assert rulings == {"HANDSET A": "current"}
+    assert alias == {"handset a 128gb": "HANDSET A"}
+
+
+def test_the_config_read_degrades_to_the_house_defaults_on_a_pre_migration_database():
+    from app.modules.commcalc import router as _r
+    pre = _StrictClient("accessory_config", [{"org_id": ORG, "id": "c1"}],
+                        frozenset(("org_id", "id")))
+    assert _r._accessory_order_config(pre, ORG) == {}, "no declared column is no declaration"
+    post = _StrictClient("accessory_config",
+                         [{"org_id": ORG, "id": "c1", "accessory_order_lookback_months": 6}],
+                         frozenset(("org_id", "id", "accessory_order_lookback_months")))
+    assert _r._accessory_order_config(post, ORG) == {"accessory_order_lookback_months": 6}

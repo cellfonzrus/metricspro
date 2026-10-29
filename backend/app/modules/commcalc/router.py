@@ -50473,16 +50473,13 @@ def _accessory_order_config(client, org_id):
 
     Read from the EXISTING per-org `commcalc.accessory_config` row (mig `1104`), beside
     `portout_fraud_rules` and `activation_details_rules` — the same extension shape mig `1031` used,
-    and NOT a sibling config table. A NULL column, or a database where 1104 has not been applied yet,
-    resolves to the house defaults rather than crashing the page."""
-    raw = {}
-    try:
-        r = (client.schema("commcalc").table("accessory_config")
-             .select(",".join(_AOP_CFG_COLUMNS)).eq("org_id", org_id).limit(1).execute().data) or []
-        raw = r[0] if r else {}
-    except Exception:
-        raw = {}                      # mig 1104 not applied yet → house defaults, never a 500
-    return raw or {}
+    and NOT a sibling config table. Read through the platform's ONE reading rule for a config row
+    whose columns arrive by hand-applied migration (`core.column_tolerant.read_row`, index §4b.1):
+    `select("*")` and take the keys present, so a NULL column, or a database where 1104 has not been
+    applied yet, resolves to the house defaults without a column ladder and without a 500."""
+    rd = _ct.read_row(lambda: client.schema("commcalc").table("accessory_config"),
+                      lambda q: q.eq("org_id", org_id), _AOP_CFG_COLUMNS)
+    return {k: v for k, v in dict(rd.row or {}).items() if k in _AOP_CFG_COLUMNS}
 
 
 def _device_lifecycle(client, org_id):
@@ -50491,18 +50488,20 @@ def _device_lifecycle(client, org_id):
     BOTH come off `commcalc.device_model_alias` (mig `096`), which is already the platform's per-model
     registry — the ruling is a COLUMN on it (mig `1104`) rather than a second table that would drift
     from the canonical-model map. The alias map is the same one `/payables/forecast` reads, so a model
-    curated once is one model on both screens."""
+    curated once is one model on both screens.
+
+    `lifecycle` is the OPTIONAL column here, so it is PROBED on its own and then spelled into the one
+    real select by `core.column_tolerant` (index §4b.1) — never a wide select with a narrower one
+    behind it, which is the ladder that let one missing column hide the rest."""
     rulings, alias = {}, {}
+    _tbl = lambda: client.schema("commcalc").table("device_model_alias")   # noqa: E731 — a FRESH builder per query
+    _scope = lambda q: q.eq("org_id", org_id)                              # noqa: E731
+    cols = _ct.select_list(("raw_model", "canonical_model"), ("lifecycle",),
+                           _ct.present_columns(_tbl, _scope, ("lifecycle",)))
     try:
-        rows = (client.schema("commcalc").table("device_model_alias")
-                .select("raw_model,canonical_model,lifecycle").eq("org_id", org_id)
-                .execute().data) or []
+        rows = (_scope(_tbl().select(cols)).execute().data) or []
     except Exception:
-        try:                           # pre-1104 database: the column does not exist yet
-            rows = (client.schema("commcalc").table("device_model_alias")
-                    .select("raw_model,canonical_model").eq("org_id", org_id).execute().data) or []
-        except Exception:
-            rows = []
+        rows = []
     for r in rows:
         canon = str(r.get("canonical_model") or r.get("raw_model") or "").strip()
         raw = str(r.get("raw_model") or "").strip()
