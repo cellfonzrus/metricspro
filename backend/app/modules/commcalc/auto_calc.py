@@ -92,6 +92,9 @@ POLL_SECONDS = 30
 # Plain words for where a landing came from (the lander's own trace-source word → a phrase an owner reads).
 SOURCE_LABELS = {
     "manual": "the Upload page",
+    # NOT AN IMPORT AT ALL — a person changed a declaration (net payment terms, which table a carrier reads).
+    # The sentence an operator reads has to say so, or a rebuild with nothing uploaded looks unexplained.
+    "payable_source_map_edit": "a change to the carrier's payment terms or source settings",
     "email_sweep": "Email Auto-Import",
     "ftp_sweep": "the FTP drop",
     "onboarding-import": "the mapped upload",

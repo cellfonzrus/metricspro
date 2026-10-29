@@ -61,6 +61,15 @@ SCOPE_ORG = "org"                # rebuilt whole for an org — every snapshot i
 # inputs_fn    — "module:function" returning MORE input tables for an org, where they are DECLARED config
 #                rather than fixed. Called with (client, org_id). A failure is reported, never swallowed into
 #                "this build has no inputs" (§COMMCALC-29's posture, applied to a registry read).
+# config_inputs— the tables that DECLARE this build rather than feed it. A DECLARATION IS AN INPUT: owner ask
+#                2026-10-29, "Put the Net term days as 14 from the back, programmable not hard code". Net
+#                terms live in `payable_source_map.net_terms_days` and nothing in code holds a number, so the
+#                setting was already programmable — but changing it left the stored due dates on the old
+#                terms until some unrelated feed happened to land. Editing a setting and waiting for a
+#                shipment to arrive before the figure agrees with it is the same defect as the button: the
+#                tenant is the scheduler again. These are kept APART from `inputs` because `inputs` are
+#                external feeds carrying lineage identity (data_lineage_registry's job) and a config table
+#                has none; for staleness they are the same thing, which is what `matches` says.
 # run          — "module:function", called with (client, org_id) -> {"status": "done"|"error", ...}
 # endpoint     — the manual door that stays, so a person can still force a rebuild. The lock requires that this
 #                endpoint and `run` reach the SAME function: a button that rebuilds differently from the hook
@@ -87,6 +96,11 @@ BUILDS = (
         # …plus every table the carrier's own `payable_source_map` row DECLARES (source, price list, sold-match,
         # reimbursement-match). Declared, so a new carrier is a config row and this registry does not change.
         "inputs_fn": "app.modules.payables.refresh:input_tables",
+        # The map is not a feed — it is the DECLARATION this build reads: which table, which columns, and the
+        # carrier's net payment terms. Editing it changes every stored due date, so it makes the ledger stale
+        # exactly as a shipment does. Its writers are `POST /payables/source-maps` and the delete beside it,
+        # and §C of the lock requires both to call the hook.
+        "config_inputs": ("payable_source_map",),
         "run": "app.modules.payables.refresh:refresh",
         "endpoint": "POST /payables/rebuild",
         "why": "measured 53 days stale on 2026-10-27 while its feed was 4 days old (index §COMMCALC-41.1)",
@@ -166,12 +180,22 @@ def static_inputs(build):
     return tuple(str(t) for t in (build.get("inputs") or ()))
 
 
+def config_inputs(build):
+    """The tables that DECLARE this build. Separate from `static_inputs` because a config table carries no
+    lineage identity, and the lock holds each to its own rule."""
+    return tuple(str(t) for t in (build.get("config_inputs") or ()))
+
+
 def matches(build, table, declared=()):
-    """Is `table` an input of `build`? PURE — the caller supplies whatever the declared resolver returned."""
+    """Is `table` an input of `build`? PURE — the caller supplies whatever the declared resolver returned.
+
+    A config table counts. A build is stale when the DECLARATION it reads changes, not only when a feed
+    arrives: net terms of 14 with due dates still computed at 21 is a stale snapshot by any other name."""
     t = str(table or "").strip()
     if not t:
         return False
-    return t in static_inputs(build) or t in tuple(str(x) for x in (declared or ()))
+    return (t in static_inputs(build) or t in config_inputs(build)
+            or t in tuple(str(x) for x in (declared or ())))
 
 
 def _load(path):

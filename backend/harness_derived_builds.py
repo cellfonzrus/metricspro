@@ -223,6 +223,28 @@ check("B9 …and with the config unreadable, a purely DECLARED table makes nothi
       db.stale_builds(fresh(rows=base_rows(), missing_table="payable_source_map"),
                       "ORG", "raw_ma_commission") == [])
 
+# A DECLARATION IS AN INPUT (owner ask 2026-10-29, "Put the Net term days as 14 from the back,
+# programmable not hard code"). Net terms were already a config row and nothing in code held a number of
+# days — but the stored due dates only agreed with a change once some unrelated feed happened to land, so
+# the tenant was the scheduler again, one step further back. The config table makes the build stale.
+check("B10 editing the carrier's DECLARATION makes the ledger stale, exactly as a shipment does — "
+      "net terms of 14 with due dates still counted at 21 is a stale snapshot by any other name",
+      [b["key"] for b, _ in db.stale_builds(c, "ORG", "payable_source_map")] == ["payable_ledger"])
+check("B11 …and it makes ONLY that build stale — the recovery ledger does not read the payable map, so a "
+      "terms change must not queue a rebuild of something it cannot affect",
+      "appeal_recovery" not in {b["key"] for b, _ in db.stale_builds(c, "ORG", "payable_source_map")})
+check("B12 the config table is kept OUT of `inputs`, which carry lineage identity, and declared under "
+      "`config_inputs` — a config table has no external feed to trace",
+      "payable_source_map" in db.config_inputs(db.by_key("payable_ledger"))
+      and "payable_source_map" not in db.static_inputs(db.by_key("payable_ledger")))
+check("B13 a build that declares no config table is unaffected — `config_inputs` defaults to empty "
+      "rather than to something a reader has to notice",
+      db.config_inputs(db.by_key("appeal_recovery")) == ()
+      and db.config_inputs({"key": "x"}) == ())
+check("B14 `matches` is still PURE about it — the config table counts with no client and no config read",
+      db.matches(db.by_key("payable_ledger"), "payable_source_map")
+      and not db.matches(db.by_key("appeal_recovery"), "payable_source_map"))
+
 # ═══ §C the verdict ═════════════════════════════════════════════════════════════════════════════════════════
 print("\n§C THE VERDICT (§COMMCALC-40 — the status word, never a row count)")
 check("C1 a build that wrote rows is built", db.classify_build({"status": "done", "written": 11000})
@@ -318,6 +340,24 @@ c = fresh(rows=base_rows(), missing_table="payable_source_map")
 r = ac.landed(c, "ORG", table="asset_ledger", periods=[], source="manual", rows=10)
 check("E8 an unreadable config does not stop the rebuild and the reason travels out with the response",
       r["builds"]["queued"] is True and r["builds"]["unreadable"], r)
+
+# THE SETTINGS CHANGE GOES THROUGH THE SAME DOOR. No second trigger: a terms edit calls `landed` with the
+# config table and NO period, exactly as the asset-ledger landing does, so it inherits the same debounce,
+# the same claim, the same poller and the same `auto_calc_on_landing` switch.
+c = fresh(rows=base_rows())
+r = ac.landed(c, "ORG", table="payable_source_map", periods=[], source="payable_source_map_edit", rows=1)
+check("E10 changing the carrier's payment terms queues the payable-ledger rebuild through the ONE hook",
+      r["queued"] is True and r["builds"]["builds"] == ["payable_ledger"], r)
+check("E11 …and queues NO commission calculation and no month — a payment term is not a month's figure",
+      r["periods"] == [] and r["builds"]["builds"] == ["payable_ledger"], r)
+check("E12 the sentence an operator reads says a SETTING changed, not that something was uploaded — a "
+      "rebuild with nothing imported would otherwise look unexplained",
+      "payment terms" in ac._label("payable_source_map_edit"), ac._label("payable_source_map_edit"))
+c = fresh(rows=base_rows(cfg=CFG_OFF))
+r = ac.landed(c, "ORG", table="payable_source_map", periods=[], source="payable_source_map_edit", rows=1)
+check("E13 a tenant that switched auto-rebuild OFF is not rebuilt by a settings edit either — one switch "
+      "governs every path into this build",
+      r["builds"]["queued"] is False, r)
 
 
 class Boom:
