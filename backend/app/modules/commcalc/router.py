@@ -2860,31 +2860,48 @@ def upload_last_by_report(types: str = "", limit: int = 1200, org_id: str = ORG_
             mig = '202' if tbl == 'upload_trace' else '007_upload_log.sql'
             hints.append(f'{tbl} unavailable (run migration {mig}): {str(e)[:160]}')
 
-    # 2. targeted lookup for asked-about keys the window didn't reach. Two queries at most per key:
-    #    the newest row, then — only if that one saved nothing — the newest row that DID land rows.
+    # 2. targeted lookup for asked-about keys the window didn't reach. ONE read per journal over the
+    #    WHOLE set of missing keys, then the same again restricted to rows that landed — four reads
+    #    in total, whether one key is missing or forty. It was two reads PER KEY until 2026-10-29
+    #    (80 round trips on a tenant asking about forty reports), which is the N+1 shape the
+    #    1,000-user load test named; the answer below is identical, the cost is not.
     seen = {c['key'] for c in cands}
-    for t in sorted(want - seen)[:40]:
-        for tbl, cols, order_col, key_col, origin in (
-                ('upload_trace', _UPLOAD_LAST_TRACE_COLS, 'created_at', 'upload_type', 'trace'),
-                ('upload_log', _UPLOAD_LAST_LOG_COLS, 'uploaded_at', 'file_type', 'log')):
-            if tbl not in sources_read:
-                continue
-            try:
-                rows = (client.schema('commcalc').table(tbl).select(cols)
-                        .eq('org_id', org_id).eq(key_col, t)
-                        .order(order_col, desc=True).limit(1).execute().data) or []
-                c = _upload_last_cand(rows[0], origin) if rows else None
-                if c:
-                    cands.append(c)
-                    if not (c['rows_saved'] or 0) > 0:
-                        landed = (client.schema('commcalc').table(tbl).select(cols)
-                                  .eq('org_id', org_id).eq(key_col, t).gt('rows_saved', 0)
-                                  .order(order_col, desc=True).limit(1).execute().data) or []
-                        c2 = _upload_last_cand(landed[0], origin) if landed else None
-                        if c2:
-                            cands.append(c2)
-            except Exception as e:
-                print(f'WARN upload/last targeted lookup for {t} in {tbl} skipped: {e}')
+    missing = sorted(want - seen)[:40]
+    for tbl, cols, order_col, key_col, origin in (
+            ('upload_trace', _UPLOAD_LAST_TRACE_COLS, 'created_at', 'upload_type', 'trace'),
+            ('upload_log', _UPLOAD_LAST_LOG_COLS, 'uploaded_at', 'file_type', 'log')):
+        if not missing or tbl not in sources_read:
+            continue
+        try:
+            # newest first, so the FIRST row seen for a key is that key's newest — the per-key
+            # `.order(desc).limit(1)`, expressed once over the set.
+            newest_for = {}
+            for r in ((client.schema('commcalc').table(tbl).select(cols)
+                       .eq('org_id', org_id).in_(key_col, missing)
+                       .order(order_col, desc=True)
+                       .limit(len(missing) * 50).execute().data) or []):
+                newest_for.setdefault(r.get(key_col), r)
+            no_rows = []
+            for k, r in newest_for.items():
+                c = _upload_last_cand(r, origin)
+                if not c:
+                    continue
+                cands.append(c)
+                if not (c['rows_saved'] or 0) > 0:
+                    no_rows.append(k)
+            if no_rows:
+                landed_for = {}
+                for r in ((client.schema('commcalc').table(tbl).select(cols)
+                           .eq('org_id', org_id).in_(key_col, no_rows).gt('rows_saved', 0)
+                           .order(order_col, desc=True)
+                           .limit(len(no_rows) * 50).execute().data) or []):
+                    landed_for.setdefault(r.get(key_col), r)
+                for r in landed_for.values():
+                    c2 = _upload_last_cand(r, origin)
+                    if c2:
+                        cands.append(c2)
+        except Exception as e:
+            print(f'WARN upload/last targeted lookup in {tbl} skipped: {e}')
 
     # 3. fold → newest-that-landed + newest-overall, per key
     landed_by, newest_by = {}, {}
