@@ -40570,3 +40570,161 @@ produces is the same ISO string it produced before.
 Cross-ref §STOREOPS-01 (the Hours Approval board this was asked from), §3d / RULE FIVE (the shared
 filter bar), §19.18 (a mechanism written and its callers left unwired — the failure this ratchet
 exists to prevent).
+## §COMMCALC-49. WHAT TO ORDER, FROM WHAT THE STORES ACTUALLY SOLD — and one answer to "how many will sell next" (owner ask 2026-10-29)
+
+**Owner ask, verbatim:** *"for sales forecasting need to add one more report to process accessory
+orders based on the previous 3 months of average sales and showing the best sellign models on the top
+and asking the user to enter where the spoecific model is end of life or current , once tehy check the
+system calculates the following accessory projected to sell in the next 2 months , the case mix will
+be decalred by the user but by defaul you can use this mix - Blacks and Blues - 70%, pinks / red -
+30% - 1 per sale / screen protectors - 1 per sale / Cables type c- type c 1 per sale / Charging cubes
+- 1 per sale / report should have all out store filters and market filters , look back months and
+future planning months / use the most update planning feature so we can then convert this into an
+automated accessory ordering system direclty fed into shopify and recurreing fulfiulling ssytem when
+the sales happen in the store"*.
+
+### COMMCALC-49.1 The duplicate check, and what it found (build gate, CLAUDE.md)
+
+Searched before a line was written: §15 / module 095 (Device Forecasting & Vendor Payables and its
+`/forecast`), §COMMCALC-25 (that report's date window and store filter), §36 (Supply ordering, vendor
+comparison, favourites, reorder quantities), §51 (the vendor order route and the Shopify draft order),
+§61 (Accessory Target Allocation), §62 (Product Mix & Ports), §19.55 (what counts as an accessory).
+
+It found the fact this report needed **already written twice**, and the second copy committed *with a
+docstring saying it was a copy*:
+
+| copy | what it held |
+|---|---|
+| `payables/router.forecast` (§15) | `rate = units / lookback` · `projected = int(round(rate * horizon))` · `recommend = max(0, projected - on_hand)` · its own `_is_device_line` |
+| `asset/purchase_orders.po_recommendations` (§36) | the same four lines and a near-verbatim `_is_device_line`, excused in its docstring by *"duplicated here, not imported, to avoid the module-load cycle"* |
+
+So the fact was FACTORED rather than copied a third time, and **both older callers were rewired in
+this change**. The import-cycle excuse is answered rather than argued with: the home imports NOTHING,
+so it can be dereferenced from any load order.
+
+### COMMCALC-49.2 The one homes
+
+| Fact | Its one home |
+|---|---|
+| how many of something will sell over the next horizon | `commcalc/demand_projection.projection` / `projected_units` / `recommend_qty` |
+| which sale line sold a DEVICE | `commcalc/demand_projection.is_device_line` (+ `HOUSE_DEVICE_DEPARTMENTS` / `HOUSE_DEVICE_CATEGORIES`, config with house defaults) |
+| the model ranking, the lifecycle ruling, the colour mix, the attach plan, the order | `commcalc/accessory_order_plan.py` (pure) |
+| where every figure on the screen came from | `commcalc/accessory_order_drilldown.py` (declaration only) |
+| the device MODEL out of a promo-decorated description | `commcalc/product_mix.model_of` (§62), dereferenced |
+| which month's sale lines to read | `router._sales_rows_union` (§3) — the DISPLAY union, so the report is never blind on the open month (§19.55 / §4a.3) |
+| the raw → canonical model map AND the lifecycle ruling | `commcalc.device_model_alias` (mig `096`, lifecycle column mig `1104`) |
+
+**THE UNIT OF THE WINDOW IS THE CALLER'S.** `/payables/forecast` and the PO recommendations count
+DAYS; this report counts MONTHS. Velocity is per window-unit and the horizon is in the same unit, so
+one arithmetic serves both without a hidden second divisor.
+
+### COMMCALC-49.3 The arithmetic
+
+    per model:  avg_monthly = units in the look-back / MONTHS THAT MODEL WAS SELLING
+                projected   = avg_monthly x the planning months       (ruled-current models only)
+    the order:  devices     = Σ projected over the ruled-current models
+                qty(item)   = round(devices x the item's per-device rate)
+                cases       = split across the declared colour groups by LARGEST REMAINDER
+
+**The divisor is the months the model was selling, not the whole look-back.** A handset that first
+sold last month has not been selling for three; dividing by three understates its order by two
+thirds, which is the quiet way a new best-seller gets under-ordered. The row says which it was
+(`history_basis`).
+
+### COMMCALC-49.4 The honesty rules — the human step is the whole point
+
+- **AN UNRULED MODEL IS NOT A ZERO, AND NOT AN AVERAGE EITHER.** A phone being retired sells exactly
+  as well in the history as a phone being launched, and no feed on this platform knows which is
+  which. So an undeclared model projects `None` and reads `awaiting_declaration`: a zero would read as
+  a decision to retire it, the average would be the report deciding on the user's behalf. The payload
+  reports `units_awaiting_declaration` and `declared_share` so the gap is a number, not a silence.
+- **A retired model keeps its history.** Projection zero because that is the DECISION; units stay on
+  the row, because dropping it would make the retired demand invisible — how a store runs out of a
+  case it is still selling.
+- **Every model retired is a real order of nothing**, and `reason` distinguishes that from having no
+  rulings at all.
+- **A colour mix that does not add up is normalised and SAID** (`declared_normalised`). 60/30 is 90%
+  of the cases: the missing tenth is a typo, not a colour.
+- **The colour quantities foot to the case quantity** — largest remainder, the same rounding rule §61
+  uses for the accessory target split, for the same reason.
+- **No projection means no order quantity, never zero.**
+- **"1 per sale" is a default, not a law** — a tenant that bundles two protectors declares two.
+- **A window of no days is unmeasurable, not zero** (the one deliberate difference from the code this
+  change extracted, which raised `ZeroDivisionError` there).
+
+### COMMCALC-49.5 The declarations, and why there is no new table
+
+Both declarations extend a table that already exists, because both facts already have a home:
+
+- the per-model **ruling** is a COLUMN on `commcalc.device_model_alias` (the registry of what we know
+  about a device model) — `lifecycle` ∈ `current` | `eol` | NULL, with `lifecycle_declared_by` /
+  `_at`. **NULL is load-bearing**: it is the un-ruled state, closed at the database by a CHECK so a
+  typo cannot become a third silent state.
+- the **colour mix**, the **attach plan** and the **default windows** are columns on
+  `commcalc.accessory_config` — the org's existing accessory-vocabulary row, the same extension shape
+  mig `1031` used for `portout_fraud_rules`.
+
+**Migration `1104_accessory_order_plan.sql` — SURFACED, NOT APPLIED.** Additive, idempotent, every
+column NULL on arrival, and no figure anywhere on the platform moves when it runs. Runbook copy:
+`/mnt/project-files/accessory-order-plan/RUN_1104_accessory_order_plan_2026-10-29.sql`. A database
+without it still serves the report on the house defaults, with every model reading as awaiting a
+ruling (proved by an integration test) — so the feature is deployable before the migration lands.
+
+### COMMCALC-49.6 The endpoints and the screen
+
+| route | what it does |
+|---|---|
+| `GET /commcalc/accessory-order-plan?period=&months=&horizon=&store=&stores=&markets=` | READ-ONLY. The ranked model table, what is still waiting on a ruling, and the order the rulings imply. Look-back 1–24 (default 3), planning window 1–12 (default 2), both clamped. RBAC store-scoped like every other sales report; the market and store filters resolve through `_store_market_resolver` and `_store_code_resolver` |
+| `POST /commcalc/accessory-order-plan/lifecycle` | a human's ruling, admin-gated, with its author and timestamp. `clear` removes a ruling, which is deliberately NOT the same as declaring one |
+| `PUT /commcalc/accessory-order-plan/config` | the colour mix, the attach plan and the default windows; returns the RESOLVED declaration, so the screen shows what was stored rather than what was typed |
+
+Screen `/commcalc/accessory-order-plan` — a Management Overview **tile**, per the owner's 2026-10-08
+"cleaner look" ruling. It renders and never computes.
+
+**DRILL-DOWN §CORE-17.3z** (`commcalc/accessory_order_drilldown.py`): the four counted device-unit
+figures open to the model rows behind them, each row naming the sales display union through
+`data_lineage_registry.SALES_DISPLAY_SOURCES` rather than a restated table name. A model awaiting a
+ruling is served with its REASON, not as a projected zero. **Refuses to claim** the declared share and
+the per-month run rate (rates, §CORE-17.3h) and every accessory quantity — the device total times a
+declared per-device rate has no rows of its own, so it would be the device rows wearing another tile
+(§CORE-17.3k).
+
+### COMMCALC-49.7 Feeding the vendor's store later is a SHAPE, not a switch
+
+The owner's last sentence asks for this to become an automated order. §51 already owns that road
+(`order_transport` → `shopify_draft_order` → `vendor_customer`), and **nothing here is wired to it or
+switched on.** What the module hands back is order lines keyed by a declared accessory key with an
+integer quantity — the shape a draft order takes — so wiring it later is a route change, not a
+re-derivation.
+
+### COMMCALC-49.8 The locks
+
+| What it proves | Where |
+|---|---|
+| the one home holds, both older callers dereference it, no third copy of either fact, and the extraction agrees with the four lines both callers carried over 1,400 combinations | `harness_demand_projection.py` (24 checks), CI job `demand-projection-one-home` in `carrier-vocab-guard.yml` |
+| the pure arithmetic and every honesty rule above | `backend/tests/unit/test_accessory_order_plan.py` (26) + `test_demand_projection.py` (16), CI job "Backend unit tests" |
+| the three routes, the display-union read, the ruling round trip, the drill tie-out and the pre-1104 degradation | `backend/tests/integration/test_accessory_order_plan_endpoint.py` (20), CI job "Backend integration tests" |
+| the report declares a drill-down state and really renders the panel | `harness_drilldown_coverage.py` (ledger line, state `shared`) |
+
+**THE PURE MODULE'S PROOF LANE IS THE PYTEST SUITE, DELIBERATELY, AND THAT IS A CHANGE OF HOUSE
+HABIT.** CLAUDE.md asks for a DB-free proof harness per pure module; §CORE-19 (2026-10-28) made
+unit + integration tests under CI the standard for all new work. Writing both would be two proof
+lanes for one module — the sibling derivation the index rules forbid, one lane of which would rot. So
+the ARITHMETIC is proved by the pytest suite (run by `tests.yml`, which cannot be skipped) and
+`harness_demand_projection.py` holds what pytest expresses badly: the AST/text locks that fail the
+build when a copy reappears or a caller un-wires.
+
+**FOUR OLDER COPIES OF THE DEVICE-DEPARTMENT VOCABULARY ARE REPORTED, NOT FIXED.**
+`account/coa.DEVICE_DEPTS`, `commcalc/gp_report.DEVICE_DEPTS`, `commcalc/calculator.DEVICE_DEPTS` and
+`commcalc/router._BOX_DEPTS` each re-list the same three department names, and all four sit on MONEY
+paths — the chart of accounts, the gross-profit report, the commission calculator and the box count
+every per-box payout rate divides by. Wiring them to the home would restate which lines those
+surfaces treat as a device, which is a change to booked figures and is the owner's call, not a
+refactor's. They are PINNED in `harness_demand_projection.py` §B3 as a shrink-only register: a FIFTH
+copy fails the build, and retiring one lowers the pin.
+
+### COMMCALC-49.9 Not money
+
+The report plans QUANTITIES TO BUY. It reads no payout, writes no ledger, feeds no P&L line, GP
+figure, commission or tax number, and its two writes are admin-gated declarations. CI tripwire:
+`harness_db_resilience.py` route pin re-taken 1810 → 1813 on the three counted, named routes.

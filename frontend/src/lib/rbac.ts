@@ -172,6 +172,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/month-focus', 'commissions'],
   ['/commcalc/accessory-target-plan', 'commissions'],
   ['/commcalc/product-mix', 'commissions'],
+  ['/commcalc/accessory-order-plan', 'commissions'],
   ['/commcalc/store-takeover', 'commissions'],
   ['/commcalc/device-line-reimbursement', 'commissions'],
   ['/commcalc/device-line-reimbursement?view=transferred', 'commissions'],
@@ -557,6 +558,7 @@ export const NAV: NavGroup[] = [
     // the customer, against accessory $ per box and port share, with the lagging-store action plan. A
     // management review surface and a coaching surface, so it is listed in BOTH groups as ONE href.
     { href: '/commcalc/product-mix', label: 'Product Mix & Ports', icon: '📱', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/accessory-order-plan', label: 'Accessory Order Plan', icon: '📦', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // STORE TAKEOVER EVALUATION (owner directive 2026-10-12, index §COMMCALC-03) — a P&L for a store
     // CLOCK VARIANCES (owner directive 2026-10-10, index §14z) — the one management surface that says
     // whether payroll can be run at all this week. Listed here as a tileOnly DUPLICATE of its StoreOps
@@ -817,6 +819,7 @@ export const NAV: NavGroup[] = [
     // The same page as the Management Overview row above — one href, so RBAC and ⌘K see one report.
     { href: '/commcalc/accessory-target-plan', label: 'Accessory Target Allocation', icon: '🎯', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/product-mix', label: 'Product Mix & Ports', icon: '📱', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/accessory-order-plan', label: 'Accessory Order Plan', icon: '📦', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/targets/accessories', label: 'Accessory Targets', icon: '🔖', module: 'targets', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/commcalc/targets/rep-map', label: 'Rep → Store Map', icon: '🗺️', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/targets/settings', label: 'Target Settings', icon: '🎚️', module: 'targets', scopes: ['all'], tileOnly: true },
@@ -1398,6 +1401,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/month-focus', 'comm'],
   ['/commcalc/accessory-target-plan', 'targets'],
   ['/commcalc/product-mix', 'sales'],
+  ['/commcalc/accessory-order-plan', 'sales'],
   ['/commcalc/store-takeover', 'comm'],
   ['/commcalc/device-line-reimbursement', 'assets'],
   ['/commcalc/device-line-reimbursement?view=transferred', 'assets'],

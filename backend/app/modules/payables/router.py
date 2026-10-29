@@ -13,6 +13,7 @@ from app.core.database import get_supabase
 from app.core.schemas import LaxModel
 from app.modules.asset.router import _norm_imei, _vip_invoice_map, _epay_payments_map
 from app.modules.commcalc import date_window
+from app.modules.commcalc import demand_projection
 from app.modules.payables import engine
 from app.modules.payables import ledger_status as _ls
 from app.modules.payables import owed_read as _owed
@@ -32,15 +33,18 @@ class UpsertPhoneMapIn(LaxModel):
     carrier_id: Any = None
     side: Any = None
 PAGE = 1000
-DEV_DEPTS = {"android - xp", "iphone - xp", "tablet - xp"}   # device box lines (mig 013 daily_sales_actuals)
+# WHICH SALE LINE IS A DEVICE, AND HOW MANY WILL SELL NEXT — both DEREFERENCED, never kept here
+# (§COMMCALC-49). This module and `asset/purchase_orders.py` each held their own copy of the two; the
+# copies are gone and `commcalc/demand_projection.py` is the one home. It imports nothing, so there is
+# no load-order hazard in reading it from either module. `harness_demand_projection.py` fails the
+# build if a second copy reappears or if this import is dropped.
+DEV_DEPTS = set(demand_projection.HOUSE_DEVICE_DEPARTMENTS)   # device box lines (mig 013 daily_sales_actuals)
 DEV_DEPTS_EXACT = ["Android - XP", "IPHONE - XP", "TABLET - XP"]   # exact-case for server-side .in_()
 
 
 def _is_device_line(dept, category):
-    """A physical-phone sale line. The custom 'for Metrics pro' report marks it category='CellPhone'
-    (department is blank on that feed); the older format used the 'Android/IPHONE/TABLET - XP' depts.
-    Accept EITHER so the forecast counts device units regardless of which report format is flowing."""
-    return (str(category or "").strip().lower() == "cellphone") or ((dept or "").strip().lower() in DEV_DEPTS)
+    """A physical-phone sale line — `demand_projection.is_device_line`, dereferenced."""
+    return demand_projection.is_device_line(dept, category)
 
 
 def sb():
@@ -335,10 +339,13 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
     mmap = _market_by_store(client, org_id)
     out = []
     for e in agg.values():
-        rate = e["units"] / lookback
-        e["avg_daily_velocity"] = round(rate, 2)
-        e["projected_demand"] = int(round(rate * horizon))
-        e["recommend_order"] = max(0, e["projected_demand"] - e["on_hand"])
+        # THE ONE PROJECTION (§COMMCALC-49). Byte-identical to the four lines this loop used to
+        # carry: velocity over the window's OWN day count, banker's rounding, and an order that is
+        # never negative. `/asset/po/recommendations` reads the same home.
+        _proj = demand_projection.projection(e["units"], lookback, horizon)
+        e["avg_daily_velocity"] = _proj["velocity"]
+        e["projected_demand"] = _proj["projected"]
+        e["recommend_order"] = demand_projection.recommend_qty(_proj["projected"], e["on_hand"])
         e["market"] = _market_of(mmap, e.get("store"))
         # THE KEY THE STORE FILTER COMPARES ON (owner report 2026-10-22). The row keeps its own
         # spelling for display; `store_key` is what a picked option is matched against, so a store
