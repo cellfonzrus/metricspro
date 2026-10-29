@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
+import DateField from '@/components/DateField'
 import { api, parseLocalDate } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
@@ -230,12 +231,12 @@ export default function TimeOffPage() {
             </div>
             <div>
               <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 4 }}>Start Date</label>
-              <input className="input" type="date" value={form.start_date}
+              <DateField className="input" value={form.start_date}
                 onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} />
             </div>
             <div>
               <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 4 }}>End Date</label>
-              <input className="input" type="date" value={form.end_date}
+              <DateField className="input" value={form.end_date}
                 onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} />
             </div>
             <div style={{ gridColumn: '1 / -1' }}>
@@ -282,12 +283,12 @@ export default function TimeOffPage() {
               </div>
               <div>
                 <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 4 }}>Start Date</label>
-                <input className="input" type="date" value={editForm.start_date}
+                <DateField className="input" value={editForm.start_date}
                   onChange={e => setEditForm(f => ({ ...f, start_date: e.target.value }))} />
               </div>
               <div>
                 <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 4 }}>End Date</label>
-                <input className="input" type="date" value={editForm.end_date}
+                <DateField className="input" value={editForm.end_date}
                   onChange={e => setEditForm(f => ({ ...f, end_date: e.target.value }))} />
               </div>
               <div style={{ gridColumn: '1 / -1' }}>

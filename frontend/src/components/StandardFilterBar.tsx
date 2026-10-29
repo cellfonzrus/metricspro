@@ -18,6 +18,7 @@
 // make sense for a surface via `show`; appending module-specific filters via `right` is allowed — the core
 // set is never substituted (§3d).
 import { useEffect, useMemo, useState } from 'react'
+import DateField from '@/components/DateField'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 import MarketStorePicker from '@/components/MarketStorePicker'
 import { apiCached, LOOKUP } from '@/lib/cache'
@@ -108,8 +109,14 @@ export default function StandardFilterBar({
       )}
       {s.period && periodMode === 'range' && (
         <>
-          <label style={lbl}>From <input type="date" style={sel} value={value.period || ''} onChange={e => set({ period: e.target.value })} /></label>
-          <label style={lbl}>To <input type="date" style={sel} value={value.periodTo || ''} onChange={e => set({ periodTo: e.target.value })} /></label>
+          {/* THE CALENDAR OPENS ON A CLICK (owner ask 2026-10-29: *"the calendor should open up instead
+              of enetring it manuallu"*). <DateField> is the one home for that; a bare `type="date"`
+              opens its calendar only from the glyph at the field's right edge, so a click anywhere
+              else put a caret in mm/dd/yyyy and the date got typed digit by digit. Fixing it HERE
+              fixes it for every range-filtered report at once — Hours Approval among them — rather
+              than for the one screen that happened to surface it. */}
+          <label style={lbl}>From <DateField style={sel} value={value.period || ''} onChange={e => set({ period: e.target.value })} aria-label="From date" /></label>
+          <label style={lbl}>To <DateField style={sel} value={value.periodTo || ''} onChange={e => set({ periodTo: e.target.value })} aria-label="To date" /></label>
         </>
       )}
       {/* Cascade mode wins when a roster-with-market is supplied — market first, then that market's

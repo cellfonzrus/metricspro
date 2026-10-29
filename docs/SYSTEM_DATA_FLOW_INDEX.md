@@ -134,6 +134,7 @@ Primary code homes:
 | CORE-20 | **A request path is not evidence of which route it reached** | "Act as a security agent and find the vulnerability in the code. Which paths does the platform let through without a login, what declares that list, and what stops a route the list never meant to name from satisfying it?" |
 | CLOSING-02 | **A declared category names what in the sales feed should agree with it** | "Add a field in as no of edge for total and no of financicing in thr daily closing for all employees to declare along with the $amount of edge and acima as they get paid for each transcoding they do, this would then be checked with our system if our system is capturing the sales as declared by the sales rep." Which half of that already existed as config, what had no home at all, and what stops the next category from being checked against a number nobody measured? |
 | CORE-21 | **An in-process cache keyed by something a client can mint is bounded by construction** | "Simulate a thousand users and see what breaks. What does the platform keep in each worker's memory while they are signed in, what decides when an entry leaves, and what fails the build the day a new cache ships without a bound?" |
+| CORE-22 | **One component decides how a date is picked, and the calendar opens on a click** | "for payroll hours approval the calendor should open up instead of enetring it manuallu" — said of a field that already HAD a calendar, reachable only from a glyph a few pixels wide at its right-hand edge, so a click anywhere else put a caret in mm/dd/yyyy and the date got typed digit by digit, on all 168 of them. When is a control's default behaviour the defect, and what stops the 169th from bringing it back? |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -26137,6 +26138,7 @@ status word rather than a blank that reads as nil.
 | CORE-19 | core |
 | CORE-20 | core |
 | CORE-21 | core |
+| CORE-22 | core |
 | COMMCALC-40 | commcalc |
 | COMMCALC-41 | commcalc |
 | COMMCALC-42 | commcalc |
@@ -40267,3 +40269,81 @@ Same rule, other subjects: §6l (`auto_calc` — the commission calculation), §
 which part of a status survives), §COMMCALC-40 (the status word that was a literal), §COMMCALC-16
 (the diagnostic the retries now act on). Neighbours: §19.21 (a status reporting what was pulled
 rather than what was written), mig 244 / `portal_backoff` (the cooldown a portal imposes).
+
+---
+
+## §CORE-22. ONE COMPONENT DECIDES HOW A DATE IS PICKED, AND THE CALENDAR OPENS ON A CLICK (owner ask 2026-10-29)
+
+**What he said**, of the Hours Approval From/To pair:
+
+> *"for payroll hours approval the calendor should open up instead of enetring it manuallu"*
+
+**The field already had a calendar.** `<input type="date">` carries the native one — but in Chromium it
+opens only from the glyph at the field's right-hand edge, a target a few pixels wide. A click anywhere
+else in the field lands a caret in the `mm/dd/yyyy` segments, and the date gets typed digit by digit.
+Nothing was missing: **typing was the control's default behaviour**, and it was the default on every
+one of the **168** date inputs across **89** files in `frontend/src` when this was measured
+(2026-10-29).
+
+### CORE-22.1 THE CLASS, and why the instance was the wrong place to fix it
+
+The instance is two fields on one payroll screen. The class is *how this product asks for a date* — and
+a per-screen fix is the patchwork the house rules forbid: it would leave the same complaint waiting on
+the other 87 files, to be reported again, screen by screen.
+
+So the fix is a component. `frontend/src/components/DateField.tsx` is **THE one home** for "how does a
+person pick a date here". It is a drop-in for the native input — same `type="date"`, same ISO
+`YYYY-MM-DD` value, every other prop forwarded untouched — that calls `showPicker()` on click and on
+focus, so the calendar opens over the whole field instead of one glyph.
+
+**Wiring the two SHARED shells is what makes it a design fix rather than a screen fix.**
+`StandardFilterBar` (RULE FIVE, §3d — the universal report filter bar) and `ReportShell` hold the
+From/To pair that every range-filtered report renders. Converting those two files gives the calendar to
+every such report at once, Hours Approval (§STOREOPS-01) among them, without touching those reports at
+all. The payroll and workforce family the ask came from is converted outright: Time Clock, Payroll Tax,
+Hours Budget, Shift Extensions, Time Off, Salary Advances.
+
+### CORE-22.2 TYPING IS NEVER REMOVED, and the three ways `showPicker` is guarded
+
+The picker is an **addition**. No `readOnly`, no `preventDefault` on the click path: a keyboard user
+tabbing a form, a screen-reader user who is never shown a calendar at all, and anyone who finds four
+digits faster than paging a calendar back to June all behave exactly as before. Trading his problem for
+theirs is not a fix.
+
+`showPicker()` is young API (Chrome 99, Safari 16, Firefox 101) and it **throws** rather than no-ops in
+three real cases: the engine does not implement it; the call is not inside a user gesture; the field is
+hidden or disabled. An exception escaping a React event handler unmounts the tree — an older browser
+would trade a blank payroll screen for a convenience. Hence an existence check, a `try/catch`, and
+**nothing in the catch**: the glyph and typing both still work, so there is no degraded state to report
+and nothing a user could act on. The component reads `el.readOnly` / `el.disabled` to decide not to pop
+a calendar, which is the opposite of setting them.
+
+### CORE-22.3 THE RATCHET — the 169th bare date input fails the build
+
+A one-home that nothing defends un-wires itself; it has happened three times here (§19.18). So
+`frontend/prove_date_field.mjs` (33 checks) proves the component's contract **and** scans the tree:
+any `<input type="date">` outside `frontend/date_field_pending.txt` **fails the build**, and that
+register may only **SHRINK** — a stale entry (a file since converted) fails too, in the other
+direction. Both directions are proved by planting the defect: a new bare input in the Hours Approval
+page is caught and named, and a converted file left on the register is caught and named.
+
+**Why a ratchet and not a hard rule.** 168 inputs in one change would put a blind diff across half the
+product, and that is not a decision a lock should make on the owner's behalf. 81 files / 152 inputs stay
+on the register and **behave exactly as they did yesterday** — stated plainly rather than presented as
+done. Converting one is a line deleted from the register, never a line added.
+
+The proof also pins the drop-in contract the way a pass-through component actually expresses it: what
+`DateField` destructures by name is exactly what it intercepts, so the check asserts that the intercept
+list is `onClick, onFocus` and nothing else, that each calls the caller's own handler first, and that
+`value` / `onChange` / `style` / `min` / `max` / `required` / `disabled` are absent from it and ride the
+spread straight to the input.
+
+**Duplicate check (index rules).** Searched before building: no `showPicker` call existed anywhere in
+`frontend/src`, and no date-field, calendar or period component existed under `frontend/src/components`
+— so this creates a one-home where there was none rather than a sibling to one. No new endpoint, no new
+table, **no migration**, no backend change, and no figure anywhere moves: the value this control
+produces is the same ISO string it produced before.
+
+Cross-ref §STOREOPS-01 (the Hours Approval board this was asked from), §3d / RULE FIVE (the shared
+filter bar), §19.18 (a mechanism written and its callers left unwired — the failure this ratchet
+exists to prevent).

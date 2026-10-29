@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import DateField from '@/components/DateField'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import { currentPeriodFromSettingsResponse, stepPeriod, type PayPeriodSettings } from '@/lib/pay-period'
@@ -135,8 +136,8 @@ export default function PayrollTaxPage() {
       </div>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        <label style={{ fontSize: 12 }}>From <input type="date" style={sel} value={start} onChange={e => setStart(e.target.value)} /></label>
-        <label style={{ fontSize: 12 }}>To <input type="date" style={sel} value={end} onChange={e => setEnd(e.target.value)} /></label>
+        <label style={{ fontSize: 12 }}>From <DateField style={sel} value={start} onChange={e => setStart(e.target.value)} /></label>
+        <label style={{ fontSize: 12 }}>To <DateField style={sel} value={end} onChange={e => setEnd(e.target.value)} /></label>
         {/* Same period steppers as the Payroll report — one shared resolver (@/lib/pay-period). */}
         <button className="btn" style={{ fontSize: 12, padding: '4px 9px' }} title="Previous pay period"
           onClick={() => { const p = stepPeriod({ start, end }, ppSettings, -1); setStart(p.start); setEnd(p.end) }}>‹ Prev period</button>
