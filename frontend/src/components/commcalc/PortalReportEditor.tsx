@@ -1,5 +1,5 @@
 'use client'
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { api } from '@/lib/client'
 import { useConnectors } from '@/lib/connectors'
 
@@ -29,6 +29,14 @@ type Loaded = {
   source_id: string; label: string; processor: string; portal_url: string
   reports: Row[]; param_kinds: string[]; date_tokens: string[]; exports: string[]
 }
+type Saved = { reports: Row[]; count: number }
+/** What the §COMMCALC-39 capture answers with: suggested rows, or a stated failure. */
+type Capture = { ok?: boolean; error?: string; reports?: { key: string; params?: Param[] }[] }
+
+/** The message off a thrown value, without widening it to `any` first. */
+function why(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
 
 const BOX: React.CSSProperties = {
   width: '100%', padding: '4px 6px', fontSize: 12, border: '1px solid var(--border)',
@@ -47,14 +55,16 @@ export default function PortalReportEditor(
   const [err, setErr] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)   // the key whose filters are expanded
 
-  const load = useCallback(async () => {
-    setErr(null)
-    try {
-      const r: any = await api(`/api/v1/commcalc/data-sources/${sourceId}/reports`)
-      setMeta(r); setRows(r.reports || [])
-    } catch (e: any) { setErr(e?.message || String(e)) }
+  // Every state write happens in the fetch's own CALLBACK, never in the effect body: a setState run
+  // synchronously inside an effect cascades a render for nothing. `alive` drops a reply that arrives
+  // after the modal has closed, so a slow read cannot write into an unmounted editor.
+  useEffect(() => {
+    let alive = true
+    api(`/api/v1/commcalc/data-sources/${sourceId}/reports`)
+      .then(r => { if (!alive) return; const d = r as Loaded; setErr(null); setMeta(d); setRows(d.reports || []) })
+      .catch((e: unknown) => { if (alive) setErr(why(e)) })
+    return () => { alive = false }
   }, [sourceId])
-  useEffect(() => { load() }, [load])
 
   function patch(i: number, next: Partial<Row>) {
     setRows(rs => rs.map((r, k) => (k === i ? { ...r, ...next } : r)))
@@ -67,11 +77,11 @@ export default function PortalReportEditor(
   async function save() {
     setBusy('save'); setErr(null); setNote(null)
     try {
-      const r: any = await api(`/api/v1/commcalc/data-sources/${sourceId}/reports`,
-        { method: 'PUT', body: JSON.stringify({ reports: rows }) })
+      const r = await api(`/api/v1/commcalc/data-sources/${sourceId}/reports`,
+        { method: 'PUT', body: JSON.stringify({ reports: rows }) }) as Saved
       setRows(r.reports || [])
       setNote(`Saved — this login now pulls ${r.count} report${r.count === 1 ? '' : 's'}.`)
-    } catch (e: any) { setErr(e?.message || String(e)) } finally { setBusy(null) }
+    } catch (e: unknown) { setErr(why(e)) } finally { setBusy(null) }
   }
 
   // The capture runs on the live session, so it needs one to be open and signed in. Its answer is a
@@ -79,22 +89,22 @@ export default function PortalReportEditor(
   async function readPage() {
     setBusy('read'); setErr(null); setNote(null)
     try {
-      const r: any = await api(`/api/v1/commcalc/data-sources/${sourceId}/live-login/calibrate`,
-        { method: 'POST', body: '{}' })
+      const r = await api(`/api/v1/commcalc/data-sources/${sourceId}/live-login/calibrate`,
+        { method: 'POST', body: '{}' }) as Capture
       if (r?.ok === false) { setErr(r.error || 'The report pages could not be read.'); return }
-      const suggested: any[] = r?.reports || []
+      const suggested = r?.reports || []
       setRows(rs => rs.map(row => {
-        const s = suggested.find((x: any) => x.key === row.key)
+        const s = suggested.find(x => x.key === row.key)
         if (!s) return row
         const have = new Set(row.params.map(p => p.selector))
-        const add = (s.params || []).filter((p: Param) => p.selector && !have.has(p.selector))
+        const add = (s.params || []).filter(p => p.selector && !have.has(p.selector))
         return add.length ? { ...row, params: [...row.params, ...add] } : row
       }))
-      const named = suggested.map((s: any) => s.key).join(', ')
+      const named = suggested.map(s => s.key).join(', ')
       setNote(suggested.length
         ? `Read ${suggested.length} page${suggested.length === 1 ? '' : 's'} (${named}). Anything new is added below — nothing you edited was replaced. Check it, then Save.`
         : 'The live session answered, but no declared report page could be reached. Check the menu words below.')
-    } catch (e: any) { setErr(e?.message || String(e)) } finally { setBusy(null) }
+    } catch (e: unknown) { setErr(why(e)) } finally { setBusy(null) }
   }
 
   // the registry's own name for this connector — blank until the registry has loaded, and blank for a
