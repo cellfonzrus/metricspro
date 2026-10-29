@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback, useMemo } from 'react'
+import DateField from '@/components/DateField'
 import { api } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -121,7 +122,7 @@ export default function HoursBudgetPage() {
       <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 14px' }}>
         Each store&apos;s weekly labor-hours budget. Scheduling past it is blocked with an alert; a manager can
         request District Manager approval to exceed it for a given week. Week starting <b>{weekStart || '—'}</b>.
-        <input type="date" value={week} onChange={e => setWeek(e.target.value)} style={{ ...inp, width: 150, marginLeft: 10 }} />
+        <DateField value={week} onChange={e => setWeek(e.target.value)} style={{ ...inp, width: 150, marginLeft: 10 }} />
       </p>
       {msg && <div style={{ fontSize: 13, marginBottom: 12 }}>{msg}</div>}
 

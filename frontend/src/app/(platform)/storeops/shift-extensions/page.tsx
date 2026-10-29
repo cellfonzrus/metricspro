@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback, useMemo } from 'react'
+import DateField from '@/components/DateField'
 import { api, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
@@ -134,7 +135,7 @@ export default function ShiftExtensionsPage() {
               {stores.filter((s: any) => s.store_code && s.is_active !== false).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code}{s.address ? ` — ${s.address}` : ''}</option>)}
             </select></label>
           <label><span style={lbl}>Date</span>
-            <input type="date" style={inp} value={form.shift_date} onChange={e => setForm({ ...form, shift_date: e.target.value })} /></label>
+            <DateField style={inp} value={form.shift_date} onChange={e => setForm({ ...form, shift_date: e.target.value })} /></label>
           <label><span style={lbl}>Extend to (end time)</span>
             <input type="time" style={inp} value={form.requested_end} onChange={e => setForm({ ...form, requested_end: e.target.value })} /></label>
           <label style={{ gridColumn: '1 / -1' }}><span style={lbl}>Reason</span>

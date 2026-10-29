@@ -8,6 +8,7 @@
 //     both operating on the CURRENTLY FILTERED rows.
 // Filtering/grouping is client-side over the rows the page already loaded — no backend change to adopt.
 import { Fragment, useCallback, useMemo, useState, useEffect } from 'react'
+import DateField from '@/components/DateField'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
@@ -356,8 +357,8 @@ export function ReportShell({ title, subtitle, notice, noticeTone, filename, col
         )}
         {dateCol && (
           <span style={{ fontSize: 12, color: 'var(--text2)', display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-            📅<input type="date" style={sel} value={dFrom} onChange={e => setDFrom(e.target.value)} title="from" />
-            →<input type="date" style={sel} value={dTo} onChange={e => setDTo(e.target.value)} title="to" />
+            📅<DateField style={sel} value={dFrom} onChange={e => setDFrom(e.target.value)} title="from" />
+            →<DateField style={sel} value={dTo} onChange={e => setDTo(e.target.value)} title="to" />
           </span>
         )}
         {/* Group by */}

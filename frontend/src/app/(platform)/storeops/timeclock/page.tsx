@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import DateField from '@/components/DateField'
 import { useRouter } from 'next/navigation'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
@@ -357,7 +358,7 @@ export default function TimeClockAdminPage() {
             <option value="">Employee…</option>
             {employees.map(e => <option key={e.employee_id} value={e.employee_id}>{e.name}</option>)}
           </select>
-          <input type="date" style={sel} value={mh.work_date} onChange={e => setMh({ ...mh, work_date: e.target.value })} />
+          <DateField style={sel} value={mh.work_date} onChange={e => setMh({ ...mh, work_date: e.target.value })} />
           <input style={{ ...sel, width: 90 }} placeholder="hours (±)" value={mh.hours} onChange={e => setMh({ ...mh, hours: e.target.value })} />
           <input style={{ ...sel, width: 240 }} placeholder="reason (required)" value={mh.reason} onChange={e => setMh({ ...mh, reason: e.target.value })} />
           <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={addManual}>+ Add</button>

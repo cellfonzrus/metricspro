@@ -11,6 +11,7 @@
 // export, and (via its period) the Additional Payroll preview. RULE FOUR (§3c): both tables export
 // Excel/PDF/email/WhatsApp. RULE THREE (§3b): employee/store pickers are EntityPicker, never free text.
 import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
+import DateField from '@/components/DateField'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import EntityPicker from '@/components/EntityPicker'
@@ -262,7 +263,7 @@ export default function SalaryAdvancesPage() {
             <input style={sel} type="number" min="0.01" step="0.01" value={fAmount} onChange={e => setFAmount(e.target.value)} placeholder="0.00" />
           </label>
           <label style={{ fontSize: 12 }}>Paid date<br />
-            <input style={sel} type="date" value={fDate} onChange={e => setFDate(e.target.value)} />
+            <DateField style={sel} value={fDate} onChange={e => setFDate(e.target.value)} />
           </label>
           <label style={{ fontSize: 12 }}>Store (envelope)<br />
             <EntityPicker options={storeOptions} value={fStore} onChange={setFStore} placeholder="Store…" width={180} />

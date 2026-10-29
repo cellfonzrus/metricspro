@@ -1150,6 +1150,15 @@ on:
       - "backend/harness_payroll_approval_save.py"
       - "backend/app/modules/storeops/payroll_approval.py"
       - "frontend/prove_hours_approval_preview.mjs"
+      # index §CORE-22 — ONE component decides how a date is picked. The guard names itself (same
+      # §13e reason as above) plus its register, the one home, and the two SHARED shells whose
+      # From/To pair every range-filtered report renders: a change to any of them must re-run it.
+      # It also scans all of frontend/src, so the page globs below already reach it on most PRs.
+      - "frontend/prove_date_field.mjs"
+      - "frontend/date_field_pending.txt"
+      - "frontend/src/components/DateField.tsx"
+      - "frontend/src/components/StandardFilterBar.tsx"
+      - "frontend/src/components/ReportShell.tsx"
       - "frontend/src/lib/hours-approval-preview.ts"
       - "frontend/src/app/(platform)/storeops/payroll/approvals/page.tsx"
       - "frontend/src/lib/setup-gate.ts"
@@ -2187,6 +2196,9 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
+      - name: Prove one component decides how a date is picked (the calendar opens on a click, typing is never removed, showPicker is guarded three ways, and the 169th bare date input fails the build — index §CORE-22)
+        working-directory: frontend
+        run: node prove_date_field.mjs | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the tile-snapshot proof (the real tile-snapshot.ts; the ± 0% regression; negative controls)
         working-directory: frontend
         run: node prove_tile_snapshot.mjs | tee -a "$GITHUB_STEP_SUMMARY"

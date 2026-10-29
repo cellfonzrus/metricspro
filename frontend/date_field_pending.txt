@@ -1,0 +1,105 @@
+# DATE FIELDS NOT YET ON THE ONE HOME — the debt list, and it may only SHRINK.
+#
+# Owner ask 2026-10-29: *"for payroll hours approval the calendor should open up instead of enetring
+# it manuallu"*. A bare `<input type="date">` opens its calendar only from the small glyph at the
+# field's right-hand edge; a click anywhere else lands a caret in mm/dd/yyyy and the date gets typed.
+# `src/components/DateField.tsx` is the one home that fixes that, and `prove_date_field.mjs` is the
+# ratchet.
+#
+# WHY A RATCHET AND NOT A HARD RULE. There were 168 date inputs across 89 files when this shipped.
+# Converting every one in a single change would put a blind diff across half the product, and that is
+# not a decision a lock should make on the owner's behalf. So the rule is the one that stops the
+# bleeding: the two SHARED shells are converted (StandardFilterBar and ReportShell), which is what
+# gives every range-filtered report the calendar — Hours Approval among them — plus the payroll and
+# workforce family the ask came from. Everything still listed below behaves as it did yesterday.
+#
+# THE RULE: a NEW bare date input fails the build. This file may only get SHORTER.
+#   · converting a file -> DELETE its line here (the guard fails on a stale entry too)
+#   · a new date field  -> use <DateField>, and add NOTHING here
+#
+# Each line is a bare path relative to frontend/, and nothing else. The guard checks PRESENCE, so a
+# file holding three date inputs leaves this list only when all three are converted.
+
+# 81 files, 152 bare date inputs, as measured 2026-10-29.
+
+src/app/(platform)/accounts/device-payable/page.tsx
+src/app/(platform)/admin/access-log/page.tsx
+src/app/(platform)/admin/billing/page.tsx
+src/app/(platform)/admin/fix-requests/page.tsx
+src/app/(platform)/admin/support/failures/page.tsx
+src/app/(platform)/admin/tenant-settings/page.tsx
+src/app/(platform)/admin/whats-new/page.tsx
+src/app/(platform)/closing/accessory-recon/page.tsx
+src/app/(platform)/closing/bank-deposit/page.tsx
+src/app/(platform)/closing/billpay-pickup/page.tsx
+src/app/(platform)/closing/cash-position/page.tsx
+src/app/(platform)/closing/cash-recon-management/page.tsx
+src/app/(platform)/closing/declared-vs-captured/page.tsx
+src/app/(platform)/closing/deposit-recon/page.tsx
+src/app/(platform)/closing/duplicates/page.tsx
+src/app/(platform)/closing/envelope-config/page.tsx
+src/app/(platform)/closing/envelope-payout/page.tsx
+src/app/(platform)/closing/epay-recon/page.tsx
+src/app/(platform)/closing/expenses-report/page.tsx
+src/app/(platform)/closing/management/page.tsx
+src/app/(platform)/closing/pickup/page.tsx
+src/app/(platform)/closing/store-cash-on-hand/page.tsx
+src/app/(platform)/closing/tender-recon/page.tsx
+src/app/(platform)/commcalc/accessory-flags/page.tsx
+src/app/(platform)/commcalc/agency/page.tsx
+src/app/(platform)/commcalc/asset/aging/page.tsx
+src/app/(platform)/commcalc/asset/borrowed/page.tsx
+src/app/(platform)/commcalc/asset/charges/[group]/page.tsx
+src/app/(platform)/commcalc/asset/dashboard/page.tsx
+src/app/(platform)/commcalc/asset/inventory-recon/page.tsx
+src/app/(platform)/commcalc/asset/invoice-due/page.tsx
+src/app/(platform)/commcalc/asset/lending/page.tsx
+src/app/(platform)/commcalc/asset/on-inventory/page.tsx
+src/app/(platform)/commcalc/asset/oninv-3way-recon/page.tsx
+src/app/(platform)/commcalc/asset/page.tsx
+src/app/(platform)/commcalc/asset/purchase-orders/page.tsx
+src/app/(platform)/commcalc/asset/purchase-orders/receiving/page.tsx
+src/app/(platform)/commcalc/atu-opportunity/page.tsx
+src/app/(platform)/commcalc/daily-commission/page.tsx
+src/app/(platform)/commcalc/distributors/page.tsx
+src/app/(platform)/commcalc/epay-fee-recon/page.tsx
+src/app/(platform)/commcalc/ma-overview-recon/page.tsx
+src/app/(platform)/commcalc/ma-upload/page.tsx
+src/app/(platform)/commcalc/month-focus/page.tsx
+src/app/(platform)/commcalc/plan-installments/page.tsx
+src/app/(platform)/commcalc/processor-ledger/page.tsx
+src/app/(platform)/commcalc/sales-recon/page.tsx
+src/app/(platform)/commcalc/settings/page.tsx
+src/app/(platform)/commcalc/store-takeover/page.tsx
+src/app/(platform)/commcalc/tax-collected/page.tsx
+src/app/(platform)/commcalc/upload/page.tsx
+src/app/(platform)/commcalc/upload/wizard/page.tsx
+src/app/(platform)/crm/leads/new/page.tsx
+src/app/(platform)/crm/leads/page.tsx
+src/app/(platform)/crm/page.tsx
+src/app/(platform)/crm/reports/page.tsx
+src/app/(platform)/hr/compliance/page.tsx
+src/app/(platform)/hr/letters/send/page.tsx
+src/app/(platform)/hr/onboarding/[employeeId]/page.tsx
+src/app/(platform)/hr/page.tsx
+src/app/(platform)/hr/people/page.tsx
+src/app/(platform)/onboarding/intake/stage2.tsx
+src/app/(platform)/pos/activations/page.tsx
+src/app/(platform)/pos/customers/page.tsx
+src/app/(platform)/pos/inventory/page.tsx
+src/app/(platform)/pos/receipts/page.tsx
+src/app/(platform)/pos/reports/page.tsx
+src/app/(platform)/pos/sales/page.tsx
+src/app/(platform)/referral/list/[id]/page.tsx
+src/app/(platform)/referral/new/page.tsx
+src/app/(platform)/storeops/reviews/page.tsx
+src/app/(platform)/storeops/setup/insurance/page.tsx
+src/app/(platform)/storeops/setup/stores/LeasePanel.tsx
+src/app/(platform)/storeops/setup/stores/page.tsx
+src/app/(platform)/storeops/visits/[id]/VisitActions.tsx
+src/app/(platform)/storeops/visits/new/page.tsx
+src/app/(platform)/vision/activity/page.tsx
+src/app/(platform)/vision/behavior/page.tsx
+src/app/(platform)/vision/heatmap/page.tsx
+src/app/onboard/[token]/page.tsx
+src/components/ClosingSubmitForm.tsx
