@@ -240,7 +240,17 @@ def process_asset_ledger_bytes(file_bytes: bytes, org_id: str) -> dict:
         _log_asset_pipeline_issue(
             client, org_id, "asset_undercharge_flag_sync_failed",
             f"Undercharge flag sync failed on the last upload: {_e}")
-    return {"rows_imported": len(rows), "swap_mode": swap_mode}
+    # THE POST-LANDING HOOK (§6l / §COMMCALC-41). `asset_ledger` is the device payable ledger's main input,
+    # and until 2026-10-27 nothing downstream of this landing was told: measured that day, the payable ledger
+    # had last been built 2026-09-04 while this feed was four days old, so every "what is owed" surface read
+    # empty. The hook is the ONE place that decides what a landing makes stale; this call states no build and
+    # no period of its own, and never raises into the upload. There is no month here — the Asset Lending file
+    # is a point-in-time snapshot of the whole shelf — so `periods` is empty by design and only the org-scoped
+    # builds are queued.
+    from app.modules.commcalc import auto_calc as _auto
+    auto = _auto.landed(client, org_id, table="asset_ledger", periods=[], source="asset_ledger_upload",
+                        rows=len(rows))
+    return {"rows_imported": len(rows), "swap_mode": swap_mode, "auto_calc": auto}
 
 
 @router.post("/upload")

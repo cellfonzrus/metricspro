@@ -90,6 +90,8 @@ import asyncio
 import contextvars
 from urllib.parse import parse_qs, urlencode
 
+from app.core import ttl_cache as _ttl_cache   # index §CORE-19 — THE bounded in-process TTL cache
+
 # Exact full paths that are public (matched literally, no prefix semantics).
 _PUBLIC_EXACT = frozenset({
     "/health",                            # Railway / uptime health probe (no auth by design)
@@ -202,12 +204,87 @@ _PUBLIC_PREFIXES = (
 _RUN_DUE_SUFFIX = "/run-due"
 _PROMOTE_DUE_SUFFIX = "/promote-due"
 
+# ── WHICH PATHS ARE SELF-AUTHENTICATING SWEEPS — DERIVED, NEVER GUESSED (security review 2026-10-28) ─
+# The two suffixes above used to be tested against the REQUEST PATH. That reads the wrong thing: a path
+# is not evidence of which ROUTE it reached. 315 routes in this app end in a path PARAMETER, so asking
+# for one of them with the literal value `run-due` produced a path ending in "/run-due" and the
+# allowlist fired — skipping BOTH the auth requirement and the org_id rewrite:
+#
+#     PUT  /api/v1/commcalc/config/run-due?org_id=<any tenant>      (no token at all)
+#     POST /api/v1/commcalc/calculate/run-due?org_id=<any tenant>   (no token at all)
+#
+# `save_config` and most of the other 314 carry no permission gate of their own — they rely on this
+# middleware — so that was an unauthenticated write into, and an unauthenticated recalculation of,
+# any tenant's data.
+#
+# THE FACT ALREADY HAS A HOME: the app's own route table declares exactly which paths are sweeps. A
+# LITERAL (parameter-free) template ending in one of the suffixes is a cron entrypoint; a
+# parameterised template can never become one, whatever is typed into it. So this dereferences
+# `path_redact.route_templates` — the same walk that module already uses to derive "which URL
+# segments are secrets" — rather than keeping a second list that would drift the day a sweep is added.
+#
+# NEVER A LOCKOUT. An empty derivation means "the route table could not be read", not "there are no
+# sweeps", so `_is_public` falls back to the old suffix test there — 37 cron jobs must not 401 because
+# a FastAPI internal changed shape. Break-glass CRON_PATH_LITERAL_ONLY=0 restores the pre-fix
+# behaviour exactly, with one env change and no code rollback (same posture as REQUIRE_AUTH).
+# Locked by harness_public_allowlist_lock.py.
+# The derivation is memoised for ONE app, not in a dict keyed by app. A process serves a single
+# FastAPI app whose route table is fixed once the app is built, so a dict here would be a map that
+# only ever holds one entry and can only ever grow — which is the shape the bounded-cache
+# lock exists to retire. Two module-level slots say the same thing in O(1), with nothing to evict and
+# no TTL to forget. `_FALLBACK_CRON_PATHS` keeps the most recent SUCCESSFUL derivation so a later
+# failure to read the route table falls back to a real answer instead of an empty one; it is derived,
+# never hardcoded.
+#
+# The one thing the dict did that this does not: hold answers for SEVERAL apps at once. If two app
+# objects alternated, each call would recompute instead of hitting. That is a trade made on purpose
+# — a process serves one app, and the test suites that build a second one do so once — and the cost
+# of being wrong is a recomputation, where the cost of the dict being wrong was unbounded memory.
+_CRON_PATHS_FOR_APP_ID = None        # id() of the app the memo below was derived from
+_CRON_PATHS_MEMO = None              # that app's literal cron paths
+_FALLBACK_CRON_PATHS = None          # most recent successful derivation, from any app
+
+
+def _cron_literal_only() -> bool:
+    return os.environ.get("CRON_PATH_LITERAL_ONLY", "1").lower() not in ("0", "false", "no", "off")
+
+
+def cron_paths_for_app(app):
+    """The LITERAL cron entrypoints this app declares, as a frozenset of full paths. Memoised.
+
+    Empty frozenset when the route table cannot be read — `_is_public` reads that as "fall back",
+    never as "there are no sweeps". Never raises (it runs on every request)."""
+    global _FALLBACK_CRON_PATHS, _CRON_PATHS_FOR_APP_ID, _CRON_PATHS_MEMO
+    try:
+        if app is None:
+            return _FALLBACK_CRON_PATHS or frozenset()
+        key = id(app)
+        hit = _CRON_PATHS_MEMO if key == _CRON_PATHS_FOR_APP_ID else None
+        if hit is None:
+            from app.core.path_redact import route_templates
+            hit = frozenset(t for t in route_templates(app)
+                            if isinstance(t, str) and "{" not in t
+                            and (t.endswith(_RUN_DUE_SUFFIX) or t.endswith(_PROMOTE_DUE_SUFFIX)))
+            _CRON_PATHS_FOR_APP_ID, _CRON_PATHS_MEMO = key, hit
+            if hit:
+                _FALLBACK_CRON_PATHS = hit
+        return hit
+    except Exception:
+        return _FALLBACK_CRON_PATHS or frozenset()
+
 # token -> (identity, expiry_epoch), positive results only. identity is the 4-tuple returned by
 # _resolve_identity: (authenticated, super_admin, member_orgs, default_org). Caching the whole
 # membership SET (not a single org) lets a login switch active tenants — a new x-active-org header on
 # the SAME token — with no re-auth and no cache bust; the per-request header pick is pure/cheap.
-_cache: dict = {}
+#
+# BOUNDED BY CONSTRUCTION (index §CORE-19, load test 2026-10-28). This was a bare dict: entries
+# expired but were never deleted and there was no cap, so it grew for the life of the worker. The
+# key is the TOKEN, which the auth service re-mints on every refresh, so the key space is not
+# bounded by the number of users — 1,000 logins refreshing through a day is tens of thousands of
+# dead entries per worker, held until the next deploy. `TTLCache` is the one home for that
+# bookkeeping; the TTL and the semantics below are unchanged. `IDENTITY_CACHE_MAX` tunes the cap.
 _TTL = 60.0
+_cache = _ttl_cache.TTLCache(ttl=_TTL, cap=_ttl_cache.cap_from_env("IDENTITY_CACHE_MAX", 8192))
 
 # Header by which the client declares which of its tenants it is acting as. Client-supplied and
 # therefore UNTRUSTED — always verified against the login's membership set before it is honored.
@@ -237,11 +314,12 @@ def _raw_header(scope, name: str) -> str:
 
 
 def _client_ip_from(scope, headers) -> str:
-    fwd = (headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    if fwd:
-        return fwd[:64]
-    cl = scope.get("client") or ()
-    return (str(cl[0]) if cl else "")[:64]
+    """This request's client address. DEREFERENCES `app.core.client_ip` — the ONE home for the
+    question (security review 2026-10-28). It used to read the LEFTMOST `X-Forwarded-For` entry,
+    which is whatever the client typed, so the rate limiter, the IP block list and the access log's
+    `ip` column were all attacker-controlled. See that module for the hop-count switch."""
+    from app.core import client_ip as _cip
+    return _cip.from_scope(scope, headers)
 
 
 async def _reject_impersonation(send, reason: str):
@@ -349,8 +427,11 @@ class IdentityBackendUnavailable(Exception):
 # Break-glass: TWOFA_ENFORCE default ON, but per-tenant policy defaults OFF (NULL twofa_policy → mode
 # 'off'), so a deploy locks NObody out. Set TWOFA_ENFORCE=0 to kill enforcement globally (a bad deploy
 # can't strand the owner). A missing mig 711 column → the policy read errors → treated 'off' → no-op.
-_twofa_cache: dict = {}          # org_id -> (policy_dict, expiry_epoch)
 _TWOFA_TTL = 60.0
+# org_id -> policy_dict. Keyed by tenant, so it was never the unbounded one — but it reads the same
+# one home as its neighbours so there is a single eviction rule in this module, not three.
+_twofa_cache = _ttl_cache.TTLCache(ttl=_TWOFA_TTL,
+                                   cap=_ttl_cache.cap_from_env("TENANT_POLICY_CACHE_MAX", 1024))
 
 
 def _twofa_enforce() -> bool:
@@ -362,8 +443,8 @@ def _tenant_2fa_policy(org: str) -> dict:
     (→ no enforcement). Normalized to a safe shape here (independent of the router's copy)."""
     now = time.time()
     hit = _twofa_cache.get(org)
-    if hit and hit[1] > now:
-        return hit[0]
+    if hit is not None:
+        return hit
     policy = {"mode": "off", "required_roles": []}
     try:
         from app.core.database import get_supabase
@@ -378,7 +459,7 @@ def _tenant_2fa_policy(org: str) -> dict:
                 policy["required_roles"] = [str(r) for r in rr if str(r).strip()]
     except Exception:
         policy = {"mode": "off", "required_roles": []}
-    _twofa_cache[org] = (policy, now + _TWOFA_TTL)
+    _twofa_cache.put(org, policy)
     return policy
 
 
@@ -468,15 +549,21 @@ async def _session_guard_verdict(token, uid, org, role, scope, headers):
         return "ok"
 
 
-def _is_public(path: str) -> bool:
+def _is_public(path: str, cron_paths=None) -> bool:
+    """Is this path on the public allowlist? PURE.
+
+    `cron_paths` is the DERIVED set of literal cron entrypoints (see `cron_paths_for_app`). When it is
+    non-empty the sweep allowlist is membership in that set, so a parameterised route can never be
+    reached unauthenticated by typing a sweep's name into it. None/empty ⇒ the route table could not be
+    read ⇒ fall back to the historical suffix test rather than stranding the cron jobs."""
     if path in _PUBLIC_EXACT:
         return True
     for p in _PUBLIC_PREFIXES:
         if path == p or path.startswith(p + "/"):
             return True
-    if path.endswith(_RUN_DUE_SUFFIX) or path.endswith(_PROMOTE_DUE_SUFFIX):
-        return True
-    return False
+    if cron_paths and _cron_literal_only():
+        return path in cron_paths
+    return path.endswith(_RUN_DUE_SUFFIX) or path.endswith(_PROMOTE_DUE_SUFFIX)
 
 
 # METHOD SCOPING for allowlisted paths. An entry here means "public for THESE methods only"; every other
@@ -556,8 +643,8 @@ def _resolve_identity(token: str):
     IdentityBackendUnavailable cached: the next request re-tries, so recovery is automatic."""
     now = time.time()
     hit = _cache.get(token)
-    if hit and hit[1] > now:
-        return hit[0]
+    if hit is not None:
+        return hit
     # ── STEP 1 — TOKEN VERIFICATION. Missing / expired / forged / unverifiable, or the auth service
     # itself refusing: ALL of these are genuine authentication failures and return the SAME
     # unauthenticated tuple this function has always returned, so the caller emits the byte-identical
@@ -604,7 +691,7 @@ def _resolve_identity(token: str):
     except Exception:
         return (False, False, (), None, {}, None)
     result = (True, super_admin, member_orgs, default_org, org_info, uid)
-    _cache[token] = (result, now + _TTL)
+    _cache.put(token, result)
     return result
 
 
@@ -767,7 +854,11 @@ def _tenant_is_ambiguous(member_orgs, requested, default_org) -> bool:
 # opened and where this requirement is switched back off). OPERATOR_ENTRY_ENFORCE=0 kills it outright
 # with no database access at all.
 _ENTRY_TTL = 30.0
-_entry_cache: dict = {}
+# "policy" -> the operator policy row, and "s:<uid>:<org>" -> that caller's entry session. The
+# session keys carry a uid, so this grew with every operator who ever reached a foreign tenant.
+# Bounded through the one home; per-entry TTLs are passed to `put` exactly as before.
+_entry_cache = _ttl_cache.TTLCache(ttl=_ENTRY_TTL,
+                                   cap=_ttl_cache.cap_from_env("ENTRY_SESSION_CACHE_MAX", 4096))
 
 
 def _entry_enforce() -> bool:
@@ -777,8 +868,8 @@ def _entry_enforce() -> bool:
 def _entry_policy():
     """The operator policy row, cached. None on any error ⇒ POLICY_DEFAULTS ⇒ requirement OFF."""
     now = time.time()
-    hit = _entry_cache.get("policy")
-    if hit and hit[1] > now:
+    hit = _entry_cache.get("policy", _ttl_cache.MISS)
+    if hit is not _ttl_cache.MISS:
         return hit[0]
     row = None
     try:
@@ -788,7 +879,7 @@ def _entry_policy():
         row = rows[0] if rows else None
     except Exception:
         row = None
-    _entry_cache["policy"] = (row, now + _ENTRY_TTL)
+    _entry_cache.put("policy", (row,))
     return row
 
 
@@ -798,8 +889,8 @@ def _entry_session_row(uid, org):
     key = "s:%s:%s" % (uid, org)
     now = time.time()
     hit = _entry_cache.get(key)
-    if hit and hit[1] > now:
-        return hit[0]
+    if hit is not None:
+        return hit
     out = (None, True)
     try:
         from app.core.database import get_supabase_admin
@@ -814,7 +905,7 @@ def _entry_session_row(uid, org):
     # out a TTL — the answer to "may I be here" must track the ledger closely, in both directions.
     from app.modules.core import operator as _OP
     fresh = _ENTRY_TTL if (not out[1] and _OP.session_state(out[0]) == "active") else 2.0
-    _entry_cache[key] = (out, now + fresh)
+    _entry_cache.put(key, out, ttl=fresh)
     return out
 
 
@@ -1027,7 +1118,7 @@ class TenantScopeMiddleware:
         _imp_raw = _raw_header(scope, _IMPERSONATE_HEADER)
         if _imp_raw:
             return await self._handle_impersonated(scope, receive, send, path, method, _imp_raw)
-        if _is_public(path):
+        if _is_public(path, cron_paths=cron_paths_for_app(scope.get("app"))):
             # Allowlisting skips BOTH the auth requirement and the org_id rewrite, so a path that only
             # needs ONE public method must not hand every method away. `_PUBLIC_METHODS` scopes those:
             # /core/auth-config is public for GET only (the PUT flips the global enforce-login flag and

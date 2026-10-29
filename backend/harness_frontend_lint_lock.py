@@ -75,7 +75,7 @@ REGISTER = "eslint_pending.txt"
 
 # MEASURED on this tree, not estimated. Both may only ever be LOWERED.
 #   python3 -c "import json,collections;d=json.load(open('/tmp/r.json'));print(sum(len(f['messages']) for f in d))"
-PINNED_TOTAL = 5583        # findings pinned by frontend/eslint_pending.txt (5953 on main before the
+PINNED_TOTAL = 5582        # findings pinned by frontend/eslint_pending.txt (5953 on main before the
                            # gate landed; 5917 when it did; 5645 once react/no-unescaped-entities
                            # and @typescript-eslint/no-unused-expressions were cleared to zero; 5643
                            # once the admin-assigned-password card moved out of /admin/security into

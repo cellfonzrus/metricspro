@@ -571,7 +571,6 @@
 1	react-hooks/immutability	src/app/(platform)/commcalc/targets/my/page.tsx
 3	react-hooks/immutability	src/app/(platform)/commcalc/targets/page.tsx
 1	react-hooks/immutability	src/app/(platform)/commcalc/whatif/page.tsx
-1	react-hooks/immutability	src/app/(platform)/crm/lookup/page.tsx
 1	react-hooks/immutability	src/app/(platform)/hr/letters/send/page.tsx
 2	react-hooks/immutability	src/app/(platform)/pos/receipts/page.tsx
 1	react-hooks/immutability	src/app/(platform)/vision/page.tsx

@@ -69,6 +69,24 @@ def filename(transaction_id="", prefix="receipt") -> str:
     return f"{prefix}-{txn}.pdf" if txn else f"{prefix}.pdf"
 
 
+def _fit_scale(rows, usable: float) -> float:
+    """How much the slip's type has to shrink for its WIDEST row to fit the roll — never above 1.0,
+    so a short receipt is set at the ordinary size. Measured through reportlab's own metrics rather
+    than a character-width constant, because a constant is a second answer to "how wide is this
+    text" and the drawing is the first one."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    need = 0.0
+    for r in (rows or []):
+        text = str((r or {}).get("text") or "")
+        if not text:
+            continue
+        size = SLIP_FONT_PT * (1.35 if (r or {}).get("big") else 1.0)
+        need = max(need, stringWidth(text, SLIP_FONT, size))
+    if need <= 0 or usable <= 0:
+        return 1.0
+    return min(1.0, usable / need)
+
+
 def slip_pdf(rows, *, paper_width_mm=80, title="Receipt") -> bytes:
     """The till slip as ONE continuous page as wide as the roll and as long as the slip — a roll has
     no page break, and a receipt split across two A4 sheets is not what came out of the printer.
@@ -78,17 +96,27 @@ def slip_pdf(rows, *, paper_width_mm=80, title="Receipt") -> bytes:
     """
     rows = [r for r in (rows or [])]
     width = max(120.0, float(paper_width_mm or 80) * PT_PER_MM)
-    height = max(80.0, SLIP_MARGIN_PT * 2 + SLIP_LEADING_PT * max(1, len(rows)))
+    usable = width - SLIP_MARGIN_PT * 2
+    # THE TYPE IS SET TO FIT THE ROLL, which is what a thermal printer does: it fits its whole
+    # character grid (`sale_receipt.PAPER_COLS`) across the paper, and `receipt_escpos.two_col`
+    # right-aligns every figure by COUNTING those characters. At a fixed 8.5 pt, 48 Courier columns
+    # measure ~245 pt and an 80 mm roll is ~227 pt, so the last six characters of every right-hand
+    # column fell off the page: a customer's receipt that read "Subtotal 8" where the slip says
+    # "Subtotal 808.75". Scaling here rather than widening the page keeps the file the size of the
+    # roll (what `neg-P2` pins) and keeps the arithmetic the printer's own.
+    scale = _fit_scale(rows, usable)
+    leading = SLIP_LEADING_PT * scale
+    height = max(80.0, SLIP_MARGIN_PT * 2
+                 + sum(leading * (1.35 if r.get("big") else 1.0) for r in rows or [{}]))
     buf = BytesIO()
     c = _canvas(buf, (width, height))
     c.setTitle(title or "Receipt")
-    y = height - SLIP_MARGIN_PT - SLIP_FONT_PT
+    y = height - SLIP_MARGIN_PT - SLIP_FONT_PT * scale
     for r in rows:
         text = str(r.get("text") or "")
         big = bool(r.get("big"))
-        size = SLIP_FONT_PT * (1.35 if big else 1.0)
+        size = SLIP_FONT_PT * scale * (1.35 if big else 1.0)
         c.setFont(SLIP_FONT_BOLD if (r.get("bold") or big) else SLIP_FONT, size)
-        usable = width - SLIP_MARGIN_PT * 2
         w = c.stringWidth(text, SLIP_FONT, size)
         align = r.get("align") or "left"
         if align == "center":
@@ -98,7 +126,7 @@ def slip_pdf(rows, *, paper_width_mm=80, title="Receipt") -> bytes:
         else:
             x = SLIP_MARGIN_PT
         c.drawString(x, y, text)
-        y -= SLIP_LEADING_PT * (1.35 if big else 1.0)
+        y -= leading * (1.35 if big else 1.0)
     c.showPage()
     c.save()
     return buf.getvalue()
@@ -138,7 +166,7 @@ def words_pdf(words, *, title="Receipt") -> bytes:
 
 
 def receipt_pdf(snap, template_v, *, fmt=None, render_words=None, brand=None,
-                disclaimer_blocks=None, store_name="", store_lines=None, fold_discount=False,
+                disclaimer_blocks=None, store_name="", store_row=None, fold_discount=False,
                 tenant_name="", employee_name="", short_customer_name=False, remit_block="",
                 customer_lines=None) -> bytes:
     """THE receipt of this sale as a PDF, from the same inputs `sale_receipt.html` is given — and the
@@ -155,13 +183,15 @@ def receipt_pdf(snap, template_v, *, fmt=None, render_words=None, brand=None,
     snap = _sr.for_render(snap, short_customer_name=short_customer_name)
     title = f'Receipt {snap["transaction_id"]}'.strip()
     if layout == _sr.LAYOUT_POS_FORMAT:
-        doc = _sr.document(snap, fmt, template_v, brand=brand, store_lines=store_lines,
+        doc = _sr.document(snap, fmt, template_v, brand=brand, store_row=store_row,
                            tenant_name=tenant_name, employee_name=employee_name,
-                           remit_block=remit_block, customer_lines=customer_lines)
+                           remit_block=remit_block, customer_lines=customer_lines,
+                           store_name=store_name, disclaimer_blocks=disclaimer_blocks)
         return words_pdf(render_words(doc, getattr(fmt, "PRINT_LAYOUT", None)), title=title)
     model = _sr.slip_model(snap, template_v, brand=brand, disclaimer_blocks=disclaimer_blocks,
                            store_name=store_name, fold_discount=fold_discount,
                            tenant_name=tenant_name, employee_name=employee_name,
-                           remit_block=remit_block, customer_lines=customer_lines)
+                           remit_block=remit_block, customer_lines=customer_lines,
+                           store_row=store_row)
     return slip_pdf(_escpos.lines(model),
                     paper_width_mm=(template_v or {}).get("paper_width_mm"), title=title)

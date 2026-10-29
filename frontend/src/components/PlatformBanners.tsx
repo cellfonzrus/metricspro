@@ -33,6 +33,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api, setActiveOrg } from '@/lib/client'
+import { reloadAs } from '@/lib/navigate-away'
 import { useAuth } from '@/lib/auth-context'
 import { canDeclareMonthFocus } from '@/lib/rbac'
 import { countdown, type EntryBanner } from '@/lib/operator'
@@ -132,7 +133,8 @@ function OperatorEntryBanner() {
   async function leave() {
     try { await api('/api/v1/core/operator/exit', { method: 'POST', body: JSON.stringify({}) }) } catch { /* the banner must always let you out */ }
     setActiveOrg(null)
-    window.location.href = '/operator/tenants'
+    // Leaving the tenant must leave the tenant's data behind too — see lib/navigate-away.
+    reloadAs('/operator/tenants')
   }
 
   return (

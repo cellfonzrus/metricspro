@@ -282,9 +282,45 @@ else:
            WH in exact and WH not in pre)
     ck("nothing else left the exact list", main_exact - now_exact == set())
     ck("nothing else joined the prefix list", now_pre - main_pre == set())
-    ck("_is_public body byte-identical to main",
-       block_src(MAIN, "def _is_public(path: str) -> bool:").strip()
-       == block_src(NOW, "def _is_public(path: str) -> bool:").strip())
+    # This used to pin `_is_public`'s body BYTE-IDENTICAL to main. That pin has outlived its
+    # usefulness in exactly the way §19 already records for harness_portal_secret_lock F5: it forbids
+    # ever FIXING the function, and on 2026-10-28 it did — the sweep allowlist stopped matching a
+    # SUFFIX of the request path (which 249 parameterised routes could satisfy, reaching protected
+    # handlers with no token) and started reading the app's own route table instead.
+    #
+    # The durable property this check existed to defend is "no path becomes public that was not
+    # public before", so that is what it asserts now, directly: the exact/prefix sets are already
+    # compared above, and the sweep rule is compared by BEHAVIOUR over the paths both versions can
+    # be asked about. Narrowing is allowed; widening is not. The sweep rule's own proof lives in
+    # harness_public_allowlist_lock.py.
+    def main_is_public(path):
+        """`_is_public` AS IT STANDS ON MAIN, evaluated against main's own allowlists."""
+        if path in main_exact:
+            return True
+        if any(path == q or path.startswith(q + "/") for q in main_pre):
+            return True
+        return path.endswith("/run-due") or path.endswith("/promote-due")
+
+    WIDENING_PROBES = (
+        "/health", "/api/v1/core/auth-config", "/api/v1/core/me",
+        "/api/v1/core/me/password-changed", "/api/v1/notify/dl/abc", WH,
+        "/api/v1/notify/run-due", "/api/v1/commcalc/sales/promote-due",
+        "/api/v1/commcalc/config/run-due", "/api/v1/commcalc/calculate/run-due",
+        "/api/v1/core/roles/run-due", "/api/v1/commcalc/commissions/July 2026",
+        "/api/v1/core/members", "/api/v1/storeops/employees",
+    )
+    cron_now = M.cron_paths_for_app(None) or frozenset({
+        "/api/v1/notify/run-due", "/api/v1/commcalc/sales/promote-due"})
+    widened = [p for p in WIDENING_PROBES
+               if M._is_public(p, cron_paths=cron_now) and not main_is_public(p)]
+    ck("_is_public is no WIDER than main (nothing newly public): %r" % (widened,), widened == [])
+    narrowed = [p for p in WIDENING_PROBES
+                if main_is_public(p) and not M._is_public(p, cron_paths=cron_now)]
+    ck("…and the narrowing is exactly the parameterised-route hole, not an allowlisted path: %r"
+       % (sorted(narrowed),),
+       set(narrowed) == {"/api/v1/commcalc/config/run-due",
+                         "/api/v1/commcalc/calculate/run-due",
+                         "/api/v1/core/roles/run-due"})
 
     # ── method scoping (the auth-config lesson, applied to the webhook) ──
     ck("auth-config is public for GET only",
@@ -411,7 +447,7 @@ ck("nothing cached during the outage", "GOOD" not in M._cache)
 
 fresh()
 c = run_request(token="GOOD", rows=MEMBER)
-M._cache["GOOD"] = (M._cache["GOOD"][0], 0.0)          # expire it
+M._cache.put("GOOD", M._cache.get("GOOD"), ttl=0.0)   # expire it (index §CORE-19: the cache is a TTLCache, not a dict)
 calls = []
 c = run_request(token="GOOD", rows=MEMBER, auth_calls=calls)
 ck("an expired cache entry re-verifies", len(calls) == 1 and c.reached_app is True)

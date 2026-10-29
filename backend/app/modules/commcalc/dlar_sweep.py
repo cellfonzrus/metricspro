@@ -494,6 +494,33 @@ def slice_vintage(period, rep_rows=None, store_rows=None):
 GRAIN_LABEL = {"raw_dlar_store": "stores", "raw_dlar_rep": "reps"}
 
 
+def status_verdict(res):
+    """'ok' or 'partial' — the ONE home for "did this run leave the feed whole". PURE.
+
+    The sentence SAYS "⚠ PARTIAL" and the stored `last_status` said 'ok', because the caller passed
+    the literal. So every surface that colours on the status word — the DLAR sweep page, the
+    connectors row, the upload-duty feed at `_upload_duties` (which already treats 'partial' as a
+    failed auto feed) — showed green over October 2026's missing unit counts for ten days, while the
+    detail line beside it said a column had stopped arriving. One fact, two homes, one of them a
+    literal: `status_sentence` and the caller now BOTH dereference this.
+
+    'partial' is not a new word: `_sweep_set_status` already counts it as a run that imported
+    (`success` defaults to status in ('ok', 'partial')), the ePay sweep already emits it for a mixed
+    run, and `_upload_duties` already reads it. Nothing is invented here — the DLAR sweep was the one
+    sibling computing the verdict and then throwing it away."""
+    res = res or {}
+    if res.get("skipped_guard"):
+        return "partial"
+    for tbl in ("raw_dlar_store", "raw_dlar_rep"):
+        if ((res.get("content") or {}).get(tbl) or {}).get("empty_columns"):
+            return "partial"
+    for rkey in ("dlar", "advocate"):
+        f = (res.get("fields") or {}).get(rkey) or {}
+        if f.get("missing") or f.get("blank"):
+            return "partial"
+    return "ok"
+
+
 def status_sentence(res):
     """The sweep's own status line — WHAT WAS WRITTEN, per grain, as of when, and every refusal. PURE.
 
@@ -551,7 +578,7 @@ def status_sentence(res):
             shape.append(f"{lbl}: '{k}' arrived EMPTY")
         for k in f.get("unconsumed") or ():
             unknown.append(f"{lbl}: '{k}'")
-    head = "OK" if not (skipped or gone or shape) else "⚠ PARTIAL"
+    head = "OK" if status_verdict(res) == "ok" else "⚠ PARTIAL"
     line = f"{head} — {period}: " + " · ".join(parts)
     if skipped:
         line += " · NOT REPLACED (partial-collapse guard, existing->pulled): " + ", ".join(skipped)

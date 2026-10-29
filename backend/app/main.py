@@ -80,13 +80,27 @@ def _log_system_error(request, exc) -> str:
         pass
     try:
         from app.core.database import get_supabase
-        org_id = request.query_params.get("org_id") or "00000000-0000-0000-0000-000000000001"
+        # THE PLATFORM'S OWN ORG, NEVER THE CALLER'S CLAIM (security review 2026-10-28). This read
+        # `request.query_params.get("org_id")`, which is the UNVERIFIED value the caller typed — so
+        # anyone who could provoke a 500 could write rows, including a truncated traceback, into any
+        # tenant's Failure Logs page. `tenant_middleware._log_identity_outage` was already fixed not
+        # to do this and says why in its own comment; this was the sibling that was never brought in
+        # line (CLAUDE.md: "find the siblings before you ship"). Super-admins see every org's
+        # failures, so filing a platform fault under the platform org loses nothing. The acting
+        # tenant, where the middleware resolved one, is recorded in `detail` for triage.
+        from app.core.tenant_middleware import _PLATFORM_ORG_ID, acting_org
+        try:
+            _acting = acting_org()
+        except Exception:
+            _acting = None
+        org_id = _PLATFORM_ORG_ID
         get_supabase().schema("core").table("failure_log").insert({
             "org_id": org_id, "category": "system_error", "severity": "error",
             "source": f"{request.method} {safe_path}"[:200],
             "message": f"Unhandled server error [{ref}] on {safe_path}"[:1000],
             "detail": {"ref": ref, "method": request.method, "path": safe_path,
                        "exc_type": type(exc).__name__,
+                       "acting_org": (str(_acting) if _acting else None),
                        "traceback": traceback.format_exc()[-4000:]},
             "remediation": ("An unexpected server error. Search the failure log for this reference id to "
                             "see the full trace. Fix the underlying cause; the masked message shields the "

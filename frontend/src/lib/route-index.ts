@@ -100,6 +100,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/closing/bank-deposit' },
   { path: '/closing/billpay-pickup' },
   { path: '/closing/cash-config' },
+  { path: '/closing/declared-vs-captured' },
   { path: '/closing/cash-position', label: 'Cash Position', aliases: ['cash on hand', 'cash position'] },
   { path: '/closing/cash-recon-management' },
   { path: '/closing/closing-pickup-status', aliases: ['not closed', 'did not close', 'missing closing', 'closing not submitted', 'cash not picked up', 'cash still in store', 'who did not close', 'pickup status'] },
@@ -390,6 +391,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/watchdog' },
   { path: '/watchdog/void-register' },
   { path: '/watchdog/multi-handset' },
+  { path: '/watchdog/byod-upgrade' },
 ]
 
 /** The destinations search may offer: every page except the ones declared pre-auth. The CALLER still

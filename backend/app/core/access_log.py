@@ -9,6 +9,7 @@ client; when the browser hasn't granted location, GPS is simply null.
 import asyncio
 from app.core.database import get_supabase_admin
 from app.core import tenant_middleware as _tm
+from app.core import client_ip as _cip
 from app.core import path_redact as _pr
 
 _SKIP_PREFIXES = ("/health", "/favicon", "/static", "/_next", "/openapi", "/docs", "/redoc")
@@ -76,7 +77,7 @@ class AccessLogMiddleware:
                         scope.get("app"), path,
                         scope.get("query_string", b"").decode() or "")[:400]) or None,
                     "status": status["code"],
-                    "ip": (_tm._client_ip_from(scope, headers) or None),
+                    "ip": (_cip.from_scope(scope, headers) or None),   # ONE home: app/core/client_ip.py
                     "user_agent": (headers.get("user-agent") or "")[:300] or None,
                     "gps_lat": _num(headers.get("x-geo-lat")),
                     "gps_lng": _num(headers.get("x-geo-lng")),

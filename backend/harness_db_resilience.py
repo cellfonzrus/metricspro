@@ -1291,7 +1291,36 @@ _all_routes = _flatten_routes(real_app.routes)
 # `git diff origin/main -- backend/ | grep -cE '^\+.*@router\.'` = 1 and `'^-.*@router\.'` = 0 —
 # one added, NONE removed, 1803 + 1 = 1804. So the pin was re-taken on a counted, named addition,
 # never relaxed to make CI green.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1804"))
+# Re-pinned 1804 -> 1805 on 2026-10-27 for §COMMCALC-41, a derived snapshot rebuilding itself when its
+# inputs land. The delta is ONE route and it is named: GET /payables/auto-build (when the device payable
+# ledger last rebuilt itself and whether a rebuild is queued, so the screen can say so instead of leaving
+# a tenant to guess whether the button needs pressing). It is READ-ONLY — it writes nothing, queues
+# nothing and starts no build; it serves `derived_builds.read_view`, which reads one row. It adds no input
+# to any report, statement, GP, commission or tax figure, and it adds no route to db_resilience itself
+# (I0b proves that independently of this number). Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` lists ONE added decorator on a real
+# route and none removed — the four other `+` lines it prints are a comment and two string literals
+# inside `harness_derived_build_lock.py`'s negative control, not routes. 1804 + 1 = 1805. So the pin was
+# re-taken on a counted, named addition, never relaxed to make CI green.
+#
+# Re-pinned 1805 -> 1806 on 2026-10-28 for §COMMCALC-43, the BYOD-and-upgrade-on-one-number report:
+# ONE added GET, `/commcalc/watchdog/byod-upgrade`, the drill-down behind the new fraud-area finding.
+# It is READ-ONLY — it reads the sales feed through `watchdog_router._read_sales` and writes nothing;
+# the finding itself is written by the existing watchdog tick, which adds no route. It adds no input
+# to any report, statement, GP, commission or tax figure. Verified the same way as every pin above,
+# against a CLEAN WORKTREE of origin/main (1805) rather than against this branch's memory of it:
+# `git diff main -- backend/ | grep -E '^[+-].*@router\.'` prints exactly one added decorator and
+# none removed. 1805 + 1 = 1806.
+# Re-pinned 1806 -> 1807 on 2026-10-29 for §CLOSING-02, declared-vs-captured: ONE added GET,
+# `/closing/declared-vs-captured`, the report behind "did our system capture what the rep declared".
+# It is READ-ONLY — it writes nothing, queues nothing and pays nobody; it reads the declared side
+# through `closing/metric_catalog` and the captured side through `financing_report.vendor_units` and
+# the existing `_b2b_day`, and its worst verdict is a flag, so it gates no close. It adds no input to
+# any report, statement, GP, commission or tax figure, and no route to db_resilience itself (I0b
+# proves that independently of this number). Verified the same way as every pin above:
+# `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` prints exactly one added decorator
+# and none removed. 1806 + 1 = 1807. Re-taken on a counted, named addition, never relaxed for CI.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1807"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

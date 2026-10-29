@@ -610,6 +610,16 @@ export const NAV: NavGroup[] = [
     // scopes mean this changes what is REACHABLE and nothing about who may see it; the endpoint
     // applies the district-manager span filter before it counts anything.
     { href: '/watchdog/multi-handset', label: 'Several Handsets To One Buyer', icon: '📱', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // A BROUGHT DEVICE AND AN UPGRADE ON ONE NUMBER (owner ask 2026-10-28, index §COMMCALC-43:
+    // "check if a byod and an upgrade is done on the same day for the same phone number at the same
+    // store"). Same group, same module and byte-identical scopes to the two entries above, for the
+    // same reason: the Fraud area page already shows the finding, and this shows the two sales
+    // behind it, which the findings table has no columns for. `tileOnly` so it lands as a tile on
+    // the Flags & Compliance hub (the owner's 2026-09-01 "cleaner look" ruling) rather than as
+    // another sidebar row — `mergeUnplacedItems` places it without a tile-layout migration.
+    // Byte-identical scopes mean this changes what is REACHABLE and nothing about who may see it;
+    // the endpoint applies the district-manager span filter before it counts anything.
+    { href: '/watchdog/byod-upgrade', label: 'Brought Device Then Upgrade', icon: '🔁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // FOLLOW UP WITH MANAGERS (owner 2026-10-03, index §47.14). Its home is this group because what
     // it follows up ON is this group's queues: the board rolls the SAME registry
     // (compliance_summary.CATEGORIES) up per manager and queue with an age, which is the one thing
@@ -1046,6 +1056,9 @@ export const NAV: NavGroup[] = [
     { href: '/closing/tender-recon', label: 'X-Tender Recon', icon: '🧾', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/tender-recon-3way', label: '3-Way Tender Recon', icon: '🧮', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/accessory-recon', label: 'Accessory Recon', icon: '🔖', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    // mig 1102, index §CLOSING-02 — what each employee declared at closing vs what the sales feed
+    // captured. Same module key and scope tiers as its recon siblings above.
+    { href: '/closing/declared-vs-captured', label: 'Declared vs Captured', icon: '🔍', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/pickup', label: 'Cash Pickup', icon: '💵', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // Bill Payment Pickup (owner directive 2026-09-02, mig 942): "one more pick up for the bill
     // payment pickup and deposit menu, just under the cash pick up module, the same process same
@@ -1442,6 +1455,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/storeops/visits/plan', 'ops'],
   ['/closing', 'ops'], ['/closing/verify', 'ops'], ['/closing/management', 'ops'], ['/closing/recon', 'ops'],
   ['/closing/tender-recon', 'ops'], ['/closing/tender-recon-3way', 'ops'], ['/closing/accessory-recon', 'ops'],
+  ['/closing/declared-vs-captured', 'ops'],
   ['/closing/pickup', 'ops'], ['/closing/billpay-pickup', 'ops'],
   ['/closing/closing-pickup-status', 'ops'],
   ['/closing/cash-recon-management', 'ops'], ['/closing/epay-recon', 'ops'],

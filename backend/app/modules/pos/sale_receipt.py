@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import html as _html
 
+from . import receipt_store_block as _shop
+
 LAYOUT_THERMAL = "thermal"
 LAYOUT_POS_FORMAT = "pos_format"
 LAYOUTS = (LAYOUT_THERMAL, LAYOUT_POS_FORMAT)
@@ -50,6 +52,23 @@ DEFAULT_PAPER_MM = 80
 #: the printer directly (§POS-04). It lives beside PAPER_PX because it is the same fact about the
 #: same paper in the other medium's units, and `paper_options` still derives the offer from PAPER_PX.
 PAPER_COLS = {58: 32, 80: 48}
+
+#: THE PAGE A RECEIPT PRINTS ON — one rule, both layouts, every medium that goes through a browser
+#: (§POS-11).
+#:
+#: Owner 2026-10-29: *"d not put hte reprint date and time on top woith the word Slae in the middle
+#: of the screen"*. Neither was the receipt's. A browser stamps its OWN header and footer on anything
+#: it prints — the date and time of the printing, the document's `<title>`, the URL, the page number
+#: — unless the page declares its own `@page` margins. No stylesheet here had one, so every receipt
+#: this platform has ever printed carried that stamp: a customer's receipt looking like a printout of
+#: a web page, with a reprint timestamp on it that contradicts the sale's own date.
+#:
+#: `margin: 0` removes the PAGE's margin, which is what suppresses the stamp; each renderer then sets
+#: its own padding so the ink does not run to the edge of a real sheet. One home, because the till
+#: slip and the tenant's own POS layout are two layouts of ONE receipt and the browser must stamp
+#: neither — and because the next layout gets it without anyone remembering.
+PAGE_CSS = "@page { size: auto; margin: 0; }"
+
 DEFAULT_FONT_PX = 12
 DEFAULT_FOOTER = "Thank you for your business!"
 
@@ -334,7 +353,7 @@ def _esc(v) -> str:
 
 def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name="",
                fold_discount=False, tenant_name="", employee_name="", remit_block="",
-               customer_lines=None) -> dict:
+               customer_lines=None, store_row=None) -> dict:
     """THE CONTENT of a till slip: which lines print, in what order, with what figures.
 
     WHY THIS EXISTS (owner 2026-10-20: *"the receipts will print to the thermal printer only if
@@ -355,7 +374,10 @@ def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name=
     show_discount_row = (not fold_discount) and t["show_discounts"] and snap["discount_total"] > 0
     display_subtotal = snap["subtotal"] + snap["discount_total"] if show_discount_row else snap["subtotal"]
     company = company_name(brand, tenant_name)
-    head_name = company or store_name or "POS System"
+    # What the shop IS, from the ONE home every layout reads (§POS-10) — never assembled here, or
+    # the till slip and the tenant's own POS layout answer that question twice.
+    shop = _shop.block(brand, store_row, tenant_name=tenant_name, store_code=store_name)
+    head_name = shop["name"] or store_name or "POS System"
 
     items = []
     for it in snap["items"]:
@@ -373,9 +395,11 @@ def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name=
     head_lines = []
     if t["show_store_name"] or company:
         head_lines.append({"text": head_name, "strong": True})
-    head_lines += [{"text": ln} for ln in (brand.get("address_lines") or [])]
-    if brand.get("license_tax_ids"):
-        head_lines.append({"text": brand["license_tax_ids"]})
+    head_lines += [{"text": ln} for ln in shop["address_lines"]]
+    if shop["phone"]:
+        head_lines.append({"text": shop["phone"]})
+    if shop["license"]:
+        head_lines.append({"text": shop["license"]})
     if t["header_text"]:
         head_lines.append({"text": t["header_text"], "pre": True})
     head_lines.append({"text": f'Transaction #{snap["transaction_id"]}'})
@@ -424,7 +448,7 @@ def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name=
 
 def thermal_html(snap, template_v, brand=None, disclaimer_blocks=None, store_name="",
                  fold_discount=False, tenant_name="", employee_name="", remit_block="",
-                 customer_lines=None) -> str:
+                 customer_lines=None, store_row=None) -> str:
     """The 58/80 mm till slip as HTML — ONE of the two renderers of `slip_model`, the one a browser
     prints and an email carries. Field for field what the register's own `buildReceiptHtml` used to
     print, every figure now read from the model rather than recomputed here."""
@@ -432,7 +456,7 @@ def thermal_html(snap, template_v, brand=None, disclaimer_blocks=None, store_nam
     m = slip_model(snap, template_v, brand=brand, disclaimer_blocks=disclaimer_blocks,
                    store_name=store_name, fold_discount=fold_discount, tenant_name=tenant_name,
                    employee_name=employee_name, remit_block=remit_block,
-                   customer_lines=customer_lines)
+                   customer_lines=customer_lines, store_row=store_row)
     width = PAPER_PX.get(t["paper_width_mm"], PAPER_PX[DEFAULT_PAPER_MM])
     font = t["font_size_px"]
     small = max(9, font - 2)
@@ -490,6 +514,8 @@ def thermal_html(snap, template_v, brand=None, disclaimer_blocks=None, store_nam
         ".nums td { color: #333; }"
         f".grand {{ font-size: {font + 2}px; font-weight: bold; }}"
         "@media print { body { width: auto; } }"
+        # The browser's own header and footer (§POS-11) — a receipt says what page it prints on.
+        + PAGE_CSS +
         "</style></head><body>"
         f'<div class="center">{"".join(header_bits)}</div>'
         f'<hr><table>{"".join(rows)}</table><hr>'
@@ -500,8 +526,30 @@ def thermal_html(snap, template_v, brand=None, disclaimer_blocks=None, store_nam
 
 
 # ── the tenant's own POS layout ───────────────────────────────────────────────────────────────────
-def document(snap, fmt, template_v, brand=None, store_lines=None, tenant_name="",
-             employee_name="", remit_block="", customer_lines=None) -> dict:
+def _footer_with_blocks(footer_text, disclaimer_blocks) -> str:
+    """The legal text a POS-layout receipt ends with: the template's own footer, then the tenant's
+    declared blocks in order.
+
+    WHY HERE. The blocks reached the till slip and the printer's byte stream (`slip_model["blocks"]`)
+    and NOT this layout, so the SAME sale emailed in the tenant's own POS format went out with no
+    return policy on it — half a receipt, and the half a customer argues about. The Document already
+    has one verbatim legal region (`footer_text`, which both of its renderers print), so the blocks
+    ride THAT rather than a fourth place deciding what a receipt's terms say.
+    """
+    parts = [str(footer_text).strip()] if str(footer_text or "").strip() else []
+    for d in (disclaimer_blocks or []):
+        text = str((d or {}).get("text") or "").strip()
+        if not text:
+            continue
+        if (d or {}).get("signature"):
+            text += "\n\nX ______________________\nCustomer signature"
+        parts.append(text)
+    return "\n\n".join(parts)
+
+
+def document(snap, fmt, template_v, brand=None, store_row=None, tenant_name="",
+             employee_name="", remit_block="", customer_lines=None, store_name="",
+             disclaimer_blocks=None) -> dict:
     """The sale as the SAME structured Document an imported receipt of this POS is parsed into — so
     `receipt_formats.render.render_html` prints it in that POS's layout with no renderer change, and
     the tenant's own uploaded receipts and its register's receipts finally look alike.
@@ -514,13 +562,13 @@ def document(snap, fmt, template_v, brand=None, store_lines=None, tenant_name=""
         raise ReceiptError("that POS format cannot build a document")
     doc = base.new_document(getattr(fmt, "POS_SOURCE", ""), getattr(fmt, "LABEL", ""))
     doc["title"] = getattr(fmt, "TITLE", None) or "Sale"
-    company = company_name(brand, tenant_name)
-    lines = [ln for ln in ([company] if company else []) + list(store_lines or []) if ln]
-    if not lines and (template_v or {}).get("show_store_name"):
-        lines = [l for l in (store_lines or []) if l]
-    doc["store"]["lines"] = lines
-    if (brand or {}).get("license_tax_ids"):
-        doc["store"]["lines"].append(brand["license_tax_ids"])
+    # THE SAME store block the till slip prints, from the one home (§POS-10). This path used to be
+    # handed a `store_lines` list the router assembled for it alone, which is how a receipt in the
+    # tenant's own POS layout came to carry the company name and no address at all.
+    shop = _shop.block(brand, store_row, tenant_name=tenant_name, store_code=store_name)
+    doc["store"]["lines"] = [ln for ln in ([shop["name"]] + shop["address_lines"]
+                                           + [shop["license"]]) if ln]
+    doc["store"]["phone"] = shop["phone"]
 
     doc["meta"] = [
         {"key": "invoice_no", "label": "Invoice #", "value": snap["transaction_id"]},
@@ -570,7 +618,8 @@ def document(snap, fmt, template_v, brand=None, store_lines=None, tenant_name=""
     if snap["method"]:
         doc["payments"] = [{"label": snap["method"].title(),
                             "amount": snap["tendered"] if snap["tendered"] is not None else snap["total"]}]
-    doc["footer_text"] = (template_v or {}).get("footer_text") or ""
+    doc["footer_text"] = _footer_with_blocks((template_v or {}).get("footer_text") or "",
+                                             disclaimer_blocks)
     # §POS-06 — a receipt printed in the tenant's own POS layout carries the pay-by-bank paragraph
     # too. `comments` is the Document's own free-text block and both of that format's renderers
     # already print it, so this is the same one paragraph in the third medium rather than a fourth
@@ -593,7 +642,7 @@ def for_render(snap, *, short_customer_name=False) -> dict:
 
 
 def html(snap, template_v, *, render_document=None, fmt=None, brand=None, disclaimer_blocks=None,
-         store_name="", store_lines=None, fold_discount=False, tenant_name="",
+         store_name="", store_row=None, fold_discount=False, tenant_name="",
          employee_name="", short_customer_name=False, remit_block="", customer_lines=None) -> str:
     """THE receipt of this sale, as print-ready HTML — the only answer, for print, reprint and email.
 
@@ -605,13 +654,15 @@ def html(snap, template_v, *, render_document=None, fmt=None, brand=None, discla
     snap = for_render(snap, short_customer_name=short_customer_name)
     if layout == LAYOUT_POS_FORMAT:
         return render_document(document(snap, fmt, template_v, brand=brand,
-                                        store_lines=store_lines, tenant_name=tenant_name,
+                                        store_row=store_row, tenant_name=tenant_name,
                                         employee_name=employee_name, remit_block=remit_block,
-                                        customer_lines=customer_lines))
+                                        customer_lines=customer_lines, store_name=store_name,
+                                        disclaimer_blocks=disclaimer_blocks))
     return thermal_html(snap, template_v, brand=brand, disclaimer_blocks=disclaimer_blocks,
                         store_name=store_name, fold_discount=fold_discount,
                         tenant_name=tenant_name, employee_name=employee_name,
-                        remit_block=remit_block, customer_lines=customer_lines)
+                        remit_block=remit_block, customer_lines=customer_lines,
+                        store_row=store_row)
 
 
 # ── WHAT THIS PRINT USES ──────────────────────────────────────────────────────────────────────────

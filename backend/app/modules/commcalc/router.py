@@ -17,12 +17,16 @@ from app.core.schemas import LaxModel
 from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.core import column_tolerant as _ct    # 2026-09-22 — ANY-SUBSET column reads, the one reading rule (index §4b.1)
+# THE one home of "a status line that must fit a column keeps its ends" (found 2026-10-27).
+from app.core import status_detail as _status_detail
+from app.modules.commcalc import sweep_due as _sweep_due   # THE one "is this sweep due, and why" (index §COMMCALC-45)
 from app.modules.core import portal_secret as _psec   # 2026-10-12 — THE registry of which stored columns hold a credential (index §CORE-03; pure)
 from app.modules.commcalc import prospect_feed_tally as _pft   # 2026-10-16 — THE per-feed,
 # per-month row tally, in the one shape both its readings produce (index §COMMCALC-TALLY)
 from app.modules.core import feed_read as _feed_read   # 2026-10-06 — THE complete paged feed read; no literal row ceiling (index §19.48)
 from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE pay-feed balance: placed, or reported unplaced (index §19.48)
 from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
+from app.modules.commcalc import carrier_device_money as _cdm   # THE device-financing dollars per device (index §COMMCALC-44)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10-10 — THE daily-incentive shapes (mig 1072); every rule is a config row (index §74)
@@ -3326,6 +3330,35 @@ def _vip_next_run(frequency, day_of_week, day_of_month, hour, tzname, minute=0):
     return nxt.astimezone(_timezone.utc).isoformat()
 
 
+#: Where `_sweep_due_rows` writes the reason. Underscored so it can never collide with a column, and
+#: never written back to the database — the row it rides on is read-only to every caller below.
+_DUE_REASON_KEY = "_due_reason"
+
+
+def _sweep_due_rows(rows, now_iso=None):
+    """The enabled sweep configs that are DUE, by the one verdict (index §COMMCALC-45).
+
+    Every `run-due` entrypoint used to filter in SQL — `.lte('next_run_at', now)` — which can only ask
+    the clock. This asks `commcalc.sweep_due`, so a run that came back PARTIAL and a sweep whose own
+    settings were just corrected are both due without anybody pressing anything. One row per org per
+    connector, so the read is the same size it always was."""
+    out = []
+    for r in (rows or []):
+        v = _sweep_due.verdict(r, now_iso)
+        if v.get("due"):
+            # The reason rides WITH the row, because the caller's next decision depends on it: only a
+            # clock-due run may advance `next_run_at`. A retry or a settings change runs now and
+            # leaves the scheduled slot still owed — advancing it would let one early retry swallow
+            # the day's real run, which is the same false-green the schedule is supposed to prevent.
+            out.append({**r, _DUE_REASON_KEY: v.get("reason")})
+    return out
+
+
+def _sweep_due_by_clock(cfg):
+    """Did the CLOCK make this row due? Only then is the scheduled slot satisfied by this run."""
+    return (cfg or {}).get(_DUE_REASON_KEY) in (None, _sweep_due.REASON_CLOCK)
+
+
 _VIP_CFG_DEFAULTS = {'enabled': False, 'frequency': 'weekly', 'day_of_week': 0,
                      'day_of_month': 1, 'hour': 6, 'timezone': 'America/New_York',
                      'lookback_days': 14, 'sweep_invoices': True, 'sweep_asset': False,
@@ -3455,13 +3488,26 @@ def _require_import_admin(authorization, org_id):
                              "administrator to grant your role the 'Import Health' setting.")
 
 
-def _sweep_set_status(client, table, org_id, status, detail, mark_run=False, success=None):
+def _sweep_set_status(client, table, org_id, status, detail, mark_run=False, success=None,
+                      evidence=None):
     """Record ONE portal sweep's outcome on its own *_sweep_config row.
 
     mark_run — this call ends a run (not the 'running…' heartbeat, which must stamp no timestamp).
     success  — did the run actually IMPORT data? Defaults to status in ('ok','partial'); only a success
-               advances last_run_at (the freshness trail core.import_evidence reads)."""
-    upd = {'last_status': status, 'last_detail': (detail or '')[:600]}
+               advances last_run_at (the freshness trail core.import_evidence reads).
+    evidence — the run's STRUCTURED findings, stored WHOLE in `core.job_run.detail` (jsonb) beside the
+               fitted prose. A cap belongs on a sentence a person reads, never on the evidence behind
+               it: on 2026-10-28 the DLAR status line named eight of the FORTY-ONE fields Boost sends
+               that nothing reads, and the two that answer "what was the renamed column called now"
+               were inside the "+33 more". The sentence was right to stay short; the finding needed
+               somewhere complete to live, and the history row was already jsonb (mig 701). Never
+               secrets — a caller passes findings, not a config row."""
+    # A CAP MUST NOT DECIDE WHICH PART OF A STATUS SURVIVES (found 2026-10-27, index §CORE-xx).
+    # This was `detail[:600]`, a HEAD cut — so the §COMMCALC-16 diagnostic's conclusion, which names
+    # the portal field the carrier renamed and is written LAST, was the exact text thrown away. The
+    # detection worked and the finding died on the way to the column. `core.status_detail.fit` keeps
+    # both ends and says how much it dropped; a line that already fits is unchanged.
+    upd = {'last_status': status, 'last_detail': _status_detail.fit(detail, 600)}
     if mark_run:
         ok = (str(status or '').strip().lower() in ('ok', 'partial')) if success is None else bool(success)
         now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -3472,8 +3518,9 @@ def _sweep_set_status(client, table, org_id, status, detail, mark_run=False, suc
         try:
             client.schema('core').table('job_run').insert({
                 'org_id': org_id, 'job_name': f'sweep:{table}', 'status': 'succeeded' if ok else 'failed',
-                'detail': {'status': status, 'detail': (detail or '')[:600]}, 'started_at': now_iso,
-                'finished_at': now_iso}).execute()
+                'detail': {'status': status, 'detail': _status_detail.fit(detail, 600),
+                           **({'evidence': evidence} if evidence else {})},
+                'started_at': now_iso, 'finished_at': now_iso}).execute()
         except Exception as e:
             print(f'WARN sweep run history not recorded ({table}): {e}')
     _status_update(client, table, upd, lambda q: q.eq('org_id', org_id))
@@ -3753,14 +3800,16 @@ def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
-    due = client.schema('commcalc').table('vip_sweep_config').select('*') \
-        .eq('enabled', True).lte('next_run_at', now_iso).execute().data or []
+    due = _sweep_due_rows(
+        client.schema('commcalc').table('vip_sweep_config').select('*')
+        .eq('enabled', True).execute().data, now_iso)
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
-        nxt = _vip_next_run(cfg.get('frequency') or 'weekly', cfg.get('day_of_week'),
-                            cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
-        client.schema('commcalc').table('vip_sweep_config').update(
-            {'next_run_at': nxt}).eq('org_id', oid).execute()
+        if _sweep_due_by_clock(cfg):      # a retry leaves the scheduled slot owed (§COMMCALC-45)
+            nxt = _vip_next_run(cfg.get('frequency') or 'weekly', cfg.get('day_of_week'),
+                                cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
+            client.schema('commcalc').table('vip_sweep_config').update(
+                {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_vip_sweep, oid)
     return {"triggered": len(due)}
 
@@ -11600,16 +11649,10 @@ def _device_reimb_recon_inputs(client, org_id: str, period: str):
         return _feed_read.read_all(_make)      # PAGED through the one home — no row ceiling (§19.48)
 
     # ── config: house defaults ← house org row ← this tenant's row (RULE TWO, mig 1063) ──────────
-    def _cfg_blob(oid):
-        try:
-            rows = (client.schema("commcalc").table("commission_org_config")
-                    .select("device_reimb_recon_config").eq("org_id", oid).limit(1).execute().data) or []
-        except Exception as e:                 # column/table absent → house defaults (contract §5)
-            print(f"WARN device_reimb_recon config unavailable (run migration 1063?): {e}")
-            return None
-        return (rows[0] if rows else {}).get("device_reimb_recon_config")
-
-    cfg = _drr.config_from_rows(_cfg_blob(org_id), _cfg_blob(ORG_ID) if org_id != ORG_ID else None)
+    # Read through §COMMCALC-44, which owns this config for every caller of the device-financing
+    # money. A second copy of the inherit-the-house-row read here is how the two sides of one money
+    # question start answering it differently.
+    cfg = _cdm.load_recon_config(client, org_id, ORG_ID)
     cols = cfg["columns"]
 
     # ── the ONE classification home, bound to this org's own rules ────────────────────────────────
@@ -11769,86 +11812,17 @@ def _device_line_reimb_run(client, org_id: str, period: str, store: str = ""):
         _device_reimb_recon_inputs(client, org_id, period)
     cols = cfg["columns"]
 
-    # ── §58's one home, bound to this org ────────────────────────────────────────────────────────
-    from app.modules.commcalc import carrier_dollar_class as _cdc
-    cdc_cfg = _cdc.load_config(client, org_id)
-    try:
-        cdc_rules = carrier_map.load_rules(client, org_id)
-    except Exception:
-        cdc_rules = []
-    cdc_decl = _cdc.load_declarations(client, org_id)
-    _lines_map = (cdc_cfg or {}).get("component_lines") or {}
-    # WHICH COMPONENTS' DOLLARS ARE THE DEVICE-FINANCING SIDE — §58's own question, asked, not
-    # derived here (§69). This read used to be "every component this org routed OFF the generic
-    # carrier-commission line", which was an INFERENCE that held only while exactly one component
-    # was routed anywhere. A second component routed to a line of ITS own is not device money: under
-    # the owner's 2026-10-10 MDF ruling that inference would have re-admitted $91,000.00 a month of
-    # per-store lump sums — no device named, and nothing for one to name — to this per-DEVICE report
-    # minutes after §65.5 cleared it of exactly that money. The home answers the question as it is
-    # meant: the components that book to the line the device-financing reimbursement books to.
-    _device_components = _cdc.device_reimb_components(_lines_map, "carrier_comm")
-    configured = bool(_device_components)
-    _cache: dict = {}
-
-    # A dollar §58 placed on a category the component vocabulary has NO row for is not evidence of a
-    # device payment, however the keyword ladder then booked it. §58 says so itself — it returns the
-    # fallback component with `basis: declared_category_unmapped` precisely so a caller can decline
-    # it — and this layer declines, because its grain is one row per PHONE. Measured live (house org,
-    # Aug-Oct 2026): 'Ramp Up Subsidy' is declared into MDF, which has no component row, and its 14
-    # monthly per-store lump sums ($91,000.00 in the September window, $287,500.00 across the feed)
-    # are correctly identifier-less — there is no phone for a ramp subsidy to name. Counting them as
-    # device money put $91,000.00 in a bucket a reader would take for unattributable device money.
-    # WHICH BASES THOSE ARE IS NOT DECIDED HERE (§66). "Is a component reached on this basis
-    # evidence about the dollar, or a placement of last resort" has ONE home — the module that owns
-    # `basis` — and this layer asks it (`_cdc.component_is_evidence`) rather than keeping its own
-    # tuple of basis names. The POLICY stays here, because it is this layer's and nobody else's: at
-    # a per-PHONE grain an unreliable component is DECLINED. A statement that must book every dollar
-    # answers the same False differently, by naming a column or a line for it, which is why the home
-    # answers only the question.
-    def is_device_dollar(raw_type):
-        key = str(raw_type or "")
-        hit = _cache.get(key)
-        if hit is None:
-            c = _cdc.classify(cdc_decl, cdc_rules, raw_type, cdc_cfg) or {}
-            hit = _cache[key] = (str(c.get("component") or "").upper() in _device_components
-                                 and _cdc.component_is_evidence(c.get("basis")))
-        return hit
-
-    # The carrier's PER-LINE feed over the REIMBURSEMENT LAG WINDOW. The lag LENGTH and the month
-    # enumeration are §27's (`imei_rebate_report.period_window`), the ONE home for "how long either
-    # side of the event may this money arrive"; this report states no lag rule of its own.
-    #
-    # THE ANCHOR IS THE ONE THING THAT DIFFERS, and it has to, so it is said rather than assumed.
-    # §27 anchors on the ACTIVATION, which the money can only follow, so its window runs FORWARD.
-    # This layer anchors on the distributor's CLAIM DATE, and a claim is made when the distributor
-    # settles — which is routinely AFTER the carrier paid. Measured live (store 652, September
-    # 2026): two devices were paid in August and claimed in September, so a forward-only window
-    # called them never-paid. The window is therefore SYMMETRIC — the same lag either side, both
-    # months enumerated by §27's own function.
-    from app.modules.commcalc.imei_rebate_report import period_window as _lag_window
-    _lag = int(cfg.get("lag_months") or 0)
-    _anchor = _drr.month_key(period) if period else None
-    if _anchor and _lag:
-        _y, _m = int(_anchor[:4]), int(_anchor[5:7]) - _lag
-        _y, _m = _y + (_m - 1) // 12, (_m - 1) % 12 + 1
-        _pw = _lag_window(f"{_y:04d}-{_m:02d}", _lag * 2)
-    else:
-        _pw = _lag_window(period, 0) if period else None
-    _line_periods = sorted({v for p in (_pw or [period]) for v in (_pvariants(p) or [p])}) \
-        if period else None
-
-    # PAGED through the one home (§19.48) — 245,195 live house rows unnarrowed, 21,943 for one month.
-    def _line_q():
-        q = (client.schema("commcalc").table("raw_payment_detail")
-             .select(",".join(sorted({cols["line_store"], cols["line_amount"],
-                                      cols["line_category"], cols["line_device_id"],
-                                      cols["line_date"], cols["line_rep"]})))
-             .eq("org_id", org_id))
-        return q.in_("period", _line_periods) if _line_periods else q
-    line_rows = _feed_read.read_all(_line_q)
-
-    carrier_lines = _drr.carrier_line_side(line_rows, cfg,
-                                           is_device_dollar if configured else None, resolve_store)
+    # ── THE DEVICE-FINANCING MONEY PER DEVICE — §COMMCALC-44, dereferenced, not built here ───────
+    # This was ~60 lines inline: §58's classification bound to this org, which components ARE the
+    # device-financing side under its own routing, §66's refusal of a component reached on a basis
+    # that is not evidence, §27's symmetric lag window, the paged read of the per-line feed, and
+    # §65's pure per-device fold. §COMMCALC-43's chargeback amount needed the same figure, so it is
+    # ONE home now and both callers read it. Not one decision changed: they moved whole.
+    carrier_lines, _cdm_meta = _cdm.per_device(client, org_id, period, cfg=cfg,
+                                               resolve_store=resolve_store, pvariants=_pvariants)
+    configured = _cdm_meta["configured"]
+    _device_components = set(_cdm_meta["components"])
+    _pw = _cdm_meta["lag_window"]
     # The distributor ledger is a whole-table snapshot with no period column, so the month filter is
     # the reimbursement DATE's month and the pure layer applies it — never a second period rule here.
     mk = _drr.month_key(period) if period else None
@@ -13873,8 +13847,13 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
             blocked.append({"org_id": oid, "kind": kind, "reason": "no_browser_service"})
             continue
         try:
+            # EVERY COLUMN THE VERDICT READS, or a reason is lost before it can be given. This
+            # select used to stop at the schedule columns, which is precisely how due-ness stayed a
+            # clock: a narrower read cannot see that the declaration changed or that the last run
+            # came back short. `_sweep_due.READS` is the one list and the lock checks it.
             cfg = (client.schema('commcalc').table(tbl)
-                   .select('enabled,next_run_at,frequency,day_of_week,day_of_month,hour,timezone')
+                   .select(','.join(('day_of_week', 'day_of_month', 'hour', 'timezone')
+                                    + _sweep_due.READS))
                    .eq('org_id', oid).limit(1).execute().data) or []
         except Exception:
             continue
@@ -13884,8 +13863,13 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
         cf = cfg[0]
         if not cf.get('enabled'):
             continue
-        nra = cf.get('next_run_at')
-        connector_due = not nra or nra <= now_iso
+        # A SWEEP IS DUE FROM ITS STATE, NOT FROM A STORED CLOCK ALONE (owner 2026-10-29, index
+        # §COMMCALC-45). This was `not nra or nra <= now_iso`, so a run that came back PARTIAL waited
+        # a full day exactly like a clean one, and correcting the sweep's own settings pushed the next
+        # run further away instead of nearer. The reason is carried into the tick's answer.
+        _dv = _sweep_due.verdict(cf, now_iso)
+        connector_due = bool(_dv.get('due'))
+        _due_reason = _dv.get('reason')
 
         # ePay is the one connector whose reports can each own a schedule slot (migration 290):
         # Comprehensive Comp runs at 23:30 while MI and payment detail stay on the connector's
@@ -13895,7 +13879,10 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
             run_now = list(slot_due) + (list(shared) if connector_due else [])
             if not run_now:
                 continue
-            if connector_due:
+            # ONLY A CLOCK-DUE RUN SATISFIES THE CLOCK. A retry or a settings change runs NOW and
+            # leaves the scheduled slot still owed; advancing it would let one early retry swallow
+            # the day's real run.
+            if connector_due and _due_reason == _sweep_due.REASON_CLOCK:
                 nxt = _vip_next_run(cf.get('frequency') or 'daily', cf.get('day_of_week'),
                                     cf.get('day_of_month'), cf.get('hour'), cf.get('timezone'))
                 try:
@@ -13909,14 +13896,15 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
 
         if not connector_due:
             continue
-        nxt = _vip_next_run(cf.get('frequency') or 'daily', cf.get('day_of_week'),
-                            cf.get('day_of_month'), cf.get('hour'), cf.get('timezone'))
-        try:
-            client.schema('commcalc').table(tbl).update({'next_run_at': nxt}).eq('org_id', oid).execute()
-        except Exception:
-            pass
+        if _due_reason == _sweep_due.REASON_CLOCK:   # see above: a retry leaves the slot owed
+            nxt = _vip_next_run(cf.get('frequency') or 'daily', cf.get('day_of_week'),
+                                cf.get('day_of_month'), cf.get('hour'), cf.get('timezone'))
+            try:
+                client.schema('commcalc').table(tbl).update({'next_run_at': nxt}).eq('org_id', oid).execute()
+            except Exception:
+                pass
         background_tasks.add_task(dispatch[kind], oid)
-        triggered.append(c.get('vendor_name'))
+        triggered.append(f"{c.get('vendor_name')} ({_due_reason})")
     return {"triggered": triggered, "checked": checked,
             # Never silent: a connector this service could not launch is named, with why.
             **({"blocked": blocked} if blocked else {}),
@@ -15418,9 +15406,11 @@ def _dlar_public_cfg(cfg, org_id=None):
     return out
 
 
-def _dlar_set_status(client, org_id, status, detail, mark_run=False, success=None):
+def _dlar_set_status(client, org_id, status, detail, mark_run=False, success=None,
+                     evidence=None):
     """See _sweep_set_status: only a run that IMPORTED data advances last_run_at."""
-    _sweep_set_status(client, 'dlar_sweep_config', org_id, status, detail, mark_run, success)
+    _sweep_set_status(client, 'dlar_sweep_config', org_id, status, detail, mark_run, success,
+                      evidence=evidence)
 
 
 def _do_dlar_sweep(org_id):
@@ -15451,7 +15441,17 @@ def _do_dlar_sweep(org_id):
         # debounced Run Calculation of that period in the background (the outcome shows on the Rep Incentive
         # page). The status line says what the hook did — never "recalculated" for a run that was only queued.
         detail += " · " + _auto_calc.phrase(res.get('auto_calc'))
-        _dlar_set_status(client, org_id, 'ok', detail, mark_run=True)
+        # THE STATUS WORD IS THE SENTENCE'S OWN VERDICT, never a literal (index §COMMCALC-40).
+        # This line used to pass 'ok' whatever `status_sentence` had just concluded, so the sweep page
+        # and the connectors row stayed green over a '⚠ PARTIAL' detail for the ten days October 2026's
+        # unit counts were missing. `status_verdict` is the one home both now dereference.
+        # THE WHOLE FINDING GOES WITH IT. `status_sentence` caps its lists at eight names because a
+        # person reads it; the field-arrival result is the EVIDENCE and goes to the history row whole,
+        # so "which field did the portal rename this to" is answerable without re-running the sweep.
+        _dlar_set_status(client, org_id, dlar_sweep.status_verdict(res), detail, mark_run=True,
+                         evidence={'fields': res.get('fields'), 'content': res.get('content'),
+                                   'vintage': res.get('vintage'), 'written': res.get('written'),
+                                   'skipped_guard': res.get('skipped_guard')})
     except dlar_sweep.DlarLoginError as e:
         _dlar_set_status(client, org_id, 'error', str(e), mark_run=True)
     except Exception as e:
@@ -15521,14 +15521,16 @@ def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
-    due = client.schema('commcalc').table('dlar_sweep_config').select('*') \
-        .eq('enabled', True).lte('next_run_at', now_iso).execute().data or []
+    due = _sweep_due_rows(
+        client.schema('commcalc').table('dlar_sweep_config').select('*')
+        .eq('enabled', True).execute().data, now_iso)
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
-        nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
-                            cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
-        client.schema('commcalc').table('dlar_sweep_config').update(
-            {'next_run_at': nxt}).eq('org_id', oid).execute()
+        if _sweep_due_by_clock(cfg):      # a retry leaves the scheduled slot owed (§COMMCALC-45)
+            nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
+                                cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
+            client.schema('commcalc').table('dlar_sweep_config').update(
+                {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_dlar_sweep, oid)
     return {"triggered": len(due)}
 
@@ -15681,8 +15683,9 @@ def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
-    due = client.schema('commcalc').table('b2b_sweep_config').select('*') \
-        .eq('enabled', True).lte('next_run_at', now_iso).execute().data or []
+    due = _sweep_due_rows(
+        client.schema('commcalc').table('b2b_sweep_config').select('*')
+        .eq('enabled', True).execute().data, now_iso)
     off = []
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
@@ -15691,10 +15694,11 @@ def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = 
         if _route_closed(_source_route_policy(client, oid, {"processor": cfg.get("connector")})):
             off.append({"org_id": oid, "skipped": "route_disabled"})
             continue
-        nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
-                            cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
-        client.schema('commcalc').table('b2b_sweep_config').update(
-            {'next_run_at': nxt}).eq('org_id', oid).execute()
+        if _sweep_due_by_clock(cfg):      # a retry leaves the scheduled slot owed (§COMMCALC-45)
+            nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
+                                cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
+            client.schema('commcalc').table('b2b_sweep_config').update(
+                {'next_run_at': nxt}).eq('org_id', oid).execute()
         background_tasks.add_task(_do_b2b_sweep, oid)
     return {"triggered": len(due) - len(off), "route_disabled": off}
 
@@ -15921,13 +15925,13 @@ def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
     for cfg in (client.schema('commcalc').table('epay_sweep_config').select('*')
                 .eq('enabled', True).execute().data or []):
         oid = cfg.get('org_id') or ORG_ID
-        nra = cfg.get('next_run_at')
-        connector_due = not nra or nra <= now_iso
+        _dv = _sweep_due.verdict(cfg, now_iso)            # index §COMMCALC-45, not a stored clock
+        connector_due = bool(_dv.get('due'))
         slot_due, shared = _epay_sub_schedule(client, oid, now_iso)
         run_now = list(slot_due) + (list(shared) if connector_due else [])
         if not run_now:
             continue
-        if connector_due:
+        if _dv.get('reason') == _sweep_due.REASON_CLOCK:   # a retry leaves the slot owed
             nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
                                 cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
             client.schema('commcalc').table('epay_sweep_config').update(
@@ -38963,14 +38967,16 @@ async def ftp_run_due(x_notify_secret: str = Header(default="")):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
-    due = (client.schema('commcalc').table('ftp_sweep_config').select('*')
-           .eq('enabled', True).lte('next_run_at', now_iso).execute().data) or []
+    due = _sweep_due_rows(
+        (client.schema('commcalc').table('ftp_sweep_config').select('*')
+         .eq('enabled', True).execute().data), now_iso)
     ran = []
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
         res = await _run_ftp_sweep(oid)
-        nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
-        client.schema('commcalc').table('ftp_sweep_config').update({'next_run_at': nxt}).eq('org_id', oid).execute()
+        if _sweep_due_by_clock(cfg):      # a retry leaves the scheduled slot owed (§COMMCALC-45)
+            nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
+            client.schema('commcalc').table('ftp_sweep_config').update({'next_run_at': nxt}).eq('org_id', oid).execute()
         ran.append({"org_id": oid, "result": res})
     return {"ran": len(ran), "detail": ran}
 
@@ -41302,7 +41308,7 @@ def _pull_diag_payload(res):
                   "buttons", "date_fields") if probe.get(k) is not None}
     return {
         "at": datetime.now(timezone.utc).isoformat(),
-        "status": str(res.get("status") or res.get("error") or "")[:600],
+        "status": _status_detail.fit(res.get("status") or res.get("error") or "", 600),
         "delivered": _pull_delivered(res), "rows_ingested": res.get("rows_ingested"),
         "reason": res.get("reason"),
         "reports_page_reachable": res.get("reports_page_reachable"),
@@ -41338,8 +41344,8 @@ def _record_pull_result(client, sid, org_id, res, *, source="portal-pull"):
     delivered = _pull_delivered(res)
     try:
         _source_stamp(client, sid, org_id,
-                      {"last_status": str((res or {}).get("status")
-                                          or (res or {}).get("error") or "ok")[:600],
+                      {"last_status": _status_detail.fit((res or {}).get("status")
+                                                           or (res or {}).get("error") or "ok", 600),
                        "auth_status": "authenticated"},
                       success=delivered)
     except Exception:

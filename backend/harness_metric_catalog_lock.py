@@ -13,6 +13,9 @@ What it refuses to let happen:
   §C  an endpoint serves a category list it built itself instead of asking `_metric_catalog`
   §D  a frontend screen hard-codes a category list, a rule kind or a split basis
   §E  a NEW direct reader of `daily_closing.counts` appears (the pinned set may only SHRINK)
+  §G  (mig 1102) a second parser of `feed_counterpart`, a second derivation of financed units, or a
+      caller that stops dereferencing either — and the ONE remaining legacy declared-vs-captured
+      site stays pinned so a third cannot appear
   §F  negative controls — the scanners can actually see a violation
 
 Stdlib only, DB-free, no imports from the app beyond the two pure modules under test.
@@ -28,6 +31,7 @@ sys.path.insert(0, HERE)
 from app.modules.closing import metric_catalog as mc          # noqa: E402
 from app.modules.closing import count_config                  # noqa: E402
 from app.modules.commcalc import daily_incentive as di        # noqa: E402
+from app.modules.closing import declared_feed_recon as dfr    # noqa: E402
 
 P = F = 0
 def ok(cond, label, extra=""):
@@ -58,10 +62,20 @@ def fe_files(root):
                 yield os.path.join(dirpath, f)
 
 
+_CODE_CACHE: dict = {}
+
+
 def code_only(path):
     """A file's executable text — docstrings and comments stripped. Doctrine explains WHY a rule
     exists and may quote the owner's own examples; what must not carry a second copy of the
     vocabulary is the code."""
+    if path in _CODE_CACHE:
+        return _CODE_CACHE[path]
+    _CODE_CACHE[path] = _strip(path)
+    return _CODE_CACHE[path]
+
+
+def _strip(path):
     try:
         src = open(path, encoding="utf-8").read()
     except OSError:
@@ -245,6 +259,92 @@ ok(mc.storage_for({"declared_by": "store", "value_kind": "count"}) == "counts_js
    "E3 the home still routes a mig-501 category to the mig-501 store (no tenant moves)")
 
 
+
+print("\n§G  mig 1102 — the counterpart has one parser and the feed has one derivation")
+HOME_RECON = "backend/app/modules/closing/declared_feed_recon.py"
+HOME_UNITS = "backend/app/modules/commcalc/financing_report.py"
+
+eq(dfr.COUNTERPART_KINDS, ("financing", "recon_class"), "G1 the counterpart kinds are the two")
+eq(dfr.RECON_CLASSES, tuple(c for c in mc.RECON_CLASSES if c != "other"),
+   "G2 the reconcilable recon classes mirror metric_catalog's, less the non-comparing 'other'")
+
+# ONE PARSER. A module that splits the counterpart string itself has a second reading of it, and a
+# second reading is how one surface starts reconciling a category another leaves alone.
+# `code_only` joins tokens with spaces, so the scanner must tolerate both the attribute form
+# (`d.feed_counterpart.split`) and the subscript form (`d["feed_counterpart"].split`).
+_SPLITS = re.compile(
+    r"""feed_counterpart\s*["']?\s*\]?\s*(?:\.\s*(?:split|partition|startswith|strip)|\[)""")
+parser_copies = [rel(p).replace(os.sep, "/") for p in py_files(APP)
+                 if rel(p).replace(os.sep, "/") != HOME_RECON
+                 and _SPLITS.search(code_only(p))]
+eq(parser_copies, [], "G3 nobody but the reconciler reads a feed_counterpart string apart")
+# The prefixes themselves are the vocabulary; writing one as a literal elsewhere re-declares it.
+_PREFIX = re.compile(r"""["'](?:financing|recon_class):["']|["']financing:\{""")
+prefix_copies = [rel(p).replace(os.sep, "/") for p in py_files(APP)
+                 if rel(p).replace(os.sep, "/") != HOME_RECON
+                 and _PREFIX.search(code_only(p))]
+ok(prefix_copies in ([], ["backend/app/modules/closing/router.py"]),
+   "G4 the counterpart prefixes are built by the home (the endpoint's one fold is allowed)",
+   f"got {prefix_copies!r}")
+
+# ONE DERIVATION of "which financed units did this feed capture". `financing_registry` owns the
+# matcher and `financing_report` owns the collapse; a THIRD module classifying financed lines is the
+# duplicate defect — the path that accuses a rep would drift from the path that pays one.
+PINNED_FINANCING_CLASSIFIERS = {
+    "backend/app/modules/commcalc/financing_registry.py",   # the matcher's own home
+    "backend/app/modules/commcalc/financing_report.py",     # the one derivation
+    "backend/app/modules/commcalc/sales_comparison.py",     # pre-existing; its own report's grain
+}
+classifiers = {rel(p).replace(os.sep, "/") for p in py_files(APP)
+               if re.search(r"matcher_hits\s*\(", code_only(p))}
+eq(sorted(classifiers - PINNED_FINANCING_CLASSIFIERS), [],
+   "G5 no NEW module classifies a financed sale line")
+ok(len(classifiers) <= len(PINNED_FINANCING_CLASSIFIERS),
+   "G5b the financed-line classifier set may only shrink",
+   f"{len(classifiers)} > {len(PINNED_FINANCING_CLASSIFIERS)}")
+
+# THE CALLER STAYS WIRED. Writing the registry without wiring the callers to it has happened three
+# times here (index §19.18); these two assertions are what stops the fourth.
+_rep_src = code_only(os.path.join(APP, "modules", "commcalc", "financing_report.py"))
+ok(re.search(r"vendor_units\s*\(", _rep_src),
+   "G6 financing_report.build still FOLDS vendor_units rather than deriving its own")
+_closing_src = code_only(os.path.join(APP, "modules", "closing", "router.py"))
+ok("vendor_units" in _closing_src,
+   "G7 the declared-vs-captured endpoint dereferences vendor_units")
+ok("declared_feed_recon" in _closing_src
+   and re.search(r"declared_feed_recon\s*\.\s*reconcile\s*\(", _closing_src),
+   "G8 ...and compares through the one reconciler")
+
+# THE ONE REMAINING LEGACY SITE, pinned. `closing/router`'s activation/upgrade count recon is the
+# older expression of the same question (mig 501, hard-wired to two feed figures). It cannot be
+# routed through the reconciler until `metric_catalog.build` falls back to the standard three, which
+# is a mig-1072 semantic change touching the closing form, the incentive engine and the targets
+# axis — stated as not done in PR mig-1102. What this pin buys: a THIRD expression cannot appear.
+PINNED_LEGACY_RECON = {"backend/app/modules/closing/router.py"}
+legacy = {rel(p).replace(os.sep, "/") for p in py_files(APP)
+          if re.search(r"""\bact_var\b|\bupg_var\b""", code_only(p))}
+eq(sorted(legacy - PINNED_LEGACY_RECON), [],
+   "G9 no THIRD declared-vs-captured comparison has appeared")
+ok(len(legacy) <= len(PINNED_LEGACY_RECON),
+   "G9b the legacy comparison set may only shrink", f"{len(legacy)} > {len(PINNED_LEGACY_RECON)}")
+
+# THE SCREEN ASKS TOO. A hard-coded counterpart list on the editor is the same defect as a
+# hard-coded category list, which §D already forbids for the categories themselves.
+fe_counterpart_copies = []
+for p in fe_files(FE):
+    src = open(p, encoding="utf-8").read()
+    if re.search(r"""['"]financing:[a-z_]+['"]""", src) or \
+       re.search(r"""['"]recon_class:(?:activation|upgrade)['"]""", src):
+        fe_counterpart_copies.append(rel(p).replace(os.sep, "/"))
+eq(fe_counterpart_copies, [],
+   "G10 no screen hard-codes a counterpart; the server offers them from the tenant's own registries")
+
+# The reconciler never writes and never pays — the posture, locked rather than merely documented.
+_recon_src = code_only(os.path.join(APP, "modules", "closing", "declared_feed_recon.py"))
+for _w in ("insert", "update(", "delete(", "upsert", "schema("):
+    ok(_w not in _recon_src, f"G11 the reconciler is read-only: no {_w!r} in its code")
+ok("blocked" not in _recon_src, "G12 no verdict here can ever be a close block")
+
 print("\n§F  negative controls — the scanners can see a violation")
 _fake = "x = ('per_unit', 'percent_of_amount', 'threshold_pool')"
 ok(re.search(r"[=\(]\s*\(\s*['\"]per_unit['\"]", _fake) is not None,
@@ -266,6 +366,14 @@ ok(code_only(os.path.join(APP, "modules", "closing", "metric_catalog.py")) != ""
    "F6 the docstring stripper returns code, not nothing")
 ok("THE ONE HOME" not in cat_src,
    "F7 ...and the stripper really did remove the docstring")
+ok(_SPLITS.search('x = d["feed_counterpart"].split(":")') is not None,
+   "F8 the counterpart-parser scanner fires on a planted split")
+ok(re.search(r"matcher_hits\s*\(", "if _reg.matcher_hits(r, m):") is not None,
+   "F9 the financed-line scanner fires on a planted classify")
+ok(re.search(r"""\bact_var\b""", "act_var = a - b") is not None,
+   "F10 the legacy-comparison scanner fires on a planted copy")
+ok(re.search(r"""['\"]financing:[a-z_]+['\"]""", "const x = 'financing:edge'") is not None,
+   "F11 the screen scanner fires on a planted counterpart literal")
 
 print(f"\n{'='*70}\n  {P} passed / {F} failed\n{'='*70}")
 sys.exit(1 if F else 0)

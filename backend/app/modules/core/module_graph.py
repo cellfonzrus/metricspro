@@ -121,6 +121,13 @@ FACTS: dict[str, dict] = {
             # The DM-verify chargeback strip (§CORE-17.3f) — money out of a named person's pay,
             # opening to the missed verifications it charges for.
             'app/modules/closing/ops_chargeback_drilldown.py': ('report_drilldown',),
+            # §CLOSING-02 — Declared vs Captured. TWO panels, because its two figures are Σ over the
+            # SAME row out of DIFFERENT feeds (the closing sheets and the sales pair), which is
+            # §CORE-17.3m's grain rule and this report's whole subject. The three verdict COUNTS get
+            # no panel: the table below them IS that list. The absence reason on a captured row is
+            # DEREFERENCED from `declared_feed_recon`, which is the one home for telling the four
+            # absences apart — re-deciding it here could blame a rep for a feed nobody loaded.
+            'app/modules/closing/declared_feed_drilldown.py': ('report_drilldown',),
             # The Management Envelope Receipt (§CORE-17.3g). THREE PEOPLE COUNT ONE ENVELOPE, in
             # three tables, so each figure names only the ones it was read out of — and it serves a
             # SECOND panel family, one per By-employee line, the owner's employee-level cash
@@ -327,6 +334,11 @@ FACTS: dict[str, dict] = {
             'app/modules/account/device_billing_drilldown.py': ('report_drilldown',),
             'app/modules/account/inventory_value_drilldown.py': ('report_drilldown',),
             'app/modules/account/memo_recon_drilldown.py': ('report_drilldown',),
+            # §COMMCALC-43 — the brought-device-then-upgrade flag, TWO grains in one catalogue
+            # because its two money figures are Σ over the same row out of DIFFERENT feeds: the
+            # sales feed for what the store rang, the carrier's payment feed for the chargeback
+            # amount. One panel for both would attribute a carrier payment to the sales feed.
+            'app/modules/commcalc/byod_upgrade_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -1065,6 +1077,45 @@ FACTS: dict[str, dict] = {
             # forms no opinion of its own about any device: it declares which column each figure was
             # read out of and which relation held it.
             'app/modules/commcalc/device_financing_drilldown.py': ('_drr',),
+            # §COMMCALC-44 — the one home for the DOLLARS against a device binds this fact's pure
+            # fold to the org's config and the paged feed read. Both reports that want the figure
+            # go through it, so neither re-derives this fact's verdict vocabulary.
+            'app/modules/commcalc/carrier_device_money.py': ('_drr',),
+        },
+    },
+    # ══════════════════════════════════════════════════════════════════════════════════════════
+    # Factored out of `router._device_line_reimb_run` on 2026-10-28 when §COMMCALC-43's chargeback
+    # amount needed the same figure. It is NOT a sibling of the fact above: that one owns the
+    # VERDICT (paid here, paid elsewhere, never paid, not measured) and this one owns only the
+    # DOLLARS against one device and the I/O that binds the §58/§66/§27 questions to them. Two
+    # reports read this; both read the verdict fact through it.
+    'carrier_device_money': {
+        "question": 'How much device-financing money has the carrier already paid against THIS '
+                    'device? It binds the org\'s own declarations to §58\'s classification, asks '
+                    '§66 whether a classification is evidence at all, asks §27 how long either '
+                    'side of the event the money may arrive, reads the per-line feed paged, and '
+                    'folds it per device through §65\'s pure `carrier_line_side`. It answers None '
+                    'and never 0.00 for a device the feed carries no row for, because a rebate '
+                    'lands months after the sale and a confident zero there is the fake-zero '
+                    'class.',
+        "homes": ('app/modules/commcalc/carrier_device_money.py',),
+        "index": ('COMMCALC-44',),
+        "locks": ('harness_carrier_device_money.py',
+                  'harness_device_line_reimbursement.py'),
+        # SNAPSHOT — written BY HAND, multi-line, not blessed (see the note on the fact above).
+        "callers": {
+            # The P&L's equipment-reimbursement side: one row per device, the figure the statement
+            # is booked on.
+            'app/modules/commcalc/router.py': ('_cdm',),
+            # §COMMCALC-43's CHARGEBACK AMOUNT — the carrier money standing against the handset on
+            # a flagged brought-device-then-upgrade pair. It reads the SAME verdict the P&L books
+            # on, which is the point: a watchdog screen and the statement must not quote two
+            # different rebates for one phone.
+            'app/modules/commcalc/watchdog_router.py': ('_cdm',),
+            # §COMMCALC-43's drill-down catalogue names the relation this home reads the chargeback
+            # amount out of, by dereferencing `FEED_TABLE` rather than spelling it — so a panel
+            # cannot attribute the figure to the feed the ROW was found in (§CORE-17.3j).
+            'app/modules/commcalc/byod_upgrade_drilldown.py': ('_cdm',),
         },
     },
     'device_cost_store': {
@@ -1154,6 +1205,11 @@ FACTS: dict[str, dict] = {
             # of that one rule would let a target be SET in units and MEASURED in dollars, so it
             # belongs to this question rather than being a fact of its own.
             'app/modules/commcalc/targets_engine.py': ('_figure_unit',),
+            # §CLOSING-02 (mig 1102) — the declared-vs-captured reconciler asks the catalog WHO
+            # declares a category (`is_employee_declared`), because the grain of an accusation is
+            # the category's and not the feed's: folding a per-rep capture against a store
+            # declaration accused a store of not declaring a sale it had declared.
+            'app/modules/closing/declared_feed_recon.py': ('_metrics',),
         },
     },
     'daily_incentive_shapes': {
@@ -1209,6 +1265,10 @@ FACTS: dict[str, dict] = {
             # The closing module: `_name_match` (the screening rule) AND the who-worked signal,
             # which is the surface the owner reported.
             'app/modules/closing/router.py': ('_person_identity',),
+            # §CLOSING-02 — the declared-vs-captured reconciler joins the name a rep typed at
+            # closing to the salesperson on the sales feed, which is exactly the punch-against-sale
+            # join this key exists for. It dereferences `folded_token_key` and folds nothing itself.
+            'app/modules/closing/declared_feed_recon.py': ('_person',),
             # A byte copy of the router's screening rule, kept local to dodge an import cycle the
             # pure home does not have.
             'app/modules/closing/ops_chargebacks.py': ('_person_identity',),
@@ -1338,6 +1398,13 @@ FACTS: dict[str, dict] = {
             # evidence, so a last-resort basis added later cannot start presenting itself as a fact.
             'app/modules/commcalc/sales_margin_drilldown.py': ('_cdc',),
             'app/modules/commcalc/router.py': ('_cdc', '_cdc_gp', '_cdc_leg'),
+            # §COMMCALC-44 — the device-money home asks this fact THREE of its questions at once:
+            # which components are the device-financing side (`device_reimb_components`, §69),
+            # whether a classification is evidence at all (`component_is_evidence`, §66) and the
+            # classification itself (`classify`). It carries no payment-type vocabulary and no basis
+            # allowlist of its own; the POLICY of declining a non-evidence component belongs to its
+            # per-device grain and lives there.
+            'app/modules/commcalc/carrier_device_money.py': ('_cdc',),
         },
     },
     'installment_month_of_life': {
@@ -1366,6 +1433,10 @@ FACTS: dict[str, dict] = {
             'app/modules/asset/router.py': ('_reg',),
             'app/modules/closing/cash_watchdog.py': ('_reg',),
             'app/modules/closing/ops_chargebacks.py': ('_reg',),
+            # §COMMCALC-43. The byod-and-upgrade detector spells no severity, area or label of its
+            # own — `harness_byod_upgrade_day` §G1 fails the build if it declares one — so the
+            # Management Watchdog board gains a page for it by this registration alone.
+            'app/modules/commcalc/byod_upgrade_day.py': ('_reg',),
             'app/modules/commcalc/flags.py': ('_reg',),
             'app/modules/commcalc/multi_handset_day.py': ('_reg',),
             'app/modules/commcalc/portout_flags.py': ('_reg',),
@@ -1580,6 +1651,34 @@ FACTS: dict[str, dict] = {
             'app/modules/notify/report_registry.py': ('SR',),
         },
     },
+    'sweep_due': {
+        "question": ("Should this sweep run NOW, and why — or is the only answer anybody has a stored "
+                     "clock time?"),
+        "homes": ('app/modules/commcalc/sweep_due.py',),
+        "index": ('COMMCALC-45',),
+        "locks": ('harness_sweep_due.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            # The defect was HERE and nowhere else: eight `run-due` endpoints each comparing a stored
+            # clock, four of them in SQL where no other reason can be expressed. §F of the lock reads
+            # this file as source and pins the one excused filter that remains.
+            'app/modules/commcalc/router.py': ('_sweep_due',),
+        },
+    },
+    'sweep_verdict': {
+        "question": ("Did this sweep run leave the feed whole — and does the stored status WORD say "
+                     "the same thing as the status sentence beside it?"),
+        "homes": ('app/modules/commcalc/dlar_sweep.py',),
+        "index": ('COMMCALC-40',),
+        "locks": ('harness_portal_cell.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            # The defect was HERE, not in the home: the router passed the literal 'ok' beside a
+            # detail line that said "⚠ PARTIAL". §H of the lock reads this file as source and keeps
+            # the literal as an armed negative control.
+            'app/modules/commcalc/router.py': ('dlar_sweep',),
+        },
+    },
     'portal_cell': {
         "question": ("Did the source actually SEND this figure, or is this a zero we wrote down? And "
                      "which source field feeds which column?"),
@@ -1625,6 +1724,19 @@ FACTS: dict[str, dict] = {
             'app/modules/storeops/salary_owed.py': ('_hours_basis',),
         },
     },
+    'status_detail': {
+        "question": ("This status must fit a column — which part of it survives, and does the reader "
+                     "know something was dropped?"),
+        "homes": ('app/core/status_detail.py',),
+        "index": ('CORE-18',),
+        "locks": ('harness_status_detail.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            'app/modules/commcalc/auto_calc.py': ('_status_detail',),
+            'app/modules/commcalc/router.py': ('_status_detail',),
+            'app/modules/commcalc/vidapay_sweep.py': ('_status_detail',),
+        },
+    },
     'feed_lineage': {
         "question": "Which table is the LIVE feed for this item, and which column means 'arrived'?",
         "homes": ('app/modules/commcalc/data_lineage_registry.py',),
@@ -1633,6 +1745,13 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             'app/modules/commcalc/auto_calc.py': ('_lineage',),
+            # §COMMCALC-41 — the registry of DERIVED BUILDS declares which tables make each stored
+            # snapshot stale, so the post-landing hook can rebuild it. Every one of those table names
+            # is dereferenced from here (`ASSET_LEDGER`, `PAYMENT_DETAIL`, `DISTRIBUTOR_INVOICES`,
+            # `MI_RESIDUAL`, `COMMISSION_CALC_FEEDS`) rather than spelled beside the build: a second
+            # copy of "which table is this feed" is exactly the divergence this registry exists to
+            # stop, and `harness_derived_build_lock.py` §F fails the build on a literal.
+            'app/modules/commcalc/derived_builds.py': ('_lineage',),
             # A DRILL-DOWN HAS TO NAME A TABLE, so the cash-recon tiles' provenance asks the
             # registry which feed the resolved bill-payment processor lands in, and which table is
             # the live sales feed (§CORE-17.3a). Naming either at the call site would be the copied
@@ -1863,9 +1982,24 @@ FACTS: dict[str, dict] = {
         "homes": ('app/modules/commcalc/line_class.py',),
         "index": ('6', 'COMMCALC-03.23'),
         "locks": ('harness_line_class_lock.py', 'harness_activation_event_lock.py'),
-        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`, but CHECK THE
+        # DIFF: the rewriter strips the hand-written comments out of these `callers` dicts, so the
+        # two §COMMCALC-43 entries below were added by hand.
         "callers": {
             'app/modules/asset/router.py': ('_lc',),
+            # §COMMCALC-43. "A BYOD activation and an upgrade on one number" is a question about
+            # ACTIVATION EVENTS, and this home is the only thing that knows what one is: it folds an
+            # invoice's activation-type lines into events keyed on the line's own phone number and
+            # resolves each event's class by the org's declared precedence. The detector therefore
+            # owns no class vocabulary and no phone normaliser of its own (§D7 / §G3 of its lock
+            # fail the build if either appears), and the 'BYOD Upgrade' line that is ONE byod event
+            # rather than a pair is correct here for free.
+            'app/modules/commcalc/byod_upgrade_day.py': ('_lc',),
+            # The §COMMCALC-43 endpoint and the watchdog tick resolve the ORG's rules
+            # (`router._line_rules_of`) and hand them to the detector, so a tenant whose POS spells
+            # the activation kind in `category` is classified by its own declaration rather than by
+            # the house default — and they fall back to HOUSE_RULES by name, never by re-deriving.
+            'app/modules/commcalc/watchdog_router.py': ('_lc',),
             'app/modules/closing/router.py': ('_lcls',),
             'app/modules/commcalc/calculator.py': ('_lc',),
             'app/modules/commcalc/commission_engine.py': ('_lc',),
@@ -2427,6 +2561,10 @@ FACTS: dict[str, dict] = {
             'app/modules/payables/engine.py': ('_feed_read',),
             'app/modules/payables/unsold_inventory.py': ('_feed_read',),
             'app/modules/payables/vendor_invoice.py': ('_feed_read',),
+            # §COMMCALC-44 — the carrier's per-line payment feed, ~30,000 rows a month and growing.
+            # It was already read through this home inline in the router; the read moved WITH the
+            # question rather than reverting to a private page loop.
+            'app/modules/commcalc/carrier_device_money.py': ('_feed_read',),
         },
     },
     'payment_category_map': {

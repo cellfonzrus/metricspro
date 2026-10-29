@@ -52,7 +52,13 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from app.modules.commcalc import data_lineage_registry as _lineage
+# THE registry of "a stored snapshot that must be rebuilt when its inputs land" (§COMMCALC-41).
+# This hook decides WHETHER a landing makes something stale by asking it — it lists no build and
+# no table of its own.
+from app.modules.commcalc import derived_builds as _builds
 from app.modules.account import _period as _pd
+# THE one home of "a status line that must fit a column keeps its ends" (found 2026-10-27).
+from app.core import status_detail as _status_detail
 
 HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
 MIGRATION = "1030_auto_calc_on_landing.sql"
@@ -86,6 +92,9 @@ POLL_SECONDS = 30
 # Plain words for where a landing came from (the lander's own trace-source word → a phrase an owner reads).
 SOURCE_LABELS = {
     "manual": "the Upload page",
+    # NOT AN IMPORT AT ALL — a person changed a declaration (net payment terms, which table a carrier reads).
+    # The sentence an operator reads has to say so, or a rebuild with nothing uploaded looks unexplained.
+    "payable_source_map_edit": "a change to the carrier's payment terms or source settings",
     "email_sweep": "Email Auto-Import",
     "ftp_sweep": "the FTP drop",
     "onboarding-import": "the mapped upload",
@@ -98,6 +107,7 @@ SOURCE_LABELS = {
     "pos_module": "the built-in POS sync",
     "ingest_guard_release": "rows released from the store-guard review",
     "ma_manual": "the master-agent manual upload",
+    "asset_ledger_upload": "the Asset Lending upload (or the VIP sweep that downloads it)",
     "import-wizard": "the commission import wizard",
 }
 
@@ -310,7 +320,8 @@ def classify_run(result):
     if status == "done":
         errs = r.get("save_errors") or []
         if errs:
-            return "calculated_with_errors", "; ".join(str(e) for e in errs)[:600]
+            return "calculated_with_errors", _status_detail.fit(
+                "; ".join(str(e) for e in errs), 600)
         return "calculated", ""
     if status == "error":
         msg = str(r.get("error") or "the calculation stopped with no message").strip()
@@ -515,6 +526,35 @@ def _record_last(client, org_id, period, rec, durable):
         print(f"WARN auto-calc outcome not recorded org={org_id} period={period} ({rec.get('outcome')}): {e}")
 
 
+def _queue_builds(client, org_id, stale, entry, now, cfg):
+    """Queue every ORG-scoped derived build this landing made stale, through the registry's own queue. Returns
+    what it did (the lander puts it in its response). Never raises into a lander."""
+    out = {"queued": False, "builds": [], "unreadable": []}
+    if not stale:
+        return out
+    try:
+        durable = _builds.state_ready(client)
+        for build, err in stale:
+            if err:
+                out["unreadable"].append({"build": build["key"], "error": err})
+            if not cfg["on"]:
+                _builds.record_last(client, org_id, build["key"],
+                                    _builds.record("off", build, [entry], at=entry.get("at")), durable)
+                continue
+            _builds.queue(client, org_id, build["key"], [entry], now, durable)
+            out["builds"].append(build["key"])
+        out["queued"] = bool(out["builds"])
+        out["mode"] = "durable" if durable else "process"
+        if out["builds"]:
+            labels = ", ".join((_builds.by_key(k) or {}).get("label") or k for k in out["builds"])
+            out["sentence"] = (f"{labels} will rebuild automatically once uploads have been quiet for "
+                               f"{cfg['debounce_minutes']} minute(s).")
+    except Exception as e:                                  # a lander is never broken by the queue
+        print(f"WARN derived-build queue failed org={org_id}: {e}")
+        out["error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
 def landed(client, org_id, *, table, periods, source, filename=None, rows=None, now=None):
     """THE post-landing hook. Every lander calls it AFTER its rows are written. Queues one Run Calculation per
     (org, month) touched when `table` is calculation input and the org's config is on; records 'off' when it is
@@ -524,26 +564,42 @@ def landed(client, org_id, *, table, periods, source, filename=None, rows=None, 
             return {"queued": False, "reason": "no_org"}
         if rows is not None and not rows:
             return {"queued": False, "reason": "nothing_landed", "table": table}
-        if not is_calc_feed(table):
+        # WHAT THIS LANDING MAKES STALE. Two questions, one hook: the period's commission calculation (the
+        # registry's period-scoped build, asked through `is_calc_feed`), and every ORG-scoped snapshot whose
+        # declared inputs include this table. A table that is neither is still answered honestly.
+        is_feed = is_calc_feed(table)
+        stale = _builds.stale_builds(client, org_id, table)
+        if not is_feed and not stale:
             return {"queued": False, "reason": "not_a_calc_input", "table": table}
-        ps = month_periods(periods)
-        if not ps:
-            return {"queued": False, "reason": "no_period", "table": table}
         now = now or _now()
         cfg = load_config(client, org_id)
         entry = landing_entry(source, table, filename, rows, _iso(now))
-        durable = state_ready(client)
+        builds_out = _queue_builds(client, org_id, stale, entry, now, cfg)
+        # A month-period is what the COMMISSION calculation is keyed on. A snapshot of "what we owe" is not a
+        # month's figure, so a landing with no readable period still refreshes the org-scoped builds.
+        ps = month_periods(periods) if is_feed else []
+        if is_feed and not ps:
+            return {"queued": bool(builds_out.get("queued")), "reason": "no_period", "table": table,
+                    "builds": builds_out}
         if not cfg["on"]:
             for p in ps:
-                _record_last(client, org_id, p, record("off", p, [entry], at=_iso(now)), durable)
-            return {"queued": False, "reason": "off", "periods": ps, "config": cfg,
-                    "sentence": sentence("off", ", ".join(ps), [entry], at=_iso(now))}
+                _record_last(client, org_id, p, record("off", p, [entry], at=_iso(now)), durable=state_ready(client))
+            return {"queued": False, "reason": "off", "periods": ps, "config": cfg, "builds": builds_out,
+                    "sentence": sentence("off", ", ".join(ps), [entry], at=_iso(now)) if ps else None}
+        durable = state_ready(client)
         for p in ps:
             _queue(client, org_id, p, [entry], now, durable)
-        return {"queued": True, "periods": ps, "mode": "durable" if durable else "process",
+        queued = bool(ps) or bool(builds_out.get("queued"))
+        return {"queued": queued, "periods": ps,
+                # Nothing queued and a build queue that complained is an ERROR, never a silent "fine": a
+                # rebuild that was supposed to be live and was not is exactly what this hook exists to stop.
+                **({} if queued else {"reason": "error" if builds_out.get("error") else "nothing_queued",
+                                      "error": builds_out.get("error")}),
+                "mode": "durable" if durable else "process", "builds": builds_out,
                 "debounce_minutes": cfg["debounce_minutes"],
-                "sentence": sentence("queued", ", ".join(ps), [entry], at=_iso(now),
-                                     debounce_minutes=cfg["debounce_minutes"])}
+                "sentence": (sentence("queued", ", ".join(ps), [entry], at=_iso(now),
+                                      debounce_minutes=cfg["debounce_minutes"]) if ps
+                             else builds_out.get("sentence"))}
     except Exception as e:
         print(f"WARN auto-calc hook failed org={org_id} table={table} periods={periods}: {e}")
         return {"queued": False, "reason": "error", "error": f"{type(e).__name__}: {e}"}
@@ -640,6 +696,13 @@ def run_due(client, now=None, runner=None):
             continue
         out.append(run_one(client, org_id, period, landings, durable=is_durable, cfg=cfg,
                            runner=runner, now=now))
+    # THE SAME TICK runs the org-scoped derived builds (§COMMCALC-41). They ride this poller deliberately: a
+    # second thread would be a second scheduler for one question. `runner` is this function's test seam for the
+    # COMMISSION runner only, so it is not passed on — a build's runner is the registry's.
+    try:
+        out += _builds.run_due(client, now=now)
+    except Exception as e:
+        print(f"WARN derived-build tick failed: {e}")
     return out
 
 

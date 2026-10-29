@@ -84,6 +84,8 @@ Primary code homes:
 | POS-07 | **The customer's own address on the receipt** | "The receipt should show the complete address for the customer as in the system." Where does a receipt get the address it prints, and why did an imported copy of a receipt carry the customer's address when the till slip of the same sale carried only their name? |
 | POS-08 | **The emailed receipt as a file** | "The receipt is going in the body of the email — it should be a PDF attachment as well." What is in the file, is it the same receipt as the mail it rides on, and what happens to the mail when the file cannot be built? |
 | POS-09 | **Sending a receipt — one home, two channels, every screen** | "I need the email option in the Sales Log viewer, and the send-notification option via WhatsApp also." Why could the Sale Log only PRINT a receipt it could already show, who decides which number or address a receipt goes to, and what does a customer get on WhatsApp? |
+| POS-10 | **What the shop IS, on a receipt** | "The RQ receipt email to the customer does not show the address and looks fake — the till thermal printer receipt came out ok." Where does a receipt get the shop's name, address, phone and licence, and why did one layout print all of it while the other printed the company name alone? |
+| POS-11 | **The page a receipt prints on, and the Bill To** | "Do not put the reprint date and time on top with the word Sale in the middle of the screen; the Bill To should have the customer address printed." Whose header is that across the top of a printed receipt, and why does a Bill To show a bare name when the renderer prints the address? |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -127,6 +129,10 @@ Primary code homes:
 | CORE-17 | **A figure names the rows behind it** | "Where is this number coming from? Open a reported figure and see the rows it was summed from, and which report, feed or upload each row came out of. Which reports still have no drill-down, and what stops the next one shipping without one?" |
 | CORE-14 | **One palette, dereferenced** | "Make the colours of the side menu alternate between the logo colours so each item stands out. Where does a colour used by the chrome live, how many places spell it, and what proves a row stays readable once it is coloured?" |
 | CORE-16 | **A self-call carries the tenant it is acting as** | "The envelope payout screen says the commission accrual and salary-owed fetches failed with 409 Conflict. What identity does a call the platform makes to itself carry, which company does it say it is acting for, and what stops the next such call from dropping it?" |
+| CORE-19 | **A test is a gate, or it is a file** | "We need to define all development we do to follow the following: unit testing, integration testing, test-driven development. What runs a test in this repo, what stops a test reaching the live database when there is no staging one, and what fails the build the day the framework quietly comes undone?" |
+| CORE-20 | **A request path is not evidence of which route it reached** | "Act as a security agent and find the vulnerability in the code. Which paths does the platform let through without a login, what declares that list, and what stops a route the list never meant to name from satisfying it?" |
+| CLOSING-02 | **A declared category names what in the sales feed should agree with it** | "Add a field in as no of edge for total and no of financicing in thr daily closing for all employees to declare along with the $amount of edge and acima as they get paid for each transcoding they do, this would then be checked with our system if our system is capturing the sales as declared by the sales rep." Which half of that already existed as config, what had no home at all, and what stops the next category from being checked against a number nobody measured? |
+| CORE-21 | **An in-process cache keyed by something a client can mint is bounded by construction** | "Simulate a thousand users and see what breaks. What does the platform keep in each worker's memory while they are signed in, what decides when an entry leaves, and what fails the build the day a new cache ships without a bound?" |
 | COMMCALC-04 | **Whether a row is filed under a month is a fact about the table** | "Every upload of the marketplace handset fulfilment report has been refused since the day the row-date stamp shipped, and the customer was told the feature isn't switched on. Which table stores a row's month, who decides it, and which other write paths kept their own answer?" |
 | COMMCALC-01 | **Which record says a trade-in happened** | "A rep did 30 trade-ins at the till in August and was paid $0 for them. Which record pays the trade-in spiff, who declares it, why is the till the default, and what moves if we recompute a closed month?" |
 | COMMCALC-03 | **Evaluate a store we do not own yet** | "What would a store we are considering taking over be worth? Upload its MA commission, daily-TX and handset orders without creating the store, import OUR average expenses with ITS actual rent, and show me which subscriber accounts carry more lines than one month should and which phones were sold on them — with and without those phones in the profit." |
@@ -160,6 +166,13 @@ Primary code homes:
 | COMMCALC-37 | **A report is its page AND its filters, and an unfiltered export is refused** | Fourteen back-office reports were asked for "by the day with all regular filters we have been using", one of them "in detail and pulled for every item" — and the pull loop reached each report's page and pressed Export without ever setting a date, a class, a detail toggle, or pressing Run. What question does a page's default answer, and what does a landed row look like when it answers a different question from the one that was asked? |
 | COMMCALC-38 | **What a supplier billed us has a supplier-neutral home, and the invoice feed ships with its door** | "i want to pull in invoices from ups and then compare to the sales reports to make sure every single shipment is being paid for and cash collected by the sales reps" — and the login row he had already made sat on a processor nothing dispatches, so Run now stamped "not wired yet" and stopped. Which part of "a supplier invoice" is a universal fact, which part is one distributor's portal, and what does a second supplier's invoices do to a table whose every reader assumes the first? |
 | COMMCALC-39 | **A declaration is read off the page, and a declared report resolves to itself** | Fourteen reports were asked for by name, and every one of them would have resolved to NOTHING: the pull passed a source's own declaration back to its adapter as a FILTER, squashed under a different rule from the one the reports were keyed by, so a fully configured source read as "No reports are enabled". And the filters those reports need are behind framework-generated control ids nobody can guess. Where should a declaration come from, and what does one argument meaning two things to two callers cost? |
+| COMMCALC-40 | **The status word is the sentence's own verdict, never a literal** | The sweep said "⚠ PARTIAL — a column stopped arriving" in one column and stored `ok` in the column next to it, so every screen that colours on the word showed green over October 2026's missing KPI counts for ten days. What does a verdict cost when it is computed as prose and then discarded at the one place a machine reads it? |
+| COMMCALC-41 | **A derived snapshot rebuilds itself when its inputs land** | "The rebuild ledger or recalculate should be real time all across, then tenant would not know when to run" — and the payable ledger had last been built 53 days earlier while the feed it is built from was four days old, so every "what is owed next week" surface read EMPTY and nothing on the page said why. Which derived things are live, which are on a button nobody knows to press, and what is a tenant doing scheduling a rebuild at all? |
+| COMMCALC-42 | **A per-tenant config table is read once per tenant, never once per key** | A 1,000-user load test named `commcalc.target_field_registry` the busiest table in the platform — 19,658 reads, more than every other table combined — because the registry was fetched one `report_key` at a time and the readiness matrix walks every key twice. One page cost 88 PostgREST round trips, growing with the number of report types a tenant declares. How much of the platform's fixed concurrency budget is being spent asking the same small config table the same question over and over? |
+| COMMCALC-43 | **Two kinds of activation on one number in one day, counted as events** | "Check if a byod and an upgrade is done on the same day for the same phone number at the same store." Counting LINES the live feed showed 456 such number-days; counting activation EVENTS it shows 95, and the 46 lines reading 'BYOD Upgrade' are one sale rather than a pair. What is one activation, which phone line is it on, and how does a report say "we could not measure this" when 94% of a tenant's sales carry no number at all? |
+| COMMCALC-44 | **How much device money has the carrier paid against this phone** | "Include the $ amount of the rebate and title it as chargeback amount." The figure already existed, inline in the P&L's reimbursement run, so a second report wanting it made it a home rather than a copy: the P&L and a watchdog screen must not quote two different rebates for one phone. A rebate lands months after the sale, so the amount is allowed to be ABSENT — 41 of October's 48 cases — and naming which of four absences it is matters as much as the number. |
+| COMMCALC-45 | **A sweep schedules itself from its own state** | "I should not be running the sweep it should be automatic like the rebuild or the commission calculation" — and a sweep's due-ness was a stored clock time copied into eight places, so thirteen consecutive PARTIAL runs each waited a full day and correcting the sweep's own settings pushed the next run FURTHER away. What makes a sweep due, if not the calendar? |
+| PAYABLES-01 | **A rebuild never deletes what it cannot replace** | "Rebuild via sql let me know what permissions to add" — and the rebuild, run for real, deleted all 11,000 Boost rows and inserted none, then returned HTTP 200 describing the table it had just emptied. Two migrations had been skipped while later-numbered ones landed. What is a delete+insert worth without a transaction, and which half of that pair is the one you can afford to run first? |
 | COMMCALC-40 | **The password is sometimes on the next page — one home for a login's first step** | "If there is no password on the first page then click to continue with username and then enter password on thr next page" — said after a two-page sign-in was reported as a form that renders unexpectedly, in a message naming a different vendor's portal. Three paths answered "what does this page want first", two by spelling one vendor's element ids and one not at all. What is a login's first step a fact ABOUT, and what does a page that asks for something we do not hold deserve to be told? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
@@ -7079,6 +7092,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | *(no table added)* — §19.40 "Employees & Pay" menu entry + `?tab=` deep links are frontend NAV / routing; `storeops.employees.pay_rate` is still written only from HR → Employees & Pay / Roles & Access (§19.35) | — | — |
 | `commcalc.closing_attempt` (mig `103`) — gains `refused` / `refusal_code` / `refusal_detail` (mig `1037`): a daily closing that was REFUSED is now recorded here, in the SAME audit trail the accepted and blocked tries use (no sibling table). `refused` rows are never counted as tries — `closing/submit_refusal.is_real_try` is the one rule every counter reads | `closing/router._refuse` (THE single refusal site, codes declared in `closing/submit_refusal.REFUSALS`); `closing/router._log_attempt` (the real tries, unchanged) | `GET /closing/attempts` → screen `closing/management`; `closing/router._real_attempt_count` (the 3-try close gate) — §29.11. **Also gains the rest of the submit form (mig `1052`: `acc_sale`, the three counts, `remarks`, `envelope_picture`) plus the configured-tender jsonb**, so a blocked try can be resumed — read by `closing/unfinished_day.resume_entry` via `GET /closing/resume`, and by `_closing_summary_for_date` / `closing_rollup` / `_run_closing_missing_alerts` through `unfinished_day.describe` to tell "nobody submitted" apart from "submitted and sent back to recount" — §29.12 |
 | `commcalc.closing_count_field_def` (mig `501`) — gains **`value_kind`** (`count`/`amount`/`both`), **`declared_by`** (`store`/`employee`), **`unit_price`** and **`in_revenue`** (mig `1072`): the three facts that make a declared category PAYABLE. Every default reproduces mig `501`, so no existing tenant moves | `PUT /closing/count-config` (the Count Fields editor; a client that omits the new keys has the stored values carried forward rather than reset) | ONE home `closing/metric_catalog.build` → `GET /closing/metric-catalog`, the closing form, the incentive-rule editor; lock `harness_metric_catalog_lock.py` — §76 |
+| `commcalc.closing_count_field_def` — gains **`feed_counterpart`** plus **`feed_units_tolerance`** / **`feed_amount_tolerance`** (mig `1102`): what in the sales feed answers the same question as this category, and how far the two may differ first. NULL = not reconciled, which is the ordinary case and NOT an error; a value the one parser cannot read is refused by the column's own CHECK | `PUT /closing/count-config` (the "Check against" picker, offered from the tenant's own financing vendors) | ONE parser `closing/declared_feed_recon.parse_counterpart` → `GET /closing/declared-vs-captured`; lock `harness_metric_catalog_lock.py` §G — §CLOSING-02 |
 | `commcalc.closing_metric_line` (mig `1072`) — a store-day's declarations that carry MONEY or a PERSON. `employee_name` NULL = the store's own figure. The OTHER physical store beside `daily_closing.counts`; **no caller reads either directly** | `PUT /closing/metric-lines` (the closing form, after the row is accepted — a refused closing leaves no half-day behind) | `closing/metric_catalog.declared` / `by_employee` (THE fold) → `GET /closing/declared/{date}`, `GET /commcalc/daily-incentive/{date}` — §76.3 |
 | `commcalc.incentive_rule` + `incentive_rule_assignment` (mig `1072`) — the daily-incentive rules. `rule_kind` is one of three SHAPES; every rule, category, rate, threshold and split is a ROW (RULE TWO). Assignments reuse the employee-plan scope vocabulary | `PUT /commcalc/incentive-rules` (refuses a rule naming an undeclared category); `DELETE` switches OFF, never destroys | `commcalc/daily_incentive.compute_day` via `GET /commcalc/daily-incentive/{date}`; scope by `management_incentive.resolve_plan` — §76.4 |
 | `commcalc.target_line` (mig `1074`) — a DECLARED category's target for a store-period at one grain. The four BUILT-IN categories keep their columns on `commcalc.targets` (mig `006`) and are read byte-for-byte as before; this is the other physical store and **no caller reads either directly** | `PUT /commcalc/targets/{period}/lines` (same `_require_target_edit` gate as the built-in save; refuses a built-in key, an undeclared key and a negative) | `commcalc/targets_engine.derive_monthly_by_cat` (THE fold) → `GET /commcalc/targets/{period}` / `/axis` / `/calendar` / `/backward` / `/summary` / `/action-plan` / `/report-cards`; lock `harness_target_axis_lock.py` — §COMMCALC-02 |
@@ -7341,6 +7355,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - `GET /commcalc/commission-leg-store-trend?period=&months=&market=&store=` — **the month-of-life (M1..M12) commission rungs PER STORE with the months side by side** (owner ask 2026-10-15): one row per store, one column per month, each cell carrying 1st-month / M2–M12 / Unsplit and that store's own rung ladder, plus `worst_rung` naming the rung that fell hardest between the first and last COMPLETE month — so a store shrinking NOW (M1 falling) is distinguishable from one echoing a cohort lost months ago (M1 flat, M4–M6 falling). It CALLS `router._commission_leg_trend_compute` with its store axis on and PIVOTS the result through the pure `commcalc/commission_leg_store_trend.py` — the same read, the same carrier classification (§58/§66), the same store identity (§64), the same rung convention (§4a.2) — so Σ(per-store) == the company figure to the cent (§A of the lock). An unfinished month is flagged `partial` and excluded from every delta; money matching no store is its own named row; `ties` states per month whether the displayed total equals the company series. READ-ONLY, no writer, no table, **no migration** (§COMMCALC-12).
 - `GET /commcalc/month-focus/{period}?plays=` — this month's DECLARED focus (`commcalc.month_focus`, mig `1065`): the headline, the pay type named as driving its spiffs, the temporary spiffs on the table with their status, the weekly check-ins done, and — computed, never stored — what the month still owes plus the plays its own measured numbers support. `plays=0` skips the sales read, for the two login surfaces. `PUT /commcalc/month-focus/{period}` declares or amends it (market manager or above, `month_focus.may_declare` → `core.scope.is_market_or_wider`; a partial save cannot blank the month, and check-ins are never writable from the body). `POST /commcalc/month-focus/{period}/checkin` confirms the CURRENT check-in day, computed server-side and idempotent, so a confirmation cannot be back-dated. Pays nothing; writes only `commcalc.month_focus` (§63).
 - `GET /closing/metric-catalog` — **what this business declares at the end of a day, and what a unit is worth**: every category with its `value_kind`, `declared_by`, `unit_price`, `in_revenue` and `storage`, plus `revenue_keys` / `employee_keys` and the vocabularies themselves. THE one answer; the closing form and the incentive-rule editor read it instead of listing categories. `GET /closing/declared/{date}?store_code=` folds both physical stores into one store-day (plus `by_employee`, `store_revenue`, `employee_revenue`); `PUT /closing/metric-lines` saves the money-bearing and per-employee lines (full replace per store-day, and a line naming an undeclared category is REFUSED, not stored) — `closing/metric_catalog.py`, mig `1072` (§76).
+- `GET /closing/declared-vs-captured?date_from=&date_to=&store_code=&rep=` — **did our system capture the sales the rep declared?** Per day × store × rep × category, for every declared category that NAMES a feed counterpart; the ones that do not are returned in `not_reconciled` BY NAME, so a missing category is explained rather than silently absent. Read-only, and the worst severity is `flagged` — nothing here blocks a close or changes what anyone is paid. The declared side is `closing/metric_catalog.declared` / `by_employee`; the captured side is `financing_report.vendor_units` (the derivation the Financing report and the payout share) and `_b2b_day`'s counts; the comparison is `closing/declared_feed_recon.reconcile`. A day the feed was never read for, and a counterpart whose detection is not configured, are `pending` with variance **None** and their own reason — never a $0.00 that would read as "we checked and it agreed" — `closing/declared_feed_recon.py`, mig `1102` (§CLOSING-02).
 - `GET /commcalc/incentive-rules` — the tenant's daily-incentive rules **with the catalog they may point at**, the three rule shapes, the split bases, the qualifier scopes and the comparisons. `PUT /commcalc/incentive-rules` upserts one (money-posture gated by `_require_commission_admin`; **refuses** a rule whose qualifier or payout names an undeclared category); `DELETE /commcalc/incentive-rules/{id}` switches it OFF rather than destroying its audit trail. `GET /commcalc/daily-incentive/{date}?store_code=` COMPUTES one store-day — per-employee lines, `by_employee` totals, `top_earner`, `unallocated`, and a `rules[]` why-trail carrying each qualifier verdict. **Computes only; nothing is persisted and nobody is paid by calling it** — `commcalc/daily_incentive.py`, mig `1072` (§76.4).
 - `GET /commcalc/targets/{period}/axis` — **what is targetable for this tenant**: the four built-in sales categories, then every category the admin declared on Count Fields (§76), each with the label they typed, its unit, where its target physically lives (`column` / `derived` / `line`) and whether its achievement comes from the sales feed or from a declaration. THE one list; nine screens and modules used to keep their own. `PUT /commcalc/targets/{period}/lines` saves the declared half into `commcalc.target_line` — gated on the SAME permission and store span as `PUT /targets/{period}`, and it REFUSES a built-in category key because two homes for one number is the divergence the design removes — `commcalc/targets_engine.py`, mig `1074` (§COMMCALC-02).
 - `GET /commcalc/targets/{period}/calendar?grain=week&week_starts=0` — the existing schedule-weighted calendar, plus a `windows` block giving the owner's per-day / per-week / per-month target. A window is a SUM OVER THE CALENDAR already in the response (`targets_engine.grain_windows`), at full precision, never a second calculation — so the weeks always add up to the month. Additive: omitting `grain` returns exactly what it always did (§COMMCALC-02.4).
@@ -7702,6 +7717,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **The equipment rebate on a store's P&L is thousands below the equipment reimbursement — which devices account for it, and was anything actually not paid?** Per device: the claim, the cost, what the store charged, who sold it, and which store the carrier paid. "The carrier paid a DIFFERENT store" is its own verdict and never "we were never paid"; nothing paid anywhere on a short-statement month is `not_measured` with the missing days named | `commcalc.asset_ledger` (claim, cost, sale price, device id) × `commcalc.raw_payment_detail` (the carrier's per-LINE feed — `imei`, `amount`, `payment_type`, `rep_username`), both keyed through §64 `coa.store_resolver` | the DEVICE-GRAIN layer of the §19.53 one home `commcalc/device_reimb_recon.py` (`carrier_line_side` / `device_lines` / the four `LINE_*` verdicts), wired by `router._device_line_reimb_run` → `GET /commcalc/device-line-reimbursement`; module-graph fact `device_reimbursement_paid_vs_claimed`; locks `harness_device_line_reimbursement.py` (89 checks) and `harness_batch16_drilldown.py` — §65.  **DRILL-DOWN §CORE-17.3p:** TWO GRAINS on one device row separated only by PROVENANCE (§CORE-17.3n) — the claim, the cost, the price the store charged and the two unpaid buckets out of the unit ledger, what the carrier paid HERE and at a DIFFERENT store out of its own per-line feed. A device the feed never named carries no figure and names NO table; with no routing declared the two paid panels are not served at all. NOT narrowed: the verdict picker filters the table in the browser while the tiles are the server's fold — reported. Declaration `commcalc/device_financing_drilldown.py`. Live September 2026, house org: store `652 Communipaw Avenue` claims $15,274.91, the carrier paid it $10,314.93 and paid **another store $5,004.98** on 15 of its devices, and **$0.00** was unpaid anywhere; estate-wide 135 devices and $41,548.83 sit on one store's cost with another store's money |
 | **Which store should carry a handset's cost when the ledger stocked it at one door and the carrier paid another?** The store the carrier PAID, for the devices the per-device reconciliation proved; everything it could not measure stays on the distributor ledger's store and is reported. Per-store only — the company total never moves | `commcalc.asset_ledger` (the cost and its stocking store) × §65's per-device verdict, declared per org by `commcalc.account_config.device_cost_store_basis` (mig 1069) | `account/device_cogs.cost_store` — the ONE placement — over `resolve_device_cost_store_basis` / `load_activation_index` → `device_reimb_recon.activation_store_moves`; the identity side is `store_identity.shared_identity_pairs` / `.may_be_one_store` via `coa.shared_store_identity_pairs`; called by `device_cogs._vip_sold_cost`, period handed down by `coa.build_inputs`; module-graph fact `device_cost_store`; lock `harness_device_inventory_cogs.py` §H (89 checks) — §70. Live Jun–Oct 2026, house org: **468 devices, $195,155.32** across 100 store pairs, netting to **$0.00** company-wide. OFF until declared |
 | **What does a store-day DECLARE, what was it worth, and which employee generated the most of it?** — folded across the two physical stores, with every catalog metric present (zeros and `declared: False`) so "declared nothing" is distinguishable from "has no such category"; a store-level figure is NEVER attributed to a person, and the submitter is never credited with the store's day | `commcalc.closing_count_field_def` (mig `501` + `1072`: `value_kind` / `declared_by` / `unit_price` / `in_revenue`) × `commcalc.daily_closing.counts` + the three physical columns × `commcalc.closing_metric_line` (mig `1072`) × `commcalc.closing_tender_def` (mig `111`, read-only) | ONE home `closing/metric_catalog.py` (`build` / `storage_for` / `declared` / `by_employee` / `gross_revenue` / `employee_revenue` / `revenue_keys` — pure, DB-free) → `GET /closing/metric-catalog`, `GET /closing/declared/{date}`, `PUT /closing/metric-lines`, the closing form and the Count Fields editor; lock `harness_metric_catalog_lock.py` (38) — §76. `gross_revenue` is THE definition of a day's sales, so a target and a payout rule cannot disagree about it |
+| **Did our system capture the sales the rep DECLARED?** — per day × store × rep × category, for every declared category that names a feed counterpart. The grain belongs to the CATEGORY, not to the feed, so a store-declared figure is never compared per rep (which accused a store of not declaring a sale it had declared); one human is one row through §CORE-08; and four distinct absences carry four distinct reasons rather than one $0.00 variance | `commcalc.closing_count_field_def.feed_counterpart` (mig `1102`) × the declared store-day (§76) × `commcalc.financing_vendor` + its detection rules (mig `272`) × the sales pair (`daily_sales_feed` / `raw_sales`) | ONE home `closing/declared_feed_recon.py` (`parse_counterpart` / `reconcile` / `counterpart_options` — pure, DB-free) over ONE derivation `commcalc/financing_report.vendor_units` (which `build` now FOLDS) → `GET /closing/declared-vs-captured`, screen `/closing/declared-vs-captured`; proof `harness_declared_feed_recon.py` (68) + lock `harness_metric_catalog_lock.py` §G — §CLOSING-02. **Measures only — it never pays and it never blocks a close** |
 | **What does a day's declared categories PAY each employee?** — three shapes only (`per_unit`, `percent_of_amount`, `threshold_pool`); every rule, category, rate, threshold and split is a CONFIG ROW, so no tenant vocabulary reaches the code (asserted over the stripped executable text). A gate that cannot be VERIFIED fails CLOSED, an unresolved input is zero production, and **a pool whose split cannot be measured is returned `unallocated` with a reason rather than split evenly** | `commcalc.incentive_rule` + `incentive_rule_assignment` (mig `1072`) × the declared store-day above × `storeops.shifts` (actual hours where recorded, else scheduled) | ONE home `commcalc/daily_incentive.py` (`compute_day` / `measure` / `split_pool` — pure) → `GET /commcalc/daily-incentive/{date}`; scope precedence REUSES `management_incentive.resolve_plan`, never a second ladder; screen `/commcalc/incentive-rules`; proof `harness_daily_incentive.py` (83, the owner's six live rules replayed as config) — §76.4. **Computes only — persisting and paying is not this endpoint's** |
 | **What is this store supposed to do — per day, per week, per month — and what do I still need to reach it?** — the axis is ASKED of the tenant (the four built-in sales categories plus every category declared on Count Fields), so a target exists for the thing the business actually sells. A week or day figure is a WINDOW over the one monthly spread, summed at full precision, never a second calculation — so the weeks always add up to the month | `commcalc.targets` (mig `006`, the built-ins' own columns, read byte-for-byte as before) × `commcalc.target_line` (mig `1074`, the declared half) × `storeops.shifts` (the scheduled hours the month is spread over) × the declared store-day above (the ACHIEVED figure for a declared category) | ONE home `commcalc/targets_engine.py` (`target_axis` / `derive_monthly_by_cat` — THE fold over both physical stores — `compute_scope`, `grain_windows`, `merge_declared_actuals`) → `GET /commcalc/targets/{period}` / `/axis` / `/calendar` / `/summary` / `/action-plan` / `/report-cards`; locks `harness_target_axis_lock.py` (80) + proof `harness_target_declared_axis.py` (42) — §COMMCALC-02 |
 | **Is this stored credential readable by anyone who gets the database?** — not a KPI but the same shape of question, and it had ten different answers. ONE: `core/portal_secret.TABLES` names every column that holds a credential, which primitive opens it (text, or the JSONB `{"enc": …}` envelope), which schema the table is in and which columns address one of its rows. A credential-LOOKING column that is deliberately not encrypted carries its reason in `NOT_A_SECRET` — because an excuse nobody wrote down cannot be told apart from an oversight | the ten tables in §16 above × `app/core/crypto.py` (Fernet, `enc:v1:`) × `database/migrations/**` (what §D of the lock scans) | ONE home `core/portal_secret.py` (`seal_row` / `open_row` / `open_rows` / `secret_columns` / `json_columns` / `table_schema` / `table_key` / `protection_state` / `describe`) → every reader and writer in §16; `core/encryption_backfill.backfill_portal_secrets` (iterating the registry, owning no table list of its own); lock `harness_portal_secret_lock.py` (158) — §CORE-03 |
@@ -7940,6 +7956,9 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"What does this customer's record say, written out for a human"** (every receipt: the till copy, the Sale Log reprint, the emailed copy, the printer's byte stream, the tenant's own POS layout, the admin preview — and the receipt rebuilt from an imported sales report; owner 2026-10-21) | `pos.customers.address_1 / address_2 / city / state / zip`, the columns named once as `customer_bill_to.FIELDS` / `COLUMNS` | **ONE home** `backend/app/modules/pos/customer_bill_to.py` (`FIELDS`, `COLUMNS`, `lines`, `block`, `has_address`). Readers DEREFERENCE it: `pos.router._receipt_bundle` selects `COLUMNS` and passes `lines(customer)` to both media, `pos/sale_receipt.slip_model` prints them under the customer's name and `document` bills to `[name] + lines`, `pos/sales_from_reports._customer_lines_fn` (the imported-receipt path, which WAS the only copy) calls `lines(row)`. NOT the comparison of two addresses — `customer_identity.norm_address` answers "are these the same person" and stays its own home. Lock `harness_pos_receipt_render.py` §O (O12): any join or f-string assembling an address field outside those two homes fails the build. Proof §O (16 + 3 negative controls, 247 in all) — §POS-07 |
 | **"This receipt as a FILE"** (the emailed copy's attachment; owner 2026-10-21) | nothing of its own — `sale_receipt.slip_model` (the till slip's rows, through `receipt_escpos.lines`) or `sale_receipt.document` (the POS layout's words, through `receipt_formats.render.render_words`) | **ONE renderer** `backend/app/modules/pos/receipt_pdf_render.py` (`receipt_pdf` — the entry, `slip_pdf`, `words_pdf`, `filename`, `PT_PER_MM`). A THIRD MEDIUM of the two existing content homes, not a third receipt: it reads no toggle, no figure and no line of its own, and the LAYOUT is the one `sale_receipt.clean_layout` already chose for the mail body, so the file and the mail can never be two different receipts. The slip is ONE page as wide as the declared roll (a roll has no page break); the POS layout is the format's own geometry on letter, paginated by the words' own `top` so no line is dropped. NOT `pos/receipt_pdf.py`, which READS an uploaded PDF for the format parsers. Built only where something attaches it (`_receipt_bundle(want_pdf=True)`), and a file that cannot be built never holds up the mail. Proof `harness_pos_receipt_render.py` §P (17 + 3 negative controls, read back with pdfplumber) — §POS-08 |
 | **"Send this receipt to the customer"** (the till's completion modal AND the Sale Log reprint; email and WhatsApp; owner 2026-10-21) | `pos.customers.email` / `.phone_primary` through the receipt answer itself (`SaleReceipt.email` / `.whatsapp`), which the server resolves — the browser invents neither | **ONE sender** `frontend/src/components/pos/SendReceiptPanel.tsx`, mounted by both screens, over **ONE view home** `backend/app/modules/pos/sale_receipt.email_view` / `whatsapp_view` (the same five-field shape per channel: who it would go to, where that came from, whether it can be sent, who it comes from, what it announces itself as) and ONE client `pos-receipt.emailSaleReceipt` / `whatsappSaleReceipt`. Was INLINE in the till modal, keyed to the sale just rung, so the Sale Log could only PRINT and a second channel would have been built twice. What counts as a phone number is DEREFERENCED from `notify/whatsapp_window.digits` (`whatsapp_meta._to_number` was a second copy of that rule and now reads it), and WHEN a file may be sent stays `whatsapp_meta.send_document_detailed`. The file is the §POS-08 PDF, built once. Proof `harness_pos_receipt_render.py` §Q (17 + 2 negative controls, 247 in all) — §POS-09 |
+| **"What shop is this receipt from?"** (the till slip, the printer's byte stream, the tenant's own POS layout, the PDF; owner 2026-10-28) | the receipt-branding rows `pos.pos_settings` (`brand_company_name`, `brand_address_line1…5`, `brand_license_tax_ids`) through `pos_config_effective.brand`, with this store's `storeops.stores` row as the FALLBACK, read through `receipt_store_block.STORE_COLUMNS` (the sibling read in `sales_from_reports._store_header_fn` dereferences the same columns; a receipt REBUILT from a landed report deliberately keeps the store block that POS printed rather than this tenant's branding) | **ONE home** `backend/app/modules/pos/receipt_store_block.block` — `{name, address_lines, phone, license, lines}`. Was TWO: the slip read the branding rows, the POS layout read a `store_lines` list the router assembled for it alone, selecting a `name` column `storeops.stores` does not have — 42703, swallowed, and every receipt in that layout printed the company name and no address. The legal blocks reach that layout now too. Proof `harness_pos_receipt_render.py` §R (14 checks; R11 fails the build on a second assembly, R13 on a slip PDF whose figures fall off the roll) — §POS-10 |
+| **"What page does a receipt print on?"** (every layout, every medium that goes through a browser; owner 2026-10-29) | nothing — it is a property of the PAGE, and no stylesheet here declared one | **ONE home** `sale_receipt.PAGE_CSS` (`@page { size: auto; margin: 0; }`), emitted by `thermal_html` and dereferenced by `receipt_formats/render._page_css`. Without it a browser stamps its own header and footer over the receipt — the date and time of the PRINTING, the document title centred above it, the URL and the page number — which is what the owner saw and read as a reprint stamp contradicting the sale's own date. Each layout then sets its own print padding so the ink does not run to the sheet's edge. Proof `harness_pos_receipt_render.py` §S (12 checks + 2 negative controls) — §POS-11 |
+| **"Does this customer's record hold an address at all?"** (the till print screen and the Sale Log reprint; owner 2026-10-29) | `pos.customers` through `customer_bill_to.FIELDS` | **ONE home** `customer_bill_to.view` → `{lines, on_file, note}`, dereferencing `lines` / `has_address` rather than re-deriving either. The Bill To already printed the address (§POS-07); what was missing was upstream — the till's quick-add customer form asked for a name, a phone and an email and NOT for an address, so a record created at the register could never carry one (measured live 2026-10-29: **1 of 1,636** customer records on the reporting tenant held one). The form now asks for every field `FIELDS` names (§S10 fails the build if it stops), and until a record has one the CASHIER is told, never the customer's receipt — §POS-11 |
 | **"What is this POS setting's effective value at this store"** (server side; owner 2026-10-17) | `pos.pos_settings` (org row `store_code IS NULL`, else the store override) | **ONE home** `backend/app/modules/pos/pos_config_effective.py` (`effective`, `values`, `flag`, `text`, `brand`, `disclaimers`, `SERVER_DEFAULTS`). The resolution rule lived ONLY in the browser (`frontend/src/lib/pos-config.ts`) until the server had to render a receipt; the two copies are PINNED key-by-key by `harness_pos_receipt_render.py` §B, which fails the build naming any default changed on one side only — §POS-02 |
 | **"What is this tenant called"** (the From name on its mail, a statement heading, a document title; owner 2026-10-17) | `storeops.tenants.name` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`NAME_COLUMN`, `display_name_from`, `display_name`, `display_names`) — a blank name reads as blank, never a fabricated stand-in printed as the business's own name. `notify/channels/email_resend.from_header` is the ONE place a `From:` header is assembled, and every business-facing send site passes its `org_id` so the customer sees the tenant; only genuine platform mail (the sign-in OTP) keeps the platform name. Siblings rewired in the same PR: `commcalc/router` ×2, `core/data_qa_api`, `core/operator_api`, `helpdesk/router`, `storeops/payroll_approval` ×2, `storeops/router._tenant_display_name`. Lock `harness_pos_receipt_render.py` §E6 fails the build if a second name-only reader appears — §POS-02 |
 
@@ -26047,6 +26066,7 @@ status word rather than a blank that reads as nil.
 | 73 | closing |
 | 74 | closing |
 | CLOSING-01 | closing |
+| CLOSING-02 | closing |
 | 15.1 | notify |
 | 15.2 | notify |
 | 15.3 | notify |
@@ -26109,6 +26129,16 @@ status word rather than a blank that reads as nil.
 | CORE-15 | core |
 | CORE-16 | core |
 | CORE-17 | core |
+| CORE-18 | core |
+| CORE-19 | core |
+| CORE-20 | core |
+| CORE-21 | core |
+| COMMCALC-40 | commcalc |
+| COMMCALC-41 | commcalc |
+| COMMCALC-42 | commcalc |
+| COMMCALC-43 | commcalc |
+| COMMCALC-44 | commcalc |
+| COMMCALC-45 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -26118,6 +26148,9 @@ status word rather than a blank that reads as nil.
 | POS-07 | pos |
 | POS-08 | pos |
 | POS-09 | pos |
+| POS-10 | pos |
+| POS-11 | pos |
+| PAYABLES-01 | payables |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -26135,7 +26168,6 @@ it is removed.
 | asset | its paths appear in passing in §34 only; no section documents the asset module itself |
 | crm | undocumented |
 | helpdesk | undocumented |
-| payables | its paths appear in passing in §14u and §53.1 only; no section documents it |
 | recovery | undocumented |
 | referral | undocumented |
 | remediation | undocumented |
@@ -26173,6 +26205,133 @@ plus a frozen tail, not two live schemes, and the build check in CORE-01.4 is wh
   by the check above rather than copied.
 - `.github/workflows/module-graph-guard.yml` already ran on this file and on `backend/harness_*.py`.
   **Reused**: one step added to the existing job; no new workflow, no job removed or disabled.
+## §CLOSING-02. A DECLARED CATEGORY NAMES WHAT IN THE SALES FEED SHOULD AGREE WITH IT (owner ask 2026-10-29)
+
+Owner, verbatim: *"Add a field in as no of edge for total and no of financicing in thr daily closing
+for all employees to declare along with the $amount of edge and acima as they get paid for each
+transcoding they do, this would then be checked with our system if our system is capturing the sales
+as declared by the sales rep"*.
+
+**Module:** `backend/app/modules/closing/declared_feed_recon.py` (THE one home for the comparison —
+pure) · `backend/app/modules/commcalc/financing_report.py` (`vendor_units`, THE one derivation of
+financed units by vendor × store × rep × **day**, extracted so `build` folds it) ·
+`backend/app/modules/closing/router.py` (`_counterpart_captured`, the one read of the captured side;
+`GET /closing/declared-vs-captured`) ·
+`backend/app/modules/closing/declared_feed_drilldown.py` (§CORE-17: **two** panels, because the two
+figures are Σ over the same row out of DIFFERENT feeds; the verdict counts get none)
+**Lock:** `backend/harness_declared_feed_recon.py` — 68 checks · `harness_metric_catalog_lock.py` §G
+(38 → 60 checks), both run by `carrier-vocab-guard.yml`
+**Tests:** `backend/tests/unit/test_declared_feed_recon.py` (21) ·
+`backend/tests/unit/test_financing_vendor_units.py` (10) ·
+`backend/tests/integration/test_declared_vs_captured_endpoint.py` (12)
+**Migration:** `1102_closing_feed_counterpart.sql` — one nullable config column and two tolerances.
+**Screen:** `/closing/declared-vs-captured` ("Declared vs Captured", beside the other closing recons)
+— server-folded and NOT narrowed, so `lib/drill-narrow` is deliberately absent and each panel covers
+the whole range; ledger `harness_drilldown_pending.txt` records it `shared`.
+
+### §CLOSING-02.1 HALF THE ASK WAS ALREADY BUILT, AND IS THEREFORE NOT BUILT AGAIN
+
+The duplicate check (CLAUDE.md build gate) found the declaration half complete since mig `1072`
+(§76). A tenant's declared categories already carry `value_kind='both'` (a tally AND its dollars) and
+`declared_by='employee'` (a line per person), `closing/metric_catalog.py` is the one home for that
+vocabulary, and `ClosingSubmitForm` already renders a `#` box and a `$` box per category per person
+off it. **"Edge" and "Acima" are four config rows, not four fields** — RULE TWO, and the reason no
+source file in this section spells either (asserted over the stripped executable text, §E of the
+proof).
+
+What was missing was the **link**. A declared category had no way to say WHAT in the sales feed
+answers the same question, so the only declared-vs-captured check in the platform was
+`closing/router`'s activation/upgrade count recon — hard-wired to two feed figures, unable to check a
+new category at all and unable to be reused. One column names the counterpart; ONE reconciler serves
+every category that has one.
+
+### §CLOSING-02.2 THE COUNTERPART DEREFERENCES, IT DOES NOT RESTATE
+
+`closing_count_field_def.feed_counterpart` is `'<kind>:<ref>'`, parsed in exactly one place
+(`parse_counterpart`), and the column's own CHECK constraint refuses a value that parser cannot read
+— a silently-unreconciled category is a check an owner believes is running and is not.
+
+| kind | dereferences | grain it can answer at |
+| --- | --- | --- |
+| `financing:<vendor_key>` | the tenant's own `commcalc.financing_vendor` (mig `272`), which already answers "is this line financed, and by whom" — keyed on the **TENDER**, because Edge is how the customer paid and not a Motorola model (the 2026-07-27 defect) | day × store × **rep** |
+| `recon_class:activation` / `:upgrade` | the B2B count buckets mig `501` already defines, via `_b2b_day`'s counts | day × **store** only |
+| NULL | nothing — and that is the ordinary case, not an omission | — |
+
+Because financing detection is inherited from the registry that pays, **this report cannot disagree
+with the payout about what a financed sale is**. The admin picks a counterpart from a list the server
+builds from the tenant's own vendor rows with the label they typed (pick-don't-type, RULE THREE); no
+screen may hard-code one (lock §G10).
+
+### §CLOSING-02.3 AN ABSENCE NEEDS THE RIGHT REASON — FOUR OF THEM, NEVER A CLEAN $0.00
+
+The `recon_drilldown` pending doctrine (§CORE-17), applied to a new question. Four different things
+look like "nothing captured", and one $0.00 variance for all of them would read as *we checked and it
+agreed*:
+
+| what happened | verdict | variance | whose gap |
+| --- | --- | --- | --- |
+| the sales feed was never loaded for that day | `pending` | **None** | ours |
+| the vendor's detection is not configured | `pending` | **None** | **ours** — the reason carries the registry's own note |
+| a per-employee category whose counterpart answers per store only | `pending` | **None** | ours, stated |
+| the feed WAS read and holds none of it | `not_captured` | measured | a question for the rep |
+| the feed captured it and nobody declared it | `not_declared` | measured | a question for the rep |
+| both present and they differ | `variance` | measured | a question for the rep |
+
+`pending` is kept OUT of the gap count: an accusation the report refuses to make is not a finding
+against anybody. A pending row still shows what the rep declared, because that is the only number
+anybody has.
+
+### §CLOSING-02.4 THE GRAIN BELONGS TO THE CATEGORY, NOT TO THE FEED
+
+Found by the integration test before it shipped. A store-declared category is ONE figure for the
+store-day, while the sales feed always knows a salesperson — so folding the feed per rep against a
+store declaration produced TWO rows, the store's "we captured nothing" and the rep's "nobody declared
+this", **accusing a store of failing to declare a sale it had declared**. The grain is read off the
+catalog (`metric_catalog.is_employee_declared`, dereferenced — the lock's §A8 fails the build on a
+module that decides it for itself) and applied once, in `_addr`.
+
+One human is one row: the roster spells a rep `Singh, Simarjyot` and the feed spells them
+`Simarjyot Singh`, and the identity key is dereferenced from `core/person_identity.folded_token_key`
+(§CORE-08), never re-folded here. The spelling a human typed at closing is the one displayed.
+
+### §CLOSING-02.5 MONEY POSTURE
+
+It measures; it never pays and it never blocks a close. The worst severity is `flagged` — the same
+posture mig `501`'s count recon has always had (informational, never a gate) — and the reconciler's
+executable text contains no write verb at all (locked, §G11/§G12). A rep is paid per transaction, so
+a gap **either way** is worth a manager's eye and neither direction is evidence of anything on its
+own.
+
+### §CLOSING-02.6 WHAT IS NOT DONE, STATED
+
+- **The legacy activation/upgrade recon is not rewired through the reconciler.** `closing/router`'s
+  `act_var`/`upg_var` comparison is the older expression of the same question. Routing it through
+  requires `metric_catalog.build` to fall back to `count_config.STANDARD_DEFS` when a tenant has
+  declared nothing — a mig-`1072` semantic change touching the closing form, the incentive engine and
+  the targets axis — which is its own change. What is locked instead: that site is **pinned as the one
+  remaining legacy comparison** (lock §G9, shrink-only), so a third expression cannot appear, and the
+  captured figure it compares against now has one home.
+- **`/closing/accessory-recon` is the other sibling of this class** — declared accessory dollars vs
+  the sales transactions. It is store-grain, money-only and reads the accessory config rather than a
+  declared category, so it is not a counterpart today; folding it in is the natural next step.
+- **A tenant must still pick its counterparts.** Nothing is seeded by the migration: the column is
+  NULL on every existing row, so no tenant moves and no surface changes until an admin sets one.
+
+### §CLOSING-02.7 A DEFECT FOUND IN A SIBLING, REPORTED AND NOT FIXED HERE
+
+`closing/router._declared_by_store_day` (§76, the ranged declared read the **targets** engine's
+achieved figures go through, §COMMCALC-02) keys its closing rows `rows_by[(store, day)] = r` — ONE
+row per store-day, last writer wins. **In per-rep closing mode a store-day has one `daily_closing`
+row per rep**, so a store where three reps each declared two upgrades reports two achieved, not six.
+
+This endpoint does NOT share that fold: it keeps the rows as a list and sums them (§CLOSING-02.4's
+sibling fix, caught by `test_a_store_day_closed_by_SEVERAL_reps_sums_their_counts` before shipping).
+The sibling is left as it is deliberately — correcting it RESTATES every declared-category target's
+achieved figure for every tenant in per-rep mode, which needs its own change, its own before/after
+measurement against live data and the owner's eye. It is reported here rather than quietly repaired,
+and rather than left unsaid.
+
+
 ## §CORE-02. THE CODE STYLE CHECKER IS A CHECK — and a ratchet only turns one way (owner directive 2026-10-11)
 
 Owner, verbatim: *"Run the code style checker and fix the problems"*.
@@ -26528,6 +26687,87 @@ them would be noise. What it registers is a CI gate, a runner, a register and a 
 - Same class: §75 (which named this gap), §19.18 (a mechanism written, callers left unwired), §19.25 (a gate that cannot run is not a gate).
 - CORE-02.9 (the owner's rewording ruling, 2026-10-12) registers **one** artefact: `frontend/src/lib/setupNotice.tsx` → `<PlatformDetail detail />`, a second export of the §19.36 home gated by the same `useSetupDetailVisible()`. Its one caller today is `app/(platform)/commcalc/connectors/page.tsx`. Still no table, endpoint, metric or report. Locked by `harness_carrier_vocab_guard.py` §SETUP / §INFRA, which is what fails the build if a page writes an internal name in copy instead of dereferencing this home.
 - CORE-02.8 (the follow-up) registers no new artefact either: it changes only JSX text escaping in 74 files, a ternary-to-`if/else` transliteration in 16, `frontend/eslint_pending.txt` (932 → 842 entries) and `PINNED_TOTAL` in the lock (5917 → 5645). Still no table, endpoint, metric or report, so §16–18 stay correctly empty for CORE-02.
+
+### CORE-02.10 A DESTINATION HANDED TO THE BROWSER — one home, three characters (2026-10-28)
+
+Found by the **Next.js 16.4.3 security bump** (§CORE-19's sibling PR), not by a reviewer. The bump
+brought a new lint rule, `@next/next/no-location-assign-relative-destination`, and it reported
+**seven** hand-rolled `window.location.href = '/page'` assignments across five files. The rule's own
+message says to use `useRouter().push()` instead. **Doing that at all seven would have been a
+security regression**, and that is the whole finding.
+
+**The class, not the instance.** The seven were three different kinds of code wearing one spelling:
+
+| character | sites | what it must do | why |
+|---|---|---|---|
+| **identity boundary** | `startImpersonation`, `stopImpersonation`, `onImpersonationInvalid` (`lib/auth-context.tsx`), operator `enter()` (`app/(operator)/operator/tenants/page.tsx`), operator `leave()` (`components/PlatformBanners.tsx`) | discard the document | the acting identity the next request carries has just changed; `router.push()` keeps every mounted component, cached lookup and piece of state the previous identity put there, so an admin would open the employee's app still holding the admin's rows and an operator would leave a tenant with that tenant's numbers on screen |
+| **row click** | `commcalc/asset/purchase-orders`, `crm/lookup` | `router.push()` | ordinary in-app navigation; a full document load here is only a slower way to arrive |
+| **external provider** | `vision/settings` (Google OAuth consent) | leave the app, https only | the destination is built by our own backend and is an absolute URL; the lint rule never saw it, because its destination is a variable |
+
+So the general fact that was wrong is not "this line uses the wrong navigation". It is that **the app
+had no way to say *discard everything and come back as someone else*, so five call sites each spelled
+it out by hand** — which is exactly why a rule aimed at the spelling could not tell the five from the
+two. Each of the five already carried its own prose explaining the reload; one of them said it
+outright: *"A soft refresh would leave components holding the admin's data."*
+
+**The fix.** `frontend/src/lib/navigate-away.ts` is now the only place in the frontend that hands a
+destination to the browser.
+
+- `reloadAs(path: \`/${string}\`)` — the identity boundary. Full document load, no-op on the server
+  so no caller needs its own `typeof window` guard. **No linter suppression**, and that is the point
+  rather than luck: the rule reports a destination it can READ as a literal relative path, and this
+  one arrives as a parameter. A rule-named, justified disable was written first and then removed —
+  keeping it would have pushed the frontend's directive count 92 → 93, over the ceiling
+  `harness_frontend_lint_lock.PINNED_SUPPRESSIONS` pins, **to buy nothing at all**.
+- `redirectToProvider(url)` — the external hop, and a small hardening that came free. It parses the
+  URL and **throws unless it is absolute `https:`**. Today the URL comes from our own backend, so
+  this is not an open redirect; the check is there because the failure it prevents is severe. A
+  destination that reached it having lost its scheme would navigate *relative to the current page*
+  (`evil.test/x` → `/vision/settings/evil.test/x`), and one carrying `javascript:` or `data:` would
+  execute **in the app's own origin**, with the signed-in session's storage in reach. The refusal is
+  loud, not a silent no-op, so the operator sees an error rather than a dead button.
+
+**Lock it so it cannot un-wire** (the CLAUDE.md requirement, and the §19.18 failure mode).
+`backend/harness_navigate_away_one_home.py` — **39 checks, DB-free, stdlib only**, written failing
+first. It compares DERIVED sets against DECLARED ones in both directions (§CORE-10: a lower bound
+lets a subject leave the scan and take its assertion with it), so a sixth file that starts navigating
+fails the build and a caller that stops dereferencing the one home **names itself**. §A the one home
+really does leave the page (a registry that quietly became a `router.push()` would defeat the point)
+and does not import `next/navigation`; §B it suppresses nothing; §C the files that navigate are
+exactly `{navigate-away.ts}`; §D the identity boundaries and the provider hop are exactly the
+declared callers; §E the two row clicks use the router and must NOT dereference the one home
+(pointing a row click at a full document load is a regression dressed as a fix); §F
+`redirectToProvider` parses rather than string-matches, so `https:evil` cannot pass; §N 15 controls.
+
+Its scan is **stricter than the lint rule** on purpose: a destination it cannot read as a literal is
+REPORTED rather than waved through, which is how the `vision/settings` provider hop was found at all.
+Two of its own negative controls went red on the first run and both were real defects in it — a naive
+`//`-comment stripper was eating `'//example.test/x'` and `'https://a.test'` as comments, blinding
+the scan on exactly the absolute URLs it exists to tell apart from internal paths. The stripper is a
+quote-aware scanner now. Comment stripping is needed at all for the reason
+`harness_anonymous_write_surface` hit the same day and `encryption_backfill`'s AST scan hit before
+it: **every one of these files explains in a comment what it used to do, quoting the very expression
+being forbidden.**
+
+**Measured.** `frontend/eslint_pending.txt` 834 → **833** entries, `PINNED_TOTAL` 5583 → **5582**
+findings — a `react-hooks/immutability` finding in `crm/lookup` was paid off as a side effect of the
+router change, so the register had to shrink or it would have read as worse than reality and quietly
+re-admitted debt already paid. Suppressions **unchanged at 92**. `npx tsc --noEmit` clean.
+
+**Register.**
+- `frontend/src/lib/navigate-away.ts` → `reloadAs`, `redirectToProvider`, `type InternalPath`. The
+  ONE home for handing a destination to the browser. Six callers, all declared in the lock.
+- `backend/harness_navigate_away_one_home.py` → the lock.
+- `.github/workflows/security.yml` → job `navigate-away-one-home`, **enforcing** (not report-only).
+- Duplicate check (the build gate): searched this index and `backend/harness_*.py` for an existing
+  mechanism answering "where does the app hand a destination to the browser" — **there is none**;
+  the closest is this section's own note that `<a>` → `<Link>` changes a full reload into a client
+  navigation, which is the observation this home now makes enforceable. `frontend/src/lib/client.ts`
+  owns the session and the acting org but does no navigation, and was left untouched.
+- Same class: §19.18 (a mechanism written, its callers left unwired), §CORE-10 (a derived subject set
+  compared with a declared one), §CORE-19 (its sibling: a security decision keyed on a string the
+  caller typed).
+- No table, endpoint, metric or report, so §16–18 stay correctly empty for CORE-02.
 
 ## §COMMCALC-01. WHICH RECORD SAYS A TRADE-IN HAPPENED — the till, declared, with one home (owner ruling 2026-10-12)
 
@@ -32606,6 +32846,138 @@ Same class: §POS-04 (one content home, every medium), §POS-07 (one home, deref
 
 ---
 
+## §POS-10. WHAT THE SHOP IS, ON A RECEIPT — ONE HOME, EVERY LAYOUT (owner report 2026-10-28)
+
+Owner, on a real emailed receipt (transaction 4605): *"see the rq receipt email to the customer, it
+does not show the address and looks fake , make sure all teh details are on the recipt like the
+original receipt from rq , the till thermal printer receipt came out ok"*.
+
+### POS-10.1 Duplicate check (the build gate)
+
+Searched this index for an existing mechanism that answers "what does a receipt say the shop is":
+§POS-02 (the one renderer), §POS-04 (one content home, every medium), §POS-07 (the CUSTOMER's address
+— the other party on the same receipt). The shop's own block had **no** home; it was assembled twice.
+Nothing new was built to hold it — `pos_config_effective.brand` keeps reading the branding rows and
+`customer_bill_to` keeps the other party. The new module is the one **resolution**, and both layouts
+were rewired onto it. No migration: no new fact is stored.
+
+### POS-10.2 THE CLASS, not the instance
+
+"What does this receipt say the shop IS?" had **two** answers:
+
+1. the till slip (`sale_receipt.slip_model`) read the receipt-branding rows — company name, address
+   lines, licence/tax ids — and printed all three;
+2. the tenant's own POS layout (`sale_receipt.document`) read a `store_lines` list the **router**
+   assembled for that path alone out of the `storeops.stores` row.
+
+Two paths answering one question drift, and these had. The second selected a **`name` column that
+`storeops.stores` does not have**; PostgREST answered 42703; the router's `except Exception: pass`
+swallowed it; `store_lines` stayed `[]`; and every receipt printed in the tenant's own POS layout
+went out with the company name and nothing else — no street, no city, no licence. The till slip was
+untouched because it never read that row, which is exactly why the owner saw one medium right and
+the other wrong. The instance was one tenant; the class was every tenant on that layout.
+
+The same split hid a **second hole**: the legal blocks (`pos_config_effective.disclaimers` — the
+return policy) were handed to the slip and to the printer's byte stream and **not** to the POS
+layout, so the emailed copy of the same sale had no terms on it either.
+
+And a **third**, in the file rather than the layout: `receipt_pdf_render.slip_pdf` drew the till
+slip's character grid at a fixed 8.5 pt on a page as wide as the roll. 48 Courier columns measure
+~245 pt; an 80 mm roll is ~227 pt. Every right-hand figure fell off the edge, so the attached PDF
+read `Subtotal 8` where the printed slip says `Subtotal 808.75`. The type is now **set to fit the
+roll**, which is what a thermal printer does.
+
+### POS-10.3 The one home
+
+`backend/app/modules/pos/receipt_store_block.py`
+
+* `block(brand, store_row, tenant_name, store_code)` → `{name, address_lines, phone, license, lines}`.
+* **Precedence, stated once:** the receipt-branding rows win (what an admin typed on the receipt
+  screen, per-org with a per-store override). The store's own row is the FALLBACK, for a shop that
+  never filled the branding in. Nothing is invented: a shop that declared neither prints neither.
+* `STORE_COLUMNS` — the columns `storeops.stores` ACTUALLY has that a receipt needs. The reader
+  dereferences it; a hand-spelled select is what produced the silent 42703.
+* The company NAME is still `sale_receipt.company_name`'s rule, dereferenced (§POS-02 §E).
+
+### POS-10.4 Files, locks, money
+
+| | |
+| --- | --- |
+| New | `backend/app/modules/pos/receipt_store_block.py` · `sale_receipt._footer_with_blocks` · `receipt_pdf_render._fit_scale` · `harness_pos_receipt_render.py` §R · `backend/tests/unit/test_pos_receipt_store_block.py` · `backend/tests/integration/test_pos_receipt_endpoint.py` |
+| Changed | `sale_receipt.slip_model` / `document` / `thermal_html` / `html` (take `store_row`, read the one home; `document` takes `disclaimer_blocks`) · `receipt_pdf_render.receipt_pdf` / `slip_pdf` · `pos/router._receipt_bundle` (reads the store row through `_shop.STORE_COLUMNS`) and the template preview (`PREVIEW_STORE`) |
+| Endpoints | **NONE** — no new route; the same receipt endpoints print more of what they already had |
+| Migration | **NONE** — no new fact is stored; every field already exists as a POS setting or a store column |
+| Locks | §R (14 checks). R4 fails the build on a select that asks `storeops.stores` for a column it has not got, R11 on a second assembly of the store block outside its home, R6 on the two layouts drifting apart, R13 on a slip PDF whose figures fall off the roll (measured off the rendered file, not off the geometry that drew it) |
+| MONEY IMPACT | **NONE** — a receipt restates a sale already rung; no figure changes |
+
+Same class: §POS-02 (the one renderer), §POS-04 (one content home, every medium), §POS-07 (the other
+party on the same receipt, fixed this way first), §POS-08 (the file this one no longer clips).
+
+---
+
+## §POS-11. THE PAGE A RECEIPT PRINTS ON, AND THE BILL TO (owner report 2026-10-29)
+
+Owner, on the Verizon RQ-format receipt: *"the receipt for verizon rq format printed correctly , d
+not put hte reprint date and time on top woith the word Slae in the middle of the screen , teh bil
+to should have the customer address printed"*.
+
+### POS-11.1 Duplicate check (the build gate)
+
+Searched the index for an existing mechanism that answers "what page does a receipt print on":
+§POS-02 (the one renderer), §POS-04 (one content home, every medium), §POS-08 (the PDF, which draws
+its own page because it is not a browser), §POS-10 (the store block). **Nothing** answered it — no
+stylesheet in the repository had an `@page` rule at all. For the Bill To, §POS-07 already owns "this
+customer's address, written out"; it is dereferenced, not reimplemented, and `view()` is added
+**to that home** rather than beside it. No migration: no new fact is stored.
+
+### POS-11.2 Neither stamp was the receipt's
+
+A browser prints its **own** header and footer over any page: the date and time of the PRINTING on
+the left, the document's `<title>` centred, the URL and the page number below. It suppresses them
+only when the page declares its own `@page` margins. So the "reprint date and time" and the centred
+"Sale" the owner saw were Chrome's, printed over a receipt that had never said what page it prints
+on — and the timestamp actively contradicts the sale's own `Tendered On` line two inches below it.
+
+The class is not "the RQ layout has a stray title". It is that **a receipt never declared its page**,
+which was true of the till slip, of the tenant's own POS layout, and of every tenant. One home,
+`sale_receipt.PAGE_CSS`, emitted by both, with each layout keeping its own print padding so the ink
+does not run to a real sheet's edge.
+
+### POS-11.3 The Bill To prints what the platform was never asked to collect
+
+The address already prints whenever the record holds one — that is §POS-07, and it works; the
+regression for it is pinned. What was missing sat one screen upstream: the till's **quick-add
+customer form** asked for a first name, a last name, a phone and an email and **not** for an
+address, and it told the cashier that "full details (address, ID, etc.) can be added later". So a
+customer created at the register could not have an address to print.
+
+**Measured live, 2026-10-29:** of **1,636** customer records on the reporting tenant, **1** holds an
+address. Transaction 4605's own customer holds a phone and nothing else. That is a data gap, REPORTED
+rather than papered over: no renderer change can print a fact nobody collected.
+
+So the till now asks for every field `customer_bill_to.FIELDS` names — the same five the receipt
+prints, pinned by §S10 so the form cannot drift from the renderer again — and until a record holds
+one, `customer_bill_to.view` hands the print/send screen one sentence saying so. Deliberately to the
+CASHIER and never onto the receipt: a customer reading "no address on file" can do nothing about it,
+and a receipt that apologises for its own contents is the thing the owner called fake in the first
+place.
+
+### POS-11.4 Files, locks, money
+
+| | |
+| --- | --- |
+| New | `sale_receipt.PAGE_CSS` · `receipt_formats/render._page_css` · `customer_bill_to.view` / `NO_ADDRESS_NOTE` · `harness_pos_receipt_render.py` §S · `backend/tests/unit/test_pos_receipt_print_page.py` |
+| Changed | `sale_receipt.thermal_html` and `receipt_formats/render` (emit the page rule; the POS layout's print padding 0 → 12mm) · `pos/router._receipt_bundle` (+`bill_to`, in `_RECEIPT_KEYS`) · `lib/pos-receipt.ts` (`ReceiptBillToView`) · `SendReceiptPanel.tsx` (shows the server's sentence) · the register's quick-add customer form (asks for the address) |
+| Endpoints | **NONE** — no new route; `POST /pos/customers` already accepted every one of those fields (§S11) |
+| Migration | **NONE** — every column already exists on `pos.customers` |
+| Locks | §S (12 checks + 2 negative controls). S3 fails the build on a second `@page` rule, S2 on a layout that stops carrying it, S4 on a page with no margin printing to the sheet's edge, S7 on a receipt that tells the CUSTOMER a record is incomplete, S10 on a till form that stops asking for a field the receipt prints |
+| MONEY IMPACT | **NONE** — a receipt restates a sale already rung |
+
+Same class: §POS-07 (the customer's address, whose home this extends), §POS-10 (the shop's own block,
+the other half of the same receipt's head), §POS-02 (the one renderer both layouts go through).
+
+---
+
 ## §COMMCALC-20. A HANDSET THAT BOOKS A REBATE BOOKS A COST (owner report 2026-10-19)
 
 Owner, on LuxeLink September 2026: *"how come the device cost is less than the device rebate"* —
@@ -38528,3 +38900,1164 @@ for anybody who never clocks out (E029: 8 of 8 days), which is the upstream caus
 hand-corrections above; the auto-closed punch is already `punch_unusable` in §14y's vocabulary, but
 `schedule_fallback` mode still pays it. (c) **E029's live row is overstated by $943 and is
 DM+HR-approved** — a data repair, reported here, never "fixed" in code.
+
+---
+
+## §CORE-18. A LENGTH CAP DOES NOT DECIDE WHICH PART OF A STATUS SURVIVES (found 2026-10-27)
+
+**Owner report 2026-10-27, verbatim:** *"Is all the data being ingested properly for kpi, Ismail
+reported that data was off"*.
+
+**The §COMMCALC-16 diagnostic worked.** The DLAR sweep's 2026-10-26 run detected that the carrier had
+renamed the store report's unit-count fields, and the line it composed named them **and** named the
+fields the portal is sending that nothing reads — the new spelling, which is the entire point of that
+mechanism. What reached the operator, measured live on `commcalc.dlar_sweep_config.last_detail`, was
+**600 characters** ending:
+
+```
+… ⚠ PORTAL FIELD CHANGED: store (DLAR): 'gross_activation_quantity' NOT SENT, store (DLAR):
+'prepaid_activations' NOT SENT, store (DLAR): 'postpaid_activations' NOT SENT, store (DLAR):
+'upgrades' NOT SENT,
+```
+
+mid-list, with the conclusion gone. `router._sweep_set_status` wrote `detail[:600]`. **The detection
+worked and the finding was destroyed on the way to the column.**
+
+### CORE-18.1 The class, not the instance
+
+> **A length cap on a human-read status must not decide WHICH part of it survives. Keep both ends and
+> elide the middle, and say how much was dropped.**
+
+A head cut silently privileges whatever is written first, which is usually the restatement of what
+already went fine. It is worst exactly where it matters most: a diagnostic's conclusion is written
+last, and the part of a status that GROWS is the middle — one entry per changed column, one per store.
+So the longer the list of things wrong, the more certain it is that the answer is the text thrown away.
+The elision also carries a COUNT, because a bare `…` cannot be told from a sentence that trails off —
+which is how the 2026-10-26 line read.
+
+### CORE-18.2 The one home
+
+`app/core/status_detail.py` — `fit(detail, limit=600, keep_tail=None)`. PURE, stdlib only. A line that
+already fits is returned **unchanged**, so every healthy status is byte-identical to before. Over the
+cap, head and tail are both kept with `MARK` (`" …[N chars elided]… "`) between them. A cap too small
+for both ends degrades to the plain head cut, and nothing in it can raise: a status writer is the last
+place in the system that may throw.
+
+### CORE-18.3 The callers, wired
+
+| caller | what was being cut |
+|---|---|
+| `commcalc/router._sweep_set_status` | every portal sweep's `last_detail` — the DLAR instance above |
+| the same function's `core.job_run` insert | the durable history of the same line |
+| `commcalc/router._pull_diag` | a connector pull's probe `status` |
+| `commcalc/router._source_stamp` caller | a `data_source` row's `last_status` |
+| `commcalc/vidapay_sweep` | the ORIGINAL status, which a prepended prefix pushed into the tail |
+| `commcalc/auto_calc` | the later entries of a joined error list |
+
+**Excused, with reason:** `supply/catalog_scrape` and `supply/ordering_logic` cap a product
+*description*, not a status — the head IS the useful part; `core/control_box` caps a redacted log
+context, where the head is the subject.
+
+### CORE-18.4 Locks
+
+`backend/harness_status_detail.py` — 32 checks, DB-free, in CI. §B is the regression from the **real**
+2026-10-26 line, with a pre-fix control proving the head cut dropped the answer. §C proves a middle
+four times longer still cannot push the conclusion out. §D fuzzes every input length and every cap for
+an over-cap result. §E proves the writer never raises on junk input or a junk cap.
+
+**A control that passed for the wrong reason, caught in the writing:** the fixture's invented new
+spelling was first `activation_quantity`, which is a substring of the OLD `gross_activation_quantity`,
+so the pre-fix control found the old name in the truncated head and called it the answer. The fixture
+now uses spellings that are substrings of no old field name. A negative control must be able to fail.
+
+Same class: §COMMCALC-16 (the diagnostic this one was silencing), §19.26 (missing beats wrong), §19.21
+(a status that reports what was pulled rather than what was written).
+
+---
+
+## §CORE-20. A REQUEST PATH IS NOT EVIDENCE OF WHICH ROUTE IT REACHED (found 2026-10-28)
+
+**Owner ask 2026-10-28, verbatim:** *"act as a security agent to find the vulnerability in the code"*.
+Full review: `/mnt/project-files/security-review-2026-10-28/FINDINGS.md` (ten findings; the two the
+owner must act on are not code — the `anon` grants of §CORE-20.6 and a Next.js RCE bump).
+
+### CORE-20.1 The class, not the instance
+
+> **A decision about a REQUEST must be keyed on the thing that declares the answer, not on a string
+> the caller typed. The route table declares which paths are self-authenticating; the request path
+> declares nothing.**
+
+`tenant_middleware._is_public` ended:
+
+```python
+if path.endswith("/run-due") or path.endswith("/promote-due"):
+    return True
+```
+
+The intent was right — `pg_cron` calls the sweeps with no JWT and authenticates with its own
+`x-notify-secret`, so the auth requirement must not fire before the handler — but it read the
+**request path**. Measured against the real route table: **249 of the app's 1805 routes end in a path
+PARAMETER**, so asking for one with the literal value `run-due` produced a path ending in
+`/run-due`, and the allowlist fired. Allowlisting skips **both** the authentication requirement
+**and** the `org_id` rewrite, so with no token at all:
+
+```
+PUT  /api/v1/commcalc/config/run-due?org_id=<any tenant>      → router.save_config upserts payout_config
+POST /api/v1/commcalc/calculate/run-due?org_id=<any tenant>   → a background commission recalculation
+```
+
+`save_config` carries no permission gate of its own, and nor do most of the other 248: they rely on
+this middleware. The hijacked segment becomes the parameter's value, so the READS mostly came back
+empty (`period = "run-due"` matches no stored month) — the damage was on the WRITE and TRIGGER side,
+and it was one route name away from being a disclosure.
+
+### CORE-20.2 The one home
+
+`app/core/tenant_middleware.cron_paths_for_app(app)` — the LITERAL (parameter-free) route templates
+ending in `/run-due` or `/promote-due`, read off the app's own route table and memoised in two
+module-level slots — an app id and its answer. NOT a dict keyed by app: a process serves one app
+whose route table is fixed once built, so a dict there would only ever hold one entry and could only
+ever grow, which is the shape the bounded-cache lock (`harness_ttl_cache_bounded.py`, added by #579)
+exists to retire. It was a dict when this section first landed; that gate caught it, and the
+correction landed with #580 (#581 proposed the identical change and was closed as superseded). The
+derivation and the fallback are unchanged — 37 cron paths, verified against the real app. It
+**dereferences `core/path_redact.route_templates`** rather than walking the router a second time:
+that module already derives "which URL segments are secrets" from the same table (§19 — a route
+written `/public/onboarding/{token}` names its own sensitive parameter), and this is the same fact
+asked a different question. `_is_public(path, cron_paths=…)` tests MEMBERSHIP in that set; a
+parameterised template can never enter it, whatever is typed into it.
+
+**Never a lockout.** An empty derivation means "the route table could not be read", not "there are no
+sweeps", so `_is_public` falls back to the historical suffix test there — 37 cron entrypoints must not
+start 401-ing because a FastAPI internal changed shape. Break-glass `CRON_PATH_LITERAL_ONLY=0`
+restores the pre-fix behaviour exactly, one env change, no code rollback (the REQUIRE_AUTH posture).
+
+### CORE-20.3 The siblings, found and fixed in the same change
+
+Three more surfaces answered a security question from something the caller controls.
+
+| surface | what it read | what it reads now |
+|---|---|---|
+| `core/rate_limit` (per-IP limiter), `core/ip_block` (ban list), `core/access_log.ip`, `core/session_guard`, `core/impersonation_api` journal | the **leftmost** `X-Forwarded-For` entry — four separate copies of one line. A proxy APPENDS, so the leftmost entry is whatever the CLIENT sent: one header gave a fresh "IP" per request, walked through a ban, and wrote a chosen address into the audit trail | **`app/core/client_ip.py`** — the ONE home. The trustworthy entry is counted **from the right**: with N trusted proxies the client's address is `parts[len(parts) - N]`, and forged entries all sit to its left. `TRUSTED_PROXY_HOPS` is N; the unforgeable ASGI peer is the floor |
+| `main._log_system_error` | `request.query_params.get("org_id")` — so anyone who could provoke a 500 wrote `core.failure_log` rows, each with a truncated traceback, into **any tenant's** Failure Logs page | `_PLATFORM_ORG_ID`, the same fact `tenant_middleware._log_identity_outage` was ALREADY fixed to use, with the acting tenant kept in `detail` for triage |
+| `POST /core/auth/login-record` (anonymous; the frontend asserts the sign-in outcome because sign-in goes straight to Supabase) | an unverified `{email, success:false}`, five of which soft-lock any email a stranger knows, indefinitely | its own `RATE_LIMIT_LOGIN_RECORD_PER_HOUR` tier (12/hour/IP). **Labelled a cost increase, not a fix** — see §CORE-20.5 |
+
+**`TRUSTED_PROXY_HOPS` is deliberately UNSET by default**, and `core/security_posture` reports that as
+a boot finding rather than guessing: N is a property of the deploy, this API is reached both directly
+at `api.metricspro.tech` and same-origin through the site's proxy, and a wrong N either leaves the
+hole open (too low) or collapses every browser user into one shared rate-limit bucket and fills the
+access log with a proxy's address (too high) — that second failure is an outage. Measuring N takes one
+curl: `/mnt/project-files/security-review-2026-10-28/SET_TRUSTED_PROXY_HOPS.md`.
+
+### CORE-20.4 Locks
+
+| harness | checks | what fails the build |
+|---|---|---|
+| `harness_public_allowlist_lock.py` | 80 | a parameterised route reachable through the sweep rule — asserted against the **real 1805-route table**, with a pre-fix control proving all 249 were |
+| `harness_client_ip.py` | 45 | a FIFTH copy of the leftmost-`X-Forwarded-For` parse anywhere in `app/`, or a wired call site that stops dereferencing the one home; plus the hop arithmetic for chains shorter, equal and longer than N |
+| `harness_anonymous_write_surface.py` | 43 | any audit/diagnostic write (`failure_log`, `access_log`, `log`, `auth_event`, `impersonation_action`) that takes its `org_id` from the query string; plus the login-record cap's existence, tier separation and bite |
+
+All three are **enforcing** jobs in `.github/workflows/security.yml` (not `continue-on-error`), so the
+pipefail lock counts them as gates rather than debt.
+
+**A pin that had outlived itself, retired in the same change.** `harness_identity_backend_503` asserted
+`_is_public`'s body **byte-identical to main**, which forbids ever fixing the function — and on
+2026-10-28 it did. Replaced with the property it existed to defend: the allowlist may NARROW but never
+WIDEN, compared by behaviour over probe paths against main's own allowlists. Same lesson as
+`harness_portal_secret_lock` F5 (§19.18): *a harness that pins a literal shape breaks when that shape
+becomes derived; rewrite it to read the fact.*
+
+### CORE-20.5 What this change deliberately does NOT fix, and why
+
+- **The login-lockout claim.** `login_guard` counts an outcome the client asserted, because sign-in
+  bypasses the backend entirely. The honest fix is for the API to observe the sign-in itself, which is
+  an architecture decision for the owner, not something to change unasked. The cap raises the cost and
+  only bites once `TRUSTED_PROXY_HOPS` is set — which is why both halves ship together. Scope, stated:
+  `login_guard.check` is read ONLY by the pre-login probe the frontend consults, so this is a denial of
+  service against the **login screen** for a named person, not a true account lock.
+- **`/docs`, `/redoc`, `/openapi.json` stay public.** They hand an anonymous caller the whole API
+  surface — which is how the 249 routes above were found from outside. Gating them is a UX decision.
+- **The report-only `security` workflow.** bandit / semgrep / pip-audit / npm audit / trufflehog all
+  run `continue-on-error: true`, so none can fail a build — which is why four critical Next.js RCE
+  advisories sat on `main` while `npm audit` reported them on every PR. The fix is a shrink-only
+  ratchet in the shape of §CORE-13's `CUTOFF`, and turning them red before the dependency bump lands
+  would block every PR, so it is a separate change.
+
+### CORE-20.6 The finding this review could NOT close in code
+
+**74 relations are `GRANT`ed to the PUBLIC `anon` role**, 56 of them also carrying
+`CREATE POLICY … FOR ALL TO anon, authenticated USING (true) WITH CHECK (true)`, and at least five
+(`commcalc.journal_entries`, `commcalc.companies`, `commcalc.gp_snapshot`,
+`commcalc.account_statements`, `commcalc.vip_invoices`) granted to `anon` with **no RLS enabled at
+all**. The anon key is `NEXT_PUBLIC_SUPABASE_ANON_KEY` — public by construction. Among the 74:
+`storeops.payroll_gross_ledger`, `storeops.tenants` (including `twofa_policy`), `core.auth_otp`,
+`core.twofa_device`, `core.account_link_invite`, `commcalc.mtd_commission_payout`.
+
+Early migrations copied Supabase's quickstart snippet. §CORE-13's guard already says `service_role`
+**only** — and its `CUTOFF = 1089` grandfathers every table below it, which is the whole exposed set.
+No `anon` grant here is load-bearing: `app/core/database.py` reaches every relation as
+`service_role` through PostgREST, and the browser uses `supabase-js` for auth and realtime channels
+only (no `.from()` / `.rpc()` call site exists in `frontend/src` or `mobile/src` — §CORE-13 measured
+this).
+
+**REPORTED, NOT APPLIED.** This is a schema change, so it is surfaced for owner approval per the house
+rules; the read-only confirmation query and the drafted revoke are in the review folder. Until it
+lands, every gate in §CORE-20.1–19.3 can be reached around.
+
+
+## §COMMCALC-40. THE STATUS WORD IS THE SENTENCE'S OWN VERDICT, NEVER A LITERAL (found 2026-10-27)
+
+> **Numbered COMMCALC-40.** Checked against `origin/main` immediately before pushing, per §CORE-17's
+> note on the allocator not being a reservation.
+
+Found while answering *"is all the data being ingested properly for kpi, Ismail reported that data was
+off"*. The DLAR sweep's detail line read, correctly, every day from 2026-10-16:
+
+```
+⚠ PARTIAL — October 2026: … · ⚠ COLUMN STOPPED ARRIVING: raw_dlar_store.gross_adds (0 of 28 rows) …
+```
+
+and the `last_status` stored beside it read **`ok`**. So the DLAR sweep page, the connectors row and
+the upload-duty feed all showed green over October 2026's missing unit counts for ten days, with the
+contradiction sitting in the next column.
+
+### COMMCALC-40.1 THE CLASS — one fact, two homes, one of them a literal
+
+`status_sentence` computes the verdict (`"OK" if not (skipped or gone or shape) else "⚠ PARTIAL"`) and
+returns it as *prose*. The caller then passed the literal `'ok'` to `_dlar_set_status`. The verdict
+existed, was correct, and was discarded at the one place a machine could read it.
+
+`'partial'` was never a new word here, which is what makes this a wiring defect rather than a feature:
+
+| Already spoke 'partial' | Where |
+|---|---|
+| `_sweep_set_status` — a run that imported | `success` defaults to status in `('ok', 'partial')` |
+| the ePay sweep — a mixed run | `_epay_set_status(… 'partial' if _errs else 'ok' …)` |
+| the VIP sweep | `status = 'ok' if not errs else ('partial' if parts else 'error')` |
+| the upload-duty feed | `failed = auto and sweep_last_status in ('error', 'partial')` |
+
+A consumer already knew the word the producer refused to say. **DLAR was the only sibling computing
+the verdict and then throwing it away** — checked in the same PR, and that is why no sibling fix is
+excused here.
+
+### COMMCALC-40.2 THE ONE HOME
+
+`dlar_sweep.status_verdict(res)` → `'ok'` | `'partial'`, pure. `status_sentence` derives its head from
+it, so the prose and the word are ONE computation with two readings, and the router passes it instead
+of a literal.
+
+### COMMCALC-40.3 DUPLICATE CHECK (the build gate)
+
+| Searched for | Found | Reused or excused |
+|---|---|---|
+| an existing "did this run leave the feed whole" home | none; four private derivations (table above) | the house's own `('ok','partial','error')` vocabulary is REUSED, not extended |
+| a second place computing the DLAR verdict | `status_sentence`'s `head` | REWIRED to dereference, not copied |
+| sibling sweeps with the same literal | b2b (handles its honest zero), ePay, VIP (both already derive) | none needed fixing; stated rather than assumed |
+
+Nothing new is derived and no new vocabulary is introduced.
+
+### COMMCALC-40.4 LOCKED
+
+`harness_portal_cell.py` §H (54 checks in the file now, DB-free, in CI): the real October run reads
+`partial`; a healthy run still reads `ok`; the sentence head and the verdict **cannot disagree** across
+five result shapes; a refused table is partial even when every field arrived; the verdict is one of the
+house's own words; and — the un-wire lock, because the defect was in the CALLER and not in this module
+— the router is read as source and the shipped literal is kept as an **armed negative control**, so
+restoring `_dlar_set_status(client, org_id, 'ok'` fails the build.
+
+### COMMCALC-40.5 Cross-references
+
+Same class: §CORE-18 (the other half of this silence — the diagnostic's answer truncated out of the
+same two columns), §COMMCALC-16 (the diagnostic itself), §19.21 (a status that reports what was pulled
+rather than what was written), §19.41 (`success` is what landed, not what the status word says).
+
+## §COMMCALC-41. A DERIVED SNAPSHOT REBUILDS ITSELF WHEN ITS INPUTS LAND — no tenant is the scheduler (owner ask 2026-10-27)
+
+Owner, verbatim: *"The rebuild ledger or recalculate should be real time all across, then tenant would
+not know when to run, so the data should be live update as soon as something changes."*
+
+**Module:** `backend/app/modules/commcalc/derived_builds.py` (THE registry + the (org, build) queue) ·
+`backend/app/modules/commcalc/auto_calc.py` (the ONE post-landing hook and the ONE poller, extended) ·
+`backend/app/modules/payables/refresh.py` · `backend/app/modules/recovery/refresh.py` (the two refresh
+one-homes) · `backend/app/modules/asset/router.py` (`process_asset_ledger_bytes` — the landing that was
+telling nobody)
+**Proof:** `backend/harness_derived_builds.py` — 56 checks, DB-free
+**Lock:** `backend/harness_derived_build_lock.py` — static, stdlib only, 8 negative controls. Its §A
+discovery is **the owner's question asked of the code**: every `@router.post`/`put` whose path contains
+rebuild / recalc / recompute / rerun — every button a tenant could be expected to know when to press —
+must be a registered build's `endpoint` or be excused with its reason. Five exist today; two are
+registered, three excused
+**Migration:** `1100_derived_build_queue.sql` — one new table, surfaced for approval. **Unapplied costs
+liveness, never correctness**: without it the queue degrades to one per process and every button still
+works exactly as it does today.
+
+### COMMCALC-41.1 THE CLASS — one derived thing was live, and every other one was a button
+
+§6l already made the rep commission calculation live: a landing queues it, a debounce coalesces a burst
+of uploads into one run, one conditional UPDATE claims it, and **nobody presses Run Calculation**. Every
+*other* derived snapshot in this platform was left on a button, and a button is a scheduler that only
+works if the tenant knows the schedule.
+
+What that cost, measured against production on **2026-10-27**:
+
+| Fact | Measured |
+|---|---|
+| `commcalc.device_payable_ledger.built_at` (house / Boost) | **2026-09-04** |
+| `commcalc.asset_ledger` — the feed it is built FROM | uploaded **2026-10-23** |
+| Rows in the ledger due on or after that day | **0** of 11,000 dated |
+| What `/payables/owed-by-date`, `/payables/due`, `/asset/owed-weekly` and the Payables screen showed | an empty upcoming list |
+| What the screen said about it | **nothing** |
+
+**53 days stale, and the page read as "nothing is owed".** The feed was four days old. Nothing was
+broken, nothing was missing, and nobody had pressed ↻ Rebuild ledger — because nothing tells anyone to.
+
+**The instance is "the payable ledger is stale". The class is: a derived table's freshness is its own
+fact, and a tenant cannot be the scheduler for it.** So the fix is NOT a second hook for payables —
+that is exactly the patchwork the house forbids. It is a registry of derived builds plus the hook,
+the debounce, the claim and the poller that already exist.
+
+### COMMCALC-41.2 THE ONE HOMES
+
+| Question | The one home | Who reads it |
+|---|---|---|
+| Which stored snapshots are live, and what makes each stale? | `commcalc/derived_builds.BUILDS` — per build: its input tables **by identity from `data_lineage_registry`**, a resolver for the inputs that are DECLARED per carrier, its runner, and the manual door that stays | `auto_calc.landed` (it lists no build and no table of its own), the lock |
+| Has a landing made something stale, and when does it rebuild? | `auto_calc.landed` — unchanged as the ONE entry every lander calls; it now asks the registry as well as `is_calc_feed` | every lander |
+| What IS a rebuild of the payable ledger? | `payables/refresh.refresh` — `engine.build_ledger` + `engine.sync_payable_flags`, which is what the button always did | `POST /payables/rebuild` **and** the hook |
+| What IS a rebuild of the recovery ledger? | `recovery/refresh.refresh` — the build plus the `last_run_at` stamp | `POST /recovery/rebuild` **and** the hook |
+| Did it rebuild, and what does the screen say? | `derived_builds.record` / `.sentence` / `.view`, over `commcalc.derived_build_status` | `GET /payables/auto-build`, the rebuild response |
+
+**The button is not removed, and it is not a second answer.** Both callers arrive at the same refresh
+function, so a pressed rebuild and a live rebuild cannot be two different rebuilds — §D of the lock
+fails the build if the endpoint reaches the engine directly again.
+
+**Three registered builds:** `commission` (period-scoped, §6l's own path, registered so the list of
+live builds has one home), `payable_ledger`, `appeal_recovery`. A snapshot is **org-scoped**, not
+period-scoped, because "what we owe" is a point-in-time fact about the whole shelf and not September's
+figure — which is why it cannot ride `calc_status`'s `(org_id, period)` key and mig 1100 exists.
+
+**The landing that was telling nobody.** `asset_ledger` — the payable ledger's main input — lands
+through `asset/router.process_asset_ledger_bytes` (the manual Asset Lending upload **and** the VIP
+sweep both), and that function was listed in `auto_calc.EXCUSED` as *"not calculation input"*. True,
+and beside the point: it is the input of a different build. It now fires the hook with **no period at
+all**, which is the honest shape for a snapshot, and only the org-scoped builds are queued.
+
+### COMMCALC-41.3 DUPLICATE CHECK (the build gate)
+
+| Searched for | Found | Reused or excused |
+|---|---|---|
+| an existing home for "data landed for org X" | **`commcalc/auto_calc.py` (§6l)** | **EXTENDED, not sat beside.** Same hook, same debounce (`due_at` / `is_due` / `merge_landings` are IMPORTED), same claim shape, same poller, same `auto_calc_on_landing` switch — a tenant turns ONE thing off, not two |
+| a second place that could schedule a rebuild | none; the engine had no caller but its endpoint | the registry starts no thread and registers no cron — §E of the lock pins `derived_builds.run_due` to `auto_calc.run_due`'s single caller |
+| other derived snapshots with the same stale-button shape (**find the siblings**) | `commcalc.appeal_recovery` (`POST /recovery/rebuild`) — **registered here, same PR**; `pos.sales` (`sales_from_reports.rebuild`) — **already live** via `_intake_pos_rebuild_after_landing`, so excused with that reason | both stated in `EXCUSED_BUILDS` / `BUILDS` rather than left to a reader to notice |
+| a table name to put in the registry | `data_lineage_registry.ASSET_LEDGER` / `.PAYMENT_DETAIL` / `.DISTRIBUTOR_INVOICES` / `.MI_RESIDUAL` / `.COMMISSION_CALC_FEEDS` | dereferenced by identity; §F of the lock fails the build on a literal |
+| where a carrier's own feeds are declared | `commcalc.payable_source_map` | READ as the registry's `inputs_fn`, so declaring a new carrier changes what refreshes the ledger with **no code change** (RULE TWO) |
+
+Nothing new derives a figure here; this moves no money and changes no number. It changes **when** a
+number is rebuilt.
+
+### COMMCALC-41.4 WHAT A LANDING NOW DOES
+
+1. a lander writes its rows and calls `auto_calc.landed(…)` — exactly as before;
+2. the hook asks `is_calc_feed` (the commission calculation) **and** `derived_builds.stale_builds`
+   (every snapshot whose static or DECLARED inputs include that table);
+3. each answer is queued, coalesced to ONE row per key — `calc_status` for a month, mig 1100's
+   `derived_build_status` for a build;
+4. the existing poller claims each request once uploads have been quiet for the org's debounce window
+   (default 5 minutes, never later than 6 windows after the FIRST landing so a steady stream cannot
+   starve it) and runs it through the refresh one home;
+5. the outcome — built / built with warnings / refused / failed — is RECORDED with the one sentence an
+   operator reads. **A failed rebuild says the screen still shows the last good build**, and its tone is
+   `error`, so a screen that colours on tone cannot show green over a stale figure (§COMMCALC-40's
+   class, applied to a build).
+
+A **verdict is never read off a row count** (§COMMCALC-40): the exact shape that bit this platform on
+2026-10-27 — `HTTP 200 {"written": 0}` over a ledger whose rows had just been deleted — classifies as
+`failed`, pinned as §C3 of the proof.
+
+### COMMCALC-41.5 A BUILD CANNOT BE THE JUDGE OF WHETHER IT FINISHED
+
+The 4 September build of the house ledger wrote **exactly 11,000 rows — eleven pages of one thousand
+— and reported success.** An automatic rebuild makes that shape worse, not better: nobody is watching
+it, so a success-looking response over an incomplete ledger becomes the normal case.
+
+So the row count is checked **outside** the build, in `payables/refresh.shortfall_warnings`: each
+carrier's written count against its source population, counted under the same filters the build
+applies (`org_id`, and `owed_field > 0` where the carrier declares one). Short of its population →
+a warning that says the figures for that carrier are incomplete and must not be read as a smaller
+balance. A population that cannot be counted yields **no** warning rather than a false one.
+
+This is deliberately not a check inside `build_ledger`: a build that stopped part-way is exactly the
+caller least able to say so.
+
+**And the eleven exact pages are probably not only a partial insert.** `engine._build_one_carrier`
+pages its source with `q.range(page * PAGE, …)` and **no `.order(...)`** — the §CORE-05 defect
+`harness_feed_read_lock.py` exists for, where an unordered `range()` walk can serve duplicates, miss
+rows, and still end on a short page. REPORTED to the thread that owns the engine; an atomic swap of an
+incomplete read is still an incomplete ledger.
+
+### COMMCALC-41.6 REPORTED, not fixed
+
+- **`build_ledger` is still delete-then-insert per carrier.** That is why `{"written": 0}` over an
+  emptied table was possible at all, and it is owned by the *Device Payable VidaPay T-CETRA empty*
+  thread, which is making it write-then-swap in its own PR. This PR deliberately does not touch it —
+  it makes the rebuild AUTOMATIC, which raises the stakes of that fix rather than performing it. Until
+  it lands, a live rebuild is exactly as safe as the button, no safer.
+- **Migration 1100 is not applied.** Until it is, the queue is per process: a landing in one worker is
+  rebuilt by that worker, and two workers receiving two landings could rebuild the same snapshot
+  concurrently. The durable claim is what makes that impossible, and it is one `create table`.
+- ~~**`payable_source_map` declares `net_terms_days` NULL for Luxelink**, so 0 of its 4,495 payable rows
+  carry a due date whatever rebuilds them.~~ **RESOLVED — re-measured against production 2026-10-29:**
+  Luxelink's Total / MA map declares 21 days and **4,563 of 4,563** of its ledger rows carry a due date,
+  as do 35,645 of 35,645 of the house's. The principle stands and is now §COMMCALC-41.8's: liveness does
+  not create a date nobody declared (§COMMCALC-34) — it restates the dates when the declaration changes.
+
+### COMMCALC-41.8 A DECLARATION IS AN INPUT (owner ask 2026-10-29)
+
+Owner, verbatim: *"Put the Net term days as 14 from the back , programmable not hard code"*.
+
+**It already was programmable, and that was not enough.** Net terms live in
+`commcalc.payable_source_map.net_terms_days`, read first by `payables/engine._terms_days`, and no number
+of days appears anywhere in code (RULE TWO was never broken here). What was missing is that **changing
+the setting did not restate the figures derived from it.** The stored due dates on
+`commcalc.device_payable_ledger` were computed with the old terms and stayed on them until some
+unrelated feed happened to land. That is §COMMCALC-41's own defect one step further back: the tenant is
+the scheduler again, only now for a settings change instead of an upload.
+
+**The rule.** A build's DECLARATION is one of its inputs. `derived_builds.BUILDS` carries
+`config_inputs` beside `inputs`, and `matches()` treats the two the same for staleness:
+
+| | `inputs` | `config_inputs` |
+|---|---|---|
+| what it is | an external feed that ARRIVES | a config table a person EDITS |
+| named by | `data_lineage_registry` identity — a literal fails §B2 of the lock | its own table name; a config table has no external feed to trace, and inventing a lineage entry for one would be a fake fact |
+| makes the build stale | yes | yes — this is the whole point |
+| who fires the hook | the lander | the endpoint that writes it (`POST /payables/source-maps` and the delete beside it, via `_source_map_changed`) |
+
+`payable_ledger` declares `config_inputs = ("payable_source_map",)`. The edit calls the SAME
+`auto_calc.landed` with **no period**, so it inherits the one debounce, claim, poller and
+`auto_calc_on_landing` switch — a terms change is not a second trigger. Its `SOURCE_LABELS` entry makes
+the operator's sentence say *a change to the carrier's payment terms or source settings* rather than
+naming an import that never happened.
+
+**Locked** so it cannot un-wire: §B5 (a declared config table must be one some endpoint here actually
+writes — a declaration nobody can edit cannot make anything stale), §B6 (declared once, never also as a
+lineage input), §C4 (every writer of a declaration fires the hook) and §C5 (the payment-terms door in
+particular), with four planted violations required RED.
+
+**The screen.** `POST /payables/source-maps` already existed, so nothing new was opened; it now PATCHES
+an existing carrier instead of demanding the whole declaration back, which is how a settings screen
+overwrites a column it never showed anyone. The Payables page gains a **Payment Terms** tab reading the
+same endpoint. A blank box means *the carrier stamps its own due date* (Boost / VIP,
+`due_date_mode='field'`) and is deliberately NOT the same as `0`.
+
+### COMMCALC-41.7 Cross-references
+
+Same class: **§6l** (the hook this generalises), §COMMCALC-40 (the status word is the verdict),
+§COMMCALC-29 (a declared source that cannot be read is REPORTED — applied here to the registry's own
+declared-input read), §COMMCALC-34 (a billing cadence is declared, not inferred), §19.18 (writing a
+registry without wiring the callers to it is not a fix), §CORE-13 (a migration grants what it creates).
+## §PAYABLES-01. A REBUILD NEVER DELETES WHAT IT CANNOT REPLACE (found 2026-10-27)
+
+> **Numbered PAYABLES-01.** Checked against `origin/main` immediately before pushing, per §CORE-17's
+> number race (§COMMCALC-40 landed the same morning in #570).
+
+**Owner, verbatim:** *"Rebuild via sql let me know what permissions to add"*, asked after
+*"What are the upcoming payments for the next week"* returned nothing.
+
+**MEASURED, NOT IMAGINED — this is an incident write-up.** At 10:44 UTC I ran the real
+`engine.build_ledger` against production for the house org. `_build_one_carrier` deleted the
+carrier's rows and THEN inserted the rebuilt ones, so it **deleted all 11,000 Boost/VIP rows and
+inserted none**:
+
+    PGRST204  Could not find the 'rebate_basis' column of 'device_payable_ledger' in the schema cache
+
+`build_ledger` catches per carrier so one bad config cannot abort the rest, so the call **returned
+normally** — `{"carriers": 1, "written": 0, "per_carrier": [{"error": "…"}]}`, and through
+`POST /payables/rebuild` an **HTTP 200** — describing a table it had just emptied. The rows were
+restored in full from a snapshot taken beforehand (15,495 total, 11,000 house rows all carrying due
+dates, `built_at` 2026-09-04, sample rows matching the snapshot). **Pressing ↻ Rebuild ledger in the
+UI does exactly the same thing, and nobody pressing it has a snapshot.**
+
+### PAYABLES-01.1 THE CLASS — a delete+insert with no transaction is a delete
+
+The instance was "the code is ahead of the production schema": migrations **1093 and 1094 had never
+been applied** while 1095, 1098 and 1099 had. Migrations are applied by hand here, so **a landed
+migration number is no evidence that the ones below it landed** — check the columns, not the number.
+
+The class is wider and is what is fixed: this backend reaches the database only through PostgREST
+(§CORE-13 — there is no direct SQL path), so a rebuild cannot wrap its delete and its insert in one
+transaction. Any write the relation refuses — a dropped column, a renamed one, a revoked grant —
+turns the pair into a delete. Naming the missing column would have fixed one morning; naming the
+order fixes every morning after it.
+
+### PAYABLES-01.2 THE FIX — refuse, then delete, then insert
+
+`backend/app/modules/payables/write_shape.py` is the ONE home for *"can this relation accept the row
+this build is about to write?"*. `_build_one_carrier` now builds the first page of replacement rows,
+asks `refuse_if_unwritable`, and only then sweeps the carrier's old snapshot — so a refusal arrives
+while the old rows are still there. The delete itself was lifted into **one home**,
+`engine._sweep_carrier`, which is not reached before the check.
+
+**The guard can only fire where there is something to lose**, which is what makes it safe
+everywhere. The live column set is read from a sample row of the relation (PostgREST returns every
+column, NULLs included, so a row's KEYS are the relation's columns; `information_schema` is not
+reachable through it). An EMPTY relation yields `None` — "I could not look", deliberately not "it
+has no columns" — and the build proceeds exactly as before, because an empty table has nothing to
+destroy. Cost: one `select … limit 1` per carrier. No arithmetic changed.
+
+### PAYABLES-01.3 THE OTHER HALF — a refused rebuild is not a 200
+
+`build_ledger` reports a refusal under `blocked`, kept apart from a per-carrier `error`: *"this
+carrier rebuilt badly"* and *"this carrier was left exactly as it was"* are different sentences, and
+the per-carrier entry carries `rows_left_intact` so nobody reads `rows: 0` as loss. A blocked carrier
+is not counted in `carriers` or `written`. `POST /payables/rebuild` turns a non-empty `blocked` into
+**409** naming the missing columns — before the flags refresh, so a refused rebuild cannot go on to
+restate the discrepancy flags off a ledger it did not write.
+
+### PAYABLES-01.4 The lock
+
+`backend/harness_payable_rebuild_preflight.py` — **32 checks, stdlib-only, DB-free**. §A
+`write_shape` as pure arithmetic, including that an unknown column set refuses nothing and a sparse
+sample cannot cause a false refusal; §B the ORDER, driven through the **real** `_build_one_carrier`
+against a recording client (only `_rows_for_page` is stubbed) — on a refusal **not one delete is
+issued**, and the sweep happens once per carrier, not once per page; §C the regression in the live
+defect's exact shape, a ledger with no `rebate_basis`; §D the refusal reaching a reader and the 409;
+§E the AST ratchet — the delete has one home, the guard is WIRED rather than merely written (§19.18),
+and inside the build the preflight call appears before the sweep call; §F the read side (see
+PAYABLES-01.6) — the one home is dereferenced, no hand-cut page loop or page ceiling survives in the
+engine, and the source is read before the sweep.
+
+Restoring the old order fails B1 and B2, verified by reverting it and re-running.
+
+### PAYABLES-01.5 Cross-references
+
+Same class: §CORE-13 (no direct SQL path — why the catalogue cannot be read and why a grant can
+refuse a write), §19.18 (a registry written and never dereferenced), §19.41 (`success` is what
+landed, not what the status word says), §COMMCALC-40 (a verdict discarded where a machine reads it),
+§COMMCALC-32 (`ledger_status`, the other gate on what reaches this ledger), §COMMCALC-34
+(`owed_read`, the one read over what this build writes).
+
+### PAYABLES-01.6 THE SAME DEFECT ON THE READ SIDE — a rebuild cannot replace from half the source
+
+Found while answering the obvious question about the rebuild: the house ledger went from 11,000 rows
+to 35,346, so was it double-counting? **No — measured 2026-10-27, `commcalc.asset_ledger` holds
+exactly 35,346 house rows with `owed_to_vip > 0`, against 35,346 ledger rows and 33,384 distinct
+`(imei, carrier_id)` keys whose only repeats are the feed's three non-device placeholders (`''`,
+`PROCESSING FEE`, `SHIPPING`). One row per source row.** The old number was the defect: **11,000 is
+eleven exact pages of 1,000**, a build that covered a third of its source and reported success.
+
+The cause is §CORE-05 in this engine. `_build_one_carrier` cut its own pages with
+`.range(page * PAGE, …)` and **no `.order(...)`** — and Postgres promises no row order without one,
+so such a walk serves some rows twice, never serves others, and still ends on a short page. Two
+sibling reads inside `ma_store_resolution` did the same, each under a 40-page ceiling, and the build
+loop under an 80-page one: the §19.48 shape, a read that is quietly wrong.
+
+All three now dereference **`app/modules/core/feed_read.read_all`** (§CORE-05), which pages on a
+stable key, has no ceiling that truncates in silence, and raises `IncompleteRead` rather than
+returning a partial feed. Placed where it is, that raise reaches the caller **before the sweep**, so
+an unreadable source leaves the old snapshot standing — the same guarantee as the write preflight,
+on the other side: *a rebuild never deletes what it cannot replace, and it cannot establish it can
+replace from half the source.* `harness_feed_read_lock.py`'s unordered-read ratchet drops 98 → 95.
+
+## §COMMCALC-42. A PER-TENANT CONFIG TABLE IS READ ONCE PER TENANT, NEVER ONCE PER KEY (load test 2026-10-28)
+
+**How it was found.** A 1,000-user load test against the real app (rig and findings in
+`/mnt/project-files/load-test-2026-10-28/`) counted every PostgREST round trip the platform makes.
+`commcalc.target_field_registry` came back as the single busiest table in the system — **19,658
+reads**, more than every other table combined — and `GET /commcalc/column-mapping/readiness` cost
+**88 round trips to render one page**, a number that GREW with the number of report types a tenant
+declares.
+
+**The class, not the instance.** The defect is not "that page is slow". It is *a per-tenant config
+table read one key at a time*. `target_registry.load_registry(client, org, report_key)` issued one
+query per `report_key`, and `column_mapping._registry_overlay` calls it for every key the readiness
+matrix walks — twice per key, once for `target_fields` and once for `period_source_field`.
+
+**Why it costs more than it looks.** The app's endpoints are blocking `def` handlers (the
+`harness_nav_perf.py` discipline), so each request holds one of the platform's
+`(workers × 40)` request threads for its whole chain of round trips. Fan-out is spent directly out
+of the concurrency budget: the load test measured a hard ceiling of 80 in-flight requests at the
+production default of `WEB_CONCURRENCY=2`.
+
+**The one home.** `app/modules/commcalc/target_registry.py` is now the only place that reads
+`commcalc.target_field_registry`, and it reads **the whole org's registry in one query**
+(`_org_rows`), org-keyed, 30-second TTL, positive results only, expired entries pruned on write.
+Its three accessors — `load_registry`, `registry_tuples`, `registry_report_keys` — all filter that
+one read in memory, so every caller inherits the fix and a future caller cannot reintroduce the
+fan-out by accident. `add_field` / `remove_field` call `invalidate(org_id)`, so a saved field is
+visible at once. A read that FAILS is never cached, so an un-run migration 070 self-heals on the
+next call — the same posture as `app/core/identity.py` and
+`tenant_middleware._resolve_identity`, which is also where the cache shape comes from (one pattern
+in the platform, not two).
+
+**Measured, end to end, against the real app:** `GET /commcalc/column-mapping/readiness`
+**88 → 10** round trips, 1,549 ms → 665 ms. `GET /closing/readiness` 21 → 16.
+
+**The lock.** `backend/harness_target_registry_one_read.py`, CI job
+`target-registry-one-read` in `.github/workflows/carrier-vocab-guard.yml`. §A FAILS THE BUILD if
+the query count ever grows with the number of report keys again, or if the single read is narrowed
+to one `report_key`; §B pins the answers unchanged; §C pins write-invalidation; §D pins
+failure-is-never-cached; §E pins tenant isolation of the cache; §F drives the REAL readiness
+endpoint through `_harness_dbfree` and asserts one registry read. Verified red before green: with
+the per-key query restored, §A1/A2/A3/A5 fail.
+
+Same class: §19.18 (a registry written and its callers not wired to it), §CORE-05 (one complete
+paged read), §COMMCALC-24 (one pooled client, not one per request).
+
+## §CORE-19. A TEST IS A GATE, OR IT IS A FILE — unit, integration and TDD as the house standard (owner directive 2026-10-28)
+
+**Owner directive 2026-10-28, verbatim:** *"We need to define all development we do to follow the
+following / Unit testing / Integration testing / Test driven development"*.
+
+**Full guide: `docs/TESTING.md`.** This section is the index entry: what exists, where it lives, and
+what fails the build.
+
+### CORE-19.1 What was measured before building
+
+- **597** `backend/harness_*.py` proof programs, of which **330 are run by no workflow**
+  (`harness_unrun_pending.txt`) — the §19.25 class, already named.
+- **One** pytest-shaped file (`backend/tests/test_assignment_audit_flags.py`, now moved into `tests/unit/`), collected by nothing
+  and run by no job.
+- **No** pytest configuration, no conftest, no fixtures, no test runner of any kind.
+- **No frontend TEST job anywhere.** `npm run typecheck` and `npm run lint:gate` were already
+  gated — inside `carrier-vocab-guard.yml`, whose name says nothing about either, and locked by
+  `harness_frontend_typecheck_lock.py` / `harness_frontend_lint_lock.py`. What did not exist was any
+  job that runs a test. The 12 `frontend/tools/*-proof.mjs` programs were executed by **no workflow
+  at all**; 8 pass today and 4 do not.
+- **Duplicate check (CLAUDE.md build gate):** the index was searched for `pytest`, `unit test`,
+  `integration test`, `test framework`, `vitest`, `jest`. **Zero hits.** No existing mechanism serves
+  this purpose, so nothing was duplicated. The harnesses and the `*-proof.mjs` programs are the
+  adjacent mechanism and were **extended, not replaced**: the proofs are now run by CI behind a
+  shrink-only register, and `pytest.ini` deliberately does not collect harnesses so the two lanes
+  stay separate.
+
+### CORE-19.2 The class, not the instance
+
+> **A test that no workflow runs, or that can pass while the thing it guards is gone, is not a gate
+> — it is a file.** The same fact the house already established for harnesses applies to a test
+> suite, and a suite fails that way faster: a `testpaths` that drifts, a network guard deleted to
+> debug one thing, a CI job that installs a runner and never calls it. Each leaves the suite green
+> and meaningless.
+
+So the framework ships with the lock that fails the build when any load-bearing piece comes undone.
+
+### CORE-19.3 The one homes
+
+| Fact | Its one home |
+|---|---|
+| How the backend suite is configured | `backend/pytest.ini` |
+| Test-only dependencies | `backend/requirements-dev.txt` |
+| Fixtures, credential blanking, the network guard, suite auto-marking | `backend/tests/conftest.py` |
+| The in-memory database double | `backend/tests/fakes/supabase.py` |
+| How the frontend suite is configured | `frontend/vitest.config.ts` |
+| The frontend's fetch blocker | `frontend/tests/setup.ts` |
+| Running the standalone frontend proofs + their ratchet | `frontend/tools/run-proofs.mjs` + `tools/proof_red_pending.txt` |
+| The written standard | `docs/TESTING.md` |
+| The lock on all of the above | `backend/harness_test_discipline.py` |
+
+`backend/tests/unit/` is pure logic; `backend/tests/integration/` is the real `app.main:app` under
+Starlette's `TestClient`. Markers are applied **by directory** in `conftest.pytest_collection_modifyitems`,
+so `-m unit` / `-m integration` are right without anyone remembering a decorator.
+
+### CORE-19.4 Production is unreachable from a test, by construction
+
+There is no staging database in this project: every environment points at the same live Supabase. So
+the suite does not ask authors to be careful, it removes the capability. Two independent barriers in
+`conftest.py`, and the credential one fires first:
+
+1. **Credentials are blanked** before the app is imported — `create_client` refuses outright.
+2. **Outbound sockets are blocked** for the whole session; loopback stays open for `TestClient`.
+   Anything else raises `OutboundNetworkBlocked` naming the host and pointing at `docs/TESTING.md`.
+
+`frontend/tests/setup.ts` is the mirror: `fetch` throws unless a test stubs it deliberately.
+
+Checking something against live data remains a separate activity, done by **reading** production
+through the Supabase REST API — never by a test, never by writing.
+
+### CORE-19.5 The double refuses the shape that emptied a live table
+
+`tests/fakes/supabase.py` raises `OutboundWriteRefused` on an `update()` or `delete()` carrying **no
+filter** — the shape that emptied 11,000 live payable rows (§PAYABLES-01). A test cannot certify that
+shape as working. The double is itself unit-tested (`tests/unit/test_supabase_double.py`, 12 checks)
+because every integration test's honesty rests on its chain semantics matching postgrest's.
+
+### CORE-19.6 The lock — `harness_test_discipline.py`
+
+Run by `.github/workflows/tests.yml` job `test-discipline`. Stdlib only. It fails the build when:
+
+- `pytest.ini` stops pointing at the suite, or drops `--strict-markers`, or its declared markers stop
+  being exactly `{unit, integration}`;
+- `requirements-dev.txt` stops pinning pytest or stops building on the real `requirements.txt`;
+- the network guard is removed **or stops working** — it is given a real production hostname and must
+  refuse it, and given loopback and must let it through. Run, not read;
+- the credentials conftest blanks are not **exactly** the declared set, compared both ways (§CORE-10),
+  so a variable leaving the list names itself instead of quietly going live;
+- either suite directory disappears or empties;
+- a **second** in-memory Supabase double appears anywhere under `tests/`;
+- a declared CI command is not actually run by `tests.yml`, or the workflow omits the top-level
+  `shell: bash` the pipefail lock requires (§19.25);
+- the frontend loses its test scripts, its setup file, or its fetch blocker;
+- RULE TWO: a tenant or carrier name appears anywhere in the framework.
+
+### CORE-19.7 CI — `.github/workflows/tests.yml`, five enforcing jobs
+
+| Job | Command |
+|---|---|
+| Backend unit tests | `python -m pytest tests -m unit` |
+| Backend integration tests | `python -m pytest tests -m integration` |
+| Frontend unit and component tests | `npm run test` |
+| Frontend proofs (shrink-only register) | `npm run test:proofs` |
+| The test framework stays wired (lock) | `python harness_test_discipline.py` |
+
+None is `continue-on-error`. A red job blocks the merge.
+
+### CORE-19.8 The second shrink-only register
+
+`frontend/tools/proof_red_pending.txt` is the frontend's counterpart to
+`harness_unrun_pending.txt`: a proof **not** on it must pass, a proof **on** it that starts passing
+fails the build until its line is deleted, and `PINNED_MAX` in `run-proofs.mjs` is its length today
+(**4**) and may only go down. The four entries are declared with what is actually wrong with each —
+one real assertion failure, three whose runner lost the `@/` tsconfig path alias when transpiling to
+a temp directory. They are **reported, not hidden**, and fixing them is its own change.
+## §CORE-21. AN IN-PROCESS CACHE KEYED BY SOMETHING A CLIENT CAN MINT IS BOUNDED BY CONSTRUCTION (load test 2026-10-28)
+
+### CORE-21.1 How it was found
+
+The 1,000-user load test (rig and findings in `/mnt/project-files/load-test-2026-10-28/`) read the
+worker's memory climbing while a thousand distinct login tokens went through it, and the code said
+why: `tenant_middleware._cache` maps a bearer token to its resolved identity with a 60-second TTL,
+and entries **expired but were never deleted**. There was no size cap either. The key is the TOKEN,
+which the auth service re-mints on every refresh, so the key space is NOT bounded by the number of
+users — 1,000 logins refreshing through a day is tens of thousands of dead entries per worker per
+day, held until the next deploy.
+
+### CORE-21.2 The class, not the instance
+
+The defect is not "that one dict leaks". It is **a module-level dict used as a TTL cache, with no
+cap and no eviction** — and the platform had several, each with its own hand-written
+`(value, expires_at)` tuple and its own missing prune:
+
+| | key space | before |
+|---|---|---|
+| `tenant_middleware._cache` | bearer token | unbounded, never pruned |
+| `tenant_middleware._entry_cache` | uid + org | unbounded, never pruned |
+| `tenant_middleware._twofa_cache` | org | tenant-bounded, never pruned |
+| `impersonation._policy_cache` | org | tenant-bounded, never pruned |
+| `impersonation._session_cache` | session id | unbounded, never pruned |
+| `impersonation._brief_cache` | session id | unbounded, never pruned |
+
+Capping one of them is the patchwork the house rules forbid.
+
+### CORE-21.3 The one home
+
+`app/core/ttl_cache.TTLCache` — a dict with a time-to-live and a hard entry cap, thread-safe,
+with an injectable clock so a proof can move time without sleeping. On insert, **expired entries
+are dropped first** (they are free) and only then the oldest live ones, so pressure never evicts
+something fresh while something dead is still held. Eviction lives there and nowhere else; callers
+hold an instance instead of re-deriving the bookkeeping, so forgetting to prune stops being
+possible. Caps are operator-tunable (`IDENTITY_CACHE_MAX`, `ENTRY_SESSION_CACHE_MAX`,
+`TENANT_POLICY_CACHE_MAX`, `IMPERSONATION_CACHE_MAX`); an unparseable value falls back rather than
+failing a boot.
+
+All six caches above now dereference it. **No TTL, no semantics and no behaviour changed** — the
+identity cache still holds for 60 s, still caches positive results only, and still lets a failed
+read self-heal.
+
+### CORE-21.4 Siblings checked and excused
+
+- `core/rate_limit.RateLimiter` — a fixed-window **counter**, not a value cache, and already bounded
+  (`max_keys=100_000` with its own sweep). Different mechanism, already safe.
+- `core/import_health._ATTN_MEMO` — already hard-capped at 128 and pinned by `harness_nav_perf.py`
+  D10. Converting it would churn a proven lock for no behaviour change.
+- `core/identity._store_cache` / `_emp_cache` and `commcalc/target_registry._cache` (§COMMCALC-42) —
+  keyed by ORG, so bounded by the tenant count, which a client cannot inflate.
+
+### CORE-21.5 Lock
+
+`backend/harness_ttl_cache_bounded.py`, CI job `ttl-cache-bounded` in
+`.github/workflows/org-scope-guard.yml`. §A pins the cache's own behaviour (TTL, cap, expired-first
+eviction, thread safety under 8 writers); §B asserts the six live caches ARE the one home and that
+50,000 distinct tokens leave the identity cache bounded; §C pins that a bounded cache still caches;
+**§D FAILS THE BUILD if a new bare dict appears beside a TTL constant anywhere under `app/core/`** —
+which is how the three `impersonation.py` siblings were found during this very change, after the
+first draft fixed only `tenant_middleware`.
+
+Same class: §COMMCALC-42 (a per-tenant config table read once per tenant), §19.18 (a registry
+written and its callers not wired to it).
+
+
+## §COMMCALC-43. TWO KINDS OF ACTIVATION ON ONE NUMBER IN ONE DAY, COUNTED AS EVENTS (owner ask 2026-10-28)
+
+Owner, verbatim: *"Need to create a new flag report to check if a byod and an upgrade is done on the
+same day for the same phone number at the same store, add standard filters and send options"*.
+
+**Module:** `backend/app/modules/commcalc/byod_upgrade_day.py` (THE one home — pure, DB-free, no I/O)
+**Endpoint:** `GET /commcalc/watchdog/byod-upgrade` (`commcalc/watchdog_router.py`) — the drill-down
+**Sweep:** the `byod_upgrade` block of `watchdog_router._run_for_org` — the EXISTING tick and the
+existing `cron.schedule` line; no new cron, no new entrypoint
+**Flag:** `BYOD_AND_UPGRADE_SAME_NUMBER`, area `fraud`, grain `store_day`, severity HIGH, source
+`byod_upgrade_watchdog` (registered in `commcalc/flag_registry.py`)
+**Config:** `commcalc.watchdog_rule.params.classes` — house `["byod", "upgrade"]`
+**Screen:** `/watchdog/byod-upgrade`, a tile on the Flags & Compliance hub (`rbac.ts`, `tileOnly`)
+**Proof:** `backend/harness_byod_upgrade_day.py` — 55 checks, DB-free, the detector's logic
+**House test gate (§CORE-19):** `backend/tests/unit/test_byod_upgrade_day.py` (10) and
+`backend/tests/integration/test_byod_upgrade_endpoint.py` (6) — the two regressions and the real
+endpoint over the in-memory double, so the detector is gated by `tests.yml` as well as by its own
+harnesses. Both were mutation-checked: pairing on `any` instead of `all` reddens four of them, and
+removing the two-class floor reddens one. The harnesses stay the exhaustive proof; these are the
+facts a reader of `tests/` can see without opening one
+**Integration proof:** `backend/harness_byod_upgrade_wiring.py` — 40 checks, the real endpoint and the
+real sweep against a stand-in PostgREST client (the query, its columns, the config resolution, the
+span filter, the written row)
+**Migration:** NONE. `commcalc.watchdog_rule` and `commcalc.flags` both already exist.
+
+### COMMCALC-43.1 DUPLICATE CHECK — what was searched, and what is reused rather than re-derived
+
+Searched `flag_registry.TYPES`, this index and `core/module_graph.py` for anything answering "did one
+phone line take two different kinds of activation in one day".
+
+| already exists | why it is not extended |
+| --- | --- |
+| `MULTI_HANDSET_ONE_BUYER` (§COMMCALC-05) | Keys on the bill-to NAME and counts HANDSETS. Same area, adjacent question, different key and different unit — one detector cannot carry two keys without lying about one. Its SHAPE is copied wholesale: source ownership, injected predicates, stated gaps. |
+| `DUPLICATE_IMEI` (§53) | One DEVICE on many lines — the mirror of one LINE with many activations. |
+| §19.28 BYOD-Swap exclusion | Already knows a BYOD line can be a re-paper and excludes it from the activation count. That is a PAY rule and is untouched: this counts what was rung, not what pays. |
+
+**Reused, so this module writes almost no logic of its own:**
+
+- **what ONE activation is, its phone key and its class** — `line_class.activation_events` (§19.28,
+  §59). It folds each invoice's activation-type lines into events keyed on the line's own phone
+  number and resolves each event's class by the org's declared precedence.
+- **the phone number** — `pos/customer_identity.norm_phone`, reached *through* that home. There is no
+  digit-stripping in this module; `harness_byod_upgrade_day` §G3 fails the build if one appears.
+- **which classes make a pair** — `flag_registry.rule_params` (RULE TWO).
+- **severity / area / label** — `flag_registry`. One scale, one board.
+- **which line is a handset** — the per-org `accessory_config.box_departments` set the box count
+  already uses, INJECTED as `is_box` and never read here.
+- **the filters and the send button** — `components/ReportShell.tsx`, which already owns the By-rep /
+  By-store / By-date-range / By-month filters, "＋ Add filter" on any column, Group-by with
+  subtotals, the three exports and `lib/send-report.SendReportButton` (§COMMCALC-19, THE one sender).
+  The owner's "standard filters and send options" needed a report built ON the frame, not a second
+  frame.
+
+**New here and nowhere else:** grouping activation EVENTS by (store, day, phone number), and the pair
+test over the classes present on one such number-day.
+
+### COMMCALC-43.2 THE UNIT IS AN EVENT, NEVER A LINE — the regression the module exists around
+
+Every line of a receipt carries the receipt's contract type, so one upgrade lands as five or six
+lines reading 'Upgrade' (plan, autopay, protection, handset, set-up fee). **Counting LINES, the live
+house feed for Aug–Oct 2026 shows 456 number-days carrying both words. Counting EVENTS it shows 95.**
+The other 361 were one sale counted several times.
+
+The sharper trap: **46 live lines read 'BYOD Upgrade'**, which is a single sale. `activation_class`
+resolves it to `byod`, because the org's precedence puts byod first — so it is ONE event and cannot
+pair with itself. A detector looking for the two WORDS would report a pair on every one of them.
+Nothing in this module reads a contract type; §A3/§A4 of the lock are that regression.
+
+### COMMCALC-43.3 MEASURED BEFORE IT SHIPPED, read-only against production 2026-10-28
+
+`commcalc.daily_sales_feed`, Aug–Oct 2026, through the REAL module:
+
+| | Cellfonz R Us | Luxelink Wireless |
+| --- | --- | --- |
+| activation events | 5,005 | 3,484 |
+| **keyed on a phone number** | **4,988 (99.7%)** | **213 (6.1%)** |
+| cases | **95** (Oct 48 / Sep 25 / Aug 22) | 0 |
+| value of flagged lines | $5,978.83 | — |
+
+**All 95 carry the identical shape**: the BYOD event carries NO handset line, and an upgrade event on
+a SEPARATE receipt the same day carries a promo handset ('… Q4 Promo Upgrade') plus a $35 upgrade
+set-up charge. Concentrated: 31 of 95 at one store, one rep on 190 of the flagged lines.
+
+**Luxelink's 0 is NOT a clean period** — 93.9% of its events key on a DEVICE because its feed leaves
+`mdn` empty, so nothing on those sales can be grouped to a phone line. `summary.numbered_share` is
+the honest headline and the screen states it in an amber panel above any count (§19.26, "missing
+beats wrong").
+
+### COMMCALC-43.4 THREE THINGS THIS SHIPPED THAT WERE NOT THE ASK
+
+1. **A SILENT ZERO, found and fixed.** The watchdog tick's shared sales read did not select
+   `contract_type`, and `line_class.HOUSE_FIELDS` is exactly that column. Without it every line
+   classifies as `None`, no activation event exists, and the sweep reports a clean period it never
+   looked at — no error, no warning. `harness_byod_upgrade_wiring` §B now fails the build if any
+   field a tenant's resolved rules can classify on leaves either select, and §B4 proves the detector
+   really does go silent without it so §B2/§B3 are not decoration.
+2. **A CONFIG KNOB REMOVED THE DAY IT WAS WRITTEN.** `separate_receipts_only` was in the first draft.
+   Mutation-testing the lock showed it could never change an outcome: `activation_events` keys an
+   event on (invoice, phone line), so two activations of one number on one receipt are ONE event and
+   can never be a pair. Every case is therefore on two or more receipts by construction. §D8 asserts
+   the structural fact and fails the build if the key is added back. *A config row a tenant can set
+   and that cannot do anything is the same class of defect as a fake zero: it reads as a control and
+   is not one.*
+3. **A FAKE ZERO THAT IS REACHABLE IN PRODUCTION, reported rather than rewritten.**
+   `router._accessory_config` has fallen back to the house department labels since mig 218 whenever
+   an org declared none, to keep the house box numbers byte-identical. So an org with no declaration
+   is handed a vocabulary that may match nothing, and `is_box` then answers a confident "no handset"
+   instead of "we cannot tell". Changing that fallback would move box counts on the money paths, so
+   it is **not** touched here. Instead `summary.box_vocabulary_matched` / `handset_lines` MEASURE
+   whether the declared set matched any line in the period, and the screen says so in an amber panel
+   — measured rather than declared, which is the only version a surface can rely on. **This is a
+   platform-wide gap: every other surface reading `box_departments` has the same exposure and none of
+   them measures it. Named here so the next reader can close it at the config layer.**
+
+### COMMCALC-43.5 IT REPORTS AND DOES NOT CONCLUDE
+
+No function returns a verdict, no case carries a verdict field, and §E of the lock walks every
+user-facing string in the module and fails the build if one calls anything fraud, abuse or a scheme.
+A customer who activates a line on a phone they brought in and then buys a handset the same day is an
+ordinary sale and reads identically on this screen. `KEY_CANNOT_ANSWER` states the four limits on the
+module itself, and the screen renders them under the table.
+
+### COMMCALC-43.6 CROSS-REFERENCES
+
+- §53 / §COMMCALC-05 — the flag registry, the Management Watchdog board and the sibling detector
+  whose shape this copies.
+- §19.16 — `router._open_month_source`, the one home for which sales table answers for a period,
+  reached through `watchdog_router._read_sales`. §C of the wiring proof reproduces the void sweep's
+  2026-10-12 defect (a surface naming the month-end archive reads zero rows for the month in
+  progress, the only month anybody can act on).
+- §19.28 / §59 — `line_class`: the activation event, its phone key, the class precedence.
+- §19.40 — `pos/customer_identity`: THE phone key and the phone-vs-device rule.
+- §64 — store identity. The report's store filter derives its options from the ROWS it was handed, so
+  option and value are the same string by construction and the 2026-10-22 label-vs-key defect cannot
+  occur; §D3 of the wiring proof bans the bare `.eq("store", …)` form in the endpoint anyway.
+- §COMMCALC-19 — `SendReportButton`, the one sender, reached through `ReportShell`.
+- §CORE-13 — no migration here, so no grant.
+
+## §COMMCALC-44. HOW MUCH DEVICE MONEY HAS THE CARRIER PAID AGAINST THIS PHONE (owner ask 2026-10-28)
+
+Owner, verbatim: *"inmclude the $ amount of the rebate and title it as chargeback amount, make it
+oneline summary top show the sales rep teh store the phone sold and the phone number meim and teh $
+amount and thebn drill down like other menus to get mroe detail sof both trasnactions"*.
+
+**Module:** `backend/app/modules/commcalc/carrier_device_money.py` — THE one home for "the
+device-financing dollars against THIS device"
+**Catalogue:** `backend/app/modules/commcalc/byod_upgrade_drilldown.py` — §COMMCALC-43's two §CORE-17
+panel grains
+**Callers:** `router._device_line_reimb_run` (the P&L's equipment-reimbursement side, §19.53/§65) and
+`watchdog_router.watchdog_byod_upgrade` (the chargeback amount, §COMMCALC-43)
+**Proof:** `backend/harness_carrier_device_money.py` — 37 checks, DB-free, the one-home lock
+**Integration proof:** `harness_byod_upgrade_wiring.py` §H — 21 checks over the real endpoint
+**House test gate (§CORE-19):** `tests/unit/test_carrier_device_money.py` (9) and the five added
+cases in `tests/integration/test_byod_upgrade_endpoint.py`
+**Migration:** NONE — it reads relations that already exist.
+**Money:** `$0.00`. The existing device-line reimbursement report was verified byte-identical on
+live September 2026 data after the refactor: 1,029 devices, `carrier_paid_here` $265,017.30,
+`distributor_claimed` $305,876.13.
+
+### COMMCALC-44.1 DUPLICATE CHECK — the figure already existed, and that is exactly why this is a home
+
+The chargeback amount is not a new measurement. "What did the carrier pay for device financing
+against this device" was ALREADY answered — by §65's pure `device_reimb_recon.carrier_line_side`,
+with about sixty lines in `router._device_line_reimb_run` binding the I/O to it.
+
+| already exists | what was done |
+| --- | --- |
+| `device_reimb_recon.carrier_line_side` (§65) — the pure per-device fold | REUSED unchanged. It is still the only thing that folds a feed row onto a device. |
+| the router's inline binding of §58/§66/§27 + the paged read to that fold | **EXTRACTED WHOLE** into this home, and the router now dereferences it. Copying it would have been two derivations of one money question. |
+| `imei_rebate_report.period_window` (§27) | REUSED. The lag window is asked, never re-spelled. |
+| `carrier_dollar_class.device_reimb_components` (§58/§69) / `component_is_evidence` (§66) | REUSED. This module carries no payment-type vocabulary and no basis allowlist. |
+| `core/feed_read.read_all` (§19.48) | REUSED. The read moved with the question rather than reverting to a private page loop. |
+
+Nothing new was derived. The decisions, their order and their reasons are the ones that were already
+in that block, moved whole — which is what makes the extraction provable: the live report's figures
+did not move by a cent.
+
+### COMMCALC-44.2 WHY TWO REPORTS QUOTING ONE REBATE HAD TO BE ONE HOME
+
+The P&L books its equipment-reimbursement line on this figure. The watchdog screen prints it as the
+chargeback amount beside a flagged sale. Had the block been copied, the day the two drifted they
+would both be quoting "the rebate on that phone" with different numbers and neither would say so —
+the duplicate defect the index rules forbid, on money.
+
+`harness_carrier_device_money.py` is the lock that keeps it one: §B fails the build if anything in
+app code calls §65's fold directly but this home and the module that defines it, §C that the §58/§66/
+§27 questions are asked rather than re-spelled, §D that both callers still dereference it, and §E
+that the watchdog caller spells none of the facts this home owns.
+
+### COMMCALC-44.3 NONE IS NOT $0.00 — the whole reason this figure is allowed to be absent
+
+A rebate routinely lands **months** after the sale. So "no carrier payment has arrived against this
+handset" and "the carrier paid $0.00 for it" are DIFFERENT facts, and `amount_for` returns `None` —
+never `0.00` — for a device the feed carries no row for (§19.26).
+
+Measured live 2026-10-28 over the flagged cases, and the shape is the argument:
+
+| month | cases | chargeback total | measured | not yet |
+| --- | --- | --- | --- | --- |
+| August 2026 | 22 | $5,764.97 | 22 | 0 |
+| September 2026 | 25 | $5,961.50 | 24 | 1 |
+| October 2026 | 48 | $1,901.50 | 7 | 41 |
+
+October is 41 of 48 **not yet**. Rendered as `$0.00` that month would read as "nothing is at stake
+on 41 recent sales", which is the opposite of the truth.
+
+### COMMCALC-44.4 FOUR WAYS THE AMOUNT CAN BE ABSENT, AND NAMING THE WRONG ONE IS THE SAME DEFECT
+
+Found by writing §H of the wiring proof: with no routing declared, every row said *"the carrier's
+feed carries no payment against this handset yet"* — a confident statement about rows nobody had
+read. That is the fake zero in words rather than in a number, so the reason is bound to WHAT WAS
+LOOKED AT (`chargeback_reason_for`), outside in:
+
+1. **the feed could not be read** — nothing was looked at; this is not a carrier that paid nothing.
+2. **nothing declared** — the org has declared no device money, so no payment could be called a
+   rebate and none was looked for. A CONFIG row fixes it, never code (RULE TWO).
+3. **no handset on the sale** — there is no device identifier to look up, which is a fact about the
+   sale, not the carrier.
+4. **handset known, feed read, nothing paid** — the carrier's absence, and the only one of the four
+   that is about the carrier.
+
+The panel is still SERVED in all four: its rows name each handset and the feed they looked in, and a
+link that explains an absence is worth more than no link.
+
+### COMMCALC-44.5 THE ONE-LINE SUMMARY AND THE DRILL-DOWN
+
+The report's table went from twelve columns to the seven the owner named — date, sales rep, store,
+phone sold, phone number, MEID, chargeback amount. **Nothing was deleted**: the activation and
+receipt counts, the per-side handset counts and devices, what each receipt rang and what stands out
+all moved into the row's own drill-down, one click away instead of eleven columns wide.
+
+"Drill down like other menus" IS §CORE-17's shared panel, with **two grains** because the two money
+figures are Σ over the same row out of DIFFERENT feeds — the sales feed for what the store rang, the
+carrier's payment feed for the chargeback amount. One catalogue over both would attribute a carrier
+payment to the sales feed (§CORE-17.3j). The chargeback panel is therefore keyed on `("meid",
+"number")`: `raw_payment_detail` carries no store or day column, so keying it that way would hand a
+reader an address that relation cannot be looked up by.
+
+**The phone named is the one the store SOLD** — the handset on the second (positional, never
+class-named) side of the pair. The first side is the device the customer brought in; naming that
+would report the phone the store did not sell. Every handset on that side is summed, with
+`chargeback_partial` true when the feed answered for only some of them: all 95 live cases carry
+exactly one handset, but naming only the first would understate the exposure the day a second
+appears.
+
+### COMMCALC-44.6 CROSS-REFERENCES
+
+- §19.53 / §65 — `device_reimb_recon`: the per-device verdict (paid here, paid elsewhere, never
+  paid, not measured) and the pure fold this home binds I/O to. That fact owns the VERDICT; this one
+  owns only the DOLLARS and the reads that produce them.
+- §58 / §69 — `carrier_dollar_class`: which components ARE the device-financing side, asked as
+  `device_reimb_components` rather than inferred from "routed off the generic commission line".
+- §66 — `component_is_evidence`, an allowlist, so an unruled basis reads as NOT evidence. The POLICY
+  of declining such a dollar belongs to this per-device grain and lives here.
+- §27 — `imei_rebate_report.period_window`: the lag window, asked SYMMETRICALLY because a payment
+  routinely lands before the claim is settled and a forward-only window reported paid devices as
+  never-paid.
+- §19.48 / §CORE-05 — `core/feed_read.read_all`: the paged read, on a feed growing ~30,000 rows a
+  month.
+- §COMMCALC-43 — the brought-device-then-upgrade flag this figure was added to.
+- §CORE-17 — the shared drill-down; §CORE-17.4 — `/watchdog` is still outside `REPORT_DIRECTORY`, so
+  this report is named in `harness_drilldown_coverage.EXTRA_REPORTS` and its three siblings are the
+  named candidates for the next batch.
+- §50 — `core/module_graph.py`: the fact `carrier_device_money`, its two callers and the three facts
+  it dereferences, added BY HAND.
+- §CORE-13 — no migration here, so no grant.
+
+## §COMMCALC-45. A SWEEP SCHEDULES ITSELF FROM ITS OWN STATE (owner ask 2026-10-29)
+
+Owner, verbatim: *"I should not be running the sweep it should be automatic like the rebuild or the
+commission calculation - whenever anything changes it should automatically do the sweep as required."*
+
+> **Numbered COMMCALC-45.** Checked against `origin/main` immediately before pushing, per §CORE-17's
+> note that the allocator is not a reservation.
+
+He is naming the rule the platform already applies twice. `auto_calc` (§6l) made the commission
+calculation live; `derived_builds` (§COMMCALC-41) made every other stored snapshot live. Both on one
+rule: **a derived thing's freshness is its own fact, and a tenant cannot be the scheduler for it.** A
+sweep was the one thing that rule had not reached, because its due-ness was a stored clock time and
+nothing else:
+
+```python
+connector_due = not nra or nra <= now_iso          # the shipped rule, in eight places
+```
+
+### COMMCALC-45.1 WHAT THAT COST, MEASURED
+
+| Measured on the house org | |
+|---|---|
+| A **PARTIAL** run satisfied the schedule | `next_run_at` is advanced before dispatch, so a run that came back with a column missing waited a full day exactly like a clean one. From 2026-10-16 to 2026-10-28 the DLAR sweep ran **thirteen** times, read `⚠ PARTIAL — COLUMN STOPPED ARRIVING` every time, and changed nothing about when it would next try. |
+| **Changing the declaration did not make it due** | the config PUT re-derives `next_run_at` from the calendar, which pushes it INTO THE FUTURE. Correcting a field mapping, a credential or the report list left the sweep sitting on a result computed under the old declaration until tomorrow's slot — the one moment a re-run is most obviously owed. |
+| The decision was **copied, not dereferenced** | eight places answered it: `/connectors/run-due`, four per-vendor `run-due`s, the per-report slot loop and two more. And a `.lte('next_run_at', now)` filter in SQL **cannot** express "due because the declaration changed", so the copies were not merely duplication — they were a ceiling on what due-ness could ever mean. |
+
+### COMMCALC-45.2 THE ONE HOME
+
+`commcalc/sweep_due.py` — `verdict(cfg, now)`, PURE, answering from the config row the dispatcher
+already reads. Seven declared reasons, four of them due:
+
+| Reason | Due | Why it exists |
+|---|---|---|
+| `never_run` | yes | no previous contact to protect, so it jumps the floor below |
+| `config_changed` | yes | `updated_at` is later than the last ATTEMPT, so the last result answered the old question. **This is the owner's "whenever anything changes".** |
+| `retry_incomplete` | yes | the last status was not whole, and the retry gap has passed |
+| `clock` | yes | the shipped behaviour, unchanged and still the common case |
+| `disabled` / `too_soon` / `waiting` | no | each says which, in words, so a tick's answer names why a sweep did not run |
+
+**THE FLOOR ON CONTACT** (`MIN_ATTEMPT_GAP_S`, 15 minutes) sits above every reason including the
+clock: however many facts change at once, this software knocks on somebody else's door at most once
+per gap. Two cron ticks inside the gap are now one run, which the clock rule alone permitted. A human
+pressing **Run sweep now** is not governed by it — a person asking is not the automatic schedule.
+
+**THE RETRY IS A FRACTION OF THE TENANT'S OWN CADENCE** (`RETRY_FRACTION` = ¼, capped at 6 h): an
+hourly feed that came back short is re-tried in minutes, a monthly one within the day. A daily sweep
+reading PARTIAL now tries four times a day instead of once. No new tenant knob: the cadence is
+already declared, and these two intervals are platform behaviour — how often this software may
+contact a third party — not a tenant's choice (RULE TWO).
+
+**`last_attempt_at`, NOT `last_run_at`, IS THE GUARD** — and the LATER of the two, never one with the
+other as a fallback. `_sweep_set_status` writes exactly one per run: `last_run_at` when the run
+imported (which **includes** `partial`, because a partial landed rows), `last_attempt_at` when it did
+not. So a connector that failed in August and has run partially every day since carries a fresh
+`last_run_at` beside a two-month-old `last_attempt_at`; reading the attempt column first and falling
+back took the August date as "when we last knocked" and let the floor pass on every tick. The floor
+would have existed and protected nothing. Caught in the writing, kept as §B of the lock.
+
+**ONLY A CLOCK-DUE RUN ADVANCES THE SLOT.** A retry or a settings change runs now and leaves the
+scheduled slot still owed. Advancing it would let one early retry swallow the day's real run — the
+same false green this section exists to remove.
+
+### COMMCALC-45.3 SIBLINGS — fixed, or excused in writing
+
+| Caller | |
+|---|---|
+| `/connectors/run-due` (THE dispatcher pg_cron calls) | wired; its `.select()` widened to `sweep_due.READS`, because the narrow schedule-only read was itself how due-ness stayed a clock |
+| `/vip`, `/dlar`, `/b2b`, `/epay`, `/ftp-sweep` `run-due` | wired, all five through the one `_sweep_due_rows` helper |
+| the ePay per-report slot loop | left as its own clock: a report slot is a time of day the carrier publishes at, and the connector verdict already gates everything riding the shared schedule |
+| `/email-sweep/run-due` | **EXCUSED, and the only surviving `.lte('next_run_at')`.** It advances its schedule UP FRONT on purpose: during the 2026-08-26→09-01 incident a sweep cancelled mid-flight never advanced it, so every later tick restarted the same ever-larger sweep and died at 5 s, silently, for six days. Its status is also keyed per (org, account) rather than per org, so the verdict's keying does not fit it. An incident-hardened path is not re-shaped without a reason, and nothing here needed one. |
+| `notify` / `storeops` / `closing` `next_run_at` readers | a different question: a digest that already sent must not re-send, and "incomplete" has no meaning for an alert. Named so nobody reads their absence as an oversight. |
+
+### COMMCALC-45.4 AND THE FINDING IS RECORDED WHOLE
+
+A retry is worth nothing if the partial it retries is unreadable. On 2026-10-28 the DLAR status line
+named **eight** of the **forty-one** fields Boost sends that nothing reads, and the two that answer
+*"what is the renamed column called now"* were inside the `+33 more`. The sentence was right to stay
+short — a person reads it. The finding needed somewhere complete to live, and `core.job_run.detail`
+(mig 701) is already `jsonb`, so `_sweep_set_status(..., evidence=…)` stores the whole field-arrival,
+content-arrival and vintage result beside the fitted prose. **No migration.** This is the third time
+a cap has decided which part of an answer survived (§CORE-18, and the eight-name cap here): a
+sentence is for a person, evidence goes somewhere complete.
+
+### COMMCALC-45.5 DUPLICATE CHECK (the build gate)
+
+| Searched | Found | Reused or excused |
+|---|---|---|
+| a "should this sweep run now" home | **none** — eight private copies of a clock comparison | one home; all but the excused email sweep wired to it |
+| a "when is the next slot" home | `router._vip_next_run` | REUSED unchanged; `sweep_due` never computes a next slot |
+| a "may we contact this portal now" home | `portal_backoff` (mig 244, keyed on `data_source`) | NOT duplicated — it answers a cooldown the portal imposed; the floor here answers how often we may initiate. Both apply; neither is derived from the other. |
+| a place that records a run's findings | `core.job_run.detail`, already `jsonb` | REUSED; no new table, no migration |
+
+### COMMCALC-45.6 LOCKED
+
+`backend/harness_sweep_due.py` — 47 DB-free checks in the dependency-free module-graph job (proved
+importable with the wheels genuinely blocked). §A is the **real production config row** read on
+2026-10-29, with the shipped clock rule kept as a control that says NOT due. §B is the stale-attempt
+trap. §F reads the router as SOURCE, because the defect was never in a home — it was in the callers:
+the inline rule is an armed negative control, the SQL clock filters are **pinned at one** (the excused
+email sweep, by name) and may only shrink, and the slot-advance guard and the widened `select` are
+asserted. Verified by reverting the DLAR filter: 3 checks fail, 44 pass.
+
+### COMMCALC-45.7 Cross-references
+
+Same rule, other subjects: §6l (`auto_calc` — the commission calculation), §COMMCALC-41
+(`derived_builds` — every other stored snapshot). Same class of silence: §CORE-18 (a cap deciding
+which part of a status survives), §COMMCALC-40 (the status word that was a literal), §COMMCALC-16
+(the diagnostic the retries now act on). Neighbours: §19.21 (a status reporting what was pulled
+rather than what was written), mig 244 / `portal_backoff` (the cooldown a portal imposes).

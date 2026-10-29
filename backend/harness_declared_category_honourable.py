@@ -439,10 +439,21 @@ ok("F6 the Gross-Profit columns do not move for this money: §66 already placed 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("G. THE LOCK — the callers, and ONE copy of each fact")
 
+# THE QUESTION MOVED, THE PROPERTY DID NOT. "Which components are the device side" was asked inside
+# `router._device_line_reimb_run` until 2026-10-28, when the whole device-money question was factored
+# into §COMMCALC-44 (`commcalc/carrier_device_money.py`) because a second report needed the same
+# figure. So G1 now reads the home that asks, and G1b proves the router really dereferences it —
+# together they are the same lock one indirection away, not a weaker one.
+CDM = src("app/modules/commcalc/carrier_device_money.py")
+CDM_TOK = code_only(CDM)
 ok("G1 the per-device report ASKS which components are the device side and derives nothing",
-   "_cdc.device_reimb_components(" in ROUTER)
-ok("G2 …and the pre-fix comprehension is GONE from the router — the inference cannot come back by "
-   "edit", '!= "carrier_comm"' not in ROUTER_TOK and "!= 'carrier_comm'" not in ROUTER_TOK)
+   "_cdc.device_reimb_components(" in CDM)
+ok("G1b …and the router reaches that answer through the one home rather than asking again, so the "
+   "P&L's reimbursement line and the watchdog's chargeback amount cannot drift apart",
+   "_cdm.per_device(" in ROUTER and "_cdc.device_reimb_components(" not in ROUTER)
+ok("G2 …and the pre-fix comprehension is GONE from both — the inference cannot come back by edit",
+   all('!= "carrier_comm"' not in t and "!= 'carrier_comm'" not in t
+       for t in (ROUTER_TOK, CDM_TOK)))
 ok("G3 the P&L asks for the device-financing LINE instead of spelling the component",
    "_cdc.device_reimb_line(" in COA)
 ok("G4 …and names that component nowhere in its own code",

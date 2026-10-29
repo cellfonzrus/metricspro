@@ -15,7 +15,17 @@ import { SortableTh, useTableSort } from '@/components/SortableTh'
 // POST /api/v1/payables/rebuild. Forecasting is phones-only; payables + due are per-IMEI.
 
 // The tabs this page declares; `?tab=` is read through the ONE URL-tab reader (lib/useUrlTab.ts, index §19.40).
-const PAYABLES_TABS = ['forecast', 'payables', 'owed', 'map'] as const
+// A CARRIER'S DECLARATION, only the part the Payment Terms tab shows. Deliberately narrow: the row
+// carries two dozen columns and this screen must not be able to send back one it never displayed.
+type TermsRow = {
+  carrier_id: string
+  label?: string | null
+  net_terms_days?: number | null
+  due_date_mode?: string | null
+  due_date_field?: string | null
+}
+
+const PAYABLES_TABS = ['forecast', 'payables', 'owed', 'map', 'terms'] as const
 type Tab = typeof PAYABLES_TABS[number]
 const sel = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' } as const
 const STATUS_COLORS: Record<string, string> = {
@@ -89,6 +99,16 @@ function PayablesPageBody() {
   // could not read. Silence here is what let a mis-declared cost source write 2,923 devices with no
   // price that looked exactly like a carrier nobody had configured (§COMMCALC-29).
   const [warns, setWarns] = useState<string[]>([])
+  // WHEN THIS LEDGER LAST REBUILT ITSELF (index §COMMCALC-41). The ledger is rebuilt by the post-landing
+  // hook now, so the question a tenant used to answer by pressing the button — "is what I am looking at
+  // current?" — is answered on the page instead. One sentence, from the server's own one home: this screen
+  // composes no wording of its own and makes no judgement about freshness.
+  const [auto, setAuto] = useState<{ state?: string; tone?: string; sentence?: string } | null>(null)
+  // THE CARRIER'S OWN DECLARATION, editable here (owner 2026-10-29: "Put the Net term days as 14 from
+  // the back , programmable not hard code"). These are `commcalc.payable_source_map` rows served by the
+  // endpoint that already existed — no second door, and nothing in code holds a number of days.
+  const [terms, setTerms] = useState<TermsRow[]>([])
+  const [termsDraft, setTermsDraft] = useState<Record<string, string>>({})
   // WHICH DAYS THE SERVER ACTUALLY MEASURED. The default (today -> +3 days) is computed by the
   // endpoint and returned, so the pickers show what was applied instead of this page holding a
   // second copy of the default that could drift from it (§COMMCALC-32).
@@ -160,6 +180,19 @@ function PayablesPageBody() {
   useEffect(() => { if (tab === 'payables') loadPayables() }, [tab, status, filt.period, filt.periodTo, allDates])
   useEffect(() => { if (tab === 'owed') loadOwed() }, [tab, owedStore, filt.period, filt.periodTo, marketKey, allDates])
   useEffect(() => { if (tab === 'map') loadMap() }, [tab])
+  useEffect(() => { if (tab === 'terms') loadTerms() }, [tab])
+  // WHEN THIS LEDGER LAST REBUILT ITSELF (§COMMCALC-41) — read on the same tab change the rest of the
+  // page reads on, deliberately not in an effect of its own.
+  useEffect(() => { loadAuto() }, [tab])
+
+  async function loadAuto() {
+    try {
+      const r = await api(`/api/v1/payables/auto-build`)
+      setAuto(r?.auto || null)
+    } catch {
+      setAuto(null)          // the page works without it; freshness is never guessed from the client
+    }
+  }
 
   async function rebuild() {
     setBusy(true); setMsg('Rebuilding ledger… (may take a minute for a full rebuild)')
@@ -171,6 +204,7 @@ function PayablesPageBody() {
         Object.entries(sc).map(([k, v]) => `${v} ${k}`).join(', ') +
         (r.flags_written != null ? ` · ${r.flags_written} discrepancy flags` : ''))
       if (tab === 'payables') loadPayables(); else if (tab === 'forecast') loadForecast(); else loadOwed()
+      loadAuto()
     } catch (e: any) { setWarns([]); setMsg('Rebuild error (it may still be completing server-side): ' + e.message) }
     setBusy(false)
   }
@@ -195,6 +229,31 @@ function PayablesPageBody() {
       setCandidates(c.rows || []); setCarriersList(c.carriers || m.carriers || []); setMappings(m.rows || [])
     } catch (e) { console.error(e) }
     setLoading(false)
+  }
+  async function loadTerms() {
+    setLoading(true)
+    try {
+      const d = await api(`/api/v1/payables/source-maps`)
+      setTerms(d.rows || [])
+    } catch (e) { console.error(e) }
+    setLoading(false)
+  }
+  async function saveTerms(carrierId: string, days: string) {
+    // AN EMPTY BOX MEANS "NOT DECLARED", which is not the same as zero: Boost's map leaves it unset
+    // because the carrier stamps a real due date on every row, and 0 would mean "due the day it ships".
+    const n = days.trim() === '' ? null : Number(days)
+    if (n !== null && (!Number.isInteger(n) || n < 0)) { setMsg('Net terms must be a whole number of days, or blank for "not declared".'); return }
+    setBusy(true); setMsg('')
+    try {
+      // ONE field goes up. The endpoint patches an existing carrier rather than demanding the whole
+      // declaration back, so a box this screen never showed cannot be overwritten by saving this one.
+      const r = await api(`/api/v1/payables/source-maps`, { method: 'POST', body: JSON.stringify({ carrier_id: carrierId, net_terms_days: n }) })
+      setMsg(r?.auto?.queued
+        ? 'Saved. The due dates are being recalculated from the new terms — nothing else to press.'
+        : 'Saved. The due dates restate on the next rebuild of this ledger.')
+      loadTerms(); loadAuto()
+    } catch (e) { setMsg('Could not save: ' + (e instanceof Error ? e.message : String(e))) }
+    setBusy(false)
   }
   async function saveMapping(raw: string, canonical: string, cid: string, side: string) {
     await api(`/api/v1/payables/phone-map`, { method: 'POST', body: JSON.stringify({ raw_model: raw, canonical_model: canonical, carrier_id: cid || null, side }) })
@@ -388,6 +447,16 @@ function PayablesPageBody() {
           </button>
         </div>
       )}
+      {auto?.sentence && (
+        <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 8, fontSize: 13,
+          background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <strong style={{ fontWeight: 600 }}>
+            {auto.tone === 'error' ? '\u26a0 This ledger updates itself, and the last attempt did not finish.'
+              : 'This ledger updates itself.'}
+          </strong>{' '}{auto.sentence}{' '}
+          <span style={{ opacity: 0.7 }}>The Rebuild button is only there if you want it rebuilt right now.</span>
+        </div>
+      )}
       {msg && <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, background: 'var(--surface)', border: '1px solid var(--border)', fontSize: 13 }}>{msg}</div>}
       {warns.length > 0 && (
         <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 8, background: 'var(--surface)', border: '1px solid var(--c-fg-d97706)', fontSize: 13 }}>
@@ -400,11 +469,11 @@ function PayablesPageBody() {
       )}
 
       <div style={{ display: 'flex', gap: 8, margin: '18px 0 14px', flexWrap: 'wrap' }}>
-        {(['payables', 'forecast', 'owed', 'map'] as Tab[]).map(t => (
+        {(['payables', 'forecast', 'owed', 'map', 'terms'] as Tab[]).map(t => (
           <button key={t} onClick={() => setTab(t)}
             style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, cursor: 'pointer',
               background: tab === t ? 'var(--accent, #2563eb)' : 'var(--surface)', color: tab === t ? '#fff' : 'var(--text)', fontWeight: tab === t ? 600 : 400 }}>
-            {t === 'payables' ? 'Payables (per IMEI)' : t === 'forecast' ? 'Forecast (phones)' : t === 'owed' ? 'Daily Owed' : 'Phone Mapping'}
+            {t === 'payables' ? 'Payables (per IMEI)' : t === 'forecast' ? 'Forecast (phones)' : t === 'owed' ? 'Daily Owed' : t === 'map' ? 'Phone Mapping' : 'Payment Terms'}
           </button>
         ))}
         {tab === 'forecast' && (
@@ -463,7 +532,7 @@ function PayablesPageBody() {
           marketOptions rides the same endpoint's canonical org_market_options list (∪ row stamps)
           for the non-cascade fallback; in cascade mode the roster's per-store market stamps —
           resolved server-side through the same canonical union resolver — drive the picker. */}
-      {tab !== 'map' && (
+      {tab !== 'map' && tab !== 'terms' && (
         <StandardFilterBar value={filt} onChange={setFilt} show={{ reps: false }} periodMode="range"
           cascadeStores={cascade}
           storeOptions={cascade.map(c => ({ id: c.id, label: c.label }))}
@@ -707,6 +776,67 @@ function PayablesPageBody() {
           </table>
           </>
         )
+      )}
+
+      {tab === 'terms' && !loading && (
+        <div>
+          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 14, maxWidth: 820, lineHeight: 1.6 }}>
+            How many days after a device ships you have to pay the distributor for it. Change the number and
+            save — the upcoming due dates recalculate themselves from the new terms, so there is nothing else
+            to press. Leave it <b>blank</b> for a carrier that stamps a real due date on every line of its own
+            statement: a blank means &quot;the carrier tells us&quot;, which is not the same as 0 days.
+          </div>
+          {terms.length === 0
+            ? <div style={{ color: 'var(--muted)', fontSize: 13 }}>No carrier is declared for this tenant yet.</div>
+            : <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 820 }}>
+                <thead><tr>
+                  <th style={th}>Carrier</th>
+                  <th style={th}>Net payment terms</th>
+                  <th style={th}>Where the due date comes from</th>
+                  <th style={th}></th>
+                </tr></thead>
+                <tbody>{terms.map((r: TermsRow) => {
+                  const key = String(r.carrier_id)
+                  // THE BOX SHOWS THE SAVED VALUE until it is touched, so a row nobody edited cannot be
+                  // saved back as something else. `?? ''` and not `|| ''`: 0 days is a real declaration.
+                  const shown = key in termsDraft ? termsDraft[key] : (r.net_terms_days ?? '') === '' ? '' : String(r.net_terms_days)
+                  const dirty = key in termsDraft && termsDraft[key] !== ((r.net_terms_days ?? '') === '' ? '' : String(r.net_terms_days))
+                  return (
+                    <tr key={key}>
+                      <td style={td}>{r.label || key}</td>
+                      <td style={td}>
+                        <input value={shown} inputMode="numeric" placeholder="not declared"
+                          onChange={e => setTermsDraft(d => ({ ...d, [key]: e.target.value }))}
+                          style={{ width: 92, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }} />
+                        <span style={{ color: 'var(--muted)', fontSize: 12, marginLeft: 6 }}>days</span>
+                      </td>
+                      <td style={{ ...td, fontSize: 12, color: 'var(--text2)' }}>
+                        {r.due_date_mode === 'field'
+                          ? <>the carrier&apos;s own date on each line{r.due_date_field ? <> (<code>{r.due_date_field}</code>)</> : null}</>
+                          : <>counted from the ship date using these terms</>}
+                      </td>
+                      <td style={td}>
+                        <button disabled={busy || !dirty} onClick={() => saveTerms(key, shown)}
+                          style={{ padding: '5px 13px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, cursor: dirty && !busy ? 'pointer' : 'default',
+                            /* TOKENS ONLY, no literal and no `var(--x, #hex)` fallback. The tab buttons
+                               above still carry a literal inside a var() fallback and the §B1 theme lock
+                               does not see it; it saw these two, which is the lock being right about the
+                               newer code rather than the older. A hex here would also not come down for
+                               the dark theme, since only a token is redefined under [data-theme="dark"]. */
+                            background: dirty && !busy ? 'var(--accent)' : 'var(--surface)',
+                            color: dirty && !busy ? 'var(--c-fg-ffffff)' : 'var(--muted)' }}>
+                          Save
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}</tbody>
+              </table>}
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 14, maxWidth: 820 }}>
+            A carrier that declares nothing here falls back to its distributor&apos;s own terms, and if that is
+            unset too the line carries no due date at all rather than a guessed one.
+          </div>
+        </div>
       )}
 
       {tab === 'map' && !loading && (

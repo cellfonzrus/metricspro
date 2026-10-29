@@ -158,12 +158,41 @@ def rebuild(carrier_id: str = "", org_id: str = ORG_ID):
     Delete+insert per carrier. May run long on a full Boost rebuild; if the browser 502s it still
     completes server-side (like the commission recalc) — poll /payables/payables afterwards."""
     client = sb()
-    built = engine.build_ledger(client, org_id, carrier_id or None)
-    try:
-        built["flags_written"] = engine.sync_payable_flags(client, org_id)
-    except Exception as e:
-        built["flags_error"] = str(e)[:200]
+    # ONE COMPOSITION OF A REBUILD (§COMMCALC-41.2). The post-landing hook rebuilds this ledger too, and a
+    # button that rebuilt it differently from the hook would be two answers to one question — so both arrive
+    # at `payables/refresh.refresh` and neither knows what a rebuild is made of. `refresh` carries §PAYABLES-01's
+    # contract through: when the preflight BLOCKED a carrier it returns `blocked` and does NOT go on to
+    # restate the discrepancy flags off a ledger it did not write.
+    from app.modules.payables import refresh as _refresh
+    built = _refresh.refresh(client, org_id, carrier_id or None)
+    # A REFUSED REBUILD IS NOT A SUCCESS (§PAYABLES-01). Before 2026-10-27 this returned 200 with
+    # `written: 0` after the build had already emptied a carrier; the delete is now held back until
+    # the write is known to be possible, and the remaining half of that defect is this status code —
+    # a screen must not be able to render "rebuilt" over a rebuild that did not happen. The ordering that
+    # matters (no `sync_payable_flags` after a block) is enforced inside `refresh`, which is where the two
+    # steps now live; this raise is what the caller sees.
+    if built.get("blocked"):
+        raise HTTPException(409, {"message": "rebuild refused — the database is behind the code; "
+                                             "nothing was deleted and every carrier is as it was",
+                                  "blocked": built["blocked"], "result": built})
+    built["auto"] = _build_state(client, org_id)
     return built
+
+
+@router.get("/auto-build")
+def auto_build_state(org_id: str = ORG_ID):
+    """When this ledger last rebuilt itself, and whether a rebuild is queued — so the screen can say so
+    instead of leaving a tenant to guess whether the button needs pressing (owner 2026-10-27)."""
+    return {"auto": _build_state(sb(), org_id)}
+
+
+def _build_state(client, org_id):
+    """The hook's own answer for this build, read through its one home. Never raises into a response."""
+    try:
+        from app.modules.commcalc import derived_builds as _builds
+        return _builds.read_view(client, org_id, "payable_ledger")
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 # ── Part A — forecast (phones only) ───────────────────────────────────────────
@@ -674,16 +703,43 @@ def list_source_maps(org_id: str = ORG_ID):
                      .eq("org_id", org_id).execute().data) or []}
 
 
+def _source_map_changed(client, org_id, what):
+    """A DECLARATION CHANGED, so the ledger derived from it is stale (§COMMCALC-41, `config_inputs`).
+
+    The same hook every lander calls, with NO period — a payable balance is a point-in-time fact, not a
+    month's figure. This is why editing net terms does not need the Rebuild button afterwards: the owner ask
+    of 2026-10-29 was that the setting be programmable, and a setting whose figures only agree with it after
+    the next unrelated shipment is not programmable, it is a second thing to remember.
+    """
+    try:
+        from app.modules.commcalc import auto_calc as _auto
+        return _auto.landed(client, org_id, table="payable_source_map", periods=[],
+                            source="payable_source_map_edit", rows=1)
+    except Exception as e:                                   # never let bookkeeping fail the save itself
+        print(f"WARN source-map hook failed org={org_id} {what}: {type(e).__name__}: {e}")
+        return {"queued": False, "reason": "error", "error": f"{type(e).__name__}: {e}"}
+
+
 @router.post("/source-maps")
 def upsert_source_map(body: dict, org_id: str = ORG_ID):
     client = sb()
     row = dict(body or {})
     row["org_id"] = org_id
-    if not row.get("carrier_id") or not row.get("source_table") or not row.get("imei_field"):
-        raise HTTPException(400, "carrier_id, source_table, imei_field are required")
+    if not row.get("carrier_id"):
+        raise HTTPException(400, "carrier_id is required")
+    # REQUIRED ON CREATION, NOT ON EVERY EDIT. Demanding `source_table` and `imei_field` on an edit forced
+    # every caller to resend the whole declaration to change one field, which is how a settings screen
+    # overwrites a column it never showed anyone. An existing row is PATCHED: PostgREST's upsert updates only
+    # the columns present, so an absent key is left exactly as it was.
+    existing = (client.schema("commcalc").table("payable_source_map").select("id")
+                .eq("org_id", org_id).eq("carrier_id", row["carrier_id"]).limit(1).execute().data) or []
+    if not existing and not (row.get("source_table") and row.get("imei_field")):
+        raise HTTPException(400, "source_table and imei_field are required to declare a NEW carrier")
     r = (client.schema("commcalc").table("payable_source_map")
          .upsert(row, on_conflict="org_id,carrier_id").execute())
-    return {"saved": True, "row": (r.data or [None])[0]}
+    saved = (r.data or [None])[0]
+    return {"saved": True, "row": saved,
+            "auto": _source_map_changed(client, org_id, f"upsert carrier={row['carrier_id']}")}
 
 
 @router.delete("/source-maps/{map_id}")
@@ -691,7 +747,7 @@ def delete_source_map(map_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema("commcalc").table("payable_source_map").delete() \
         .eq("org_id", org_id).eq("id", map_id).execute()
-    return {"deleted": True}
+    return {"deleted": True, "auto": _source_map_changed(client, org_id, f"delete map={map_id}")}
 
 
 # ── per-tenant settings: the clock-in priority-ack gate + the priority window % ────────────────────

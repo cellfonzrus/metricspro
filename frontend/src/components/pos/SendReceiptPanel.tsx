@@ -100,6 +100,14 @@ export function SendReceiptPanel({ saleId, view, choice, onEmailSent }: {
         </button>
       </div>
 
+      {/* The Bill To (§POS-11). The owner asked for the customer's address on the receipt; it prints
+          whenever their record holds one, and most records hold none. The receipt itself never says
+          so — a customer cannot act on it — but the cashier standing here can, so the server's one
+          sentence is shown to them. */}
+      {!view.bill_to.on_file && view.bill_to.note && (
+        <div style={{ ...note, color: 'var(--text2)' }}>{view.bill_to.note}</div>
+      )}
+
       <div style={note}>
         {said
           ? said

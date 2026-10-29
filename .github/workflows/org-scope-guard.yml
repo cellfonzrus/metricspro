@@ -20,12 +20,26 @@ on:
       # the undefined-name lock (index §6k) judges EVERY module under backend/app
       - "backend/app/**/*.py"
       - "backend/harness_undefined_names_lock.py"
+      # §CORE-19 — the bounded in-process TTL cache: the one home, the two modules that hold one,
+      # and the lock whose §D scan judges every file under backend/app/core.
+      - "backend/app/core/ttl_cache.py"
+      - "backend/app/core/tenant_middleware.py"
+      - "backend/app/core/impersonation.py"
+      - "backend/harness_ttl_cache_bounded.py"
       # the paged-read lock (index §CORE-05) judges EVERY module under backend/app too
       - "backend/harness_feed_read_lock.py"
       - "backend/app/modules/core/feed_read.py"
       - "backend/app/modules/recovery/engine.py"
       # the auto-calc-on-landing lock (index §6l) — every lander under backend/app, the index, the page, the CI
       - "backend/harness_auto_calc_lock.py"
+      # the derived-build lock (index §COMMCALC-41) — the registry, the two refresh one homes, the queue's
+      # migration; every writer and every snapshot build under backend/app is judged by the paths above
+      - "backend/harness_derived_build_lock.py"
+      - "backend/harness_derived_builds.py"
+      - "backend/app/modules/commcalc/derived_builds.py"
+      - "backend/app/modules/payables/refresh.py"
+      - "backend/app/modules/recovery/refresh.py"
+      - "database/migrations/1100_derived_build_queue.sql"
       - "docs/SYSTEM_DATA_FLOW_INDEX.md"
       - "database/migrations/1030_auto_calc_on_landing.sql"
       - "frontend/src/app/(platform)/commcalc/**"
@@ -123,6 +137,18 @@ jobs:
       - name: Run the auto-calc-on-landing lock
         working-directory: backend
         run: python3 harness_auto_calc_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # A DERIVED SNAPSHOT REBUILDS ITSELF WHEN ITS INPUTS LAND (owner ask 2026-10-27, index §COMMCALC-41).
+      # Measured that day: the device payable ledger had last been built 53 days earlier while the feed it is
+      # built from was four days old, so every "what is owed" surface read empty and nothing said why. These
+      # two steps keep every delete-then-insert snapshot build registered against the ONE post-landing hook,
+      # keep the button and the hook composing the same rebuild, and keep the queue from growing a second
+      # scheduler. Seven planted controls inside the lock; the proof is DB-free.
+      - name: Run the derived-build proof
+        working-directory: backend
+        run: python3 harness_derived_builds.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the derived-build lock
+        working-directory: backend
+        run: python3 harness_derived_build_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   feed-read-lock:
     # A PAGED READ IS A READ OF THE DATA (owner report 2026-10-14, index §CORE-05). `range()` paging with
@@ -381,3 +407,27 @@ jobs:
         with: { python-version: "3.11" }
       - name: Run the inner-component-inputs lock
         run: python3 backend/harness_inner_component_inputs.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # THE BOUNDED-CACHE LOCK (index §CORE-19, found by the 1,000-user load test 2026-10-28). The
+  # token -> identity cache held one entry per bearer token the worker had ever verified: entries
+  # expired but were never deleted and there was no cap, and the key is a token the auth service
+  # re-mints on every refresh, so the key space is not bounded by the number of users. Five more
+  # caches in core/ had the same shape. app/core/ttl_cache.TTLCache is now the one home for that
+  # bookkeeping — bounded by construction, expired entries evicted before live ones — and all six
+  # dereference it with no TTL or behaviour change. This job FAILS THE BUILD if one of them stops
+  # being the one home, if the identity cache can grow past its cap, if a bound turns into a cache
+  # that never hits, or if a NEW bare dict appears beside a TTL constant anywhere under app/core.
+  # Imports app/core, so it needs the backend's dependencies. DB-free; no network.
+  ttl-cache-bounded:
+    name: Bounded-cache lock (a cache keyed by something a client can mint cannot grow)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the bounded-cache lock (an in-process cache keyed by something a client can mint is bounded by construction - index CORE-19)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_ttl_cache_bounded.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

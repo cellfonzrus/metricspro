@@ -162,7 +162,14 @@ export default function PosSalesPage() {
   const [customerSearch, setCustomerSearch] = useState('')
   const [showCustomerPicker, setShowCustomerPicker] = useState(false)
   const [showNewCustomer, setShowNewCustomer] = useState(false)
-  const [newCust, setNewCust] = useState({ first_name: '', last_name: '', phone_primary: '', email: '' })
+  // The address fields are here because the RECEIPT prints them (§POS-07 Bill To). A quick-add that
+  // asked only for a name, a phone and an email is why 1 of 1,636 customer records on the reporting
+  // tenant held an address on 2026-10-29, and therefore why their receipts billed to a bare name —
+  // the owner's 2026-10-29 report. A till that never asks cannot be fixed in the renderer.
+  const [newCust, setNewCust] = useState({
+    first_name: '', last_name: '', phone_primary: '', email: '',
+    address_1: '', address_2: '', city: '', state: '', zip: '',
+  })
   const [creatingCustomer, setCreatingCustomer] = useState(false)
   const [showProductPicker, setShowProductPicker] = useState(false)
   // Create / edit a product from the register (owner 2026-10-16). `mode` 'create' is the
@@ -566,6 +573,11 @@ export default function PosSalesPage() {
           last_name: newCust.last_name.trim() || null,
           phone_primary: newCust.phone_primary.trim() || null,
           email: newCust.email.trim() || null,
+          address_1: newCust.address_1.trim() || null,
+          address_2: newCust.address_2.trim() || null,
+          city: newCust.city.trim() || null,
+          state: newCust.state.trim() || null,
+          zip: newCust.zip.trim() || null,
           account_type: 'Personal',
           referral_source: 'Walk In Customer',
           is_active: true,
@@ -575,7 +587,10 @@ export default function PosSalesPage() {
       setSelectedCustomer(r.customer as Customer)
       setShowNewCustomer(false)
       setShowCustomerPicker(false)
-      setNewCust({ first_name: '', last_name: '', phone_primary: '', email: '' })
+      setNewCust({
+        first_name: '', last_name: '', phone_primary: '', email: '',
+        address_1: '', address_2: '', city: '', state: '', zip: '',
+      })
     } catch (err: any) {
       alert(`Could not create customer: ${err?.message || err}`)
     }
@@ -1472,11 +1487,18 @@ export default function PosSalesPage() {
                   <input value={newCust.last_name} onChange={e => setNewCust(f => ({ ...f, last_name: e.target.value }))} placeholder="Last name" style={inputStyle} />
                   <input value={newCust.phone_primary} onChange={e => setNewCust(f => ({ ...f, phone_primary: e.target.value }))} placeholder="Phone" style={inputStyle} />
                   <input value={newCust.email} onChange={e => setNewCust(f => ({ ...f, email: e.target.value }))} placeholder="Email" style={inputStyle} />
+                  <input value={newCust.address_1} onChange={e => setNewCust(f => ({ ...f, address_1: e.target.value }))} placeholder="Address" style={inputStyle} />
+                  <input value={newCust.address_2} onChange={e => setNewCust(f => ({ ...f, address_2: e.target.value }))} placeholder="Apt / Suite" style={inputStyle} />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
+                  <input value={newCust.city} onChange={e => setNewCust(f => ({ ...f, city: e.target.value }))} placeholder="City" style={inputStyle} />
+                  <input value={newCust.state} onChange={e => setNewCust(f => ({ ...f, state: e.target.value }))} placeholder="State" style={inputStyle} />
+                  <input value={newCust.zip} onChange={e => setNewCust(f => ({ ...f, zip: e.target.value }))} placeholder="Zip" style={inputStyle} />
                 </div>
                 <button onClick={createQuickCustomer} disabled={creatingCustomer} style={{ background: 'var(--green)', border: 'none', color: 'var(--c-fg-ffffff)', borderRadius: 7, padding: '8px 16px', fontSize: 12, fontWeight: 600, cursor: creatingCustomer ? 'wait' : 'pointer', width: '100%' }}>
                   {creatingCustomer ? 'Creating…' : 'Create & Select'}
                 </button>
-                <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6 }}>Full details (address, ID, etc.) can be added later from the Customers page.</div>
+                <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6 }}>The address prints on the customer&apos;s receipt. Anything else (ID, account details) can be added later from the Customers page.</div>
               </div>
             )}
             <div style={{ overflowY: 'auto', flex: 1 }}>
