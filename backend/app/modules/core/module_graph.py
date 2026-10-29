@@ -571,6 +571,32 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/login_progressive.py': ('rc',),
         },
     },
+    # ── §COMMCALC-47 — where a click on the live screen lands ────────────────────────────────────
+    'live_frame_click_target': {
+        "question": 'The live login streams a real browser and lets the operator click the picture; the '
+                    'UI sends the click as a FRACTION of the image, so where on the live page is that? '
+                    'It was answered inside the click handler by multiplying the fraction by the '
+                    'configured viewport — but the frames come from Chrome\'s screencast, and every '
+                    'frame arrives with metadata saying what it actually shows (deviceWidth / '
+                    'deviceHeight, pageScaleFactor, offsetTop). The frame handler kept the JPEG and '
+                    'the ack and DROPPED the metadata, so on any page whose visible size is not the '
+                    'window every click landed off target by that ratio, worse the further from the '
+                    'top-left the operator aimed (the owner\'s billing portal, 2026-10-29: "it shows '
+                    'the live scren but cannot click on the box"). A frame is not a guess about a '
+                    'viewport — it is an image that knows what it shows, so the geometry travels WITH '
+                    'the frame and the click dereferences it. The arithmetic reduces exactly to the '
+                    'old formula at scale 1 / offset 0 / device size = window, which is every portal '
+                    'that works today.',
+        "homes": ('app/modules/commcalc/live_frame.py',),
+        "index": ('COMMCALC-47',),
+        "locks": ('harness_live_frame.py',),
+        # SNAPSHOT — written BY HAND (§50). Both live screens (the portal login and supply's vendor
+        # window) drive the SAME live_login session, so this one translation serves both and there was
+        # no sibling to fix.
+        "callers": {
+            'app/modules/commcalc/live_login.py': ('lf',),
+        },
+    },
     # ── §COMMCALC-46 — what a login page wants before it will show the password ──────────────────
     'login_first_step': {
         "question": 'Is the password on this login page, and if not, what does the page want first? '
