@@ -1360,7 +1360,20 @@ _all_routes = _flatten_routes(real_app.routes)
 # than over either side: §COMMCALC-48 landed two routes the same day, so 1812 + 3 = 1815 and neither
 # change asserts the other's figure. Re-taken on a counted,
 # named addition, never relaxed for CI.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1815"))
+# Re-pinned 1815 -> 1816 on 2026-10-30 for §POS-14, the working store: ONE added route, counted and
+# named — `GET /pos/working-store` (read-only: which stores this login may ring a sale at, whether a
+# confirmation is owed, and the rate that applies at the confirmed one). It is NOT money-touching:
+# it computes nothing and writes nothing, and the two money paths it serves (`POST
+# /pos/sales/checkout`, `POST /pos/activations`) only gained a REFUSAL — they add no input to any
+# report, statement, GP, commission or tax figure, and the PR adds no route to db_resilience itself
+# (I0b proves that independently of this number). Verified rather than inferred from the count: the
+# app's own leaf routes were enumerated on `origin/main` in a worktree and on this head, and the set
+# difference is exactly `['/api/v1/pos/working-store']` added with NOTHING removed; and
+# `git diff origin/main -- backend/app/ | grep -E '^[+-].*@router\.(get|post|put|patch|delete)\('`
+# prints 1 added decorator and 0 removed. Taken over the MERGED base, not over either side: main
+# advanced by three PRs (#604, #605, #607) while this was in flight and none of them added a route,
+# so 1815 + 1 = 1816. Re-taken on a counted, named addition, never relaxed for CI.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1816"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
