@@ -1301,7 +1301,7 @@ FACTS: dict[str, dict] = {
                     'lot of phones. The option lists are extensible per org, with a picture per '
                     'option; a house default is correct here because these are the generic names of '
                     'a kind of product, read against no tenant\'s feed. NOT `accessory_catalog`, '
-                    'which classifies what was SOLD from an uploaded product catalog (migs 230/231) '
+                    'which classifies what was SOLD from an uploaded product catalog '
                     '— one word apart in the filename, two different questions, and writing this '
                     'feature overwrote that module once before the name was fixed. Also the ONE home '
                     'for the share-reading rule (percentages or fractions, decided by the total), '
