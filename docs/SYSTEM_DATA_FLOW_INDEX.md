@@ -181,9 +181,11 @@ Primary code homes:
 | COMMCALC-47 | **A frame knows what it shows — one home for where a click on the live screen lands** | "it shows the live scren but cannot click on the box to enter the user id" — the box was in the picture and clicking it did nothing. Every streamed frame arrives telling us what it shows, and that was thrown away, so a click was converted through the window instead. What is a click on a picture of a browser a fact ABOUT? |
 | COMMCALC-48 | **The reports a login pulls are edited, not coded — one editable declaration** | "start defining the reports from the back end again, not hardcoded but consumer defined editable". Which reports a tenant pulls and the filters each one needs were already config — in two columns no screen could write, so in practice they were declarable only in SQL. One derived editor shape over the same two columns, with the round trip pinned as the identity. |
 | COMMCALC-49 | **What to order, from what the stores actually sold — and one answer to "how many will sell next"** | "process accessory orders based on the previous 3 months of average sales … asking the user to enter where the spoecific model is end of life or current". The device models the stores sold, ranked, waiting on a human ruling before anything is projected — and the velocity arithmetic that question needs, which was already written twice, factored into one home both older forecasts now read. |
+| COMMCALC-50 | **A page that refuses us is not a login form that renders unexpectedly** | "live login for the billing initated" — and it came back "Could not find the login form. The login form may render differently than expected — check the screenshot." The screenshot showed no form at all: the portal had refused the request in plain words, carrying its own error reference. Three vocabularies answered "is this page refusing us", two of them hardcoded, and none of them held that wording. |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
+| CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-22 | **A page load never queries once per item** | "How do we avoid these extra round-trip calls? Which loop shapes really cost one trip per row and which only look like it, what is the count today, and what fails the build the day a new one ships?" |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
@@ -7977,6 +7979,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"This Document, drawn on a page"** (the emailed/attached PDF of the tenant's own POS layout) | the Document the content homes built | **ONE home** `receipt_formats/render_pdf.py` — the THIRD output of the one Document walk, beside `render_html` and `render_words`. It replaced a PDF rebuilt from `render_words`, which is a round-trip PROOF fixture (words at the ORIGINAL POS's paper offsets, for its parser) and therefore carried **0 drawn lines** and broke phrases mid-word. `render_words` is UNCHANGED and keeps its own job. Lives in the render package because `receipt_pdf_render` may decide no content (§P11) and now only delegates, refusing by name when no renderer is injected. Proof §C/§D/§G — §POS-13 |
 | **"How is a payment method written for a customer?"** (both receipt layouts) | `pos.sale_payments.payment_method`, a machine value | **ONE home** `sale_receipt.method_label`. The slip printed `Paid (credit_card)` and the POS layout `.title()`'d it to **Credit_Card** on a customer's receipt — two dressings of one fact, both wrong. No method vocabulary is declared (RULE TWO): whatever the tenant stores is made readable, never translated against a list. Proof §F — §POS-13 |
 | **"What is this POS setting's effective value at this store"** (server side; owner 2026-10-17) | `pos.pos_settings` (org row `store_code IS NULL`, else the store override) | **ONE home** `backend/app/modules/pos/pos_config_effective.py` (`effective`, `values`, `flag`, `text`, `brand`, `disclaimers`, `SERVER_DEFAULTS`). The resolution rule lived ONLY in the browser (`frontend/src/lib/pos-config.ts`) until the server had to render a receipt; the two copies are PINNED key-by-key by `harness_pos_receipt_render.py` §B, which fails the build naming any default changed on one side only — §POS-02 |
+| **"What a human PICKS this company by"** (the post-login company chooser, the Settings switcher, the operator helpdesk's tenant column; owner report 2026-10-30) | `storeops.tenants.name` + `.slug` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`picker_label_from`, `picker_labels`, `LabelMap`, `looks_like_uuid`, `GENERIC_LABEL`) and `mobile/src/lib/company-label.ts` (`companyLabel`, `looksLikeOrgId`, `GENERIC_COMPANY_LABEL`) — the app keeps the promise itself because a phone can run a bundle older than the server. DISTINCT from "what is this tenant called" below: a receipt's From name may be blank, a picker's label may not. Was THREE derivations — `core/router._my_tenants_payload` (`or "Tenant"`), the web picker, and the app's `tenantName` (`… || org_id`, the one that printed the defect). Siblings rewired in the same PR: `helpdesk/router._tenant_names` and its seven `or "Tenant"` callers. Lock `harness_company_label_lock.py` runs BOTH halves and compares them row for row — §CORE-26 |
 | **"What is this tenant called"** (the From name on its mail, a statement heading, a document title; owner 2026-10-17) | `storeops.tenants.name` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`NAME_COLUMN`, `display_name_from`, `display_name`, `display_names`) — a blank name reads as blank, never a fabricated stand-in printed as the business's own name. `notify/channels/email_resend.from_header` is the ONE place a `From:` header is assembled, and every business-facing send site passes its `org_id` so the customer sees the tenant; only genuine platform mail (the sign-in OTP) keeps the platform name. Siblings rewired in the same PR: `commcalc/router` ×2, `core/data_qa_api`, `core/operator_api`, `helpdesk/router`, `storeops/payroll_approval` ×2, `storeops/router._tenant_display_name`. Lock `harness_pos_receipt_render.py` §E6 fails the build if a second name-only reader appears — §POS-02 |
 
 ---
@@ -26164,6 +26167,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-47 | commcalc |
 | COMMCALC-48 | commcalc |
 | COMMCALC-49 | commcalc |
+| COMMCALC-50 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -26179,6 +26183,7 @@ status word rather than a blank that reads as nil.
 | POS-13 | pos |
 | PAYABLES-01 | payables |
 | CORE-25 | core |
+| CORE-26 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -35437,6 +35442,130 @@ Same home, other axes: §COMMCALC-07 (the one pull loop), §COMMCALC-37 (declare
 §COMMCALC-46 (the login declaration, which shares the calibration column), §COMMCALC-47 (the live screen
 the capture reads through).
 
+## §COMMCALC-50. A PAGE THAT REFUSES US IS NOT A LOGIN FORM THAT RENDERS UNEXPECTEDLY — one vocabulary for what a portal answered with (owner report 2026-10-30)
+
+> Owner, 2026-10-30: *"live login for the billing initated"*. The attempt is on the row at
+> 13:22:31Z, `auth_status = error`:
+>
+> > Could not find the login form. The login form may render differently than expected — check the screenshot.
+>
+> The screenshot has no form on it. It is a UPS error page:
+>
+> > **Something went wrong, or you are trying to perform an action that is not allowed.**
+> > Please hit back on your browser and try again. Error Code: 0.c9ab3717.1793366535.1fdc2afb
+
+### COMMCALC-50.1 THE DEFECT
+
+The portal said, in words, why it had turned us away. The driver threw that away and reported a
+guess about form markup — sending the operator to inspect a page that had no form to inspect.
+
+The message was not sloppy; it was the honest output of a mechanism that had no way to know. Three
+separate vocabularies answered "is this page refusing us rather than showing us a form":
+
+| vocabulary | where | reachable by a tenant? |
+| --- | --- | --- |
+| `portal_block_marker` rows (throttles) | `commcalc.portal_block_marker`, mig 244 | **yes** — config, per-org, per-processor |
+| `vidapay_sweep._BOT_PHRASES` | a tuple in CODE | no |
+| `_looks_like_cloudflare`'s markers | spelled inline in CODE | no |
+| an inline WAF tuple inside `begin_login_b2bsoft` | spelled inline in CODE, **OR'd with the one above** | no |
+
+Four, in fact — the lock found the fourth. None held `action that is not allowed`, so the page fell
+through all of them to the default guess.
+
+### COMMCALC-50.2 THE CLASS, not the instance
+
+Not "add the UPS wording". The class is **a page that refuses us is not a login form that renders
+unexpectedly**, and the mechanism defect is that one question had four answers, three of which no
+tenant could change. Adding a phrase to one tuple would have left the other three, and left the next
+portal's wording to fall through exactly the same way.
+
+So the vocabulary has ONE home, in the table that already held the configurable half of it:
+`commcalc.portal_block_marker` now carries `kind` — `throttle` | `refusal` | `challenge` (mig
+`1105`, additive, defaulting to `throttle` so every row seeded by mig 244 keeps its meaning).
+
+A tenant whose portal uses different words adds a ROW (RULE TWO). There is no branch to change.
+
+### COMMCALC-50.3 Three kinds, because the remedies differ
+
+Merging them would be the same defect wearing a hat — the wrong note wastes an operator's afternoon:
+
+| kind | what it means | what the operator is told | cooldown? |
+| --- | --- | --- | --- |
+| `throttle` | come back later | the source is in a cooldown, not broken | **yes** — `detect_block`, which alone carries a retry-after |
+| `refusal` | you may not do that | check the ADDRESS saved on this source | no — it will say the same next time |
+| `challenge` | prove you are human | a proxy, or sign in on the live screen | no |
+
+`portal_backoff.page_verdict(text, refusal, challenge)` answers the last two and **never** claims a
+throttle; `detect_block` answers the first and never claims the other two. A challenge is reported
+ahead of a refusal when both match, because its remedy is the more specific one — reporting it as a
+plain refusal sends somebody to check an address that is perfectly correct.
+
+### COMMCALC-50.4 Every caller wired, or excused with its reason
+
+- `vidapay_sweep._looks_like_bot_wall` / `_looks_like_cloudflare` — kept as the predicates every
+  existing caller already asks, now dereferencing the one vocabulary. Cloudflare's **conjunction**
+  (the vendor named AND a ray id) stays in code because a flat marker list cannot express an AND;
+  that is a shape, not a vocabulary.
+- the inline WAF tuple in `begin_login_b2bsoft` — **deleted**; its phrases are seeded as rows. Only
+  the two AVAILABILITY words stay local, because *"the site is down"* is a third fact and reading an
+  outage as a refusal would send an operator to check a correct address.
+- `live_login._wall_note` and the no-password branch — the page's own verdict **leads**; the old
+  guess survives only as what is left when the page said nothing.
+- **EXCUSED:** `vidapay_sweep._CAPTCHA_TEXT` (§COMMCALC-11) asks *"must a human tick a box on this
+  form"* — about a form that IS present and whose password field was found. Merging it here would
+  make a sign-in page carrying a captcha read as *"no form here — check your address"*.
+
+### COMMCALC-50.5 Locked
+
+`backend/harness_portal_page_verdict.py` — **81 checks**, DB-free and browser-free. §A pins the
+owner's actual page: it is read as a refusal, is NOT read as a throttle (which would park a healthy
+source in a needless cooldown), and the note sends the operator to the address rather than the
+markup. It fails the build if a second phrase list appears in the driver, if a caller stops
+dereferencing the one home, if a marker row's `kind` stops being honoured, if the throttle question
+starts borrowing refusal rows or the reverse, if a pre-migration tree silently borrows throttle rows
+for the new kinds, if the marker rows stop being read WHOLE, or if the error message stops leading
+with what the page said. Nine armed negative controls. It searches the driver as CODE — docstrings and comments dropped via the AST —
+because the driver's own docstring quotes the interstitial wording it used to hardcode, and that
+history is worth keeping written down.
+
+### COMMCALC-50.5b Every tenant, not the one that surfaced it
+
+The seeded phrases are **house** rows (org `00000000-…-0001`), and `load_markers` reads
+`in_("org_id", [this_org, HOUSE_ORG])` and prefers the tenant's own rows only when it HAS some. So
+one seed serves every tenant — Cellfonz, LuxeLink, NY Logistics, Vzone and any tenant added later —
+and a tenant whose portal uses different words adds its own rows, which then replace the house list
+for that tenant. Nothing here is keyed to the tenant whose login surfaced the defect, and the home
+names no portal (§COMMCALC-50 §H). Pinned by F14/F15.
+
+### COMMCALC-50.5a The marker rows are read WHOLE (§4b.1)
+
+The first cut of `load_markers` selected the marker columns by name and, on a tenant whose tree
+predates the `kind` column, caught the failure and selected a shorter list — the **column-block
+ladder** §4b.1 exists to forbid, and `harness_any_columns_lock.py` caught it. This table's columns
+arrive by hand-applied migration, so one missing column must never hide the rest: the read is
+`select("*")` and the reader takes the keys that are there. A row that predates the column simply
+arrives without the key, and the filter already reads a row with no `kind` as a throttle row — which
+is what every row this table seeded meant — so such a tenant still answers the throttle question
+from configuration while the other two kinds fall back to their seeds. That is the honest answer:
+nothing there was ever declared about them. Pinned by F12/F13: the proof's stub client *refuses* a
+select that names columns, and the home may hold exactly one select for this question.
+
+### COMMCALC-50.6 NOT fixed here, said plainly
+
+**This does not make that login work.** The address on the owner's UPS Billing source is
+`https://billing.ups.com/ups/billing/invoice` — a page *inside* the billing centre, and asking for
+one with no session is exactly what gets answered this way. That is a config row only he can supply,
+because `ups.com` is unreachable from the build container and a guessed address is how the screen
+was reached in the first place. What ships here is that the next operator is told what the portal
+actually said, instead of being sent to read markup.
+
+### COMMCALC-50.7 Cross-references
+
+Same home, other axes: §COMMCALC-10 (the live-login phases), §COMMCALC-46 (what a login page wants
+first), §COMMCALC-11 (an invisible human check is still a check — the excused sibling).
+Neighbours: §COMMCALC-47 (the live screen the screenshot comes from), the mig-244 cooldown ladder.
+Reading rule dereferenced: §4b.1 (any-subset column reads — see §COMMCALC-50.5a).
+
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
 
 > **Numbered CORE-17, not CORE-16.** The allocator handed out `CORE-16` while this was being
@@ -41108,3 +41237,71 @@ writes a sidebar width of its own (negative control planted and confirmed red).
 
 No endpoint, no table, no migration, no query. Nothing about what a figure IS changes; this is where
 a pane is drawn. The desk layout is byte-identical above `NARROW_MAX`.
+
+---
+
+## §CORE-26. A LABEL A PERSON READS IS NEVER AN ID — one home for what a company is called on a picker (owner report 2026-10-30)
+
+Owner, verbatim, with a screenshot of the mobile app: *"How do I know which company is which it
+should show the company name on the app instead of company id"*. The "Choose a company" screen
+listed four raw UUIDs. A login belonging to four companies could not tell which one it was signing
+into, on the one screen whose entire job is telling them apart.
+
+### §CORE-26.1 Duplicate check (the build gate)
+
+Searched the index first. Two existing mechanisms answer a neighbouring question and BOTH were
+extended rather than copied:
+
+- **§POS-02 `core/tenant_identity`** already owned *"what is this tenant called"* (the From name on
+  its mail, a statement heading). The picker's label is the SAME registry read for a different
+  promise, so it lives in that module — `picker_label_from` beside `display_name_from` — not in a
+  new one. The two promises genuinely differ and the module says so: a receipt that cannot name the
+  business prints nothing (a fabricated name would be a lie on a customer's receipt), while a
+  picker that cannot name the company still has to be pickable.
+- **§13b.1 `harness_scope_label_lock.py`** locks the identical RULE (`scope_label || scope_key`, the
+  owner's near-identical report of 2026-10-03) for a FINANCE scope's name. Different registry and
+  different fact — `storeops.tenants` is not `coa.org_companies`, and one tenant holds many of the
+  latter — so the locks stay separate and cross-reference each other.
+
+Nothing new was created that an existing path already served. No endpoint, no table, no migration.
+
+### §CORE-26.2 The class, not the instance
+
+"The phone printed an id" is the instance. The class is that a company's human label was DERIVED in
+three places, each with its own last resort:
+
+| where | last resort | what the user saw |
+| --- | --- | --- |
+| `core/router._my_tenants_payload` | `t.get("name") or "Tenant"` | every unnamed company the same unchoosable word |
+| `frontend/src/app/login/page.tsx` | `{t.name}` raw | blank button |
+| `mobile/src/api/core.tenantName` | `name \|\| org_name \|\| org_id` | **the UUID** |
+| `helpdesk/router._tenant_names` × 7 callers | `or "Tenant"` | the sibling, found by the lock |
+
+One fact, one home, dereferenced: the label is the onboarding name, else the slug read back as
+words, else the generic word `Company` — and **never a UUID, whatever the stored row holds**,
+including a row whose `name` column literally contains one.
+
+### §CORE-26.3 What the lock refuses
+
+`backend/harness_company_label_lock.py` (29 checks, each with a negative control) fails the build
+when the one home loses either half; when the server label can be blank or id-shaped for ANY row
+shape (**run**, not read); when the app half drifts from the server half (both are **run** and
+compared row for row, so the mirror cannot rot); when a backend payload re-introduces `or "Tenant"`
+or `or org_id`; when `_my_tenants_payload` stops dereferencing; when a picker surface paints
+`org_id` as a title or a JSX child (a React list `key` is exempt — it is never painted); or when a
+second copy of the id shape or of the last-resort word appears.
+
+### §CORE-26.4 Tests
+
+TDD, red first: `backend/tests/unit/test_tenant_picker_label.py` (14), 
+`backend/tests/integration/test_my_tenants_labels.py` (7, through the REAL app over the database
+double — `/core/my-tenants` AND `/core/bootstrap`, which must agree), and
+`mobile/src/lib/company-label.test.ts` (13). **`mobile/` had no test of any kind before this**,
+which is how the screen shipped: there was no gate a label rule could fail. `mobile/vitest.config.ts`
++ `mobile/tests/setup.ts` (the same no-network promise the backend conftest makes) and a
+`Mobile unit tests` job in `.github/workflows/tests.yml` close that.
+
+### §CORE-26.5 Not money
+
+No endpoint, no table, no migration, no query, no figure. Nothing about what a number IS changes;
+this is what a button is called.

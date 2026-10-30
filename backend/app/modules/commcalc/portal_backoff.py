@@ -64,6 +64,100 @@ DEFAULT_MARKERS = (
     "unusual number of requests",
 )
 
+# ── WHAT A PAGE IS TELLING US INSTEAD OF SHOWING A FORM (index §COMMCALC-50) ────────────────────
+# A throttle is only ONE of the things a portal can answer with, and the others were answered
+# elsewhere, in CODE. `vidapay_sweep._BOT_PHRASES` was a hardcoded tuple deciding "anti-automation
+# page", and `_looks_like_cloudflare` spelled a challenge vendor's markers inline — so this platform
+# had THREE vocabularies for one question ("is this page refusing us rather than showing us a form"),
+# one of them configurable and two of them not.
+#
+# The owner's UPS billing login on 2026-10-30 is what that costs. UPS answered:
+#
+#     "Something went wrong, or you are trying to perform an action that is not allowed."
+#
+# — a plain refusal, carrying its own error reference. No tuple here held that wording, so the driver
+# fell through to "Could not find the login form. The login form may render differently than expected
+# — check the screenshot." The screenshot showed no form at all. The operator was sent to read markup
+# on a page that was telling him, in words, that he had been turned away.
+#
+# THE CLASS: a page that refuses us is not a login form that renders unexpectedly. So the three kinds
+# share ONE vocabulary, ONE table and ONE inheritance rule — `commcalc.portal_block_marker`, now
+# carrying `kind` (mig 1105). A tenant whose portal uses different words adds a ROW, never a branch.
+THROTTLE_KIND = "throttle"      # come back later — this one sets a cooldown
+REFUSAL_KIND = "refusal"        # you may not do that — no cooldown; it will say the same next time
+CHALLENGE_KIND = "challenge"    # prove you are human — a wait or a human may clear it
+VERDICT_KINDS = (THROTTLE_KIND, REFUSAL_KIND, CHALLENGE_KIND)
+
+# Seeds, used verbatim only where the table is absent (pre-mig-1105) or empty — same rule as
+# DEFAULT_MARKERS above. NARROW on purpose: these decide that a page is not worth a login attempt,
+# and a false positive turns a working portal into "refused".
+DEFAULT_REFUSAL_MARKERS = (
+    "action that is not allowed",   # ← the UPS billing wording, owner report 2026-10-30
+    "access to this page has been denied",
+    "access denied",
+    "request unsuccessful",
+    "not authorized to view this page",
+    "something doesn't look right",
+    "doesn't look right",
+    "unusual activity",
+    "request is blocked",           # ← moved out of vidapay_sweep's inline WAF tuple
+    "forbidden",
+)
+DEFAULT_CHALLENGE_MARKERS = (
+    "verify you are human",
+    "are you a robot",
+    "attention required",
+    "just a moment",
+    "cf-chl",
+    "challenge-platform",
+    "checking your browser",
+    "unusual traffic",              # ← moved out of vidapay_sweep's inline WAF tuple
+    "are you a human",
+    "captcha",
+)
+
+# What to TELL the operator for each kind. One home, because the three need genuinely different
+# actions and the wrong one wastes their afternoon: a refusal is usually a wrong address or a
+# permission, a challenge wants a proxy or a human, a throttle wants time.
+_VERDICT_NOTE = {
+    REFUSAL_KIND: ("The portal REFUSED the request — this is not a sign-in page. Check the address "
+                   "saved on this source: asking for a page inside the portal without a session is "
+                   "answered this way. The screenshot shows exactly what it said."),
+    CHALLENGE_KIND: ("The portal served a human / anti-automation check rather than a sign-in page — "
+                     "route this source through a residential proxy, or sign in on the live screen."),
+    THROTTLE_KIND: ("The portal is rate-limiting us — it is asking us to come back later, so this "
+                    "source is in a cooldown rather than broken."),
+}
+
+
+def verdict_note(kind):
+    """The one operator sentence for a verdict kind. PURE. Never raises, never returns None."""
+    return _VERDICT_NOTE.get(str(kind or "").strip().lower(), "")
+
+
+def page_verdict(text, refusal=None, challenge=None):
+    """Is this page REFUSING us or CHALLENGING us rather than showing a form? PURE.
+
+    Returns {"kind", "marker", "note"} or None. A challenge is reported ahead of a refusal when both
+    match, because a challenge is the more specific claim and has the more specific remedy (a proxy
+    or a human) — reporting it as a plain refusal would send the operator to check an address that is
+    perfectly correct.
+
+    Throttling is NOT answered here: it is `detect_block`, which alone carries a retry-after and
+    alone sets a cooldown. Two questions, two answers, one vocabulary.
+    """
+    body = str(text or "").lower()
+    if not body:
+        return None
+    for kind, seeds, given in ((CHALLENGE_KIND, DEFAULT_CHALLENGE_MARKERS, challenge),
+                               (REFUSAL_KIND, DEFAULT_REFUSAL_MARKERS, refusal)):
+        for m in (given if given is not None else seeds):
+            m = str(m or "").strip().lower()
+            if m and m in body:
+                return {"kind": kind, "marker": m, "note": verdict_note(kind)}
+    return None
+
+
 # HTTP statuses that mean rate-limited. 429 is unambiguous. 503 is counted ONLY when the response
 # also carries a Retry-After header (a bare 503 is an outage, not a throttle).
 BLOCK_STATUSES = (429,)
@@ -302,20 +396,40 @@ def confirm_warning(state, tz=None):
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 3) CONFIG LOADERS  (best-effort; org-scoped; fall back to the seeds)
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-def load_markers(client, org_id, processor=None):
-    """The tenant's enabled block-page markers. This org's rows win; otherwise the house/default rows;
-    otherwise the seeded DEFAULT_MARKERS. A row with a `processor` applies only to that processor.
-    Never raises — a missing table (pre-mig-244) returns the seeds."""
+_KIND_SEEDS = {}        # filled below, once the seed tuples above are defined
+
+
+def load_markers(client, org_id, processor=None, kind=None):
+    """The tenant's enabled markers OF ONE KIND. This org's rows win; otherwise the house/default
+    rows; otherwise that kind's seeds. A row with a `processor` applies only to that processor.
+    Never raises — a missing table reads as no rows, and so as the seeds for the kind asked for.
+
+    THE ROWS ARE READ WHOLE (index §4b.1, the ONE reading rule): this table's columns arrive by
+    hand-applied migration, so a select naming them would fail entirely on a tenant missing the
+    newest one, and a second select naming fewer is the column-block ladder that rule exists to
+    forbid. Reading whole means a row that predates the kind column simply arrives without the key,
+    and the filter below already reads a row with no kind as a throttle row — which is what every
+    row seeded with this table meant. So on such a tenant the throttle question is still answered
+    from configuration and the other two kinds fall back to their seeds, which is the honest answer:
+    nothing there was ever declared about them.
+
+    `kind` defaults to THROTTLE_KIND so every caller written before the kind column existed keeps
+    the rows it always got."""
+    want = (str(kind or THROTTLE_KIND).strip().lower()) or THROTTLE_KIND
+    seeds = list(_KIND_SEEDS.get(want, DEFAULT_MARKERS))
     try:
-        rows = (client.schema("commcalc").table("portal_block_marker")
-                .select("org_id,processor,marker,enabled")
+        rows = (client.schema("commcalc").table("portal_block_marker").select("*")
                 .in_("org_id", [str(org_id), HOUSE_ORG]).limit(400).execute().data) or []
     except Exception:
-        return list(DEFAULT_MARKERS)
+        return seeds
     proc = (processor or "").strip().lower()
     mine, house = [], []
     for r in rows:
         if r.get("enabled") is False:
+            continue
+        # A row with no kind is a THROTTLE row: that is what every row seeded by mig 244 meant, and
+        # reading it as anything else would silently re-point an operator's existing configuration.
+        if (str(r.get("kind") or THROTTLE_KIND).strip().lower()) != want:
             continue
         rp = (r.get("processor") or "").strip().lower()
         if rp and proc and rp != proc:
@@ -327,7 +441,12 @@ def load_markers(client, org_id, processor=None):
             continue
         (mine if str(r.get("org_id")) == str(org_id) else house).append(m)
     out = mine or house
-    return list(dict.fromkeys(out)) or list(DEFAULT_MARKERS)
+    return list(dict.fromkeys(out)) or seeds
+
+
+_KIND_SEEDS.update({THROTTLE_KIND: DEFAULT_MARKERS,
+                    REFUSAL_KIND: DEFAULT_REFUSAL_MARKERS,
+                    CHALLENGE_KIND: DEFAULT_CHALLENGE_MARKERS})
 
 
 def _org_cfg(client, org_id):

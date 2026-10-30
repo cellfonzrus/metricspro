@@ -130,9 +130,10 @@ def _launch(p):
         return p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
 
 
-_BOT_PHRASES = ("something doesn't look right", "doesn't look right", "unusual activity",
-                "verify you are human", "are you a robot", "request unsuccessful",
-                "access to this page has been denied", "attention required")
+# The phrases that mean "this page is refusing or challenging us" are NOT here any more: they are
+# ONE vocabulary in `portal_backoff` (index §COMMCALC-50), the same table and the same inheritance
+# rule the throttle markers already used. A tuple here was the second of three copies, and the one
+# that decided the operator's error message — see §COMMCALC-50.1 for what that cost on 2026-10-30.
 
 
 class VidaPayLoginError(Exception):
@@ -505,15 +506,35 @@ def _all_frames_text(page):
     return " ".join(parts).lower()
 
 
-def _looks_like_cloudflare(page):
-    body = _page_text(page)
-    return ("cf-chl" in body or "challenge-platform" in body or
-            ("cloudflare" in body and "ray id" in body) or "just a moment" in body)
+def page_refusal(page, refusal=None, challenge=None):
+    """What is this page telling us INSTEAD of showing a form — {"kind","marker","note"} or None.
+
+    THE one reader for that question in this driver. `refusal` / `challenge` are the tenant's
+    configured marker lists (`portal_backoff.load_markers(..., kind=...)`); passing neither uses the
+    seeds, which is what the paths deep in the driver with no DB client get. Never raises."""
+    try:
+        return _pb.page_verdict(_page_text(page), refusal=refusal, challenge=challenge)
+    except Exception:
+        return None
 
 
-def _looks_like_bot_wall(page):
+def _looks_like_cloudflare(page, challenge=None):
+    """A human / anti-automation CHALLENGE — something a wait, a proxy or a person can clear."""
+    v = page_refusal(page, refusal=(), challenge=challenge)
+    if v and v["kind"] == _pb.CHALLENGE_KIND:
+        return True
+    # Cloudflare's own two-signal case: the vendor named AND a ray id. Kept because it is a
+    # CONJUNCTION, which a flat marker list cannot express — not a second vocabulary.
     body = _page_text(page)
-    return any(p in body for p in _BOT_PHRASES)
+    return "cloudflare" in body and "ray id" in body
+
+
+def _looks_like_bot_wall(page, refusal=None, challenge=None):
+    """A page that is not going to show us a form: a refusal OR a challenge.
+
+    Kept as the one predicate every existing caller already asks, so nothing downstream changes
+    shape; `page_refusal` is what a caller asks when it needs to know WHICH, and what to say."""
+    return bool(page_refusal(page, refusal=refusal, challenge=challenge))
 
 
 # ── RATE LIMIT / TEMPORARY BLOCK (owner report 2026-07-27: "you have too many requests, and have been
@@ -1873,10 +1894,18 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None, label=None):
                     txt = ((pg.title() or "") + " " + " ".join(d.get("headings", []))).lower()
                 except Exception:
                     d, txt = {}, ""
-                hit = any(k in txt for k in ("request is blocked", "service unavailable", "access denied",
-                                             "forbidden", "captcha", "unusual traffic", "are you a human",
-                                             "doesn't look right", "temporarily unavailable"))
-                return (hit or _looks_like_bot_wall(pg)), d
+                # The refusal / challenge words are NOT spelled here any more — they were a second
+                # copy of the one vocabulary (§COMMCALC-50), OR'd with the one home two lines down,
+                # so a phrase added to config would be honoured by one half of this condition and
+                # not the other. What stays is the two AVAILABILITY words, which are a different
+                # fact: "the site is down" is not "the site refused us", and treating an outage as
+                # a refusal would tell an operator to go and check an address that is perfectly
+                # right. They are matched against the TITLE AND HEADINGS here, not the body.
+                hit = any(k in txt for k in ("service unavailable", "temporarily unavailable"))
+                # No DB client reaches this far into the driver, so the one home answers from its
+                # SEEDS here — the same fallback `_rate_limit_hit` already takes on this path.
+                verdict = _pb.page_verdict(txt)
+                return (hit or bool(verdict) or _looks_like_bot_wall(pg)), d
             _b, _d0 = _blocked(page)
             if _b:
                 raise VidaPayLoginError(

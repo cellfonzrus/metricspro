@@ -1049,16 +1049,17 @@ async def _notify_escalation(org_id: str, ticket: dict, actor: str):
 
 # ── Support console (CROSS-TENANT, house-gated) ─────────────────────────────────────────────────
 def _tenant_names(org_ids):
-    out = {}
+    """What each of these companies is CALLED on an operator screen — dereferenced from the one
+    home (§POS-02), never read here.
+
+    This used to run its own `tenants` select and leave every caller to spell `or "Tenant"`, which
+    is seven copies of a last resort and the same defect that put raw org ids on the mobile company
+    picker (owner, 2026-10-30). `picker_labels` always answers: the onboarding name, else the slug
+    read back as words, else the one generic word — so the callers need no fallback at all, and
+    `harness_company_label_lock.py` §L4 fails the build if one comes back.
+    """
     ids = [o for o in set(org_ids) if o]
-    if not ids:
-        return out
-    try:
-        rows = db("tenants").select("org_id,name").in_("org_id", ids).execute().data or []
-        out = {r["org_id"]: r.get("name") for r in rows if r.get("org_id")}
-    except Exception:
-        pass
-    return out
+    return tenant_identity.picker_labels(get_supabase(), ids) if ids else {}
 
 
 @router.get("/support/cases")
@@ -1103,7 +1104,7 @@ def support_cases(authorization: str = Header(default=""), x_active_org: str = H
     out = []
     for c in cases:
         t = tmap.get((c.get("org_id"), c.get("ticket_id"))) or {}
-        out.append({**c, "tenant_name": names.get(c.get("org_id")) or "Tenant",
+        out.append({**c, "tenant_name": names.get(c.get("org_id")),
                     "ticket_subject": t.get("subject"),
                     "ticket_number": (f"TKT-{t.get('ticket_number')}" if t.get("ticket_number") else None),
                     "requester": t.get("requester_name") or t.get("requester_email")})
@@ -1136,7 +1137,7 @@ def support_case_detail(cid: str, authorization: str = Header(default=""), x_act
             comments = (db("ticket_comments").select("*").eq("org_id", org_id)
                         .eq("ticket_id", case["ticket_id"]).order("created_at").execute().data or [])
     names = _tenant_names([org_id])
-    return {"case": {**case, "tenant_name": names.get(org_id) or "Tenant"},
+    return {"case": {**case, "tenant_name": names.get(org_id)},
             "events": events, "ticket": ticket, "ticket_comments": comments,
             "failures": _case_failures(org_id, (ticket or {}).get("created_at")),
             "statuses": list(_SUPPORT_STATUSES), "priorities": list(_SUPPORT_PRIORITIES)}
@@ -1423,8 +1424,8 @@ def support_failures(authorization: str = Header(default=""), x_active_org: str 
     names = _tenant_names(all_orgs)
     for g in groups:
         for o in g.get("affected_orgs", []):
-            o["org_name"] = names.get(o["org_id"]) or "Tenant"
-    flat = [{**r, "tenant_name": names.get(r.get("org_id")) or "Tenant"} for r in rows]
+            o["org_name"] = names.get(o["org_id"])
+    flat = [{**r, "tenant_name": names.get(r.get("org_id"))} for r in rows]
     # STABLE facets (registry + all tenants) so a filter dropdown never self-collapses when it's active.
     row_kinds = {r.get("category") for r in rows if r.get("category")}
     kinds_facet = sorted(({"kind": k, "label": (kind_meta.get(k, {}).get("label") or k)}
@@ -1471,8 +1472,8 @@ def _decorate_fix_request(fr, names):
     orgs = fr.get("affected_orgs") or []
     for o in orgs:
         if isinstance(o, dict) and o.get("org_id"):
-            o["org_name"] = names.get(o["org_id"]) or "Tenant"
-    return {**fr, "owner_name": names.get(fr.get("org_id")) or "Tenant", "affected_orgs": orgs}
+            o["org_name"] = names.get(o["org_id"])
+    return {**fr, "owner_name": names.get(fr.get("org_id")), "affected_orgs": orgs}
 
 
 @router.post("/support/fix-requests")
@@ -1539,7 +1540,7 @@ def support_fix_request_detail(fid: str, authorization: str = Header(default="")
     failures = t.fetch_failures(get_supabase(), ids=ids, limit=500) if ids else []
     org_ids = [fr.get("org_id")] + [o.get("org_id") for o in (fr.get("affected_orgs") or []) if isinstance(o, dict)] + [f.get("org_id") for f in failures]
     names = _tenant_names(org_ids)
-    failures = [{**f, "tenant_name": names.get(f.get("org_id")) or "Tenant"} for f in failures]
+    failures = [{**f, "tenant_name": names.get(f.get("org_id"))} for f in failures]
     return {"fix_request": _decorate_fix_request(fr, names), "failures": failures,
             "statuses": list(t.statuses), "can_approve": bool(ctx.get("super_admin"))}
 
