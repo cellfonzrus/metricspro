@@ -41350,7 +41350,11 @@ so it can be dereferenced from any load order.
 | where every figure on the screen came from | `commcalc/accessory_order_drilldown.py` (declaration only) |
 | the device MODEL out of a promo-decorated description | `commcalc/product_mix.model_of` (§62), dereferenced |
 | which month's sale lines to read | `router._sales_rows_union` (§3) — the DISPLAY union, so the report is never blind on the open month (§19.55 / §4a.3) |
-| the raw → canonical model map AND the lifecycle ruling | `commcalc.device_model_alias` (mig `096`, lifecycle column mig `1104`) |
+| the raw → canonical model map AND the lifecycle ruling | `commcalc.device_model_alias` (mig `096`, lifecycle column mig `1104`) — the ruling is keyed on the PHONE (COMMCALC-49.11) |
+| which sold lines are the SAME PHONE | `commcalc/device_model_family.family_of` / `group_units` — colour words are a REQUIRED argument (COMMCALC-49.11) |
+| what kinds of accessory can be BOUGHT, and how each is chosen | `commcalc/accessory_order_catalog.py` — SPLIT per phone vs ASSIGNED by connector (COMMCALC-49.12). NOT `accessory_catalog`, which classifies what was SOLD (§19.55) |
+| how a declared set of shares is read (percentages or fractions) | `commcalc/accessory_order_catalog.normalise_shares` — the colour mix dereferences it |
+| which cable / charger / earphone ONE phone takes | `commcalc.model_accessory_spec` (mig `1108`); absent = the declared current standard |
 
 **THE UNIT OF THE WINDOW IS THE CALLER'S.** `/payables/forecast` and the PO recommendations count
 DAYS; this report counts MONTHS. Velocity is per window-unit and the horizon is in the same unit, so
@@ -41508,6 +41512,108 @@ copy fails the build, and retiring one lowers the pin.
 The report plans QUANTITIES TO BUY. It reads no payout, writes no ledger, feeds no P&L line, GP
 figure, commission or tax number, and its two writes are admin-gated declarations. CI tripwire:
 `harness_db_resilience.py` route pin re-taken 1810 → 1813 on the three counted, named routes.
+
+### COMMCALC-49.11 ONE PHONE IS ONE ROW, WHATEVER COLOUR IT SOLD IN (owner ask 2026-10-30)
+
+Owner: *"accessory order plan should combine the accessories for all line items for iphone 13 oin
+different colors with a drill down option to see what was sold, , iph 13 is different from 13 pro"*.
+
+**THE DEFECT, measured on the live feed before anything was written.** The report ranked five colours
+of one handset as five handsets, so the best seller showed up as five mid-table rows and its case
+order was split five ways:
+
+| spelling (September 2026, one tenant's own feed) | units |
+|---|---|
+| `Apple iPhone 13 128GB Pink CPO TO` | 23 |
+| `Apple iPhone 13 128GB Black CPO TO` | 6 |
+| `Apple iPhone 13 128GB Red CPO TO` | 6 |
+| `Apple iPhone 13 128GB White CPO TO` | 4 |
+| `Apple iPhone 13 128GB Blue CPO TO` | 3 |
+
+One case SKU fits every one of them, and none of them fits an iPhone 13 Pro. **One home:**
+`commcalc/device_model_family.py` (`resolve_colour_tokens`, `family_of`, `group_units`).
+
+| what is dropped | how, and why that way |
+|---|---|
+| the CAPACITY (`128GB`, `128 GB`, `1TB`) | by PATTERN — a number followed by a storage unit is a file-format marker in every feed here, like the `CellPhone` category tolerance, so it is a house rule |
+| the COLOUR (`Pink`, `BLK`, `Midnight`) | only if the ORG HAS DECLARED THAT WORD (`accessory_config.device_colour_tokens`, mig `1108`). A colour word is a tenant's own spelling, so §COMMCALC-49.10 bans a house list |
+| nothing else, ever | `PRO`, `PLUS`, `MINI`, `5G`, `FE`, `CPO` and the carrier suffix all survive, which is what keeps a Pro a different phone |
+
+- **`colour_tokens` is a REQUIRED keyword argument with nothing behind it.** An org that has declared
+  none gets `basis='no_vocabulary'`, keeps its raw spellings, and the screen says why — it never
+  borrows another tenant's colour list.
+- **A curated `device_model_alias.canonical_model` OUTRANKS the derivation** (`basis='declared_alias'`),
+  so a human can merge two families the rule keeps apart — new and refurbished stock of one handset,
+  for instance, which take the same case.
+- **THE RULING IS NOW KEYED ON THE PHONE, not on a spelling.** `device_model_alias.lifecycle` is
+  written against the family, because that is the name the human actually ruled on. Production
+  carried 148 alias rows and ZERO rulings when this landed, so nothing stored had to be re-keyed.
+- **The folded row carries its variants**, so the drill-down the owner asked for costs no second
+  query against the feed — it is the rows the report already folded.
+- **Live result, both tenants, Aug–Oct 2026:** 46 spellings → 40 phones (house org), 60 → 52 (the
+  other tenant), every unit preserved.
+
+### COMMCALC-49.12 THE ORDER IS BOUGHT AT TWO GRAINS (owner ask 2026-10-30)
+
+Owner: *"the order is per phone, so it should be not be on top as displayed, the accessory order
+should be per phone model and on one column and the cases type on the other columns , the screen
+protector in the other column and charger and cables should be consolidated based on the sales, not
+per phone , the cables are common to a lot of phones, current standard is type c which should be
+assigned ot the phone model in the beinging but it should be editable as a drop down if oit changes
+later"*.
+
+**ONE home for the ordering vocabulary: `commcalc/accessory_order_catalog.py`.** The load-bearing
+distinction it holds:
+
+| grain | what it means | on the screen |
+|---|---|---|
+| **SPLIT** | bought FOR a phone; that phone's quantity divides across the styles on offer | a column per style, one row per phone, footing to the row total by largest remainder |
+| **ASSIGNED** | bought BY CONNECTOR; each phone is assigned one option and the order sums across phones | one line per connector, naming the phones it covers |
+
+House catalog (the owner's own list, in generic words — a house default is right here because these
+are the names of a kind of product, read against no tenant's feed):
+
+| kind | grain | options |
+|---|---|---|
+| Case | split, colour-split | silicone · kickstand · drop proof/heavy duty · floral · diamond |
+| Screen protector | split | clear · privacy |
+| Cable | assigned | USB-C↔USB-C (standard) · USB-C↔Lightning · USB-A↔USB-C · USB-A↔Lightning |
+| Charging cube | assigned, TWO dimensions | ports: single/dual USB-A, USB-C, or one of each · wattage: 5 / 18 / 20 / 45 / 60 / 100 W |
+| Earphones | assigned | USB-C · Lightning · 3.5 mm jack — **no rate declared, so none is ordered and it says so** |
+
+- **`accessory_catalog.py` IS A DIFFERENT MODULE AND A DIFFERENT QUESTION.** That one (migs 230/231,
+  §19.55) classifies a SOLD line from an uploaded product catalog; this one is what can be BOUGHT,
+  with styles, wattages and connectors. The names are one word apart, and writing this feature
+  overwrote that module once before the name was fixed — `harness_accessory_order_grid.py` §B1 now
+  fails the build if either imports the other.
+- **The share-reading rule has ONE home here** (`normalise_shares`: percentages or fractions, decided
+  by the total, normalised with the basis said). `accessory_order_plan.resolve_case_mix` shipped with
+  its own copy and now dereferences it.
+- **An undeclared style mix is an EVEN split that SAYS it is one** (`basis='even_split'`) — a usable
+  starting sheet, never presented as a measurement. A policy default, not a tenant's vocabulary.
+- **A per-phone connector is an OVERRIDE, not a setting.** `commcalc.model_accessory_spec` (mig
+  `1108`, UNIQUE on org × model × category × dimension). Absent = the declared current standard, and
+  the line says which (`spec_basis`). Clearing one DELETES the row rather than writing the standard
+  in as though somebody had chosen it. An option the catalog does not offer is REFUSED by the route
+  and IGNORED by the reader, so a stale row cannot produce an order line nobody can buy.
+- **A ROUTER AND A SIM KIT TAKE NO CASE.** Which product classes get an accessory is a POLICY
+  declaration (`accessory_order_device_classes`, house: `phone` + `tablet`), read through §62's
+  classifier. One tenant's Aug–Oct device departments carried 498 such units, which would have bought
+  498 cases for routers and SIM cards.
+- **An absence is still never a zero.** An unruled phone's cells are `None` with a reason; a phone
+  ruled end of life orders a real 0; an un-rated kind of accessory reports `no_rate`. Three different
+  facts, kept apart.
+- **Endpoints:** `GET /commcalc/accessory-order-plan` (now returning `grid_columns`, `model_orders`,
+  `consolidated`, `catalog`, `option_mix`, `colour_tokens`), `PUT …/config` (+`catalog`,
+  `option_mix`, `device_classes`, `colour_tokens`), `PUT …/model-spec`, `POST …/lifecycle`.
+- **Locked:** `harness_accessory_order_grid.py` (32 checks) — the colour vocabulary cannot become
+  optional, no colour or brand word may be a VALUE in either home, an undeclared org gets no
+  fallback, a caller may not stop asking the declaration, the grid and the consolidated sheet must
+  foot, and an absence may not become a zero. Tests:
+  `backend/tests/unit/test_device_model_family.py` (13),
+  `backend/tests/unit/test_accessory_order_catalog.py` (23), and the cross-tenant endpoint tests in
+  `backend/tests/integration/test_accessory_order_plan_endpoint.py`.
+
 
 ## §CORE-25. A PANE THE VIEWPORT CANNOT AFFORD IS NOT A LAYOUT — one narrow-screen home (owner report 2026-10-30)
 
