@@ -38,7 +38,7 @@ import {
 import type { HeldLine } from '@/lib/pos-held-sale'
 // THE edit of a sale already rung (lib/pos-sale-amend, §POS-12) — same transaction number, every
 // superseded version kept. Owner 2026-10-29: "add more tiems to teh same rec3ipt".
-import { fetchAmendPlan, saveAmendedSale } from '@/lib/pos-sale-amend'
+import { fetchAmendPlan, previewAmendedSale, saveAmendedSale } from '@/lib/pos-sale-amend'
 import type { AmendLine, AmendPlan } from '@/lib/pos-sale-amend'
 // THE one customer sentence for unfinished setup (§19.36) — never the migration's name.
 import { SETUP_NOTICE } from '@/lib/setupNotice'
@@ -1086,10 +1086,28 @@ export default function PosSalesPage() {
     }
     setAmendSaving(true)
     try {
-      // The figures are sent for shape only — the server re-derives every one of them from the
-      // agreed prices, so nothing this screen computed can become what is stored (§POS-12).
+      // STEP ONE — THE DRY RUN (§POS-13). Ask the server what this edit comes to and what it would
+      // leave outstanding, with nothing written. The cash / credit mismatch is NOT derived here:
+      // this screen can price a cart for display, but a browser subtracting a tender from a total
+      // would be a second answer to a money question, and it would drift from the server's on the
+      // first rounding change. The preview is a dry run of the SAME call that saves, so the figure
+      // the cashier agrees to is provably the figure that lands.
+      const preview = await previewAmendedSale(amending.sale_id, cart as AmendLine[])
+      if (preview.tender?.mismatch && preview.tender_message) {
+        // The money is put in front of the cashier BEFORE the write, because they are the only
+        // person who can collect or refund it, and after the save they have no reason to look.
+        if (!confirm(`${preview.tender_message}\n\nSave the edit?`)) { setAmendSaving(false); return }
+      } else if (preview.tender && !preview.tender.measured && preview.tender.reason_label) {
+        // Not measurable is not a mismatch, and is not hidden either: the cashier is told that this
+        // edit's effect on the drawer could not be checked, in the server's own words.
+        if (!confirm(`${preview.tender_message}\n\nSave the edit anyway?`)) { setAmendSaving(false); return }
+      }
+      // STEP TWO — the save. The figures are sent for shape only; the server re-derives every one
+      // of them from the agreed prices, so nothing this screen computed can become what is stored
+      // (§POS-12).
       const saved = await saveAmendedSale(amending.sale_id, cart as AmendLine[])
-      alert(saved.message || `Saved as revision ${saved.revision}.`)
+      alert([saved.message, saved.tender?.mismatch ? saved.tender_message : '']
+        .filter(Boolean).join('\n\n') || `Saved as revision ${saved.revision}.`)
       setAmending(null)
       setCart([])
       setActiveView('salelog')
@@ -1242,6 +1260,34 @@ export default function PosSalesPage() {
                   date, so print them a fresh one afterwards.
                 </span>
                 <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px', color: 'var(--red)' }} onClick={stopEditing}>Stop editing</button>
+              </div>
+            )}
+            {/* WHAT WAS TENDERED (§POS-13). Shown for the whole edit, because the cashier is about
+                to move what the customer OWES and the money already taken will not move with it.
+                These are the server's figures, printed; the verdict is deliberately not computed
+                here — it arrives with the dry run when they press Save. When the tender was never
+                recorded the bar says SO rather than showing a zero, which would read as "it
+                balances" on the one screen where that must not be guessed. */}
+            {amending && amending.tender && (
+              <div style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)', padding: '8px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: 'var(--text2)', flex: 1, minWidth: 240 }}>
+                  {amending.tender.tendered.present ? (
+                    <>💵 <b>Tendered: ${(amending.tender.tendered.total ?? 0).toFixed(2)}</b>
+                      {amending.tender.tendered.methods.length > 0 && (
+                        <> on {amending.tender.tendered.methods.map(m => m.replace(/_/g, ' ')).join(' and ')}</>
+                      )}. Changing this sale does not change what was taken — anything left over is
+                      shown to you before it saves, and logged either way.</>
+                  ) : (
+                    <>💵 <b>No payment was recorded against this sale</b>, so the effect of this edit
+                      on the drawer cannot be checked. The edit is still logged.</>
+                  )}
+                </span>
+                {!amending.tender_log_available && (
+                  <span style={{ fontSize: 11, color: 'var(--amber, #f59e0b)' }}>
+                    Mismatch logging is not switched on (migration 1106), so an edit that leaves
+                    money outstanding will be refused rather than saved unlogged.
+                  </span>
+                )}
               </div>
             )}
             {heldBanner && (

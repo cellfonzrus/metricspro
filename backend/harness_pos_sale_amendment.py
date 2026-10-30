@@ -97,8 +97,13 @@ ok("A4. the router has the amend region", len(_amend_region) == 2)
 # and a count of "exactly three gated routes" would be meaningless.
 REGION = (_amend_region[1].split("# ── Register (cash drawer) sessions", 1)[0]
           if len(_amend_region) == 2 else "")
+# RE-VERIFIED THEN RE-PINNED, never relaxed (the §COMMCALC db-resilience lesson). Moved 12,000 →
+# 14,000 on 2026-10-30 when §POS-13 wired the tender mismatch into these same three routes. At the
+# re-pin the region was 12,736 characters — 5.5% of a 229,551-character router, still holding
+# EXACTLY the three @router decorators the locks below count, and still stopping before
+# /register/open. The bound is a tripwire for "this split stopped working", not a size budget.
 ok("A4b. the region is bounded, not the rest of the file",
-   0 < len(REGION) < 12000 and "/register/open" not in REGION, len(REGION))
+   0 < len(REGION) < 14000 and "/register/open" not in REGION, len(REGION))
 ok("A5. the router calls the one home for the refusal", "_amend.refusal(" in REGION)
 ok("A6. the router calls the one home for the plan", "_amend.plan(" in REGION)
 # No second opinion: the router must not re-derive status, age or the window default itself.
