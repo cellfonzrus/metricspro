@@ -1390,7 +1390,16 @@ _all_routes = _flatten_routes(real_app.routes)
 # number). Taken over the MERGED base, not over either side: the working-store PR (#610) landed its
 # own single route while this was in flight, so 1815 + 1 + 7 = 1823 and neither change asserts the
 # other's figure. Re-taken on a counted, named addition — never relaxed for CI.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1823"))
+# Re-pinned 1823 -> 1824 on 2026-10-30 (§COMMCALC-49.12, the accessory order grid). Verified the
+# house way: THIS file's own count run against an `origin/main` worktree printed 1823 and against
+# the branch 1824, and `git diff origin/main <branch> -- backend/ | grep -E '^[+-].*@router\.'`
+# printed exactly ONE added decorator and NONE removed:
+#     + /accessory-order-plan/model-spec     PUT   (which cable / charger / earphone ONE phone takes)
+# It reads no payout, writes no ledger and feeds no report, statement, GP, commission or tax figure —
+# it stores a purchasing preference per device model — and it is not a route of db_resilience itself
+# (I0b proves that independently of this number). Re-taken on a counted, named addition, never
+# relaxed for CI.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1824"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
