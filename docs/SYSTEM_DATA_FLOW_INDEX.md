@@ -35514,16 +35514,29 @@ plain refusal sends somebody to check an address that is perfectly correct.
 
 ### COMMCALC-50.5 Locked
 
-`backend/harness_portal_page_verdict.py` — **77 checks**, DB-free and browser-free. §A pins the
+`backend/harness_portal_page_verdict.py` — **79 checks**, DB-free and browser-free. §A pins the
 owner's actual page: it is read as a refusal, is NOT read as a throttle (which would park a healthy
 source in a needless cooldown), and the note sends the operator to the address rather than the
 markup. It fails the build if a second phrase list appears in the driver, if a caller stops
 dereferencing the one home, if a marker row's `kind` stops being honoured, if the throttle question
 starts borrowing refusal rows or the reverse, if a pre-migration tree silently borrows throttle rows
-for the new kinds, or if the error message stops leading with what the page said. Nine armed
-negative controls. It searches the driver as CODE — docstrings and comments dropped via the AST —
+for the new kinds, if the marker rows stop being read WHOLE, or if the error message stops leading
+with what the page said. Nine armed negative controls. It searches the driver as CODE — docstrings and comments dropped via the AST —
 because the driver's own docstring quotes the interstitial wording it used to hardcode, and that
 history is worth keeping written down.
+
+### COMMCALC-50.5a The marker rows are read WHOLE (§4b.1)
+
+The first cut of `load_markers` selected the marker columns by name and, on a tenant whose tree
+predates the `kind` column, caught the failure and selected a shorter list — the **column-block
+ladder** §4b.1 exists to forbid, and `harness_any_columns_lock.py` caught it. This table's columns
+arrive by hand-applied migration, so one missing column must never hide the rest: the read is
+`select("*")` and the reader takes the keys that are there. A row that predates the column simply
+arrives without the key, and the filter already reads a row with no `kind` as a throttle row — which
+is what every row this table seeded meant — so such a tenant still answers the throttle question
+from configuration while the other two kinds fall back to their seeds. That is the honest answer:
+nothing there was ever declared about them. Pinned by F12/F13: the proof's stub client *refuses* a
+select that names columns, and the home may hold exactly one select for this question.
 
 ### COMMCALC-50.6 NOT fixed here, said plainly
 
@@ -35539,6 +35552,7 @@ actually said, instead of being sent to read markup.
 Same home, other axes: §COMMCALC-10 (the live-login phases), §COMMCALC-46 (what a login page wants
 first), §COMMCALC-11 (an invisible human check is still a check — the excused sibling).
 Neighbours: §COMMCALC-47 (the live screen the screenshot comes from), the mig-244 cooldown ladder.
+Reading rule dereferenced: §4b.1 (any-subset column reads — see §COMMCALC-50.5a).
 
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
 

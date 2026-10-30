@@ -108,6 +108,11 @@ def _code_only(src):
 
 SWEEP_CODE = _code_only(SWEEP)
 
+# Just `load_markers`, as code: the reading rule of §4b.1 is about THAT read. The other loaders in
+# the home read their own relations and are not this lock's business.
+_LM = re.search(r"\ndef load_markers\(.*?(?=\n(?:def |_KIND_SEEDS))", BACKOFF, re.S)
+LOAD_MARKERS_CODE = _code_only(_LM.group(0) if _LM else "")
+
 # EXCUSED, with the reason, because it answers a genuinely different question (index §COMMCALC-11):
 # `_CAPTCHA_TEXT` asks "must a human tick a box on this form", about a form that IS on the page and
 # whose password field was found. This lock's question is whether there is a form at all. Merging the
@@ -167,12 +172,16 @@ class _Res:
 
 
 class _Tbl:
-    def __init__(self, rows, cols_ok=True):
-        self._rows, self._cols_ok = rows, cols_ok
+    # The reading rule of index §4b.1: this table's columns arrive by hand-applied migration, so the
+    # home must read the row WHOLE. A select that named columns would be a ladder waiting to happen,
+    # so this stub refuses one outright and records that the read was whole.
+    def __init__(self, rows, seen=None):
+        self._rows, self._seen = rows, seen if seen is not None else []
 
     def select(self, cols):
-        if "kind" in cols and not self._cols_ok:
-            raise RuntimeError('column portal_block_marker.kind does not exist')
+        self._seen.append(cols)
+        if str(cols).strip() != "*":
+            raise AssertionError(f"the home named columns ({cols!r}) instead of reading whole")
         return self
 
     def in_(self, *a, **k):
@@ -186,14 +195,14 @@ class _Tbl:
 
 
 class _Client:
-    def __init__(self, rows, cols_ok=True):
-        self._rows, self._cols_ok = rows, cols_ok
+    def __init__(self, rows):
+        self._rows, self.seen = rows, []
 
     def schema(self, *a):
         return self
 
     def table(self, *a):
-        return _Tbl(self._rows, self._cols_ok)
+        return _Tbl(self._rows, self.seen)
 
 
 ORG = "11111111-1111-1111-1111-111111111111"
@@ -218,8 +227,8 @@ check("F5 no kind asked ⇒ throttle, so every pre-1105 caller gets what it alwa
       pb.load_markers(cl, ORG) == pb.load_markers(cl, ORG, kind=pb.THROTTLE_KIND))
 
 OLD = [{"org_id": ORG, "processor": None, "marker": "slow down please", "enabled": True}]
-old_cl = _Client(OLD, cols_ok=False)
-check("F6 pre-mig-1105 (no kind column): the throttle question still answers from the table",
+old_cl = _Client(OLD)
+check("F6 a table whose rows predate the kind column: the throttle question still answers from it",
       pb.load_markers(old_cl, ORG, kind=pb.THROTTLE_KIND) == ["slow down please"],
       repr(pb.load_markers(old_cl, ORG, kind=pb.THROTTLE_KIND)))
 check("F7 …and refusal falls back to its SEEDS rather than borrowing throttle rows",
@@ -238,6 +247,12 @@ check("F10 a tenant's configured list REPLACES the seeds (that is the point of c
 check("F11 …and a seed phrase the tenant did not configure then does NOT match",
       pb.page_verdict("access denied",
                       refusal=pb.load_markers(cl, ORG, kind=pb.REFUSAL_KIND)) is None)
+check("F12 every read above was a WHOLE row, so one missing column can never hide the others",
+      bool(cl.seen) and set(cl.seen) == {"*"} and set(old_cl.seen) == {"*"},
+      repr(sorted(set(cl.seen) | set(old_cl.seen))))
+check("F13 …and the home issues ONE read per question, never a second narrower one (no ladder)",
+      LOAD_MARKERS_CODE.count(".select(") == 1 and '.select("*")' in LOAD_MARKERS_CODE,
+      f"{LOAD_MARKERS_CODE.count('.select(')} select(s)")
 
 # ── §G the migration says what the code believes ────────────────────────────────────────────────
 print("\n§G the migration and the code agree")

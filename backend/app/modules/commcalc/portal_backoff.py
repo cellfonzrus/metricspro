@@ -402,28 +402,26 @@ _KIND_SEEDS = {}        # filled below, once the seed tuples above are defined
 def load_markers(client, org_id, processor=None, kind=None):
     """The tenant's enabled markers OF ONE KIND. This org's rows win; otherwise the house/default
     rows; otherwise that kind's seeds. A row with a `processor` applies only to that processor.
-    Never raises — a missing table (pre-mig-244) or a missing `kind` column (pre-mig-1105) returns
-    the seeds for the kind asked for.
+    Never raises — a missing table reads as no rows, and so as the seeds for the kind asked for.
 
-    `kind` defaults to THROTTLE_KIND so every caller written before mig 1105 keeps the rows it always
-    got: a marker row with no kind IS a throttle marker, which is what every seeded row was."""
+    THE ROWS ARE READ WHOLE (index §4b.1, the ONE reading rule): this table's columns arrive by
+    hand-applied migration, so a select naming them would fail entirely on a tenant missing the
+    newest one, and a second select naming fewer is the column-block ladder that rule exists to
+    forbid. Reading whole means a row that predates the kind column simply arrives without the key,
+    and the filter below already reads a row with no kind as a throttle row — which is what every
+    row seeded with this table meant. So on such a tenant the throttle question is still answered
+    from configuration and the other two kinds fall back to their seeds, which is the honest answer:
+    nothing there was ever declared about them.
+
+    `kind` defaults to THROTTLE_KIND so every caller written before the kind column existed keeps
+    the rows it always got."""
     want = (str(kind or THROTTLE_KIND).strip().lower()) or THROTTLE_KIND
     seeds = list(_KIND_SEEDS.get(want, DEFAULT_MARKERS))
     try:
-        rows = (client.schema("commcalc").table("portal_block_marker")
-                .select("org_id,processor,marker,enabled,kind")
+        rows = (client.schema("commcalc").table("portal_block_marker").select("*")
                 .in_("org_id", [str(org_id), HOUSE_ORG]).limit(400).execute().data) or []
     except Exception:
-        try:
-            rows = (client.schema("commcalc").table("portal_block_marker")
-                    .select("org_id,processor,marker,enabled")
-                    .in_("org_id", [str(org_id), HOUSE_ORG]).limit(400).execute().data) or []
-        except Exception:
-            return seeds
-        # Pre-mig-1105 the table cannot tell the kinds apart, so only the throttle question can be
-        # answered from it; the others fall back to their seeds rather than borrowing throttle rows.
-        if want != THROTTLE_KIND:
-            return seeds
+        return seeds
     proc = (processor or "").strip().lower()
     mine, house = [], []
     for r in rows:

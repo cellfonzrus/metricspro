@@ -677,7 +677,12 @@ FACTS: dict[str, dict] = {
                     'login form that renders unexpectedly, so the words live in ONE table with a '
                     'kind column and a tenant adds a ROW, never a branch. The three kinds stay '
                     'three answers because the remedies differ \u2014 an address, a proxy, or time '
-                    '\u2014 and only a throttle sets a cooldown.',
+                    '\u2014 and only a throttle sets a cooldown. The rows are read WHOLE (the '
+                    '\u00a74b.1 reading rule): the columns arrive one hand-applied schema change at '
+                    'a time, so a '
+                    'select naming them and a shorter one behind it is the column-block ladder that '
+                    'rule forbids, and a row predating the kind column simply arrives without the '
+                    'key and reads as the throttle row it always was.',
         "homes": ('app/modules/commcalc/portal_backoff.py',),
         "index": ('COMMCALC-50',),
         "locks": ('harness_portal_page_verdict.py',),
