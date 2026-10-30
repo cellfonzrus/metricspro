@@ -18,6 +18,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Header, HTTPException, UploadFile, File, Form, Response
 from fastapi.responses import StreamingResponse
 from app.core.database import get_supabase
+from app.core import upload_format as _upload_format
 from app.core.schemas import LaxModel
 from app.core.config import settings
 from app.core import crypto
@@ -487,7 +488,12 @@ _DEFAULT_DD_DISCLAIMER = (
 _DEFAULT_WORK_AUTH_NOTICE = (
     "Your work-authorization documents (Form I-9 support documents) are still outstanding. "
     "Your payroll will be delayed until these documents are submitted.")
-_DEFAULT_UPLOAD_FORMATS = ["pdf", "jpeg"]
+# WHAT FORMAT AN UPLOADED DOCUMENT MAY BE — the ONE home, `app/core/upload_format.py` (§POS-16.3).
+# This module held the sniffer, the magic bytes, the alias map and the default list privately, which
+# made them reachable only from these three upload routes. A wholesale customer's returned W-9
+# (§POS-16) asks the same question from another module, so the fact moved out and these four names
+# are now thin dereferences — kept as names because every call site here reads them.
+_DEFAULT_UPLOAD_FORMATS = list(_upload_format.DEFAULT_FORMATS)
 _DEFAULT_ROUTING_URL = "https://www.routingnumbers.info/api/data.json?rn={routing}"
 
 
@@ -503,7 +509,8 @@ def _tenant_row(org_id):
 
 def _tenant_config(org_id):
     """Every onboarding config value this pack introduces, org-scoped (SAP-configurable rule), with a
-    hardcoded fallback ONLY when migration 401 hasn't run — never a silent divergence once it has."""
+    hardcoded fallback ONLY when migration 401 hasn't run — never a silent divergence once it has.
+    The allow-LIST's house default is the one home's (§POS-16.3); the tenant's own row still wins."""
     t = _tenant_row(org_id)
     return {
         "upload_allowed_formats": t.get("onboarding_upload_formats") or list(_DEFAULT_UPLOAD_FORMATS),
@@ -513,40 +520,14 @@ def _tenant_config(org_id):
     }
 
 
-_MAGIC = {
-    "pdf": (lambda b: b[:5] == b"%PDF-"),
-    "jpeg": (lambda b: b[:3] == b"\xff\xd8\xff"),
-    "png": (lambda b: b[:8] == b"\x89PNG\r\n\x1a\n"),
-}
-_EXT_ALIASES = {"jpg": "jpeg", "jpeg": "jpeg", "pdf": "pdf", "png": "png"}
-
-
 def _sniff_format(data: bytes):
-    """The REAL format of an uploaded file, from its magic bytes — a renamed .exe never passes as a PDF.
-    Returns a normalized format key ('pdf'|'jpeg'|'png') or None if unrecognized."""
-    head = (data or b"")[:16]
-    for fmt, test in _MAGIC.items():
-        try:
-            if test(head):
-                return fmt
-        except Exception:
-            continue
-    return None
+    """The REAL format of an uploaded file, from its magic bytes (§POS-16.3's one sniffer)."""
+    return _upload_format.sniff(data)
 
 
 def _format_allowed(data: bytes, filename: str, allowed):
-    """(ok, detected_format) — ok iff the MAGIC BYTES sniff to a format in the tenant's allow-list.
-    The extension is used ONLY to label an unrecognized file in the error message — it can never grant
-    access on its own. This is deliberate: a renamed .exe (or anything whose header doesn't match a
-    known signature) must be rejected even when its filename says ".pdf" — an extension-only check is
-    exactly the hole "not just extension" (item 2) closes. A .txt renamed to .pdf, a zip bomb, a script
-    — none of these have a PDF/JPEG/PNG magic header, so none of them pass regardless of filename."""
-    allow = {_EXT_ALIASES.get(a.strip().lower(), a.strip().lower()) for a in (allowed or _DEFAULT_UPLOAD_FORMATS)}
-    sniffed = _sniff_format(data)
-    if not sniffed:
-        ext = (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
-        return False, (_EXT_ALIASES.get(ext, ext) or None)   # unrecognized header — reject regardless of name
-    return sniffed in allow, sniffed
+    """(ok, detected_format) through the one home. The extension can never grant access."""
+    return _upload_format.allowed(data, filename, allowed)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1482,10 +1463,7 @@ async def _do_onboard_upload(org_id, employee_id, task_id, file, who, uploaded_r
     # token) was called.
     ok_fmt, detected_fmt, allowed_fmts = _check_upload_format(org_id, data, safe)
     if not ok_fmt:
-        allowed_label = "/".join(a.upper() for a in allowed_fmts)
-        raise HTTPException(400, f"Only {allowed_label} files are accepted here"
-                                  + (f" — this looks like a {detected_fmt.upper()} file" if detected_fmt else
-                                     " — this file's format could not be recognized") + f". Please upload a {allowed_label} file.")
+        raise HTTPException(400, _upload_format.refusal_sentence(allowed_fmts, detected_fmt))
     path = f"{org_id}/{employee_id}/{uuid.uuid4().hex}_{safe}"
     c = _ensure_onboard_bucket()
     try:

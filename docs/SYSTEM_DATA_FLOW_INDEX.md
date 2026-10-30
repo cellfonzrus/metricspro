@@ -89,6 +89,8 @@ Primary code homes:
 | POS-12 | **Editing a sale that is already rung** | "I am not able to edit the receipt or add more items to the same receipt." How does a cashier put another item on a receipt that is already printed, and what happens to the version the customer is holding? |
 | POS-14 | **Which store is this sale for, and what rate does the till charge** | "Since we have multiple stores under 1 tenant, the user if assigned to multiple stores should confirm which store they are working in so the receipt and the sale are logged for that store; the settings should give a list of stores to assign their respective sales tax on a store level or a market level." Who decides which store a sale belongs to, and why did a rate set on a MARKET never reach the till? |
 | POS-13 | **What a receipt document looks like** | "The receipt is not formatted properly and no clear border lines to make it look professional." Why does the emailed receipt carry no borders at all, and why are its phrases broken apart mid-word? |
+| POS-15 | **A sale the customer pays later** | "Also add another tender type as Terms — 15/30/60." What may a till be paid with, who decides, and what does a receipt say about a sale nobody has paid yet? |
+| POS-16 | **A wholesale customer, and the W-9 that makes their sales tax-free** | "A customer type as wholesale where the option to not charge tax will be by default if the user confirms they received the filled out w9 … block the user to make a sale before the system has an updated w9, only the admin can go past … and a return link for the customer to send the w9 back." |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -7982,6 +7984,11 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"Which store is this sale for, and is that CONFIRMED?"** (the register, the activations screen, the inventory screen, special orders, and `POST /pos/sales/checkout` + `POST /pos/activations` which take the money; owner 2026-10-30) | the caller's reporting span (`storeops.scope_keyset`) over the ACTIVE `storeops.stores` roster, with `storeops.app_users.store_code` as a pre-selection HINT and never an answer | **ONE home** `backend/app/modules/pos/working_store.py` — `span` / `resolve` / `sale_refusal`, returning the store AND its `basis` (`confirmed` \| `sole_store` \| `unconfirmed`, which carries no store code at all). Was NO home: four screens spelled `getActiveStore() \|\| user.store_code \|\| stores[0].store_code`, so a guess read as an answer, the saved pick carried no user (the next cashier inherited the last one's store), and checkout compared the sale's store to nothing — any store in the tenant, or NULL, which `_span_filter` then shows to every store-scoped manager. Client half `frontend/src/lib/pos-working-store.ts` (same two sentences, same three bases, keyed per login); `lib/pos-store.ts` DELETED. Proof `harness_pos_working_store.py` (67 checks; §G fails the build on a positional fallback returning to any POS page, §F on the two halves wording one refusal differently) — §POS-14 |
 | **"What sales-tax rate applies at this store?"** (the till, the POS Settings grid, the market dropdown, the bulk save; mig 741, re-homed 2026-10-30) | `pos.tax_codes`, whose scope is store `>` market `>` org-wide | **ONE home** `backend/app/modules/pos/tax_precedence.py` — `pick` / `resolve`, carrying the rung that won (`store` \| `market` \| `org` \| `none`) and the percent-to-fraction conversion a sale line stores. `router._resolve_tax` now DEREFERENCES it and the register ASKS for it through `GET /pos/tax-codes/resolve`. There were TWO rules: the server's three rungs, and the register's own two (store, then org-wide), so a rate declared on a MARKET showed as this store's `effective_rate` in the grid and was charged by nobody — the customer paid the org-wide rate, or $0 where none was declared. `none` stays explicit; a taxable sale that charged nothing is not recoverable once the customer has left. Proof §D (10 checks; H5 reproduces the two-rung answer) — §POS-14 |
 | **"How is a payment method written for a customer?"** (both receipt layouts) | `pos.sale_payments.payment_method`, a machine value | **ONE home** `sale_receipt.method_label`. The slip printed `Paid (credit_card)` and the POS layout `.title()`'d it to **Credit_Card** on a customer's receipt — two dressings of one fact, both wrong. No method vocabulary is declared (RULE TWO): whatever the tenant stores is made readable, never translated against a list. Proof §F — §POS-13 |
+| **"What may a till be paid with?"** (the register's buttons, the checkout's gate, the database's CHECK list; owner 2026-10-30) | it was written FOUR times — two literal button arrays in `pos/sales/page.tsx`, the condition that chose between them, and `CHECK (payment_method IN …)` on `pos.sale_payments` (mig 725) | **ONE home** `pos/tender_vocabulary.py` — `REGISTER_TENDERS` (what each tender IS), `offered(cfg)` (what THIS org offers, over `pos.pos_settings`), `terms_day_options(cfg)`. The class each tender reconciles as is the house ladder's answer (`closing.router.tender_class` over its `recon_words`), never a mapping here — so a terms sale files under the existing `store_acct` and no class was invented. The browser reads it through `GET /pos/tender-types` and `lib/pos-tenders.ts`; mig `1106`'s CHECK list is pinned equal to the keys. Proof `harness_pos_tender_vocabulary.py` §A/§B/§C/§E; lock `harness_tender_vocab_lock.py` §(g) — §POS-15 |
+| **"Has this sale been paid, and what does it owe?"** (the checkout's balance, the till slip, the tenant's own POS layout) | nothing — every tender settled at the till, so `Paid (…)` was the only money line and `balance` was always written 0 | **ONE home** `tender_vocabulary.plan_payment` + its `settles_now`, dereferenced by `pos/router.checkout` (which re-derives `pos.sales.balance` as the sum of the legs that did NOT settle — the body's figure is discarded, because mig 725's `pos.checkout` stores what it is handed) and by `sale_receipt._unpaid`, which both receipt layouts ask instead of testing for a tender word. A terms row without its day count or due date is refused by the database as well (mig `1106` shape constraint). Proof §D/§G — §POS-15 |
+| **"May I sell to this customer, and is this sale taxable?"** (the register's panel, the checkout's gate; owner 2026-10-30) | `pos.customers.account_type` + `pos.customer_tax_doc` (mig `1107`) + the four `pos.pos_settings` rows | **ONE home** `pos/wholesale_w9.may_sell` — ONE call answers both, so no state exists where a sale is tax-free and the certificate is not current (the expensive failure). `taxable_rate` / `lib/pos-w9.taxRateFor` is the one place an exemption meets a rate; `pos.sales.tax_exempt_basis` records WHY a sale charged no tax (it cannot be re-derived — the certificate may be filed the next day) and `w9_override_by` names the admin who allowed a TAXABLE sale past a missing one. Only a PERSON can confirm receipt: a customer's own upload lands `submitted`. Proof `harness_pos_wholesale_w9.py` §A/§C/§D — §POS-16 |
+| **"What customer types exist?"** (the CHECK constraint, the customer form, the importer) | it was written THREE times — `pos.customers.account_type` CHECK (mig 725), the form's own array and the importer's `oneOf` | **ONE home** `pos/wholesale_w9.ACCOUNT_TYPES`, served by `GET /pos/customer-account-types`; mig `1107`'s CHECK and the importer's values are pinned equal to it (§E1/§E2), so a fourth spelling fails the build — §POS-16 |
+| **"What format may an uploaded document be?"** (a customer's returned W-9, HR's three onboarding uploads) | `hr/router._MAGIC` / `_sniff_format` / `_format_allowed`, **private to one router** | **ONE home** `app/core/upload_format.py` — `MAGIC` / `sniff` / `allowed` / `normalise` / `DEFAULT_FORMATS` / `refusal_sentence`. A file IS what its bytes say; the extension is read only to word the refusal, so a renamed `.exe` cannot pass on either path. HR's copies are DELETED and its four names are thin dereferences. Proof §H — §POS-16.3 |
 | **"What is this POS setting's effective value at this store"** (server side; owner 2026-10-17) | `pos.pos_settings` (org row `store_code IS NULL`, else the store override) | **ONE home** `backend/app/modules/pos/pos_config_effective.py` (`effective`, `values`, `flag`, `text`, `brand`, `disclaimers`, `SERVER_DEFAULTS`). The resolution rule lived ONLY in the browser (`frontend/src/lib/pos-config.ts`) until the server had to render a receipt; the two copies are PINNED key-by-key by `harness_pos_receipt_render.py` §B, which fails the build naming any default changed on one side only — §POS-02 |
 | **"What a human PICKS this company by"** (the post-login company chooser, the Settings switcher, the operator helpdesk's tenant column; owner report 2026-10-30) | `storeops.tenants.name` + `.slug` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`picker_label_from`, `picker_labels`, `LabelMap`, `looks_like_uuid`, `GENERIC_LABEL`) and `mobile/src/lib/company-label.ts` (`companyLabel`, `looksLikeOrgId`, `GENERIC_COMPANY_LABEL`) — the app keeps the promise itself because a phone can run a bundle older than the server. DISTINCT from "what is this tenant called" below: a receipt's From name may be blank, a picker's label may not. Was THREE derivations — `core/router._my_tenants_payload` (`or "Tenant"`), the web picker, and the app's `tenantName` (`… || org_id`, the one that printed the defect). Siblings rewired in the same PR: `helpdesk/router._tenant_names` and its seven `or "Tenant"` callers. Lock `harness_company_label_lock.py` runs BOTH halves and compares them row for row — §CORE-26 |
 | **"What is this tenant called"** (the From name on its mail, a statement heading, a document title; owner 2026-10-17) | `storeops.tenants.name` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`NAME_COLUMN`, `display_name_from`, `display_name`, `display_names`) — a blank name reads as blank, never a fabricated stand-in printed as the business's own name. `notify/channels/email_resend.from_header` is the ONE place a `From:` header is assembled, and every business-facing send site passes its `org_id` so the customer sees the tenant; only genuine platform mail (the sign-in OTP) keeps the platform name. Siblings rewired in the same PR: `commcalc/router` ×2, `core/data_qa_api`, `core/operator_api`, `helpdesk/router`, `storeops/payroll_approval` ×2, `storeops/router._tenant_display_name`. Lock `harness_pos_receipt_render.py` §E6 fails the build if a second name-only reader appears — §POS-02 |
@@ -26186,6 +26193,8 @@ status word rather than a blank that reads as nil.
 | POS-12 | pos |
 | POS-13 | pos |
 | POS-14 | pos |
+| POS-15 | pos |
+| POS-16 | pos |
 | PAYABLES-01 | payables |
 | CORE-25 | core |
 | CORE-26 | core |
@@ -33299,6 +33308,254 @@ IS on the receipt that is now logged to the right store), §19 (`core.scope`, wh
 an answer), §CORE-13 (one fact, one home, dereferenced).
 
 ---
+
+
+## §POS-15. A SALE ON TERMS — THE REGISTER'S TENDER VOCABULARY HAS ONE HOME (owner ask 2026-10-30)
+
+Owner, verbatim: *"also add another tender type as Terms . 15/30/60"*.
+
+### POS-15.1 Duplicate check (the build gate)
+
+| question | existing mechanism | what this change did |
+|---|---|---|
+| which canonical tender classes exist, and what does each fold to on the closing axis | `closing.router.TENDER_VOCAB` / `tender_class`, locked by `harness_tender_vocab_lock.py` (§30.13) | **REUSED WHOLE.** The register's vocabulary spells no class: each tender carries the WORDS a feed would print for it and the house ladder answers. A terms sale therefore reconciles as the existing `store_acct` class — no new class, no new fold |
+| what are a carrier's / distributor's net payment terms | `commcalc.payable_source_map.net_terms_days` + `payables/engine._terms_days` (§COMMCALC-34) | **NOT TOUCHED — a different question.** That is what WE owe a supplier. This is what a CUSTOMER owes us. The two share a word and nothing else; merging them would make one screen's edit move the other's money |
+| how a payment method is written for a customer | `sale_receipt.method_label` (§POS-13) | **REUSED WHOLE** — `Terms` reads correctly through it, so no label was added |
+| which POS setting applies at this store | `pos_config_effective.effective` (§POS-02) | **REUSED WHOLE** — the two new settings are ordinary keys, resolved store-override → org → declared |
+| what a sale line comes to, and what the sale totals | `sale_amendment.line_money` / `totals` (§POS-12), `pos.checkout` (mig 725) | **NOT TOUCHED.** No figure on any line changes; the only new arithmetic is the BALANCE, which is the sum of the legs that did not settle |
+
+### POS-15.2 THE CLASS, not the instance
+
+Not "there is no Terms button". **The register's tender list had no home**, so the same fact was
+written in four places and nothing checked that they agreed:
+
+- a literal array of buttons in `frontend/src/app/(platform)/pos/sales/page.tsx`, in two copies —
+  one for a tenant with integrated card processing and one for a tenant without;
+- the rule for swapping those two copies, a condition beside them in the same screen;
+- `CHECK (payment_method IN (...))` on `pos.sale_payments` (mig 725);
+- and, downstream, the house tender vocabulary the closing recon classes a FEED's label through.
+
+So adding one tender type meant a screen, a condition and a constraint, in three languages, with the
+build silently green if any of them was missed. The register's buttons and the database's constraint
+are both answers to *"what may a till be paid with"* — one question, so one home.
+
+### POS-15.3 One home, dereferenced
+
+`backend/app/modules/pos/tender_vocabulary.py` is the ONE home for four facts:
+
+| fact | where it lives now | who dereferences it |
+|---|---|---|
+| which tenders the platform knows, and for each: does it settle at the till, does it ask for an amount tendered, is it an integrated-card button | `REGISTER_TENDERS` / `all_tenders()` | `GET /pos/tender-types`, the checkout, both receipt layouts, and mig 1106's CHECK list (pinned equal, §E1) |
+| which class a tender reconciles as | `recon_words` handed to `closing.router.tender_class` — **asked, never mapped** | the closing recon, unchanged |
+| which of them THIS org offers, and on what day counts | `offered(cfg)` / `terms_day_options(cfg)` over `pos.pos_settings` (`tender_terms_enabled`, `tender_terms_day_options`) | the endpoint the register reads; the checkout asks again |
+| what a Terms sale needs before it may be rung, and what it owes | `plan_payment` — one set of refusals, each a sentence written once | the checkout (the gate) and `lib/pos-tenders.ts` (the courtesy) |
+
+The browser carries no tender word at all: `frontend/src/lib/pos-tenders.ts` reads the served list,
+keeps a selection valid when it changes, and holds the Terms blockers the cashier sees before the
+endpoint is called. Its pre-answer fallback is **cash alone** — a guessed list would be a fourth copy.
+
+### POS-15.4 A terms sale is money OWED, not money taken
+
+`settles_now` is False for exactly one tender, and everything else follows from it rather than from a
+test for the word "terms":
+
+- `pos.sales.balance` is the sum of the legs that did not settle — **the server's arithmetic**. A till
+  that sends `balance: 0` on an unpaid invoice is overruled, not obeyed (mig 725's function stores
+  what it is handed, so this had to be re-derived server-side).
+- the due date is the SALE's date + the declared day count, never today's — so a late entry or an
+  edit cannot move a date the customer was told.
+- **no receipt calls it paid.** `slip_model` and the tenant's own POS layout both printed one money
+  line (`Paid (Credit Card)`); on a sale on account that would read **Paid (Terms) $108.88** on an
+  invoice nobody has paid. Both now ask `settles_now` through `sale_receipt._unpaid` and print
+  `Balance due <date>` instead. That is the §POS-13 lesson (two layouts, one fact) applied before it
+  could become a second defect.
+- a terms leg without its day count, or an immediate tender carrying one, is refused by a database
+  constraint as well as by the one home — the row cannot exist in a shape no reader can explain.
+
+### POS-15.5 Every tenant, measured
+
+The Terms tender is **on for every org by default** with the owner's three day counts, because the
+vocabulary is the PLATFORM's and only what an org OFFERS is declared (RULE TWO: `tender_terms_enabled`
+and `tender_terms_day_options` are rows, and no tenant is named in any file this change touches). The
+cross-tenant tests seed three orgs — one that declared nothing, one with its own day counts (7 / 45)
+and one that switched the tender off — and assert each gets ITS answer and never another's; the
+negative assertion (one tenant's declaration must not reach another's register) is what pins the
+mechanism rather than the symptom.
+
+### POS-15.6 The tender is not offered before its storage exists
+
+`pos.sale_payments` carries `CHECK (payment_method IN …)` from mig 725, and until **1106** widens
+it the database REFUSES a terms leg. Both hosts auto-deploy from `main`, so shipping the code
+before the migration would have put a Terms key on every live register that fails at the till —
+the cashier's sale lost, with a constraint error for an explanation. This was caught on the way to
+merge, not by a report from a store.
+
+So `GET /pos/tender-types` asks `router._terms_schema_ready` (a probe for the column 1106 adds;
+**any** failure reads as *not applied*, never as ready) and turns the tender off for that request,
+answering `terms_available: false` with a setup note. The org's own declaration is untouched — this
+is the SCHEMA not being ready, a platform fact, not a change to what the tenant asked for — so when
+1106 lands the tender appears with no further configuration. The money path asks the same question,
+because a screen loaded before the migration can still SEND a terms leg, and that refusal is the
+vocabulary's own sentence rather than a 500 from the constraint. A missing migration never shuts
+the till: cash is still offered.
+
+The §19.36 boundary neutralises the migration name on its way to a tenant, so the till is told the
+feature is not ready and the platform super admin alone is told which step is outstanding. Proof:
+`harness_pos_tender_vocabulary.py` §I, plus two integration regressions.
+
+This is the §POS-01 adaptive-migration pattern, which the wholesale W-9 endpoints (§POS-16) already
+followed; the tender half did not, and that inconsistency was the defect.
+
+### POS-15.7 What is NOT in this change
+
+- **No report.** An "open balances / due this week" report needs the standard filter and send bar
+  every report here carries, and that toolbar default is itself in flight (PR #606). The data is
+  complete the moment this lands — `pos.sale_payments.due_date` with its partial index — so the
+  report is a follow-up, named here so nobody re-derives the balance beside it.
+- **No payment-taking.** Recording a customer's later payment against an open balance is the next
+  piece of work, and it belongs with whichever home owns a customer's account, not here.
+
+### POS-15.8 Registered
+
+| thing | where |
+|---|---|
+| one home | `backend/app/modules/pos/tender_vocabulary.py` |
+| browser reader | `frontend/src/lib/pos-tenders.ts` |
+| endpoint | `GET /pos/tender-types` (`pos/router.tender_types`, `_tender_cfg`) |
+| migration | `1106_pos_terms_tender.sql` — `terms_days` / `due_date` / the widened CHECK / the shape constraint / `pos.checkout` replaced |
+| settings | `tender_terms_enabled`, `tender_terms_day_options` (`pos.pos_settings`, per org or per store) |
+| proof | `backend/harness_pos_tender_vocabulary.py` (§A–§H + negative controls) |
+| lock | `harness_tender_vocab_lock.py` §(g) — the register's list is in its scan now, and a class mapped there instead of asked fails the build |
+| tests | `backend/tests/unit/test_pos_tender_vocabulary.py`, `test_pos_terms_receipt.py`, `backend/tests/integration/test_pos_terms_tender_endpoint.py`, `frontend/src/lib/pos-tenders.test.ts` |
+
+| MONEY IMPACT | **NONE on anything stored.** No existing row is backfilled or restated: every payment keeps a NULL day count and NULL due date, which reads correctly as "not a terms sale". What is new is that a sale may now record a BALANCE at the till, which no sale could before |
+
+Same class: §POS-13 (two layouts, one fact — applied here before it bit), §30.13 (the house tender
+vocabulary this dereferences), §POS-02 (the setting-resolution home), §COMMCALC-34 (the supplier-side
+net terms this deliberately does not merge with).
+
+---
+
+## §POS-16. THE WHOLESALE CUSTOMER AND THE W-9 THAT MAKES A SALE TAX-FREE (owner ask 2026-10-30)
+
+Owner, verbatim: *"add another tender type as Terms … and a customer type as wholesale where the
+option to not charge tax will be by default if the user confirms they received the filled out w9 and
+block the user to make a sale before the system has an updated w9, only the admin can go past
+without an updated w9, give the downloadable link to the user in case of a wholesale customer so
+they done have to look for it and the option to email to the customer and a return link for the
+customer to send the w9 back to the user."*
+
+### POS-16.1 Duplicate check (the build gate)
+
+| question | existing mechanism | what this change did |
+|---|---|---|
+| what customer types exist | `pos.customers.account_type` CHECK (mig 725) **and** the customer form's own `['Personal','Business']` **and** the importer's `oneOf` — three copies | **FACTORED into one home.** `wholesale_w9.ACCOUNT_TYPES`; the CHECK list and the importer's values are pinned equal to it (§E1/§E2) and the form reads it from `GET /pos/customer-account-types` |
+| what tax rate applies at this store | `pos/router._resolve_tax` (store > market > org, §30) | **REUSED WHOLE.** The exemption does not resolve a rate — it zeroes the one that resolver already answered, in `wholesale_w9.taxable_rate` / `lib/pos-w9.taxRateFor` |
+| what format may an uploaded document be | `hr/router._sniff_format` / `_format_allowed` / `_MAGIC`, **private to HR** | **MOVED to `app/core/upload_format.py`** and HR rewired to it (§POS-16.3). A customer's returned W-9 is the same question from another module; a second sniffer there is how one path accepts a renamed executable while the other refuses it |
+| a token-gated page a person outside the company uses to send a document in | the HR onboarding public portal (`/hr/public/onboarding/{token}`, allowlisted in `tenant_middleware`) | **THE PATTERN REUSED, NOT THE ROUTES** — same posture (the token IS the auth, boundary-matched prefix, uniform 404, magic-byte check). Not shared code: that portal authenticates an EMPLOYEE against their own record with a DOB gate, and a customer has no record to gate against |
+| how an email reaches a customer | `notify/channels/email_resend.send_email` + the receipt-email path (§POS-02) | **REUSED WHOLE** |
+| which POS setting applies at this store | `pos_config_effective.effective` (§POS-02) | **REUSED WHOLE** — the four new settings are ordinary keys |
+| is this sale allowed to complete | `pos/router.getCheckoutBlockers` / the checkout's gates (`require_customer`, drawer sessions, §POS-01) | **EXTENDED** — one more blocker, from the one home, worded once |
+
+### POS-16.2 THE CLASS, not the instance
+
+Tax-free is **not a property of a customer type.** It is a property of a customer type *with a
+current exemption certificate on file*. The lazy build — zero the tax when the account type says
+Wholesale, and keep the W-9 chase separately — produces exactly one failure, and it is the expensive
+one: a sale goes out tax-free against a certificate nobody holds, and the house carries the
+liability. So:
+
+- `wholesale_w9.may_sell` answers **both** questions in one call: may this sale be rung, and is it
+  taxable. There is no state in which a sale is exempt and the certificate is not current (§A4).
+- a tax-free sale **states its basis** on the sale row (`pos.sales.tax_exempt_basis`). A zero tax
+  figure with no stated reason is what an auditor asks about, and it cannot be re-derived later —
+  the certificate may be filed the next day.
+- the **override is not the exemption.** An admin going past a missing W-9 permits a **taxable**
+  sale and is named on it (`pos.sales.w9_override_by`). The block protects the sale from stalling;
+  the exemption protects the house from an unsupported tax position. Conflating them would let the
+  override become the thing that makes a sale tax-free, which is the opposite of the owner's ask.
+- only a **person** can confirm receipt. A customer's own upload lands as `submitted`, not
+  `received`, because the owner's wording is that the exemption follows *the user confirming they
+  received the filled out W-9* — and an anonymous caller holding a link cannot be that user.
+
+### POS-16.3 One home, dereferenced
+
+| fact | home | who dereferences it |
+|---|---|---|
+| which customer types exist | `pos/wholesale_w9.ACCOUNT_TYPES` | mig `1107`'s CHECK (pinned), the importer's `oneOf` (pinned), the customer form via `GET /pos/customer-account-types` |
+| is this customer wholesale | `wholesale_w9.is_wholesale` | the decision, the confirm route — no caller spells the word |
+| is this certificate current | `wholesale_w9.w9_state` — the certificate's OWN expiry wins; else the org's declared refresh period (`w9_valid_months`, 36 by house default, `0` = never) | `may_sell` only |
+| may this sale be rung, and is it taxable | `wholesale_w9.may_sell` | `GET /pos/customers/{id}/w9`, `POST /pos/sales/checkout`, and the register's panel (which shows the decision's own sentence) |
+| the exemption meeting a tax rate | `wholesale_w9.taxable_rate` (server) · `lib/pos-w9.taxRateFor` (the browser, where the cart is priced) | the cart's re-tax effect and every line added |
+| where the blank form is | `wholesale_w9.blank_form_url` — the org's declaration, the IRS's published PDF behind it, **https only** | the register's download link, the request email, the customer's page |
+| the return link, its words and its death | `wholesale_w9.new_token` / `token_expiry` / `token_live` / `return_link` / `request_subject` / `request_html` / `LINK_DEAD` | the request route, the two public routes, the page's route |
+| what format an uploaded document may be | **`app/core/upload_format.py`** — `MAGIC`, `sniff`, `allowed`, `normalise`, `DEFAULT_FORMATS`, `refusal_sentence` | the W-9 upload AND HR's three onboarding uploads (rewired; the private copies are gone, §H2) |
+
+### POS-16.4 The flow, end to end
+
+1. A cashier attaches a wholesale customer. The register asks the one home and draws the panel: the
+   W-9 state, a **⬇ Blank W-9** link, **✉ Email the W-9 to the customer**, and **✓ I have the signed
+   W-9**.
+2. Emailing mints a one-use token, stores it on `pos.customer_tax_doc` with its expiry, and sends
+   the customer the blank form plus their return link. The screen that asked is told the address and
+   the link — never handed the raw token to display or log.
+3. The customer opens `/w9/{token}`, downloads the form, signs it, uploads it. It is format-checked
+   by magic bytes, stored in a private bucket, recorded as `submitted`, and **the token is cleared**.
+4. Somebody at the company confirms the signed form is in hand. That — and only that — sets
+   `received`, and from then the customer's sales are tax-free until the certificate goes out of date.
+5. Until then the sale is **blocked** with the one home's sentence, or an admin ticks the override
+   and the sale goes through **taxable**, naming them.
+
+### POS-16.5 Every tenant, measured
+
+Wholesale is tax-free once a W-9 is on file, and a missing W-9 blocks, **for every org by default**;
+how long a certificate stays current, whether to block at all, whether wholesale is exempt and where
+the blank form lives are `pos.pos_settings` rows (per org or per store). No tenant, carrier or
+product is named in any file this change touches (RULE TWO). The integration tests seed three orgs —
+one on the house policy, one refreshing every 12 months, one that does not block — and assert each
+gets its own answer, including the negative that pins the mechanism: **the same customer id with a
+certificate filed under one org leaves another org's till blocked.**
+
+### POS-16.6 The security posture of the customer's link
+
+The return link is the only anonymous surface this adds, and it is a **credential**:
+
+- **minted** by the application from `secrets.token_urlsafe(32)` — never derived from a customer id,
+  a name or a timestamp;
+- **narrow** — it reaches one customer's upload slot and nothing else. The page it serves names the
+  asking company and carries nothing from the customer's record, because a link in an inbox gets
+  forwarded and anything on that page travels with it;
+- **expiring** (14 days) and **single-use** — cleared the moment a document arrives;
+- **not an oracle** — unknown, expired and already-used answer the *same* 404 with the *same* body,
+  so a probe cannot tell them apart (the posture `/notify/dl` and `/referral/redeem` already take);
+- **not a write of record** — an upload can only ever set `submitted`. It cannot confirm receipt,
+  cannot grant an exemption, cannot touch a sale;
+- **format-checked by bytes**, through the one sniffer, before anything is stored;
+- allowlisted in `tenant_middleware._PUBLIC_PREFIXES` by its own boundary-matched prefix
+  (`/api/v1/pos/public/w9`); every other `/pos/*` route keeps full auth (§G11 asserts both).
+
+### POS-16.7 Registered
+
+| thing | where |
+|---|---|
+| one homes | `backend/app/modules/pos/wholesale_w9.py`, `backend/app/core/upload_format.py` |
+| browser reader | `frontend/src/lib/pos-w9.ts` |
+| endpoints | `GET /pos/customers/{id}/w9` · `POST /pos/customers/{id}/w9/confirm` · `POST /pos/customers/{id}/w9/request` · `GET /pos/customer-account-types` · **public:** `GET /pos/public/w9/{token}` · `POST /pos/public/w9/{token}/upload` |
+| page | `frontend/src/app/w9/[token]/page.tsx` (outside the `(platform)` RBAC group, like `/onboard`) |
+| migration | `1107_pos_wholesale_w9.sql` — the `Wholesale` type, `pos.customer_tax_doc`, `pos.sales.tax_exempt_basis` / `w9_override_by`, `pos.checkout` replaced |
+| settings | `wholesale_tax_exempt_default`, `w9_block_sale`, `w9_valid_months`, `w9_blank_form_url` |
+| storage | private bucket `customer-tax-docs`, path `{org}/{customer}/{uuid}_{name}` |
+| proof | `backend/harness_pos_wholesale_w9.py` (§A–§J + negative controls) |
+| tests | `backend/tests/unit/test_wholesale_w9.py`, `test_upload_format.py`, `backend/tests/integration/test_pos_wholesale_w9_endpoint.py`, `frontend/src/lib/pos-w9.test.ts` |
+
+| MONEY IMPACT | **NONE on anything stored.** No customer's type changes, no stored tax figure is touched, every existing sale keeps a NULL basis (correctly: it was taxable). What is new is that a future sale may charge no tax — only against a confirmed certificate, and only while it is current |
+
+Same class: §POS-15 (the tender this shipped beside), §POS-13 (two layouts, one fact), §30.16 (the
+customer master this reads), and the HR onboarding portal (§14 family) whose public-token posture
+this follows without sharing its routes.
+
+---
+
 
 ## §COMMCALC-20. A HANDSET THAT BOOKS A REBATE BOOKS A COST (owner report 2026-10-19)
 
