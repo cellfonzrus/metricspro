@@ -233,6 +233,20 @@ check("G12 the renderer asks `settles_now` rather than testing for a tender word
       "settles_now" in body_of(read("backend/app/modules/pos/sale_receipt.py"), "_unpaid")
       and not re.search(r"['\"]terms['\"]", body_of(read("backend/app/modules/pos/sale_receipt.py"), "_unpaid")))
 
+print("\n§I  THE TENDER IS NOT OFFERED BEFORE ITS STORAGE EXISTS (mig 1106)")
+_types = body_of(ROUTER_SRC, "tender_types")
+check("I1 the endpoint asks whether the database can store a terms sale at all",
+      "_terms_schema_ready(" in _types)
+check("I2 ...and turns the tender OFF rather than leaving a button that fails at the till",
+      "TERMS_ENABLED_KEY: False" in _types and '"terms_available"' in _types)
+check("I3 the probe reads a failure as NOT READY, never as ready",
+      "return False" in body_of(ROUTER_SRC, "_terms_schema_ready")
+      and "except Exception" in body_of(ROUTER_SRC, "_terms_schema_ready"))
+check("I4 the money path refuses a stale screen's terms leg too, not just the list",
+      "_terms_schema_ready(" in body_of(ROUTER_SRC, "checkout"))
+check("I5 the org's own declaration is not rewritten — only this request's view of it",
+      "cfg = {**cfg," in _types)
+
 print("\n§H  REGISTERED")
 IDX = read(INDEX)
 check("H1 the section is in the index", "§POS-15" in IDX or "POS-15" in IDX)

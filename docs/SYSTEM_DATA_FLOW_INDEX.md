@@ -33382,7 +33382,31 @@ and one that switched the tender off — and assert each gets ITS answer and nev
 negative assertion (one tenant's declaration must not reach another's register) is what pins the
 mechanism rather than the symptom.
 
-### POS-15.6 What is NOT in this change
+### POS-15.6 The tender is not offered before its storage exists
+
+`pos.sale_payments` carries `CHECK (payment_method IN …)` from mig 725, and until **1106** widens
+it the database REFUSES a terms leg. Both hosts auto-deploy from `main`, so shipping the code
+before the migration would have put a Terms key on every live register that fails at the till —
+the cashier's sale lost, with a constraint error for an explanation. This was caught on the way to
+merge, not by a report from a store.
+
+So `GET /pos/tender-types` asks `router._terms_schema_ready` (a probe for the column 1106 adds;
+**any** failure reads as *not applied*, never as ready) and turns the tender off for that request,
+answering `terms_available: false` with a setup note. The org's own declaration is untouched — this
+is the SCHEMA not being ready, a platform fact, not a change to what the tenant asked for — so when
+1106 lands the tender appears with no further configuration. The money path asks the same question,
+because a screen loaded before the migration can still SEND a terms leg, and that refusal is the
+vocabulary's own sentence rather than a 500 from the constraint. A missing migration never shuts
+the till: cash is still offered.
+
+The §19.36 boundary neutralises the migration name on its way to a tenant, so the till is told the
+feature is not ready and the platform super admin alone is told which step is outstanding. Proof:
+`harness_pos_tender_vocabulary.py` §I, plus two integration regressions.
+
+This is the §POS-01 adaptive-migration pattern, which the wholesale W-9 endpoints (§POS-16) already
+followed; the tender half did not, and that inconsistency was the defect.
+
+### POS-15.7 What is NOT in this change
 
 - **No report.** An "open balances / due this week" report needs the standard filter and send bar
   every report here carries, and that toolbar default is itself in flight (PR #606). The data is
@@ -33391,7 +33415,7 @@ mechanism rather than the symptom.
 - **No payment-taking.** Recording a customer's later payment against an open balance is the next
   piece of work, and it belongs with whichever home owns a customer's account, not here.
 
-### POS-15.7 Registered
+### POS-15.8 Registered
 
 | thing | where |
 |---|---|

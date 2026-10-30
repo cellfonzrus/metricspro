@@ -2111,12 +2111,40 @@ def _tender_cfg(client, org_id: str, store_code: str = "") -> dict:
             for k in (_tender.SUSPEND_CARDS_KEY, _tender.TERMS_ENABLED_KEY, _tender.TERMS_DAYS_KEY)}
 
 
+TERMS_MIGRATION = ("apply migration 1106 (database/migrations/1106_pos_terms_tender.sql) — until it "
+                   "is applied the database will not accept a sale paid on account")
+
+
+def _terms_schema_ready(client) -> bool:
+    """Is the database ready to STORE a terms sale (§POS-15, mig 1106)?
+
+    This is not belt-and-braces. `pos.sale_payments` carries `CHECK (payment_method IN …)` from mig
+    725, and until 1106 widens it the database REFUSES a terms leg. Offering the button before then
+    would put a Terms key on every register that fails at the till — the cashier's sale lost, with a
+    constraint error for an explanation. So the tender is offered only once its storage exists.
+    The probe asks for the column 1106 adds; any failure reads as "not applied", never as ready."""
+    try:
+        client.schema("pos").table("sale_payments").select("terms_days").limit(1).execute()
+        return True
+    except Exception:
+        return False
+
+
 @router.get("/tender-types")
 def tender_types(store_code: str = "", org_id: str = ORG_ID):
     """Which tenders THIS register offers, each with the facts the screen needs to draw it."""
-    cfg = _tender_cfg(sb(), org_id, store_code)
+    client = sb()
+    cfg = _tender_cfg(client, org_id, store_code)
+    ready = _terms_schema_ready(client)
+    if not ready:
+        # The org's own declaration is left alone — this is the SCHEMA not being ready, which is a
+        # platform fact and not a change to what the tenant asked for. When 1106 lands, the tender
+        # appears with no further configuration.
+        cfg = {**cfg, _tender.TERMS_ENABLED_KEY: False}
     return {"tenders": _tender.offered(cfg),
-            "terms_day_options": list(_tender.terms_day_options(cfg))}
+            "terms_day_options": list(_tender.terms_day_options(cfg)),
+            "terms_available": ready,
+            **({} if ready else {"setup_note": TERMS_MIGRATION})}
 
 
 @router.post("/sales/checkout")
@@ -2219,6 +2247,10 @@ def checkout(body: dict, authorization: str = Header(default=""), org_id: str = 
     # EVERY payment leg is asked about, not just the first: a sale split across a card and an
     # account is the case where validating one leg and trusting the other writes the wrong balance.
     tcfg = _tender_cfg(sb(), org_id, sale.get("store_code") or "")
+    # A screen loaded before mig 1106 landed (or cached since) can still SEND a terms leg. Refuse it
+    # by name here rather than let `pos.sale_payments`'s CHECK constraint refuse it as a 500.
+    if not _terms_schema_ready(sb()):
+        tcfg = {**tcfg, _tender.TERMS_ENABLED_KEY: False}
     checked, owed = [], 0.0
     for raw in (payments or []):
         pay = dict(raw) if isinstance(raw, dict) else {}

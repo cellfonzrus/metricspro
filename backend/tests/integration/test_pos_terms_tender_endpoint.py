@@ -187,3 +187,30 @@ def test_a_bad_second_leg_refuses_the_whole_sale(api_client, wired):
     r = api_client.post(CHECKOUT_PATH, params={"org_id": HOUSE}, json=body)
     assert r.status_code == 400 and "99" in r.json()["detail"]
     assert len(wired) == before
+
+
+# ── the tender is not offered before its storage exists (§POS-15, mig 1106) ──────────────────────
+def test_terms_is_not_offered_until_the_migration_that_stores_it_is_applied(api_client, wired, monkeypatch):
+    """`pos.sale_payments` carries a CHECK from mig 725 that refuses a terms leg until 1106 widens
+    it. Offering the button before then puts a key on every register that FAILS at the till — the
+    cashier's sale lost, with a constraint error for an explanation."""
+    monkeypatch.setattr("app.modules.pos.router._terms_schema_ready", lambda *a, **k: False)
+    body = api_client.get(TYPES_PATH, params={"org_id": HOUSE}).json()
+    assert body["terms_available"] is False
+    assert "terms" not in [t["key"] for t in body["tenders"]]
+    # The till is TOLD, but not told the internals: the §19.36 boundary neutralises the migration
+    # name on its way out, and the detail reaches the platform super admin alone.
+    assert body["setup_note"], "the register is told the feature is not ready, not left guessing"
+    assert "1106" not in body["setup_note"] and "migration" not in body["setup_note"].lower()
+    # …and cash is still sellable: a missing migration must not shut the till.
+    assert "cash" in [t["key"] for t in body["tenders"]]
+
+
+def test_a_stale_screen_sending_terms_before_the_migration_is_refused_by_name(api_client, wired, monkeypatch):
+    """A screen loaded before 1106 landed can still SEND a terms leg. The refusal is the one home's
+    own sentence, not a 500 from the database's constraint."""
+    monkeypatch.setattr("app.modules.pos.router._terms_schema_ready", lambda *a, **k: False)
+    r = api_client.post(CHECKOUT_PATH, params={"org_id": HOUSE}, json=_body(HOUSE))
+    assert r.status_code == 400, r.text
+    assert "terms" in r.json()["detail"].lower()
+    assert wired == [], "nothing reached the database"
