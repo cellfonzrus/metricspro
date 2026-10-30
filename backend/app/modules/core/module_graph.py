@@ -675,7 +675,7 @@ FACTS: dict[str, dict] = {
                     'driver reported "Could not find the login form \u2014 it may render differently '
                     'than expected" about a page with no form on it. A page that refuses us is not a '
                     'login form that renders unexpectedly, so the words live in ONE table with a '
-                    'kind (mig 1105) and a tenant adds a ROW, never a branch. The three kinds stay '
+                    'kind column and a tenant adds a ROW, never a branch. The three kinds stay '
                     'three answers because the remedies differ \u2014 an address, a proxy, or time '
                     '\u2014 and only a throttle sets a cooldown.',
         "homes": ('app/modules/commcalc/portal_backoff.py',),
