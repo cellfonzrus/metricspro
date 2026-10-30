@@ -10,6 +10,7 @@ import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
 import { GoogleRatingChips, useGoogleRatings } from './_lib/googleRatings'
+import { twoPaneColumns, useNarrowViewport } from '@/lib/viewport'
 
 // WHERE EACH OF THESE TILES CAME FROM (index §CORE-17.3v). The server serves a panel per figure it
 // can stand behind, from commcalc/rep_incentive_drilldown.py, folded over the SAME rep rows this
@@ -76,6 +77,7 @@ const BADGE_COLOR: Record<string, string> = {
 }
 
 export default function CommCalcDashboard() {
+  const narrow = useNarrowViewport()   // §CORE-25 — a pinned pane stacks rather than starving its sibling on a phone
   const { period } = usePeriod()
   const { carriers, permissions } = useAuth()
   const isBoost = carrierMode(carriers) === 'boost'   // non-Boost carriers pay via plans, not KPI tiers
@@ -368,7 +370,7 @@ export default function CommCalcDashboard() {
       {tileDrill.panel && <DrillDownPanel panel={tileDrill.panel} extraColumns={DASH_DRILL_COLUMNS} />}
 
       {/* Tier Distribution + Top Reps */}
-      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: twoPaneColumns(280, narrow, 'start'), gap: 16, marginBottom: 24 }}>
         <div className="card">
           <div style={{ fontWeight: 600, marginBottom: 16 }}>{isBoost ? 'Tier Distribution' : 'Payout Basis'}</div>
           {!isBoost && (

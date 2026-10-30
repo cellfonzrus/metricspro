@@ -30,10 +30,12 @@ import {
   inwardSentence, flip, withCountingLine, currentLine, zoneStatus,
   type Pt, type LineGeometry, type Inward, type Zone,
 } from '@/lib/vision-zones'
+import { responsiveColumns, useNarrowViewport } from '@/lib/viewport'
 
 type Drag = { a: Pt; b: Pt } | null
 
 export default function VisionLinesPage() {
+  const narrow = useNarrowViewport()   // §CORE-25 — a pinned pane stacks rather than starving its sibling on a phone
   const [cameras, setCameras] = useState<Camera[]>([])
   const [zonesByCam, setZonesByCam] = useState<Record<string, Zone[]>>({})
   const [selected, setSelected] = useState<string>('')
@@ -191,7 +193,7 @@ export default function VisionLinesPage() {
 
       {msg && <div style={{ ...panel, borderColor: 'var(--c-bg-dc2626)', color: 'var(--c-fg-f87171)', marginBottom: 16 }}>{msg}</div>}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: 18,
+      <div style={{ display: 'grid', gridTemplateColumns: responsiveColumns('minmax(220px, 280px) 1fr', narrow), gap: 18,
         alignItems: 'start' }}>
         {/* ── camera list ─────────────────────────────────────────────────────────────────────── */}
         <div style={{ ...panel, padding: 0, overflow: 'hidden' }}>

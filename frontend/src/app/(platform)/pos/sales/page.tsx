@@ -29,6 +29,7 @@ import ProductFilters, {
 import ProductFormFields, {
   ProductFormValue, productFormFrom, productFormFromEntry, productFormPayload, productFormReady,
 } from '../product-form'
+import { twoPaneFrame, useNarrowViewport } from '@/lib/viewport'
 // THE suspended cart (lib/pos-held-sale) — restore on arrival, debounced autosave, clear on
 // checkout or discard, all keyed on this (store, register) terminal.
 import {
@@ -178,6 +179,7 @@ export default function PosSalesPage() {
   const [cart, setCart] = useState<CartItem[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
+  const narrow = useNarrowViewport()   // §CORE-25 — a phone stacks the register instead of clipping the cart
   const [products, setProducts] = useState<Product[]>([])                 // default catalog (quick-scan matching)
   const [pickerResults, setPickerResults] = useState<Product[] | null>(null) // server search results while typing
   // Product picker filters (owner 2026-09-24) — the ONE shared filter set (../product-filters), applied
@@ -1193,9 +1195,16 @@ export default function PosSalesPage() {
         </div>
       )}
 
-      {/* ===== SALE VIEW ===== */}
+      {/* ===== SALE VIEW =====
+          THE DEFECT THIS FIXES (owner report 2026-10-30, index §CORE-25): this frame used to be
+          `1fr 340px` inside `overflow: hidden`. Measured at iPhone width, the 340px Order Summary
+          took the whole page and the LEFT pane — the cart, its lines and "+ Add Product" — came out
+          at 0px and was clipped. The register showed no products. Narrow now STACKS through the one
+          home, and drops the viewport-height box with it: a stacked pane inside
+          `calc(100vh - 220px)` is cut off below the fold, which is the same disappearance. */}
       {activeView === 'sale' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', minHeight: 480, height: 'calc(100vh - 220px)' }}>
+        <div style={{ ...twoPaneFrame(340, narrow, { height: 'calc(100vh - 220px)', minHeight: 480 }),
+          border: '1px solid var(--border)', borderRadius: 10 }}>
 
           {/* LEFT — Cart */}
           <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)' }}>

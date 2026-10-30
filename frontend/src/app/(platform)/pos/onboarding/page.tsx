@@ -25,6 +25,7 @@ import {
 } from './plan-sources-logic'
 import { SetupNotice } from '@/lib/setupNotice'
 import { sourceLabel } from '@/lib/sourceLabels'
+import { twoPaneColumns, useNarrowViewport } from '@/lib/viewport'
 
 type Evidence = { state: string; count: number | null; reason: string }
 type Task = {
@@ -55,6 +56,7 @@ function download(filename: string, text: string) {
 }
 
 export default function PosOnboardingPage() {
+  const narrow = useNarrowViewport()   // §CORE-25 — a pinned pane stacks rather than starving its sibling on a phone
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -155,7 +157,7 @@ export default function PosOnboardingPage() {
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: twoPaneColumns(280, narrow, 'start'), gap: 16, alignItems: 'start' }}>
         {/* ── the rail: where you are, what is left ─────────────────────────────────────── */}
         <div style={{ ...CARD, padding: 12 }}>
           {groups.map(g => (

@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { api, fmt } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { serializeCsv, type CsvCell } from '@/lib/pos-csv'
+import { twoPaneColumns, useNarrowViewport } from '@/lib/viewport'
 
 interface Kpis {
   today: { count: number; total: number }
@@ -146,6 +147,7 @@ const dayStartIso = (s: string) => { const [y, m, d] = s.split('-').map(Number);
 const dayEndIso = (s: string) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d, 23, 59, 59).toISOString() }
 
 export default function PosReportsPage() {
+  const narrow = useNarrowViewport()   // §CORE-25 — a pinned pane stacks rather than starving its sibling on a phone
   const [activeCategory, setActiveCategory] = useState('Sales')
   const [activeReport, setActiveReport] = useState('Daily Sales Summary')
   const [stats, setStats] = useState<Kpis | null>(null)
@@ -501,7 +503,7 @@ export default function PosReportsPage() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: twoPaneColumns(220, narrow, 'start'), gap: 16 }}>
 
         {/* LEFT SIDEBAR — Report categories */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

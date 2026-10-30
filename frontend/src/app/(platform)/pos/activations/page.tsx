@@ -19,6 +19,7 @@ import { apiCached } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import { getActiveStore, setActiveStore } from '@/lib/pos-store'
 import { PosConfigValues, loadEffectivePosConfig, resolvePosConfig } from '@/lib/pos-config'
+import { twoPaneColumns, useNarrowViewport } from '@/lib/viewport'
 
 interface Activation {
   id: string; activation_number: number; customer_id: string | null
@@ -97,6 +98,7 @@ function custName(c: { first_name?: string | null; last_name?: string | null; co
 }
 
 export default function PosActivationsPage() {
+  const narrow = useNarrowViewport()   // §CORE-25 — a pinned pane stacks rather than starving its sibling on a phone
   const { user } = useAuth()
 
   const [activations, setActivations] = useState<Activation[]>([])
@@ -727,7 +729,7 @@ export default function PosActivationsPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                   <div style={panel}>
                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 10 }}>Promotions &amp; Trade-in</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 180px', gap: 10 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: twoPaneColumns(180, narrow), gap: 10 }}>
                       <div><label style={label}>Promotion Offered</label><input value={formData.promotion_offered} onChange={e => setFormData(f => ({ ...f, promotion_offered: e.target.value }))} style={input} placeholder="e.g. BOGO iPhone 14, $200 gift card" /></div>
                       <div><label style={label}>Trade-in Credit ($)</label><input type="number" step="0.01" value={formData.trade_in_credit} onChange={e => setFormData(f => ({ ...f, trade_in_credit: parseFloat(e.target.value) || 0 }))} style={input} /></div>
                     </div>

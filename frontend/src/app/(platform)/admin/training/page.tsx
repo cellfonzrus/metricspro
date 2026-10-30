@@ -16,6 +16,7 @@ import EntityPicker from '@/components/EntityPicker'
 import { api } from '@/lib/client'
 import { TENANT_NAV } from '@/lib/rbac'
 import { AUDIENCE_LABEL, MODULE_LABEL, Tour, TourStep, fetchTours, startTour } from '@/lib/tours'
+import { responsiveColumns, useNarrowViewport } from '@/lib/viewport'
 
 const ORG_HOUSE = '00000000-0000-0000-0000-000000000001'
 const inp: React.CSSProperties = { padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)',
@@ -27,6 +28,7 @@ const blankStep = (order: number): TourStep => ({
 })
 
 export default function AdminTrainingPage() {
+  const narrow = useNarrowViewport()   // §CORE-25 — a pinned pane stacks rather than starving its sibling on a phone
   const [tours, setTours] = useState<Tour[]>([])
   const [ready, setReady] = useState(true)
   const [canEdit, setCanEdit] = useState(false)
@@ -167,7 +169,7 @@ export default function AdminTrainingPage() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 340px) 1fr', gap: 16, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: responsiveColumns('minmax(260px, 340px) 1fr', narrow), gap: 16, alignItems: 'start' }}>
         {/* ── list ─────────────────────────────────────────────────────────────────────────────── */}
         <div className="card" style={{ padding: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase',

@@ -14,6 +14,7 @@ import { api } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { getActiveStore } from '@/lib/pos-store'
 import { useAuth } from '@/lib/auth-context'
+import { responsiveColumns, useNarrowViewport } from '@/lib/viewport'
 
 interface CatalogItem {
   id: string; product_code: string | null; short_name: string | null; full_name: string | null
@@ -52,6 +53,7 @@ const cell: React.CSSProperties = { padding: '7px 12px', borderBottom: '1px soli
 function money(n: number | null | undefined) { return `$${(Number(n) || 0).toFixed(2)}` }
 
 export default function SpecialOrdersPage() {
+  const narrow = useNarrowViewport()   // §CORE-25 — a pinned pane stacks rather than starving its sibling on a phone
   const { user } = useAuth()
   const [view, setView] = useState<'new' | 'orders'>('new')
   const [stores, setStores] = useState<Store[]>([])
@@ -168,7 +170,7 @@ export default function SpecialOrdersPage() {
       )}
 
       {view === 'new' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 360px', gap: 14, alignItems: 'start' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: responsiveColumns('minmax(0,1fr) 360px', narrow), gap: 14, alignItems: 'start' }}>
           {/* Catalog search + results */}
           <div style={panel}>
             <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>1. Find the item</div>

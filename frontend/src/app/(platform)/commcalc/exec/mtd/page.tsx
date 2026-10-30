@@ -19,6 +19,7 @@ import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
 import { agreesToTheCent } from '@/lib/drill-narrow'
+import { twoPaneColumns, useNarrowViewport } from '@/lib/viewport'
 
 // Super-admin org-resolution mitigation (same as the Sales Report page): reads carry the active tenant
 // so a super-admin (whom the tenant middleware does NOT rewrite) reads the selected tenant, not the house
@@ -636,6 +637,7 @@ export default function ExecMtdPage() {
 
 // ── Admin-editable metric definitions (SAP-configurable; no hard-coded classifier) ──────────────────
 function MetricConfigPanel({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const narrow = useNarrowViewport()   // §CORE-25 — a pinned pane stacks rather than starving its sibling on a phone
   const { pos } = usePosTerm()   // the tenant's POS name in copy (lib/report-labels.ts)
   const [cfg, setCfg] = useState<any>(null)
   const [saving, setSaving] = useState<string | null>(null)
@@ -690,7 +692,7 @@ function MetricConfigPanel({ onClose, onSaved }: { onClose: () => void; onSaved:
             <button onClick={() => save(b)} disabled={saving === b} style={{ fontSize: 12, padding: '3px 10px', cursor: 'pointer' }}>{saving === b ? 'Saving…' : 'Save'}</button>
           </div>
           {(BUCKET_KEYS[b] || Object.keys(cfg.config[b].rules)).map((k) => (
-            <label key={k} style={{ display: 'grid', gridTemplateColumns: '190px 1fr', gap: 8, alignItems: 'center', margin: '4px 0' }}>
+            <label key={k} style={{ display: 'grid', gridTemplateColumns: twoPaneColumns(190, narrow, 'start'), gap: 8, alignItems: 'center', margin: '4px 0' }}>
               <span style={{ fontSize: 12, color: 'var(--text2)' }}>{k}</span>
               <input value={(cfg.config[b].rules[k] || []).join(', ')} onChange={(e) => setTok(b, k, e.target.value)}
                 style={{ fontSize: 12, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 6 }} />

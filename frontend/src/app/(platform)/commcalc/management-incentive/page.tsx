@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
 import { useActiveCarrier } from '@/lib/auth-context'
 import { presetVisibleForCarrier } from '@/lib/carrier-scope'
+import { twoPaneColumns, useNarrowViewport } from '@/lib/viewport'
 
 type Comp = { label?: string; kind?: string; rate?: number; metric_source?: string; target_per_store?: number; store_count?: number | null; cap_at_target?: boolean; sort?: number }
 type Bonus = { label?: string; kind?: string; amount?: number; gated_by?: string; config?: any; sort?: number }
@@ -36,6 +37,7 @@ const emptyPlan = (): Plan => ({
 })
 
 export default function ManagementIncentivePage() {
+  const narrow = useNarrowViewport()   // §CORE-25 — a pinned pane stacks rather than starving its sibling on a phone
   // Active-carrier lens: hide carrier-named presets (e.g. the seeded "Total Wireless default") that
   // aren't the active carrier. Single-carrier tenants see every preset (unchanged).
   const { activeCarrier, multi } = useActiveCarrier()
@@ -115,7 +117,7 @@ export default function ManagementIncentivePage() {
       {msg && <div style={{ fontSize: 13, marginBottom: 12 }}>{msg}</div>}
 
       {tab === 'plans' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: twoPaneColumns(240, narrow, 'start'), gap: 16 }}>
           <div className="card" style={{ padding: 12, height: 'fit-content' }}>
             <button className="btn btn-primary" style={{ width: '100%', fontSize: 13, marginBottom: 8 }} onClick={() => setPlan(emptyPlan())}>+ New plan</button>
             {visiblePlans.map(p => (

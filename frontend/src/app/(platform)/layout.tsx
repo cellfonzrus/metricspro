@@ -21,6 +21,7 @@ import ChatEnvelope from '@/components/ChatEnvelope'
 import PlatformBanners from '@/components/PlatformBanners'
 import FlowReturnBar from '@/components/FlowReturnBar'
 import { apiUrl } from '@/lib/apiBase'
+import { useNarrowViewport } from '@/lib/viewport'
 // ONE findable world for BOTH search boxes (§54.12). The sidebar's ⌘K search used to build its own
 // index from NAV alone and rank it with its own private ladder, so 27 menu-less pages could not be
 // found here while ⌘/ found every one of them. Both now gate and fold through `viewerCatalog` and
@@ -233,7 +234,20 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   // set, so a dual-carrier tenant sees one carrier's cluster at a time. Single-carrier tenants are
   // pinned to their only carrier (multi=false), so this is byte-identical to the old carrierOK gate.
   const { activeCarrier, setActiveCarrier, carrierList, multi } = useActiveCarrier()
-  const [collapsed, setCollapsed] = useState(false)
+  // THE RAIL ON A PHONE (owner report 2026-10-30, index §CORE-25). The sidebar is a hard 248px with
+  // `flexShrink: 0`, so on a 390px screen it left every page ~94px — enough to clip the POS
+  // register's cart away entirely. A narrow viewport now gets the icon rail the collapse button
+  // already builds, so the fix reuses the existing layout rather than inventing a phone one. The
+  // button still works on a desk; narrow simply wins while it lasts, and a rotation restores it.
+  const narrow = useNarrowViewport()
+  // The viewport decides UNLESS this viewport was the one the operator pressed in. An explicit
+  // press still wins — the rail's own search button expands the menu, and on a phone that has to
+  // keep working — and the press is REMEMBERED WITH THE WIDTH IT WAS MADE AT, so a rotation hands
+  // the choice back to the viewport instead of leaving a 248px menu over a 390px screen. Derived,
+  // so there is no effect writing state back on every rotation.
+  const [collapsePref, setCollapsePref] = useState<{ at: boolean; value: boolean } | null>(null)
+  const collapsed = collapsePref && collapsePref.at === narrow ? collapsePref.value : narrow
+  const setCollapsed = useCallback((value: boolean) => setCollapsePref({ at: narrow, value }), [narrow])
   const [openGroup, setOpenGroup] = useState<string | null>(null)  // accordion: only one group's items shown at a time
   const [menuOpen, setMenuOpen] = useState(false)
   const [navCfg, setNavCfg] = useState<{ labels?: Record<string, string>; capabilities?: Record<string, boolean | null>; layout?: NavLayout }>({})
@@ -386,7 +400,9 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+    // `setCollapsed` now remembers the width the press was made at (§CORE-25), so it changes when
+    // the viewport does and the shortcut has to be re-bound with it.
+  }, [setCollapsed])
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)', flexDirection: 'column' }}>
@@ -592,10 +608,14 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
       </aside>
 
       <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <header style={{ background: 'var(--c-bg-ffffff)', borderBottom: '1px solid var(--border)', padding: '0 24px',
+        {/* The top bar is a single 56px row and does not wrap. On a phone its three groups were
+            wider than the glass, and an overflowing page makes mobile Safari widen the layout
+            viewport to fit — zooming every page out. Narrow trims the gutters and lets the groups
+            shrink, so the page is laid out at the width the device actually has (§CORE-25). */}
+        <header style={{ background: 'var(--c-bg-ffffff)', borderBottom: '1px solid var(--border)', padding: narrow ? '0 10px' : '0 24px',
           height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           position: 'sticky', top: 0, zIndex: 10 }}>
-          <div style={{ fontSize: 14, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ fontSize: 14, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: narrow ? 8 : 16, minWidth: 0, overflow: 'hidden' }}>
             <span><span style={{ color: 'var(--text3)' }}>Period: </span><span style={{ fontWeight: 600, color: 'var(--accent)' }}>{period}</span></span>
             <Link href="/portal" title="Open the employee kiosk to clock in / out"
               style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', textDecoration: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px' }}>
@@ -683,8 +703,8 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
               it reads as a query bar; shrinks on narrow screens. */}
           <button onClick={() => window.dispatchEvent(new Event('askbar:open'))}
             title="Ask a question or jump to a report (⌘/)" aria-label="Ask a question"
-            style={{ flex: '0 1 400px', maxWidth: 400, minWidth: 150, display: 'flex', alignItems: 'center',
-              gap: 8, margin: '0 16px', padding: '7px 12px', borderRadius: 9, cursor: 'text', fontSize: 13,
+            style={{ flex: '0 1 400px', maxWidth: 400, minWidth: narrow ? 0 : 150, display: 'flex', alignItems: 'center',
+              gap: 8, margin: narrow ? '0 6px' : '0 16px', padding: '7px 12px', borderRadius: 9, cursor: 'text', fontSize: 13,
               color: 'var(--text3)', background: 'var(--c-bg-f1f5f9)', border: '1px solid var(--border)' }}>
             <span aria-hidden>🔎</span>
             <span style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Ask a question…</span>
