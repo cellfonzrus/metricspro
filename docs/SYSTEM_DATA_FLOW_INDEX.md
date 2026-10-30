@@ -41186,6 +41186,41 @@ Before and after, same built app, same stubbed API, Chromium at iPhone-14 size:
 | layout viewport | **734px** (Safari widens an overflowing page and zooms out) | **390px** — the device's own width |
 | desktop 1440px | `802px 340px` | **`802px 340px`, unchanged** |
 
+### §CORE-25.6 THE MENU ITSELF, walked at iPhone width (owner ask 2026-10-30)
+
+Owner: *"now act as a testing agent for the app and make sure all the menus are available on the app
+and they can be used"*. Walked in Chromium at iPhone-14 size against the built app — the rail that
+§CORE-25 introduced turned out to carry two faults of the SAME class:
+
+| Found | Measured |
+| --- | --- |
+| the icon rail renders EVERY group open, so a phone got **182 unlabelled icons**, and as a flex child of a page with no height bound it stretched the page to **7,452px** with the content in the top 664 | `document.scrollHeight` 7,452; `.mp-nav` did not scroll — it grew |
+| pressing *expand menu* put a 248px column beside a 390px page, so the page overflowed and the browser **zoomed the whole app out** again | layout viewport **555px**, not 390 |
+
+Both say the same thing: **a phone has one column, so the menu is an OVERLAY, not a column.**
+`viewport.menuFrame(narrow, collapsed, open)` is the one home for the menu's frame — `static` and
+`collapsed ? 60 : 248` on a desk, `fixed` / `translateX(-100%)` / full 248 **with labels** on a phone,
+bounded `top: 0, bottom: 0` so the MENU scrolls and the page does not. The shell adds the two things
+an overlay needs and nothing else: a `☰` at the head of the top bar, and a scrim that closes it; a
+chosen destination closes it, a group header does not. `collapsed` is simply ignored while narrow —
+the rail is a desk control.
+
+After: page **741px** (was 7,452), layout viewport **390px** open or shut, menu 248×664 scrolling
+internally, scrim present. **26 of the 28 menu groups walked end to end** — open menu, expand group,
+tap the item (231×35px, on screen), land on the page, menu closes, no overflow. The other two are not
+faults: Payroll & HR's group was already open (the accordion opens the group holding the current
+page, so the test's click shut it), and Super Admin Toolbox is platform-admin gated and does not
+render for the signed-out harness.
+
+**The sweep, with a desktop control.** All 325 distinct NAV destinations were loaded at iPhone size
+and again at 1440px: **0 pages overflowed at either size, and 0 failed on the phone that did not fail
+identically on the desk.** 68 pages hit the error boundary at BOTH sizes — that is the harness
+feeding every endpoint `{}`, not a defect of the app, and it is recorded here so the next sweep does
+not re-derive it.
+
+`tools/narrow-layout-proof.mjs` also fails the build now when the shell stops calling `menuFrame`, or
+writes a sidebar width of its own (negative control planted and confirmed red).
+
 ### §CORE-25.5 Not money
 
 No endpoint, no table, no migration, no query. Nothing about what a figure IS changes; this is where
