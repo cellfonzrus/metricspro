@@ -155,6 +155,10 @@ ok("C5. checkout refuses BEFORE it calls pos.checkout",
    _CO.index("_wstore.sale_refusal") < _CO.index('rpc("checkout"'))
 ok("C6. checkout stamps the roster's spelling onto the sale",
    "_wstore.resolve(" in _CO and 'sale["store_code"]' in _CO)
+ok("C6b. the refusal and the spelling read ONE span, not two",
+   _CO.count("_working_span(authorization, org_id)") == 1
+   and "_wstore.sale_refusal(_span," in _CO and "_wstore.resolve(_span," in _CO,
+   "two reads could disagree and write a NULL store onto an authorised sale")
 _AC = ROUTER.split('@router.post("/activations")', 1)[1].split("@router.", 1)[0]
 ok("C7. THE SIBLING: the activation write is gated by the same one home",
    "_wstore.sale_refusal(" in _AC,

@@ -1842,13 +1842,16 @@ def checkout(body: dict, authorization: str = Header(default=""), org_id: str = 
     # all, which `pos.checkout` writes as NULL and `_span_filter` then shows to every store-scoped
     # manager in the tenant. A sale nobody can attribute is not a sale, so the refusal is the one
     # sentence `working_store` owns rather than a second wording invented here.
-    _refusal = _wstore.sale_refusal(_working_span(authorization, org_id), sale.get("store_code"))
+    # ONE span, read once: the refusal and the spelling must be two readings of the SAME answer. Two
+    # reads could disagree if the roster read failed between them, and the second one losing would
+    # write a NULL store onto a sale the first one had just authorised.
+    _span = _working_span(authorization, org_id)
+    _refusal = _wstore.sale_refusal(_span, sale.get("store_code"))
     if _refusal:
         raise HTTPException(403, _refusal)
     # The ROSTER'S spelling, not the terminal's. Store codes are compared without case folding
-    # across this platform, and 'b-1115' once became a phantom store holding $289 of a day's money.
-    sale["store_code"] = _wstore.resolve(_working_span(authorization, org_id),
-                                         sale.get("store_code"))["store_code"]
+    # across this platform, and a lower-cased code once became a phantom store holding a day's money.
+    sale["store_code"] = _wstore.resolve(_span, sale.get("store_code"))["store_code"]
     # The register may now edit unit_price (owner directive 2026-08-11). Keep what the product was
     # LISTED at so an override is visible afterwards as list_price <> unit_price — a line that
     # records only what was charged makes a discounted sale indistinguishable from a cheap product.
