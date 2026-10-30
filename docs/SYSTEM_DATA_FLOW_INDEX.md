@@ -186,6 +186,7 @@ Primary code homes:
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
+| CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-22 | **A page load never queries once per item** | "How do we avoid these extra round-trip calls? Which loop shapes really cost one trip per row and which only look like it, what is the count today, and what fails the build the day a new one ships?" |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
@@ -7981,6 +7982,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"What sales-tax rate applies at this store?"** (the till, the POS Settings grid, the market dropdown, the bulk save; mig 741, re-homed 2026-10-30) | `pos.tax_codes`, whose scope is store `>` market `>` org-wide | **ONE home** `backend/app/modules/pos/tax_precedence.py` — `pick` / `resolve`, carrying the rung that won (`store` \| `market` \| `org` \| `none`) and the percent-to-fraction conversion a sale line stores. `router._resolve_tax` now DEREFERENCES it and the register ASKS for it through `GET /pos/tax-codes/resolve`. There were TWO rules: the server's three rungs, and the register's own two (store, then org-wide), so a rate declared on a MARKET showed as this store's `effective_rate` in the grid and was charged by nobody — the customer paid the org-wide rate, or $0 where none was declared. `none` stays explicit; a taxable sale that charged nothing is not recoverable once the customer has left. Proof §D (10 checks; H5 reproduces the two-rung answer) — §POS-14 |
 | **"How is a payment method written for a customer?"** (both receipt layouts) | `pos.sale_payments.payment_method`, a machine value | **ONE home** `sale_receipt.method_label`. The slip printed `Paid (credit_card)` and the POS layout `.title()`'d it to **Credit_Card** on a customer's receipt — two dressings of one fact, both wrong. No method vocabulary is declared (RULE TWO): whatever the tenant stores is made readable, never translated against a list. Proof §F — §POS-13 |
 | **"What is this POS setting's effective value at this store"** (server side; owner 2026-10-17) | `pos.pos_settings` (org row `store_code IS NULL`, else the store override) | **ONE home** `backend/app/modules/pos/pos_config_effective.py` (`effective`, `values`, `flag`, `text`, `brand`, `disclaimers`, `SERVER_DEFAULTS`). The resolution rule lived ONLY in the browser (`frontend/src/lib/pos-config.ts`) until the server had to render a receipt; the two copies are PINNED key-by-key by `harness_pos_receipt_render.py` §B, which fails the build naming any default changed on one side only — §POS-02 |
+| **"What a human PICKS this company by"** (the post-login company chooser, the Settings switcher, the operator helpdesk's tenant column; owner report 2026-10-30) | `storeops.tenants.name` + `.slug` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`picker_label_from`, `picker_labels`, `LabelMap`, `looks_like_uuid`, `GENERIC_LABEL`) and `mobile/src/lib/company-label.ts` (`companyLabel`, `looksLikeOrgId`, `GENERIC_COMPANY_LABEL`) — the app keeps the promise itself because a phone can run a bundle older than the server. DISTINCT from "what is this tenant called" below: a receipt's From name may be blank, a picker's label may not. Was THREE derivations — `core/router._my_tenants_payload` (`or "Tenant"`), the web picker, and the app's `tenantName` (`… || org_id`, the one that printed the defect). Siblings rewired in the same PR: `helpdesk/router._tenant_names` and its seven `or "Tenant"` callers. Lock `harness_company_label_lock.py` runs BOTH halves and compares them row for row — §CORE-26 |
 | **"What is this tenant called"** (the From name on its mail, a statement heading, a document title; owner 2026-10-17) | `storeops.tenants.name` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`NAME_COLUMN`, `display_name_from`, `display_name`, `display_names`) — a blank name reads as blank, never a fabricated stand-in printed as the business's own name. `notify/channels/email_resend.from_header` is the ONE place a `From:` header is assembled, and every business-facing send site passes its `org_id` so the customer sees the tenant; only genuine platform mail (the sign-in OTP) keeps the platform name. Siblings rewired in the same PR: `commcalc/router` ×2, `core/data_qa_api`, `core/operator_api`, `helpdesk/router`, `storeops/payroll_approval` ×2, `storeops/router._tenant_display_name`. Lock `harness_pos_receipt_render.py` §E6 fails the build if a second name-only reader appears — §POS-02 |
 
 ---
@@ -26185,6 +26187,7 @@ status word rather than a blank that reads as nil.
 | POS-14 | pos |
 | PAYABLES-01 | payables |
 | CORE-25 | core |
+| CORE-26 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -41082,7 +41085,8 @@ so it can be dereferenced from any load order.
 | Fact | Its one home |
 |---|---|
 | how many of something will sell over the next horizon | `commcalc/demand_projection.projection` / `projected_units` / `recommend_qty` |
-| which sale line sold a DEVICE | `commcalc/demand_projection.is_device_line` (+ `HOUSE_DEVICE_DEPARTMENTS` / `HOUSE_DEVICE_CATEGORIES`, config with house defaults) |
+| which sale line sold a DEVICE | `commcalc/demand_projection.is_device_line` — the departments are a REQUIRED argument, never a default (see COMMCALC-49.10) |
+| which departments THIS ORG calls a device | `commcalc/device_vocabulary.declared_device_departments` → `accessory_config.box_departments` (mig 218), the declaration the box count / product mix / GP report already read |
 | the model ranking, the lifecycle ruling, the colour mix, the attach plan, the order | `commcalc/accessory_order_plan.py` (pure) |
 | where every figure on the screen came from | `commcalc/accessory_order_drilldown.py` (declaration only) |
 | the device MODEL out of a promo-decorated description | `commcalc/product_mix.model_of` (§62), dereferenced |
@@ -41092,6 +41096,48 @@ so it can be dereferenced from any load order.
 **THE UNIT OF THE WINDOW IS THE CALLER'S.** `/payables/forecast` and the PO recommendations count
 DAYS; this report counts MONTHS. Velocity is per window-unit and the horizon is in the same unit, so
 one arithmetic serves both without a hidden second divisor.
+
+### COMMCALC-49.10 EVERY TENANT, NOT THE ONE WHOSE WORDS ARE IN THE CODE (owner directive 2026-10-30)
+
+Owner: *"how come it is only working for cellfonz r us and not luxlink, there is a problem in the code
+it should be universal add on of a feture — note it in the index that all features should be for all
+tenanats and the testing agent shoudl test it after it is made, security agen should give a pass before
+it is made live"*.
+
+**WHAT HAPPENED.** `demand_projection.is_device_line` shipped with `depts` OPTIONAL, defaulting to
+`("android - xp", "iphone - xp", "tablet - xp")` — the house tenant's POS labels. None of the three
+callers passed a vocabulary. So for a tenant filing handsets under `BrandedHandset`, the Accessory
+Order Plan, `/payables/forecast` and `/asset/po/recommendations` each reported **no device sales at
+all**: 1,034 handsets in September 2026 read as zero, with no error, no warning, and nothing on the
+screen to suggest a vocabulary problem. Measured on live data 2026-10-30.
+
+**THE DECLARATION ALREADY EXISTED.** `accessory_config.box_departments` (mig 218) is the org's own
+admin-editable list, and the box count, the product mix, `gp_report.device_department_test` and
+`multi_handset_day.handset_rows` all read it. The affected tenant's row was already correct. This was
+not a missing feature or a data gap — it was a fifth copy of a declared fact, and the only one that
+did not dereference it. The duplicate check missed it because it searched for copies of the velocity
+ARITHMETIC and of `_is_device_line`, not for the QUESTION they answer.
+
+**THE RULE, stated once for every feature after this one.**
+
+- **A feature is not finished until it works for every tenant.** "Works" means measured against each
+  tenant's own declarations and feed shapes, not against the house org alone. A default that is
+  really one tenant's vocabulary is RULE TWO's per-tenant code wearing a hat.
+- **A vocabulary a tenant declares is a REQUIRED argument, never a default.** A caller that has not
+  asked the org cannot be able to answer. An optional default is what turns a missing declaration
+  into a confident wrong number instead of a visible gap — and this one stayed invisible because
+  zero is a plausible answer.
+- **Nothing declared means nothing identified, and the surface says so.** It never falls back to
+  another tenant's words. An empty report sends somebody to the admin screen; a wrong one does not.
+- **Tested across tenants AFTER it is built, and security-passed BEFORE it goes live.** The
+  cross-tenant tests for this report are in
+  `backend/tests/integration/test_accessory_order_plan_endpoint.py` ("EVERY TENANT, NOT THE ONE
+  WHOSE WORDS ARE IN THE CODE") and `backend/tests/unit/test_device_vocabulary.py`; they assert both
+  that each tenant's shape produces its order AND that one tenant's declaration never leaks into
+  another's read.
+- **Locked:** `harness_demand_projection.py` §G5–G8 fails the build if the vocabulary becomes
+  optional again, if a department literal reappears as a VALUE in the home, if an undeclared org is
+  given a fallback, or if a caller stops asking `declared_device_departments`.
 
 ### COMMCALC-49.3 The arithmetic
 
@@ -41319,3 +41365,98 @@ writes a sidebar width of its own (negative control planted and confirmed red).
 
 No endpoint, no table, no migration, no query. Nothing about what a figure IS changes; this is where
 a pane is drawn. The desk layout is byte-identical above `NARROW_MAX`.
+
+---
+
+## §CORE-26. A LABEL A PERSON READS IS NEVER AN ID — one home for what a company is called on a picker (owner report 2026-10-30)
+
+Owner, verbatim, with a screenshot of the mobile app: *"How do I know which company is which it
+should show the company name on the app instead of company id"*. The "Choose a company" screen
+listed four raw UUIDs. A login belonging to four companies could not tell which one it was signing
+into, on the one screen whose entire job is telling them apart.
+
+### §CORE-26.1 Duplicate check (the build gate)
+
+Searched the index first. Two existing mechanisms answer a neighbouring question and BOTH were
+extended rather than copied:
+
+- **§POS-02 `core/tenant_identity`** already owned *"what is this tenant called"* (the From name on
+  its mail, a statement heading). The picker's label is the SAME registry read for a different
+  promise, so it lives in that module — `picker_label_from` beside `display_name_from` — not in a
+  new one. The two promises genuinely differ and the module says so: a receipt that cannot name the
+  business prints nothing (a fabricated name would be a lie on a customer's receipt), while a
+  picker that cannot name the company still has to be pickable.
+- **§13b.1 `harness_scope_label_lock.py`** locks the identical RULE (`scope_label || scope_key`, the
+  owner's near-identical report of 2026-10-03) for a FINANCE scope's name. Different registry and
+  different fact — `storeops.tenants` is not `coa.org_companies`, and one tenant holds many of the
+  latter — so the locks stay separate and cross-reference each other.
+
+Nothing new was created that an existing path already served. No endpoint, no table, no migration.
+
+### §CORE-26.2 The class, not the instance
+
+"The phone printed an id" is the instance. The class is that a company's human label was DERIVED in
+three places, each with its own last resort:
+
+| where | last resort | what the user saw |
+| --- | --- | --- |
+| `core/router._my_tenants_payload` | `t.get("name") or "Tenant"` | every unnamed company the same unchoosable word |
+| `frontend/src/app/login/page.tsx` | `{t.name}` raw | blank button |
+| `mobile/src/api/core.tenantName` | `name \|\| org_name \|\| org_id` | **the UUID** |
+| `helpdesk/router._tenant_names` × 7 callers | `or "Tenant"` | the sibling, found by the lock |
+
+One fact, one home, dereferenced: the label is the onboarding name, else the slug read back as
+words, else the generic word `Company` — and **never a UUID, whatever the stored row holds**,
+including a row whose `name` column literally contains one.
+
+### §CORE-26.3 What the lock refuses
+
+`backend/harness_company_label_lock.py` (29 checks, each with a negative control) fails the build
+when the one home loses either half; when the server label can be blank or id-shaped for ANY row
+shape (**run**, not read); when the app half drifts from the server half (both are **run** and
+compared row for row, so the mirror cannot rot); when a backend payload re-introduces `or "Tenant"`
+or `or org_id`; when `_my_tenants_payload` stops dereferencing; when a picker surface paints
+`org_id` as a title or a JSX child (a React list `key` is exempt — it is never painted); or when a
+second copy of the id shape or of the last-resort word appears.
+
+### §CORE-26.4 Tests
+
+TDD, red first: `backend/tests/unit/test_tenant_picker_label.py` (14), 
+`backend/tests/integration/test_my_tenants_labels.py` (7, through the REAL app over the database
+double — `/core/my-tenants` AND `/core/bootstrap`, which must agree), and
+`mobile/src/lib/company-label.test.ts` (13). **`mobile/` had no test of any kind before this**,
+which is how the screen shipped: there was no gate a label rule could fail. `mobile/vitest.config.ts`
++ `mobile/tests/setup.ts` (the same no-network promise the backend conftest makes) and a
+`Mobile unit tests` job in `.github/workflows/tests.yml` close that.
+
+### §CORE-26.6 The app's JavaScript reaches a phone by itself (owner, 2026-10-30)
+
+Owner: *"im not the mac and the machine does not have the terminal to run right now any other way"*.
+
+The label fix above is one thing; **why the 2026-09-17 fix (#240) was still not on his phone six
+weeks later** is another, and it is the more durable defect. `mobile/app.config.ts` has declared an
+EAS Update URL since the app was written and `mobile/package.json` has declared `update:production` —
+but the channel only moved when a human remembered to type `eas update` on a Mac, and nobody did.
+A delivery step that depends on somebody remembering is a delivery step that does not happen.
+
+TestFlight's "automatic updates" toggle does NOT cover this. It installs a new **binary** when one is
+uploaded; a JavaScript change travels over the air on a different channel entirely. The owner had the
+toggle on and was still six weeks behind.
+
+`.github/workflows/mobile-ota-update.yml` publishes the channel on every push to `main` that touches
+`mobile/**`, and on a **Run workflow** button for a manual push — so the step needs a browser, never
+a terminal. Both hosts already auto-deploy from `main` (§23d); after this, so does the app. It runs
+`mobile/`'s own tests once more immediately before publishing, which is not redundant with the pull
+request's gate: an over-the-air bundle reaches every installed phone at once with no store review
+standing between it and them. With no `EXPO_TOKEN` secret it publishes nothing and says in the job
+summary exactly which two browser pages to visit, rather than failing inside the CLI.
+
+Limits, by construction: an over-the-air update carries only JavaScript and assets. A native change —
+a new module, a new permission, an SDK bump, a `version` bump (the runtime key is
+`{ policy: 'appVersion' }`) — finds no matching runtime and is simply not delivered, rather than
+shipping something broken. The workflow never builds and never submits to a store.
+
+### §CORE-26.5 Not money
+
+No endpoint, no table, no migration, no query, no figure. Nothing about what a number IS changes;
+this is what a button is called.

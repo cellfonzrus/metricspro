@@ -37,7 +37,8 @@ from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 �
 from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-09 — THE accessory company-goal allocation (index §61; pure)
 from app.modules.commcalc import accessory_order_plan as _aop          # 2026-10-29 — THE accessory ORDER plan (index §COMMCALC-49; pure)
 from app.modules.commcalc import accessory_order_drilldown as _aopdd   # 2026-10-29 — that report's drill declaration (§CORE-17.3y; declaration only, pure)
-from app.modules.commcalc import demand_projection as _dp             # 2026-10-29 — THE device velocity/horizon projection + device-line test (§COMMCALC-49; pure)
+from app.modules.commcalc import demand_projection as _dp   # 2026-10-29 — THE device velocity/horizon projection + device-line test (§COMMCALC-49; pure)
+from app.modules.commcalc import device_vocabulary as _devvocab   # 2026-10-30 — THE one place to ask which departments an org calls a device (§COMMCALC-49)
 from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
 from app.modules.commcalc import tender_recon_drilldown as _tender_recon_drilldown   # 2026-10-24 — THE X-report-vs-closing tile drill (index §CORE-17.3a; declaration only, pure)
 from app.modules.asset import device_asset_drilldown as _asset_dd   # 2026-10-25 — THE device-asset family's drill declaration (index §CORE-17.3l; declaration only, pure)
@@ -50600,7 +50601,12 @@ def get_accessory_order_plan(period: str = "", months: int = 0, horizon: int = 0
         return True
 
     rulings, alias = _device_lifecycle(client, org_id)
-    dept_vocab = None                  # house vocabulary; a tenant override is a config row, not code
+    # WHICH DEPARTMENTS ARE DEVICE LINES IS THIS ORG'S DECLARATION (owner defect 2026-10-30). This
+    # line used to read `dept_vocab = None`, which took `demand_projection`'s house default — one
+    # tenant's POS labels — so the report told every other tenant it had sold no devices. The
+    # declaration already existed: `accessory_config.box_departments` (mig 218), the same list the
+    # box count, the product mix and the GP report read. Asked through its one home.
+    dept_vocab = _devvocab.declared_device_departments(client, org_id)
     units: dict = {}
     opt_stores, meta_by_period, lines_read = set(), {}, 0
     promo_tokens = None

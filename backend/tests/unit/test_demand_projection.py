@@ -17,6 +17,14 @@ from app.modules.commcalc import demand_projection as dp
 
 
 # ── the device-line test (the fact both callers kept their own copy of) ──────────────────────────
+# A DECLARATION, PASSED IN. These rows used to run with no vocabulary at all, against a house default
+# that was one tenant's POS labels — which is how three features came to read a whole tenant's
+# handsets as zero (owner defect 2026-10-30, §COMMCALC-49). The vocabulary is now required, so each
+# row below names the declaration it is judged under. The cross-tenant half lives in
+# `test_device_vocabulary.py`.
+DECLARED = ("Android - XP", "IPHONE - XP", "TABLET - XP")
+
+
 @pytest.mark.parametrize("dept,category,expected", [
     ("", "CellPhone", True),            # the custom report: category only, department blank
     ("", "cellphone", True),            # case is not a fact about the line
@@ -28,17 +36,19 @@ from app.modules.commcalc import demand_projection as dp
     (None, None, False),
 ])
 def test_the_device_line_test_matches_both_feed_formats(dept, category, expected):
-    assert dp.is_device_line(dept, category) is expected
+    assert dp.is_device_line(dept, category, DECLARED) is expected
 
 
-def test_the_device_vocabulary_is_config_and_an_empty_declaration_is_honoured():
-    """RULE TWO: the words live in config with house defaults. A tenant whose POS spells its device
-    department differently declares it; an EXPLICITLY empty declaration means "this half does not
-    identify a device here" and is obeyed rather than silently replaced by the house list."""
-    assert dp.is_device_line("Handsets", "", depts=["handsets"]) is True
-    assert dp.is_device_line("Android - XP", "", depts=["handsets"]) is False
-    assert dp.is_device_line("", "CellPhone", categories=[]) is False
-    assert dp.is_device_line("Android - XP", "CellPhone", depts=[], categories=[]) is False
+def test_the_device_vocabulary_is_the_orgs_and_an_empty_declaration_is_honoured():
+    """RULE TWO: the department words are the ORG'S, with no house list behind them. A tenant whose
+    POS spells its device department differently declares it, and an empty declaration identifies
+    nothing rather than being silently replaced by another tenant's words."""
+    assert dp.is_device_line("Handsets", "", ["handsets"]) is True
+    assert dp.is_device_line("Android - XP", "", ["handsets"]) is False
+    assert dp.is_device_line("", "CellPhone", DECLARED, categories=[]) is False
+    assert dp.is_device_line("Android - XP", "CellPhone", [], categories=[]) is False
+    # The whole point of the fix: no declaration is not another tenant's declaration.
+    assert dp.is_device_line("Android - XP", "", []) is False
 
 
 # ── the projection ───────────────────────────────────────────────────────────────────────────────
