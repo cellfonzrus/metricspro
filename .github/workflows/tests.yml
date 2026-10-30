@@ -96,6 +96,23 @@ jobs:
         working-directory: frontend
         run: npm run test:proofs
 
+  mobile-tests:
+    # The app's PURE logic. `mobile/` had no test of any kind until 2026-10-30, which is how the
+    # "Choose a company" screen shipped printing raw org ids: there was no gate a label rule could
+    # fail. Node environment, no device, no emulator — a screen test belongs behind a renderer.
+    name: Mobile unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: "20", cache: npm, cache-dependency-path: mobile/package-lock.json }
+      - name: install
+        working-directory: mobile
+        run: npm ci
+      - name: vitest
+        working-directory: mobile
+        run: npm run test
+
   test-discipline:
     # The lock: the framework above cannot quietly come undone. It RUNS conftest's network guard
     # against a production hostname rather than reading the source for it.

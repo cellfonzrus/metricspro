@@ -50,6 +50,8 @@ from app.core import impersonation as _impersonation
 # and this file share trial.py as the single source of how a trial is stamped and read.
 from app.modules.billing import trial as _trial
 from app.modules.core import self_lockout as _self_lockout
+# "What is this tenant called / what does a human pick it by" — the ONE home (index §POS-02).
+from app.modules.core import tenant_identity as _tenant_identity
 
 router = APIRouter(prefix="/core", tags=["Core / RBAC"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -307,7 +309,12 @@ def _my_tenants_payload(client, uid, rows=None, tmap=None, role_map=None):
             pass
         out.append({
             "org_id": o,
-            "name": t.get("name") or "Tenant",
+            # WHAT A HUMAN PICKS THIS COMPANY BY — dereferenced, never re-derived here (§POS-02).
+            # This line used to read `t.get("name") or "Tenant"`: every unnamed company became the
+            # same unchoosable word, and the mobile app, finding no usable name, fell through to
+            # printing the org_id (owner's screenshot, 2026-10-30). The one home answers the name,
+            # else the slug read back as words, and never a UUID.
+            "name": _tenant_identity.picker_label_from(t, o),
             "slug": t.get("slug"),
             "role": r.get("role"),
             "role_display": rdisp,
