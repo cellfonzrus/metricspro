@@ -1,4 +1,4 @@
--- 1108_accessory_order_grid.sql — ONE PHONE IS ONE ROW, AND THE ORDERING CATALOG IS DECLARED
+-- 1109_accessory_order_grid.sql — ONE PHONE IS ONE ROW, AND THE ORDERING CATALOG IS DECLARED
 -- (index §COMMCALC-49.11 / §COMMCALC-49.12)
 --
 -- OWNER ASK 2026-10-30, verbatim: *"accessory order plan should combine the accessories for all line

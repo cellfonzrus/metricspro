@@ -50527,7 +50527,7 @@ def _accessory_model_specs(client, org_id):
     OWNER ASK 2026-10-30: a cable or a cube is *"assigned ot the phone model in the beinging but ...
     editable as a drop down if oit changes later"*. So the house standard applies until somebody
     overrides it FOR ONE PHONE, and the override is stored per model (`commcalc.model_accessory_spec`,
-    mig `1108`) rather than carried on an order. A database where 1108 has not been applied yet
+    mig `1109`) rather than carried on an order. A database where 1109 has not been applied yet
     returns nothing and every phone keeps the house standard, which is exactly the right answer."""
     try:
         rows = (client.schema("commcalc").table("model_accessory_spec")
@@ -50903,7 +50903,7 @@ def put_accessory_model_spec(body: Optional[PutAccessoryModelSpecIn] = None,
                      on_conflict="org_id,model,category,dimension").execute())
         except Exception as e:
             raise HTTPException(409, "The assignment was not stored. Per-model accessory "
-                                     "assignments need migration 1108; ask an administrator to run "
+                                     "assignments need migration 1109; ask an administrator to run "
                                      "it, then try again.") from e
         written += 1
     for r in clear:

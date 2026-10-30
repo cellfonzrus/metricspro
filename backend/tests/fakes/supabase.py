@@ -155,7 +155,17 @@ class _Query:
         if op == "in":
             return got in val
         if op == "is":
-            return (got in (None, _MISSING)) if val is None else (got == val)
+            # PostgREST spells IS NULL as the literal `is.null`, and that is the spelling every
+            # caller in this codebase uses — `.is_("store_code", "null")`, not `.is_(…, None)`
+            # (app/modules/asset/router.py, commcalc/epay_ingest.py, account/statement_engine.py).
+            # The double used to compare the STRING "null" to the column and so answered False for
+            # every NULL row, silently returning [] for a read that works in production. Found while
+            # testing the §POS-17 settings fix, 2026-10-30.
+            if val is None or (isinstance(val, str) and val.strip().lower() == "null"):
+                return got in (None, _MISSING)
+            if isinstance(val, str) and val.strip().lower() in ("true", "false"):
+                return bool(got) is (val.strip().lower() == "true")
+            return got == val
         if op in ("gt", "gte", "lt", "lte"):
             if got is _MISSING or got is None:
                 return False

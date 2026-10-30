@@ -16,6 +16,7 @@ one existed; no code read `modules`, so POS visibility was enforced only client-
 Adding it server-side has to land together with seeding `pos` into MODULE_CATALOG and the roles
 UI, or every existing role — none of which carries a `pos` key — would be locked out at once.
 """
+import re as _re
 import datetime as _dt
 from datetime import datetime as _datetime, timezone as _timezone
 
@@ -2315,6 +2316,40 @@ def void_sale(sale_id: str, authorization: str = Header(default=""), org_id: str
 # are absent. The plan endpoint then answers `available: false` with the setup note, so the Sale Log
 # simply does not offer the button rather than offering one that errors.
 from app.modules.pos import sale_amendment as _amend
+# The cash / credit mismatch an edit leaves behind (§POS-17). A SECOND one home beside the first,
+# not a bigger one: `sale_amendment` answers "may this be edited and what does it come to", and
+# `sale_settlement` answers "what was tendered against it and what does that leave outstanding".
+# The second question has callers the first does not (the void path, and the mismatch report), which
+# is precisely why it is its own module rather than more functions on that one.
+from app.modules.pos import sale_settlement as _settle
+
+
+def _tender_band(client, org_id: str, store_code: str = ""):
+    """The declared tender-mismatch band for this store, read through the ONE config home and named
+    by the one home for the setting — never a default spelled beside this call (RULE TWO)."""
+    rows = _pos_settings_rows(client, org_id, store_code)
+    return _poscfg.effective(rows, _settle.BAND_SETTING, store_code)
+
+
+def _sale_payments(client, org_id: str, sale_id: str) -> list:
+    """What was tendered against this sale, as recorded. An EMPTY list is returned on absence and is
+    never turned into a $0.00 payment — `sale_settlement.tendered` is the one place that distinction
+    is made, and 4,603 of the 4,605 live sales depend on it being made correctly."""
+    return (client.schema("pos").table("sale_payments")
+            .select("payment_method,amount,card_last_four,created_at")
+            .eq("org_id", org_id).eq("sale_id", sale_id)
+            .order("created_at").limit(100).execute().data) or []
+
+
+def _tender_log_available(client, org_id: str) -> bool:
+    """Whether mig 1108 has been applied. A PROBE, not a claim — the same shape as
+    `_amend_available`: ask the database for the column and let it answer."""
+    try:
+        (client.schema("pos").table("sale_amendments").select("tender_variance")
+         .eq("org_id", org_id).limit(1).execute())
+        return True
+    except Exception:
+        return False
 
 
 def _amend_window(client, org_id: str, store_code: str = ""):
@@ -2352,6 +2387,14 @@ def sale_amend_plan(sale_id: str, authorization: str = Header(default=""), org_i
         cart = _amend.cart_from(items) if reason is None else []
     except _amend.AmendmentError as e:
         reason, cart = str(e), []
+    # What stands tendered against this sale RIGHT NOW (§POS-17), so the till can show the cashier
+    # what was taken before they move what is owed. The verdict is deliberately NOT previewed from
+    # here: a cart the cashier has not sent yet is not a figure this endpoint has seen, and the
+    # browser must not derive the mismatch itself. The dry run on the save route is what previews it,
+    # and it is the SAME call that writes, so a preview cannot disagree with the save.
+    payments = _sale_payments(client, org_id, sale_id)
+    standing = _settle.outstanding(sale, payments,
+                                   band=_tender_band(client, org_id, sale.get("store_code") or ""))
     return {
         "sale_id": sale_id,
         "transaction_id": sale.get("transaction_id"),
@@ -2363,6 +2406,8 @@ def sale_amend_plan(sale_id: str, authorization: str = Header(default=""), org_i
         "is_activation_sale": bool(sale.get("is_activation_sale")),
         "store_code": sale.get("store_code"),
         "available": _amend_available(client, org_id),
+        "tender": standing,
+        "tender_log_available": _tender_log_available(client, org_id),
     }
 
 
@@ -2404,10 +2449,44 @@ def amend_sale_items(sale_id: str, body: dict, authorization: str = Header(defau
         raise HTTPException(400, str(e)) from None
     if not plan["allowed"]:
         raise HTTPException(400, plan["reason"])
+
+    # ── the cash / credit mismatch this edit leaves behind (§POS-17) ─────────────────────────────
+    # Measured against the RESTATED total, because that is what will be owed once this write lands,
+    # and against the tender as RECORDED, which this write does not touch. Both figures come from
+    # the one home; nothing here subtracts anything itself.
+    payments = _sale_payments(client, org_id, sale_id)
+    after = {**sale, **plan["totals"]}
+    band = _tender_band(client, org_id, sale.get("store_code") or "")
+    settlement = _settle.outstanding(after, payments, band=band)
+    tender = _settle.record(after, payments, band=band)
+    tender_sentence = _settle.sentence(after, settlement)
+
+    # THE DRY RUN. The preview the till shows before it commits is THIS call with nothing written,
+    # so the figure the cashier agreed to and the figure that lands are the same computation rather
+    # than two that happen to agree today. A browser deriving its own preview is the sibling
+    # derivation the house rules forbid, and this is the shape that makes one unnecessary.
+    if body.get("dry_run"):
+        return {"dry_run": True, "revision": plan["revision"], "totals": plan["totals"],
+                "changed": plan["diff"]["summary"], "message": plan["sentence"],
+                "tender": settlement, "tender_message": tender_sentence,
+                "tender_log_available": _tender_log_available(client, org_id)}
+
+    # AN EDIT THAT CREATES UNEXPLAINED MONEY DOES NOT PROCEED UNLESS THE EXPLANATION CAN BE FILED.
+    # Exactly §POS-12's argument for refusing when the superseded version cannot be kept, applied to
+    # the second record that makes an edit answerable. A SETTLED edit needs no log row, so it is not
+    # held up by a migration it does not use.
+    if settlement["mismatch"] and not _tender_log_available(client, org_id):
+        raise HTTPException(503, "this edit would leave " + tender_sentence.rstrip(".") +
+                                 ", and migration 1108 has not been applied, so that mismatch "
+                                 "could not be logged — the edit was not saved")
+
     patch = {**plan["totals"],
              "change_summary": plan["diff"]["summary"],
              "change_detail": plan["diff"],
-             "notes": (body.get("notes") or "").strip() or None}
+             "notes": (body.get("notes") or "").strip() or None,
+             # Travels in the patch rather than as a new parameter, so mig 1108 replaces
+             # `pos.amend_sale` at its existing signature and creates no overload.
+             "tender": tender}
     try:
         r = client.schema("pos").rpc("amend_sale", {
             "p_org": org_id, "p_sale": sale_id,
@@ -2418,7 +2497,8 @@ def amend_sale_items(sale_id: str, body: dict, authorization: str = Header(defau
     except Exception as e:
         raise HTTPException(400, f"could not save the edit: {e}")
     return {"sale": r.data, "revision": plan["revision"], "totals": plan["totals"],
-            "changed": plan["diff"]["summary"], "message": plan["sentence"]}
+            "changed": plan["diff"]["summary"], "message": plan["sentence"],
+            "tender": settlement, "tender_message": tender_sentence}
 
 
 @router.get("/sales/{sale_id}/amendments")
@@ -2607,7 +2687,17 @@ def list_settings(store_code: str = "", org_id: str = ORG_ID):
     q = (sb().schema("pos").table("pos_settings").select("store_code,key,value")
          .eq("org_id", org_id))
     if store_code:
-        q = q.or_(f"store_code.is.null,store_code.eq.{store_code}")
+        # THE STORE CODE IS CHECKED BEFORE IT IS INTERPOLATED, through the ONE home for that
+        # decision (security pass 2026-10-30, index §POS-17) — this endpoint built the same
+        # f-string filter from the same raw query parameter, and any signed-in POS user reaches it.
+        #
+        # FAIL-SAFE MEANS NARROW HERE, and that differs from `_pos_settings_rows` on purpose: that
+        # caller hands its rows to `pos_config_effective`, which matches the store in Python, so
+        # dropping the filter changes nothing. THIS one returns the rows to the browser, so dropping
+        # the filter would hand back every store's rows. A refused code therefore reads the org
+        # defaults ALONE.
+        store_filter = _safe_settings_store_filter(store_code)
+        q = q.or_(store_filter) if store_filter else q.is_("store_code", "null")
     rows = q.limit(1000).execute().data or []
     out = []
     for row in rows:
@@ -2795,15 +2885,52 @@ from app.modules.notify import whatsapp_window as _wa_window
 from app.modules.core import tenant_identity as _tenant
 
 
+#: What a store code may contain before it is allowed into a PostgREST filter STRING.
+#:
+#: WHY A CHARSET AND NOT AN ESCAPE. `.eq()` is parameterised by supabase-py, but `.or_()` takes a
+#: fragment of PostgREST's own filter GRAMMAR, in which `,` separates disjuncts and `.` separates
+#: column / operator / value. There is nothing to escape with — a value carrying either character is
+#: not a store code, it is a second filter. So the value is CHECKED, and refused if it is not one.
+#:
+#: Verified non-breaking against production 2026-10-30: all 51 `storeops.stores` codes use only
+#: letters, digits, spaces and hyphens. `/`, `&`, `'` and `_` are admitted as plausible future store
+#: names; `.`, `,`, `(`, `)`, `:` and `"` are exactly the grammar characters and are not.
+_SETTINGS_STORE_OK = _re.compile(r"[A-Za-z0-9 _/&'-]+")
+
+
+def _safe_settings_store_filter(store_code: str):
+    """The `or` filter for this store code, or **None** when the value may not be interpolated.
+
+    None means "read the org's rows without a store filter", which is the FAIL-SAFE answer and not a
+    degraded one: `pos_config_effective.effective` already matches the store override by exact string
+    in Python, so an org-wide read resolves to the same value. Refusing therefore narrows what is
+    returned, never widens it.
+    """
+    code = (store_code or "").strip()
+    if not code or not _SETTINGS_STORE_OK.fullmatch(code):
+        return None
+    return f"store_code.is.null,store_code.eq.{code}"
+
+
 def _pos_settings_rows(client, org_id: str, store_code: str = ""):
     """The POS config rows this org (and optionally this store) has — read ONCE per receipt and
     resolved through `pos_config_effective`, which is the server's one home for the store-override →
-    org-default → declared-default rule the browser applies."""
+    org-default → declared-default rule the browser applies.
+
+    THE STORE CODE IS CHECKED BEFORE IT IS INTERPOLATED (security pass 2026-10-30, index §POS-17).
+    It used to go straight into the `or` filter as an f-string. Every caller then passed a value read
+    from a database row or sat behind the `pos_settings` grant, so nothing user-supplied reached it —
+    and `GET /pos/reports/tender-mismatch` was the first path that would have. Fixed HERE rather than
+    at that one caller, because the class is "a store code is interpolated into filter grammar" and
+    the next caller to pass a query parameter must not have to know that. Pinned by
+    `harness_pos_sale_settlement.py` §L.
+    """
     try:
         q = (client.schema("pos").table("pos_settings").select("store_code,key,value")
              .eq("org_id", org_id))
-        if store_code:
-            q = q.or_(f"store_code.is.null,store_code.eq.{store_code}")
+        store_filter = _safe_settings_store_filter(store_code)
+        if store_filter:
+            q = q.or_(store_filter)
         return q.limit(1000).execute().data or []
     except Exception:
         return []
@@ -3928,6 +4055,120 @@ def report_sales(date_from: str = "", date_to: str = "", store_code: str = "",
         r["customer_name"] = (cust.get(r.get("customer_id")) or {}).get("name")
         r["employee_name"] = emp.get((r.get("employee_id") or "").strip())
     return {"rows": rows}
+
+
+@router.get("/reports/tender-mismatch")
+def report_tender_mismatch(date_from: str = "", date_to: str = "", store_code: str = "",
+                           employee_id: str = "", kind: str = "mismatch",
+                           authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """THE LOG of the cash / credit mismatch (§POS-17) — owner ask 2026-10-30.
+
+    DERIVED LIVE over `pos.sales` and `pos.sale_payments` rather than read from the filed rows
+    alone, and that is the design point, not an implementation detail: an edit is only ONE of the
+    two writes that can move the tender and the total apart. `pos.void_sale` (mig 725) is the other,
+    and it files nothing. Deriving the comparison here means the void sibling is covered by the same
+    one home, on the same screen, without reopening a function that moves money correctly today.
+
+    The filed row (mig 1108) is joined on where it exists, because it carries what the till SAW at
+    the moment of the edit and who has settled it since — facts no live derivation can recover.
+
+    NOT MEASURABLE IS NOT A FINDING. 4,603 of the 4,605 live sales are imported receipt history with
+    no payment row at all (measured 2026-10-30). Those are counted in `summary` and named in
+    `blockers`; they are not listed as mismatches, and `kind=unmeasured` is how somebody who wants
+    to see them asks. A report that listed them by default would be 4,603 accusations.
+    """
+    client = sb()
+    # THE STORE ASKED FOR IS CHECKED AGAINST THE CALLER'S SPAN BEFORE IT IS USED, the same answer
+    # `adjust_inventory` gives. Span-filtering the RESULT is not enough on its own here: the store
+    # code also resolves this report's band, so an unchecked value would reach a config read for a
+    # store the caller may not see.
+    keyset = _caller_store_keyset(authorization, org_id)
+    if store_code and not _span_filter([{"store_code": store_code}], keyset):
+        raise HTTPException(403, "that store is outside your reporting span")
+    q = (client.schema("pos").table("sales")
+         .select("id,transaction_id,created_at,total,balance,status,voided_at,revision,"
+                 "amended_at,amended_by,customer_id,employee_id,store_code")
+         .eq("org_id", org_id))
+    if date_from:
+        q = q.gte("created_at", _date_bound(date_from, end=False))
+    if date_to:
+        q = q.lte("created_at", _date_bound(date_to, end=True))
+    if store_code:
+        q = q.eq("store_code", store_code)
+    if employee_id:
+        q = q.eq("employee_id", employee_id)
+    sales = q.order("created_at", desc=True).limit(1000).execute().data or []
+    sales = _span_filter(sales, keyset)
+    if not sales:
+        return {"rows": [], "summary": _settle.summarise([]), "blockers": [],
+                "log_available": _tender_log_available(client, org_id)}
+
+    ids = [s["id"] for s in sales]
+    pays: dict = {}
+    for chunk in (ids[i:i + 100] for i in range(0, len(ids), 100)):
+        for row in ((client.schema("pos").table("sale_payments")
+                     .select("sale_id,payment_method,amount,card_last_four")
+                     .eq("org_id", org_id).in_("sale_id", chunk).limit(1000).execute().data) or []):
+            pays.setdefault(row["sale_id"], []).append(row)
+
+    filed: dict = {}
+    log_available = _tender_log_available(client, org_id)
+    if log_available:
+        for chunk in (ids[i:i + 100] for i in range(0, len(ids), 100)):
+            for row in ((client.schema("pos").table("sale_amendments")
+                         .select("sale_id,revision,tender_variance,tender_verdict,"
+                                 "tender_direction,tender_measured,tender_reason,settled_at,"
+                                 "settled_by,settled_method,settled_amount,created_at")
+                         .eq("org_id", org_id).in_("sale_id", chunk)
+                         .order("revision", desc=True).limit(1000).execute().data) or []):
+                filed.setdefault(row["sale_id"], row)   # the newest revision, ordered above
+
+    # The band is the ORG's, read once for the whole report — never per row, so one store's
+    # declaration cannot silently score another store's sale on this screen.
+    band = _tender_band(client, org_id, store_code)
+    emp = _employee_names(org_id)
+    cust = _customer_names(org_id, [s.get("customer_id") for s in sales])
+    assessed = []
+    for s in sales:
+        out = _settle.outstanding(s, pays.get(s["id"], []), band=band)
+        f = filed.get(s["id"]) or {}
+        assessed.append({
+            "sale_id": s["id"], "transaction_id": s.get("transaction_id"),
+            "created_at": s.get("created_at"), "store_code": s.get("store_code"),
+            "employee_id": s.get("employee_id"),
+            "employee_name": emp.get((s.get("employee_id") or "").strip()),
+            "customer_name": (cust.get(s.get("customer_id")) or {}).get("name"),
+            "status": s.get("status"), "revision": _amend.current_revision(s),
+            "was_edited": bool(s.get("revision") and int(s["revision"] or 1) > 1),
+            "was_voided": str(s.get("status") or "").lower() == "voided" or bool(s.get("voided_at")),
+            "total": out["expected"]["total"], "balance": out["expected"]["balance"],
+            "expected": out["expected"]["amount"], "tendered": out["tendered"]["total"],
+            "methods": ", ".join(out["tendered"]["methods"]),
+            "variance": out["variance"], "verdict": out["verdict"],
+            "direction": out["direction"], "measured": out["measured"],
+            "reason": out["reason_label"],
+            "mismatch": out["mismatch"],
+            "attributed_to": (out["attribution"]["method"]
+                              or ("more than one tender" if out["attribution"]["ambiguous"] else None)),
+            # Only a FILED row can say this, which is why it is joined rather than derived.
+            "settled_at": f.get("settled_at"), "settled_by": f.get("settled_by"),
+            "settled_method": f.get("settled_method"), "settled_amount": f.get("settled_amount"),
+            "logged": bool(f) and f.get("tender_measured") is not None,
+        })
+
+    summary = _settle.summarise(assessed)
+    if kind == "unmeasured":
+        rows = [r for r in assessed if not r["measured"]]
+    elif kind == "collect":
+        rows = [r for r in assessed if r["direction"] == _settle.COLLECT]
+    elif kind == "refund":
+        rows = [r for r in assessed if r["direction"] == _settle.REFUND]
+    elif kind == "all":
+        rows = assessed
+    else:
+        rows = [r for r in assessed if r["mismatch"]]
+    return {"rows": rows, "summary": summary, "blockers": _settle.blockers(assessed),
+            "band": band, "log_available": log_available, "kind": kind}
 
 
 @router.get("/reports/activations")

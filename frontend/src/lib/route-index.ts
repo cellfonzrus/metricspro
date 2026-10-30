@@ -322,6 +322,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/pos/reports' },
   { path: '/pos/sales' },
   { path: '/pos/settings' },
+  { path: '/pos/tender-mismatch' },
   { path: '/pos/special-orders' },
   { path: '/pos/special-orders/manage' },
   { path: '/pos/vendors' },
