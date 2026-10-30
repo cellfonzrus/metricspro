@@ -20,6 +20,7 @@ import RegisterLock from '@/components/pos/RegisterLock'
 import { getActiveStore, setActiveStore } from '@/lib/pos-store'
 import { PosConfigValues, loadEffectivePosConfig, resolvePosConfig, getRegisterNumber } from '@/lib/pos-config'
 import { Tender, TENDER_FALLBACK, loadTenders, tenderFor, keepSelectionValid, termsBlockers, dueDateFor } from '@/lib/pos-tenders'
+import { W9State, W9_UNKNOWN, loadW9, taxRateFor, panelWords, requestLabel, awaitingReview } from '@/lib/pos-w9'
 import { LinkedText } from '@/components/ScreenLink'
 import ProductFilters, {
   EMPTY_FILTER_OPTIONS, EMPTY_PRODUCT_FILTERS, ProductFilterOptions, ProductFilterValue,
@@ -239,6 +240,10 @@ export default function PosSalesPage() {
   // carried here. `termsDays` is the agreed payment term on a sale that is paid later.
   const [tenders, setTenders] = useState<Tender[]>(TENDER_FALLBACK)
   const [termsDays, setTermsDays] = useState<number | null>(null)
+  // §POS-15 — this customer's W-9 state, as the SERVER decided it. The checkout asks again.
+  const [w9, setW9] = useState<W9State>(W9_UNKNOWN)
+  const [w9Busy, setW9Busy] = useState(false)
+  const [w9Override, setW9Override] = useState(false)
   const [amountTendered, setAmountTendered] = useState('')
   const [lastTransactionId, setLastTransactionId] = useState<number | null>(null)
   const [lastReceipt, setLastReceipt] = useState<ReceiptSnapshot | null>(null)
@@ -346,8 +351,18 @@ export default function PosSalesPage() {
       .then(list => { if (live) setTenders(list) })
       .catch(() => { if (live) setTenders(TENDER_FALLBACK) })
     return () => { live = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeStore, cfg.suspend_card_processing])
+
+  // §POS-15 — ask the one home about the attached customer. A retail customer answers "not
+  // wholesale" and nothing on this screen changes.
+  useEffect(() => {
+    let live = true
+    setW9Override(false)
+    loadW9(api, selectedCustomer?.id || null, activeStore || '')
+      .then(state => { if (live) setW9(state) })
+      .catch(() => { if (live) setW9(W9_UNKNOWN) })
+    return () => { live = false }
+  }, [selectedCustomer?.id, activeStore])
 
   // A selection the register no longer offers (a store switch, a manager suspending card
   // processing mid-shift) resolves to the first one it does — DERIVED, not written back into
@@ -442,6 +457,12 @@ export default function PosSalesPage() {
     const org = active.find(t => t.store_code === null)
     return org && Number.isFinite(Number(org.rate)) ? Number(org.rate) / 100 : null
   }, [taxCodes, activeStore])
+
+  // §POS-15 — THE rate this sale's lines are taxed at: the store's resolved rate, or zero when a
+  // wholesale customer's exemption is live. One rule, in `lib/pos-w9.taxRateFor`, so the cart and
+  // the server cannot disagree — the checkout refuses a sale whose lines carry tax against an
+  // exemption, and a second opinion here would only produce a refusal nobody can act on.
+  const effectiveTaxRate = taxRateFor(activeTaxRate, w9)
 
   // Tax basis — was org_settings.tax_applied_on in the standalone app; now a config-registry key.
   const taxAppliedOn: 'pre_discount' | 'post_discount' =
@@ -690,10 +711,49 @@ export default function PosSalesPage() {
       const taxable = it.is_taxable !== undefined
         ? it.is_taxable
         : (products.find(pp => pp.id === it.product_id)?.is_taxable ?? it.tax_rate > 0)
-      return recalcItem({ ...it, tax_rate: taxable ? (activeTaxRate ?? 0) : 0 })
+      return recalcItem({ ...it, tax_rate: taxable ? effectiveTaxRate : 0 })
     }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTaxRate, taxAppliedOn, cfg.tax_method, cfg.tax_cap_enabled, cfg.tax_cap_amount])
+  }, [effectiveTaxRate, taxAppliedOn, cfg.tax_method, cfg.tax_cap_enabled, cfg.tax_cap_amount])
+
+  // ── §POS-15 the three things a cashier can do about a W-9 ─────────────────────────────────────
+  // Each one calls the server and then re-reads the STATE from it. None of them decides locally
+  // that the customer is now exempt: the panel shows what the one home answered.
+  async function refreshW9() {
+    setW9(await loadW9(api, selectedCustomer?.id || null, activeStore || '').catch(() => W9_UNKNOWN))
+  }
+
+  async function emailW9Form() {
+    if (!selectedCustomer) return
+    setW9Busy(true)
+    try {
+      const r = await api(`/api/v1/pos/customers/${selectedCustomer.id}/w9/request`,
+        { method: 'POST', body: JSON.stringify({}) })
+      alert(r.message || 'Form W-9 emailed.')
+      await refreshW9()
+    } catch (err: unknown) {
+      alert(`Could not email the W-9: ${err instanceof Error ? err.message : 'unknown error'}`)
+    } finally {
+      setW9Busy(false)
+    }
+  }
+
+  async function confirmW9Received() {
+    if (!selectedCustomer) return
+    if (!confirm('Confirm you have the completed, signed Form W-9 for this customer?\n\n'
+      + 'This is what makes their sales tax-free, so only confirm a form you are holding.')) return
+    setW9Busy(true)
+    try {
+      const r = await api(`/api/v1/pos/customers/${selectedCustomer.id}/w9/confirm`,
+        { method: 'POST', body: JSON.stringify({}) })
+      alert(r.message || 'W-9 recorded.')
+      await refreshW9()
+    } catch (err: unknown) {
+      alert(`Could not record the W-9: ${err instanceof Error ? err.message : 'unknown error'}`)
+    } finally {
+      setW9Busy(false)
+    }
+  }
 
   function addToCart(product: Product, serial = '') {
     const newItem: CartItem = recalcItem({
@@ -706,7 +766,7 @@ export default function PosSalesPage() {
       list_price: product.retail_price,
       cost: product.cost,
       discount: 0,
-      tax_rate: product.is_taxable ? (activeTaxRate ?? 0) : 0,
+      tax_rate: product.is_taxable ? effectiveTaxRate : 0,
       tax_value: 0,
       extended_price: 0,
       is_taxable: product.is_taxable,
@@ -898,6 +958,11 @@ export default function PosSalesPage() {
       issues.push(...termsBlockers(selectedTender,
         { customerId: selectedCustomer?.id || null, termsDays }))
     }
+    // §POS-15 — a wholesale sale with no current W-9. The sentence is the server's own; an admin
+    // may tick the override, and the server checks that right again before it writes anything.
+    if (w9.blocked && !w9Override && w9.refusal) {
+      issues.push(w9.refusal)
+    }
     return issues
   }
 
@@ -1000,6 +1065,9 @@ export default function PosSalesPage() {
             tax_total: parseFloat(taxTotal.toFixed(2)),
             total: saleTotal,
             balance: onTerms ? saleTotal : 0,
+            // §POS-15 — a request to go past a missing W-9, not a claim to be allowed to. The
+            // server reads the caller's own rights and names the admin itself.
+            w9_override: w9Override || undefined,
             is_activation_sale: isActivationSale,
             receipt: receiptSnapshot,
           },
@@ -1258,6 +1326,52 @@ export default function PosSalesPage() {
               <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px', marginLeft: 'auto' }} onClick={() => setActiveView('home')}>← Back</button>
             </div>
 
+            {/* §POS-15 — THE WHOLESALE W-9 PANEL. Shown only for a wholesale customer. Every word
+                of its verdict comes from the server's one home; this block decides nothing. */}
+            {w9.wholesale && (() => {
+              const words = panelWords(w9)
+              const review = awaitingReview(w9)
+              const tone = words.tone === 'block' ? 'var(--red)'
+                : words.tone === 'warn' ? 'var(--amber)' : 'var(--green, var(--text2))'
+              return (
+                <div style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)', padding: '10px 16px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)' }}>WHOLESALE</span>
+                  <span style={{ fontSize: 12, color: tone, flex: 1, minWidth: 240 }}>
+                    {words.text}
+                    {review && <><br />{review}</>}
+                  </span>
+                  {w9.form_url && (
+                    <a href={w9.form_url} target="_blank" rel="noopener noreferrer"
+                       className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px', textDecoration: 'none' }}>
+                      ⬇ Blank W-9
+                    </a>
+                  )}
+                  {w9.w9_status !== 'current' && (
+                    <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }}
+                            disabled={w9Busy} onClick={emailW9Form}>
+                      {requestLabel(w9)}
+                    </button>
+                  )}
+                  {w9.w9_status !== 'current' && (
+                    <button className="btn btn-secondary" style={{ fontSize: 11, padding: '5px 10px' }}
+                            disabled={w9Busy} onClick={confirmW9Received}>
+                      ✓ I have the signed W-9
+                    </button>
+                  )}
+                  {/* The admin override. Offered only to a login the SERVER said may use it, and
+                      the server checks that right again before it writes the sale. It permits a
+                      TAXABLE sale — it never grants the exemption. */}
+                  {w9.blocked && w9.override_available && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text2)', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={w9Override}
+                             onChange={e => setW9Override(e.target.checked)} />
+                      Allow this sale without a W-9 (taxable)
+                    </label>
+                  )}
+                </div>
+              )
+            })()}
+
             {/* A RESUMED SALE says so. The cashier at the register may not be the one who left the
                 cart, and the prices on it are as old as the hold — so the banner names both rather
                 than presenting someone else's part-rung sale as this one's work. */}
@@ -1414,7 +1528,7 @@ export default function PosSalesPage() {
                 // Discount row so Subtotal − Discount + Tax = TOTAL adds up exactly.
                 { label: 'Subtotal', value: `$${(subtotal + discountTotal).toFixed(2)}`, red: false },
                 { label: 'Discount', value: discountTotal > 0 ? `-$${discountTotal.toFixed(2)}` : '$0.00', red: discountTotal > 0 },
-                { label: `Tax (${((activeTaxRate ?? 0) * 100).toFixed(3).replace(/\.?0+$/, '')}%)`, value: `$${taxTotal.toFixed(2)}`, red: false },
+                { label: w9.tax_exempt ? 'Tax (exempt — W-9 on file)' : `Tax (${(effectiveTaxRate * 100).toFixed(3).replace(/\.?0+$/, '')}%)`, value: `$${taxTotal.toFixed(2)}`, red: false },
               ].map(row => (
                 <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: 13 }}>
                   <span style={{ color: 'var(--text2)' }}>{row.label}</span>

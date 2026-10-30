@@ -89,6 +89,7 @@ Primary code homes:
 | POS-12 | **Editing a sale that is already rung** | "I am not able to edit the receipt or add more items to the same receipt." How does a cashier put another item on a receipt that is already printed, and what happens to the version the customer is holding? |
 | POS-13 | **What a receipt document looks like** | "The receipt is not formatted properly and no clear border lines to make it look professional." Why does the emailed receipt carry no borders at all, and why are its phrases broken apart mid-word? |
 | POS-14 | **A sale the customer pays later** | "Also add another tender type as Terms — 15/30/60." What may a till be paid with, who decides, and what does a receipt say about a sale nobody has paid yet? |
+| POS-15 | **A wholesale customer, and the W-9 that makes their sales tax-free** | "A customer type as wholesale where the option to not charge tax will be by default if the user confirms they received the filled out w9 … block the user to make a sale before the system has an updated w9, only the admin can go past … and a return link for the customer to send the w9 back." |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -7980,6 +7981,9 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"How is a payment method written for a customer?"** (both receipt layouts) | `pos.sale_payments.payment_method`, a machine value | **ONE home** `sale_receipt.method_label`. The slip printed `Paid (credit_card)` and the POS layout `.title()`'d it to **Credit_Card** on a customer's receipt — two dressings of one fact, both wrong. No method vocabulary is declared (RULE TWO): whatever the tenant stores is made readable, never translated against a list. Proof §F — §POS-13 |
 | **"What may a till be paid with?"** (the register's buttons, the checkout's gate, the database's CHECK list; owner 2026-10-30) | it was written FOUR times — two literal button arrays in `pos/sales/page.tsx`, the condition that chose between them, and `CHECK (payment_method IN …)` on `pos.sale_payments` (mig 725) | **ONE home** `pos/tender_vocabulary.py` — `REGISTER_TENDERS` (what each tender IS), `offered(cfg)` (what THIS org offers, over `pos.pos_settings`), `terms_day_options(cfg)`. The class each tender reconciles as is the house ladder's answer (`closing.router.tender_class` over its `recon_words`), never a mapping here — so a terms sale files under the existing `store_acct` and no class was invented. The browser reads it through `GET /pos/tender-types` and `lib/pos-tenders.ts`; mig `1106`'s CHECK list is pinned equal to the keys. Proof `harness_pos_tender_vocabulary.py` §A/§B/§C/§E; lock `harness_tender_vocab_lock.py` §(g) — §POS-14 |
 | **"Has this sale been paid, and what does it owe?"** (the checkout's balance, the till slip, the tenant's own POS layout) | nothing — every tender settled at the till, so `Paid (…)` was the only money line and `balance` was always written 0 | **ONE home** `tender_vocabulary.plan_payment` + its `settles_now`, dereferenced by `pos/router.checkout` (which re-derives `pos.sales.balance` as the sum of the legs that did NOT settle — the body's figure is discarded, because mig 725's `pos.checkout` stores what it is handed) and by `sale_receipt._unpaid`, which both receipt layouts ask instead of testing for a tender word. A terms row without its day count or due date is refused by the database as well (mig `1106` shape constraint). Proof §D/§G — §POS-14 |
+| **"May I sell to this customer, and is this sale taxable?"** (the register's panel, the checkout's gate; owner 2026-10-30) | `pos.customers.account_type` + `pos.customer_tax_doc` (mig `1107`) + the four `pos.pos_settings` rows | **ONE home** `pos/wholesale_w9.decide` — ONE call answers both, so no state exists where a sale is tax-free and the certificate is not current (the expensive failure). `taxable_rate` / `lib/pos-w9.taxRateFor` is the one place an exemption meets a rate; `pos.sales.tax_exempt_basis` records WHY a sale charged no tax (it cannot be re-derived — the certificate may be filed the next day) and `w9_override_by` names the admin who allowed a TAXABLE sale past a missing one. Only a PERSON can confirm receipt: a customer's own upload lands `submitted`. Proof `harness_pos_wholesale_w9.py` §A/§C/§D — §POS-15 |
+| **"What customer types exist?"** (the CHECK constraint, the customer form, the importer) | it was written THREE times — `pos.customers.account_type` CHECK (mig 725), the form's own array and the importer's `oneOf` | **ONE home** `pos/wholesale_w9.ACCOUNT_TYPES`, served by `GET /pos/customer-account-types`; mig `1107`'s CHECK and the importer's values are pinned equal to it (§E1/§E2), so a fourth spelling fails the build — §POS-15 |
+| **"What format may an uploaded document be?"** (a customer's returned W-9, HR's three onboarding uploads) | `hr/router._MAGIC` / `_sniff_format` / `_format_allowed`, **private to one router** | **ONE home** `app/core/upload_format.py` — `MAGIC` / `sniff` / `allowed` / `normalise` / `DEFAULT_FORMATS` / `refusal_sentence`. A file IS what its bytes say; the extension is read only to word the refusal, so a renamed `.exe` cannot pass on either path. HR's copies are DELETED and its four names are thin dereferences. Proof §H — §POS-15.3 |
 | **"What is this POS setting's effective value at this store"** (server side; owner 2026-10-17) | `pos.pos_settings` (org row `store_code IS NULL`, else the store override) | **ONE home** `backend/app/modules/pos/pos_config_effective.py` (`effective`, `values`, `flag`, `text`, `brand`, `disclaimers`, `SERVER_DEFAULTS`). The resolution rule lived ONLY in the browser (`frontend/src/lib/pos-config.ts`) until the server had to render a receipt; the two copies are PINNED key-by-key by `harness_pos_receipt_render.py` §B, which fails the build naming any default changed on one side only — §POS-02 |
 | **"What is this tenant called"** (the From name on its mail, a statement heading, a document title; owner 2026-10-17) | `storeops.tenants.name` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`NAME_COLUMN`, `display_name_from`, `display_name`, `display_names`) — a blank name reads as blank, never a fabricated stand-in printed as the business's own name. `notify/channels/email_resend.from_header` is the ONE place a `From:` header is assembled, and every business-facing send site passes its `org_id` so the customer sees the tenant; only genuine platform mail (the sign-in OTP) keeps the platform name. Siblings rewired in the same PR: `commcalc/router` ×2, `core/data_qa_api`, `core/operator_api`, `helpdesk/router`, `storeops/payroll_approval` ×2, `storeops/router._tenant_display_name`. Lock `harness_pos_receipt_render.py` §E6 fails the build if a second name-only reader appears — §POS-02 |
 
@@ -26183,6 +26187,7 @@ status word rather than a blank that reads as nil.
 | POS-12 | pos |
 | POS-13 | pos |
 | POS-14 | pos |
+| POS-15 | pos |
 | PAYABLES-01 | payables |
 | CORE-25 | core |
 <!-- SECTION-REGISTER:END -->
@@ -33316,6 +33321,127 @@ vocabulary this dereferences), §POS-02 (the setting-resolution home), §COMMCAL
 net terms this deliberately does not merge with).
 
 ---
+
+## §POS-15. THE WHOLESALE CUSTOMER AND THE W-9 THAT MAKES A SALE TAX-FREE (owner ask 2026-10-30)
+
+Owner, verbatim: *"add another tender type as Terms … and a customer type as wholesale where the
+option to not charge tax will be by default if the user confirms they received the filled out w9 and
+block the user to make a sale before the system has an updated w9, only the admin can go past
+without an updated w9, give the downloadable link to the user in case of a wholesale customer so
+they done have to look for it and the option to email to the customer and a return link for the
+customer to send the w9 back to the user."*
+
+### POS-15.1 Duplicate check (the build gate)
+
+| question | existing mechanism | what this change did |
+|---|---|---|
+| what customer types exist | `pos.customers.account_type` CHECK (mig 725) **and** the customer form's own `['Personal','Business']` **and** the importer's `oneOf` — three copies | **FACTORED into one home.** `wholesale_w9.ACCOUNT_TYPES`; the CHECK list and the importer's values are pinned equal to it (§E1/§E2) and the form reads it from `GET /pos/customer-account-types` |
+| what tax rate applies at this store | `pos/router._resolve_tax` (store > market > org, §30) | **REUSED WHOLE.** The exemption does not resolve a rate — it zeroes the one that resolver already answered, in `wholesale_w9.taxable_rate` / `lib/pos-w9.taxRateFor` |
+| what format may an uploaded document be | `hr/router._sniff_format` / `_format_allowed` / `_MAGIC`, **private to HR** | **MOVED to `app/core/upload_format.py`** and HR rewired to it (§POS-15.3). A customer's returned W-9 is the same question from another module; a second sniffer there is how one path accepts a renamed executable while the other refuses it |
+| a token-gated page a person outside the company uses to send a document in | the HR onboarding public portal (`/hr/public/onboarding/{token}`, allowlisted in `tenant_middleware`) | **THE PATTERN REUSED, NOT THE ROUTES** — same posture (the token IS the auth, boundary-matched prefix, uniform 404, magic-byte check). Not shared code: that portal authenticates an EMPLOYEE against their own record with a DOB gate, and a customer has no record to gate against |
+| how an email reaches a customer | `notify/channels/email_resend.send_email` + the receipt-email path (§POS-02) | **REUSED WHOLE** |
+| which POS setting applies at this store | `pos_config_effective.effective` (§POS-02) | **REUSED WHOLE** — the four new settings are ordinary keys |
+| is this sale allowed to complete | `pos/router.getCheckoutBlockers` / the checkout's gates (`require_customer`, drawer sessions, §POS-01) | **EXTENDED** — one more blocker, from the one home, worded once |
+
+### POS-15.2 THE CLASS, not the instance
+
+Tax-free is **not a property of a customer type.** It is a property of a customer type *with a
+current exemption certificate on file*. The lazy build — zero the tax when the account type says
+Wholesale, and keep the W-9 chase separately — produces exactly one failure, and it is the expensive
+one: a sale goes out tax-free against a certificate nobody holds, and the house carries the
+liability. So:
+
+- `wholesale_w9.decide` answers **both** questions in one call: may this sale be rung, and is it
+  taxable. There is no state in which a sale is exempt and the certificate is not current (§A4).
+- a tax-free sale **states its basis** on the sale row (`pos.sales.tax_exempt_basis`). A zero tax
+  figure with no stated reason is what an auditor asks about, and it cannot be re-derived later —
+  the certificate may be filed the next day.
+- the **override is not the exemption.** An admin going past a missing W-9 permits a **taxable**
+  sale and is named on it (`pos.sales.w9_override_by`). The block protects the sale from stalling;
+  the exemption protects the house from an unsupported tax position. Conflating them would let the
+  override become the thing that makes a sale tax-free, which is the opposite of the owner's ask.
+- only a **person** can confirm receipt. A customer's own upload lands as `submitted`, not
+  `received`, because the owner's wording is that the exemption follows *the user confirming they
+  received the filled out W-9* — and an anonymous caller holding a link cannot be that user.
+
+### POS-15.3 One home, dereferenced
+
+| fact | home | who dereferences it |
+|---|---|---|
+| which customer types exist | `pos/wholesale_w9.ACCOUNT_TYPES` | mig `1107`'s CHECK (pinned), the importer's `oneOf` (pinned), the customer form via `GET /pos/customer-account-types` |
+| is this customer wholesale | `wholesale_w9.is_wholesale` | the decision, the confirm route — no caller spells the word |
+| is this certificate current | `wholesale_w9.w9_state` — the certificate's OWN expiry wins; else the org's declared refresh period (`w9_valid_months`, 36 by house default, `0` = never) | `decide` only |
+| may this sale be rung, and is it taxable | `wholesale_w9.decide` | `GET /pos/customers/{id}/w9`, `POST /pos/sales/checkout`, and the register's panel (which shows the decision's own sentence) |
+| the exemption meeting a tax rate | `wholesale_w9.taxable_rate` (server) · `lib/pos-w9.taxRateFor` (the browser, where the cart is priced) | the cart's re-tax effect and every line added |
+| where the blank form is | `wholesale_w9.blank_form_url` — the org's declaration, the IRS's published PDF behind it, **https only** | the register's download link, the request email, the customer's page |
+| the return link, its words and its death | `wholesale_w9.new_token` / `token_expiry` / `token_live` / `return_link` / `request_subject` / `request_html` / `LINK_DEAD` | the request route, the two public routes, the page's route |
+| what format an uploaded document may be | **`app/core/upload_format.py`** — `MAGIC`, `sniff`, `allowed`, `normalise`, `DEFAULT_FORMATS`, `refusal_sentence` | the W-9 upload AND HR's three onboarding uploads (rewired; the private copies are gone, §H2) |
+
+### POS-15.4 The flow, end to end
+
+1. A cashier attaches a wholesale customer. The register asks the one home and draws the panel: the
+   W-9 state, a **⬇ Blank W-9** link, **✉ Email the W-9 to the customer**, and **✓ I have the signed
+   W-9**.
+2. Emailing mints a one-use token, stores it on `pos.customer_tax_doc` with its expiry, and sends
+   the customer the blank form plus their return link. The screen that asked is told the address and
+   the link — never handed the raw token to display or log.
+3. The customer opens `/w9/{token}`, downloads the form, signs it, uploads it. It is format-checked
+   by magic bytes, stored in a private bucket, recorded as `submitted`, and **the token is cleared**.
+4. Somebody at the company confirms the signed form is in hand. That — and only that — sets
+   `received`, and from then the customer's sales are tax-free until the certificate goes out of date.
+5. Until then the sale is **blocked** with the one home's sentence, or an admin ticks the override
+   and the sale goes through **taxable**, naming them.
+
+### POS-15.5 Every tenant, measured
+
+Wholesale is tax-free once a W-9 is on file, and a missing W-9 blocks, **for every org by default**;
+how long a certificate stays current, whether to block at all, whether wholesale is exempt and where
+the blank form lives are `pos.pos_settings` rows (per org or per store). No tenant, carrier or
+product is named in any file this change touches (RULE TWO). The integration tests seed three orgs —
+one on the house policy, one refreshing every 12 months, one that does not block — and assert each
+gets its own answer, including the negative that pins the mechanism: **the same customer id with a
+certificate filed under one org leaves another org's till blocked.**
+
+### POS-15.6 The security posture of the customer's link
+
+The return link is the only anonymous surface this adds, and it is a **credential**:
+
+- **minted** by the application from `secrets.token_urlsafe(32)` — never derived from a customer id,
+  a name or a timestamp;
+- **narrow** — it reaches one customer's upload slot and nothing else. The page it serves names the
+  asking company and carries nothing from the customer's record, because a link in an inbox gets
+  forwarded and anything on that page travels with it;
+- **expiring** (14 days) and **single-use** — cleared the moment a document arrives;
+- **not an oracle** — unknown, expired and already-used answer the *same* 404 with the *same* body,
+  so a probe cannot tell them apart (the posture `/notify/dl` and `/referral/redeem` already take);
+- **not a write of record** — an upload can only ever set `submitted`. It cannot confirm receipt,
+  cannot grant an exemption, cannot touch a sale;
+- **format-checked by bytes**, through the one sniffer, before anything is stored;
+- allowlisted in `tenant_middleware._PUBLIC_PREFIXES` by its own boundary-matched prefix
+  (`/api/v1/pos/public/w9`); every other `/pos/*` route keeps full auth (§G11 asserts both).
+
+### POS-15.7 Registered
+
+| thing | where |
+|---|---|
+| one homes | `backend/app/modules/pos/wholesale_w9.py`, `backend/app/core/upload_format.py` |
+| browser reader | `frontend/src/lib/pos-w9.ts` |
+| endpoints | `GET /pos/customers/{id}/w9` · `POST /pos/customers/{id}/w9/confirm` · `POST /pos/customers/{id}/w9/request` · `GET /pos/customer-account-types` · **public:** `GET /pos/public/w9/{token}` · `POST /pos/public/w9/{token}/upload` |
+| page | `frontend/src/app/w9/[token]/page.tsx` (outside the `(platform)` RBAC group, like `/onboard`) |
+| migration | `1107_pos_wholesale_w9.sql` — the `Wholesale` type, `pos.customer_tax_doc`, `pos.sales.tax_exempt_basis` / `w9_override_by`, `pos.checkout` replaced |
+| settings | `wholesale_tax_exempt_default`, `w9_block_sale`, `w9_valid_months`, `w9_blank_form_url` |
+| storage | private bucket `customer-tax-docs`, path `{org}/{customer}/{uuid}_{name}` |
+| proof | `backend/harness_pos_wholesale_w9.py` (§A–§J + negative controls) |
+| tests | `backend/tests/unit/test_wholesale_w9.py`, `test_upload_format.py`, `backend/tests/integration/test_pos_wholesale_w9_endpoint.py`, `frontend/src/lib/pos-w9.test.ts` |
+
+| MONEY IMPACT | **NONE on anything stored.** No customer's type changes, no stored tax figure is touched, every existing sale keeps a NULL basis (correctly: it was taxable). What is new is that a future sale may charge no tax — only against a confirmed certificate, and only while it is current |
+
+Same class: §POS-14 (the tender this shipped beside), §POS-13 (two layouts, one fact), §30.16 (the
+customer master this reads), and the HR onboarding portal (§14 family) whose public-token posture
+this follows without sharing its routes.
+
+---
+
 
 ## §COMMCALC-20. A HANDSET THAT BOOKS A REBATE BOOKS A COST (owner report 2026-10-19)
 

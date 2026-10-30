@@ -74,6 +74,14 @@ SERVER_DEFAULTS: dict[str, object] = {
     # Per store as well as per org, so a counter that does not sell on account can say so.
     "tender_terms_enabled": True,
     "tender_terms_day_options": "15,30,60",
+    # THE WHOLESALE CUSTOMER AND THEIR W-9 (owner 2026-10-30, §POS-15). Read by the W-9 panel's
+    # endpoint and by the checkout's gate. The VALUES are the house answer and
+    # `pos/wholesale_w9.py` is their one home — pinned key by key by `harness_pos_wholesale_w9.py`
+    # §F. Per store as well as per org: a trade counter and a retail shop can differ.
+    "wholesale_tax_exempt_default": True,
+    "w9_valid_months": 36,
+    "w9_block_sale": True,
+    "w9_blank_form_url": "",
     "receipt_remit_routing_number": "",
     "receipt_remit_account_number": "",
 }

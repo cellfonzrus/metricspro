@@ -47,7 +47,10 @@ const ENTITIES: EntityDef[] = [
     blurb: 'Customer address book: names, contact info, addresses, credit settings.',
     note: 'The carrier account PIN cannot be imported — enter it per customer in the app. SSN and driver-licence details are not held by the platform at all, so there is nothing to import.',
     fields: [
-      { key: 'account_type', type: 'string', oneOf: ['Personal', 'Business'], blank: 'Personal', synonyms: ['type', 'customer_type'] },
+      // §POS-15 — the customer types. The importer validates against this list, so a Wholesale
+      // customer could not be imported without it; the server's `wholesale_w9.ACCOUNT_TYPES`
+      // is the one home and `harness_pos_wholesale_w9.py` §E pins this line against it.
+      { key: 'account_type', type: 'string', oneOf: ['Personal', 'Business', 'Wholesale'], blank: 'Personal', synonyms: ['type', 'customer_type'] },
       { key: 'company_name', type: 'string', synonyms: ['company', 'business_name'] },
       { key: 'first_name', type: 'string', synonyms: ['firstname', 'first', 'given_name'] },
       { key: 'last_name', type: 'string', synonyms: ['lastname', 'last', 'surname', 'family_name'] },
