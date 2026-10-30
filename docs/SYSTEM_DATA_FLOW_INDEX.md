@@ -87,6 +87,7 @@ Primary code homes:
 | POS-10 | **What the shop IS, on a receipt** | "The RQ receipt email to the customer does not show the address and looks fake — the till thermal printer receipt came out ok." Where does a receipt get the shop's name, address, phone and licence, and why did one layout print all of it while the other printed the company name alone? |
 | POS-11 | **The page a receipt prints on, and the Bill To** | "Do not put the reprint date and time on top with the word Sale in the middle of the screen; the Bill To should have the customer address printed." Whose header is that across the top of a printed receipt, and why does a Bill To show a bare name when the renderer prints the address? |
 | POS-12 | **Editing a sale that is already rung** | "I am not able to edit the receipt or add more items to the same receipt." How does a cashier put another item on a receipt that is already printed, and what happens to the version the customer is holding? |
+| POS-14 | **Which store is this sale for, and what rate does the till charge** | "Since we have multiple stores under 1 tenant, the user if assigned to multiple stores should confirm which store they are working in so the receipt and the sale are logged for that store; the settings should give a list of stores to assign their respective sales tax on a store level or a market level." Who decides which store a sale belongs to, and why did a rate set on a MARKET never reach the till? |
 | POS-13 | **What a receipt document looks like** | "The receipt is not formatted properly and no clear border lines to make it look professional." Why does the emailed receipt carry no borders at all, and why are its phrases broken apart mid-word? |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
@@ -7978,6 +7979,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"What did this sale look like before it was edited?"** (the audit trail that makes an in-place rewrite answerable) | `pos.sale_amendments` (mig **1103**) | **ONE home** `sale_amendment.snapshot` / `current_revision`, filed by `pos.amend_sale` BEFORE it touches anything. Keeps the sale's own STORED figures, never re-derived ones — the point is to record what the customer's receipt said, not what it should have said. A null `revision` reads as 1, so the first edit of an older sale still files the original. The endpoint returns 503 rather than editing when the table is absent. Proof §C — §POS-12 |
 | **"What does a receipt DOCUMENT look like?"** (the browser copy and the PDF of one receipt; owner 2026-10-29) | nothing — it was described twice, in a private `_CSS` string and not at all for the PDF | **ONE home** `receipt_formats/doc_style.py`: the fonts, weights, greys, proportions and `RULES`, the named list of every rule drawn. `render_html` builds its stylesheet from `doc_style.css()` and the PDF draws from the same numbers, so a border exists once and appears in both. A second stylesheet in the renderer fails the build. Proof `harness_pos_receipt_document.py` §A/§B — §POS-13 |
 | **"This Document, drawn on a page"** (the emailed/attached PDF of the tenant's own POS layout) | the Document the content homes built | **ONE home** `receipt_formats/render_pdf.py` — the THIRD output of the one Document walk, beside `render_html` and `render_words`. It replaced a PDF rebuilt from `render_words`, which is a round-trip PROOF fixture (words at the ORIGINAL POS's paper offsets, for its parser) and therefore carried **0 drawn lines** and broke phrases mid-word. `render_words` is UNCHANGED and keeps its own job. Lives in the render package because `receipt_pdf_render` may decide no content (§P11) and now only delegates, refusing by name when no renderer is injected. Proof §C/§D/§G — §POS-13 |
+| **"Which store is this sale for, and is that CONFIRMED?"** (the register, the activations screen, the inventory screen, special orders, and `POST /pos/sales/checkout` + `POST /pos/activations` which take the money; owner 2026-10-30) | the caller's reporting span (`storeops.scope_keyset`) over the ACTIVE `storeops.stores` roster, with `storeops.app_users.store_code` as a pre-selection HINT and never an answer | **ONE home** `backend/app/modules/pos/working_store.py` — `span` / `resolve` / `sale_refusal`, returning the store AND its `basis` (`confirmed` \| `sole_store` \| `unconfirmed`, which carries no store code at all). Was NO home: four screens spelled `getActiveStore() \|\| user.store_code \|\| stores[0].store_code`, so a guess read as an answer, the saved pick carried no user (the next cashier inherited the last one's store), and checkout compared the sale's store to nothing — any store in the tenant, or NULL, which `_span_filter` then shows to every store-scoped manager. Client half `frontend/src/lib/pos-working-store.ts` (same two sentences, same three bases, keyed per login); `lib/pos-store.ts` DELETED. Proof `harness_pos_working_store.py` (67 checks; §G fails the build on a positional fallback returning to any POS page, §F on the two halves wording one refusal differently) — §POS-14 |
+| **"What sales-tax rate applies at this store?"** (the till, the POS Settings grid, the market dropdown, the bulk save; mig 741, re-homed 2026-10-30) | `pos.tax_codes`, whose scope is store `>` market `>` org-wide | **ONE home** `backend/app/modules/pos/tax_precedence.py` — `pick` / `resolve`, carrying the rung that won (`store` \| `market` \| `org` \| `none`) and the percent-to-fraction conversion a sale line stores. `router._resolve_tax` now DEREFERENCES it and the register ASKS for it through `GET /pos/tax-codes/resolve`. There were TWO rules: the server's three rungs, and the register's own two (store, then org-wide), so a rate declared on a MARKET showed as this store's `effective_rate` in the grid and was charged by nobody — the customer paid the org-wide rate, or $0 where none was declared. `none` stays explicit; a taxable sale that charged nothing is not recoverable once the customer has left. Proof §D (10 checks; H5 reproduces the two-rung answer) — §POS-14 |
 | **"How is a payment method written for a customer?"** (both receipt layouts) | `pos.sale_payments.payment_method`, a machine value | **ONE home** `sale_receipt.method_label`. The slip printed `Paid (credit_card)` and the POS layout `.title()`'d it to **Credit_Card** on a customer's receipt — two dressings of one fact, both wrong. No method vocabulary is declared (RULE TWO): whatever the tenant stores is made readable, never translated against a list. Proof §F — §POS-13 |
 | **"What is this POS setting's effective value at this store"** (server side; owner 2026-10-17) | `pos.pos_settings` (org row `store_code IS NULL`, else the store override) | **ONE home** `backend/app/modules/pos/pos_config_effective.py` (`effective`, `values`, `flag`, `text`, `brand`, `disclaimers`, `SERVER_DEFAULTS`). The resolution rule lived ONLY in the browser (`frontend/src/lib/pos-config.ts`) until the server had to render a receipt; the two copies are PINNED key-by-key by `harness_pos_receipt_render.py` §B, which fails the build naming any default changed on one side only — §POS-02 |
 | **"What a human PICKS this company by"** (the post-login company chooser, the Settings switcher, the operator helpdesk's tenant column; owner report 2026-10-30) | `storeops.tenants.name` + `.slug` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`picker_label_from`, `picker_labels`, `LabelMap`, `looks_like_uuid`, `GENERIC_LABEL`) and `mobile/src/lib/company-label.ts` (`companyLabel`, `looksLikeOrgId`, `GENERIC_COMPANY_LABEL`) — the app keeps the promise itself because a phone can run a bundle older than the server. DISTINCT from "what is this tenant called" below: a receipt's From name may be blank, a picker's label may not. Was THREE derivations — `core/router._my_tenants_payload` (`or "Tenant"`), the web picker, and the app's `tenantName` (`… || org_id`, the one that printed the defect). Siblings rewired in the same PR: `helpdesk/router._tenant_names` and its seven `or "Tenant"` callers. Lock `harness_company_label_lock.py` runs BOTH halves and compares them row for row — §CORE-26 |
@@ -26182,6 +26185,7 @@ status word rather than a blank that reads as nil.
 | POS-11 | pos |
 | POS-12 | pos |
 | POS-13 | pos |
+| POS-14 | pos |
 | PAYABLES-01 | payables |
 | CORE-25 | core |
 | CORE-26 | core |
@@ -33212,6 +33216,87 @@ stopped being asked a question it was never answering.
 Same class: §POS-02 (the one renderer this extends), §POS-08 (the PDF as a third medium, whose
 "no figure of its own" rule this keeps), §POS-11 (the page it prints on), §POS-04 (the content home
 it draws).
+
+---
+
+## §POS-14. WHICH STORE IS THIS SALE FOR, AND WHAT RATE DOES THE TILL CHARGE (owner 2026-10-30)
+
+Owner: *"pos has another thing to do, since we have multiple stores under 1 tenant, the user if
+assigned to multiple stores should confirm which store they are working in so the receipt and the
+sale are logged for that store in their store's databases; the settings should give a list of stores
+to assign their respective sales tax on a store level or a market level."*
+
+### POS-14.1 Duplicate check (the build gate)
+
+Searched this index first for both halves.
+
+**The tax half ALREADY EXISTED and was not rebuilt.** Migration 741 gave `pos.tax_codes` its
+`market` column; `GET /pos/tax-codes` + `/resolve` + `/markets` + `/store-grid` + `POST /tax-codes/bulk`
+and `components/pos/TaxCodesSection.tsx` are the owner's own 2026-08-09 ask ("give the stores which
+are already configured as a drop down menu to assign them the respective sales tax… option for new
+tax code should also have market"). Nothing new was created for it: the second asked-for screen is
+the screen that is already there. What was built is the EXTRACTION of the rule it shares with the
+till, and the removal of the till's private copy.
+
+**The store half had no mechanism at all.** §POS-01 keys a held cart on `(org, store_code,
+register_number)`, §POS-10 reads a store's row for a receipt, `core.scope` answers "where was this
+person" for VISIBILITY — none of them answers "which store is this sale being rung at", and the four
+POS screens that needed it had each answered it privately. So this is a new one home, not a sibling.
+
+### POS-14.2 THE CLASS, not the instance
+
+Both halves are the same defect: **one question with two answers, the shorter one winning where the
+money is.**
+
+- **"Which store is this sale for?"** had no home. The register, the activations screen, the
+  inventory screen and the special-orders screen each spelled `getActiveStore() || user.store_code
+  || stores[0].store_code`. Three consequences, all live: a GUESS was indistinguishable from an
+  ANSWER (nothing in the sale or on the screen recorded that no human had chosen); the saved pick
+  was a bare `localStorage` key with no user in it, so the next cashier to sign in at that till
+  inherited the last one's store; and **`POST /pos/sales/checkout` compared the sale's store to
+  nothing** — it accepted any store in the tenant and accepted NO store, which `pos.checkout`
+  writes as NULL and `_span_filter` then shows to every store-scoped manager in the tenant.
+- **"What rate applies here?"** had a home on the server with three rungs and a copy in the register
+  with two. A rate declared on a MARKET was shown by the Settings grid as that store's
+  `effective_rate` and was charged by nobody.
+
+### POS-14.3 The one homes
+
+| | |
+| --- | --- |
+| `pos/working_store.py` | `span(roster, keyset, login_store)` → `{stores, login_store, must_confirm}`; `resolve(span, requested)` → `{store_code, basis, refusal}`; `sale_refusal(span, store_code)`. **There is no positional fallback in it.** `stores[0]` was the defect; a sole-store span is the only case where an unpicked store is a known fact rather than a guess, and it is labelled `sole_store` so it cannot be mistaken for a choice. An EMPTY span still owes an answer — `must_confirm` False there would read as "go ahead with no store". Pure: rows in, verdict out, no client and no clock |
+| `pos/tax_precedence.py` | `pick` / `resolve` — store `>` market `>` org-wide, the rung that won, and the percent→fraction conversion. `router._resolve_tax` is three lines that call it |
+| `frontend/src/lib/pos-working-store.ts` | the client's mirror: the same two sentences, the same three bases, and the saved pick keyed `pos_active_store:<userId>`. The pre-§POS-14 shared key is read ONCE for back-compat and never written back, so nobody inherits a store after the first explicit pick. `lib/pos-store.ts` is DELETED |
+
+**A pin is a hint, never an answer.** `app_users.store_code` pre-selects the dialog and is ignored
+when it falls outside the span — the same point `core.scope` makes about visibility (§19: 7 of 71
+logins are pinned to a store they have never worked).
+
+### POS-14.4 What the owner can see
+
+- A cashier granted more than one store is **asked, once**, before anything can be rung up. The
+  picker offers only the stores that login may ring at, which is the span checkout enforces, so it
+  cannot offer a store the sale would be refused at.
+- A cashier granted exactly one store is asked nothing.
+- The Order Summary says **"inherited from market"** or **"inherited from company"** when the store
+  has no rate of its own, so a 8.5% that came from Brooklyn is legible rather than mysterious.
+- A sale at a store the login is not granted, or with no store at all, is **refused with a sentence**
+  rather than written. Activations are refused the same way, by the same one home.
+
+### POS-14.5 Files, locks, money
+
+| | |
+| --- | --- |
+| New | `pos/working_store.py` · `pos/tax_precedence.py` · `frontend/src/lib/pos-working-store.ts` · `harness_pos_working_store.py` (67 checks) · `tests/unit/test_pos_working_store.py` (25) · `tests/integration/test_pos_working_store_endpoint.py` (19) · `frontend/src/lib/__tests__/pos-working-store.test.ts` (17) |
+| Changed | `pos/router.py` (`_resolve_tax` dereferences the rule; `_caller_login_store`, `_working_span` and `GET /pos/working-store`; `checkout` and `create_activation` refuse and stamp the roster's spelling) · the four POS pages · `frontend/src/lib/pos-store.ts` **DELETED** |
+| Endpoints | **NEW** `GET /pos/working-store`. The tax endpoints are unchanged in shape |
+| Migration | **NONE** — the span comes from the scope machinery and the rates from mig 741's table |
+| Locks | §A the span is the caller's, active-only, org-scoped, fail-closed · §B the basis is honest and `stores[0]` is nobody's answer, pinned in both roster orders · §C the money path refuses BEFORE the write, on both the sale and the activation, and neither words its own refusal · §D three rungs, market not skippable, `none` explicit, one `_resolve_tax` body · §E `working_store._in_keyset` RUN against `core.scope.in_keyset` over the same rows · §F the TypeScript sentences compared byte-for-byte with the Python ones · §G no second ladder on any POS page, no rate rule in the client, the old home gone, the saved pick keyed per login · §H eight controls, incl. H5 which reproduces the two-rung answer (4.0% where 8.5% was declared) |
+| MONEY IMPACT | **A rate that was declared and not charged now charges.** No stored figure moves and no past sale is restated: this changes what a NEW sale is struck at. On the reporting tenant today no market-scoped `pos.tax_codes` row exists, so nothing changes until one is declared — which is exactly the setting the owner asked for. The refusals write nothing; they stop writes |
+
+Same class: §POS-01 (the `(org, store, register)` triple this agrees with), §POS-10 (what the shop
+IS on the receipt that is now logged to the right store), §19 (`core.scope`, where a pin is also not
+an answer), §CORE-13 (one fact, one home, dereferenced).
 
 ---
 

@@ -172,6 +172,14 @@ on:
       - "frontend/prove_one_domain.mjs"
       - "frontend/package-lock.json"
       - "backend/harness_one_domain_lock.py"
+      # §POS-14 — the working store and the sales-tax precedence: the two one homes, the router
+      # that dereferences them, the four POS pages and the client half, and the lock itself.
+      - "backend/app/modules/pos/working_store.py"
+      - "backend/app/modules/pos/tax_precedence.py"
+      - "backend/app/modules/pos/router.py"
+      - "frontend/src/lib/pos-working-store.ts"
+      - "frontend/src/app/(platform)/pos/**"
+      - "backend/harness_pos_working_store.py"
       # §COMMCALC-43 — one read per tenant for the target-field registry: the one home, its two
       # consumers, the page that surfaced the fan-out, and the lock itself.
       - "backend/app/modules/commcalc/target_registry.py"
@@ -1569,6 +1577,14 @@ on:
     branches: [main]
     paths:
       - "frontend/src/**"
+      # §POS-14 — the working store and the sales-tax precedence: the two one homes, the router
+      # that dereferences them, the four POS pages and the client half, and the lock itself.
+      - "backend/app/modules/pos/working_store.py"
+      - "backend/app/modules/pos/tax_precedence.py"
+      - "backend/app/modules/pos/router.py"
+      - "frontend/src/lib/pos-working-store.ts"
+      - "frontend/src/app/(platform)/pos/**"
+      - "backend/harness_pos_working_store.py"
       # index §75 — the frontend type check; same reason as the pull_request filter above.
       - "frontend/**"
       - "backend/harness_frontend_typecheck_lock.py"
@@ -2581,6 +2597,20 @@ jobs:
       - name: Run the receipt-document proof (one description of the borders, drawn by both media; the rules measured off the rendered PDF; phrases whole; the round-trip fixture left to its own job — index §POS-13)
         working-directory: backend
         run: python3 harness_pos_receipt_document.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  pos-working-store-proof:
+    name: POS working store + sales-tax precedence (DB-free, the real router and the real pages)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the working-store proof (a guess is never a confirmed store and `stores[0]` is nobody's answer; the money path refuses before the write, on the sale AND the activation; sales tax is ONE rule with THREE rungs and the market rung cannot be skipped; the keyset match RUN against core.scope; the refusal worded once across Python and TypeScript — index §POS-14)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_pos_working_store.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   store-identity-proof:
     name: Store identity — one store, one canonical key (DB-free, the real resolver)
