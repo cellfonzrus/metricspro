@@ -11,6 +11,8 @@ by the next author who is in a hurry and reads that docstring as permission. So 
 Run: `cd backend && python3 harness_demand_projection.py`
 DB-FREE. No client, no network, no environment — drive it under `env -i`.
 """
+import ast
+import inspect
 import os
 import re
 import sys
@@ -179,6 +181,46 @@ check("E2 the ONE deliberate difference: a window of no days is reported as unme
       and dp.projection(9, 0, 7)["projected"] is None)
 
 
+def _dept_literals_in(src):
+    """Department-shaped string VALUES in `src`, docstrings excluded (AST, not a text search: the
+    module's header names the old spellings deliberately, and a check that forbade saying so would
+    push the history out of the file that needs it). Returns the offenders."""
+    tree = ast.parse(src)
+    docs = {id(n.value) for n in ast.walk(tree)
+            if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)}
+    vals = [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs]
+    # The shapes a device DEPARTMENT takes in the live feeds. The CATEGORY marker ('cellphone') is a
+    # file-format word, not a tenant's, and is deliberately not listed.
+    bad = ("- xp", "handset", "phone - ", "device - ")
+    return [v for v in vals if any(b in v.lower() for b in bad)]
+
+
+def _asks_the_declaration(path):
+    """Does this caller read the org's declaration through its one home, rather than hand
+    `is_device_line` a list it made up itself?
+
+    Scoped to the callers that actually ASK which line is a device: `accessory_order_plan` reads this
+    home for the ARITHMETIC only and never sees a feed row, so requiring it to resolve a vocabulary
+    would be a check nobody can satisfy — the kind of vacuous gate this house has been bitten by."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            src = fh.read()
+    except OSError:
+        return False
+    # A CALL, found in the AST — the word also appears in prose that merely points at this home,
+    # and a text search would demand a vocabulary from a module that never sees a feed row.
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return False
+    calls = any(isinstance(n, ast.Call)
+                and ((isinstance(n.func, ast.Attribute) and n.func.attr == "is_device_line")
+                     or (isinstance(n.func, ast.Name) and n.func.id == "is_device_line"))
+                for n in ast.walk(tree))
+    return (not calls) or ("declared_device_departments" in src)
+
+
 print("\n== F. the honesty rules ==")
 check("F1 nothing sold over a real window is a MEASURED zero, not a blank",
       dp.projection(0, 30, 60) == {"units": 0, "window": 30, "horizon": 60,
@@ -206,7 +248,32 @@ check("G3 an EXPLICITLY empty declaration is honoured — a tenant whose feed ca
       "two columns can say so, and is not silently given the house list back",
       dp.is_device_line("Android - XP", "CellPhone", depts=[], categories=[]) is False)
 check("G4 either column may answer, because the two live feed formats each carry only one",
-      dp.is_device_line("", "CellPhone") and dp.is_device_line("Android - XP", None))
+      dp.is_device_line("", "CellPhone", ()) and dp.is_device_line("Android - XP", None, ("android - xp",)))
+
+# ── G5-G8: THE DEPARTMENTS ARE THE ORG'S, AND THERE IS NOTHING TO FALL BACK TO ──────────────────
+# THE DEFECT (owner-reported 2026-10-30, and it was this module's). `is_device_line`'s `depts` used to
+# DEFAULT to the house tenant's POS labels, and not one of the three callers passed a vocabulary. For
+# a tenant filing handsets under another department name, the Accessory Order Plan, the device order
+# forecast and the PO recommendations each reported no device sales at all — a month of handsets read
+# as zero, silently, with no error and nothing on screen to suggest a vocabulary problem.
+#
+# RULE TWO already forbade it; what was missing was a check that FAILS THE BUILD. These four are it.
+print("\n== G5-G8. the departments are the ORG'S declaration, with nothing behind them ==")
+_sig = inspect.signature(dp.is_device_line)
+check("G5 `depts` is REQUIRED — a caller that has not asked the org which departments are device "
+      "departments cannot answer the question at all. An optional default is the whole defect",
+      _sig.parameters["depts"].default is inspect.Parameter.empty)
+check("G6 no device-DEPARTMENT vocabulary is a value anywhere in the home (AST, so the header may "
+      "still NAME the old spellings to record what they cost)",
+      not _dept_literals_in(home))
+check("G7 an org that has declared nothing gets NOTHING — never another tenant's words. A confident "
+      "wrong order is worse than an empty one, and an empty one sends somebody to the admin screen",
+      dp.is_device_line("BrandedHandset", "KittedBranded", ()) is False
+      and dp.is_device_line("Android - XP", "", []) is False)
+_vocab_callers = [c for c in CALLERS if not _asks_the_declaration(c)]
+check("G8 every caller that asks which line is a device reads the org's declaration through its one "
+      "home (device_vocabulary.declared_device_departments), never a list of its own",
+      not _vocab_callers, f"off the declaration: {_vocab_callers}")
 
 
 print("\n" + "=" * 70)

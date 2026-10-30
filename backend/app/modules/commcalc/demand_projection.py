@@ -60,12 +60,29 @@ PURE. No import of anything, so the two existing callers can dereference it from
 """
 from __future__ import annotations
 
-# ── WHICH SALE LINE IS A DEVICE (RULE TWO: config, with house defaults) ──────────────────────────
-# The house vocabulary is the union of the two shapes this platform's feeds actually use, which is
-# what both former copies accepted: the custom report marks a handset `category='CellPhone'` with a
-# blank department, while the older format carries the department and no category. Neither word is a
-# carrier, tenant or product name, and a tenant whose POS spells it differently DECLARES its own.
-HOUSE_DEVICE_DEPARTMENTS = ("android - xp", "iphone - xp", "tablet - xp")
+# ── WHICH SALE LINE IS A DEVICE (RULE TWO: the DEPARTMENTS ARE THE ORG'S OWN DECLARATION) ────────
+# THE DEFECT THIS SHAPE EXISTS TO PREVENT (owner-reported 2026-10-30, and it was mine). This module
+# used to carry `HOUSE_DEVICE_DEPARTMENTS = ("android - xp", "iphone - xp", "tablet - xp")` as an
+# OPTIONAL default. Those are one tenant's POS labels. Every caller took the default, so for a tenant
+# that files handsets under a different department name all three features — this plan, the device
+# order forecast and the PO recommendations — reported that it had sold no devices at all: 1,034
+# handsets in one month, read as zero, with no error anywhere.
+#
+# The declaration already existed and was already correct: `accessory_config.box_departments`
+# (mig 218) is the org's own list, and the box count, the product mix, the GP report and the
+# multi-handset flag all read it. Only this test kept a copy — the duplicate defect the index rules
+# forbid, found by the owner rather than by the duplicate check, because I searched for the
+# ARITHMETIC's copies and not for this one.
+#
+# SO THERE IS NOTHING TO FALL BACK TO. `depts` is REQUIRED. A caller that has not asked the org which
+# departments are device departments cannot get an answer at all, which is why this cannot silently
+# come back. `device_vocabulary.declared_device_departments` is the one home for asking, and the house
+# fallback for an org that has declared nothing has its one home in the router (`_BOX_DEPTS`).
+#
+# The CATEGORY half is different in kind and stays a house tolerance: the older export format marks a
+# handset `category='CellPhone'` with a BLANK department. That is a FILE FORMAT marker, not a carrier,
+# tenant or product name, so RULE TWO does not reach it — and a tenant whose feed says otherwise
+# declares its own through `categories`.
 HOUSE_DEVICE_CATEGORIES = ("cellphone",)
 
 #: Why a projection reads the way it does. Returned on every projection, so a caller can never show a
@@ -84,14 +101,23 @@ def _lower_tuple(raw, default):
     return out
 
 
-def resolve_device_vocabulary(depts=None, categories=None):
-    """The declared device vocabulary → `(departments, categories)`, lower-cased. PURE."""
-    return (_lower_tuple(depts, HOUSE_DEVICE_DEPARTMENTS),
-            _lower_tuple(categories, HOUSE_DEVICE_CATEGORIES))
+def resolve_device_vocabulary(depts, categories=None):
+    """The org's declared device vocabulary → `(departments, categories)`, lower-cased. PURE.
+
+    `depts` is the ORG'S OWN list and is required; an empty list resolves to an empty set, which
+    identifies nothing. That is the honest answer for an org that has declared nothing — the report
+    then says it found no device sales, and a human fixes the declaration, where quietly borrowing
+    another tenant's words would hand them a confident wrong number."""
+    return (_lower_tuple(depts, ()), _lower_tuple(categories, HOUSE_DEVICE_CATEGORIES))
 
 
-def is_device_line(dept, category, depts=None, categories=None) -> bool:
-    """Whether ONE sale line sold a physical device. PURE, and THE one test (§COMMCALC-49).
+def is_device_line(dept, category, depts, categories=None) -> bool:
+    """Whether ONE sale line sold a physical device, BY THIS ORG'S DECLARATION. PURE, and THE one
+    test (§COMMCALC-49).
+
+    `depts` — the org's declared device departments — is REQUIRED, with no default, so that a caller
+    cannot answer this question without having asked the org. See the header: an optional default is
+    exactly how three features came to be blind to a whole tenant.
 
     EITHER column may answer, because the two live feed formats each carry only one of them: a line
     whose category names a handset is a handset even with a blank department, and vice versa. That

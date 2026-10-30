@@ -40871,7 +40871,8 @@ so it can be dereferenced from any load order.
 | Fact | Its one home |
 |---|---|
 | how many of something will sell over the next horizon | `commcalc/demand_projection.projection` / `projected_units` / `recommend_qty` |
-| which sale line sold a DEVICE | `commcalc/demand_projection.is_device_line` (+ `HOUSE_DEVICE_DEPARTMENTS` / `HOUSE_DEVICE_CATEGORIES`, config with house defaults) |
+| which sale line sold a DEVICE | `commcalc/demand_projection.is_device_line` — the departments are a REQUIRED argument, never a default (see COMMCALC-49.10) |
+| which departments THIS ORG calls a device | `commcalc/device_vocabulary.declared_device_departments` → `accessory_config.box_departments` (mig 218), the declaration the box count / product mix / GP report already read |
 | the model ranking, the lifecycle ruling, the colour mix, the attach plan, the order | `commcalc/accessory_order_plan.py` (pure) |
 | where every figure on the screen came from | `commcalc/accessory_order_drilldown.py` (declaration only) |
 | the device MODEL out of a promo-decorated description | `commcalc/product_mix.model_of` (§62), dereferenced |
@@ -40881,6 +40882,48 @@ so it can be dereferenced from any load order.
 **THE UNIT OF THE WINDOW IS THE CALLER'S.** `/payables/forecast` and the PO recommendations count
 DAYS; this report counts MONTHS. Velocity is per window-unit and the horizon is in the same unit, so
 one arithmetic serves both without a hidden second divisor.
+
+### COMMCALC-49.10 EVERY TENANT, NOT THE ONE WHOSE WORDS ARE IN THE CODE (owner directive 2026-10-30)
+
+Owner: *"how come it is only working for cellfonz r us and not luxlink, there is a problem in the code
+it should be universal add on of a feture — note it in the index that all features should be for all
+tenanats and the testing agent shoudl test it after it is made, security agen should give a pass before
+it is made live"*.
+
+**WHAT HAPPENED.** `demand_projection.is_device_line` shipped with `depts` OPTIONAL, defaulting to
+`("android - xp", "iphone - xp", "tablet - xp")` — the house tenant's POS labels. None of the three
+callers passed a vocabulary. So for a tenant filing handsets under `BrandedHandset`, the Accessory
+Order Plan, `/payables/forecast` and `/asset/po/recommendations` each reported **no device sales at
+all**: 1,034 handsets in September 2026 read as zero, with no error, no warning, and nothing on the
+screen to suggest a vocabulary problem. Measured on live data 2026-10-30.
+
+**THE DECLARATION ALREADY EXISTED.** `accessory_config.box_departments` (mig 218) is the org's own
+admin-editable list, and the box count, the product mix, `gp_report.device_department_test` and
+`multi_handset_day.handset_rows` all read it. The affected tenant's row was already correct. This was
+not a missing feature or a data gap — it was a fifth copy of a declared fact, and the only one that
+did not dereference it. The duplicate check missed it because it searched for copies of the velocity
+ARITHMETIC and of `_is_device_line`, not for the QUESTION they answer.
+
+**THE RULE, stated once for every feature after this one.**
+
+- **A feature is not finished until it works for every tenant.** "Works" means measured against each
+  tenant's own declarations and feed shapes, not against the house org alone. A default that is
+  really one tenant's vocabulary is RULE TWO's per-tenant code wearing a hat.
+- **A vocabulary a tenant declares is a REQUIRED argument, never a default.** A caller that has not
+  asked the org cannot be able to answer. An optional default is what turns a missing declaration
+  into a confident wrong number instead of a visible gap — and this one stayed invisible because
+  zero is a plausible answer.
+- **Nothing declared means nothing identified, and the surface says so.** It never falls back to
+  another tenant's words. An empty report sends somebody to the admin screen; a wrong one does not.
+- **Tested across tenants AFTER it is built, and security-passed BEFORE it goes live.** The
+  cross-tenant tests for this report are in
+  `backend/tests/integration/test_accessory_order_plan_endpoint.py` ("EVERY TENANT, NOT THE ONE
+  WHOSE WORDS ARE IN THE CODE") and `backend/tests/unit/test_device_vocabulary.py`; they assert both
+  that each tenant's shape produces its order AND that one tenant's declaration never leaks into
+  another's read.
+- **Locked:** `harness_demand_projection.py` §G5–G8 fails the build if the vocabulary becomes
+  optional again, if a department literal reappears as a VALUE in the home, if an undeclared org is
+  given a fallback, or if a caller stops asking `declared_device_departments`.
 
 ### COMMCALC-49.3 The arithmetic
 

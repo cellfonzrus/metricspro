@@ -39,6 +39,7 @@ from fastapi import APIRouter, HTTPException, Header
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
 from app.modules.commcalc import demand_projection
+from app.modules.commcalc import device_vocabulary as _devvocab
 
 router = APIRouter()
 
@@ -102,7 +103,10 @@ class ReceivePoLineIn(LaxModel):
 _MIGRATION_MSG = ("Purchase Orders migration pending — ask the operator to run "
                    "database/migrations/301_asset_purchase_orders.sql in the Supabase SQL Editor.")
 _PO_STATUSES = ("draft", "submitted", "partially_received", "received", "closed", "cancelled")
-_DEV_DEPTS = set(demand_projection.HOUSE_DEVICE_DEPARTMENTS)   # the one home's vocabulary, read not copied
+# No device-department literal here: which departments are device lines is the ORG'S declaration
+# (`accessory_config.box_departments`, mig 218), asked through `device_vocabulary` per request. The
+# list that used to sit on this line was one tenant's POS labels, which made these recommendations
+# blind to every tenant that spells them differently (owner defect 2026-10-30).
 # PostgREST's "this relation/function doesn't exist" error signatures (schema-cache miss because mig 301
 # hasn't run) — same markers asset/router.py's own _is_missing_schema_error uses (mig-300 precedent).
 _MISSING_SCHEMA_MARKERS = ("PGRST202", "PGRST205", "PGRST203", "schema cache", "does not exist")
@@ -138,15 +142,20 @@ def _float(v, d=0.0):
         return d
 
 
-def _is_device_line(dept, category):
-    """A physical-phone sale line — `commcalc/demand_projection.is_device_line`, DEREFERENCED.
+def _is_device_line(dept, category, depts):
+    """A physical-phone sale line BY THIS ORG'S DECLARATION — `commcalc/demand_projection.is_device_line`,
+    DEREFERENCED, with `depts` from `device_vocabulary.declared_device_departments`.
 
     This used to be a copy of payables/router.py's own copy, excused in its docstring by the
     module-load cycle described at the top of this file. The excuse is answered rather than argued
     with: `demand_projection` imports NOTHING, so reading it here cannot participate in a cycle
     whichever module loads first. Two tests of "is this a device" was the duplicate defect CLAUDE.md
-    forbids, and `harness_demand_projection.py` now fails the build if a third appears (§COMMCALC-49)."""
-    return demand_projection.is_device_line(dept, category)
+    forbids, and `harness_demand_projection.py` now fails the build if a third appears (§COMMCALC-49).
+
+    `depts` is required because it is required there: a caller that has not asked the org which
+    departments are device departments must not be able to answer the question at all. That optional
+    default is what made this function answer for one tenant and no other."""
+    return demand_projection.is_device_line(dept, category, depts)
 
 
 # ── per-setting admin gate (mirrors commcalc/router.py's _require_commission_admin) ─────────────────────
@@ -364,6 +373,9 @@ def po_recommendations(stores: str = "", market: str = "", lookback: int = 7, ho
         return _po_resolve_market(store) or None
 
     cutoff = (datetime.now(timezone.utc).date() - timedelta(days=lookback)).isoformat()
+    # THIS ORG'S declared device departments, asked once for the whole scan (the config read is cached
+    # per org, and asking per row would be a read per sale line).
+    _dev_depts = _devvocab.declared_device_departments(client, org_id)
     agg = {}
 
     def bucket(store, model):
@@ -383,7 +395,7 @@ def po_recommendations(stores: str = "", market: str = "", lookback: int = 7, ho
             for r in chunk:
                 if str(r.get("voided") or "").upper() == "YES" or (r.get("trans_type") or "") == "Return":
                     continue
-                if not _is_device_line(r.get("department"), r.get("category")):
+                if not _is_device_line(r.get("department"), r.get("category"), _dev_depts):
                     continue
                 sp = (r.get("salesperson") or "").strip().lower()
                 if not sp or sp == "admin":
@@ -829,6 +841,7 @@ def _estimate_sold_split(client, org_id, est_units, exclude_imeis):
     Callers MUST label these rows 'estimated (no serial captured)' — never presented as an exact match."""
     if not est_units:
         return {}
+    _dev_depts = _devvocab.declared_device_departments(client, org_id)
     groups = {}
     for u in est_units:
         key = (u["store"] or "", (u["device_model"] or "").strip().lower())
@@ -853,7 +866,7 @@ def _estimate_sold_split(client, org_id, est_units, exclude_imeis):
                 for r in chunk:
                     if str(r.get("voided") or "").upper() == "YES" or (r.get("trans_type") or "") == "Return":
                         continue
-                    if not _is_device_line(r.get("department"), r.get("category")):
+                    if not _is_device_line(r.get("department"), r.get("category"), _dev_depts):
                         continue
                     if str(r.get("product_desc") or "").split(" - ")[0].strip().lower() != model_lower:
                         continue

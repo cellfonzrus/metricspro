@@ -14,6 +14,7 @@ from app.core.schemas import LaxModel
 from app.modules.asset.router import _norm_imei, _vip_invoice_map, _epay_payments_map
 from app.modules.commcalc import date_window
 from app.modules.commcalc import demand_projection
+from app.modules.commcalc import device_vocabulary as _devvocab
 from app.modules.payables import engine
 from app.modules.payables import ledger_status as _ls
 from app.modules.payables import owed_read as _owed
@@ -38,13 +39,21 @@ PAGE = 1000
 # copies are gone and `commcalc/demand_projection.py` is the one home. It imports nothing, so there is
 # no load-order hazard in reading it from either module. `harness_demand_projection.py` fails the
 # build if a second copy reappears or if this import is dropped.
-DEV_DEPTS = set(demand_projection.HOUSE_DEVICE_DEPARTMENTS)   # device box lines (mig 013 daily_sales_actuals)
-DEV_DEPTS_EXACT = ["Android - XP", "IPHONE - XP", "TABLET - XP"]   # exact-case for server-side .in_()
+# WHICH DEPARTMENTS ARE DEVICE LINES IS THE ORG'S OWN DECLARATION, not a literal here (owner defect
+# 2026-10-30). Both of the lists that used to sit on these two lines were one tenant's POS labels, so
+# this forecast and the candidate scan below were blind to every tenant that spells them differently —
+# a whole month of another tenant's handsets read as zero. `device_vocabulary` is the one place that
+# asks (`accessory_config.box_departments`, mig 218 — the SAME declaration the box count, the product
+# mix and the GP report read). Resolved per request, because a tenant may change it.
 
 
-def _is_device_line(dept, category):
-    """A physical-phone sale line — `demand_projection.is_device_line`, dereferenced."""
-    return demand_projection.is_device_line(dept, category)
+def _is_device_line(dept, category, depts):
+    """A physical-phone sale line BY THIS ORG'S DECLARATION — `demand_projection.is_device_line`,
+    dereferenced, with `depts` from `device_vocabulary.declared_device_departments`.
+
+    `depts` is required here because it is required there: a caller that has not asked the org which
+    departments are device departments must not be able to answer the question at all."""
+    return demand_projection.is_device_line(dept, category, depts)
 
 
 def sb():
@@ -256,7 +265,9 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
         return agg.setdefault(key, {"carrier": cname, "store": st, "device_model": canonical,
                                     "units": 0, "on_hand": 0, "mapped": bool(m)})
 
-    # velocity — Boost device sales (raw_sales device lines)
+    # velocity — device sales (raw_sales device lines), over THIS ORG'S declared device departments
+    _dev_depts = _devvocab.declared_device_departments(client, org_id)
+
     def sq():
         q = (client.schema("commcalc").table("raw_sales")
              .select("store,product_desc,department,category,voided,trans_type,salesperson")
@@ -265,7 +276,7 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
     for r in _fetch_all(sq):
         if (r.get("voided") or "").upper() == "YES" or (r.get("trans_type") or "") == "Return":
             continue
-        if not _is_device_line(r.get("department"), r.get("category")):
+        if not _is_device_line(r.get("department"), r.get("category"), _dev_depts):
             continue
         sp = (r.get("salesperson") or "").strip().lower()
         if not sp or sp == "admin":
@@ -833,9 +844,14 @@ def phone_map_candidates(limit: int = 300, days: int = 180, org_id: str = ORG_ID
     for r in _fetch_all(lambda: client.schema("commcalc").table("raw_sales").select("product_desc")
                         .eq("org_id", org_id).eq("category", "CellPhone").gte("trans_date", cutoff)):
         _add(r.get("product_desc"), "sales", boost_id, boost_name)          # custom report phone lines
-    for r in _fetch_all(lambda: client.schema("commcalc").table("raw_sales").select("product_desc")
-                        .eq("org_id", org_id).in_("department", DEV_DEPTS_EXACT).gte("trans_date", cutoff)):
-        _add(r.get("product_desc"), "sales", boost_id, boost_name)          # legacy-format phone lines
+    # The department filter is pushed to the server, so it must be THE ORG'S declared list in the
+    # org's own spelling — not a literal. An org that has declared nothing contributes no rows here
+    # rather than contributing another tenant's departments.
+    _cand_depts = [d for d in _devvocab.declared_device_departments(client, org_id) if d]
+    if _cand_depts:
+        for r in _fetch_all(lambda: client.schema("commcalc").table("raw_sales").select("product_desc")
+                            .eq("org_id", org_id).in_("department", _cand_depts).gte("trans_date", cutoff)):
+            _add(r.get("product_desc"), "sales", boost_id, boost_name)      # legacy-format phone lines
     try:
         for r in _fetch_all(lambda: client.schema("commcalc").table("raw_ma_commission").select("sku")
                             .eq("org_id", org_id).gte("tx_date", cutoff)):

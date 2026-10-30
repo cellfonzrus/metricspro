@@ -1196,26 +1196,37 @@ FACTS: dict[str, dict] = {
                     'counting months share one arithmetic without a hidden second divisor; the '
                     'banker\'s rounding both live callers were already ordering phones on is '
                     'preserved to the digit. A window of no days is reported as unmeasurable, never '
-                    'as a projection of zero.',
-        "homes": ('app/modules/commcalc/demand_projection.py',),
+                    'as a projection of zero. SECOND HOME, added 2026-10-30 after the owner '
+                    'found all three callers blind to a whole tenant: which DEPARTMENTS an org '
+                    'calls a device is the org\'s own declaration '
+                    '(`accessory_config.box_departments`, mig 218 — the list the box count, the '
+                    'product mix and the GP report already read), asked through '
+                    '`device_vocabulary.declared_device_departments`. It had been an OPTIONAL '
+                    'default holding one tenant\'s POS labels, so a month of another tenant\'s '
+                    'handsets read as zero. The vocabulary is now a REQUIRED argument: a caller '
+                    'that has not asked the org cannot answer at all.',
+        "homes": ('app/modules/commcalc/demand_projection.py',
+                  'app/modules/commcalc/device_vocabulary.py'),
         "index": ('COMMCALC-49',),
         "locks": ('harness_demand_projection.py',),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04, and it strips exactly these reasons).
         "callers": {
             # The device forecast (§15, module 095). It kept its own four lines of velocity and its
-            # own device-line test; both are gone and DEV_DEPTS now reads the home's vocabulary.
-            'app/modules/payables/router.py': ('demand_projection',),
+            # own device-line test; both are gone, and the device DEPARTMENTS it used to spell as a
+            # literal are now the ORG'S declaration, asked through `device_vocabulary`.
+            'app/modules/payables/router.py': ('_devvocab', 'demand_projection'),
             # The proposed-PO recommendations (§36). The other copy, excused in its docstring by the
             # module-load cycle — answered rather than argued with, since the home imports nothing.
-            'app/modules/asset/purchase_orders.py': ('demand_projection',),
+            'app/modules/asset/purchase_orders.py': ('_devvocab', 'demand_projection'),
             # The Accessory Order Plan (§COMMCALC-48) — the THIRD caller, and the one whose arrival
             # is why the fact was factored instead of copied a third time. It counts MONTHS where
             # the other two count days, which is exactly what the window-unit rule allows.
             'app/modules/commcalc/accessory_order_plan.py': ('_dp',),
+
             # The report's endpoint reads the device-line test directly, so the look-back counts the
             # same lines the two ordering screens do.
-            'app/modules/commcalc/router.py': ('_dp',),
+            'app/modules/commcalc/router.py': ('_devvocab', '_dp'),
         },
     },
     'device_cost_store': {
