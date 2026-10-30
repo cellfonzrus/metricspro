@@ -1270,6 +1270,55 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_devvocab', '_dp'),
         },
     },
+    'device_model_family': {
+        "question": 'WHICH SOLD LINES ARE THE SAME PHONE, for the purpose of ordering accessories? A '
+                    'case fits a phone, not a colour of it, so five colours of one handset are one '
+                    'order row — while a Pro is a different phone and must stay one. The capacity is '
+                    'dropped by PATTERN (a number followed by a storage unit is a format marker, like '
+                    'the CellPhone category); the COLOUR is dropped only if the ORG HAS DECLARED THAT '
+                    'WORD, because a colour word is a tenant\'s own spelling and CLAUDE.md bans a '
+                    'house default that is really one tenant\'s vocabulary. So `colour_tokens` is a '
+                    'REQUIRED keyword argument with nothing behind it, an org that has declared none '
+                    'gets no grouping and the surface SAYS so, and a curated '
+                    '`device_model_alias.canonical_model` outranks the derivation. The folded row '
+                    'carries the spellings that went into it, so the drill-down costs no second query.',
+        "homes": ('app/modules/commcalc/device_model_family.py',),
+        "index": ('COMMCALC-49.11',),
+        "locks": ('harness_accessory_order_grid.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50).
+        "callers": {
+            # The Accessory Order Plan's endpoint: it asks the org for its colour words and folds the
+            # raw model counts into phones before the plan is built.
+            'app/modules/commcalc/router.py': ('_dmf',),
+        },
+    },
+    'accessory_order_catalog': {
+        "question": 'WHAT KINDS OF ACCESSORY CAN BE BOUGHT, and how is each one chosen? The '
+                    'load-bearing distinction is SPLIT against ASSIGNED: a case and a protector are '
+                    'bought FOR a phone and divide across styles, so they are columns per phone; a '
+                    'cable, a charging cube and earphones are bought BY CONNECTOR and consolidate '
+                    'across every phone that takes the same one, because the cables are common to a '
+                    'lot of phones. The option lists are extensible per org, with a picture per '
+                    'option; a house default is correct here because these are the generic names of '
+                    'a kind of product, read against no tenant\'s feed. NOT `accessory_catalog`, '
+                    'which classifies what was SOLD from an uploaded product catalog '
+                    '— one word apart in the filename, two different questions, and writing this '
+                    'feature overwrote that module once before the name was fixed. Also the ONE home '
+                    'for the share-reading rule (percentages or fractions, decided by the total), '
+                    'which the colour mix now dereferences instead of keeping its own copy.',
+        "homes": ('app/modules/commcalc/accessory_order_catalog.py',),
+        "index": ('COMMCALC-49.12',),
+        "locks": ('harness_accessory_order_grid.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50).
+        "callers": {
+            # The plan builds the grid and the consolidated sheet off the resolved catalog, and reads
+            # the share rule for the colour mix through it.
+            'app/modules/commcalc/accessory_order_plan.py': ('_cat',),
+            # The endpoint resolves the catalog to validate a per-phone assignment before storing it,
+            # and reads which product classes take an accessory at all.
+            'app/modules/commcalc/router.py': ('_aocat',),
+        },
+    },
     'device_cost_store': {
         "question": 'WHICH STORE carries a handset\'s cost? The distributor ledger books it to the '
                     'store the unit was STOCKED to; the carrier pays the store it was ACTIVATED at. '
