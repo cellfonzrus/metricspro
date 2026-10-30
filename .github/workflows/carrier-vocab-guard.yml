@@ -845,6 +845,9 @@ on:
       - "backend/harness_pos_held_sale.py"
       - "backend/app/modules/pos/sale_amendment.py"
       - "backend/harness_pos_sale_amendment.py"
+      - "backend/harness_pos_sale_settlement.py"
+      - "backend/app/modules/pos/sale_settlement.py"
+      - "database/migrations/1108_pos_sale_tender_mismatch.sql"
       - "database/migrations/1103_pos_sale_amendment.sql"
       - "frontend/src/lib/pos-sale-amend.ts"
       - "backend/app/modules/pos/sale_receipt.py"
@@ -2554,6 +2557,16 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_deposit_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      # §POS-17, and HERE rather than in the stdlib lock job for the reason §19.25b states and
+      # `harness_ci_pipefail_lock` enforces: §L drives the REAL `_safe_settings_store_filter`, so it
+      # imports the POS router, which imports fastapi. In a job that installs nothing the step would
+      # die with ModuleNotFoundError before check one — the lock named exactly this and this is the
+      # fix it asks for. It sits beside `harness_deposit_recon` on purpose: §POS-17's verdict IS
+      # `deposit_recon.status_for`, and §E fails the build if the two ever disagree.
+      - name: Run the POS tender-mismatch proof + lock (one home for tender vs total; an unrecorded tender is never $0.00; total − balance; the verdict is deposit_recon's; the void sibling; the dry run is the save; a store code is checked before it is interpolated — index §POS-17)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_pos_sale_settlement.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # THE HOURS-APPROVAL SAVE PROOF (index §STOREOPS-01). HERE, not in the lock job, because it
       # imports app/modules/storeops/payroll_approval.py, which imports fastapi —
       # harness_ci_pipefail_lock names exactly this class of step and this is the fix it asks for.
