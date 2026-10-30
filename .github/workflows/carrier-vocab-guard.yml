@@ -213,6 +213,12 @@ on:
       - "backend/harness_report_drilldown.py"
       - "backend/harness_drilldown_coverage.py"
       - "backend/harness_drilldown_pending.txt"
+      # index §CORE-27 — the toolbar gate: every report carries the standard filters and the
+      # send bar. Named here as well as covered by the wildcards, per the §13e lesson.
+      - "backend/harness_report_toolbar_coverage.py"
+      - "frontend/src/lib/zero-sales-export.ts"
+      - "frontend/src/components/ReportExportBar.tsx"
+      - "frontend/src/components/StandardFilterBar.tsx"
       - "backend/app/modules/core/report_drilldown.py"
       - "frontend/src/components/DrillDownPanel.tsx"
       # §CORE-17.3a — the TILE fold and the first report declared against it.
@@ -624,7 +630,7 @@ on:
       # index §56 — one home for a chart's plain-language caption; every Trends chart card wired
       - "backend/harness_trends_chart_notes.py"
       - "frontend/src/components/ChartNote.tsx"
-      # index §CORE-26 — the COMPANY-PICKER label lock (owner report 2026-10-30). Sibling of the
+      # index §CORE-27 — the COMPANY-PICKER label lock (owner report 2026-10-30). Sibling of the
       # scope display-name lock below: same rule, different registry.
       - "backend/harness_company_label_lock.py"
       - "backend/app/modules/core/tenant_identity.py"
@@ -1610,7 +1616,7 @@ jobs:
       - name: Run the chart-caption lock (every Trends chart says what a move MEANS; one home, ungated — index §56)
         working-directory: backend
         run: python3 harness_trends_chart_notes.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the company-picker label lock (one home for what a human calls a company; no `… || org_id`; both halves run and compared — index §CORE-26)
+      - name: Run the company-picker label lock (one home for what a human calls a company; no `… || org_id`; both halves run and compared — index §CORE-27)
         working-directory: backend
         run: python3 harness_company_label_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the scope display-name lock (one home for a scope's name; no `scope_label || scope_key`; every finance surface wired — index §13b.1)
@@ -1842,6 +1848,9 @@ jobs:
       - name: Run the drill-down COVERAGE gate (every report route declared exactly once; a new report is un-mergeable until its author says whether it drills, is flat, is not a report, or owes one; the owes count may only SHRINK — index §CORE-17.5)
         working-directory: backend
         run: python3 harness_drilldown_coverage.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the report TOOLBAR coverage gate (every report carries the standard filters and the send bar by default; the population is read from the drill-down ledger rather than re-declared; both owes counts may only SHRINK — index §CORE-27)
+        working-directory: backend
+        run: python3 harness_report_toolbar_coverage.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the cash-recon tile drill lock (every money tile the screen shows is DECLARED and its rows tie back to it; a planted cent, a dropped store-day, a flipped variance sign each break a tie-out; the feed tables are dereferenced from the lineage registry, never named in a report — index §CORE-17.3a)
         working-directory: backend
         run: python3 harness_cash_recon_drilldown.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
