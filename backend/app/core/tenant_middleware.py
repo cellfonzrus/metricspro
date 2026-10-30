@@ -154,6 +154,14 @@ _PUBLIC_PREFIXES = (
     "/redoc",                             # ReDoc UI (currently open)
     "/api/v1/core/me",                    # token-verified whoami + /me/password-changed (self-gate on token)
     "/api/v1/hr/public/onboarding",       # HR onboarding public token endpoints (the link token IS the auth)
+    "/api/v1/pos/public/w9",              # A wholesale customer's RETURN LINK for their completed
+                                           # Form W-9 (§POS-15): the one-use token IS the auth, it
+                                           # reaches ONLY that one customer's upload slot, it expires,
+                                           # and it is cleared the moment the document arrives. Any
+                                           # unknown / expired / used token → the SAME 404 with the
+                                           # same body, so a probe cannot tell them apart. The page it
+                                           # serves names the asking company and nothing about the
+                                           # customer's record.
     "/api/v1/notify/dl",                   # no-login report download: the HMAC token IS the auth; reaches
                                            # ONLY the one artifact it signs (uniform 404 on any bad token)
     "/api/v1/referral/redeem",             # PUBLIC QR redemption (mig 850): the HMAC capability token IS

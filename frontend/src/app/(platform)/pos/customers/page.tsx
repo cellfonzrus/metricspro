@@ -149,6 +149,10 @@ export default function PosCustomersPage() {
   const [selected, setSelected] = useState<Customer | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [formData, setFormData] = useState({ ...emptyForm })
+  // §POS-15 — the customer types come from the server's one home (`wholesale_w9.ACCOUNT_TYPES`),
+  // which is also what mig 1107's CHECK constraint is generated from. The two that always existed
+  // are the fallback for the moment before the answer lands, never a second list.
+  const [accountTypes, setAccountTypes] = useState<string[]>(['Personal', 'Business'])
   const [formTab, setFormTab] = useState('General')
   const [detailTab, setDetailTab] = useState('Lines')
   const [lines, setLines] = useState<PhoneLine[]>([])
@@ -199,6 +203,13 @@ export default function PosCustomersPage() {
   }
 
   useEffect(() => { loadCustomers() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    let live = true
+    api('/api/v1/pos/customer-account-types')
+      .then(r => { if (live && Array.isArray(r?.account_types) && r.account_types.length) setAccountTypes(r.account_types) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [])
 
   async function selectCustomer(c: Customer) {
     setSelected(c)
@@ -722,7 +733,7 @@ export default function PosCustomersPage() {
                   <div style={panel}>
                     <label style={{ ...label, marginBottom: 8 }}>Select Account Type</label>
                     <div style={{ display: 'flex', gap: 20 }}>
-                      {['Personal','Business'].map(t => (
+                      {accountTypes.map(t => (
                         <label key={t} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', color: formData.account_type === t ? 'var(--text)' : 'var(--text2)' }}>
                           <input type="radio" checked={formData.account_type === t} onChange={() => setFormData(f => ({ ...f, account_type: t }))} />
                           {t} Account
@@ -731,7 +742,7 @@ export default function PosCustomersPage() {
                     </div>
                   </div>
 
-                  {formData.account_type === 'Business' && (
+                  {formData.account_type !== 'Personal' && (
                     <div>
                       <label style={label}>Company Name</label>
                       <input value={formData.company_name} onChange={e => setFormData(f => ({ ...f, company_name: e.target.value }))} style={input} />

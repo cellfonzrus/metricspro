@@ -16,11 +16,14 @@ one existed; no code read `modules`, so POS visibility was enforced only client-
 Adding it server-side has to land together with seeding `pos` into MODULE_CATALOG and the roles
 UI, or every existing role — none of which carries a `pos` key — would be locked out at once.
 """
+import datetime as _dt
 from datetime import datetime as _datetime, timezone as _timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 
+from app.core.config import settings
 from app.core.database import get_supabase
+from app.core import upload_format as _upload_format
 from app.modules.pos import held_sale as _held
 from app.modules.pos import stock_landing as _stock
 
@@ -1769,6 +1772,274 @@ def get_sale(sale_id: str, org_id: str = ORG_ID):
     return {"sale": sale}
 
 
+
+# ── THE WHOLESALE CUSTOMER AND THEIR W-9 (owner 2026-10-30, index §POS-15) ───────────────────────
+# `pos/wholesale_w9.py` is THE home for "may I sell to this customer, and is this sale taxable".
+# Every route below and the checkout DEREFERENCE it: none of them judges a certificate, words a
+# refusal, or decides that a sale is tax-free.
+#
+# ADAPTIVE, like §POS-01's held cart and §POS-12's amendments: until mig 1107 is applied
+# `pos.customer_tax_doc` is absent. Reads then answer as though no certificate exists (which is the
+# truth), the register shows the setup note instead of a block, and the WRITES refuse by name —
+# a confirmation we cannot store must not be reported as stored.
+W9_BUCKET = "customer-tax-docs"
+W9_MIGRATION = ("apply migration 1107 (database/migrations/1107_pos_wholesale_w9.sql) — until it is "
+                "applied a wholesale customer's W-9 cannot be recorded")
+
+
+def _w9_cfg(client, org_id: str, store_code: str = "") -> dict:
+    """The W-9 settings, resolved through the ONE config home. The keys are named by the one home."""
+    rows = _pos_settings_rows(client, org_id, store_code)
+    return {k: _poscfg.effective(rows, k, store_code)
+            for k in (_w9.EXEMPT_DEFAULT_KEY, _w9.VALID_MONTHS_KEY, _w9.BLOCK_SALE_KEY,
+                      _w9.FORM_URL_KEY)}
+
+
+def _w9_doc(client, org_id: str, customer_id: str):
+    """This customer's W-9 row, or None. `(False, None)` when mig 1107 is not applied yet."""
+    try:
+        rows = (client.schema("pos").table("customer_tax_doc").select("*")
+                .eq("org_id", org_id).eq("customer_id", customer_id).eq("kind", _w9.W9_KIND)
+                .limit(1).execute().data) or []
+    except Exception:
+        return False, None
+    return True, (rows[0] if rows else None)
+
+
+def _customer_row_or_none(client, org_id: str, customer_id: str):
+    """This customer's row, or None when there is no id, no row, or the read failed."""
+    cid = str(customer_id or "").strip()
+    if not cid:
+        return None
+    try:
+        rows = (client.schema("pos").table("customers").select("*")
+                .eq("org_id", org_id).eq("id", cid).limit(1).execute().data) or []
+    except Exception:
+        return None
+    return rows[0] if rows else None
+
+
+def _customer_row(client, org_id: str, customer_id: str):
+    rows = (client.schema("pos").table("customers").select("*")
+            .eq("org_id", org_id).eq("id", customer_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "that customer could not be found")
+    return rows[0]
+
+
+def _w9_decision(client, org_id: str, customer, store_code: str = "", *, is_admin=False,
+                 override=None):
+    """The one decision, with today's date. Returns `(decision, table_present, doc)`."""
+    present, doc = _w9_doc(client, org_id, (customer or {}).get("id") or "")
+    cfg = _w9_cfg(client, org_id, store_code)
+    d = _w9.decide(customer, doc, cfg, now=_dt.date.today(), is_admin=is_admin, override=override)
+    return d, present, doc
+
+
+def _is_pos_admin(authorization: str, org_id: str) -> bool:
+    """May this login go past a missing certificate? The caller's OWN rights, read the way every
+    other POS gate reads them — never a body field claiming them."""
+    try:
+        ctx = _caller_ctx(authorization, org_id) or {}
+    except Exception:
+        return False
+    if ctx.get("super_admin"):
+        return True
+    if str(ctx.get("role") or "").strip().lower() in ("admin", "owner"):
+        return True
+    return bool((ctx.get("perms") or {}).get("pos_settings"))
+
+
+@router.get("/customer-account-types")
+def customer_account_types(org_id: str = ORG_ID):
+    """The customer types this platform knows (`wholesale_w9.ACCOUNT_TYPES`) — read by the customer
+    form so the words are not spelled a third time (the CHECK constraint is the second, generated
+    from the same list by mig 1107)."""
+    return {"account_types": list(_w9.ACCOUNT_TYPES), "wholesale": _w9.WHOLESALE}
+
+
+@router.get("/customers/{customer_id}/w9")
+def customer_w9(customer_id: str, store_code: str = "", authorization: str = Header(default=""),
+                org_id: str = ORG_ID):
+    """What the register needs to draw the W-9 panel for one customer."""
+    client = sb()
+    customer = _customer_row(client, org_id, customer_id)
+    is_admin = _is_pos_admin(authorization, org_id)
+    d, present, doc = _w9_decision(client, org_id, customer, store_code, is_admin=is_admin)
+    cfg = _w9_cfg(client, org_id, store_code)
+    return {**{k: v for k, v in d.items() if k != "override_by"},
+            "form_url": _w9.blank_form_url(cfg),
+            "accepted_formats": list(_upload_format.DEFAULT_FORMATS),
+            "requested_at": (doc or {}).get("requested_at"),
+            "requested_to_email": (doc or {}).get("requested_to_email"),
+            "submitted_at": (doc or {}).get("submitted_at"),
+            "received_at": (doc or {}).get("received_at"),
+            "link_live": _w9.token_live(doc, now=_dt.datetime.utcnow()),
+            "available": bool(present),
+            "setup_note": None if present else W9_MIGRATION}
+
+
+@router.post("/customers/{customer_id}/w9/confirm")
+def confirm_customer_w9(customer_id: str, body: dict = None,
+                        authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """A person confirms the filled-out, signed W-9 is in hand (owner: the exemption follows THIS).
+
+    A customer's own upload never reaches this state by itself — it lands as `submitted` and waits
+    for a human, because this is the row an exemption rests on.
+    """
+    body = body or {}
+    client = sb()
+    customer = _customer_row(client, org_id, customer_id)
+    if not _w9.is_wholesale(customer):
+        raise HTTPException(400, "that customer is not on wholesale terms, so no W-9 is needed")
+    present, doc = _w9_doc(client, org_id, customer_id)
+    if not present:
+        raise HTTPException(503, W9_MIGRATION)
+    who = _caller_employee(authorization, org_id) or ""
+    row = {"status": _w9.STATUS_RECEIVED,
+           "received_at": str(body.get("received_at") or _dt.date.today().isoformat())[:10],
+           "confirmed_by": who,
+           "expires_at": (str(body.get("expires_at"))[:10] if body.get("expires_at") else None),
+           "note": (str(body.get("note") or "").strip() or None),
+           # the door closes: a confirmed certificate needs no open upload link
+           "return_token": None, "token_expires_at": None,
+           "updated_at": _dt.datetime.utcnow().isoformat() + "Z"}
+    if doc:
+        (client.schema("pos").table("customer_tax_doc").update(row)
+         .eq("org_id", org_id).eq("id", doc["id"]).execute())
+    else:
+        client.schema("pos").table("customer_tax_doc").insert(
+            {**row, "org_id": org_id, "customer_id": customer_id, "kind": _w9.W9_KIND}).execute()
+    d, _p, _d = _w9_decision(client, org_id, customer)
+    return {"confirmed": True, "confirmed_by": who, "decision": d,
+            "message": "W-9 recorded as received. Wholesale sales to this customer are now "
+                       + ("tax-free." if d["tax_exempt"] else "allowed.")}
+
+
+@router.post("/customers/{customer_id}/w9/request")
+async def request_customer_w9(customer_id: str, body: dict = None,
+                              authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Email this customer the blank form and a one-use link to send it back.
+
+    The LINK goes to the customer's mailbox; the screen that asked is told the address and that it
+    went, not handed the raw token to display or log (§POS-15.6).
+    """
+    body = body or {}
+    client = sb()
+    customer = _customer_row(client, org_id, customer_id)
+    to = (str(body.get("email") or "").strip() or str(customer.get("email") or "").strip())
+    if not to or "@" not in to:
+        raise HTTPException(400, "no email address for this customer — type one, or add one to "
+                                 "their profile first")
+    present, doc = _w9_doc(client, org_id, customer_id)
+    if not present:
+        raise HTTPException(503, W9_MIGRATION)
+    from app.modules.notify.channels import email_resend as _mail
+    if not _mail.is_configured():
+        raise HTTPException(503, "emailing isn't switched on for this platform yet "
+                                 "(no mail provider configured)")
+    cfg = _w9_cfg(client, org_id)
+    token = _w9.new_token()
+    now = _dt.datetime.utcnow()
+    company = _tenant.display_name(client, org_id)
+    form_url = _w9.blank_form_url(cfg)
+    link = _w9.return_link(settings.APP_PUBLIC_URL, token)
+    name = " ".join(x for x in [customer.get("first_name"), customer.get("last_name")] if x).strip()
+    try:
+        mid = await _mail.send_email(
+            to, _w9.request_subject(company), _w9.request_html(company, form_url, link, name),
+            None, from_name=company or None)
+    except Exception as e:
+        raise HTTPException(502, f"the mail provider refused it: {str(e)[:200]}")
+    row = {"status": _w9.STATUS_REQUESTED, "requested_at": now.isoformat() + "Z",
+           "requested_by": _caller_employee(authorization, org_id) or "",
+           "requested_to_email": to, "return_token": token,
+           "token_expires_at": _w9.token_expiry(now).isoformat() + "Z",
+           "updated_at": now.isoformat() + "Z"}
+    if doc:
+        (client.schema("pos").table("customer_tax_doc").update(row)
+         .eq("org_id", org_id).eq("id", doc["id"]).execute())
+    else:
+        client.schema("pos").table("customer_tax_doc").insert(
+            {**row, "org_id": org_id, "customer_id": customer_id, "kind": _w9.W9_KIND}).execute()
+    return {"sent": True, "to": to, "link": link, "provider_message_id": mid or None,
+            "expires_in_days": _w9.RETURN_LINK_DAYS,
+            "message": f"Form W-9 emailed to {to} with a link to send it back. The link stops "
+                       f"working in {_w9.RETURN_LINK_DAYS} days."}
+
+
+# ── the customer's return link (ANONYMOUS, token-gated) ─────────────────────────────────────────
+# The one-use token IS the auth and reaches ONLY this customer's upload slot. Unknown, expired and
+# already-used all answer the SAME 404 with the SAME body, so a probe learns nothing. The page is
+# told who is asking and what file to send — never anything from the customer's record.
+def _w9_by_token(token: str):
+    try:
+        rows = (sb().schema("pos").table("customer_tax_doc").select("*")
+                .eq("return_token", (token or "").strip()).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    doc = rows[0] if rows else None
+    if not doc or not _w9.token_live(doc, now=_dt.datetime.utcnow()):
+        raise HTTPException(404, _w9.LINK_DEAD)
+    return doc
+
+
+def _store_tax_doc_file(org_id: str, customer_id: str, data: bytes, filename: str, fmt: str):
+    """Put the returned document in the private bucket. Separate so the upload route has one job."""
+    import uuid as _uuid
+    safe = (filename or "w9").replace("/", "_")[-80:]
+    path = f"{org_id}/{customer_id}/{_uuid.uuid4().hex}_{safe}"
+    c = sb()
+    try:
+        c.storage.get_bucket(W9_BUCKET)
+    except Exception:
+        try:
+            c.storage.create_bucket(W9_BUCKET)   # private by default
+        except Exception:
+            pass
+    try:
+        c.storage.from_(W9_BUCKET).upload(path, data, {"content-type": "application/octet-stream"})
+    except Exception as e:
+        raise HTTPException(500, f"the upload could not be stored: {str(e)[:160]}")
+    return {"path": path, "format": fmt}
+
+
+@router.get("/public/w9/{token}")
+def public_w9_meta(token: str):
+    """What the customer's browser loads: who is asking, the blank form, what file to send."""
+    doc = _w9_by_token(token)
+    cfg = _w9_cfg(sb(), doc["org_id"])
+    company = _tenant.display_name(sb(), doc["org_id"])
+    return {"ok": True, "company_name": company, "form_url": _w9.blank_form_url(cfg),
+            "accepted_formats": list(_upload_format.DEFAULT_FORMATS),
+            "what_we_need": "a completed, signed Form W-9"}
+
+
+@router.post("/public/w9/{token}/upload")
+async def public_w9_upload(token: str, file: UploadFile = File(...)):
+    """The customer sends the completed form back.
+
+    It lands as `submitted`, NOT as received: the exemption follows a person confirming the form is
+    in hand (the owner's wording), and an anonymous caller cannot be that person. The token is
+    cleared here — one use, then the door closes.
+    """
+    doc = _w9_by_token(token)
+    data = await file.read()
+    ok, detected = _upload_format.allowed(data, file.filename or "", _upload_format.DEFAULT_FORMATS)
+    if not ok:
+        raise HTTPException(400, _upload_format.refusal_sentence(
+            _upload_format.DEFAULT_FORMATS, detected))
+    stored = _store_tax_doc_file(doc["org_id"], doc["customer_id"], data, file.filename or "", detected)
+    now = _dt.datetime.utcnow().isoformat() + "Z"
+    (sb().schema("pos").table("customer_tax_doc")
+     .update({"status": "submitted", "submitted_at": now, "file_path": stored["path"],
+              "file_format": stored["format"], "return_token": None, "token_expires_at": None,
+              "updated_at": now})
+     .eq("org_id", doc["org_id"]).eq("id", doc["id"]).execute())
+    return {"received": True,
+            "message": "Thank you — your Form W-9 has been sent. Nothing else is needed from you."}
+
+
 # ── The tenders a register may take (owner 2026-10-30, index §POS-14) ─────────────────────────────
 # `pos/tender_vocabulary.py` is THE home for "which tenders exist, which this org offers, and what a
 # Terms sale needs". This endpoint and the checkout below both DEREFERENCE it; neither spells a
@@ -1811,6 +2082,48 @@ def checkout(body: dict, authorization: str = Header(default=""), org_id: str = 
     # what it is handed, so a till sending a tender this org does not offer, a Terms sale with
     # nobody to owe it, or a day count nobody declared would otherwise be obeyed. The refusal is
     # the one home's own sentence — this route does not word one.
+    # ── THE WHOLESALE GATE AND THE TAX (§POS-15), asked before a single row is written ──
+    # `pos.checkout` stores the figures it is handed, so without this a till could ring a wholesale
+    # sale with no certificate on file, or charge no tax on one that has none, and be obeyed.
+    # A customer id that resolves to no row reads as "no customer", never as a refusal: the gate's
+    # job is to stop an unsupported exemption, and `pos.sales.customer_id` has a foreign key that
+    # already refuses a sale pointing at nobody. Failing the whole sale on a read would be a new
+    # way for a till to stop working.
+    customer = _customer_row_or_none(sb(), org_id, sale.get("customer_id"))
+    # The override comes from the CALLER's own rights, never from the body: a body field claiming
+    # an override is exactly the shape this gate exists to refuse.
+    wants_override = bool(sale.pop("w9_override", False))
+    sale.pop("w9_override_by", None)
+    is_admin = _is_pos_admin(authorization, org_id) if customer is not None else False
+    w9d = {"blocked": False, "tax_exempt": False, "exempt_basis": None, "override_by": None}
+    if customer is not None:
+        w9d, _present, _doc = _w9_decision(
+            sb(), org_id, customer, sale.get("store_code") or "", is_admin=is_admin,
+            override=(eid if wants_override else None))
+        if w9d["blocked"]:
+            raise HTTPException(400, w9d["refusal"])
+    # THE TAX FIGURE IS CHECKED AGAINST THE LINES IT CAME FROM. Not re-derived from a rate (a
+    # non-taxable product is a real thing, declared on the product), but a total that does not add
+    # up to its own lines is a sale that contradicts itself and is refused, not stored.
+    def _n(v):
+        try:
+            return round(float(v or 0), 2)
+        except (TypeError, ValueError):
+            return 0.0
+    line_tax = round(sum(_n(i.get("tax_value")) for i in items if isinstance(i, dict)), 2)
+    if abs(line_tax - _n(sale.get("tax_total"))) > 0.01 + 0.01 * len(items):
+        raise HTTPException(400, f"the sales tax on this sale (${_n(sale.get('tax_total')):.2f}) "
+                                 f"does not add up to the tax on its lines (${line_tax:.2f})")
+    if w9d["tax_exempt"]:
+        if line_tax > 0.009:
+            raise HTTPException(400, "this is a tax-exempt wholesale sale, so no line may carry "
+                                     "sales tax — clear the cart and re-add the items, or ask an "
+                                     "admin if the exemption is wrong")
+        sale["tax_exempt_basis"] = w9d["exempt_basis"]
+    else:
+        sale["tax_exempt_basis"] = None
+    sale["w9_override_by"] = w9d["override_by"]
+
     # EVERY payment leg is asked about, not just the first: a sale split across a card and an
     # account is the case where validating one leg and trusting the other writes the wrong balance.
     tcfg = _tender_cfg(sb(), org_id, sale.get("store_code") or "")
@@ -2345,6 +2658,7 @@ def update_receipt_template(template_id: str, body: dict,
 from app.modules.pos import sale_receipt as _sr
 from app.modules.pos import pos_config_effective as _poscfg
 from app.modules.pos import tender_vocabulary as _tender
+from app.modules.pos import wholesale_w9 as _w9
 from app.modules.pos import receipt_escpos as _escpos
 from app.modules.pos import receipt_remit as _remit
 from app.modules.pos import customer_bill_to as _bill_to

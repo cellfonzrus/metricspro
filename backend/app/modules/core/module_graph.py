@@ -2861,6 +2861,81 @@ FACTS: dict[str, dict] = {
         },
     },
     # ── §COMMCALC-11 (owner report 2026-10-15) — a check that GATES a sign-in ────────────────────
+    # ── §POS-14 (owner ask 2026-10-30) — what a till may be paid with ───────────────────────────
+    'register_tender_vocabulary': {
+        "question": 'WHAT MAY A TILL BE PAID WITH, which of those does THIS org offer, and what '
+                    'does a sale on terms owe? It was written FOUR times: two literal button '
+                    'arrays in the register screen (one for a tenant with integrated card '
+                    'processing, one without), the condition that chose between them, and '
+                    '`CHECK (payment_method IN …)` on `pos.sale_payments` (mig 725). Adding one '
+                    'tender type therefore meant a screen, a condition and a constraint, in three '
+                    'languages, with the build green if any of them was missed. The class a tender '
+                    'RECONCILES as is NOT answered here — each entry carries the words a feed would '
+                    'print and `closing.router.tender_class` (the house vocabulary, §30.13) '
+                    'answers, so a terms sale files under the existing `store_acct` and no class '
+                    'was invented. A sale on terms does not settle at the till: the server '
+                    're-derives `pos.sales.balance` as the sum of the legs that did NOT settle, '
+                    'because `pos.checkout` stores whatever it is handed, and no receipt prints '
+                    '"Paid" on it (both layouts ask `settles_now`).',
+        "homes": ('app/modules/pos/tender_vocabulary.py',),
+        "index": ('POS-14',),
+        "locks": ('harness_pos_tender_vocabulary.py', 'harness_tender_vocab_lock.py'),
+        # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
+        # import graph.
+        "callers": {
+            # The endpoint the register reads, the checkout's gate, and the receipt's money line.
+            'app/modules/pos/router.py': ('_tender',),
+            'app/modules/pos/sale_receipt.py': ('_tv',),
+        },
+    },
+    # ── §POS-15 (owner ask 2026-10-30) — a wholesale customer and their W-9 ─────────────────────
+    'wholesale_w9_gate': {
+        "question": 'MAY I SELL TO THIS CUSTOMER, AND IS THIS SALE TAXABLE? One question, because '
+                    'tax-free is not a property of a customer TYPE — it is a property of a type '
+                    'WITH a current exemption certificate on file. Answering the two separately '
+                    'produces exactly one failure and it is the expensive one: a sale goes out '
+                    'tax-free against a certificate nobody holds and the house carries the '
+                    'liability. So `decide` answers both, no state exists where a sale is exempt '
+                    'and the certificate is not current, and the sale RECORDS its basis '
+                    '(`pos.sales.tax_exempt_basis`) because it cannot be re-derived later — the '
+                    'certificate may be filed the next day. An admin override permits a TAXABLE '
+                    'sale and never an exemption, and is named on the row. Only a PERSON can '
+                    'confirm receipt: a customer\'s own upload through their return link lands '
+                    '`submitted`, since an anonymous caller holding a link cannot be the user the '
+                    'owner meant by "the user confirms they received the filled out w9".',
+        "homes": ('app/modules/pos/wholesale_w9.py',),
+        "index": ('POS-15',),
+        "locks": ('harness_pos_wholesale_w9.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50).
+        "callers": {
+            # The W-9 panel's endpoint, the confirm / request routes, the two public token routes
+            # and the checkout's gate — all in the one router, all dereferencing `decide`.
+            'app/modules/pos/router.py': ('_w9',),
+        },
+    },
+    # ── §POS-15.3 (2026-10-30) — what format an uploaded document may be ────────────────────────
+    'upload_document_format': {
+        "question": 'WHAT FORMAT MAY AN UPLOADED DOCUMENT BE? Sniff the MAGIC BYTES, never trust '
+                    'the extension, check the result against the tenant\'s allow-list. The rule '
+                    'lived inside `hr/router.py` and was reachable only from the three onboarding '
+                    'upload routes; a wholesale customer sending back a completed W-9 (§POS-15) '
+                    'asks the identical question from another module, and a second sniffer there '
+                    'is how one path comes to accept a renamed executable while the other refuses '
+                    'it. A file IS what its bytes say: the filename is read ONLY to word the '
+                    'refusal when the header matches nothing known, and an empty allow-list reads '
+                    'as the declared default rather than as "anything goes". One refusal wording, '
+                    'so two upload screens cannot differ.',
+        "homes": ('app/core/upload_format.py',),
+        "index": ('POS-15',),
+        "locks": ('harness_pos_wholesale_w9.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50).
+        "callers": {
+            # HR's three onboarding uploads (through its four thin dereferences) and the customer's
+            # W-9 return upload. Neither keeps a sniffer, a magic-byte table or a refusal of its own.
+            'app/modules/hr/router.py': ('_upload_format',),
+            'app/modules/pos/router.py': ('_upload_format',),
+        },
+    },
     'human_check_on_sign_in': {
         "question": 'Does a human check ("I\'m not a robot") gate THIS page\'s sign-in, and of '
                     'which kind? Recognised by whether it is PAINTED was the defect: Google\'s '

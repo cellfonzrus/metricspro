@@ -85,7 +85,6 @@ ALLOW = {
     ("modules/commcalc/router.py", "_XR_TENDERS"): "PRE-EXISTING: the X-report ingest's accepted-label list (mig 062), widened by _xr_canon_known → the home's ladder (§23h)",
     ("modules/commcalc/router.py", "_XR_CARD_WORDS"): "PRE-EXISTING: _xr_tender_class stamps pos_tender_summary.tender_class cash / card / other — the recon GATE per raw label (§23h), not a class vocabulary",
     ("modules/commcalc/merchant_portals.py", "_BRAND_SYNONYMS"): "PRE-EXISTING: the card-processor settlement normaliser's card BRAND synonyms (mig 955 — which brand a settlement row is, per merchant-day), not a tender class; §12a",
-    (REG, "REGISTER_TENDERS"): "§POS-14: THE register's tender list — what a TILL may be paid with, which is a different question from what a FEED's label means. It spells no class: each entry carries the WORDS a feed would print and the home's ladder answers the class (checked below), so there is no second mapping",
     ("modules/closing/tender_config.py", "STANDARD_DEFS"): "PRE-EXISTING: the seedable closing_tender_def rows for a 'standard' tenant (mig 111) — a seed of the axis, read back through tender_axis; folding it into TENDER_VOCAB is a closing-agent change (a seam, index §30.13)",
 }
 assert all(v for v in ALLOW.values()), "every allow entry carries a reason"
@@ -298,6 +297,10 @@ def scan(files, allow):
     #     A `recon_class` literal here would be the second mapping this lock exists to prevent, and a
     #     register that stopped asking would drift the moment the ladder changed.
     reg = code(files.get(REG, ""))
+    n_reg = sum(len(re.findall(r"^REGISTER_TENDERS\s*=", code(x), re.M)) for x in files.values())
+    if n_reg != 1:
+        findings.append((REG, f"REGISTER_TENDERS defined {n_reg} times — the register's tender list "
+                              f"is ONE list (§POS-14); a second one is the defect this lock exists for"))
     if reg:
         if "tender_class(" not in reg:
             findings.append((REG, "the register's vocabulary no longer asks the home's ladder "

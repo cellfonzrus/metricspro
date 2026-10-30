@@ -852,6 +852,13 @@ on:
       - "backend/harness_pos_tender_vocabulary.py"
       - "database/migrations/1106_pos_terms_tender.sql"
       - "frontend/src/lib/pos-tenders.ts"
+      - "backend/app/modules/pos/wholesale_w9.py"
+      - "backend/app/core/upload_format.py"
+      - "backend/harness_pos_wholesale_w9.py"
+      - "database/migrations/1107_pos_wholesale_w9.sql"
+      - "frontend/src/lib/pos-w9.ts"
+      - "frontend/src/app/w9/[token]/page.tsx"
+      - "backend/app/core/tenant_middleware.py"
       - "frontend/src/lib/pos-receipt.ts"
       - "frontend/src/lib/pos-config.ts"
       - "frontend/src/components/pos/ReceiptTemplateSection.tsx"
@@ -2588,6 +2595,9 @@ jobs:
       - name: Run the register tender-vocabulary proof (ONE home for what a till may be paid with; the recon class asked of the house ladder, never mapped; what an org offers is its own declaration; a sale on terms owes its whole total on a declared date and no receipt calls it paid — index §POS-14)
         working-directory: backend
         run: python3 harness_pos_tender_vocabulary.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the wholesale W-9 proof (ONE answer to "may I sell to this customer and is this sale taxable"; only a person confirms receipt; an admin override permits a TAXABLE sale and never an exemption; the customer's return link is a one-use credential that leaks nothing; one upload-format sniffer — index §POS-15)
+        working-directory: backend
+        run: python3 harness_pos_wholesale_w9.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   store-identity-proof:
     name: Store identity — one store, one canonical key (DB-free, the real resolver)
