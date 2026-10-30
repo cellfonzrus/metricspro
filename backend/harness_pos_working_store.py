@@ -117,6 +117,14 @@ ok("A7. the roster read keeps ACTIVE stores only, in the router",
    "a closed store is never where a sale happened")
 ok("A8. the span is org-scoped at the read, so no tenant widens another",
    '.eq("org_id", org_id)' in ROUTER.split("def _working_span", 1)[1].split("return", 1)[0])
+_WS_SPAN = ROUTER.split("def _working_span", 1)[1].split("@router.get", 1)[0]
+ok("A9b. the roster read asks for store_code and address ONLY, never `market`",
+   '.select("store_code,address,is_active")' in _WS_SPAN and '"market' not in _WS_SPAN,
+   "a market is a VOCABULARY whose one resolver is core.scope; reading one this module has no use "
+   "for is how a second, unpinned answer to it gets built by accident "
+   "(harness_market_resolution_guard caught exactly this on 2026-10-30)")
+ok("A9c. ...and the one home genuinely has no use for it",
+   "market" not in WSCODE)
 ok("A9. the span fails CLOSED — it goes through _caller_store_keyset, which 403s on error",
    "_caller_store_keyset(authorization, org_id)" in ROUTER.split("def _working_span", 1)[1].split("return", 1)[0])
 

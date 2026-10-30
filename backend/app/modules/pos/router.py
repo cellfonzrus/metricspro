@@ -1124,8 +1124,13 @@ def _working_span(authorization: str, org_id: str) -> dict:
     scope hiccup cannot widen this to the whole tenant."""
     client = sb()
     try:
+        # `store_code` and `address` ONLY — the two keys `scope_keyset` widens a grant to. This
+        # deliberately does NOT ask for `market`: `working_store.span` has no use for it, and a
+        # market is a VOCABULARY whose one resolver is `core.scope` (the §13c class). Reading a
+        # vocabulary you do not need is how a second, unpinned answer to "which market is this
+        # store in" gets built by accident. harness_market_resolution_guard.py enforces that.
         roster = (client.schema("storeops").table("stores")
-                  .select("store_code,address,market,is_active")
+                  .select("store_code,address,is_active")
                   .eq("org_id", org_id).order("store_code").limit(2000).execute().data) or []
     except Exception:
         roster = []
