@@ -342,3 +342,98 @@ def test_the_config_read_degrades_to_the_house_defaults_on_a_pre_migration_datab
                          [{"org_id": ORG, "id": "c1", "accessory_order_lookback_months": 6}],
                          frozenset(("org_id", "id", "accessory_order_lookback_months")))
     assert _r._accessory_order_config(post, ORG) == {"accessory_order_lookback_months": 6}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# EVERY TENANT, NOT THE ONE WHOSE WORDS ARE IN THE CODE (owner directive 2026-10-30)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# THE DEFECT. This report shipped reading `demand_projection`'s default device-department list, which
+# was the house tenant's POS labels. A second live tenant files its handsets under `BrandedHandset`
+# with category `KittedBranded`, so the report told it that it had sold no devices at all — 1,034
+# handsets in one month, reported as zero, with nothing on the screen to suggest a vocabulary problem.
+# Owner: *"how come it is only working for cellfonz r us and not luxlink ... it should be universal
+# add on of a feture ... all features should be for all tenanats"*.
+#
+# These are the tests that would have caught it. Every row below is the SHAPE of a real feed read from
+# production on 2026-10-30 — not an invented vocabulary — and the declaration each is judged under is
+# the tenant's own `accessory_config.box_departments` row.
+OTHER_TENANT_DEPTS = ["Android - XP", "IPHONE - XP", "TABLET - XP", "BrandedHandset", "Handset"]
+HOUSE_DEPTS = ["Android - XP", "IPHONE - XP", "TABLET - XP"]
+
+#: A month in the OTHER tenant's feed shape: the department carries the fact, the category is a
+#: kitting word, and neither appears anywhere in the platform's code.
+ANOTHER_TENANTS_MONTH = [
+    _sale("L-1", "HANDSET Z 128GB", department="BrandedHandset", category="KittedBranded", id="l1"),
+    _sale("L-2", "HANDSET Z 128GB", department="BrandedHandset", category="KittedBranded", id="l2"),
+    _sale("L-3", "HANDSET Z 128GB", department="BrandedHandset", category="KittedBranded", id="l3"),
+    _sale("L-4", "HANDSET Y 64GB", department="BrandedHandset", category="KittedBranded", id="l4"),
+    _sale("L-5", "Boost Wallet Refill", department="Rtr", category="Other Carr. payments", id="l5"),
+]
+
+
+def _declare_departments(wired, departments):
+    """The tenant's own box-department declaration — `accessory_config.box_departments`, mig 218, the
+    SAME row the box count, the product mix and the GP report read. No new table, no new column."""
+    wired.seed("commcalc.accessory_config", [{"org_id": ORG, "box_departments": departments,
+                                              "id": "cfg-dept"}])
+
+
+def test_a_tenant_whose_pos_names_departments_differently_still_gets_its_order(wired, api_client):
+    """THE REPORTED DEFECT, as a test. With the other tenant's declaration in place, its feed shape
+    produces the same report the house tenant gets: four handsets over three models, ranked."""
+    _declare_departments(wired, OTHER_TENANT_DEPTS)
+    wired.seed("commcalc.daily_sales_feed", ANOTHER_TENANTS_MONTH)
+    body = api_client.get(PATH, params={"period": PERIOD, "months": 1}).json()
+    assert body["units_in_window"] == 4, "three of model Z and one of model Y; the refill is not a device"
+    assert [m["model"] for m in body["models"]] == ["HANDSET Z 128GB", "HANDSET Y 64GB"]
+    assert body["reason"] == "awaiting_declaration", "found the sales, now waiting on a human ruling"
+
+
+def test_the_same_feed_reads_as_nothing_under_the_house_declaration(wired, api_client):
+    """The defect's mechanism, pinned. The identical rows under the HOUSE tenant's three departments
+    are not devices — which is correct for that declaration, and is exactly why the list may not be a
+    literal in the code. A regression here would be silent: a wrong number, never an error."""
+    _declare_departments(wired, HOUSE_DEPTS)
+    wired.seed("commcalc.daily_sales_feed", ANOTHER_TENANTS_MONTH)
+    body = api_client.get(PATH, params={"period": PERIOD, "months": 1}).json()
+    assert body["units_in_window"] == 0
+    assert body["reason"] == "no_sales_in_window"
+
+
+def test_an_org_that_has_declared_no_departments_is_told_so_not_given_someone_elses(wired, api_client):
+    """An org with an EMPTY declaration gets no DEPARTMENT-identified devices, and the report says it
+    found no device sales. It does NOT quietly borrow another tenant's departments: a confident wrong
+    order is worse than an empty one, and the empty one sends somebody to the admin screen."""
+    _declare_departments(wired, [])
+    wired.seed("commcalc.daily_sales_feed", ANOTHER_TENANTS_MONTH)
+    body = api_client.get(PATH, params={"period": PERIOD, "months": 1}).json()
+    assert body["units_in_window"] == 0
+    assert body["reason"] == "no_sales_in_window"
+
+
+def test_the_category_tolerance_survives_an_empty_department_declaration(wired, api_client):
+    """AND THE LIMIT OF THAT, stated rather than left to be discovered. The CATEGORY half of the test
+    is not a tenant's vocabulary — it is the older export FORMAT's marker for a handset line, carried
+    with a blank department — so it is a house tolerance and it still applies when an org has declared
+    no departments. A feed in that format is therefore never silenced by a missing declaration, which
+    is why the empty-declaration rule above is about DEPARTMENTS and says so."""
+    _declare_departments(wired, [])
+    wired.seed("commcalc.daily_sales_feed", A_MONTH)        # category='CellPhone', department blank
+    body = api_client.get(PATH, params={"period": PERIOD, "months": 1}).json()
+    assert body["units_in_window"] == 5
+    assert [m["model"] for m in body["models"]] == ["HANDSET A 128GB", "HANDSET B 64GB"]
+
+
+def test_the_order_is_built_from_the_other_tenants_units_once_ruled(wired, api_client):
+    """End to end on the other tenant's vocabulary: rule the models, get the accessory order, and the
+    colour split still foots to the case quantity."""
+    _declare_departments(wired, OTHER_TENANT_DEPTS)
+    wired.seed("commcalc.daily_sales_feed", ANOTHER_TENANTS_MONTH)
+    assert api_client.post(LIFECYCLE_PATH, json={"rulings": [
+        {"model": "HANDSET Z 128GB", "lifecycle": "current"},
+        {"model": "HANDSET Y 64GB", "lifecycle": "eol"}]}).status_code == 200
+    body = api_client.get(PATH, params={"period": PERIOD, "months": 1, "horizon": 2}).json()
+    assert body["projected_devices"] == 6, "three a month, ruled current, over two months"
+    case = [a for a in body["accessories"] if a["key"] == "case"][0]
+    assert case["qty"] == 6
+    assert sum(c["qty"] for c in case["colours"]) == case["qty"]

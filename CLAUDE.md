@@ -92,6 +92,34 @@ the MECHANISM, for every caller of it, or say plainly that you have not.
   quietly restores the patchwork.
 - **A per-tenant config row is not a patch; per-tenant CODE is.** RULE TWO already bans the latter.
 
+## Every feature is for EVERY tenant (owner directive 2026-10-30)
+
+Owner: *"there is a problem in the code it should be universal add on of a feture — all features
+should be for all tenanats and the testing agent shoudl test it after it is made, security agen
+should give a pass before it is made live."*
+
+Said of a report that worked for one tenant and told the other it had sold nothing: the device-line
+test's departments DEFAULTED to the first tenant's POS labels, so 1,034 handsets in a month read as
+zero — in that report and in two older features that asked the same question. The declaration was
+already there and already right; only the code had its own copy. Index §COMMCALC-49.10.
+
+- **A feature is not finished until it works for every tenant**, measured against each tenant's own
+  declarations and feed shapes — not against the house org alone.
+- **A vocabulary a tenant declares is a REQUIRED argument, never a default with house words behind
+  it.** A caller that has not asked the org must not be able to answer. This is the one place the
+  "house default" pattern is BANNED: a default that is really one tenant's vocabulary is the
+  per-tenant code RULE TWO forbids. House defaults remain right for a POLICY (a rate, a window, a
+  switch) and wrong for a tenant's own words.
+- **Nothing declared means nothing identified, and the surface says so** — never a silent fall back
+  to another tenant's words. Zero is a plausible-looking answer, which is why this class hides.
+- **Ship the cross-tenant tests WITH it**, asserting both that each tenant's shape produces its
+  answer and that one tenant's declaration never leaks into another's read.
+- **Lock it** so the default cannot come back, the literal cannot reappear, and a caller cannot stop
+  dereferencing the declaration.
+- **A security pass before it goes live.** A tenant-scoped read is where cross-tenant leakage lives;
+  the same review that checks org-scoping checks that no tenant's vocabulary or data can be reached
+  from another tenant's request.
+
 ## House conventions (apply everywhere)
 
 - **RULE TWO — config, never code**: no carrier/tenant/product branch names in code; behavior is
