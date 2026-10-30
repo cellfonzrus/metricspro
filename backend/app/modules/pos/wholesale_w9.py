@@ -8,7 +8,7 @@ before the system has an updated w9, only the admin can go past without an updat
 customer type **with a current exemption certificate on file**. If a screen zeroed the tax because
 the account type says Wholesale while the gate separately decided the W-9 was out of date, a sale
 would go out tax-free against a certificate nobody holds — and the house would carry the tax
-liability. So `decide` answers both in one call, and it states the BASIS: a tax-free sale with no
+liability. So `may_sell` answers both in one call, and it states the BASIS: a tax-free sale with no
 stated reason is exactly what an auditor asks about, and `exempt_basis` is that reason, recorded on
 the sale.
 
@@ -22,7 +22,7 @@ WHAT LIVES HERE, AND NOWHERE ELSE:
     otherwise the org's declared refresh period (`w9_valid_months`, 36 by house default, `0` =
     never goes out of date) decides. The IRS does not expire Form W-9, so "how often do we refresh
     one" is a policy, which is why it is a declaration and not a constant in code.
-  * WHETHER THE SALE MAY BE RUNG, AND AT WHAT TAX — `decide`, with `taxable_rate` as the one place
+  * WHETHER THE SALE MAY BE RUNG, AND AT WHAT TAX — `may_sell`, with `taxable_rate` as the one place
     an exemption meets a rate.
   * WHERE THE BLANK FORM IS — `blank_form_url`, the org's declaration with the IRS's own published
     PDF as the house default. Only an `https://` URL is honoured: a link handed to a customer is a
@@ -147,7 +147,7 @@ def blank_form_url(cfg) -> str:
     return HOUSE_W9_FORM_URL
 
 
-def decide(customer, doc, cfg, *, now, is_admin=False, override=None) -> dict:
+def may_sell(customer, doc, cfg, *, now, is_admin=False, override=None) -> dict:
     """THE answer: may this sale be rung, and is it taxable?
 
     Returns `{blocked, refusal, tax_exempt, exempt_basis, w9_status, override_available,

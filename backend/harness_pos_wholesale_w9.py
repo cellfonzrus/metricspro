@@ -99,8 +99,8 @@ PAGE_SRC = read(PAGE)
 LIB_SRC = read(LIB)
 
 print("\n§A  ONE ANSWER — the exemption and the block cannot disagree")
-current = w9.decide(WHOLESALE, doc(), {}, now=NOW, is_admin=False)
-missing = w9.decide(WHOLESALE, None, {}, now=NOW, is_admin=False)
+current = w9.may_sell(WHOLESALE, doc(), {}, now=NOW, is_admin=False)
+missing = w9.may_sell(WHOLESALE, None, {}, now=NOW, is_admin=False)
 check("A1 a current certificate: not blocked AND tax-free, in one call",
       current["blocked"] is False and current["tax_exempt"] is True)
 check("A2 no certificate: blocked AND taxable, in the same call",
@@ -110,8 +110,8 @@ check("A3 a tax-free sale always states its basis",
 check("A4 no state exists where a sale is exempt and the certificate is not current",
       all(not d["tax_exempt"] or d["w9_status"] == "current"
           for d in (current, missing,
-                    w9.decide(WHOLESALE, doc(received="2001-01-01"), {}, now=NOW, is_admin=False),
-                    w9.decide(WHOLESALE, doc(status="requested", received=None), {}, now=NOW,
+                    w9.may_sell(WHOLESALE, doc(received="2001-01-01"), {}, now=NOW, is_admin=False),
+                    w9.may_sell(WHOLESALE, doc(status="requested", received=None), {}, now=NOW,
                               is_admin=False))))
 check("A5 the rate meets the exemption in ONE place on the server",
       w9.taxable_rate(0.08875, current) == 0 and w9.taxable_rate(0.08875, missing) == 0.08875)
@@ -127,7 +127,7 @@ check("A7 the register spells no exemption rule of its own",
 print("\n§B  A RETAIL SALE IS UNTOUCHED")
 for row, label in ((RETAIL, "a personal account"), ({"account_type": "Business"}, "a business"),
                    (None, "no customer at all")):
-    d = w9.decide(row, None, {}, now=NOW, is_admin=False)
+    d = w9.may_sell(row, None, {}, now=NOW, is_admin=False)
     check(f"B {label} is neither blocked nor exempt and asks for nothing",
           d == {"blocked": False, "refusal": None, "tax_exempt": False, "exempt_basis": None,
                 "w9_status": None, "override_available": False, "override_by": None,
@@ -156,9 +156,9 @@ check("C8 an unreadable declaration falls back to the house period, never to zer
       and w9.valid_months({"w9_valid_months": -5}) == w9.HOUSE_VALID_MONTHS)
 
 print("\n§D  THE ADMIN OVERRIDE")
-admin_blocked = w9.decide(WHOLESALE, None, {}, now=NOW, is_admin=True)
-taken = w9.decide(WHOLESALE, None, {}, now=NOW, is_admin=True, override="E240")
-claimed = w9.decide(WHOLESALE, None, {}, now=NOW, is_admin=False, override="E999")
+admin_blocked = w9.may_sell(WHOLESALE, None, {}, now=NOW, is_admin=True)
+taken = w9.may_sell(WHOLESALE, None, {}, now=NOW, is_admin=True, override="E240")
+claimed = w9.may_sell(WHOLESALE, None, {}, now=NOW, is_admin=False, override="E999")
 check("D1 an admin is OFFERED it; the sale is still blocked until it is taken",
       admin_blocked["override_available"] is True and admin_blocked["blocked"] is True)
 check("D2 taken, it unblocks the sale and names who allowed it",
@@ -168,7 +168,7 @@ check("D3 it never grants the exemption — the sale stays TAXABLE",
 check("D4 a non-admin claiming one is ignored",
       claimed["blocked"] is True and claimed["override_by"] is None)
 check("D5 an override on a sale that was never blocked records nothing",
-      w9.decide(WHOLESALE, doc(), {}, now=NOW, is_admin=True, override="E240")["override_by"] is None)
+      w9.may_sell(WHOLESALE, doc(), {}, now=NOW, is_admin=True, override="E240")["override_by"] is None)
 co = body_of(ROUTER_SRC, "checkout")
 check("D6 the checkout reads the CALLER's rights, never a body field claiming them",
       "_is_pos_admin(authorization, org_id)" in co
@@ -178,7 +178,7 @@ check("D7 the register sends a REQUEST to override, not a claim to be allowed to
       "w9_override: w9Override || undefined" in PAGE_SRC
       and "w9_override_by" not in PAGE_SRC)
 check("D8 an org may declare that a missing W-9 does not block at all, and it is still taxable",
-      w9.decide(WHOLESALE, None, {"w9_block_sale": False}, now=NOW, is_admin=False)
+      w9.may_sell(WHOLESALE, None, {"w9_block_sale": False}, now=NOW, is_admin=False)
       == {**missing, "blocked": False, "refusal": None, "override_available": False})
 
 print("\n§E  THE THREE LISTS OF CUSTOMER TYPES ARE ONE LIST")
@@ -318,7 +318,7 @@ check("J5 the sale records WHY it was tax-free and who allowed it",
 
 print("\n  negative controls")
 check("NEG a decision that exempted without a certificate would be caught by A4",
-      not (w9.decide(WHOLESALE, doc(received="2001-01-01"), {}, now=NOW,
+      not (w9.may_sell(WHOLESALE, doc(received="2001-01-01"), {}, now=NOW,
                      is_admin=False)["tax_exempt"]))
 check("NEG an override that granted the exemption would be caught by D3",
       taken["exempt_basis"] is None)

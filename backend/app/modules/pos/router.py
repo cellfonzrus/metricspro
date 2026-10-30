@@ -1832,7 +1832,7 @@ def _w9_decision(client, org_id: str, customer, store_code: str = "", *, is_admi
     """The one decision, with today's date. Returns `(decision, table_present, doc)`."""
     present, doc = _w9_doc(client, org_id, (customer or {}).get("id") or "")
     cfg = _w9_cfg(client, org_id, store_code)
-    d = _w9.decide(customer, doc, cfg, now=_dt.date.today(), is_admin=is_admin, override=override)
+    d = _w9.may_sell(customer, doc, cfg, now=_dt.date.today(), is_admin=is_admin, override=override)
     return d, present, doc
 
 
