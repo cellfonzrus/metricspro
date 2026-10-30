@@ -35514,7 +35514,7 @@ plain refusal sends somebody to check an address that is perfectly correct.
 
 ### COMMCALC-50.5 Locked
 
-`backend/harness_portal_page_verdict.py` — **79 checks**, DB-free and browser-free. §A pins the
+`backend/harness_portal_page_verdict.py` — **81 checks**, DB-free and browser-free. §A pins the
 owner's actual page: it is read as a refusal, is NOT read as a throttle (which would park a healthy
 source in a needless cooldown), and the note sends the operator to the address rather than the
 markup. It fails the build if a second phrase list appears in the driver, if a caller stops
@@ -35524,6 +35524,15 @@ for the new kinds, if the marker rows stop being read WHOLE, or if the error mes
 with what the page said. Nine armed negative controls. It searches the driver as CODE — docstrings and comments dropped via the AST —
 because the driver's own docstring quotes the interstitial wording it used to hardcode, and that
 history is worth keeping written down.
+
+### COMMCALC-50.5b Every tenant, not the one that surfaced it
+
+The seeded phrases are **house** rows (org `00000000-…-0001`), and `load_markers` reads
+`in_("org_id", [this_org, HOUSE_ORG])` and prefers the tenant's own rows only when it HAS some. So
+one seed serves every tenant — Cellfonz, LuxeLink, NY Logistics, Vzone and any tenant added later —
+and a tenant whose portal uses different words adds its own rows, which then replace the house list
+for that tenant. Nothing here is keyed to the tenant whose login surfaced the defect, and the home
+names no portal (§COMMCALC-50 §H). Pinned by F14/F15.
 
 ### COMMCALC-50.5a The marker rows are read WHOLE (§4b.1)
 

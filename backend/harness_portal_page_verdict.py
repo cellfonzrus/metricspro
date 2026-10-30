@@ -254,6 +254,22 @@ check("F13 …and the home issues ONE read per question, never a second narrower
       LOAD_MARKERS_CODE.count(".select(") == 1 and '.select("*")' in LOAD_MARKERS_CODE,
       f"{LOAD_MARKERS_CODE.count('.select(')} select(s)")
 
+# EVERY TENANT, not the one that surfaced it (owner directive 2026-10-30: a feature is for all
+# tenants). The seeded rows are HOUSE rows, and the house org is what every tenant inherits when it
+# has declared nothing of its own — the RULE TWO default. These two pin that both ways.
+HOUSE_ONLY = [{"org_id": pb.HOUSE_ORG, "processor": None, "marker": "you shall not pass",
+               "enabled": True, "kind": "refusal"}]
+OTHER_ORG = "22222222-2222-2222-2222-222222222222"
+house_cl = _Client(HOUSE_ONLY)
+check("F14 a tenant with NO rows of its own inherits the HOUSE rows, so a seed serves every tenant",
+      pb.load_markers(house_cl, OTHER_ORG, kind=pb.REFUSAL_KIND) == ["you shall not pass"],
+      repr(pb.load_markers(house_cl, OTHER_ORG, kind=pb.REFUSAL_KIND)))
+both_cl = _Client(HOUSE_ONLY + [{"org_id": OTHER_ORG, "processor": None, "marker": "my own words",
+                                 "enabled": True, "kind": "refusal"}])
+check("F15 …and its OWN row wins over the house row, which is what per-org config means",
+      pb.load_markers(both_cl, OTHER_ORG, kind=pb.REFUSAL_KIND) == ["my own words"],
+      repr(pb.load_markers(both_cl, OTHER_ORG, kind=pb.REFUSAL_KIND)))
+
 # ── §G the migration says what the code believes ────────────────────────────────────────────────
 print("\n§G the migration and the code agree")
 
