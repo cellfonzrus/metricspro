@@ -1,4 +1,4 @@
-"""Unit: THE answer to "may I sell to this customer, and is this sale taxable" (index §POS-15).
+"""Unit: THE answer to "may I sell to this customer, and is this sale taxable" (index §POS-16).
 
 Owner, verbatim: *"add … a customer type as wholesale where the option to not charge tax will be by
 default if the user confirms they received the filled out w9 and block the user to make a sale

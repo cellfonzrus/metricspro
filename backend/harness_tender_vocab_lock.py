@@ -55,7 +55,7 @@ HOME = "modules/closing/router.py"
 PURE = "modules/commcalc/invoice_tenders.py"
 CC_ROUTER = "modules/commcalc/router.py"
 SFR = "modules/pos/sales_from_reports.py"
-#: §POS-14 — THE register's own tender list (what a TILL may be paid with). In scope since
+#: §POS-15 — THE register's own tender list (what a TILL may be paid with). In scope since
 #: 2026-10-30: it is the fourth place a tender was once spelled, and the lock now covers it.
 REG = "modules/pos/tender_vocabulary.py"
 
@@ -293,7 +293,7 @@ def scan(files, allow):
     for rel, src in files.items():
         if rel != HOME and "fold_to_axis" in src and "fold_to_axis" in code(src):
             findings.append((rel, "names fold_to_axis outside the home — ask is_customer_payment (the one answer), not the axis"))
-    # (g) §POS-14 — the REGISTER's vocabulary asks the home for every class instead of mapping one.
+    # (g) §POS-15 — the REGISTER's vocabulary asks the home for every class instead of mapping one.
     #     A `recon_class` literal here would be the second mapping this lock exists to prevent, and a
     #     register that stopped asking would drift the moment the ladder changed.
     reg = code(files.get(REG, ""))
@@ -304,7 +304,7 @@ def scan(files, allow):
     n_reg = sum(len(_REG_DECL.findall(code(x))) for x in files.values())
     if n_reg != 1:
         findings.append((REG, f"REGISTER_TENDERS defined {n_reg} times — the register's tender list "
-                              f"is ONE list (§POS-14); a second one is the defect this lock exists for"))
+                              f"is ONE list (§POS-15); a second one is the defect this lock exists for"))
     if reg:
         if "tender_class(" not in reg:
             findings.append((REG, "the register's vocabulary no longer asks the home's ladder "
@@ -344,7 +344,7 @@ def main():
           not any(r == PURE for r, _m in findings) and not any("_intake_tender" in m for _r, m in findings), findings)
     check("(c) every other tender word list in commcalc / closing is a NAMED pre-existing sibling with its reason; no stale entry",
           not any("word list" in m or "STALE" in m for _r, m in findings), findings)
-    check("(g) §POS-14 the register's tender list asks the home's ladder for every class and spells none itself",
+    check("(g) §POS-15 the register's tender list asks the home's ladder for every class and spells none itself",
           not any(r == REG for r, _m in findings), findings)
     check("(d) the Stage-4 tender split rides the resolver's two legs; the map writer touches only report='invoice'",
           not any("_intake_invoice_tender_recon" in m or "_intake_write_tender_map" in m for _r, m in findings), findings)

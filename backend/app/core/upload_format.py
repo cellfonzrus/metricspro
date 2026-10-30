@@ -1,9 +1,9 @@
-"""THE one home for "what format may an uploaded document be" (index §POS-15.3).
+"""THE one home for "what format may an uploaded document be" (index §POS-16.3).
 
 **Why it is here and not in a module.** The rule — sniff the MAGIC BYTES, never trust the
 extension, check the result against the tenant's allow-list — was written inside `hr/router.py`
 and reachable only from the three onboarding upload routes. A wholesale customer sending back a
-completed W-9 (§POS-15) asks the identical question from a different module, and a second sniffer
+completed W-9 (§POS-16) asks the identical question from a different module, and a second sniffer
 there is how one upload path would come to accept a renamed executable while the other refused it.
 One fact, one home, dereferenced.
 

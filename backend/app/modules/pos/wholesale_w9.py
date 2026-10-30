@@ -1,4 +1,4 @@
-"""THE wholesale customer and the W-9 that makes a sale tax-free (owner ask 2026-10-30, §POS-15).
+"""THE wholesale customer and the W-9 that makes a sale tax-free (owner ask 2026-10-30, §POS-16).
 
 Owner, verbatim: *"add … a customer type as wholesale where the option to not charge tax will be by
 default if the user confirms they received the filled out w9 and block the user to make a sale
@@ -273,6 +273,6 @@ def request_html(company_name: str, form_url: str, link: str, customer_name: str
 
 
 #: The one wording of the public page's refusal. Identical for unknown, expired and already-used, so
-#: an anonymous probe cannot tell which it hit (index §POS-15.6).
+#: an anonymous probe cannot tell which it hit (index §POS-16.6).
 LINK_DEAD = ("This upload link is no longer valid. Please ask for a new one and we will send it "
              "straight over.")

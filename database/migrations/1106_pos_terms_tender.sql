@@ -1,5 +1,5 @@
 -- 1106_pos_terms_tender.sql
--- THE TERMS TENDER — a register may take a sale on account (owner ask 2026-10-30, index §POS-14).
+-- THE TERMS TENDER — a register may take a sale on account (owner ask 2026-10-30, index §POS-15).
 --
 -- Owner, verbatim: *"also add another tender type as Terms . 15/30/60"*.
 --

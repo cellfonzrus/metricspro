@@ -1,4 +1,4 @@
-"""Unit: THE register's tender vocabulary (index §POS-14).
+"""Unit: THE register's tender vocabulary (index §POS-15).
 
 WHAT IS UNDER TEST. Before this module the answer to "which tenders may a register accept" was
 written down twice — a hardcoded array in `pos/sales/page.tsx` and a `CHECK` constraint on

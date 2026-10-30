@@ -1,4 +1,4 @@
-"""THE register's tender vocabulary — what a till may be paid with (owner ask 2026-10-30, §POS-14).
+"""THE register's tender vocabulary — what a till may be paid with (owner ask 2026-10-30, §POS-15).
 
 Owner, verbatim: *"also add another tender type as Terms . 15/30/60"*.
 

@@ -1,4 +1,4 @@
-"""Integration: ringing a sale on Terms through the real endpoints (index §POS-14).
+"""Integration: ringing a sale on Terms through the real endpoints (index §POS-15).
 
 Real routing, the real router body, the real one home, over the in-memory database double with
 every outbound socket blocked by conftest. There is no staging Supabase, so "integration" here
@@ -44,6 +44,15 @@ def wired(monkeypatch, fake_supabase, app_module):
         return {"id": "s-1", "transaction_id": 9001, "org_id": params.get("p_org")}
 
     fake_supabase.seed_rpc("pos.checkout", _checkout)
+    # WHICH STORE IS THIS SALE FOR (§POS-14) runs before the tender gate and refuses a store the
+    # caller cannot ring at, so every org under test needs its own store on the roster. Seeded per
+    # org so a tenant case cannot pass by borrowing another tenant's store.
+    fake_supabase.seed("storeops.stores", [
+        {"id": f"s-{i}", "org_id": org, "store_code": STORE, "address": "1 Example Ave",
+         "market": "Brooklyn", "is_active": True}
+        for i, org in enumerate((HOUSE, ORG_B, ORG_C))])
+    monkeypatch.setattr("app.modules.pos.router._caller_login_store", lambda *a, **k: "")
+    monkeypatch.setattr("app.modules.pos.router._caller_store_keyset", lambda *a, **k: None)
     # ORG_B declares its own day counts; ORG_C does not sell on account at all.
     fake_supabase.seed("pos.pos_settings", [
         {"org_id": ORG_B, "store_code": None, "key": "tender_terms_day_options", "value": "7,45"},

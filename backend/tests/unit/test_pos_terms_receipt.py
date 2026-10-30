@@ -1,4 +1,4 @@
-"""Unit: what a receipt says when the sale was not paid (index §POS-14).
+"""Unit: what a receipt says when the sale was not paid (index §POS-15).
 
 A receipt is the document the customer walks out with. `slip_model` printed one line for the money
 — `Paid (Credit Card)` with the amount — because until now every tender settled at the till. A
@@ -6,7 +6,7 @@ Terms sale does not, so that line would read **Paid (Terms) $108.88** on an invo
 paid: not a cosmetic slip but a false statement on a tax document, and the first thing a customer
 would quote back.
 
-`settles_now` already answers this in the tender vocabulary (§POS-14), so the renderer DEREFERENCES
+`settles_now` already answers this in the tender vocabulary (§POS-15), so the renderer DEREFERENCES
 it rather than testing for a tender word of its own.
 """
 from app.modules.pos import sale_receipt as sr

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { apiUrl } from '@/lib/apiBase'
 
-// PUBLIC W-9 RETURN PAGE (owner 2026-10-30, index §POS-15) — reached by the link emailed to a
+// PUBLIC W-9 RETURN PAGE (owner 2026-10-30, index §POS-16) — reached by the link emailed to a
 // wholesale customer. NO login: the one-use token in the URL is the only credential, it reaches
 // only that one customer's upload slot, it expires, and it is cleared the moment the form arrives.
 // Talks ONLY to the token-guarded /pos/public/w9 endpoints. Lives outside the (platform) RBAC group

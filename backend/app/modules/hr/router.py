@@ -488,10 +488,10 @@ _DEFAULT_DD_DISCLAIMER = (
 _DEFAULT_WORK_AUTH_NOTICE = (
     "Your work-authorization documents (Form I-9 support documents) are still outstanding. "
     "Your payroll will be delayed until these documents are submitted.")
-# WHAT FORMAT AN UPLOADED DOCUMENT MAY BE — the ONE home, `app/core/upload_format.py` (§POS-15.3).
+# WHAT FORMAT AN UPLOADED DOCUMENT MAY BE — the ONE home, `app/core/upload_format.py` (§POS-16.3).
 # This module held the sniffer, the magic bytes, the alias map and the default list privately, which
 # made them reachable only from these three upload routes. A wholesale customer's returned W-9
-# (§POS-15) asks the same question from another module, so the fact moved out and these four names
+# (§POS-16) asks the same question from another module, so the fact moved out and these four names
 # are now thin dereferences — kept as names because every call site here reads them.
 _DEFAULT_UPLOAD_FORMATS = list(_upload_format.DEFAULT_FORMATS)
 _DEFAULT_ROUTING_URL = "https://www.routingnumbers.info/api/data.json?rn={routing}"
@@ -510,7 +510,7 @@ def _tenant_row(org_id):
 def _tenant_config(org_id):
     """Every onboarding config value this pack introduces, org-scoped (SAP-configurable rule), with a
     hardcoded fallback ONLY when migration 401 hasn't run — never a silent divergence once it has.
-    The allow-LIST's house default is the one home's (§POS-15.3); the tenant's own row still wins."""
+    The allow-LIST's house default is the one home's (§POS-16.3); the tenant's own row still wins."""
     t = _tenant_row(org_id)
     return {
         "upload_allowed_formats": t.get("onboarding_upload_formats") or list(_DEFAULT_UPLOAD_FORMATS),
@@ -521,7 +521,7 @@ def _tenant_config(org_id):
 
 
 def _sniff_format(data: bytes):
-    """The REAL format of an uploaded file, from its magic bytes (§POS-15.3's one sniffer)."""
+    """The REAL format of an uploaded file, from its magic bytes (§POS-16.3's one sniffer)."""
     return _upload_format.sniff(data)
 
 

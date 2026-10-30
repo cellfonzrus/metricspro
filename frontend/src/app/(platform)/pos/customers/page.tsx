@@ -149,7 +149,7 @@ export default function PosCustomersPage() {
   const [selected, setSelected] = useState<Customer | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [formData, setFormData] = useState({ ...emptyForm })
-  // §POS-15 — the customer types come from the server's one home (`wholesale_w9.ACCOUNT_TYPES`),
+  // §POS-16 — the customer types come from the server's one home (`wholesale_w9.ACCOUNT_TYPES`),
   // which is also what mig 1107's CHECK constraint is generated from. The two that always existed
   // are the fallback for the moment before the answer lands, never a second list.
   const [accountTypes, setAccountTypes] = useState<string[]>(['Personal', 'Business'])

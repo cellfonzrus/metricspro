@@ -1,8 +1,8 @@
-"""Unit: THE one home for "what formats may an uploaded document be" (index §POS-15.3).
+"""Unit: THE one home for "what formats may an uploaded document be" (index §POS-16.3).
 
 WHAT WAS WRONG. The rule lived inside `hr/router.py` — `_MAGIC`, `_sniff_format`,
 `_format_allowed`, `_DEFAULT_UPLOAD_FORMATS` — reachable only by the three onboarding upload
-routes. The W-9 a wholesale customer sends back (§POS-15) is the same question asked by a different
+routes. The W-9 a wholesale customer sends back (§POS-16) is the same question asked by a different
 module, and copying the sniffer there is how one upload path would come to accept a renamed
 executable while the other refused it.
 

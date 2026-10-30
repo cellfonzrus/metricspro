@@ -1,4 +1,4 @@
-"""Integration: the wholesale W-9 gate, the request email and the customer's return link (§POS-15).
+"""Integration: the wholesale W-9 gate, the request email and the customer's return link (§POS-16).
 
 Real routing, the real router bodies, the real one home, over the in-memory database double with
 conftest blocking every outbound socket.
@@ -55,6 +55,15 @@ def wired(monkeypatch, fake_supabase, app_module):
         return {"id": "s-1", "transaction_id": 9001, "org_id": params.get("p_org")}
 
     fake_supabase.seed_rpc("pos.checkout", _checkout)
+    # WHICH STORE IS THIS SALE FOR (§POS-14) runs before this gate and refuses a store the caller
+    # cannot ring at, so every org under test needs its own store on the roster. Seeded per org so a
+    # tenant case cannot pass by borrowing another tenant's store.
+    fake_supabase.seed("storeops.stores", [
+        {"id": f"s-{i}", "org_id": org, "store_code": STORE, "address": "1 Example Ave",
+         "market": "Brooklyn", "is_active": True}
+        for i, org in enumerate((HOUSE, ORG_B, ORG_C))])
+    monkeypatch.setattr("app.modules.pos.router._caller_login_store", lambda *a, **k: "")
+    monkeypatch.setattr("app.modules.pos.router._caller_store_keyset", lambda *a, **k: None)
     fake_supabase.seed("pos.customers", _customers(HOUSE) + _customers(ORG_B) + _customers(ORG_C))
     fake_supabase.seed("pos.customer_tax_doc", [])
     # ORG_B refreshes a W-9 every 12 months; ORG_C does not block a sale without one.
@@ -155,7 +164,7 @@ def test_a_current_w9_sells_tax_free_and_the_sale_records_why(api_client, wired)
 
 
 def test_a_till_that_charges_tax_on_an_exempt_sale_is_refused_rather_than_obeyed(api_client, wired):
-    """The exemption and the rate are one answer (§POS-15). A sale that claims the exemption and
+    """The exemption and the rate are one answer (§POS-16). A sale that claims the exemption and
     charges tax anyway is a disagreement the server must not store either side of."""
     db, calls = wired
     db.seed("pos.customer_tax_doc", [_received(HOUSE)])
@@ -164,16 +173,18 @@ def test_a_till_that_charges_tax_on_an_exempt_sale_is_refused_rather_than_obeyed
     assert calls == []
 
 
-def test_a_till_whose_tax_total_does_not_match_its_own_lines_is_refused(api_client, wired):
-    """The other direction, and the one that costs the house money: a tax figure that does not add
-    up to the lines it came from. The server will not store a sale that contradicts itself. (It
-    does NOT demand tax on every sale — a non-taxable product is a real thing, declared on the
-    product, so a zero that the LINES agree with is accepted.)"""
+def test_a_retail_tax_total_that_disagrees_with_the_lines_is_NOT_this_gates_business(api_client, wired):
+    """THE REGRESSION FOR A GATE I ALMOST SHIPPED. An earlier revision refused any sale whose
+    `tax_total` disagreed with its own lines. That reads as prudent and is wrong: the server
+    resolves the rate itself (§POS-14), so a till holding a stale rate sends a figure that
+    legitimately differs, and refusing it would stop a register from ringing anything. This gate's
+    job is the EXEMPTION, not arithmetic: a retail sale goes through and the disagreement is left to
+    the tax rule that owns it."""
     db, calls = wired
     body = _body(customer=RETAIL_ID, sale={"tax_total": 0})      # lines still carry 8.88
     r = api_client.post(CHECKOUT, params={"org_id": HOUSE}, json=body)
-    assert r.status_code == 400 and "tax" in r.json()["detail"].lower()
-    assert calls == []
+    assert r.status_code == 200, r.text
+    assert len(calls) == 1
 
 
 def test_a_genuinely_non_taxable_sale_is_accepted(api_client, wired):

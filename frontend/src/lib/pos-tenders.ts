@@ -1,5 +1,5 @@
 /**
- * THE browser's reader of the register's tender list (owner ask 2026-10-30, index §POS-14).
+ * THE browser's reader of the register's tender list (owner ask 2026-10-30, index §POS-15).
  *
  * Owner: *"also add another tender type as Terms . 15/30/60"*.
  *

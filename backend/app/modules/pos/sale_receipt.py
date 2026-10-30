@@ -204,7 +204,7 @@ def snapshot_view(snapshot, sale=None) -> dict:
         "method": str(snap.get("method") or "").strip(),
         "tendered": None if snap.get("tendered") in (None, "") else _f(snap.get("tendered")),
         "change": _f(snap.get("change")),
-        # §POS-14: a tender that does not settle at the till. Carried so the money line can say
+        # §POS-15: a tender that does not settle at the till. Carried so the money line can say
         # what is OWED instead of claiming payment; blank on every sale that was paid.
         "terms_days": None if snap.get("termsDays") in (None, "") else int(snap.get("termsDays")),
         "due_date": str(snap.get("dueDate") or "").strip()[:10],
@@ -371,7 +371,7 @@ def method_label(method) -> str:
 
 
 def _unpaid(snap) -> bool:
-    """Did this sale's tender settle at the till? The vocabulary answers (§POS-14); a tender it does
+    """Did this sale's tender settle at the till? The vocabulary answers (§POS-15); a tender it does
     not know reads as settled, which is what every receipt printed before this existed."""
     from app.modules.pos import tender_vocabulary as _tv
     t = _tv.tender(snap.get("method"))
@@ -449,7 +449,7 @@ def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name=
         totals.append({"label": "Tax", "value": snap["tax_total"]})
     totals.append({"label": "TOTAL", "value": snap["total"], "grand": True})
 
-    # WAS THIS SALE PAID? Asked of the tender vocabulary (§POS-14), never of a tender word here —
+    # WAS THIS SALE PAID? Asked of the tender vocabulary (§POS-15), never of a tender word here —
     # `settles_now` is declared once and this renderer dereferences it. A sale on account would
     # otherwise print "Paid (Terms)" with the full amount on an invoice nobody has paid.
     if _unpaid(snap):
@@ -651,7 +651,7 @@ def document(snap, fmt, template_v, brand=None, store_row=None, tenant_name="",
             doc["totals"].append({"key": key, "label": spec.get("label") or key,
                                   "amount": wanted[key], "editable": bool(spec.get("editable"))})
     if snap["method"]:
-        # The same question as the slip's money line, asked of the same home (§POS-14): a tender
+        # The same question as the slip's money line, asked of the same home (§POS-15): a tender
         # that did not settle at the till is a BALANCE, and this layout must not label it a payment.
         if _unpaid(snap):
             due = snap["due_date"]

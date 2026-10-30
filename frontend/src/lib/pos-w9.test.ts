@@ -1,5 +1,5 @@
 /**
- * Unit: the browser's W-9 reader (index §POS-15).
+ * Unit: the browser's W-9 reader (index §POS-16).
  *
  * The server decides whether a certificate is current, whether a sale is blocked and whether it is
  * tax-free — and asks again at checkout. What is tested here is what the BROWSER is allowed to

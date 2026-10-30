@@ -67,14 +67,14 @@ SERVER_DEFAULTS: dict[str, object] = {
     # the org row serves the rest. STORED ENCRYPTED: these two keys are the only POS settings that
     # are, and `pos/receipt_remit.py` is the one home for that (its `KEYS` names this pair). This
     # module stays PURE and never decrypts: it resolves which ROW applies, and the reader opens it.
-    # THE TENDERS A REGISTER OFFERS (owner 2026-10-30, §POS-14). Read by `GET /pos/tender-types`
+    # THE TENDERS A REGISTER OFFERS (owner 2026-10-30, §POS-15). Read by `GET /pos/tender-types`
     # and by the checkout, so the server declares their defaults here like every other key it reads.
     # The VALUES are the house answer and `pos/tender_vocabulary.py` is their one home — pinned
     # key by key by `harness_pos_tender_vocabulary.py` §F, which fails the build if the two drift.
     # Per store as well as per org, so a counter that does not sell on account can say so.
     "tender_terms_enabled": True,
     "tender_terms_day_options": "15,30,60",
-    # THE WHOLESALE CUSTOMER AND THEIR W-9 (owner 2026-10-30, §POS-15). Read by the W-9 panel's
+    # THE WHOLESALE CUSTOMER AND THEIR W-9 (owner 2026-10-30, §POS-16). Read by the W-9 panel's
     # endpoint and by the checkout's gate. The VALUES are the house answer and
     # `pos/wholesale_w9.py` is their one home — pinned key by key by `harness_pos_wholesale_w9.py`
     # §F. Per store as well as per org: a trade counter and a retail shop can differ.

@@ -1,5 +1,5 @@
 /**
- * THE browser's reader of a wholesale customer's W-9 state (owner ask 2026-10-30, index §POS-15).
+ * THE browser's reader of a wholesale customer's W-9 state (owner ask 2026-10-30, index §POS-16).
  *
  * Owner: *"a customer type as wholesale where the option to not charge tax will be by default if
  * the user confirms they received the filled out w9 and block the user to make a sale before the

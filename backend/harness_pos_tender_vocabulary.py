@@ -202,7 +202,7 @@ check("G5 the refusal reaching the cashier is the one home's own sentence",
       'HTTPException(400, plan["refusal"])' in co)
 check("G6 the balance written is the server's arithmetic, not the body's",
       'sale["balance"] = round(owed, 2)' in co)
-# Tested on the CODE only: a comment naming a section (§POS-15) or a sibling rule is prose, and a
+# Tested on the CODE only: a comment naming a section (§POS-16) or a sibling rule is prose, and a
 # lock that reads prose as a declaration teaches authors to stop writing comments.
 co_code = "\n".join(l.split("#", 1)[0] for l in co.splitlines())
 check("G7 the router spells no tender word and no day count of its own",
@@ -235,8 +235,8 @@ check("G12 the renderer asks `settles_now` rather than testing for a tender word
 
 print("\n§H  REGISTERED")
 IDX = read(INDEX)
-check("H1 the section is in the index", "§POS-14" in IDX or "POS-14" in IDX)
-check("H2 the section register carries its row", re.search(r"\|\s*POS-14\s*\|\s*pos\s*\|", IDX) is not None)
+check("H1 the section is in the index", "§POS-15" in IDX or "POS-15" in IDX)
+check("H2 the section register carries its row", re.search(r"\|\s*POS-15\s*\|\s*pos\s*\|", IDX) is not None)
 check("H3 the one home is named there", "tender_vocabulary" in IDX)
 
 print("\n  negative controls")

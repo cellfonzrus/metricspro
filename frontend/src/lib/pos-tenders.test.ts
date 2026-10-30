@@ -1,5 +1,5 @@
 /**
- * Unit: the browser's reader of the register's tender list (index §POS-14).
+ * Unit: the browser's reader of the register's tender list (index §POS-15).
  *
  * The register used to CARRY the tender buttons as a literal array, and the rule for swapping the
  * integrated card pair for the external-terminal one lived beside it. Both facts now come from the

@@ -1,5 +1,5 @@
 """PROOF — THE WHOLESALE CUSTOMER AND THE W-9 THAT MAKES A SALE TAX-FREE (owner 2026-10-30).
-stdlib only, DB-free. Index §POS-15.
+stdlib only, DB-free. Index §POS-16.
 
     python3 harness_pos_wholesale_w9.py        (from backend/)
 
@@ -289,8 +289,16 @@ check("I3 a blocked sale raises the one home's own sentence",
       'HTTPException(400, w9d["refusal"])' in co)
 check("I4 the basis stored is the one home's, never the body's",
       'sale["tax_exempt_basis"] = w9d["exempt_basis"]' in co)
-check("I5 the tax total is checked against the lines it came from",
-      "does not add up to the tax on its lines" in co)
+# I5 once pinned a refusal for a `tax_total` that disagreed with its own lines. That gate was
+# WRONG and is gone: the server resolves the rate itself (§POS-14), so a till holding a stale rate
+# sends a figure that legitimately differs, and refusing it would stop a register from ringing
+# anything. What this check pins now is that the gate reads a line's tax in BOTH shapes a caller
+# may speak — `tax_value` from the register, `tax_rate` from the activation leg — because reading
+# only the first would read a taxed line as untaxed, which on an exempt sale is the wrong way round
+# to be wrong.
+check("I5 a line's tax is read in whichever shape its caller speaks, never one of the two",
+      '_line_tax' in co and 'i.get("tax_value")' in co and 'i.get("tax_rate")' in co
+      and "does not add up to the tax on its lines" not in co)
 check("I6 an exempt sale whose lines carry tax is refused, not stored",
       "no line may carry" in co)
 check("I7 the four W-9 settings are resolved through the ONE config home",
@@ -305,9 +313,9 @@ check("I10 and the READ degrades instead, so the register is not blocked by a mi
 
 print("\n§J  REGISTERED")
 IDX = read(INDEX)
-check("J1 the section is in the index", "§POS-15" in IDX)
+check("J1 the section is in the index", "§POS-16" in IDX)
 check("J2 the section register carries its row",
-      re.search(r"\|\s*POS-15\s*\|\s*pos\s*\|", IDX) is not None)
+      re.search(r"\|\s*POS-16\s*\|\s*pos\s*\|", IDX) is not None)
 check("J3 the one homes are named there",
       "wholesale_w9" in IDX and "upload_format" in IDX)
 check("J4 the migration grants what it creates and carries its REVERT",

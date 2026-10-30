@@ -2861,7 +2861,7 @@ FACTS: dict[str, dict] = {
         },
     },
     # ── §COMMCALC-11 (owner report 2026-10-15) — a check that GATES a sign-in ────────────────────
-    # ── §POS-14 (owner ask 2026-10-30) — what a till may be paid with ───────────────────────────
+    # ── §POS-15 (owner ask 2026-10-30) — what a till may be paid with ───────────────────────────
     'register_tender_vocabulary': {
         "question": 'WHAT MAY A TILL BE PAID WITH, which of those does THIS org offer, and what '
                     'does a sale on terms owe? It was written FOUR times: two literal button '
@@ -2878,7 +2878,7 @@ FACTS: dict[str, dict] = {
                     'because `pos.checkout` stores whatever it is handed, and no receipt prints '
                     '"Paid" on it (both layouts ask `settles_now`).',
         "homes": ('app/modules/pos/tender_vocabulary.py',),
-        "index": ('POS-14',),
+        "index": ('POS-15',),
         "locks": ('harness_pos_tender_vocabulary.py', 'harness_tender_vocab_lock.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
         # import graph.
@@ -2888,7 +2888,7 @@ FACTS: dict[str, dict] = {
             'app/modules/pos/sale_receipt.py': ('_tv',),
         },
     },
-    # ── §POS-15 (owner ask 2026-10-30) — a wholesale customer and their W-9 ─────────────────────
+    # ── §POS-16 (owner ask 2026-10-30) — a wholesale customer and their W-9 ─────────────────────
     'wholesale_w9_gate': {
         "question": 'MAY I SELL TO THIS CUSTOMER, AND IS THIS SALE TAXABLE? One question, because '
                     'tax-free is not a property of a customer TYPE — it is a property of a type '
@@ -2904,7 +2904,7 @@ FACTS: dict[str, dict] = {
                     '`submitted`, since an anonymous caller holding a link cannot be the user the '
                     'owner meant by "the user confirms they received the filled out w9".',
         "homes": ('app/modules/pos/wholesale_w9.py',),
-        "index": ('POS-15',),
+        "index": ('POS-16',),
         "locks": ('harness_pos_wholesale_w9.py',),
         # SNAPSHOT — written BY HAND, never blessed (§50).
         "callers": {
@@ -2913,12 +2913,12 @@ FACTS: dict[str, dict] = {
             'app/modules/pos/router.py': ('_w9',),
         },
     },
-    # ── §POS-15.3 (2026-10-30) — what format an uploaded document may be ────────────────────────
+    # ── §POS-16.3 (2026-10-30) — what format an uploaded document may be ────────────────────────
     'upload_document_format': {
         "question": 'WHAT FORMAT MAY AN UPLOADED DOCUMENT BE? Sniff the MAGIC BYTES, never trust '
                     'the extension, check the result against the tenant\'s allow-list. The rule '
                     'lived inside `hr/router.py` and was reachable only from the three onboarding '
-                    'upload routes; a wholesale customer sending back a completed W-9 (§POS-15) '
+                    'upload routes; a wholesale customer sending back a completed W-9 (§POS-16) '
                     'asks the identical question from another module, and a second sniffer there '
                     'is how one path comes to accept a renamed executable while the other refuses '
                     'it. A file IS what its bytes say: the filename is read ONLY to word the '
@@ -2926,7 +2926,7 @@ FACTS: dict[str, dict] = {
                     'as the declared default rather than as "anything goes". One refusal wording, '
                     'so two upload screens cannot differ.',
         "homes": ('app/core/upload_format.py',),
-        "index": ('POS-15',),
+        "index": ('POS-16',),
         "locks": ('harness_pos_wholesale_w9.py',),
         # SNAPSHOT — written BY HAND, never blessed (§50).
         "callers": {

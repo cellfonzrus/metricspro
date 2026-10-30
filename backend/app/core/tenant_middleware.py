@@ -155,7 +155,7 @@ _PUBLIC_PREFIXES = (
     "/api/v1/core/me",                    # token-verified whoami + /me/password-changed (self-gate on token)
     "/api/v1/hr/public/onboarding",       # HR onboarding public token endpoints (the link token IS the auth)
     "/api/v1/pos/public/w9",              # A wholesale customer's RETURN LINK for their completed
-                                           # Form W-9 (§POS-15): the one-use token IS the auth, it
+                                           # Form W-9 (§POS-16): the one-use token IS the auth, it
                                            # reaches ONLY that one customer's upload slot, it expires,
                                            # and it is cleared the moment the document arrives. Any
                                            # unknown / expired / used token → the SAME 404 with the
