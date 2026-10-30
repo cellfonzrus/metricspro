@@ -1360,7 +1360,22 @@ _all_routes = _flatten_routes(real_app.routes)
 # than over either side: §COMMCALC-48 landed two routes the same day, so 1812 + 3 = 1815 and neither
 # change asserts the other's figure. Re-taken on a counted,
 # named addition, never relaxed for CI.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1815"))
+# Re-pinned 1815 -> 1822 on 2026-10-30 (§POS-14 / §POS-15, the register's Terms tender and the
+# wholesale W-9 gate). Verified the house way, with THIS file's own _flatten_routes run against an
+# origin/main worktree (1815) and against the branch (1822), and
+# `git diff origin/main <branch> -- backend/ | grep -E '^[+-].*@router\.'` printing exactly these
+# SEVEN added decorators and NONE removed:
+#     + /tender-types                        GET   (what this org may be paid with)
+#     + /customer-account-types              GET   (Personal / Business / Wholesale, one list)
+#     + /customers/{customer_id}/w9          GET   (the panel's state for one customer)
+#     + /customers/{customer_id}/w9/confirm  POST  (a PERSON records the certificate received)
+#     + /customers/{customer_id}/w9/request  POST  (email the blank form + mint the return link)
+#     + /public/w9/{token}                   GET   (the customer's page: company name + blank form)
+#     + /public/w9/{token}/upload            POST  (the customer returns the signed form)
+# None of the seven reads a payout, writes a ledger or feeds a report, statement, GP, commission or
+# tax figure, and none is a route of db_resilience itself (I0b proves that independently of this
+# number). Re-taken on a counted, named addition — never relaxed for CI.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1822"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

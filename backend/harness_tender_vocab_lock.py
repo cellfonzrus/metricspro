@@ -297,7 +297,11 @@ def scan(files, allow):
     #     A `recon_class` literal here would be the second mapping this lock exists to prevent, and a
     #     register that stopped asking would drift the moment the ladder changed.
     reg = code(files.get(REG, ""))
-    n_reg = sum(len(re.findall(r"^REGISTER_TENDERS\s*=", code(x), re.M)) for x in files.values())
+    # The annotation is optional on purpose: `REGISTER_TENDERS: tuple[dict, ...] = (` is the real
+    # declaration, and a pattern that only matched the bare name counted ZERO and reported a
+    # one-home violation that did not exist.
+    _REG_DECL = re.compile(r"^REGISTER_TENDERS\s*(?::[^=\n]+)?=", re.M)
+    n_reg = sum(len(_REG_DECL.findall(code(x))) for x in files.values())
     if n_reg != 1:
         findings.append((REG, f"REGISTER_TENDERS defined {n_reg} times — the register's tender list "
                               f"is ONE list (§POS-14); a second one is the defect this lock exists for"))
