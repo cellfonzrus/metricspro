@@ -13,11 +13,12 @@
 //     permission — the option stays enabled and a 403 on save is surfaced instead.
 //   * The server mirrors cell_number → mobile_phone and coerces empty uuid/date strings to null.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, addDays, localToday } from '@/lib/client'
 import { apiCached } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
-import { getActiveStore, setActiveStore } from '@/lib/pos-store'
+import { ASK_SENTENCE, savedStore, saveStore, workingStoreFrom, needsConfirmation,
+         type WorkingSpan } from '@/lib/pos-working-store'
 import { PosConfigValues, loadEffectivePosConfig, resolvePosConfig } from '@/lib/pos-config'
 import { twoPaneColumns, useNarrowViewport } from '@/lib/viewport'
 
@@ -151,7 +152,6 @@ export default function PosActivationsPage() {
     const to = localToday()
     setDateFrom(from); setDateTo(to)
     load(from, to)
-    setActiveStoreState(getActiveStore())
     apiCached('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
     loadDealerCodes()
     loadServicePlans()
@@ -164,17 +164,24 @@ export default function PosActivationsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // No store chosen on this device yet → fall back to the login's own store grant, then the
-  // first store (fallback is not persisted; only an explicit pick is).
+  // WHICH STORE IS THIS ACTIVATION FOR (index §POS-14). An activation is the carrier leg of the
+  // same sale and carries the same store_code into the commission feed, so it is the register's
+  // sibling and answers the question the same way: the span from the server, the login's own saved
+  // pick, and NO positional fallback. `POST /pos/activations` refuses the rest.
+  const [span, setSpan] = useState<WorkingSpan | null>(null)
+  useEffect(() => { setActiveStoreState(savedStore(user?.id)) }, [user?.id])
   useEffect(() => {
-    if (activeStore) return
-    const fallback = user?.store_code || stores[0]?.store_code || null
-    if (fallback) setActiveStoreState(fallback)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, stores])
+    let cancelled = false
+    api('/api/v1/pos/working-store')
+      .then(r => { if (!cancelled) setSpan({ stores: r.stores || [], login_store: r.login_store ?? null, must_confirm: !!r.must_confirm }) })
+      .catch(() => { if (!cancelled) setSpan(null) })
+    return () => { cancelled = true }
+  }, [user?.id])
+  const working = useMemo(() => workingStoreFrom(activeStore, span), [activeStore, span])
+  const mustConfirmStore = needsConfirmation(working)
 
   function pickStore(code: string) {
-    setActiveStore(code || null)
+    saveStore(user?.id, code || null)
     setActiveStoreState(code || null)
   }
 
@@ -485,10 +492,22 @@ export default function PosActivationsPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <label style={{ fontSize: 12, color: 'var(--text2)' }}>🏪 Store:</label>
-          <select value={activeStore || ''} onChange={e => pickStore(e.target.value)} style={{ ...input, width: 170 }}>
-            <option value="">— select store —</option>
-            {stores.map(s => <option key={s.store_code} value={s.store_code}>{s.store_code}</option>)}
+          {/* Only the stores this login may file an activation at (§POS-14) — the span the server
+              enforces on POST /pos/activations, so the picker cannot offer one it would refuse. */}
+          <select value={activeStore || ''} onChange={e => pickStore(e.target.value)}
+            style={{ ...input, width: 170, ...(mustConfirmStore ? { borderColor: 'var(--amber)' } : {}) }}>
+            <option value="">— confirm store —</option>
+            {(span?.stores || []).map(code => {
+              const row = stores.find(st => st.store_code === code)
+              return <option key={code} value={code}>{row?.address ? `${code} — ${row.address}` : code}</option>
+            })}
           </select>
+          {mustConfirmStore && (
+            <span title={working.refusal || ASK_SENTENCE}
+              style={{ background: 'rgba(217,119,6,0.1)', border: '1px solid var(--amber)', color: 'var(--amber)', borderRadius: 10, padding: '2px 8px', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap' }}>
+              ⚠ confirm your store
+            </span>
+          )}
           {cfg.credit_check_standalone === true && (
             <div style={{ position: 'relative' }}>
               <button className="btn btn-secondary" onClick={toggleCreditCheck}>🔎 Credit Check</button>

@@ -17,7 +17,8 @@ import { apiCached } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import RegisterDrawer, { RegisterSession } from '@/components/pos/RegisterDrawer'
 import RegisterLock from '@/components/pos/RegisterLock'
-import { getActiveStore, setActiveStore } from '@/lib/pos-store'
+import { ASK_SENTENCE, NO_STORE_SENTENCE, savedStore, saveStore, workingStoreFrom, needsConfirmation,
+         type WorkingSpan, type WorkingStore } from '@/lib/pos-working-store'
 import { PosConfigValues, loadEffectivePosConfig, resolvePosConfig, getRegisterNumber } from '@/lib/pos-config'
 import { LinkedText } from '@/components/ScreenLink'
 import ProductFilters, {
@@ -159,7 +160,6 @@ interface Sale {
   receipt?: ReceiptSnapshot | null
 }
 
-interface TaxCode { id: string; name: string; rate: number; store_code: string | null; is_active: boolean }
 interface Store { store_code: string; address?: string | null; market?: string | null }
 
 const inputStyle: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 7, padding: '7px 10px', fontSize: 13, color: 'var(--text)', outline: 'none' }
@@ -254,9 +254,17 @@ export default function PosSalesPage() {
 
   // Sale attribution + tax configuration
   const [stores, setStores] = useState<Store[]>([])
-  // The device's active store_code (localStorage) — read in an effect so SSR markup matches first paint.
-  const [activeStore, setActiveStoreState] = useState<string | null>(null)
-  const [taxCodes, setTaxCodes] = useState<TaxCode[]>([])
+  // WHICH STORE IS THIS SALE FOR (index §POS-14). The saved pick is read in an effect so SSR
+  // markup matches first paint; the SPAN — which stores this login may ring at, and whether a
+  // confirmation is owed — comes from the server, and `workingStoreFrom` is the only thing that
+  // turns the two into an answer. There is no `|| stores[0]` here any more: that fallback rang
+  // sales up at a store nobody had chosen and printed receipts under it.
+  const [pickedStore, setPickedStore] = useState<string | null>(null)
+  const [span, setSpan] = useState<WorkingSpan | null>(null)
+  // The rate the server says applies here, as a FRACTION, with the rung that won it. The register
+  // used to work this out itself from store-then-org-wide and skipped the MARKET rung, so a rate
+  // set on a market charged the org-wide rate — or nothing — at the till.
+  const [serverTax, setServerTax] = useState<{ fraction: number; rate: number | null; scope: string } | null>(null)
   const [isActivationSale, setIsActivationSale] = useState(false)
   const [lastSaleId, setLastSaleId] = useState<string | null>(null)
   const [lastSaleCustomerId, setLastSaleCustomerId] = useState<string | null>(null)
@@ -291,24 +299,37 @@ export default function PosSalesPage() {
   const employeeResolved = !authLoading
 
   useEffect(() => {
-    setActiveStoreState(getActiveStore())
     loadProducts()
     apiCached('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
-    api('/api/v1/pos/tax-codes').then(r => setTaxCodes(r.tax_codes || [])).catch(() => setTaxCodes([]))
   }, [])
 
-  // No store chosen on this device yet → fall back to the login's own store grant, then the
-  // first store (fallback is not persisted; only an explicit pick is).
+  // The two facts the terminal needs, in ONE effect so they cannot fall out of step: this LOGIN's
+  // saved pick (the key carries the user, so the next cashier here inherits nothing — it is read in
+  // an effect so SSR markup matches first paint), and the SPAN from the one home.
+  // `GET /pos/working-store` is the same module `POST /sales/checkout` refuses with, so the screen
+  // cannot offer a store the sale would be rejected at.
   useEffect(() => {
-    if (activeStore) return
-    const fallback = user?.store_code || stores[0]?.store_code || null
-    if (fallback) setActiveStoreState(fallback)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, stores])
+    let cancelled = false
+    setPickedStore(savedStore(user?.id))
+    api('/api/v1/pos/working-store')
+      .then(r => { if (!cancelled) setSpan({ stores: r.stores || [], login_store: r.login_store ?? null, must_confirm: !!r.must_confirm }) })
+      .catch(() => { if (!cancelled) setSpan(null) })
+    return () => { cancelled = true }
+  }, [user?.id])
+
+  const working: WorkingStore = useMemo(() => workingStoreFrom(pickedStore, span), [pickedStore, span])
+  const activeStore = working.storeCode
+  const mustConfirmStore = needsConfirmation(working)
+
+  // A cashier who has not chosen is ASKED, rather than having one chosen for them — DERIVED, not
+  // held in state, so there is no moment where the till is ringing and the question is unasked.
+  // It asks on the SALE view only: browsing the Sale Log needs no store, ringing one up does, and
+  // `getCheckoutBlockers` refuses the sale either way.
+  const askForStore = mustConfirmStore && !!span && activeView === 'sale'
 
   function pickStore(code: string) {
-    setActiveStore(code || null)
-    setActiveStoreState(code || null)
+    saveStore(user?.id, code || null)
+    setPickedStore(code || null)
   }
 
   const storeName = activeStore || ''
@@ -409,19 +430,24 @@ export default function PosSalesPage() {
     clearCart()
   }
 
-  // Effective tax rate as a FRACTION (e.g. 0.08875):
-  //   1) an active tax code for the active store
-  //   2) fallback: an active org-wide tax code (store_code null)
-  //   3) fallback: none configured → null (0 tax + amber chip)
-  const activeTaxRate = useMemo<number | null>(() => {
-    const active = taxCodes.filter(t => t.is_active)
-    if (activeStore) {
-      const s = active.find(t => t.store_code === activeStore)
-      if (s && Number.isFinite(Number(s.rate))) return Number(s.rate) / 100 // rate is a PERCENT (8.875)
-    }
-    const org = active.find(t => t.store_code === null)
-    return org && Number.isFinite(Number(org.rate)) ? Number(org.rate) / 100 : null
-  }, [taxCodes, activeStore])
+  // THE effective tax rate, as a FRACTION — ASKED FOR, never worked out here (index §POS-14).
+  //
+  // This used to be a local rule: the active store's own code, else an org-wide one. It had TWO
+  // rungs where the server's rule has three, so a rate declared on a MARKET — which the Settings
+  // grid shows as this store's effective rate — was charged by nobody. The register now reads
+  // `GET /pos/tax-codes/resolve` for the confirmed store and holds no second opinion. `null` still
+  // means nothing applies, and still raises the amber chip rather than charging a silent $0.
+  useEffect(() => {
+    let cancelled = false
+    if (!activeStore) { setServerTax(null); return }
+    api(`/api/v1/pos/tax-codes/resolve?store_code=${encodeURIComponent(activeStore)}`)
+      .then(r => { if (!cancelled) setServerTax({ fraction: Number(r.rate) / 100 || 0, rate: r.rate ?? null, scope: r.scope || 'none' }) })
+      .catch(() => { if (!cancelled) setServerTax(null) })
+    return () => { cancelled = true }
+  }, [activeStore])
+
+  const activeTaxRate = useMemo<number | null>(
+    () => (serverTax && serverTax.rate !== null ? serverTax.fraction : null), [serverTax])
 
   // Tax basis — was org_settings.tax_applied_on in the standalone app; now a config-registry key.
   const taxAppliedOn: 'pre_discount' | 'post_discount' =
@@ -852,7 +878,9 @@ export default function PosSalesPage() {
   function getCheckoutBlockers(atPayment = false): string[] {
     const issues: string[] = []
     if (!activeStore) {
-      issues.push('No active store is selected. Pick a store in the 🏪 store selector in the page header — inventory is deducted at the sale\'s store, so every sale must be attributed to one.')
+      // The one home's own sentence (§POS-14), so the till and the server word one refusal once.
+      issues.push(working.refusal
+        || 'No active store is confirmed. Pick a store in the 🏪 store selector in the page header — inventory is deducted at the sale\'s store, so every sale must be attributed to one.')
     }
     if (!employeeResolved) {
       issues.push('Still verifying which employee is linked to your login — wait a moment and try again.')
@@ -1138,10 +1166,19 @@ export default function PosSalesPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <label style={{ fontSize: 12, color: 'var(--text2)' }}>🏪 Store:</label>
-          <select value={activeStore || ''} onChange={e => pickStore(e.target.value)} style={{ ...inputStyle, width: 170 }}>
-            <option value="">— select store —</option>
-            {stores.map(s => <option key={s.store_code} value={s.store_code}>{s.store_code}</option>)}
+          {/* Only the stores THIS LOGIN may ring a sale at (§POS-14) — the span the server will
+              enforce at checkout, so the picker cannot offer a store the sale is refused at. */}
+          <select value={activeStore || ''} onChange={e => pickStore(e.target.value)}
+            style={{ ...inputStyle, width: 170, ...(mustConfirmStore ? { borderColor: 'var(--amber)' } : {}) }}>
+            <option value="">— confirm store —</option>
+            {(span?.stores || []).map(code => <option key={code} value={code}>{code}</option>)}
           </select>
+          {mustConfirmStore && (
+            <span title={working.refusal || ASK_SENTENCE}
+              style={{ background: 'rgba(217,119,6,0.1)', border: '1px solid var(--amber)', color: 'var(--amber)', borderRadius: 10, padding: '2px 8px', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap' }}>
+              ⚠ confirm your store
+            </span>
+          )}
           <RegisterDrawer activeStore={activeStore} storeName={storeName} cfg={cfg} session={drawerSession} onSessionChange={setDrawerSession} />
           {cfg.enable_register_lock === true && (
             <RegisterLock autoLockMinutes={Number(cfg.register_lock_minutes) || 0} />
@@ -1369,6 +1406,12 @@ export default function PosSalesPage() {
             <div style={{ padding: 20, flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 16 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Order Summary</div>
+                {activeTaxRate !== null && serverTax && serverTax.scope !== 'store' && (
+                  <span title={`This store has no rate of its own — it is charging the ${serverTax.scope === 'market' ? 'market' : 'company-wide'} rate.`}
+                    style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: 10, padding: '2px 8px', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                    inherited from {serverTax.scope === 'market' ? 'market' : 'company'}
+                  </span>
+                )}
                 {activeTaxRate === null && (
                   <a href="/pos/settings" title="No active tax code for this store — configure one in POS Settings"
                     style={{ background: 'rgba(217,119,6,0.1)', border: '1px solid var(--amber)', color: 'var(--amber)', borderRadius: 10, padding: '2px 8px', fontSize: 10, fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}>
@@ -1967,6 +2010,47 @@ export default function PosSalesPage() {
       )}
 
       {/* CHECKOUT BLOCKED MODAL — sale attribution requirements not met */}
+      {/* CONFIRM WHICH STORE YOU ARE WORKING IN (index §POS-14, owner 2026-10-30).
+          A cashier granted more than one store is ASKED, once, before anything can be rung up —
+          the sale, the receipt and the inventory deduction all land at whatever this answers, and
+          the register used to answer it by itself with the first store in the list. */}
+      {askForStore && (span!.stores || []).length > 0 && (
+        <div style={{ ...modalOverlay, zIndex: 320 }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--amber)', borderRadius: 12, width: 420, overflow: 'hidden' }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', background: 'rgba(217,119,6,0.07)' }}>
+              <b style={{ fontSize: 14 }}>🏪 Which store are you working in?</b>
+            </div>
+            <div style={{ padding: 20 }}>
+              <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 14px' }}>
+                {ASK_SENTENCE}
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {(span!.stores || []).map(code => {
+                  const row = stores.find(st => st.store_code === code)
+                  const pinned = span!.login_store === code
+                  return (
+                    <button key={code} onClick={() => pickStore(code)}
+                      style={{ textAlign: 'left', background: pinned ? 'var(--surface2)' : 'transparent',
+                               border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', cursor: 'pointer', color: 'var(--text)' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>{code}{pinned ? ' · your store' : ''}</div>
+                      {row?.address && <div style={{ fontSize: 11, color: 'var(--text2)' }}>{row.address}</div>}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* A login granted no store at all is told so, in the one home's own sentence. */}
+      {askForStore && (span!.stores || []).length === 0 && (
+        <div style={{ ...modalOverlay, zIndex: 320 }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--red)', borderRadius: 12, width: 420, padding: 20 }}>
+            <b style={{ fontSize: 14, color: 'var(--red)' }}>⛔ No store to ring up at</b>
+            <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '10px 0 0' }}>{NO_STORE_SENTENCE}</p>
+          </div>
+        </div>
+      )}
       {blockIssues && (
         <div style={{ ...modalOverlay, zIndex: 300 }}>
           <div style={{ background: 'var(--surface)', border: '1px solid var(--red)', borderRadius: 12, width: 460, overflow: 'hidden' }}>

@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
-import { getActiveStore } from '@/lib/pos-store'
+import { savedStore } from '@/lib/pos-working-store'
 import { useAuth } from '@/lib/auth-context'
 import { responsiveColumns, useNarrowViewport } from '@/lib/viewport'
 
@@ -83,10 +83,12 @@ export default function SpecialOrdersPage() {
   useEffect(() => {
     apiCached('/api/v1/storeops/stores', LOOKUP).then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
   }, [])
+  // The store this login last CHOSE (index §POS-14), never a guess. Blank prefills nothing and
+  // the field is picked from the list, which is the honest state when nobody has chosen.
   useEffect(() => {
-    const s = getActiveStore() || user?.store_code || ''
+    const s = savedStore(user?.id) || ''
     setStore(s); setShipTo(s)
-  }, [user])
+  }, [user?.id])
 
   async function runSearch() {
     setSearching(true); setMsg('')

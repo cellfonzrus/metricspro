@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react'
 import { api, localToday } from '@/lib/client'
 import { apiCached } from '@/lib/cache'
-import { getActiveStore, setActiveStore } from '@/lib/pos-store'
+import { savedStore, saveStore } from '@/lib/pos-working-store'
 import { useAuth } from '@/lib/auth-context'
 import IntegrityFlags from './integrity-flags'
 import AdjustModal from './adjust-modal'
@@ -198,11 +198,14 @@ export default function PosInventoryPage() {
     api('/api/v1/pos/products?active_only=true').then(r => setProducts(r.products || [])).catch(() => {})
   }, [])
 
-  // Resolve the active store once the store list (and possibly the login) is known:
-  // localStorage → login's store_code → first store. Stock views default to it.
+  // The store this login last CHOSE (index §POS-14) — never the first store in the list. This is
+  // a view filter rather than a money path, so no store simply means every store ('all') instead of
+  // a guess that reads like a choice. The saved pick is keyed by the login, so a shared terminal
+  // does not hand the next person the last person's store.
   useEffect(() => {
     if (activeStore || stores.length === 0) return
-    const code = getActiveStore() || user?.store_code || stores[0]?.store_code || ''
+    const saved = savedStore(user?.id)
+    const code = saved && stores.some(st => st.store_code === saved) ? saved : ''
     setActive(code)
     const filter = code || 'all'
     setStockStore(filter)
@@ -211,7 +214,7 @@ export default function PosInventoryPage() {
   }, [stores, user])  // eslint-disable-line react-hooks/exhaustive-deps
 
   function changeActiveStore(code: string) {
-    setActiveStore(code || null)
+    saveStore(user?.id, code || null)
     setActive(code)
     const filter = code || 'all'
     setStockStore(filter)
@@ -317,7 +320,9 @@ export default function PosInventoryPage() {
   }
 
   function openTransferForm() {
-    const source = activeStore || stores[0]?.store_code || ''
+    // The confirmed store, or nothing (index §POS-14). This used to fall back to the first
+    // store in the list, which would have pulled stock OUT of a store nobody had chosen.
+    const source = activeStore || ''
     setTransferForm({ from_store_code: source, to_store_code: '', notes: '' })
     setDraftItems([])
     setSerialQuery('')

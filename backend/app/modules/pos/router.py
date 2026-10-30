@@ -23,6 +23,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from app.core.database import get_supabase
 from app.modules.pos import held_sale as _held
 from app.modules.pos import stock_landing as _stock
+from app.modules.pos import working_store as _wstore
+from app.modules.pos import tax_precedence as _taxrule
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -1096,6 +1098,64 @@ def _caller_store_keyset(authorization: str, org_id: str):
         raise HTTPException(403, f"could not resolve your store scope, so access is denied: {e}")
 
 
+def _caller_login_store(authorization: str, org_id: str) -> str:
+    """The store this login is PINNED to, if any — a hint for the picker, never an answer.
+
+    §POS-14: a pin is what somebody typed on a form once (the same point core.scope makes about
+    visibility). It pre-selects the confirm dialog for a single-store cashier and is ignored when it
+    falls outside the caller's span."""
+    try:
+        from app.modules.core.router import _uid_from_token
+        uid = _uid_from_token(authorization)
+        if not uid:
+            return ""
+        rows = (sb().schema("storeops").table("app_users").select("store_code")
+                .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
+        return str((rows[0] or {}).get("store_code") or "").strip() if rows else ""
+    except Exception:
+        return ""
+
+
+def _working_span(authorization: str, org_id: str) -> dict:
+    """THE caller's ringable span, assembled for `pos/working_store` (index §POS-14).
+
+    Active stores only — offering a closed store as the place a sale happened is never correct —
+    intersected with the caller's reporting span. `_caller_store_keyset` FAILS CLOSED (403), so a
+    scope hiccup cannot widen this to the whole tenant."""
+    client = sb()
+    try:
+        roster = (client.schema("storeops").table("stores")
+                  .select("store_code,address,market,is_active")
+                  .eq("org_id", org_id).order("store_code").limit(2000).execute().data) or []
+    except Exception:
+        roster = []
+    roster = [r for r in roster if r.get("is_active") is not False]
+    keyset = _caller_store_keyset(authorization, org_id)
+    return _wstore.span(roster, keyset, login_store=_caller_login_store(authorization, org_id))
+
+
+@router.get("/working-store")
+def working_store(store_code: str = "", authorization: str = Header(default=""),
+                  org_id: str = ORG_ID):
+    """Which store may this caller ring a sale at, and is `store_code` a CONFIRMED choice?
+
+    THE one home every POS screen asks instead of spelling its own ladder (index §POS-14). It
+    answers the span, the login's pin, whether a confirmation is owed, and — for the store the
+    terminal says was picked — the BASIS of it: `confirmed`, `sole_store`, or `unconfirmed`, which
+    carries no store_code at all. There is no positional fallback: `stores[0]` is what four screens
+    used to do, and it logged sales and printed receipts under a store nobody had chosen.
+
+    It also carries the effective TAX for the resolved store, through the same one home the Settings
+    grid reads (`tax_precedence`), so the register cannot answer that question itself either."""
+    span_ = _working_span(authorization, org_id)
+    verdict = _wstore.resolve(span_, store_code)
+    tax = None
+    if verdict["store_code"]:
+        tax = resolve_tax_code(store_code=verdict["store_code"], org_id=org_id)
+    return {"stores": span_["stores"], "login_store": span_["login_store"],
+            "must_confirm": span_["must_confirm"], **verdict, "tax": tax}
+
+
 def _span_filter(rows, keyset, field="store_code", allow_null=False):
     """Keep rows whose store is inside the caller's span.
 
@@ -1442,25 +1502,17 @@ def list_tax_codes(org_id: str = ORG_ID):
 
 
 def _resolve_tax(codes, store_code, market):
-    """THE tax precedence, in one place: store_code > market > org-wide. Inactive rows never win.
+    """THE tax precedence — store_code > market > org-wide — DEREFERENCED, never re-derived.
+
+    The rule itself lives in `pos/tax_precedence.pick` (index §POS-14). It was written here, and the
+    register then grew a second, shorter copy of it that skipped the MARKET rung: a rate set on a
+    market read as `effective` in the Settings grid and charged the org-wide rate (or nothing) at
+    the till. It is pure and DB-free there, so the browser reaches the same rule through
+    GET /pos/tax-codes/resolve instead of owning a second opinion about what the customer owes.
 
     pos.checkout does not compute tax — it stores the tax_total it is given — so every caller must
-    reach a rate through here. Reimplementing this ordering anywhere else is how one screen charges
-    8.875% and another charges 0% for the same store."""
-    live = [c for c in (codes or []) if c.get("is_active") is not False]
-    sc = (store_code or "").strip()
-    mk = (market or "").strip().lower()
-    if sc:
-        hit = next((c for c in live if (c.get("store_code") or "").strip() == sc), None)
-        if hit:
-            return hit, "store"
-    if mk:
-        hit = next((c for c in live if (c.get("market") or "").strip().lower() == mk), None)
-        if hit:
-            return hit, "market"
-    hit = next((c for c in live
-                if not (c.get("store_code") or "").strip() and not (c.get("market") or "").strip()), None)
-    return (hit, "org") if hit else (None, "none")
+    reach a rate through here."""
+    return _taxrule.pick(codes, store_code, market)
 
 
 @router.get("/tax-codes/resolve")
@@ -1785,6 +1837,18 @@ def checkout(body: dict, authorization: str = Header(default=""), org_id: str = 
         raise HTTPException(403, "your login isn't linked to an employee record — "
                                  "ask an admin to set your Employee ID in Roles & Access")
     sale["employee_id"] = eid   # never trust a body-supplied rep on the money path
+    # WHICH STORE IS THIS SALE FOR (index §POS-14, owner 2026-10-30). This gate did not exist: the
+    # endpoint took whatever store the body named — any store in the tenant — and took NO store at
+    # all, which `pos.checkout` writes as NULL and `_span_filter` then shows to every store-scoped
+    # manager in the tenant. A sale nobody can attribute is not a sale, so the refusal is the one
+    # sentence `working_store` owns rather than a second wording invented here.
+    _refusal = _wstore.sale_refusal(_working_span(authorization, org_id), sale.get("store_code"))
+    if _refusal:
+        raise HTTPException(403, _refusal)
+    # The ROSTER'S spelling, not the terminal's. Store codes are compared without case folding
+    # across this platform, and 'b-1115' once became a phantom store holding $289 of a day's money.
+    sale["store_code"] = _wstore.resolve(_working_span(authorization, org_id),
+                                         sale.get("store_code"))["store_code"]
     # The register may now edit unit_price (owner directive 2026-08-11). Keep what the product was
     # LISTED at so an override is visible afterwards as list_price <> unit_price — a line that
     # records only what was charged makes a discounted sale indistinguishable from a cheap product.
@@ -2301,7 +2365,7 @@ from app.modules.pos import receipt_escpos as _escpos
 from app.modules.pos import receipt_remit as _remit
 from app.modules.pos import customer_bill_to as _bill_to
 from app.modules.pos import receipt_pdf_render as _rpdf_out
-# §POS-13 — the Document DRAWN, injected the same way `render_words` is, so the PDF
+# §POS-14 — the Document DRAWN, injected the same way `render_words` is, so the PDF
 # module keeps deciding nothing about content.
 from app.modules.pos.receipt_formats import render_pdf as _rpdf_doc
 from app.modules.pos import receipt_store_block as _shop
@@ -2872,6 +2936,15 @@ def create_activation(body: dict, authorization: str = Header(default=""), org_i
                                  "ask an admin to set your Employee ID in Roles & Access")
     ins["employee_id"] = eid
     ins["org_id"] = org_id
+    # THE SIBLING of the checkout gate (index §POS-14). An activation is the carrier leg of the
+    # same sale and carries the same store_code into the commission feed, so it answered the same
+    # question — "which store is this for?" — with the same absence of an answer. Same one home,
+    # same sentence, same canonical spelling.
+    _aspan = _working_span(authorization, org_id)
+    _arefusal = _wstore.sale_refusal(_aspan, ins.get("store_code"))
+    if _arefusal:
+        raise HTTPException(403, _arefusal)
+    ins["store_code"] = _wstore.resolve(_aspan, ins.get("store_code"))["store_code"]
     if ins.get("status") == "cancelled":
         _require_pos_perm(authorization, org_id, "pos_activations_cancel")
     r = sb().schema("pos").table("activations").insert(ins).execute()
