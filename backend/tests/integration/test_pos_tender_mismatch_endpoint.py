@@ -1,4 +1,4 @@
-"""Integration: the cash / credit mismatch an edit leaves behind, through the real endpoints (§POS-13).
+"""Integration: the cash / credit mismatch an edit leaves behind, through the real endpoints (§POS-14).
 
 Real routing, the real router body, the real one home — over the in-memory database double, with
 conftest blocking every outbound socket. There is no staging Supabase, so "integration" here means
@@ -188,7 +188,7 @@ def test_an_edit_that_would_create_unexplained_money_is_refused_when_it_cannot_b
 
 def test_a_settled_edit_is_not_held_up_by_a_migration_it_does_not_use(monkeypatch, wired, api_client):
     """An edit that moves no money needs no log row, so the refusal above must not become a blanket
-    block on editing — that would be §POS-12 regressed in the name of §POS-13."""
+    block on editing — that would be §POS-12 regressed in the name of §POS-14."""
     monkeypatch.setattr("app.modules.pos.router._tender_log_available", lambda *a, **k: False)
     res = _save(api_client, [dict(PHONE, description="Samsung A9 Plus")])
     assert res.status_code == 200, res.text

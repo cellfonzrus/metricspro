@@ -1086,7 +1086,7 @@ export default function PosSalesPage() {
     }
     setAmendSaving(true)
     try {
-      // STEP ONE — THE DRY RUN (§POS-13). Ask the server what this edit comes to and what it would
+      // STEP ONE — THE DRY RUN (§POS-14). Ask the server what this edit comes to and what it would
       // leave outstanding, with nothing written. The cash / credit mismatch is NOT derived here:
       // this screen can price a cart for display, but a browser subtracting a tender from a total
       // would be a second answer to a money question, and it would drift from the server's on the
@@ -1262,7 +1262,7 @@ export default function PosSalesPage() {
                 <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px', color: 'var(--red)' }} onClick={stopEditing}>Stop editing</button>
               </div>
             )}
-            {/* WHAT WAS TENDERED (§POS-13). Shown for the whole edit, because the cashier is about
+            {/* WHAT WAS TENDERED (§POS-14). Shown for the whole edit, because the cashier is about
                 to move what the customer OWES and the money already taken will not move with it.
                 These are the server's figures, printed; the verdict is deliberately not computed
                 here — it arrives with the dry run when they press Save. When the tender was never

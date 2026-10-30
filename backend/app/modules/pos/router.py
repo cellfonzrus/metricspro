@@ -1831,7 +1831,7 @@ def void_sale(sale_id: str, authorization: str = Header(default=""), org_id: str
 # are absent. The plan endpoint then answers `available: false` with the setup note, so the Sale Log
 # simply does not offer the button rather than offering one that errors.
 from app.modules.pos import sale_amendment as _amend
-# The cash / credit mismatch an edit leaves behind (§POS-13). A SECOND one home beside the first,
+# The cash / credit mismatch an edit leaves behind (§POS-14). A SECOND one home beside the first,
 # not a bigger one: `sale_amendment` answers "may this be edited and what does it come to", and
 # `sale_settlement` answers "what was tendered against it and what does that leave outstanding".
 # The second question has callers the first does not (the void path, and the mismatch report), which
@@ -1902,7 +1902,7 @@ def sale_amend_plan(sale_id: str, authorization: str = Header(default=""), org_i
         cart = _amend.cart_from(items) if reason is None else []
     except _amend.AmendmentError as e:
         reason, cart = str(e), []
-    # What stands tendered against this sale RIGHT NOW (§POS-13), so the till can show the cashier
+    # What stands tendered against this sale RIGHT NOW (§POS-14), so the till can show the cashier
     # what was taken before they move what is owed. The verdict is deliberately NOT previewed from
     # here: a cart the cashier has not sent yet is not a figure this endpoint has seen, and the
     # browser must not derive the mismatch itself. The dry run on the save route is what previews it,
@@ -1965,7 +1965,7 @@ def amend_sale_items(sale_id: str, body: dict, authorization: str = Header(defau
     if not plan["allowed"]:
         raise HTTPException(400, plan["reason"])
 
-    # ── the cash / credit mismatch this edit leaves behind (§POS-13) ─────────────────────────────
+    # ── the cash / credit mismatch this edit leaves behind (§POS-14) ─────────────────────────────
     # Measured against the RESTATED total, because that is what will be owed once this write lands,
     # and against the tender as RECORDED, which this write does not touch. Both figures come from
     # the one home; nothing here subtracts anything itself.
@@ -2380,7 +2380,7 @@ from app.modules.pos import receipt_escpos as _escpos
 from app.modules.pos import receipt_remit as _remit
 from app.modules.pos import customer_bill_to as _bill_to
 from app.modules.pos import receipt_pdf_render as _rpdf_out
-# §POS-13 — the Document DRAWN, injected the same way `render_words` is, so the PDF
+# §POS-14 — the Document DRAWN, injected the same way `render_words` is, so the PDF
 # module keeps deciding nothing about content.
 from app.modules.pos.receipt_formats import render_pdf as _rpdf_doc
 from app.modules.pos import receipt_store_block as _shop
@@ -3518,7 +3518,7 @@ def report_sales(date_from: str = "", date_to: str = "", store_code: str = "",
 def report_tender_mismatch(date_from: str = "", date_to: str = "", store_code: str = "",
                            employee_id: str = "", kind: str = "mismatch",
                            authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """THE LOG of the cash / credit mismatch (§POS-13) — owner ask 2026-10-30.
+    """THE LOG of the cash / credit mismatch (§POS-14) — owner ask 2026-10-30.
 
     DERIVED LIVE over `pos.sales` and `pos.sale_payments` rather than read from the filed rows
     alone, and that is the design point, not an implementation detail: an edit is only ONE of the

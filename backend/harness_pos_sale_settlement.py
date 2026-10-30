@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PROOF + LOCK: the cash / credit mismatch an edit leaves behind (index §POS-13).
+"""PROOF + LOCK: the cash / credit mismatch an edit leaves behind (index §POS-14).
 
 DB-free. Imports the REAL module, reads the REAL router, the REAL migration and the REAL page, so a
 lock here fails the build rather than describing an intention.
@@ -109,7 +109,7 @@ def pay(method, amount):
     return {"payment_method": method, "amount": amount}
 
 
-# The region of the router that owns §POS-13's reads. Bounded for the same reason §POS-12's is: an
+# The region of the router that owns §POS-14's reads. Bounded for the same reason §POS-12's is: an
 # unbounded split would make every count below meaningless.
 REGION = ROUTER.split("# ── Editing a rung sale in place", 1)
 REGION = (REGION[1].split("# ── Register (cash drawer) sessions", 1)[0] if len(REGION) == 2 else "")

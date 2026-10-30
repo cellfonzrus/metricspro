@@ -88,6 +88,7 @@ Primary code homes:
 | POS-11 | **The page a receipt prints on, and the Bill To** | "Do not put the reprint date and time on top with the word Sale in the middle of the screen; the Bill To should have the customer address printed." Whose header is that across the top of a printed receipt, and why does a Bill To show a bare name when the renderer prints the address? |
 | POS-12 | **Editing a sale that is already rung** | "I am not able to edit the receipt or add more items to the same receipt." How does a cashier put another item on a receipt that is already printed, and what happens to the version the customer is holding? |
 | POS-13 | **What a receipt document looks like** | "The receipt is not formatted properly and no clear border lines to make it look professional." Why does the emailed receipt carry no borders at all, and why are its phrases broken apart mid-word? |
+| POS-14 | **The cash / credit mismatch an edit or a void leaves behind** | "I need the POS Cash Register to have the ability to edit the sale from the prior day and create log of the cash or credit mismatch." Editing a sale moves what the customer owes and voiding one stops them owing it — so where does the money already taken go, who is told, and why was nothing comparing the two? |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -7647,6 +7648,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `POST /closing/row/{row_id}/refile` (**move a closing to the store it belongs to**, with every row keyed to it — `dry_run` returns the plan and writes nothing; refuses when the destination store-day is already closed, when money is settled against the day, or when a one-per-store-day satellite already stands at the destination) | `closing/router.py` (`refile_closing_row`, `_refile_satellite`); pure registry `closing/closing_refile.py`; mig `1081` (audit columns only); gate `_can_mgmt_review` (the release gate, DMs excluded) | §29.14 |
 | `GET /closing/billpay-pickups` (envelopes carry `credit` = declared bill-pay-on-card + `total_credit`, mig `944`; POS comparison base = declared cash+credit; `market=` resolves via the shared `_resolve_market_filter` — comma-joined multi-market grants match per-component, 2026-09-02 DM-envelopes fix, same as `GET /closing/pickups`), `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup / §12 3-way recon / §12 multi-market-grant filter |
 | `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag; since mig `944` ALSO the 3-WAY bill-pay recon — declared vs sales-tx (tender-split) vs processor, `three_way_status` per row + `three_way` summary); W3 scheduled report key `closing_billpay_recon` | `closing/router.py` (`cash_recon_management`; POS sides via the shared `_pos_tenders_for_days`/`_pos_billpay_for_days`, sales side via `_sales_billpay_for_days` → `commcalc.router._billpay_sales_by_store_day`; pure math `metric_recon.reconcile_billpay_three_way_days`); `notify/closing_reports.py` | §12 management cash recon / §12 3-way recon |
+| `GET /pos/reports/tender-mismatch` (standard store / rep / date filters + the ReportShell Send bar; `kind` = mismatch (default) / collect / refund / unmeasured / all) — every sale whose recorded tender does not match what it now comes to, DERIVED LIVE so an EDITED sale and a VOIDED one appear on one screen; screen `/pos/tender-mismatch` | `pos/router.report_tender_mismatch`, every figure from the one home `pos/sale_settlement.outstanding` / `summarise` / `blockers`; the filed row (mig 1106) joined on for what the till saw and who settled it | §POS-14 |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`; since 2026-09-08 also **`by_dm` + `dm_summary` — THE CASH SHORT BY DM REPORT**, folded from the SAME keyset-filtered day rows on `cash_pickup.picked_up_by`, never a second read; uncounted is reported as uncounted, never as short, and `over` never nets a short away, §23p), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /closing/deposit-accountability` (keyset-scoped green-day board; `can_confirm` flag; since mig `949` day rows also carry `pickup_short_rows`/`pickup_over_rows`/`pickup_variance_total` + summary `short_pickup_days`), `POST /closing/deposit-mgmt-confirm` (GATED `can_see_cash_recon`, fail-closed 403) | `closing/router.py` (`deposit_accountability_board`/`deposit_mgmt_confirm`; pure `closing/deposit_accountability.py`, mig `943`; variance via `closing/pickup_actual.py`, mig `949`) | §12 deposit accountability / §12 actual cash picked |
 | `GET /closing/accountability-chain` (**THE FIVE-STAGE CASH ACCOUNTABILITY CHAIN** — per (store, day): Daily Closing / DM verified / Cash pickup / Cash handover / Management review, each `done`+`at`+`by`, plus `stuck_at`; **plus `dm` (the assigned district manager) and `worked` (who was actually in the store that day, `actual`/`scheduled`/`none`, resolved for the 31 most recent dates with `worked_resolved_dates` / `worked_dates_capped`) — §48.7**; keyset-scoped, 62-day cap, **plus, per row, `closing_state`/`closing_label` (dereferencing `unfinished_day.describe`) and `pickup_state`/`pickup_label` + `cash_declared`/`cash_picked`/`cash_awaiting` (dereferencing `deposit_accountability.cash_pickup_state` over the declared envelope spine) — §48.8**; keyset-scoped, 62-day cap, ALL THREE standard filters (`stores`/`markets`+`market`/`employees`) through their one resolver each, plus `pickup=picked|not_picked` and `closing=submitted|not_submitted`) | `closing/router.py` (`accountability_chain`); pure `closing/deposit_accountability.py` (`expected_store_codes`, `date_span`, `stage_chain`, `chain_summary`, `stage_catalog`) dereferencing `day_accountability`; names via `core/actors.py` (`is_actor_uid`/`resolve_actor_names`); pure `storeops/org_chain.py` (`dm_by_store`) over `storeops.router.org_chain_inputs`; who-worked via `closing/router._who_worked_display_by_store`; cash via `envelope_report.declared_total_cash` + `envelope.net_row` + `envelope.is_collectable`; screens `/closing/accountability` and `/closing/closing-pickup-status` (+ the `/closing` dashboard tab, same component) | §48, §48.7, §48.8 |
@@ -7975,6 +7977,10 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"May this rung sale be edited, and with what lines?"** (the Sale Log offering the button, the endpoint allowing it, the till before it saves; owner 2026-10-29) | `pos.sales` + `pos.sale_items` + the declared window on `pos.pos_settings` | **ONE home** `sale_amendment.refusal` / `plan` / `cart_from`, dereferenced by all three callers. Before this there was no amend path at all: `pos.checkout` and `pos.void_sale` (mig 725) were the only two sale functions and the Sale Log's item table was display-only. Every refusal is a SENTENCE, written once, so two screens cannot word one refusal differently. Proof `harness_pos_sale_amendment.py` §A/§G — §POS-12 |
 | **"What does this sale line come to?"** (the edit that restates it, and the totals it rolls up to) | the agreed figures on the line itself | **ONE home** `sale_amendment.line_money` / `totals`, DERIVED from the figures `pos.sale_items` already stores and reproducing transaction 4605's two lines to the cent. It was browser-only arithmetic before, and `pos.checkout` stores whatever it is handed — tolerable for a new sale, not for an edit whose purpose is to move those figures, so the server re-derives and the body's `extended_price` / `tax_value` / totals are DISCARDED. Tax rounds per line then sums, matching what each line stores. Proof §B — §POS-12 |
 | **"What did this sale look like before it was edited?"** (the audit trail that makes an in-place rewrite answerable) | `pos.sale_amendments` (mig **1103**) | **ONE home** `sale_amendment.snapshot` / `current_revision`, filed by `pos.amend_sale` BEFORE it touches anything. Keeps the sale's own STORED figures, never re-derived ones — the point is to record what the customer's receipt said, not what it should have said. A null `revision` reads as 1, so the first edit of an older sale still files the original. The endpoint returns 503 rather than editing when the table is absent. Proof §C — §POS-12 |
+| **"What was tendered against this sale, and what does moving its total leave outstanding?"** (the till before it saves, the save itself, the mismatch log report, and the voided sale nobody refunded; owner 2026-10-30) | `pos.sale_payments` + `pos.sales.total` / `.balance` + the declared band on `pos.pos_settings` | **ONE home** `sale_settlement.outstanding` / `tendered` / `expected`, dereferenced by all four callers. NOTHING compared these two tables before: `pos.amend_sale` (mig 1103) restates the total and `pos.void_sale` (mig 725) stands the sale down, and NEITHER touches the payment rows. An UNRECORDED tender answers `measured: False` with a reason and never $0.00 — 4,603 of the 4,605 live sales have no payment row, so reading absence as zero would have produced 4,603 mismatches. Compared against `total − balance`, never the bare total. Proof `harness_pos_sale_settlement.py` §A/§B/§C/§G — §POS-14 |
+| **"Is this difference a finding, and which way does the money travel?"** (the till warning, the log row, the report rollup) | the variance plus the declared band | **ONE home** `sale_settlement.outstanding`, whose verdict IS `deposit_recon.status_for` — the platform's existing truth table, adopted rather than respelled, so this surface cannot drift from every other recon screen. `direction` (`collect`/`refund`/`settled`) is the module's own addition because it answers what the verdict does not. `HOUSE_BAND` is **0.00**, unlike §72's $5: that band absorbs two humans counting the same cash and there is nothing to absorb here. It is the only dollar literal, overridden per org by `pos_settings.tender_mismatch_band` (RULE TWO). Proof §E/§F — §POS-14 |
+| **"Which tender is the difference against?"** (the sentence the cashier reads, the `Against` column) | the methods on `pos.sale_payments` | **ONE home** `sale_settlement.attribution`. One method is attributed to it; TWO answer `ambiguous: True` and NAME both, because which one settles it is a decision a human makes at the till. Guessing is §72's $20,000 accusation in miniature. No tender word is spelled in a branch — the tenant's own `payment_method` is what is shown. Proof §D — §POS-14 |
+| **"What did the till SEE when this edit was saved, and has anybody settled it?"** | `pos.sale_amendments` tender columns (mig **1106**) | **ONE home** `sale_settlement.record`, filed by `pos.amend_sale` with the superseded version. An unmeasurable comparison files its REASON and NO figures, and a DB constraint forbids a row carrying both — the §66 fallback-basis rule as a check constraint. Mig 1106 extends mig 1103's own table at its EXISTING function signature, so no sibling table and no overload exist. Proof §B/§J — §POS-14 |
 | **"What does a receipt DOCUMENT look like?"** (the browser copy and the PDF of one receipt; owner 2026-10-29) | nothing — it was described twice, in a private `_CSS` string and not at all for the PDF | **ONE home** `receipt_formats/doc_style.py`: the fonts, weights, greys, proportions and `RULES`, the named list of every rule drawn. `render_html` builds its stylesheet from `doc_style.css()` and the PDF draws from the same numbers, so a border exists once and appears in both. A second stylesheet in the renderer fails the build. Proof `harness_pos_receipt_document.py` §A/§B — §POS-13 |
 | **"This Document, drawn on a page"** (the emailed/attached PDF of the tenant's own POS layout) | the Document the content homes built | **ONE home** `receipt_formats/render_pdf.py` — the THIRD output of the one Document walk, beside `render_html` and `render_words`. It replaced a PDF rebuilt from `render_words`, which is a round-trip PROOF fixture (words at the ORIGINAL POS's paper offsets, for its parser) and therefore carried **0 drawn lines** and broke phrases mid-word. `render_words` is UNCHANGED and keeps its own job. Lives in the render package because `receipt_pdf_render` may decide no content (§P11) and now only delegates, refusing by name when no renderer is injected. Proof §C/§D/§G — §POS-13 |
 | **"How is a payment method written for a customer?"** (both receipt layouts) | `pos.sale_payments.payment_method`, a machine value | **ONE home** `sale_receipt.method_label`. The slip printed `Paid (credit_card)` and the POS layout `.title()`'d it to **Credit_Card** on a customer's receipt — two dressings of one fact, both wrong. No method vocabulary is declared (RULE TWO): whatever the tenant stores is made readable, never translated against a list. Proof §F — §POS-13 |
@@ -26181,6 +26187,7 @@ status word rather than a blank that reads as nil.
 | POS-11 | pos |
 | POS-12 | pos |
 | POS-13 | pos |
+| POS-14 | pos |
 | PAYABLES-01 | payables |
 | CORE-25 | core |
 | CORE-26 | core |
@@ -33130,6 +33137,180 @@ Same class: §POS-01 (the register's cart, whose vocabulary and line map this sh
 receipt that must be reprinted afterwards), §POS-02 (the one renderer that prints the revised copy).
 
 ---
+
+## §POS-14. THE CASH / CREDIT MISMATCH AN EDIT OR A VOID LEAVES BEHIND (owner ask 2026-10-30)
+
+Owner, verbatim: *"i need the pos POS — Cash Register to have the ability to edit the sale from the
+prior day and create log of the cash or credit mismatch"* (the rest of that message — a Terms tender
+and a wholesale / W-9 flow — is a separate piece of work at his instruction: *"do it in 2 parts i
+need the edit part to work"*).
+
+**THE FIRST HALF ALREADY WORKED, AND WAS VERIFIED RATHER THAN ASSUMED.** §POS-12 shipped the edit;
+mig 1103 was applied and verified against production on 2026-10-29; the window is DECLARED
+(`sale_amendment.WINDOW_SETTING`) and its house default of **one day already admits yesterday** —
+`refusal` refuses at `age > win`, so a sale rung yesterday (age 1, window 1) passes. Confirmed by
+running the real resolver, not by reading it:
+
+| Sale rung | `age_days` | Verdict under the house window |
+|---|---|---|
+| today | 0 | allowed |
+| **yesterday** | **1** | **allowed** |
+| two days ago | 2 | refused, with the sentence |
+
+No tenant has declared a window of its own (0 rows of `sale_reopen_window_days` in production
+2026-10-30), so all four are on that default. **What did not exist is the second half.**
+
+### POS-14.1 The class, not the instance
+
+The instance is "the edit screen should warn about a cash mismatch". The class is:
+
+> **A SALE'S TENDER WAS NEVER RECONCILED AGAINST THE SALE'S OWN FIGURE, BY ANY CALLER, ON ANY PATH.**
+> `pos.sale_payments` records what was taken. `pos.sales.total` records what is owed. Nothing in the
+> platform ever compared the two.
+
+So the gap was never confined to the edit screen, and the sibling check found both writes that can
+move the two apart — **neither of which touches the payment rows**:
+
+| Write | What it moves | What it leaves |
+|---|---|---|
+| `pos.amend_sale` (mig 1103) | restates subtotal / tax / total | the money taken is unchanged, so there is cash or card to collect or refund |
+| `pos.void_sale` (mig 725) | status → voided, stock back | nothing is owed at all, and the whole tender is still recorded as taken |
+
+`pos/sale_settlement.py` answers for **both**. The void path is covered **without reopening mig 725**:
+the report DERIVES the comparison live, so a voided sale appears on the same screen rather than
+needing a column added to a function that handles money correctly today. That is the excusal the
+house rules require, stated rather than silent.
+
+### POS-14.2 Duplicate check (the build gate)
+
+Searched the index for a mechanism comparing money taken against money owed. **§72 (cash variance)
+is the nearest, and it is REUSED, not duplicated:**
+
+- its verdict function `deposit_recon.status_for` is called here, so short / over / ok have **one**
+  truth table platform-wide — a fourth spelling of three states is the sibling the rules forbid;
+- its discipline — *a cash figure is never a bare float*, *absence is never zero*, *say what you
+  could not measure* — is applied to this second pair of figures, which is why `outstanding()`
+  refuses with a reason instead of returning a number;
+- its `leg(amount, basis, …)` vocabulary is **deliberately not** reused: §72's `BASES` are
+  `deposit_recon`'s store-day cash words (`total_cash` / `store_cash` / `bill_payment_cash`), which
+  do not describe a single sale's tender. Forcing them on would have made every comparison here
+  `basis_unknown`. Different grain, different question, same discipline.
+
+§72 scores a **store-day drawer against a management count**; this scores **one sale's tender against
+that sale's own total**. Neither answers the other's question, and `harness_pos_sale_settlement.py`
+§E pins the shared verdict so they cannot diverge.
+
+Also checked and NOT duplicated: §POS-12 (`sale_amendment`) answers *may this be edited and what does
+it come to* and is dereferenced, not extended — the second question has callers the first does not
+(the void path, the report), which is why this is its own module rather than more functions there.
+
+### POS-14.3 Measured on live data first, and it changed the design
+
+All four tenants, 2026-10-30, before a line was written:
+
+| Fact | Figure |
+|---|---|
+| `pos.sales` rows | **4,605**, every one of them **Vzone** (store `Ave U`) |
+| `pos.sale_payments` rows | **2** |
+| sales with **no payment row at all** | **4,603** — imported receipt history, not register sales |
+| sales with a non-zero `balance` | **0 of 4,605** |
+| tender ≠ total today | **0** (tx 4604 `check` $1,524.27 and tx 4605 `credit_card` $880.53 both tie) |
+| tenants with register sales | **1 of 4** (Cellfonz R Us, LuxeLink and NY LOGISTICS have none) |
+
+Three design consequences, each of which would otherwise have been a defect:
+
+1. **An unrecorded tender is not a $0.00 tender.** Reading absence as zero would have declared
+   **4,603 mismatches worth the whole sales ledger** on the first run. `tendered()` answers
+   `present: False`, `outstanding()` answers `measured: False` with a reason, `mismatch` is False,
+   and the DB forbids a row carrying both a reason and a variance. *Not measurable is not a finding.*
+2. **The comparison is against `total − balance`, never the bare total.** No live row carries a
+   balance, which is exactly why it is handled NOW: the day one does, a reader comparing against the
+   total would invent a shortage the size of the balance.
+3. **Nothing was wrong in live data**, so there is nothing to report as a stale feed or a bad row —
+   stated plainly rather than left implied.
+
+### POS-14.4 Which tender is short is never guessed
+
+One tender method: the difference is that method's. **Two: which one settles it is not knowable from
+the rows** — it is a decision somebody makes at the counter. `attribution` answers
+`{method: None, ambiguous: True, methods: [...]}` and the sentence ASKS. Attributing it would be §72's
+$20,000 accusation in miniature.
+
+RULE TWO holds throughout: no tender word (`cash`, `credit_card`, …) appears in a branch in the
+module — whatever the tenant stores in `payment_method` is what is shown, and `sale_receipt.method_label`
+remains the one home for writing one FOR A CUSTOMER.
+
+### POS-14.5 The band is zero here, and $5 in §72 — and both are config
+
+`HOUSE_BAND = 0.00`, the **only** dollar literal in the module, overridden per org (and per store) by
+`pos.pos_settings.tender_mismatch_band`. It differs from §72's $5 **for a reason worth not
+re-deriving**: that band absorbs two HUMANS counting the same cash and differing. A tender mismatch is
+arithmetic over two recorded figures — there is no counting error to absorb, so every cent is real
+money. A band never changes the money, only whether it counts as a finding (`harness` §K3).
+
+### POS-14.6 The preview and the save are ONE computation
+
+The till shows the mismatch **before** it writes, via a **DRY RUN of the save route** — the same call
+with `dry_run: true` and nothing written — not via a route of its own and **not** by deriving it in
+the browser.
+
+> A browser subtracting a tender from a total is a second answer to a money question the server
+> already owns, and the two drift on the first rounding change.
+
+So the figure the cashier agrees to is provably the figure that lands. `harness` §A8/§A9 fail the
+build if the router **or** the page ever subtracts a tender from a total itself, and §H5 fails if a
+second preview route appears.
+
+### POS-14.7 It will not save what it cannot log
+
+An edit that would leave a mismatch is **refused with a 503** when mig 1106 is absent — §POS-12's own
+argument for refusing when the superseded version cannot be kept, applied to the second record that
+makes an edit answerable. A **settled** edit needs no log row and is NOT held up, so §POS-14 cannot
+regress §POS-12 into a blanket block (`harness` §I, integration test
+`test_a_settled_edit_is_not_held_up_by_a_migration_it_does_not_use`).
+
+### POS-14.8 Mig 1106 extends; it does not sibling
+
+- Columns added to **mig 1103's own table** `pos.sale_amendments` — the mismatch is a fact ABOUT an
+  amendment and belongs on its row. **No table is created** (`harness` §J2).
+- `pos.amend_sale` replaced at its **EXISTING signature**, so **no overload** exists and a backend
+  deployed before the migration keeps working and simply files no tender columns. The record travels
+  in `p_sale_patch` under `tender`, beside the `change_summary` / `change_detail` that already do.
+  §J6 asserts the signature is byte-identical to mig 1103's; §J5 asserts no `drop function`.
+- Check constraints pin the vocabularies (`short|over|ok`, `collect|refund|settled`) and forbid a row
+  with both a reason and a variance. Grants `service_role` only.
+- **No existing row is touched.** No sale moves and no figure on any report moves.
+
+### POS-14.9 Surfaces
+
+| Surface | What it shows |
+|---|---|
+| POS — Cash Register, editing bar | what was tendered and on what, for the whole edit; or that no payment was recorded, so the drawer effect cannot be checked |
+| POS — Cash Register, Save | the dry run's sentence, confirmed before the write; an unmeasurable edit asks too, rather than being silent |
+| `/pos/tender-mismatch` | the log: standard store / rep / date filters, the ReportShell Send bar, five views (needs attention / to collect / to refund / could not be checked / every sale), and a notice bar carrying the server's own words for what it could not measure |
+| `pos.sale_amendments` | what the till SAW at the time, and `settled_*` for who dealt with it |
+
+### POS-14.10 Multi-tenant
+
+Every feature is for every tenant (CLAUDE.md). The module is **pure and holds no org id** — it takes
+the band as an argument, read by the caller through `pos_config_effective` for the caller's OWN org,
+so there is no path by which one tenant's declaration could answer for another's sale. Asserted, not
+assumed: `test_one_tenants_declared_band_never_scores_another_tenants_sale` seeds LuxeLink's $100 band
+and proves a Cellfonz sale still scores on the house band, and
+`test_the_report_of_a_tenant_with_no_register_sales_is_empty_not_an_error` proves the three tenants
+with no register sales get an empty answer with a zeroed summary rather than a borrowed figure.
+
+### POS-14.11 Proof
+
+- `backend/harness_pos_sale_settlement.py` — 94 locks, §A–§K. Its **code-only view** (`_code_only`)
+  strips comments and docstrings before the "this word appears in no branch" locks run, because three
+  of them were first found passing against the module's **own prose**; §K9b now fails the build if
+  that view stops stripping.
+- `backend/tests/unit/test_pos_sale_settlement.py` — 26 tests, written **before** the module (TDD).
+- `backend/tests/integration/test_pos_tender_mismatch_endpoint.py` — 19 tests over the real app and
+  the in-memory double.
+
+💰 Moves no money. The derivation books nothing and pays nothing; the migration is additive.
 
 ## §POS-13. WHAT A RECEIPT DOCUMENT LOOKS LIKE (owner report 2026-10-29)
 

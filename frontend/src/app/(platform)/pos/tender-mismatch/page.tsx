@@ -1,5 +1,5 @@
 'use client'
-// THE LOG of the cash / credit mismatch (index §POS-13).
+// THE LOG of the cash / credit mismatch (index §POS-14).
 //
 // Owner 2026-10-30: "create log of the cash or credit mismatch".
 //
