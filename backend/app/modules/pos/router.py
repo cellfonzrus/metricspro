@@ -16,6 +16,7 @@ one existed; no code read `modules`, so POS visibility was enforced only client-
 Adding it server-side has to land together with seeding `pos` into MODULE_CATALOG and the roles
 UI, or every existing role — none of which carries a `pos` key — would be locked out at once.
 """
+import re as _re
 from datetime import datetime as _datetime, timezone as _timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -2202,7 +2203,17 @@ def list_settings(store_code: str = "", org_id: str = ORG_ID):
     q = (sb().schema("pos").table("pos_settings").select("store_code,key,value")
          .eq("org_id", org_id))
     if store_code:
-        q = q.or_(f"store_code.is.null,store_code.eq.{store_code}")
+        # THE STORE CODE IS CHECKED BEFORE IT IS INTERPOLATED, through the ONE home for that
+        # decision (security pass 2026-10-30, index §POS-14) — this endpoint built the same
+        # f-string filter from the same raw query parameter, and any signed-in POS user reaches it.
+        #
+        # FAIL-SAFE MEANS NARROW HERE, and that differs from `_pos_settings_rows` on purpose: that
+        # caller hands its rows to `pos_config_effective`, which matches the store in Python, so
+        # dropping the filter changes nothing. THIS one returns the rows to the browser, so dropping
+        # the filter would hand back every store's rows. A refused code therefore reads the org
+        # defaults ALONE.
+        store_filter = _safe_settings_store_filter(store_code)
+        q = q.or_(store_filter) if store_filter else q.is_("store_code", "null")
     rows = q.limit(1000).execute().data or []
     out = []
     for row in rows:
@@ -2388,15 +2399,52 @@ from app.modules.notify import whatsapp_window as _wa_window
 from app.modules.core import tenant_identity as _tenant
 
 
+#: What a store code may contain before it is allowed into a PostgREST filter STRING.
+#:
+#: WHY A CHARSET AND NOT AN ESCAPE. `.eq()` is parameterised by supabase-py, but `.or_()` takes a
+#: fragment of PostgREST's own filter GRAMMAR, in which `,` separates disjuncts and `.` separates
+#: column / operator / value. There is nothing to escape with — a value carrying either character is
+#: not a store code, it is a second filter. So the value is CHECKED, and refused if it is not one.
+#:
+#: Verified non-breaking against production 2026-10-30: all 51 `storeops.stores` codes use only
+#: letters, digits, spaces and hyphens. `/`, `&`, `'` and `_` are admitted as plausible future store
+#: names; `.`, `,`, `(`, `)`, `:` and `"` are exactly the grammar characters and are not.
+_SETTINGS_STORE_OK = _re.compile(r"[A-Za-z0-9 _/&'-]+")
+
+
+def _safe_settings_store_filter(store_code: str):
+    """The `or` filter for this store code, or **None** when the value may not be interpolated.
+
+    None means "read the org's rows without a store filter", which is the FAIL-SAFE answer and not a
+    degraded one: `pos_config_effective.effective` already matches the store override by exact string
+    in Python, so an org-wide read resolves to the same value. Refusing therefore narrows what is
+    returned, never widens it.
+    """
+    code = (store_code or "").strip()
+    if not code or not _SETTINGS_STORE_OK.fullmatch(code):
+        return None
+    return f"store_code.is.null,store_code.eq.{code}"
+
+
 def _pos_settings_rows(client, org_id: str, store_code: str = ""):
     """The POS config rows this org (and optionally this store) has — read ONCE per receipt and
     resolved through `pos_config_effective`, which is the server's one home for the store-override →
-    org-default → declared-default rule the browser applies."""
+    org-default → declared-default rule the browser applies.
+
+    THE STORE CODE IS CHECKED BEFORE IT IS INTERPOLATED (security pass 2026-10-30, index §POS-14).
+    It used to go straight into the `or` filter as an f-string. Every caller then passed a value read
+    from a database row or sat behind the `pos_settings` grant, so nothing user-supplied reached it —
+    and `GET /pos/reports/tender-mismatch` was the first path that would have. Fixed HERE rather than
+    at that one caller, because the class is "a store code is interpolated into filter grammar" and
+    the next caller to pass a query parameter must not have to know that. Pinned by
+    `harness_pos_sale_settlement.py` §L.
+    """
     try:
         q = (client.schema("pos").table("pos_settings").select("store_code,key,value")
              .eq("org_id", org_id))
-        if store_code:
-            q = q.or_(f"store_code.is.null,store_code.eq.{store_code}")
+        store_filter = _safe_settings_store_filter(store_code)
+        if store_filter:
+            q = q.or_(store_filter)
         return q.limit(1000).execute().data or []
     except Exception:
         return []
@@ -3535,6 +3583,13 @@ def report_tender_mismatch(date_from: str = "", date_to: str = "", store_code: s
     to see them asks. A report that listed them by default would be 4,603 accusations.
     """
     client = sb()
+    # THE STORE ASKED FOR IS CHECKED AGAINST THE CALLER'S SPAN BEFORE IT IS USED, the same answer
+    # `adjust_inventory` gives. Span-filtering the RESULT is not enough on its own here: the store
+    # code also resolves this report's band, so an unchecked value would reach a config read for a
+    # store the caller may not see.
+    keyset = _caller_store_keyset(authorization, org_id)
+    if store_code and not _span_filter([{"store_code": store_code}], keyset):
+        raise HTTPException(403, "that store is outside your reporting span")
     q = (client.schema("pos").table("sales")
          .select("id,transaction_id,created_at,total,balance,status,voided_at,revision,"
                  "amended_at,amended_by,customer_id,employee_id,store_code")
@@ -3548,7 +3603,7 @@ def report_tender_mismatch(date_from: str = "", date_to: str = "", store_code: s
     if employee_id:
         q = q.eq("employee_id", employee_id)
     sales = q.order("created_at", desc=True).limit(1000).execute().data or []
-    sales = _span_filter(sales, _caller_store_keyset(authorization, org_id))
+    sales = _span_filter(sales, keyset)
     if not sales:
         return {"rows": [], "summary": _settle.summarise([]), "blockers": [],
                 "log_available": _tender_log_available(client, org_id)}

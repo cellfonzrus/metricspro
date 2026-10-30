@@ -323,3 +323,78 @@ def test_the_report_of_a_tenant_with_no_register_sales_is_empty_not_an_error(wir
     assert body["rows"] == []
     assert body["summary"]["sales"] == 0 and body["summary"]["net_variance"] == 0.0
     assert body["blockers"] == []
+
+
+# ── the store a caller may ask about, and the filter it is allowed to build ──────────────────────
+# Found by the §POS-14 security pass (2026-10-30). The report is the FIRST path that reaches
+# `_pos_settings_rows` with a raw query-string store code: every pre-existing caller passes a value
+# read from a database row or sits behind the `pos_settings` grant. That helper interpolates the
+# value into a PostgREST `or` filter with an f-string, so the report handed an injection sink a
+# user-supplied value. Both layers are fixed and both are pinned here.
+def test_a_caller_cannot_ask_for_a_store_outside_their_span(monkeypatch, wired, api_client):
+    """The authorization half. A store-scoped caller asking for another store's rows gets a 403,
+    the same answer `adjust_inventory` already gives — not that store's figures."""
+    monkeypatch.setattr("app.modules.pos.router._caller_store_keyset", lambda *a, **k: {STORE})
+    monkeypatch.setattr("app.modules.pos.router._span_filter",
+                        lambda rows, keyset: [r for r in rows
+                                              if not keyset or r.get("store_code") in keyset])
+    assert _report(api_client, store_code="B-9999").status_code == 403
+    assert _report(api_client, store_code=STORE).status_code == 200
+
+
+def test_a_store_code_carrying_filter_grammar_never_reaches_the_query(monkeypatch, wired, api_client):
+    """The injection half, pinned at the SHARED helper so it holds for every caller of it — not just
+    for this report. A value that could break out of the generated `or` group is refused as a filter
+    and the read falls back to the org-wide rows, which `pos_config_effective` resolves correctly by
+    exact match in Python. Fail SAFE, not fail open: the answer is the org default, never a widened
+    row set."""
+    from app.modules.pos import router as pos_router
+    seen = []
+    real_or = type(wired.schema("pos").table("pos_settings").select("*")).or_
+
+    def spy(self, expr, **kw):
+        seen.append(expr)
+        return real_or(self, expr, **kw)
+
+    monkeypatch.setattr(type(wired.schema("pos").table("pos_settings").select("*")), "or_", spy)
+    wired.seed("pos.pos_settings", [
+        {"org_id": ORG_HOUSE, "store_code": None, "key": "tender_mismatch_band", "value": 3.00}])
+    band = pos_router._tender_band(wired, ORG_HOUSE, "X,store_code.not.is.null")
+    assert band == 3.00                      # the ORG default, not a widened read
+    assert seen == []                        # and no `or` filter was built at all
+
+
+def test_an_ordinary_store_code_still_builds_its_filter(wired):
+    """The control for the lock above: a real store code — letters, digits, spaces and hyphens, which
+    is every one of the 51 live codes — must still reach the query, or the guard has simply disabled
+    the store override for everybody."""
+    from app.modules.pos import router as pos_router
+    for code in ("B-1115", "Ave U", "B-1598"):
+        assert pos_router._safe_settings_store_filter(code) is not None, code
+    for bad in ("X,store_code.not.is.null", "a.b", "a)or(b", 'a"b', "a:b", "a(b"):
+        assert pos_router._safe_settings_store_filter(bad) is None, bad
+
+
+def test_the_settings_endpoint_sibling_is_fixed_too(monkeypatch, wired, api_client):
+    """THE SIBLING, found by the §POS-14 lock rather than by reading. `GET /pos/settings` built the
+    same interpolated `or` filter from the same raw query parameter, and its own docstring says any
+    signed-in POS user reaches it. It is MORE exposed than the band read: it returns the setting rows
+    themselves, so a widened read there leaks other stores' rows rather than being discarded.
+
+    Fail-safe here therefore means NARROW — org defaults only — not "no store filter", which would
+    return every store's rows. That difference between the two callers is the reason this is asserted
+    and not assumed from the helper being shared."""
+    wired.seed("pos.pos_settings", [
+        {"org_id": ORG_HOUSE, "store_code": None, "key": "a", "value": 1},
+        {"org_id": ORG_HOUSE, "store_code": STORE, "key": "a", "value": 2},
+        {"org_id": ORG_HOUSE, "store_code": "B-OTHER", "key": "a", "value": 3}])
+    res = api_client.get("/api/v1/pos/settings",
+                         params={"org_id": ORG_HOUSE,
+                                 "store_code": "X,store_code.not.is.null"})
+    assert res.status_code == 200, res.text
+    got = res.json()["settings"]
+    assert [r["store_code"] for r in got] == [None], got
+    # the control: a real store code still gets its own override alongside the org default
+    ok = api_client.get("/api/v1/pos/settings",
+                        params={"org_id": ORG_HOUSE, "store_code": STORE}).json()["settings"]
+    assert {str(r["store_code"]) for r in ok} == {"None", STORE}, ok

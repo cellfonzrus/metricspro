@@ -23,6 +23,7 @@ that FAILS THE BUILD if a caller stops dereferencing the shared fact:
   §I  an edit that creates unexplained money will not save unless it can be logged
   §J  the migration extends mig 1103's table and signature — no sibling, no overload
   §K  negative controls — each lock really fails when its subject is broken
+  §L  the store code a caller asks for is checked before it is used (security pass 2026-10-30)
 """
 import ast
 import pathlib
@@ -345,6 +346,48 @@ ok("K9b. control: the code-only view really strips prose, so K4/K7/K9 are not va
 ok("K10. control: the rollup really separates measured money from unmeasured",
    S.summarise([{"measured": True, "mismatch": True, "variance": -10.0,
                  "direction": S.COLLECT}])["to_collect"] == 10.0)
+
+
+# ── §L the store code a caller asks for ─────────────────────────────────────────────────────────
+# FOUND BY THE SECURITY PASS, 2026-10-30. `_pos_settings_rows` interpolated a store code into a
+# PostgREST `or` filter with an f-string. `.or_()` takes a fragment of PostgREST's filter GRAMMAR, in
+# which `,` separates disjuncts and `.` separates column/operator/value — so a value carrying either
+# is not a store code, it is a second filter. Every caller until now passed a value read from a
+# database row or sat behind the `pos_settings` grant; `GET /pos/reports/tender-mismatch` was the
+# first that would have passed a query parameter. Fixed at the SHARED HELPER, because the class is
+# "a store code is interpolated into filter grammar" and the next caller must not have to know.
+print("\n§L  the store code a caller asks for is checked before it is used")
+
+from app.modules.pos import router as RT                                        # noqa: E402
+
+ok("L1. the helper that decides exists at all", hasattr(RT, "_safe_settings_store_filter"))
+for _good in ("B-1115", "Ave U", "B-1598", "store_1", "A&B", "O'Hare", "North/South"):
+    ok(f"L2. {_good!r} is still allowed to build its filter",
+       RT._safe_settings_store_filter(_good) is not None)
+# Each of these is a PostgREST grammar character, and each must be refused.
+for _bad in ("X,store_code.not.is.null", "a.b", "a,b", "a)or(b", "a(b", 'a"b', "a:b",
+             "X,store_code.gte.A"):
+    ok(f"L3. {_bad!r} is refused as a filter", RT._safe_settings_store_filter(_bad) is None)
+ok("L4. a refusal is FAIL-SAFE — None means the org-wide read, which resolves the same value",
+   RT._safe_settings_store_filter("") is None
+   and "store_filter = _safe_settings_store_filter(store_code)" in ROUTER
+   and "if store_filter:" in ROUTER)
+# The f-string must be gone from the helper: a second interpolation site is the defect returning.
+_SETTINGS_FN = ROUTER.split("def _pos_settings_rows(", 1)
+_SETTINGS_FN = (_SETTINGS_FN[1].split("\ndef ", 1)[0] if len(_SETTINGS_FN) == 2 else "")
+ok("L5. _pos_settings_rows no longer interpolates the store code itself",
+   0 < len(_SETTINGS_FN) < 2000 and "f\"store_code" not in _SETTINGS_FN
+   and "or_(f" not in _SETTINGS_FN, len(_SETTINGS_FN))
+ok("L6. the ONLY place that builds this filter string is the one home",
+   ROUTER.count("store_code.is.null,store_code.eq.") == 1)
+ok("L7. the report refuses a store outside the caller's span BEFORE it reads anything",
+   'raise HTTPException(403, "that store is outside your reporting span")' in REPORT
+   and REPORT.index("_span_filter([{\"store_code\": store_code}]") < REPORT.index('.table("sales")'))
+ok("L8. ...and resolves the span ONCE, rather than twice with a chance to differ",
+   REPORT.count("_caller_store_keyset(") == 1)
+ok("L9. control: the charset really is the thing refusing, not a blanket no",
+   RT._safe_settings_store_filter("B-1115") is not None
+   and RT._safe_settings_store_filter("B-1115,store_code.not.is.null") is None)
 
 
 print(f"\n{_passed} passed, {_failed} failed")

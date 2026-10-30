@@ -1360,7 +1360,14 @@ _all_routes = _flatten_routes(real_app.routes)
 # than over either side: §COMMCALC-48 landed two routes the same day, so 1812 + 3 = 1815 and neither
 # change asserts the other's figure. Re-taken on a counted,
 # named addition, never relaxed for CI.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1815"))
+# Re-pinned 1815 -> 1816 on 2026-10-30 for §POS-14, the cash / credit mismatch log: ONE added route,
+# `GET /api/v1/pos/reports/tender-mismatch`. VERIFIED rather than assumed, which is what this pin is
+# for — `origin/main` was counted in a clean worktree at 1815 and this branch at 1816, and the only
+# route template matching the feature is that one. The three §POS-14 writes that touch the register
+# (`amend-plan`, `PUT items`, `amendments`) are pre-existing routes that gained behaviour, not new
+# ones, and the dry run is a BODY FLAG on the save route rather than a route of its own — which is
+# the §POS-14.6 design point, and is why the count moves by one and not by two.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1816"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
