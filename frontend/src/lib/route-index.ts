@@ -100,14 +100,14 @@ export const ROUTES: RouteEntry[] = [
   { path: '/closing/bank-deposit' },
   { path: '/closing/billpay-pickup' },
   { path: '/closing/cash-config' },
-  { path: '/closing/declared-vs-captured' },
   { path: '/closing/cash-position', label: 'Cash Position', aliases: ['cash on hand', 'cash position'] },
   { path: '/closing/cash-recon-management' },
+  { path: '/closing/cash-variance' },
   { path: '/closing/closing-pickup-status', aliases: ['not closed', 'did not close', 'missing closing', 'closing not submitted', 'cash not picked up', 'cash still in store', 'who did not close', 'pickup status'] },
   { path: '/closing/count-config', label: 'Cash Count Setup', aliases: ['count config', 'denomination count'] },
+  { path: '/closing/declared-vs-captured' },
   { path: '/closing/deposit-categories' },
   { path: '/closing/deposit-recon' },
-  { path: '/closing/cash-variance' },
   { path: '/closing/duplicates', label: 'Duplicate Closings', aliases: ['duplicate closing', 'double closing'] },
   { path: '/closing/envelope-config' },
   { path: '/closing/envelope-payout' },
@@ -132,6 +132,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/accessory-cost-audit' },
   { path: '/commcalc/accessory-definition' },
   { path: '/commcalc/accessory-flags' },
+  { path: '/commcalc/accessory-order-plan' },
   { path: '/commcalc/accessory-target-plan', aliases: ['accessory target allocation', 'accessory target plan', 'company accessory goal', 'assign accessory targets', 'accessory goal', 'set accessory targets', 'accessories per box target', 'proportionate target'] },
   { path: '/commcalc/activations' },
   { path: '/commcalc/agency' },
@@ -182,7 +183,6 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/device-cost-recon' },
   { path: '/commcalc/device-history' },
   { path: '/commcalc/device-line-reimbursement' },
-  { path: '/commcalc/mdf-entitlement-coverage' },
   { path: '/commcalc/discrepancy' },
   { path: '/commcalc/distributors' },
   { path: '/commcalc/dlar-vs-platform' },
@@ -219,6 +219,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/management-incentive' },
   { path: '/commcalc/manager-followup' },
   { path: '/commcalc/mapping' },
+  { path: '/commcalc/mdf-entitlement-coverage' },
   { path: '/commcalc/month-focus', aliases: ['month focus', 'monthly focus', 'focus of the month', 'declare the month', 'monthly initiative', 'temporary spiff', 'weekly check-in', 'monday check-in', 'spiff initiative'] },
   { path: '/commcalc/onboarding' },
   { path: '/commcalc/pay-simulator' },
@@ -245,8 +246,8 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/schematic' },
   { path: '/commcalc/settings' },
   { path: '/commcalc/spiff-impact', aliases: ['spiff impact', 'spiff effect', 'which spiff', 'bounty impact', 'pay type impact', 'profit lift'] },
-  { path: '/commcalc/store-takeover', aliases: ['store takeover', 'takeover', 'take over a store', 'evaluate a store', 'store evaluation', 'buy a store', 'acquisition', 'prospect store', 'new store p&l', 'family plans', 'multi line accounts', 'more than 2 lines', 'fraud check'] },
   { path: '/commcalc/store-match' },
+  { path: '/commcalc/store-takeover', aliases: ['store takeover', 'takeover', 'take over a store', 'evaluate a store', 'store evaluation', 'buy a store', 'acquisition', 'prospect store', 'new store p&l', 'family plans', 'multi line accounts', 'more than 2 lines', 'fraud check'] },
   { path: '/commcalc/target-fields' },
   { path: '/commcalc/targets' },
   { path: '/commcalc/targets/accessories' },
@@ -285,12 +286,6 @@ export const ROUTES: RouteEntry[] = [
   { path: '/hr' },
   { path: '/hr/compliance' },
   { path: '/hr/employee-database' },
-  // Added by hand, not by `--bless`: the blesser re-sorts entries main has out of order and drops
-  // the in-file notes, which would bury this one-line change in unrelated churn. Aliases are the
-  // words somebody looking for this actually types — the §54.7 lesson from `/account/password`,
-  // which is the page a search for "password reset" used to miss entirely. No `label`: the
-  // page's wording belongs to NAV (lib/rbac.ts), and a second spelling here is the duplicate
-  // this registry's own §G forbids.
   { path: '/hr/employee-password', aliases: ['employee password', 'reset an employee password', 'reset employee login', 'set a password for an employee', 'assign a password', 'manual password', 'employee login password', 'change someone else password'] },
   { path: '/hr/letters' },
   { path: '/hr/letters/queue', label: 'Letters Waiting to Send', aliases: ['letter queue', 'letters waiting'] },
@@ -351,8 +346,6 @@ export const ROUTES: RouteEntry[] = [
   { path: '/storeops/payroll-change-log', label: 'Payroll Change Log', aliases: ['payroll changes', 'who changed pay'] },
   { path: '/storeops/payroll-tax' },
   { path: '/storeops/payroll/approvals' },
-  // The LABEL lives in NAV (src/lib/rbac.ts) — a second spelling here is the duplicate the
-  // registry proof forbids. Only the search aliases belong on this side.
   { path: '/storeops/payroll/clock-variances', aliases: ['clock variance', 'clock in clock out differences', 'correct the clock'] },
   { path: '/storeops/payroll/payers' },
   { path: '/storeops/reports' },
@@ -389,9 +382,9 @@ export const ROUTES: RouteEntry[] = [
   { path: '/vision/onboarding' },
   { path: '/vision/settings' },
   { path: '/watchdog' },
-  { path: '/watchdog/void-register' },
-  { path: '/watchdog/multi-handset' },
   { path: '/watchdog/byod-upgrade' },
+  { path: '/watchdog/multi-handset' },
+  { path: '/watchdog/void-register' },
 ]
 
 /** The destinations search may offer: every page except the ones declared pre-auth. The CALLER still

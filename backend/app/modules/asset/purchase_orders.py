@@ -10,11 +10,13 @@ Payables engine's output. `GET /api/v1/payables/forecast` already IS an org-scop
 it filters by a single `store` only, not `market` (which this page's standard filter bar needs), and
 importing its `forecast()` function in-process to call directly would create an asset<->payables import
 cycle at module-LOAD time (this file is imported from the BOTTOM of asset/router.py, which payables/router.py
-itself imports FROM — a fragile A-imports-B-imports-A shape). Rather than risk that or add a live HTTP
-round-trip to another module's endpoint, `po_recommendations` below independently reads the SAME underlying
-org-scoped tables (`commcalc.raw_sales` device lines + `commcalc.asset_ledger` on-hand) with equivalent
-velocity/on-hand logic. See this module's handoff for the concrete cross-module ask (a `market` param on
-`/payables/forecast` would let this delegate instead of duplicating ~30 lines of aggregation).
+itself imports FROM — a fragile A-imports-B-imports-A shape). So `po_recommendations` below reads the SAME
+underlying org-scoped tables (`commcalc.raw_sales` device lines + `commcalc.asset_ledger` on-hand) rather
+than calling that endpoint. The AGGREGATION is still this module's; the ARITHMETIC no longer is — the
+velocity/horizon projection and the device-line test it used to keep its own copies of are now
+dereferenced from `commcalc/demand_projection.py` (§COMMCALC-49), which imports nothing and therefore
+cannot join any cycle whichever module loads first. The remaining cross-module ask is unchanged: a
+`market` param on `/payables/forecast` would let this delegate the aggregation too.
 
 IMPORT SHAPE — deliberately NOT importing from `app.modules.asset.router` at module-load time: this file
 is itself imported from the BOTTOM of asset/router.py (`router.include_router(po_router)`), so a top-level
@@ -36,6 +38,7 @@ from fastapi import APIRouter, HTTPException, Header
 
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
+from app.modules.commcalc import demand_projection
 
 router = APIRouter()
 
@@ -99,7 +102,7 @@ class ReceivePoLineIn(LaxModel):
 _MIGRATION_MSG = ("Purchase Orders migration pending — ask the operator to run "
                    "database/migrations/301_asset_purchase_orders.sql in the Supabase SQL Editor.")
 _PO_STATUSES = ("draft", "submitted", "partially_received", "received", "closed", "cancelled")
-_DEV_DEPTS = {"android - xp", "iphone - xp", "tablet - xp"}   # mirrors payables/router.py DEV_DEPTS (device box lines)
+_DEV_DEPTS = set(demand_projection.HOUSE_DEVICE_DEPARTMENTS)   # the one home's vocabulary, read not copied
 # PostgREST's "this relation/function doesn't exist" error signatures (schema-cache miss because mig 301
 # hasn't run) — same markers asset/router.py's own _is_missing_schema_error uses (mig-300 precedent).
 _MISSING_SCHEMA_MARKERS = ("PGRST202", "PGRST205", "PGRST203", "schema cache", "does not exist")
@@ -136,10 +139,14 @@ def _float(v, d=0.0):
 
 
 def _is_device_line(dept, category):
-    """A physical-phone sale line — same rule as payables/router.py's _is_device_line (duplicated here,
-    not imported, to avoid the module-load cycle described above; it's 2 lines of universal classification,
-    not business logic worth coupling on)."""
-    return (str(category or "").strip().lower() == "cellphone") or ((dept or "").strip().lower() in _DEV_DEPTS)
+    """A physical-phone sale line — `commcalc/demand_projection.is_device_line`, DEREFERENCED.
+
+    This used to be a copy of payables/router.py's own copy, excused in its docstring by the
+    module-load cycle described at the top of this file. The excuse is answered rather than argued
+    with: `demand_projection` imports NOTHING, so reading it here cannot participate in a cycle
+    whichever module loads first. Two tests of "is this a device" was the duplicate defect CLAUDE.md
+    forbids, and `harness_demand_projection.py` now fails the build if a third appears (§COMMCALC-49)."""
+    return demand_projection.is_device_line(dept, category)
 
 
 # ── per-setting admin gate (mirrors commcalc/router.py's _require_commission_admin) ─────────────────────
@@ -415,13 +422,16 @@ def po_recommendations(stores: str = "", market: str = "", lookback: int = 7, ho
     for b in agg.values():
         if market and (b.get("market") or "") != market:
             continue
-        rate = b["units_sold"] / lookback
-        projected = int(round(rate * horizon))
-        recommend = max(0, projected - b["on_hand"])
+        # THE ONE PROJECTION (§COMMCALC-49) — the same home `/payables/forecast` reads, so the two
+        # ordering screens can never recommend different quantities from the same window.
+        _proj = demand_projection.projection(b["units_sold"], lookback, horizon)
+        rate = _proj["velocity"] or 0.0
+        projected = _proj["projected"] or 0
+        recommend = demand_projection.recommend_qty(projected, b["on_hand"])
         if recommend <= 0 and b["units_sold"] == 0 and b["on_hand"] == 0:
             continue
         out.append({
-            **b, "avg_daily_velocity": round(rate, 2), "projected_demand": projected,
+            **b, "avg_daily_velocity": _proj["velocity"] or 0.0, "projected_demand": projected,
             "recommend_qty": recommend,
             "suggested_unit_cost": cost_map.get(b["device_model"].strip().lower(), 0),
         })

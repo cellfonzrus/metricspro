@@ -1345,7 +1345,22 @@ _all_routes = _flatten_routes(real_app.routes)
 # and none removed. §POS-12 landed on main while this was in CI, taking the base from 1807 to 1810,
 # so the arithmetic was redone against the NEW base rather than kept: 1810 + 2 = 1812. Re-taken on a
 # counted, named addition, never relaxed for CI.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1812"))
+# Re-pinned 1812 -> 1815 on 2026-10-29 for §COMMCALC-49, the Accessory Order Plan: THREE added
+# routes, counted and named — `GET /commcalc/accessory-order-plan` (read-only: the ranked device
+# models and the accessory order the rulings on them imply), `POST
+# /commcalc/accessory-order-plan/lifecycle` (a human's ruling that a model is current or end of
+# life, stored on the model registry mig 096 already owns) and `PUT
+# /commcalc/accessory-order-plan/config` (the colour mix and attach plan, stored on the org's
+# existing accessory_config row). NONE of the three is money-touching: the report plans quantities
+# to buy, reads no payout and writes no ledger, and the two writes are admin-gated declarations. It
+# adds no input to any report, statement, GP, commission or tax figure, and no route to
+# db_resilience itself (I0b proves that independently of this number). Verified the same way as
+# every pin above: `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` prints exactly
+# three added decorators for this change and none removed. Taken over the MERGED base rather
+# than over either side: §COMMCALC-48 landed two routes the same day, so 1812 + 3 = 1815 and neither
+# change asserts the other's figure. Re-taken on a counted,
+# named addition, never relaxed for CI.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1815"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
