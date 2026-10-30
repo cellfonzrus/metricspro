@@ -29,6 +29,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import DateField from '@/components/DateField'
 import ReportShell from '@/components/ReportShell'
 import { api } from '@/lib/client'
+import { PlatformDetail } from '@/lib/setupNotice'
 
 type Row = {
   sale_id: string; transaction_id: number | null; created_at: string | null
@@ -79,37 +80,53 @@ export default function TenderMismatchPage() {
   const [store, setStore] = useState('')
   const [view, setView] = useState('mismatch')
   const [data, setData] = useState<Payload>(EMPTY)
-  const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
+  const [nonce, setNonce] = useState(0)
+  const [loadedKey, setLoadedKey] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true); setErr('')
-    try {
-      const q = new URLSearchParams({ kind: view })
-      if (from) q.set('date_from', from)
-      if (to) q.set('date_to', to)
-      if (store.trim()) q.set('store_code', store.trim())
-      const r = await api(`/api/v1/pos/reports/tender-mismatch?${q}`)
-      setData({ ...EMPTY, ...r, summary: { ...EMPTY.summary, ...(r?.summary || {}) } })
-    } catch (e: unknown) {
-      setErr(String((e as { message?: string })?.message || '') || 'Could not load the log')
-      setData(EMPTY)
-    }
-    setLoading(false)
-  }, [from, to, store, view])
+  // WHAT IS BEING ASKED FOR, as one string. `loading` is DERIVED from it rather than held in its
+  // own state, so the fetch effect sets no state synchronously (react-hooks/set-state-in-effect)
+  // and "showing figures for filters that have since changed" cannot happen: the key either
+  // matches what landed or it does not. Refresh bumps `nonce`, which is part of the key.
+  const key = useMemo(
+    () => JSON.stringify([view, from, to, store.trim(), nonce]), [view, from, to, store, nonce])
+  const loading = loadedKey !== key
+  const reload = useCallback(() => setNonce(n => n + 1), [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      try {
+        const q = new URLSearchParams({ kind: view })
+        if (from) q.set('date_from', from)
+        if (to) q.set('date_to', to)
+        if (store.trim()) q.set('store_code', store.trim())
+        const r = await api(`/api/v1/pos/reports/tender-mismatch?${q}`)
+        if (!alive) return
+        setErr('')
+        setData({ ...EMPTY, ...r, summary: { ...EMPTY.summary, ...(r?.summary || {}) } })
+      } catch (e: unknown) {
+        if (!alive) return
+        setErr(String((e as { message?: string })?.message || '') || 'Could not load the log')
+        setData(EMPTY)
+      }
+      if (alive) setLoadedKey(key)
+    })()
+    return () => { alive = false }
+  }, [key, view, from, to, store])
 
   const s = data.summary
   const activeView = VIEWS.find(v => v.key === view) || VIEWS[0]
 
   // THE NOTICE IS THE SERVER'S WORDS. What could not be measured is said here rather than rendered
   // as rows of zeroes, which is the §72 discipline: a surface that cannot measure something says so.
-  const notice = useMemo(() => {
+  // The technical detail of what is not switched on is NOT in the sentence — §19.36: it rides
+  // PlatformDetail, so only the platform super admin reads it.
+  const sentence = useMemo(() => {
     const parts: string[] = []
     if (!data.log_available) {
-      parts.push('Mismatch logging is not switched on (migration 1106 has not been applied), so '
-        + 'this screen derives every figure live and no edit has filed what the till saw at the time.')
+      parts.push('Mismatch logging is not switched on for this company yet, so this screen derives '
+        + 'every figure live and no edit has filed what the till saw at the time.')
     }
     for (const b of data.blockers) {
       parts.push(`${b.count} sale${b.count === 1 ? '' : 's'} could not be checked: ${b.reason}.`)
@@ -123,6 +140,15 @@ export default function TenderMismatchPage() {
     }
     return parts.length ? parts.join(' ') : null
   }, [data, s])
+
+  const notice = sentence == null ? null : (
+    <>
+      {sentence}
+      {!data.log_available && (
+        <PlatformDetail detail="1106_pos_sale_tender_mismatch" style={{ marginLeft: 6 }} />
+      )}
+    </>
+  )
 
   return (
     <div style={{ padding: 20, maxWidth: 1400, margin: '0 auto' }}>
@@ -156,7 +182,7 @@ export default function TenderMismatchPage() {
             {VIEWS.map(v => <option key={v.key} value={v.key}>{v.label}</option>)}
           </select>
         </label>
-        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={load}
+        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={reload}
           disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
       </div>
 
@@ -164,7 +190,7 @@ export default function TenderMismatchPage() {
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
         {[
           { label: 'To collect', value: money(s.to_collect), tone: 'var(--red)' },
-          { label: 'To refund', value: money(s.to_refund), tone: 'var(--amber, #f59e0b)' },
+          { label: 'To refund', value: money(s.to_refund), tone: 'var(--amber)' },
           { label: 'Net', value: money(s.net_variance), tone: 'var(--text)' },
           { label: 'Sales needing attention', value: String(s.mismatches), tone: 'var(--text)' },
           { label: 'Agreed', value: String(s.settled), tone: 'var(--green)' },

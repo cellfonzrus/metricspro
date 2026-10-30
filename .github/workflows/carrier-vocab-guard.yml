@@ -1760,9 +1760,6 @@ jobs:
       - name: Run the rung-sale edit proof (one home for whether a sale may be edited and what its lines come to; the superseded version always kept; stock reversed and re-applied by the existing paths; its own grant and declared window — index §POS-12)
         working-directory: backend
         run: python3 harness_pos_sale_amendment.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the POS tender-mismatch proof + lock (one home for tender vs total; an unrecorded tender is never $0.00; total − balance; the verdict is deposit_recon's; the void sibling; the dry run is the save — index §POS-14)
-        working-directory: backend
-        run: python3 harness_pos_sale_settlement.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the ledger statement-identity lock (one identity derivation, one period home, one lander; every ledger read on the family; N landings refused — index §30.15)
         working-directory: backend
         run: python3 harness_ledger_identity_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -2524,6 +2521,16 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_deposit_recon.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      # §POS-14, and HERE rather than in the stdlib lock job for the reason §19.25b states and
+      # `harness_ci_pipefail_lock` enforces: §L drives the REAL `_safe_settings_store_filter`, so it
+      # imports the POS router, which imports fastapi. In a job that installs nothing the step would
+      # die with ModuleNotFoundError before check one — the lock named exactly this and this is the
+      # fix it asks for. It sits beside `harness_deposit_recon` on purpose: §POS-14's verdict IS
+      # `deposit_recon.status_for`, and §E fails the build if the two ever disagree.
+      - name: Run the POS tender-mismatch proof + lock (one home for tender vs total; an unrecorded tender is never $0.00; total − balance; the verdict is deposit_recon's; the void sibling; the dry run is the save; a store code is checked before it is interpolated — index §POS-14)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_pos_sale_settlement.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # THE HOURS-APPROVAL SAVE PROOF (index §STOREOPS-01). HERE, not in the lock job, because it
       # imports app/modules/storeops/payroll_approval.py, which imports fastapi —
       # harness_ci_pipefail_lock names exactly this class of step and this is the fix it asks for.

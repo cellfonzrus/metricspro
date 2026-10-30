@@ -41,7 +41,7 @@ import type { HeldLine } from '@/lib/pos-held-sale'
 import { fetchAmendPlan, previewAmendedSale, saveAmendedSale } from '@/lib/pos-sale-amend'
 import type { AmendLine, AmendPlan } from '@/lib/pos-sale-amend'
 // THE one customer sentence for unfinished setup (§19.36) — never the migration's name.
-import { SETUP_NOTICE } from '@/lib/setupNotice'
+import { SETUP_NOTICE, PlatformDetail } from '@/lib/setupNotice'
 // THE receipt (lib/pos-receipt) — rendered on the server so the till copy, the reprint and the
 // emailed copy are one thing; this screen prints what it is handed (§POS-02).
 import { fetchSaleReceipt, printReceiptHtml, printViaHelper } from '@/lib/pos-receipt'
@@ -1283,9 +1283,10 @@ export default function PosSalesPage() {
                   )}
                 </span>
                 {!amending.tender_log_available && (
-                  <span style={{ fontSize: 11, color: 'var(--amber, #f59e0b)' }}>
-                    Mismatch logging is not switched on (migration 1106), so an edit that leaves
+                  <span style={{ fontSize: 11, color: 'var(--amber)' }}>
+                    Mismatch logging is not switched on for this company yet, so an edit that leaves
                     money outstanding will be refused rather than saved unlogged.
+                    <PlatformDetail detail="1106_pos_sale_tender_mismatch" style={{ marginLeft: 6 }} />
                   </span>
                 )}
               </div>

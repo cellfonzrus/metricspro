@@ -106,30 +106,45 @@ export interface AmendRevision {
 // ONE reader for the tender shape, so the plan, the preview and the save cannot disagree about
 // which field means what. A server that does not send it at all (an older deploy) reads as null and
 // every surface below simply shows nothing — never a zero, which would read as "it balances".
-function readTender(t: any): AmendTender | null {
-  if (!t || typeof t !== 'object') return null
+type TenderBag = Record<string, unknown>
+/** An absent or non-numeric figure reads as null, NEVER 0 — a zero would read as "it balances". */
+const _num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v))
+const _bag = (v: unknown): TenderBag => (v && typeof v === 'object' ? v as TenderBag : {})
+const _strs = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : [])
+const _str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)
+/** A word the server is not allowed to invent: anything outside the list reads as "no verdict",
+ *  never as a guess. The three verdicts are deposit_recon's own, platform-wide. */
+const _oneOf = <T extends string>(v: unknown, allowed: readonly T[]): T | null =>
+  (typeof v === 'string' && (allowed as readonly string[]).includes(v) ? v as T : null)
+const VERDICTS = ['short', 'over', 'ok'] as const
+const DIRECTIONS = ['collect', 'refund', 'settled'] as const
+
+function readTender(raw: unknown): AmendTender | null {
+  if (!raw || typeof raw !== 'object') return null
+  const t = raw as TenderBag
+  const tendered = _bag(t.tendered)
+  const expected = _bag(t.expected)
+  const attribution = _bag(t.attribution)
   return {
     measured: t.measured === true,
     mismatch: t.mismatch === true,
-    variance: t.variance === null || t.variance === undefined ? null : Number(t.variance),
-    verdict: t.verdict ?? null,
-    direction: t.direction ?? null,
-    reason_label: t.reason_label ?? null,
+    variance: _num(t.variance),
+    verdict: _oneOf(t.verdict, VERDICTS),
+    direction: _oneOf(t.direction, DIRECTIONS),
+    reason_label: _str(t.reason_label),
     tendered: {
-      present: t.tendered?.present === true,
-      total: t.tendered?.total === null || t.tendered?.total === undefined
-        ? null : Number(t.tendered.total),
-      methods: Array.isArray(t.tendered?.methods) ? t.tendered.methods : [],
+      present: tendered.present === true,
+      total: _num(tendered.total),
+      methods: _strs(tendered.methods),
     },
     expected: {
-      present: t.expected?.present === true,
-      amount: t.expected?.amount === null || t.expected?.amount === undefined
-        ? null : Number(t.expected.amount),
+      present: expected.present === true,
+      amount: _num(expected.amount),
     },
     attribution: {
-      method: t.attribution?.method ?? null,
-      ambiguous: t.attribution?.ambiguous === true,
-      methods: Array.isArray(t.attribution?.methods) ? t.attribution.methods : [],
+      method: _str(attribution.method),
+      ambiguous: attribution.ambiguous === true,
+      methods: _strs(attribution.methods),
     },
     band: Number(t.band) || 0,
   }
