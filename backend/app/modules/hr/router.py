@@ -494,6 +494,30 @@ _DEFAULT_WORK_AUTH_NOTICE = (
 # (§POS-15) asks the same question from another module, so the fact moved out and these four names
 # are now thin dereferences — kept as names because every call site here reads them.
 _DEFAULT_UPLOAD_FORMATS = list(_upload_format.DEFAULT_FORMATS)
+_DEFAULT_ROUTING_URL = "https://www.routingnumbers.info/api/data.json?rn={routing}"
+
+
+def _tenant_row(org_id):
+    try:
+        rows = (_so().table("tenants").select(
+            "onboarding_upload_formats,dd_disclaimer_text,work_auth_notice_text,"
+            "routing_lookup_enabled,routing_lookup_url").eq("org_id", org_id).limit(1).execute().data) or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}   # migration 401 (or storeops.tenants itself) not applied yet — degrade to defaults
+
+
+def _tenant_config(org_id):
+    """Every onboarding config value this pack introduces, org-scoped (SAP-configurable rule), with a
+    hardcoded fallback ONLY when migration 401 hasn't run — never a silent divergence once it has.
+    The allow-LIST's house default is the one home's (§POS-15.3); the tenant's own row still wins."""
+    t = _tenant_row(org_id)
+    return {
+        "upload_allowed_formats": t.get("onboarding_upload_formats") or list(_DEFAULT_UPLOAD_FORMATS),
+        "dd_disclaimer_text": t.get("dd_disclaimer_text") or _DEFAULT_DD_DISCLAIMER,
+        "work_auth_notice_text": t.get("work_auth_notice_text") or _DEFAULT_WORK_AUTH_NOTICE,
+        "routing_lookup_enabled": t.get("routing_lookup_enabled", True) is not False,
+    }
 
 
 def _sniff_format(data: bytes):

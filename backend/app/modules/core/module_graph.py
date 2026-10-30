@@ -2867,7 +2867,7 @@ FACTS: dict[str, dict] = {
                     'does a sale on terms owe? It was written FOUR times: two literal button '
                     'arrays in the register screen (one for a tenant with integrated card '
                     'processing, one without), the condition that chose between them, and '
-                    '`CHECK (payment_method IN …)` on `pos.sale_payments` (mig 725). Adding one '
+                    '`CHECK (payment_method IN …)` on `pos.sale_payments`. Adding one '
                     'tender type therefore meant a screen, a condition and a constraint, in three '
                     'languages, with the build green if any of them was missed. The class a tender '
                     'RECONCILES as is NOT answered here — each entry carries the words a feed would '

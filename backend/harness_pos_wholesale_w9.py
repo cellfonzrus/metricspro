@@ -216,8 +216,13 @@ check("F9 a declared link that is not https is ignored rather than handed to a c
 
 print("\n§G  THE CUSTOMER'S RETURN LINK IS A CREDENTIAL")
 t1, t2 = w9.new_token(), w9.new_token()
-check("G1 minted from the OS's cryptographic source, not derived from the customer",
-      "secrets.token_urlsafe" in read(HOME) and t1 != t2 and len(t1) >= 32)
+# The token's strength is DECLARED, not bounded: 32 random bytes, which token_urlsafe renders as
+# exactly 43 base64url characters. A lower bound would pass a weakened token silently.
+TOKEN_BYTES, TOKEN_CHARS = 32, 43
+check("G1 minted from the OS's cryptographic source, exactly %d random bytes, not derived "
+      "from the customer" % TOKEN_BYTES,
+      ("secrets.token_urlsafe(%d)" % TOKEN_BYTES) in read(HOME)
+      and t1 != t2 and len(t1) == TOKEN_CHARS and len(t2) == TOKEN_CHARS)
 check("G2 it expires", w9.RETURN_LINK_DAYS > 0
       and "token_expires_at" in MIG_SRC and "token_expires_at" in ROUTER_SRC)
 check("G3 unknown / expired / cleared are ONE answer, so a probe learns nothing",

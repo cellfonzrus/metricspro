@@ -70,10 +70,13 @@ describe('what the panel says', () => {
     expect(w.tone).toBe('warn')
     expect(w.text).toMatch(/tax applies/i)
   })
-  it('shows the setup note instead of a block before the migration is applied', () => {
-    const w = panelWords({ ...MISSING, setup_note: 'apply migration 1107 …' })
+  it('passes a setup note through instead of blocking, when the store is not set up yet', () => {
+    // The note's WORDING is the platform's (lib/setupNotice.tsx, §19.36) and never written here —
+    // what this pins is that the panel relays it as a warning rather than refusing the sale.
+    const note = 'This store is not set up for wholesale yet.'
+    const w = panelWords({ ...MISSING, setup_note: note })
     expect(w.tone).toBe('warn')
-    expect(w.text).toContain('1107')
+    expect(w.text).toContain(note)
   })
 })
 
