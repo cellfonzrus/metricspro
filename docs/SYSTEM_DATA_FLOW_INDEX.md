@@ -185,6 +185,7 @@ Primary code homes:
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
+| CORE-26 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
 | CORE-22 | **A page load never queries once per item** | "How do we avoid these extra round-trip calls? Which loop shapes really cost one trip per row and which only look like it, what is the count today, and what fails the build the day a new one ships?" |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26179,6 +26180,7 @@ status word rather than a blank that reads as nil.
 | POS-13 | pos |
 | PAYABLES-01 | payables |
 | CORE-25 | core |
+| CORE-26 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -41108,3 +41110,132 @@ writes a sidebar width of its own (negative control planted and confirmed red).
 
 No endpoint, no table, no migration, no query. Nothing about what a figure IS changes; this is where
 a pane is drawn. The desk layout is byte-identical above `NARROW_MAX`.
+
+## §CORE-26. A REPORT ARRIVES WITH THE STANDARD FILTERS AND THE SEND BAR, OR IT DOES NOT ARRIVE (owner ask 2026-10-30)
+
+**What he said:**
+
+> *"Zero Sales does not have send notification bar, please note this also in teh indsex all reports
+> must have the satandard filters and the send bar by default"*
+
+Two asks in one sentence: fix the report he was looking at, and make the rule the default. The second
+half is the one that matters, and §CORE-17 already taught this house what "by default" has to mean —
+**a sentence in this document is re-broken by the next report nobody remembered to check.** So the
+rule ships as a gate.
+
+### §CORE-26.1 DUPLICATE CHECK (build gate)
+
+Searched this index for an existing mechanism before building anything, and **nothing new was built
+for sending or for filtering** — both already had one home each, and the gap was content and wiring:
+
+| The question | Its existing one home | What this change did |
+|---|---|---|
+| "mail this report to somebody" | `frontend/src/lib/send-report.SendReportButton` (§COMMCALC-19) | reused, untouched |
+| "the toolbar beside a page's own table" | `frontend/src/components/ReportExportBar.tsx` (§3c RULE FOUR) | reused, untouched |
+| "the toolbar for a plain tabular report" | `frontend/src/components/ReportShell.tsx` | reused, untouched |
+| "the standard filters" | `frontend/src/components/StandardFilterBar.tsx` + `lib/standard-filters` (§COMMCALC-03.20) | reused, untouched |
+| "a report's summary TILES as something sendable" | `frontend/src/lib/tile-snapshot.tileSnapshotSheet` (§COMMCALC-19) | reused for the Zero Sales snapshot sheet |
+| "which routes are reports" | `backend/harness_drilldown_pending.txt` (§CORE-17.5) | **dereferenced** by the new gate, not copied |
+
+That last row is the one worth stating. The gate needs a population of "every report", and §CORE-17's
+ledger already is one. A second list would have been two answers to one question — the defect the
+duplicate rule forbids — so the new gate **reads that ledger** and treats anything it calls
+`not_report` as not a report here either.
+
+### §CORE-26.2 THE CLASS, not the instance
+
+The instance was Zero Sales. The class is two facts about every report:
+
+* **A figure nobody can send gets retyped into an email.** That is how a number reaches a manager
+  with no filename, no date range and no small print attached to it.
+* **A report nobody can narrow gets read at the wrong scope.** A district manager reading the estate's
+  figure as their own is a wrong decision made from a right number.
+
+### §CORE-26.3 THE RULE, AND THE GATE THAT MAKES IT A DEFAULT
+
+**Every report carries the standard filters and the send bar.** A new report satisfies this for free
+by rendering `<ReportShell>` (which carries both), or `<StandardFilterBar>` plus `<ReportExportBar>`
+when it keeps a table of its own. Nothing else is accepted: a page that narrows with controls of its
+own is *not* counted as having the standard filters, because the owner asked for the standard ones and
+a per-report bar is the copy §19.18 forbids.
+
+`backend/harness_report_toolbar_coverage.py` is the gate. It declares nothing itself:
+
+* the population is read from `harness_drilldown_pending.txt` — **128 report routes** on 2026-10-30;
+* whether a page has each bar is read from the **page source**, matching the JSX **element** and never
+  the import, because a page whose render was deleted while its import stayed is the exact un-wiring
+  these locks exist to catch (the §CORE-17 D1 lesson);
+* **two pins that may only shrink** — `SEND_OWES_MAX` and `FILTER_OWES_MAX`. A new report with no
+  toolbar raises a count and fails the build; wiring one lowers it and the author re-pins DOWNWARD.
+* it also checks that what it counts is really the one home: if `<ReportShell>` ever stops rendering
+  `<SendReportButton>`, every report counted through it would silently lose its send bar, and §C1
+  fails rather than reading green.
+
+### §CORE-26.4 THE MEASUREMENT (2026-10-30) — what is still missing
+
+Of the 128 report routes, **53 carry both bars**. The debt is named rather than implied:
+
+* **27 routes cannot be sent at all.** `/accounts/analysis`, `/accounts/cost-centers`,
+  `/accounts/profit-centers`, `/accounts/royalty`, `/accounts/royalty/recon`, `/admin/org-chart`,
+  `/closing/accessory-recon`, `/closing/declared-vs-captured`, `/closing/epay-recon`,
+  `/closing/management`, `/closing/recon`, `/commcalc`, `/commcalc/accessory-flags`,
+  `/commcalc/activations`, `/commcalc/bill-payments`, `/commcalc/carrier-vs-pay`,
+  `/commcalc/commission-discrepancy`, `/commcalc/commission-withholding`, `/commcalc/device-history`,
+  `/commcalc/distributors`, `/commcalc/month-focus`, `/commcalc/schematic`,
+  `/commcalc/targets/report-cards`, `/commcalc/whatif`, `/helpdesk/dashboard`, `/storeops/team`,
+  `/storeops/visits/plan`.
+* **71 routes have no standard filters.** The whole `/commcalc/asset/*` tree (14 routes) and most of
+  `/accounts/*` are the bulk of it; several narrow with a picker of their own, which is why the figure
+  is larger than the send one and why those routes read `owes` honestly rather than being excused.
+
+Both lists print on every run of the gate, so a batch never has to re-derive them. Clearing them is
+batch work on the §CORE-17 model — each batch lowers a pin — and is **not** claimed as done here.
+
+### §CORE-26.5 THE INSTANCE — Zero Sales, and the honesty rule that had to travel with it
+
+Zero Sales already had `<StandardFilterBar>` (period range, markets, stores, reps). It now renders
+`<ReportExportBar>` beside it, fed by **`frontend/src/lib/zero-sales-export.ts`** — a pure converter,
+not a second sender.
+
+**Why the converter was needed at all, rather than handing the bar the table.** This report's whole
+posture (§15) is that *a missing feed is not a zero*: a day nothing landed for reads **not reported**,
+in amber, with a banner above it, and is never counted as a zero. **A spreadsheet has no colour, no
+tooltip and no banner.** So the rule had to be re-stated in the CELL:
+
+* a **measured** day exports its transaction count, including a real `0`;
+* a day nobody measured exports **blank — never 0**, because a 0 in a mailed file is read as a counted
+  fact and there is nothing beside it to say otherwise;
+* every row states its state **in words**, so a reader knows which kind of blank they have;
+* "consecutive zero days" of 0 exports blank too — that is *no run to report*, not a run of length 0;
+* the measured-zero and not-reported day tallies are separate columns and are never added;
+* all four summary tiles declare their change **`not measured`**: this report compares no two periods,
+  and a mailed `± 0%` would read as "held steady" about a figure nothing was compared with — the
+  §COMMCALC-19 defect in its general form.
+
+**One home for the state words.** The page used to spell `word: 'measured zero'` in its own table, and
+the export would have spelled it a second time. The words now live in `ZS_STATE_WORD` in the converter
+and the page dereferences them, so the square on screen and the cell in the mailed file cannot come to
+call one state two things. §D8 of the gate fails the build if the page spells one again.
+
+### §CORE-26.6 Tests (TDD, all tenants)
+
+* `frontend/src/lib/__tests__/zero-sales-export.test.ts` — **10 unit tests, written before the
+  converter existed**: the three sheets and their order, store rows and rep rows kept apart, and every
+  clause of the honesty rule above.
+* `backend/tests/integration/test_zero_sales_report_route.py` — **11 integration tests through the real
+  app** over the in-memory double, **parametrised over three tenants** with different thresholds and
+  gap policies. They pin the cross-language contract the mailed file depends on: every field the
+  converter dereferences is really served, each tenant's declared threshold is the one served to it
+  (RULE TWO), and an unmeasured day really is `null` rather than `0`. If the endpoint ever returned 0
+  there, the screen would keep working and the mailed file would start printing counted zeros for days
+  nobody measured.
+* The scoping test is read off the report, not asserted about the query: each tenant uploaded one day
+  for one store of its own, so a leak surfaces as another tenant's **store code**, or as this tenant's
+  store believing it was looked at on a day only another tenant uploaded — which on this report is how
+  a data gap becomes a measured zero.
+* `backend/harness_report_toolbar_coverage.py` — the gate, 22 checks, wired into CI.
+
+### §CORE-26.7 Not money
+
+No endpoint, no table, no migration, no query, no figure moved. A toolbar, a pure converter, and a
+build gate. The Zero Sales payload is served exactly as before.

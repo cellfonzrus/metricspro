@@ -7,6 +7,8 @@ import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
 import { agreesToTheCent } from '@/lib/drill-narrow'
+import ReportExportBar from '@/components/ReportExportBar'
+import { zeroSalesSheets, zsStateWord } from '@/lib/zero-sales-export'
 
 // ZERO SALES — store-days and rep-days with no activation and no upgrade (owner 2026-09-22, index §15).
 //
@@ -107,15 +109,19 @@ const ZS_DRILL_COLUMNS: DrillExtraColumn[] = [
 
 // The five states, their word and their colour. "not reported" is deliberately the loudest thing on
 // the screen after an alert: it is the state a reader must never mistake for a zero.
-const STATE: Record<string, { word: string; bg: string; fg: string; chip: string }> = {
-  had_sales:     { word: 'had sales',     bg: 'var(--c-bg-dcfce7)', fg: 'var(--c-fg-15803d)', chip: '#16a34a' },
-  measured_zero: { word: 'measured zero', bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-b91c1c)', chip: '#dc2626' },
-  not_reported:  { word: 'not reported',  bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', chip: '#d97706' },
-  closed:        { word: 'closed',        bg: 'var(--bg2)', fg: 'var(--text3)', chip: 'var(--border)' },
-  in_progress:   { word: 'in progress',   bg: 'var(--bg2)', fg: 'var(--text3)', chip: 'var(--border)' },
-  off:           { word: 'not scheduled', bg: 'var(--bg2)', fg: 'var(--text3)', chip: 'var(--border)' },
-  rule_refused:  { word: 'rule refused',  bg: 'var(--c-bg-ede9fe)', fg: 'var(--c-fg-6d28d9)', chip: '#7c3aed' },
+// COLOUR here; the WORD is dereferenced from `lib/zero-sales-export.ZS_STATE_WORD` (§CORE-26) so
+// the square on screen and the cell in the mailed file can never come to call one state two things.
+const TONE: Record<string, { bg: string; fg: string; chip: string }> = {
+  had_sales:     { bg: 'var(--c-bg-dcfce7)', fg: 'var(--c-fg-15803d)', chip: '#16a34a' },
+  measured_zero: { bg: 'var(--c-bg-fee2e2)', fg: 'var(--c-fg-b91c1c)', chip: '#dc2626' },
+  not_reported:  { bg: 'var(--c-bg-fef3c7)', fg: 'var(--c-fg-92400e)', chip: '#d97706' },
+  closed:        { bg: 'var(--bg2)', fg: 'var(--text3)', chip: 'var(--border)' },
+  in_progress:   { bg: 'var(--bg2)', fg: 'var(--text3)', chip: 'var(--border)' },
+  off:           { bg: 'var(--bg2)', fg: 'var(--text3)', chip: 'var(--border)' },
+  rule_refused:  { bg: 'var(--c-bg-ede9fe)', fg: 'var(--c-fg-6d28d9)', chip: '#7c3aed' },
 }
+const STATE: Record<string, { word: string; bg: string; fg: string; chip: string }> =
+  Object.fromEntries(Object.entries(TONE).map(([k, t]) => [k, { ...t, word: zsStateWord(k) }]))
 
 function Tile({ label, value, sub, tone, drill, d }: {
   label: string; value: string; sub?: string; tone?: string
@@ -329,12 +335,31 @@ export default function ZeroSalesPage() {
         </div>
       )}
 
+      {/* THE STANDARD FILTERS AND THE SEND BAR, BOTH SHARED (owner 2026-10-30, index §CORE-26).
+          The filters were already here; the send bar was the gap. `<ReportExportBar>` is the one
+          toolbar — Excel · PDF · Print · Send by email/WhatsApp through /notify/send-file — and it
+          is given the sheets this report's own converter builds, so what is mailed carries the five
+          states in words and never a 0 for a day nobody measured. */}
       <div style={{ marginTop: 14 }}>
         <StandardFilterBar
           value={filt} onChange={setFilt} periodMode="range"
           show={{ period: true, stores: true, markets: true, reps: true }}
           optionsUrl="/api/v1/core/filter-options"
-          right={<button className="btn btn-secondary" onClick={load}>&#8635; Refresh</button>}
+          right={
+            <>
+              <button className="btn btn-secondary" onClick={load}>&#8635; Refresh</button>
+              {data && (
+                <ReportExportBar
+                  title={`Zero Sales ${data.date_from} to ${data.date_to}`}
+                  subtitle={'A day counts as zero sales only when the feed carried the store and '
+                    + 'none of its transactions was an activation or an upgrade. A day nothing '
+                    + 'landed for reads "not reported" and is never counted as a zero.'}
+                  filename={`zero_sales_${data.date_from}_${data.date_to}`}
+                  sheets={zeroSalesSheets(data)}
+                />
+              )}
+            </>
+          }
         />
       </div>
 
