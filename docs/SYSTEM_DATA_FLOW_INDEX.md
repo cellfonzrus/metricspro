@@ -41344,6 +41344,33 @@ which is how the screen shipped: there was no gate a label rule could fail. `mob
 + `mobile/tests/setup.ts` (the same no-network promise the backend conftest makes) and a
 `Mobile unit tests` job in `.github/workflows/tests.yml` close that.
 
+### §CORE-26.6 The app's JavaScript reaches a phone by itself (owner, 2026-10-30)
+
+Owner: *"im not the mac and the machine does not have the terminal to run right now any other way"*.
+
+The label fix above is one thing; **why the 2026-09-17 fix (#240) was still not on his phone six
+weeks later** is another, and it is the more durable defect. `mobile/app.config.ts` has declared an
+EAS Update URL since the app was written and `mobile/package.json` has declared `update:production` —
+but the channel only moved when a human remembered to type `eas update` on a Mac, and nobody did.
+A delivery step that depends on somebody remembering is a delivery step that does not happen.
+
+TestFlight's "automatic updates" toggle does NOT cover this. It installs a new **binary** when one is
+uploaded; a JavaScript change travels over the air on a different channel entirely. The owner had the
+toggle on and was still six weeks behind.
+
+`.github/workflows/mobile-ota-update.yml` publishes the channel on every push to `main` that touches
+`mobile/**`, and on a **Run workflow** button for a manual push — so the step needs a browser, never
+a terminal. Both hosts already auto-deploy from `main` (§23d); after this, so does the app. It runs
+`mobile/`'s own tests once more immediately before publishing, which is not redundant with the pull
+request's gate: an over-the-air bundle reaches every installed phone at once with no store review
+standing between it and them. With no `EXPO_TOKEN` secret it publishes nothing and says in the job
+summary exactly which two browser pages to visit, rather than failing inside the CLI.
+
+Limits, by construction: an over-the-air update carries only JavaScript and assets. A native change —
+a new module, a new permission, an SDK bump, a `version` bump (the runtime key is
+`{ policy: 'appVersion' }`) — finds no matching runtime and is simply not delivered, rather than
+shipping something broken. The workflow never builds and never submits to a store.
+
 ### §CORE-26.5 Not money
 
 No endpoint, no table, no migration, no query, no figure. Nothing about what a number IS changes;

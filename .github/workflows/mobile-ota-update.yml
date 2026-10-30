@@ -1,0 +1,122 @@
+name: mobile over-the-air update
+
+# THE APP'S JAVASCRIPT REACHES A PHONE BY ITSELF (owner, 2026-10-30).
+#
+# WHAT WAS HERE BEFORE: nothing. `mobile/app.config.ts` has declared an EAS Update URL since the app
+# was written, and `mobile/package.json` has declared `update:production` — but the channel only ever
+# moved when a human remembered to type `eas update` on a Mac. Nobody did. A company-name fix merged
+# on 2026-09-17 (#240) was still not on the owner's TestFlight phone six weeks later, and the owner
+# reported it a second time as a live defect (index §CORE-26).
+#
+# THE CLASS, not the instance: a delivery step that depends on somebody remembering is a delivery
+# step that does not happen. TestFlight's "automatic updates" toggle does not cover this — it
+# installs a new BINARY when one is uploaded, while a JavaScript change travels over the air on a
+# different channel entirely. Both hosts already auto-deploy from `main` (index §23d); after this,
+# so does the app.
+#
+# WHAT IT DOES NOT DO. An over-the-air update can only carry JavaScript and assets. A NATIVE change —
+# a new Expo module, a new permission, an SDK bump, a `version` bump (the runtime key is
+# `{ policy: 'appVersion' }`) — needs a fresh build, and EAS will simply find no matching runtime
+# rather than ship something broken. This workflow never builds or submits to a store.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/mobile-ota-update.yml"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Which channel to publish to (matches the build profile in mobile/eas.json)"
+        type: choice
+        options: [production, preview]
+        default: production
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-ota-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  publish:
+    name: Publish the app's JavaScript to installed phones
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The token is read ONCE, here, so the rest of the job can say plainly why it stopped instead
+      # of failing inside the CLI with an auth error nobody can act on.
+      - name: Is this repository allowed to publish?
+        id: gate
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "${EXPO_TOKEN}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### The app was NOT updated"
+              echo
+              echo "No \`EXPO_TOKEN\` secret is set on this repository, so nothing was published and"
+              echo "phones are still running the JavaScript they already had."
+              echo
+              echo "To switch this on (all in a browser, no terminal):"
+              echo "1. <https://expo.dev> → your account → **Settings → Access tokens** → **Create token**. Copy it."
+              echo "2. This repository → **Settings → Secrets and variables → Actions** →"
+              echo "   **New repository secret**, named \`EXPO_TOKEN\`, paste the token, **Add secret**."
+              echo "3. Come back to **Actions → mobile over-the-air update** and press **Run workflow**."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v5
+        if: steps.gate.outputs.ready == 'true'
+        with: { node-version: "20", cache: npm, cache-dependency-path: mobile/package-lock.json }
+
+      - name: install
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: mobile
+        run: npm ci
+
+      # The same tests the `tests` workflow runs. A broken bundle pushed over the air reaches every
+      # installed phone at once and there is no store review standing between it and them, so this
+      # gate is not redundant with the one on the pull request — it is the last one before delivery.
+      - name: the app's own tests, once more, before anything reaches a phone
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: mobile
+        run: npm run test
+
+      - uses: expo/expo-github-action@v8
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: publish the update
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: mobile
+        env:
+          CHANNEL: ${{ inputs.channel || 'production' }}
+          # Through the environment, never interpolated into the script: a commit message is
+          # arbitrary text from anyone who can push, and `${{ }}` would paste it into bash.
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          SUBJECT="$(printf '%s' "$HEAD_MESSAGE" | head -n 1)"
+          eas update --branch "$CHANNEL" \
+            --message "${GITHUB_SHA::7} ${SUBJECT:-manual publish}" --non-interactive
+          {
+            echo "### The app was updated"
+            echo
+            echo "Channel: **$CHANNEL**, from commit \`${GITHUB_SHA::7}\`."
+            echo
+            echo "On a phone that already has the app: force-quit it, open it, wait a few seconds,"
+            echo "force-quit again and open it once more. Expo downloads the update on one launch"
+            echo "and applies it on the next, so it genuinely takes two."
+          } >> "$GITHUB_STEP_SUMMARY"
