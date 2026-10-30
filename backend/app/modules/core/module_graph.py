@@ -662,6 +662,42 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('rd',),
         },
     },
+    # ── §COMMCALC-50 — what a page is telling us instead of showing a form ──────────────────────
+    'portal_page_verdict': {
+        "question": 'Is this page REFUSING us, CHALLENGING us, or THROTTLING us, rather than showing '
+                    'us a form \u2014 and what should the operator be told? Four vocabularies '
+                    'answered it: portal_block_marker rows (configurable, throttles only), '
+                    'vidapay_sweep._BOT_PHRASES (a tuple in code), _looks_like_cloudflare\'s inline '
+                    'markers, and a fourth tuple inside begin_login_b2bsoft that was OR\'d with the '
+                    'first predicate, so a phrase a tenant configured was honoured by one half of '
+                    'that condition and not the other. None held the owner\'s UPS billing wording '
+                    '("you are trying to perform an action that is not allowed", 2026-10-30), so the '
+                    'driver reported "Could not find the login form \u2014 it may render differently '
+                    'than expected" about a page with no form on it. A page that refuses us is not a '
+                    'login form that renders unexpectedly, so the words live in ONE table with a '
+                    'kind (mig 1105) and a tenant adds a ROW, never a branch. The three kinds stay '
+                    'three answers because the remedies differ \u2014 an address, a proxy, or time '
+                    '\u2014 and only a throttle sets a cooldown.',
+        "homes": ('app/modules/commcalc/portal_backoff.py',),
+        "index": ('COMMCALC-50',),
+        "locks": ('harness_portal_page_verdict.py',),
+        # SNAPSHOT \u2014 written BY HAND (\u00a750). The driver keeps the predicates every caller already
+        # asks (_looks_like_bot_wall / _looks_like_cloudflare) and dereferences the vocabulary; the
+        # live login asks the driver's one reader. _CAPTCHA_TEXT is the EXCUSED sibling (\u00a7COMMCALC-11):
+        # "must a human tick a box on this form" is a different question about a form that IS there.
+        "callers": {
+            # the driver: both predicates every caller already asks, plus the throttle exception it
+            # has always raised from here
+            'app/modules/commcalc/vidapay_sweep.py': ('PortalRateLimited', '_pb'),
+            # the live login reaches the VOCABULARY through the driver's one reader (vp.page_refusal)
+            # and the cooldown gate through the home directly
+            'app/modules/commcalc/live_login.py': ('_pb',),
+            # the cooldown gate the scheduler and the operator's own click both pass
+            'app/modules/commcalc/router.py': ('_m',),
+            # a landed upload says whether the source was in a cooldown when it was due
+            'app/modules/commcalc/import_audit.py': ('_pb',),
+        },
+    },
     # ── §COMMCALC-38 — what a supplier billed us ─────────────────────────────────────────────────
     'supplier_invoice_line': {
         "question": 'What did a supplier bill us, and which shipment was it for? Asked so every '

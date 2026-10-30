@@ -1028,6 +1028,11 @@ on:
       # this job exists to catch. The router is named because it is where the label is passed.
       # index §COMMCALC-47 — WHERE A CLICK ON THE LIVE SCREEN LANDS. The lock names itself and its
       # home, and live_login because that is where the arithmetic must NOT come back.
+      # index §COMMCALC-50 — WHAT A PAGE IS TELLING US INSTEAD OF SHOWING A FORM. The lock names
+      # itself, the one vocabulary, and the two drivers whose hardcoded phrase tuples it replaced:
+      # a second list reappearing in either is exactly what this job exists to catch.
+      - "backend/harness_portal_page_verdict.py"
+      - "backend/app/modules/commcalc/portal_backoff.py"
       - "backend/harness_live_frame.py"
       - "backend/app/modules/commcalc/live_frame.py"
       # index §COMMCALC-48 — THE EDITABLE REPORT DECLARATION. The lock names itself, its home, and the
@@ -1949,6 +1954,9 @@ jobs:
       - name: Run the supplier-invoice lock (ONE column-vocabulary mechanism so neither feed grows its own normalizer; a blank charge is None and never 0.00; the natural key equals the migration's unique index; the distributor-only sibling is named not hidden - index COMMCALC-38)
         working-directory: backend
         run: python3 harness_supplier_invoice_feed.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the page-verdict lock (a page that REFUSES us is not a login form that renders unexpectedly; one configurable vocabulary for refusal / challenge / throttle, three kinds because the remedies differ, and the portal's own words lead the operator message - index COMMCALC-50)
+        working-directory: backend
+        run: python3 harness_portal_page_verdict.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the live-frame lock (a click on the streamed live screen is translated through THAT frame's own size, scale and top offset, never through an assumed window; it reduces exactly to the old formula on a plain desktop frame - index COMMCALC-47)
         working-directory: backend
         run: python3 harness_live_frame.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
