@@ -244,3 +244,95 @@ def test_C6_the_store_grid_and_the_till_agree_rung_for_rung(wired, api_client):
                                               "store_code": row["store_code"]}).json()
         assert (till["rate"], till["scope"]) == (row["effective_rate"], row["effective_scope"]), \
             row["store_code"]
+
+
+# ── §T. THE CROSS-TENANT PASS (project rule, 2026-10-30) ─────────────────────────────────────────
+#
+# "Every feature must work for ALL tenants, never just one. After a feature is built, a testing pass
+# must verify it works for every tenant." There is no staging database and production reads are not
+# available from this container, so this pass is STRUCTURAL: every case below runs for EVERY seeded
+# tenant, and each one also asserts the NEGATIVE — that the same rows under another tenant's
+# declaration produce nothing. Asserting only the positive is what lets a feature pass for the house
+# org and return zeros for the next tenant.
+
+ALL_ORGS = [(HOUSE, "B-1115"), (SOLO, "L-01"), (BARE, "V-01")]
+
+
+@pytest.mark.parametrize("org,store", ALL_ORGS)
+def test_T1_every_tenant_gets_its_own_span_and_nobody_elses(wired, api_client, org, store):
+    body = api_client.get(WS_PATH, params={"org_id": org}).json()
+    assert store in body["stores"], f"{org} cannot see its own store"
+    foreign = [s["store_code"] for s in STORES if s["org_id"] != org]
+    assert not (set(body["stores"]) & set(foreign)), "another tenant's stores are in this span"
+
+
+@pytest.mark.parametrize("org,store", ALL_ORGS)
+def test_T2_every_tenant_can_ring_a_sale_at_its_own_store(wired, api_client, org, store):
+    assert _checkout(api_client, org, store).status_code == 200, f"{org} cannot ring at {store}"
+    assert wired.calls[-1]["p_sale"]["store_code"] == store
+
+
+@pytest.mark.parametrize("org,store", ALL_ORGS)
+def test_T3_no_tenant_can_ring_a_sale_at_another_tenants_store(wired, api_client, org, store):
+    for other_org, other_store in ALL_ORGS:
+        if other_org == org:
+            continue
+        res = _checkout(api_client, org, other_store)
+        assert res.status_code == 403, f"{org} was allowed to post a sale to {other_store}"
+    assert wired.calls == []
+
+
+@pytest.mark.parametrize("org,store", ALL_ORGS)
+def test_T4_no_tenant_can_ring_a_sale_with_no_store(wired, api_client, org, store):
+    assert _checkout(api_client, org, None).status_code == 403
+    assert wired.calls == []
+
+
+@pytest.mark.parametrize("org,store", ALL_ORGS)
+def test_T5_every_tenant_gets_an_ANSWER_about_tax_even_when_it_has_declared_none(
+        wired, api_client, org, store):
+    """The silent-zero case, per tenant. A tenant with nothing declared must come back `none` with a
+    warning — not 0, and not another tenant's rate."""
+    body = api_client.get(RESOLVE, params={"org_id": org, "store_code": store}).json()
+    assert body["scope"] in ("store", "market", "org", "none")
+    if body["scope"] == "none":
+        assert body["rate"] is None and body["warning"]
+    else:
+        assert body["rate"] is not None and not body["warning"]
+
+
+@pytest.mark.parametrize("org,store", ALL_ORGS)
+def test_T6_a_tenants_rate_is_never_answered_from_another_tenants_rows(wired, api_client, org, store):
+    """The NEGATIVE that pins the mechanism rather than the symptom: BARE declares no rate at all
+    while HOUSE and SOLO declare several, so if the read were not org-scoped, BARE would inherit."""
+    declared = {c["org_id"] for c in TAX_CODES}
+    body = api_client.get(RESOLVE, params={"org_id": org, "store_code": store}).json()
+    if org not in declared:
+        assert body["rate"] is None, "a tenant with no declaration was handed somebody else's rate"
+    foreign = [c["rate"] for c in TAX_CODES if c["org_id"] != org]
+    assert body["rate"] is None or body["rate"] not in [f for f in foreign
+                                                        if f not in [c["rate"] for c in TAX_CODES
+                                                                     if c["org_id"] == org]]
+
+
+@pytest.mark.parametrize("org,store", ALL_ORGS)
+def test_T7_the_activation_gate_holds_for_every_tenant(wired, api_client, org, store):
+    for other_org, other_store in ALL_ORGS:
+        if other_org == org:
+            continue
+        res = api_client.post("/api/v1/pos/activations", params={"org_id": org},
+                              json={"store_code": other_store, "status": "active"})
+        assert res.status_code == 403, f"{org} filed an activation at {other_store}"
+    assert wired.rows("pos.activations") == []
+
+
+def test_T8_no_tenant_or_carrier_name_appears_in_either_one_home():
+    """RULE TWO, on the modules this PR adds: behaviour is per-org config and the caller's span, so
+    no tenant, carrier or store name may be spelled in the code."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[2]
+    banned = ("boost", "luxelink", "cellfonz", "vzone", "total wireless", "b-1115", "metro")
+    for rel in ("app/modules/pos/working_store.py", "app/modules/pos/tax_precedence.py"):
+        src = (root / rel).read_text().lower()
+        hits = [b for b in banned if b in src]
+        assert not hits, f"{rel} spells {hits}"

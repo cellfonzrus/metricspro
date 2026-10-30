@@ -90,8 +90,8 @@ def resolve(span_: dict, requested) -> dict:
     only case where an unpicked store is still a known fact rather than a guess.
 
     Resolves to the ROSTER'S OWN SPELLING of the code, not the spelling that was typed: store codes
-    are compared here without case folding elsewhere in the platform, and 'b-1115' once became a
-    phantom store holding $289.
+    are compared without case folding elsewhere in the platform, and a lower-cased code on a batch
+    of shifts once became a phantom store holding a day's money (see the index, store-code case).
     """
     codes = list((span_ or {}).get("stores") or [])
     asked = str(requested or "").strip()
