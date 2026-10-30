@@ -1199,7 +1199,7 @@ FACTS: dict[str, dict] = {
                     'as a projection of zero. SECOND HOME, added 2026-10-30 after the owner '
                     'found all three callers blind to a whole tenant: which DEPARTMENTS an org '
                     'calls a device is the org\'s own declaration '
-                    '(`accessory_config.box_departments`, mig 218 — the list the box count, the '
+                    '(`accessory_config.box_departments` — the list the box count, the '
                     'product mix and the GP report already read), asked through '
                     '`device_vocabulary.declared_device_departments`. It had been an OPTIONAL '
                     'default holding one tenant\'s POS labels, so a month of another tenant\'s '
