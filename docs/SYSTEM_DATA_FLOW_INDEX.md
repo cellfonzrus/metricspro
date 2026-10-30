@@ -88,6 +88,7 @@ Primary code homes:
 | POS-11 | **The page a receipt prints on, and the Bill To** | "Do not put the reprint date and time on top with the word Sale in the middle of the screen; the Bill To should have the customer address printed." Whose header is that across the top of a printed receipt, and why does a Bill To show a bare name when the renderer prints the address? |
 | POS-12 | **Editing a sale that is already rung** | "I am not able to edit the receipt or add more items to the same receipt." How does a cashier put another item on a receipt that is already printed, and what happens to the version the customer is holding? |
 | POS-13 | **What a receipt document looks like** | "The receipt is not formatted properly and no clear border lines to make it look professional." Why does the emailed receipt carry no borders at all, and why are its phrases broken apart mid-word? |
+| POS-14 | **A sale the customer pays later** | "Also add another tender type as Terms — 15/30/60." What may a till be paid with, who decides, and what does a receipt say about a sale nobody has paid yet? |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -7977,6 +7978,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"What does a receipt DOCUMENT look like?"** (the browser copy and the PDF of one receipt; owner 2026-10-29) | nothing — it was described twice, in a private `_CSS` string and not at all for the PDF | **ONE home** `receipt_formats/doc_style.py`: the fonts, weights, greys, proportions and `RULES`, the named list of every rule drawn. `render_html` builds its stylesheet from `doc_style.css()` and the PDF draws from the same numbers, so a border exists once and appears in both. A second stylesheet in the renderer fails the build. Proof `harness_pos_receipt_document.py` §A/§B — §POS-13 |
 | **"This Document, drawn on a page"** (the emailed/attached PDF of the tenant's own POS layout) | the Document the content homes built | **ONE home** `receipt_formats/render_pdf.py` — the THIRD output of the one Document walk, beside `render_html` and `render_words`. It replaced a PDF rebuilt from `render_words`, which is a round-trip PROOF fixture (words at the ORIGINAL POS's paper offsets, for its parser) and therefore carried **0 drawn lines** and broke phrases mid-word. `render_words` is UNCHANGED and keeps its own job. Lives in the render package because `receipt_pdf_render` may decide no content (§P11) and now only delegates, refusing by name when no renderer is injected. Proof §C/§D/§G — §POS-13 |
 | **"How is a payment method written for a customer?"** (both receipt layouts) | `pos.sale_payments.payment_method`, a machine value | **ONE home** `sale_receipt.method_label`. The slip printed `Paid (credit_card)` and the POS layout `.title()`'d it to **Credit_Card** on a customer's receipt — two dressings of one fact, both wrong. No method vocabulary is declared (RULE TWO): whatever the tenant stores is made readable, never translated against a list. Proof §F — §POS-13 |
+| **"What may a till be paid with?"** (the register's buttons, the checkout's gate, the database's CHECK list; owner 2026-10-30) | it was written FOUR times — two literal button arrays in `pos/sales/page.tsx`, the condition that chose between them, and `CHECK (payment_method IN …)` on `pos.sale_payments` (mig 725) | **ONE home** `pos/tender_vocabulary.py` — `REGISTER_TENDERS` (what each tender IS), `offered(cfg)` (what THIS org offers, over `pos.pos_settings`), `terms_day_options(cfg)`. The class each tender reconciles as is the house ladder's answer (`closing.router.tender_class` over its `recon_words`), never a mapping here — so a terms sale files under the existing `store_acct` and no class was invented. The browser reads it through `GET /pos/tender-types` and `lib/pos-tenders.ts`; mig `1106`'s CHECK list is pinned equal to the keys. Proof `harness_pos_tender_vocabulary.py` §A/§B/§C/§E; lock `harness_tender_vocab_lock.py` §(g) — §POS-14 |
+| **"Has this sale been paid, and what does it owe?"** (the checkout's balance, the till slip, the tenant's own POS layout) | nothing — every tender settled at the till, so `Paid (…)` was the only money line and `balance` was always written 0 | **ONE home** `tender_vocabulary.plan_payment` + its `settles_now`, dereferenced by `pos/router.checkout` (which re-derives `pos.sales.balance` as the sum of the legs that did NOT settle — the body's figure is discarded, because mig 725's `pos.checkout` stores what it is handed) and by `sale_receipt._unpaid`, which both receipt layouts ask instead of testing for a tender word. A terms row without its day count or due date is refused by the database as well (mig `1106` shape constraint). Proof §D/§G — §POS-14 |
 | **"What is this POS setting's effective value at this store"** (server side; owner 2026-10-17) | `pos.pos_settings` (org row `store_code IS NULL`, else the store override) | **ONE home** `backend/app/modules/pos/pos_config_effective.py` (`effective`, `values`, `flag`, `text`, `brand`, `disclaimers`, `SERVER_DEFAULTS`). The resolution rule lived ONLY in the browser (`frontend/src/lib/pos-config.ts`) until the server had to render a receipt; the two copies are PINNED key-by-key by `harness_pos_receipt_render.py` §B, which fails the build naming any default changed on one side only — §POS-02 |
 | **"What is this tenant called"** (the From name on its mail, a statement heading, a document title; owner 2026-10-17) | `storeops.tenants.name` | **ONE home** `backend/app/modules/core/tenant_identity.py` (`NAME_COLUMN`, `display_name_from`, `display_name`, `display_names`) — a blank name reads as blank, never a fabricated stand-in printed as the business's own name. `notify/channels/email_resend.from_header` is the ONE place a `From:` header is assembled, and every business-facing send site passes its `org_id` so the customer sees the tenant; only genuine platform mail (the sign-in OTP) keeps the platform name. Siblings rewired in the same PR: `commcalc/router` ×2, `core/data_qa_api`, `core/operator_api`, `helpdesk/router`, `storeops/payroll_approval` ×2, `storeops/router._tenant_display_name`. Lock `harness_pos_receipt_render.py` §E6 fails the build if a second name-only reader appears — §POS-02 |
 
@@ -26179,6 +26182,7 @@ status word rather than a blank that reads as nil.
 | POS-11 | pos |
 | POS-12 | pos |
 | POS-13 | pos |
+| POS-14 | pos |
 | PAYABLES-01 | payables |
 | CORE-25 | core |
 <!-- SECTION-REGISTER:END -->
@@ -33207,6 +33211,109 @@ stopped being asked a question it was never answering.
 Same class: §POS-02 (the one renderer this extends), §POS-08 (the PDF as a third medium, whose
 "no figure of its own" rule this keeps), §POS-11 (the page it prints on), §POS-04 (the content home
 it draws).
+
+---
+
+
+## §POS-14. A SALE ON TERMS — THE REGISTER'S TENDER VOCABULARY HAS ONE HOME (owner ask 2026-10-30)
+
+Owner, verbatim: *"also add another tender type as Terms . 15/30/60"*.
+
+### POS-14.1 Duplicate check (the build gate)
+
+| question | existing mechanism | what this change did |
+|---|---|---|
+| which canonical tender classes exist, and what does each fold to on the closing axis | `closing.router.TENDER_VOCAB` / `tender_class`, locked by `harness_tender_vocab_lock.py` (§30.13) | **REUSED WHOLE.** The register's vocabulary spells no class: each tender carries the WORDS a feed would print for it and the house ladder answers. A terms sale therefore reconciles as the existing `store_acct` class — no new class, no new fold |
+| what are a carrier's / distributor's net payment terms | `commcalc.payable_source_map.net_terms_days` + `payables/engine._terms_days` (§COMMCALC-34) | **NOT TOUCHED — a different question.** That is what WE owe a supplier. This is what a CUSTOMER owes us. The two share a word and nothing else; merging them would make one screen's edit move the other's money |
+| how a payment method is written for a customer | `sale_receipt.method_label` (§POS-13) | **REUSED WHOLE** — `Terms` reads correctly through it, so no label was added |
+| which POS setting applies at this store | `pos_config_effective.effective` (§POS-02) | **REUSED WHOLE** — the two new settings are ordinary keys, resolved store-override → org → declared |
+| what a sale line comes to, and what the sale totals | `sale_amendment.line_money` / `totals` (§POS-12), `pos.checkout` (mig 725) | **NOT TOUCHED.** No figure on any line changes; the only new arithmetic is the BALANCE, which is the sum of the legs that did not settle |
+
+### POS-14.2 THE CLASS, not the instance
+
+Not "there is no Terms button". **The register's tender list had no home**, so the same fact was
+written in four places and nothing checked that they agreed:
+
+- a literal array of buttons in `frontend/src/app/(platform)/pos/sales/page.tsx`, in two copies —
+  one for a tenant with integrated card processing and one for a tenant without;
+- the rule for swapping those two copies, a condition beside them in the same screen;
+- `CHECK (payment_method IN (...))` on `pos.sale_payments` (mig 725);
+- and, downstream, the house tender vocabulary the closing recon classes a FEED's label through.
+
+So adding one tender type meant a screen, a condition and a constraint, in three languages, with the
+build silently green if any of them was missed. The register's buttons and the database's constraint
+are both answers to *"what may a till be paid with"* — one question, so one home.
+
+### POS-14.3 One home, dereferenced
+
+`backend/app/modules/pos/tender_vocabulary.py` is the ONE home for four facts:
+
+| fact | where it lives now | who dereferences it |
+|---|---|---|
+| which tenders the platform knows, and for each: does it settle at the till, does it ask for an amount tendered, is it an integrated-card button | `REGISTER_TENDERS` / `all_tenders()` | `GET /pos/tender-types`, the checkout, both receipt layouts, and mig 1106's CHECK list (pinned equal, §E1) |
+| which class a tender reconciles as | `recon_words` handed to `closing.router.tender_class` — **asked, never mapped** | the closing recon, unchanged |
+| which of them THIS org offers, and on what day counts | `offered(cfg)` / `terms_day_options(cfg)` over `pos.pos_settings` (`tender_terms_enabled`, `tender_terms_day_options`) | the endpoint the register reads; the checkout asks again |
+| what a Terms sale needs before it may be rung, and what it owes | `plan_payment` — one set of refusals, each a sentence written once | the checkout (the gate) and `lib/pos-tenders.ts` (the courtesy) |
+
+The browser carries no tender word at all: `frontend/src/lib/pos-tenders.ts` reads the served list,
+keeps a selection valid when it changes, and holds the Terms blockers the cashier sees before the
+endpoint is called. Its pre-answer fallback is **cash alone** — a guessed list would be a fourth copy.
+
+### POS-14.4 A terms sale is money OWED, not money taken
+
+`settles_now` is False for exactly one tender, and everything else follows from it rather than from a
+test for the word "terms":
+
+- `pos.sales.balance` is the sum of the legs that did not settle — **the server's arithmetic**. A till
+  that sends `balance: 0` on an unpaid invoice is overruled, not obeyed (mig 725's function stores
+  what it is handed, so this had to be re-derived server-side).
+- the due date is the SALE's date + the declared day count, never today's — so a late entry or an
+  edit cannot move a date the customer was told.
+- **no receipt calls it paid.** `slip_model` and the tenant's own POS layout both printed one money
+  line (`Paid (Credit Card)`); on a sale on account that would read **Paid (Terms) $108.88** on an
+  invoice nobody has paid. Both now ask `settles_now` through `sale_receipt._unpaid` and print
+  `Balance due <date>` instead. That is the §POS-13 lesson (two layouts, one fact) applied before it
+  could become a second defect.
+- a terms leg without its day count, or an immediate tender carrying one, is refused by a database
+  constraint as well as by the one home — the row cannot exist in a shape no reader can explain.
+
+### POS-14.5 Every tenant, measured
+
+The Terms tender is **on for every org by default** with the owner's three day counts, because the
+vocabulary is the PLATFORM's and only what an org OFFERS is declared (RULE TWO: `tender_terms_enabled`
+and `tender_terms_day_options` are rows, and no tenant is named in any file this change touches). The
+cross-tenant tests seed three orgs — one that declared nothing, one with its own day counts (7 / 45)
+and one that switched the tender off — and assert each gets ITS answer and never another's; the
+negative assertion (one tenant's declaration must not reach another's register) is what pins the
+mechanism rather than the symptom.
+
+### POS-14.6 What is NOT in this change
+
+- **No report.** An "open balances / due this week" report needs the standard filter and send bar
+  every report here carries, and that toolbar default is itself in flight (PR #606). The data is
+  complete the moment this lands — `pos.sale_payments.due_date` with its partial index — so the
+  report is a follow-up, named here so nobody re-derives the balance beside it.
+- **No payment-taking.** Recording a customer's later payment against an open balance is the next
+  piece of work, and it belongs with whichever home owns a customer's account, not here.
+
+### POS-14.7 Registered
+
+| thing | where |
+|---|---|
+| one home | `backend/app/modules/pos/tender_vocabulary.py` |
+| browser reader | `frontend/src/lib/pos-tenders.ts` |
+| endpoint | `GET /pos/tender-types` (`pos/router.tender_types`, `_tender_cfg`) |
+| migration | `1106_pos_terms_tender.sql` — `terms_days` / `due_date` / the widened CHECK / the shape constraint / `pos.checkout` replaced |
+| settings | `tender_terms_enabled`, `tender_terms_day_options` (`pos.pos_settings`, per org or per store) |
+| proof | `backend/harness_pos_tender_vocabulary.py` (§A–§H + negative controls) |
+| lock | `harness_tender_vocab_lock.py` §(g) — the register's list is in its scan now, and a class mapped there instead of asked fails the build |
+| tests | `backend/tests/unit/test_pos_tender_vocabulary.py`, `test_pos_terms_receipt.py`, `backend/tests/integration/test_pos_terms_tender_endpoint.py`, `frontend/src/lib/pos-tenders.test.ts` |
+
+| MONEY IMPACT | **NONE on anything stored.** No existing row is backfilled or restated: every payment keeps a NULL day count and NULL due date, which reads correctly as "not a terms sale". What is new is that a sale may now record a BALANCE at the till, which no sale could before |
+
+Same class: §POS-13 (two layouts, one fact — applied here before it bit), §30.13 (the house tender
+vocabulary this dereferences), §POS-02 (the setting-resolution home), §COMMCALC-34 (the supplier-side
+net terms this deliberately does not merge with).
 
 ---
 

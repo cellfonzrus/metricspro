@@ -1769,6 +1769,28 @@ def get_sale(sale_id: str, org_id: str = ORG_ID):
     return {"sale": sale}
 
 
+# ── The tenders a register may take (owner 2026-10-30, index §POS-14) ─────────────────────────────
+# `pos/tender_vocabulary.py` is THE home for "which tenders exist, which this org offers, and what a
+# Terms sale needs". This endpoint and the checkout below both DEREFERENCE it; neither spells a
+# tender word, a day count or a refusal of its own. The register reads this instead of carrying its
+# own array of buttons, which is what made adding one tender type a three-file edit before.
+def _tender_cfg(client, org_id: str, store_code: str = "") -> dict:
+    """The register settings the tender vocabulary asks about, resolved through the ONE config home
+    (store override → org default → declared default). The KEYS are named by the vocabulary, so a
+    new setting is added in one place."""
+    rows = _pos_settings_rows(client, org_id, store_code)
+    return {k: _poscfg.effective(rows, k, store_code)
+            for k in (_tender.SUSPEND_CARDS_KEY, _tender.TERMS_ENABLED_KEY, _tender.TERMS_DAYS_KEY)}
+
+
+@router.get("/tender-types")
+def tender_types(store_code: str = "", org_id: str = ORG_ID):
+    """Which tenders THIS register offers, each with the facts the screen needs to draw it."""
+    cfg = _tender_cfg(sb(), org_id, store_code)
+    return {"tenders": _tender.offered(cfg),
+            "terms_day_options": list(_tender.terms_day_options(cfg))}
+
+
 @router.post("/sales/checkout")
 def checkout(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Atomic checkout via pos.checkout: sale + items + payments in ONE transaction (the
@@ -1785,6 +1807,31 @@ def checkout(body: dict, authorization: str = Header(default=""), org_id: str = 
         raise HTTPException(403, "your login isn't linked to an employee record — "
                                  "ask an admin to set your Employee ID in Roles & Access")
     sale["employee_id"] = eid   # never trust a body-supplied rep on the money path
+    # THE TENDER DECISION (§POS-14), asked before a single row is written. `pos.checkout` stores
+    # what it is handed, so a till sending a tender this org does not offer, a Terms sale with
+    # nobody to owe it, or a day count nobody declared would otherwise be obeyed. The refusal is
+    # the one home's own sentence — this route does not word one.
+    # EVERY payment leg is asked about, not just the first: a sale split across a card and an
+    # account is the case where validating one leg and trusting the other writes the wrong balance.
+    tcfg = _tender_cfg(sb(), org_id, sale.get("store_code") or "")
+    checked, owed = [], 0.0
+    for raw in (payments or []):
+        pay = dict(raw) if isinstance(raw, dict) else {}
+        plan = _tender.plan_payment(
+            pay.get("payment_method"), tcfg, customer_id=sale.get("customer_id"),
+            terms_days=pay.get("terms_days"),
+            sale_date=sale.get("date") or sale.get("created_at"),
+            total=pay.get("amount") if len(payments) > 1 else sale.get("total"))
+        if plan["refusal"]:
+            raise HTTPException(400, plan["refusal"])
+        pay["terms_days"] = plan["terms_days"]
+        pay["due_date"] = plan["due_date"].isoformat() if plan["due_date"] else None
+        owed += plan["balance"]
+        checked.append(pay)
+    payments = checked
+    # The figure is OURS, not the body's: what is owed is the sum of the legs that did not settle,
+    # whatever balance the screen sent.
+    sale["balance"] = round(owed, 2)
     # The register may now edit unit_price (owner directive 2026-08-11). Keep what the product was
     # LISTED at so an override is visible afterwards as list_price <> unit_price — a line that
     # records only what was charged makes a discounted sale indistinguishable from a cheap product.
@@ -2297,6 +2344,7 @@ def update_receipt_template(template_id: str, body: dict,
 # tenant printing "in its POS's layout" prints the layout its own uploads are reprinted in.
 from app.modules.pos import sale_receipt as _sr
 from app.modules.pos import pos_config_effective as _poscfg
+from app.modules.pos import tender_vocabulary as _tender
 from app.modules.pos import receipt_escpos as _escpos
 from app.modules.pos import receipt_remit as _remit
 from app.modules.pos import customer_bill_to as _bill_to

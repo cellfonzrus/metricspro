@@ -55,6 +55,9 @@ HOME = "modules/closing/router.py"
 PURE = "modules/commcalc/invoice_tenders.py"
 CC_ROUTER = "modules/commcalc/router.py"
 SFR = "modules/pos/sales_from_reports.py"
+#: §POS-14 — THE register's own tender list (what a TILL may be paid with). In scope since
+#: 2026-10-30: it is the fourth place a tender was once spelled, and the lock now covers it.
+REG = "modules/pos/tender_vocabulary.py"
 
 # LABEL words — what a header / label LADDER spells (brand names, label phrases). The axis KEYS (cash /
 # credit / ext_cc / gift …) are column keys the closing module uses everywhere and are NOT a ladder.
@@ -82,6 +85,7 @@ ALLOW = {
     ("modules/commcalc/router.py", "_XR_TENDERS"): "PRE-EXISTING: the X-report ingest's accepted-label list (mig 062), widened by _xr_canon_known → the home's ladder (§23h)",
     ("modules/commcalc/router.py", "_XR_CARD_WORDS"): "PRE-EXISTING: _xr_tender_class stamps pos_tender_summary.tender_class cash / card / other — the recon GATE per raw label (§23h), not a class vocabulary",
     ("modules/commcalc/merchant_portals.py", "_BRAND_SYNONYMS"): "PRE-EXISTING: the card-processor settlement normaliser's card BRAND synonyms (mig 955 — which brand a settlement row is, per merchant-day), not a tender class; §12a",
+    (REG, "REGISTER_TENDERS"): "§POS-14: THE register's tender list — what a TILL may be paid with, which is a different question from what a FEED's label means. It spells no class: each entry carries the WORDS a feed would print and the home's ladder answers the class (checked below), so there is no second mapping",
     ("modules/closing/tender_config.py", "STANDARD_DEFS"): "PRE-EXISTING: the seedable closing_tender_def rows for a 'standard' tenant (mig 111) — a seed of the axis, read back through tender_axis; folding it into TENDER_VOCAB is a closing-agent change (a seam, index §30.13)",
 }
 assert all(v for v in ALLOW.values()), "every allow entry carries a reason"
@@ -244,7 +248,8 @@ def scan(files, allow):
         if tok not in core:
             findings.append((HOME, f"_tender_split_by_store no longer dereferences {tok}"))
     for rel, src in files.items():
-        if not (rel.startswith("modules/commcalc/") or rel.startswith("modules/closing/")):
+        if not (rel.startswith("modules/commcalc/") or rel.startswith("modules/closing/")
+                or rel.startswith("modules/pos/")):
             continue
         body = code(src)
         for m in re.finditer(r"^\s*(?:async\s+)?def (\w+)\s*\(", body, re.M):
@@ -289,6 +294,21 @@ def scan(files, allow):
     for rel, src in files.items():
         if rel != HOME and "fold_to_axis" in src and "fold_to_axis" in code(src):
             findings.append((rel, "names fold_to_axis outside the home — ask is_customer_payment (the one answer), not the axis"))
+    # (g) §POS-14 — the REGISTER's vocabulary asks the home for every class instead of mapping one.
+    #     A `recon_class` literal here would be the second mapping this lock exists to prevent, and a
+    #     register that stopped asking would drift the moment the ladder changed.
+    reg = code(files.get(REG, ""))
+    if reg:
+        if "tender_class(" not in reg:
+            findings.append((REG, "the register's vocabulary no longer asks the home's ladder "
+                                  "(tender_class) — a class mapped here is a second copy"))
+        for key_literal in ("store_acct", "ext_cc", "vendor_rebate"):
+            if f'"{key_literal}"' in reg or f"'{key_literal}'" in reg:
+                findings.append((REG, f"spells the class key '{key_literal}' — carry the feed's WORDS "
+                                      f"and let the home's ladder answer the class"))
+    elif REG in files:
+        findings.append((REG, "the register's tender vocabulary is empty"))
+
     # (c) the siblings are named
     seen = set()
     for rel, src in files.items():
@@ -317,6 +337,8 @@ def main():
           not any(r == PURE for r, _m in findings) and not any("_intake_tender" in m for _r, m in findings), findings)
     check("(c) every other tender word list in commcalc / closing is a NAMED pre-existing sibling with its reason; no stale entry",
           not any("word list" in m or "STALE" in m for _r, m in findings), findings)
+    check("(g) §POS-14 the register's tender list asks the home's ladder for every class and spells none itself",
+          not any(r == REG for r, _m in findings), findings)
     check("(d) the Stage-4 tender split rides the resolver's two legs; the map writer touches only report='invoice'",
           not any("_intake_invoice_tender_recon" in m or "_intake_write_tender_map" in m for _r, m in findings), findings)
     check("(e) the tender basis has ONE resolver: the readers of both tender tables are the resolver's legs (or named non-split reads), every closing consumer reads through it, only the home touches the config column and only put_tender_basis writes it",
