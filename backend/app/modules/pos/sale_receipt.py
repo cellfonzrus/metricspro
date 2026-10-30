@@ -204,6 +204,10 @@ def snapshot_view(snapshot, sale=None) -> dict:
         "method": str(snap.get("method") or "").strip(),
         "tendered": None if snap.get("tendered") in (None, "") else _f(snap.get("tendered")),
         "change": _f(snap.get("change")),
+        # §POS-14: a tender that does not settle at the till. Carried so the money line can say
+        # what is OWED instead of claiming payment; blank on every sale that was paid.
+        "terms_days": None if snap.get("termsDays") in (None, "") else int(snap.get("termsDays")),
+        "due_date": str(snap.get("dueDate") or "").strip()[:10],
         "status": str(sale.get("status") or "completed"),
     }
 
@@ -366,6 +370,14 @@ def method_label(method) -> str:
     return " ".join(w for w in str(method or "").replace("_", " ").split()).title()
 
 
+def _unpaid(snap) -> bool:
+    """Did this sale's tender settle at the till? The vocabulary answers (§POS-14); a tender it does
+    not know reads as settled, which is what every receipt printed before this existed."""
+    from app.modules.pos import tender_vocabulary as _tv
+    t = _tv.tender(snap.get("method"))
+    return bool(t) and not t["settles_now"]
+
+
 def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name="",
                fold_discount=False, tenant_name="", employee_name="", remit_block="",
                customer_lines=None, store_row=None) -> dict:
@@ -437,11 +449,18 @@ def slip_model(snap, template_v, brand=None, disclaimer_blocks=None, store_name=
         totals.append({"label": "Tax", "value": snap["tax_total"]})
     totals.append({"label": "TOTAL", "value": snap["total"], "grand": True})
 
-    tendered = snap["tendered"] if snap["tendered"] is not None else snap["total"]
-    paid = [{"label": f'Paid ({method_label(snap["method"])})' if snap["method"] else "Paid",
-             "value": tendered}]
-    if snap["change"] > 0:
-        paid.append({"label": "Change", "value": snap["change"]})
+    # WAS THIS SALE PAID? Asked of the tender vocabulary (§POS-14), never of a tender word here —
+    # `settles_now` is declared once and this renderer dereferences it. A sale on account would
+    # otherwise print "Paid (Terms)" with the full amount on an invoice nobody has paid.
+    if _unpaid(snap):
+        due = snap["due_date"]
+        paid = [{"label": f"Balance due {due}" if due else "Balance due", "value": snap["total"]}]
+    else:
+        tendered = snap["tendered"] if snap["tendered"] is not None else snap["total"]
+        paid = [{"label": f'Paid ({method_label(snap["method"])})' if snap["method"] else "Paid",
+                 "value": tendered}]
+        if snap["change"] > 0:
+            paid.append({"label": "Change", "value": snap["change"]})
 
     return {
         "paper_width_mm": t["paper_width_mm"],
@@ -632,8 +651,15 @@ def document(snap, fmt, template_v, brand=None, store_row=None, tenant_name="",
             doc["totals"].append({"key": key, "label": spec.get("label") or key,
                                   "amount": wanted[key], "editable": bool(spec.get("editable"))})
     if snap["method"]:
-        doc["payments"] = [{"label": method_label(snap["method"]),
-                            "amount": snap["tendered"] if snap["tendered"] is not None else snap["total"]}]
+        # The same question as the slip's money line, asked of the same home (§POS-14): a tender
+        # that did not settle at the till is a BALANCE, and this layout must not label it a payment.
+        if _unpaid(snap):
+            due = snap["due_date"]
+            doc["payments"] = [{"label": f"Balance due {due}" if due else "Balance due",
+                                "amount": snap["total"]}]
+        else:
+            doc["payments"] = [{"label": method_label(snap["method"]),
+                                "amount": snap["tendered"] if snap["tendered"] is not None else snap["total"]}]
     doc["footer_text"] = _footer_with_blocks((template_v or {}).get("footer_text") or "",
                                              disclaimer_blocks)
     # §POS-06 — a receipt printed in the tenant's own POS layout carries the pay-by-bank paragraph

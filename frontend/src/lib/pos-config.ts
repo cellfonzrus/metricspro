@@ -197,6 +197,18 @@ export const POS_SETTING_SECTIONS: PosSettingSection[] = [
         type: 'boolean', default: false,
       },
       {
+        key: 'tender_terms_enabled',
+        label: 'Offer the Terms tender (sell on account)',
+        hint: 'Adds a Terms button at the register. A sale on terms collects nothing now: it is recorded against the customer with a due date.',
+        type: 'boolean', default: true,
+      },
+      {
+        key: 'tender_terms_day_options',
+        label: 'Payment terms offered (days)',
+        hint: 'The day counts a Terms sale may be written for, comma-separated. Blank falls back to 15, 30 and 60.',
+        type: 'text', default: '15,30,60',
+      },
+      {
         key: 'require_billing_info',
         label: 'Card holder billing info is required',
         hint: 'Address and postal code must be entered on card payments.',

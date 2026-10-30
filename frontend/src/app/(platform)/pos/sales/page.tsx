@@ -19,6 +19,7 @@ import RegisterDrawer, { RegisterSession } from '@/components/pos/RegisterDrawer
 import RegisterLock from '@/components/pos/RegisterLock'
 import { getActiveStore, setActiveStore } from '@/lib/pos-store'
 import { PosConfigValues, loadEffectivePosConfig, resolvePosConfig, getRegisterNumber } from '@/lib/pos-config'
+import { Tender, TENDER_FALLBACK, loadTenders, tenderFor, keepSelectionValid, termsBlockers, dueDateFor } from '@/lib/pos-tenders'
 import { LinkedText } from '@/components/ScreenLink'
 import ProductFilters, {
   EMPTY_FILTER_OPTIONS, EMPTY_PRODUCT_FILTERS, ProductFilterOptions, ProductFilterValue,
@@ -137,6 +138,9 @@ interface ReceiptSnapshot {
   method: string
   tendered: number | null
   change: number
+  // §POS-14 — present only on a sale that was not paid at the till.
+  termsDays?: number | null
+  dueDate?: string | null
 }
 
 interface Sale {
@@ -230,7 +234,11 @@ export default function PosSalesPage() {
   const [registerNote, setRegisterNote] = useState('')
   const [showPayment, setShowPayment] = useState(false)
   const [showReceipt, setShowReceipt] = useState(false)
-  const [paymentMethod, setPaymentMethod] = useState('cash')
+  const [chosenMethod, setPaymentMethod] = useState('cash')
+  // §POS-14 — the tenders this register offers come from the server's one home, never from a list
+  // carried here. `termsDays` is the agreed payment term on a sale that is paid later.
+  const [tenders, setTenders] = useState<Tender[]>(TENDER_FALLBACK)
+  const [termsDays, setTermsDays] = useState<number | null>(null)
   const [amountTendered, setAmountTendered] = useState('')
   const [lastTransactionId, setLastTransactionId] = useState<number | null>(null)
   const [lastReceipt, setLastReceipt] = useState<ReceiptSnapshot | null>(null)
@@ -328,16 +336,28 @@ export default function PosSalesPage() {
     return () => { cancelled = true }
   }, [activeStore])
 
-  // When integrated card processing is suspended, credit/debit collapse into a
-  // single external-terminal option — keep the selected method valid either way.
+  // §POS-14 — WHICH TENDERS THIS REGISTER OFFERS. Asked of the server, which answers from the one
+  // home: the integrated credit/debit pair collapsing into the external-terminal button when a
+  // tenant suspends card processing is that home's rule now, not a condition written here. A
+  // selection that is no longer offered moves to the first one that is.
   useEffect(() => {
-    if (cfg.suspend_card_processing && (paymentMethod === 'credit_card' || paymentMethod === 'debit_card')) {
-      setPaymentMethod('card_external')
-    } else if (!cfg.suspend_card_processing && paymentMethod === 'card_external') {
-      setPaymentMethod('cash')
-    }
+    let live = true
+    loadTenders(api, activeStore || '')
+      .then(list => { if (live) setTenders(list) })
+      .catch(() => { if (live) setTenders(TENDER_FALLBACK) })
+    return () => { live = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfg.suspend_card_processing])
+  }, [activeStore, cfg.suspend_card_processing])
+
+  // A selection the register no longer offers (a store switch, a manager suspending card
+  // processing mid-shift) resolves to the first one it does — DERIVED, not written back into
+  // state, so the screen cannot briefly hold a tender this org does not have.
+  const paymentMethod = keepSelectionValid(chosenMethod, tenders)
+
+  // The chosen tender, and the term a sale on account is written for.
+  const selectedTender = tenderFor(paymentMethod, tenders)
+  const onTerms = !!selectedTender && !selectedTender.settles_now
+  const termsDueDate = onTerms && termsDays ? dueDateFor(new Date(), termsDays) : null
 
   // ── THE SUSPENDED SALE (owner 2026-10-16, index §POS-01) ──────────────────────────────────────
   // RESTORE. The cart belongs to the TERMINAL — (store, register) — so the next session on this
@@ -872,6 +892,12 @@ export default function PosSalesPage() {
     if (atPayment && cfg.enforce_drawer_sessions && paymentMethod === 'cash' && !drawerSession) {
       issues.push('Cash sales require an open register — open the drawer first (top of the register).')
     }
+    // §POS-14 — a sale on account needs somebody to owe it and a declared term. The sentences come
+    // from the one reader; the endpoint asks the server's one home again and refuses anyway.
+    if (atPayment) {
+      issues.push(...termsBlockers(selectedTender,
+        { customerId: selectedCustomer?.id || null, termsDays }))
+    }
     return issues
   }
 
@@ -952,6 +978,10 @@ export default function PosSalesPage() {
       method: paymentMethod,
       tendered: paymentMethod === 'cash' ? cashTendered : null,
       change: paymentMethod === 'cash' ? cashChange : 0,
+      // §POS-14 — a sale that was not paid: the renderer prints a balance and its due date rather
+      // than claiming payment, and dereferences `settles_now` to decide which.
+      termsDays: onTerms ? termsDays : null,
+      dueDate: onTerms ? termsDueDate : null,
     }
 
     // ONE atomic call: sale + items + payments commit or roll back together. A stock block
@@ -969,7 +999,7 @@ export default function PosSalesPage() {
             discount_total: parseFloat(discountTotal.toFixed(2)),
             tax_total: parseFloat(taxTotal.toFixed(2)),
             total: saleTotal,
-            balance: 0,
+            balance: onTerms ? saleTotal : 0,
             is_activation_sale: isActivationSale,
             receipt: receiptSnapshot,
           },
@@ -988,7 +1018,8 @@ export default function PosSalesPage() {
             tax_value: parseFloat((item.tax_value * item.qty).toFixed(2)),
             extended_price: item.extended_price,
           })),
-          payments: [{ payment_method: paymentMethod, amount: saleTotal }],
+          payments: [{ payment_method: paymentMethod, amount: saleTotal,
+                       terms_days: onTerms ? termsDays : null }],
         }),
       })
       sale = r.sale as Sale
@@ -1026,6 +1057,7 @@ export default function PosSalesPage() {
     setShowReceipt(true)
     loadReceiptView(sale.id)
     setAmountTendered('')
+    setTermsDays(null)
     setIsActivationSale(false)
     setSaving(false)
   }
@@ -1417,19 +1449,7 @@ export default function PosSalesPage() {
             <div style={{ padding: 16, borderTop: '1px solid var(--border)' }}>
               <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>Payment Method:</div>
               <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
-                {(cfg.suspend_card_processing
-                  ? [
-                      { value: 'cash', label: '💵 Cash' },
-                      { value: 'card_external', label: '💳 Card (external terminal)' },
-                      { value: 'check', label: '📝 Check' },
-                    ]
-                  : [
-                      { value: 'cash', label: '💵 Cash' },
-                      { value: 'credit_card', label: '💳 Credit' },
-                      { value: 'debit_card', label: '🏧 Debit' },
-                      { value: 'check', label: '📝 Check' },
-                    ]
-                ).map(m => (
+                {tenders.map(t => ({ value: t.key, label: `${t.icon || ''} ${t.label}`.trim() })).map(m => (
                   <button key={m.value} onClick={() => setPaymentMethod(m.value)}
                     style={{ background: paymentMethod === m.value ? 'var(--accent)' : 'var(--surface)', border: `1px solid ${paymentMethod === m.value ? 'var(--accent2)' : 'var(--border)'}`, color: paymentMethod === m.value ? 'white' : 'var(--text)', borderRadius: 6, padding: '6px 10px', fontSize: 11, cursor: 'pointer', fontWeight: paymentMethod === m.value ? 700 : 400 }}>
                     {m.label}
@@ -1438,6 +1458,32 @@ export default function PosSalesPage() {
               </div>
               {cfg.suspend_card_processing === true && (
                 <div style={{ fontSize: 11, color: 'var(--amber)', marginBottom: 10 }}>⚠ Integrated card processing is suspended</div>
+              )}
+
+              {/* §POS-14 — the payment term, offered only for the tender that is paid later. The
+                  day counts are the org's own declaration, served with the tender. */}
+              {onTerms && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 4 }}>Payment term:</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {(selectedTender?.day_options || []).map(d => (
+                      <button key={d} onClick={() => setTermsDays(d)}
+                        style={{ background: termsDays === d ? 'var(--accent)' : 'var(--surface)', border: `1px solid ${termsDays === d ? 'var(--accent2)' : 'var(--border)'}`, color: termsDays === d ? 'white' : 'var(--text)', borderRadius: 6, padding: '6px 10px', fontSize: 11, cursor: 'pointer', fontWeight: termsDays === d ? 700 : 400 }}>
+                        Net {d}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 11, color: termsDueDate ? 'var(--text2)' : 'var(--amber)', marginTop: 6 }}>
+                    {termsDueDate
+                      ? `Nothing is collected now — $${total.toFixed(2)} falls due ${termsDueDate}.`
+                      : 'Choose a payment term before completing the sale.'}
+                  </div>
+                  {!selectedCustomer && (
+                    <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4 }}>
+                      A sale on terms has to be in a customer’s name — attach a customer above.
+                    </div>
+                  )}
+                </div>
               )}
 
               {paymentMethod === 'cash' && (

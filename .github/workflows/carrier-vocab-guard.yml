@@ -848,6 +848,10 @@ on:
       - "backend/app/modules/pos/receipt_formats/render_pdf.py"
       - "backend/app/modules/pos/receipt_formats/render.py"
       - "backend/harness_pos_receipt_document.py"
+      - "backend/app/modules/pos/tender_vocabulary.py"
+      - "backend/harness_pos_tender_vocabulary.py"
+      - "database/migrations/1106_pos_terms_tender.sql"
+      - "frontend/src/lib/pos-tenders.ts"
       - "frontend/src/lib/pos-receipt.ts"
       - "frontend/src/lib/pos-config.ts"
       - "frontend/src/components/pos/ReceiptTemplateSection.tsx"
@@ -2581,6 +2585,9 @@ jobs:
       - name: Run the receipt-document proof (one description of the borders, drawn by both media; the rules measured off the rendered PDF; phrases whole; the round-trip fixture left to its own job — index §POS-13)
         working-directory: backend
         run: python3 harness_pos_receipt_document.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the register tender-vocabulary proof (ONE home for what a till may be paid with; the recon class asked of the house ladder, never mapped; what an org offers is its own declaration; a sale on terms owes its whole total on a declared date and no receipt calls it paid — index §POS-14)
+        working-directory: backend
+        run: python3 harness_pos_tender_vocabulary.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   store-identity-proof:
     name: Store identity — one store, one canonical key (DB-free, the real resolver)
