@@ -1,4 +1,4 @@
-"""BUILD GATE — a report cannot ship without the STANDARD FILTERS and the SEND BAR (§CORE-26).
+"""BUILD GATE — a report cannot ship without the STANDARD FILTERS and the SEND BAR (§CORE-27).
 
 OWNER ASK 2026-10-30, verbatim: *"Zero Sales does not have send notification bar, please note this
 also in teh indsex all reports must have the satandard filters and the send bar by default"*.
@@ -189,7 +189,7 @@ check("D8 the five state words have ONE home and the page dereferences it — no
 print("\n== E. registration ==")
 IDX = open(f"{ROOT}/docs/SYSTEM_DATA_FLOW_INDEX.md", encoding="utf-8").read()
 check("E1 the gate is registered in the index", "harness_report_toolbar_coverage.py" in IDX)
-check("E2 and so is the rule it enforces", "CORE-26" in IDX)
+check("E2 and so is the rule it enforces", "CORE-27" in IDX)
 check("E3 and the converter", "zero-sales-export" in IDX)
 
 print(f"\n{len(PASS)}/{len(PASS) + len(FAIL)} checks passed")

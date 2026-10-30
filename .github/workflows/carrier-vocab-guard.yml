@@ -213,7 +213,7 @@ on:
       - "backend/harness_report_drilldown.py"
       - "backend/harness_drilldown_coverage.py"
       - "backend/harness_drilldown_pending.txt"
-      # index §CORE-26 — the toolbar gate: every report carries the standard filters and the
+      # index §CORE-27 — the toolbar gate: every report carries the standard filters and the
       # send bar. Named here as well as covered by the wildcards, per the §13e lesson.
       - "backend/harness_report_toolbar_coverage.py"
       - "frontend/src/lib/zero-sales-export.ts"
@@ -630,6 +630,17 @@ on:
       # index §56 — one home for a chart's plain-language caption; every Trends chart card wired
       - "backend/harness_trends_chart_notes.py"
       - "frontend/src/components/ChartNote.tsx"
+      # index §CORE-27 — the COMPANY-PICKER label lock (owner report 2026-10-30). Sibling of the
+      # scope display-name lock below: same rule, different registry.
+      - "backend/harness_company_label_lock.py"
+      - "backend/app/modules/core/tenant_identity.py"
+      - "backend/app/modules/core/router.py"
+      - "backend/app/modules/helpdesk/router.py"
+      - "mobile/src/lib/company-label.ts"
+      - "mobile/src/api/core.ts"
+      - "mobile/app/choose-company.tsx"
+      - "mobile/app/(app)/(tabs)/settings.tsx"
+      - "frontend/src/app/login/page.tsx"
       # index §13b.1 — the scope DISPLAY-NAME lock + proofs (owner report 2026-10-03)
       - "backend/harness_scope_label.py"
       - "backend/harness_scope_label_lock.py"
@@ -1034,6 +1045,11 @@ on:
       # this job exists to catch. The router is named because it is where the label is passed.
       # index §COMMCALC-47 — WHERE A CLICK ON THE LIVE SCREEN LANDS. The lock names itself and its
       # home, and live_login because that is where the arithmetic must NOT come back.
+      # index §COMMCALC-50 — WHAT A PAGE IS TELLING US INSTEAD OF SHOWING A FORM. The lock names
+      # itself, the one vocabulary, and the two drivers whose hardcoded phrase tuples it replaced:
+      # a second list reappearing in either is exactly what this job exists to catch.
+      - "backend/harness_portal_page_verdict.py"
+      - "backend/app/modules/commcalc/portal_backoff.py"
       - "backend/harness_live_frame.py"
       - "backend/app/modules/commcalc/live_frame.py"
       # index §COMMCALC-48 — THE EDITABLE REPORT DECLARATION. The lock names itself, its home, and the
@@ -1600,6 +1616,9 @@ jobs:
       - name: Run the chart-caption lock (every Trends chart says what a move MEANS; one home, ungated — index §56)
         working-directory: backend
         run: python3 harness_trends_chart_notes.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the company-picker label lock (one home for what a human calls a company; no `… || org_id`; both halves run and compared — index §CORE-27)
+        working-directory: backend
+        run: python3 harness_company_label_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the scope display-name lock (one home for a scope's name; no `scope_label || scope_key`; every finance surface wired — index §13b.1)
         working-directory: backend
         run: python3 harness_scope_label_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -1829,7 +1848,7 @@ jobs:
       - name: Run the drill-down COVERAGE gate (every report route declared exactly once; a new report is un-mergeable until its author says whether it drills, is flat, is not a report, or owes one; the owes count may only SHRINK — index §CORE-17.5)
         working-directory: backend
         run: python3 harness_drilldown_coverage.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the report TOOLBAR coverage gate (every report carries the standard filters and the send bar by default; the population is read from the drill-down ledger rather than re-declared; both owes counts may only SHRINK — index §CORE-26)
+      - name: Run the report TOOLBAR coverage gate (every report carries the standard filters and the send bar by default; the population is read from the drill-down ledger rather than re-declared; both owes counts may only SHRINK — index §CORE-27)
         working-directory: backend
         run: python3 harness_report_toolbar_coverage.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the cash-recon tile drill lock (every money tile the screen shows is DECLARED and its rows tie back to it; a planted cent, a dropped store-day, a flipped variance sign each break a tie-out; the feed tables are dereferenced from the lineage registry, never named in a report — index §CORE-17.3a)
@@ -1958,6 +1977,9 @@ jobs:
       - name: Run the supplier-invoice lock (ONE column-vocabulary mechanism so neither feed grows its own normalizer; a blank charge is None and never 0.00; the natural key equals the migration's unique index; the distributor-only sibling is named not hidden - index COMMCALC-38)
         working-directory: backend
         run: python3 harness_supplier_invoice_feed.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the page-verdict lock (a page that REFUSES us is not a login form that renders unexpectedly; one configurable vocabulary for refusal / challenge / throttle, three kinds because the remedies differ, and the portal's own words lead the operator message - index COMMCALC-50)
+        working-directory: backend
+        run: python3 harness_portal_page_verdict.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the live-frame lock (a click on the streamed live screen is translated through THAT frame's own size, scale and top offset, never through an assumed window; it reduces exactly to the old formula on a plain desktop frame - index COMMCALC-47)
         working-directory: backend
         run: python3 harness_live_frame.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

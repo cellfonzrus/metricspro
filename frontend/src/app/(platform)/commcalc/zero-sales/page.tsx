@@ -109,7 +109,7 @@ const ZS_DRILL_COLUMNS: DrillExtraColumn[] = [
 
 // The five states, their word and their colour. "not reported" is deliberately the loudest thing on
 // the screen after an alert: it is the state a reader must never mistake for a zero.
-// COLOUR here; the WORD is dereferenced from `lib/zero-sales-export.ZS_STATE_WORD` (§CORE-26) so
+// COLOUR here; the WORD is dereferenced from `lib/zero-sales-export.ZS_STATE_WORD` (§CORE-27) so
 // the square on screen and the cell in the mailed file can never come to call one state two things.
 const TONE: Record<string, { bg: string; fg: string; chip: string }> = {
   had_sales:     { bg: 'var(--c-bg-dcfce7)', fg: 'var(--c-fg-15803d)', chip: '#16a34a' },
@@ -335,7 +335,7 @@ export default function ZeroSalesPage() {
         </div>
       )}
 
-      {/* THE STANDARD FILTERS AND THE SEND BAR, BOTH SHARED (owner 2026-10-30, index §CORE-26).
+      {/* THE STANDARD FILTERS AND THE SEND BAR, BOTH SHARED (owner 2026-10-30, index §CORE-27).
           The filters were already here; the send bar was the gap. `<ReportExportBar>` is the one
           toolbar — Excel · PDF · Print · Send by email/WhatsApp through /notify/send-file — and it
           is given the sheets this report's own converter builds, so what is mailed carries the five

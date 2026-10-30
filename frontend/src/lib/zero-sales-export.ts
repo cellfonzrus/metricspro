@@ -1,4 +1,4 @@
-// THE SENDABLE ZERO SALES REPORT — index §CORE-26.
+// THE SENDABLE ZERO SALES REPORT — index §CORE-27.
 //
 // OWNER ASK (2026-10-30, verbatim): *"Zero Sales does not have send notification bar, please note
 // this also in teh indsex all reports must have the satandard filters and the send bar by default"*.

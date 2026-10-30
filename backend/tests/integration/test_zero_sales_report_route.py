@@ -1,4 +1,4 @@
-"""Integration: GET /commcalc/zero-sales through the REAL app, for EVERY tenant (index §CORE-26).
+"""Integration: GET /commcalc/zero-sales through the REAL app, for EVERY tenant (index §CORE-27).
 
 Real routing, real middleware, the real endpoint body — over the in-memory database double, with
 conftest blocking every outbound socket. There is no staging Supabase, so "integration" here means

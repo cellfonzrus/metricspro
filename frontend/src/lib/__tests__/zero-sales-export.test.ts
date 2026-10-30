@@ -1,5 +1,5 @@
 // UNIT TESTS, WRITTEN BEFORE THE CODE (project standard 2026-10-28) for the Zero Sales report's
-// sendable payload — index §CORE-26.
+// sendable payload — index §CORE-27.
 //
 // The whole risk of this report is the one its own page banner names: a day nothing landed for is
 // NOT a day with zero sales. On screen that day reads "not reported" in words and in colour. A
