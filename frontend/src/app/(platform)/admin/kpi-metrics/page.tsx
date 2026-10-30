@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { SetupNotice } from '@/lib/setupNotice'
+import { responsiveColumns, useNarrowViewport } from '@/lib/viewport'
 
 // KPI DEFINITIONS — the platform-wide registry (owner 2026-09-25: "create a KPI dashboard, which
 // will be used platform wide, move the KPI from Boost in that right now and when other KPIs are
@@ -61,6 +62,7 @@ function normalizeKey(s: string) {
 }
 
 export default function KpiMetricsAdminPage() {
+  const narrow = useNarrowViewport()   // §CORE-25 — a pinned pane stacks rather than starving its sibling on a phone
   const [rows, setRows] = useState<Metric[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -248,7 +250,7 @@ export default function KpiMetricsAdminPage() {
           SQL — otherwise "hidden unless defined" just means permanently hidden. */}
       <div style={{ ...card, marginTop: 20 }}>
         <strong style={{ fontSize: 13 }}>Define a KPI for this organisation</strong>
-        <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr 140px 220px', gap: 12, marginTop: 10, alignItems: 'end' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: responsiveColumns('180px 1fr 140px 220px', narrow), gap: 12, marginTop: 10, alignItems: 'end' }}>
           <div>
             <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>Key (identifier)</div>
             <input className="input" value={draft.metric_key} placeholder="e.g. attach_rate"

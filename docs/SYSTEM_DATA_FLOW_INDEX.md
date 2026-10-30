@@ -184,6 +184,7 @@ Primary code homes:
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
+| CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-22 | **A page load never queries once per item** | "How do we avoid these extra round-trip calls? Which loop shapes really cost one trip per row and which only look like it, what is the count today, and what fails the build the day a new one ships?" |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26177,6 +26178,7 @@ status word rather than a blank that reads as nil.
 | POS-12 | pos |
 | POS-13 | pos |
 | PAYABLES-01 | payables |
+| CORE-25 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -40990,3 +40992,84 @@ copy fails the build, and retiring one lowers the pin.
 The report plans QUANTITIES TO BUY. It reads no payout, writes no ledger, feeds no P&L line, GP
 figure, commission or tax number, and its two writes are admin-gated declarations. CI tripwire:
 `harness_db_resilience.py` route pin re-taken 1810 → 1813 on the three counted, named routes.
+
+## §CORE-25. A PANE THE VIEWPORT CANNOT AFFORD IS NOT A LAYOUT — one narrow-screen home (owner report 2026-10-30)
+
+Owner, verbatim: *"On the POs on the mobile app on Apple it shows no products when I am logged into
+Vzone"*.
+
+Nothing was wrong with the catalog (584 active Vzone products in `pos.products`, read from
+production) and nothing was wrong with the fetch. The POS register's sale view was
+
+```
+gridTemplateColumns: '1fr 340px'   …inside   overflow: 'hidden'
+```
+
+Measured in a real browser at iPhone-14 width (Chromium, `devices['iPhone 14']`, the built app):
+the shell's 248px sidebar — `flexShrink: 0`, with no narrow-screen behaviour — left the page **94px**,
+the pinned 340px Order Summary took all of it, and the LEFT pane (the cart, its product lines, the
+Quick Sale box and **+ Add Product**) computed to **0px** and was clipped away. At 1440px the same
+pane measures **802px**, which is why it had never been seen. The cashier saw a menu, a summary and
+no products.
+
+### §CORE-25.1 DUPLICATE CHECK (build gate)
+
+Searched this index and the tree for an existing mechanism that answers "how wide is this screen"
+before building anything.
+
+| Found | What it owns | Why it is not this |
+| --- | --- | --- |
+| `globals.css` `@media (max-width: 640px)` (one rule, `.stat-hero`) | one dashboard tile's column span | the ONLY responsive rule in the stylesheet; a single tile, not a pane rule, and not reachable from an inline style |
+| §CORE-14 nav palette / §CORE-15 dark theme | what the chrome LOOKS like | a colour, not a width; the shell's own width was declared inline with no home at all |
+| `(platform)/layout.tsx` `collapsed` state | the icon-rail layout the collapse button already builds | **REUSED, not duplicated** — a narrow screen now gets that same rail rather than a second phone layout |
+| `TourRunner.tsx` `innerWidth` | where a tour bubble is placed | a one-off measurement for a popover; no shared fact, nothing else reads it |
+
+Nothing owned the fact. So this section creates the ONE home and wires every caller to it in the
+same change.
+
+### §CORE-25.2 THE MECHANISM
+
+One fact — *is this viewport too narrow for a desk layout* — with one home, dereferenced:
+
+| Link | Where |
+| --- | --- |
+| THE one home | `frontend/src/lib/viewport.ts` — `NARROW_MAX` (900), `NARROW_QUERY`, `isNarrowWidth`, `responsiveColumns`, `twoPaneColumns`, `twoPaneFrame`, `useNarrowViewport` |
+| The shell | `(platform)/layout.tsx` — `collapsed = collapsePref ?? narrow`, so a phone gets the 60px rail and a rotation hands the choice back to the viewport; the 56px top bar trims its gutters so the page stops overflowing |
+| The register | `(platform)/pos/sales/page.tsx` — the sale view is `twoPaneFrame(340, narrow, …)` |
+| The siblings, fixed in the SAME change | `pos/reports` (220), `pos/onboarding` (280), `pos/activations` (180), `pos/special-orders` (`minmax(0,1fr) 360px`), `commcalc` dashboard (280), `commcalc/management-incentive` (240), `commcalc/exec/mtd` (190), `admin/kpi-metrics` (`180px 1fr 140px 220px`), `admin/training` (`minmax(260px,340px) 1fr`), `vision/lines` (`minmax(220px,280px) 1fr`) |
+| The lock | `frontend/tools/narrow-layout-proof.mjs`, run by `npm run test:proofs` (workflow `tests.yml` → **Frontend proofs**) |
+| The unit proof | `frontend/src/lib/__tests__/viewport.test.ts` (15, vitest) |
+
+**A stacked pane drops the box as well as the column.** `twoPaneFrame` returns `height: 'auto'` and
+`overflow: 'visible'` when narrow: keeping `calc(100vh - 220px)` + `overflow: hidden` would cut the
+second pane off below the fold, which is the same disappearance in a different direction.
+
+**An unknown width reads as a DESK.** `isNarrowWidth(0)` / `(NaN)` is `false`, and `useNarrowViewport`
+starts `false` on the server and in a browser with no `matchMedia`. The fallback is exactly the
+behaviour that shipped, never a layout that rearranges itself on a guess.
+
+### §CORE-25.3 WHAT THE LOCK REFUSES
+
+In `src/app/**`, an inline `gridTemplateColumns: '…'` that pins a track of **180px or more beside a
+flexible one** fails the build; so does `(platform)/layout.tsx` ceasing to call `useNarrowViewport`.
+`repeat(auto-fit|auto-fill, minmax(Npx, 1fr))` is exempt by construction — a card wall WRAPS onto
+another row and never starves its sibling — and tracks under 180px are exempt because they cannot.
+There is no allow-list and no `--accept`: the eleven sites above were fixed, not listed.
+
+### §CORE-25.4 Proved against the real screen, not the source
+
+Before and after, same built app, same stubbed API, Chromium at iPhone-14 size:
+
+| | before | after |
+| --- | --- | --- |
+| sidebar | 248px | **60px** (the rail) |
+| sale-view template | `0px 340px` | **`280px`** (one column) |
+| cart pane | **0px**, clipped | **280px**, with `+ Add Product` visible |
+| product picker | unreachable | **opens, 20 rows listed** |
+| layout viewport | **734px** (Safari widens an overflowing page and zooms out) | **390px** — the device's own width |
+| desktop 1440px | `802px 340px` | **`802px 340px`, unchanged** |
+
+### §CORE-25.5 Not money
+
+No endpoint, no table, no migration, no query. Nothing about what a figure IS changes; this is where
+a pane is drawn. The desk layout is byte-identical above `NARROW_MAX`.
