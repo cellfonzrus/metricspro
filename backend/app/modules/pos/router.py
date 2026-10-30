@@ -17,13 +17,18 @@ Adding it server-side has to land together with seeding `pos` into MODULE_CATALO
 UI, or every existing role — none of which carries a `pos` key — would be locked out at once.
 """
 import re as _re
+import datetime as _dt
 from datetime import datetime as _datetime, timezone as _timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 
+from app.core.config import settings
 from app.core.database import get_supabase
+from app.core import upload_format as _upload_format
 from app.modules.pos import held_sale as _held
 from app.modules.pos import stock_landing as _stock
+from app.modules.pos import working_store as _wstore
+from app.modules.pos import tax_precedence as _taxrule
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -1097,6 +1102,69 @@ def _caller_store_keyset(authorization: str, org_id: str):
         raise HTTPException(403, f"could not resolve your store scope, so access is denied: {e}")
 
 
+def _caller_login_store(authorization: str, org_id: str) -> str:
+    """The store this login is PINNED to, if any — a hint for the picker, never an answer.
+
+    §POS-14: a pin is what somebody typed on a form once (the same point core.scope makes about
+    visibility). It pre-selects the confirm dialog for a single-store cashier and is ignored when it
+    falls outside the caller's span."""
+    try:
+        from app.modules.core.router import _uid_from_token
+        uid = _uid_from_token(authorization)
+        if not uid:
+            return ""
+        rows = (sb().schema("storeops").table("app_users").select("store_code")
+                .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
+        return str((rows[0] or {}).get("store_code") or "").strip() if rows else ""
+    except Exception:
+        return ""
+
+
+def _working_span(authorization: str, org_id: str) -> dict:
+    """THE caller's ringable span, assembled for `pos/working_store` (index §POS-14).
+
+    Active stores only — offering a closed store as the place a sale happened is never correct —
+    intersected with the caller's reporting span. `_caller_store_keyset` FAILS CLOSED (403), so a
+    scope hiccup cannot widen this to the whole tenant."""
+    client = sb()
+    try:
+        # `store_code` and `address` ONLY — the two keys `scope_keyset` widens a grant to. This
+        # deliberately does NOT ask for `market`: `working_store.span` has no use for it, and a
+        # market is a VOCABULARY whose one resolver is `core.scope` (the §13c class). Reading a
+        # vocabulary you do not need is how a second, unpinned answer to "which market is this
+        # store in" gets built by accident. harness_market_resolution_guard.py enforces that.
+        roster = (client.schema("storeops").table("stores")
+                  .select("store_code,address,is_active")
+                  .eq("org_id", org_id).order("store_code").limit(2000).execute().data) or []
+    except Exception:
+        roster = []
+    roster = [r for r in roster if r.get("is_active") is not False]
+    keyset = _caller_store_keyset(authorization, org_id)
+    return _wstore.span(roster, keyset, login_store=_caller_login_store(authorization, org_id))
+
+
+@router.get("/working-store")
+def working_store(store_code: str = "", authorization: str = Header(default=""),
+                  org_id: str = ORG_ID):
+    """Which store may this caller ring a sale at, and is `store_code` a CONFIRMED choice?
+
+    THE one home every POS screen asks instead of spelling its own ladder (index §POS-14). It
+    answers the span, the login's pin, whether a confirmation is owed, and — for the store the
+    terminal says was picked — the BASIS of it: `confirmed`, `sole_store`, or `unconfirmed`, which
+    carries no store_code at all. There is no positional fallback: `stores[0]` is what four screens
+    used to do, and it logged sales and printed receipts under a store nobody had chosen.
+
+    It also carries the effective TAX for the resolved store, through the same one home the Settings
+    grid reads (`tax_precedence`), so the register cannot answer that question itself either."""
+    span_ = _working_span(authorization, org_id)
+    verdict = _wstore.resolve(span_, store_code)
+    tax = None
+    if verdict["store_code"]:
+        tax = resolve_tax_code(store_code=verdict["store_code"], org_id=org_id)
+    return {"stores": span_["stores"], "login_store": span_["login_store"],
+            "must_confirm": span_["must_confirm"], **verdict, "tax": tax}
+
+
 def _span_filter(rows, keyset, field="store_code", allow_null=False):
     """Keep rows whose store is inside the caller's span.
 
@@ -1443,25 +1511,17 @@ def list_tax_codes(org_id: str = ORG_ID):
 
 
 def _resolve_tax(codes, store_code, market):
-    """THE tax precedence, in one place: store_code > market > org-wide. Inactive rows never win.
+    """THE tax precedence — store_code > market > org-wide — DEREFERENCED, never re-derived.
+
+    The rule itself lives in `pos/tax_precedence.pick` (index §POS-14). It was written here, and the
+    register then grew a second, shorter copy of it that skipped the MARKET rung: a rate set on a
+    market read as `effective` in the Settings grid and charged the org-wide rate (or nothing) at
+    the till. It is pure and DB-free there, so the browser reaches the same rule through
+    GET /pos/tax-codes/resolve instead of owning a second opinion about what the customer owes.
 
     pos.checkout does not compute tax — it stores the tax_total it is given — so every caller must
-    reach a rate through here. Reimplementing this ordering anywhere else is how one screen charges
-    8.875% and another charges 0% for the same store."""
-    live = [c for c in (codes or []) if c.get("is_active") is not False]
-    sc = (store_code or "").strip()
-    mk = (market or "").strip().lower()
-    if sc:
-        hit = next((c for c in live if (c.get("store_code") or "").strip() == sc), None)
-        if hit:
-            return hit, "store"
-    if mk:
-        hit = next((c for c in live if (c.get("market") or "").strip().lower() == mk), None)
-        if hit:
-            return hit, "market"
-    hit = next((c for c in live
-                if not (c.get("store_code") or "").strip() and not (c.get("market") or "").strip()), None)
-    return (hit, "org") if hit else (None, "none")
+    reach a rate through here."""
+    return _taxrule.pick(codes, store_code, market)
 
 
 @router.get("/tax-codes/resolve")
@@ -1770,6 +1830,324 @@ def get_sale(sale_id: str, org_id: str = ORG_ID):
     return {"sale": sale}
 
 
+
+# ── THE WHOLESALE CUSTOMER AND THEIR W-9 (owner 2026-10-30, index §POS-16) ───────────────────────
+# `pos/wholesale_w9.py` is THE home for "may I sell to this customer, and is this sale taxable".
+# Every route below and the checkout DEREFERENCE it: none of them judges a certificate, words a
+# refusal, or decides that a sale is tax-free.
+#
+# ADAPTIVE, like §POS-01's held cart and §POS-12's amendments: until mig 1107 is applied
+# `pos.customer_tax_doc` is absent. Reads then answer as though no certificate exists (which is the
+# truth), the register shows the setup note instead of a block, and the WRITES refuse by name —
+# a confirmation we cannot store must not be reported as stored.
+W9_BUCKET = "customer-tax-docs"
+W9_MIGRATION = ("apply migration 1107 (database/migrations/1107_pos_wholesale_w9.sql) — until it is "
+                "applied a wholesale customer's W-9 cannot be recorded")
+
+
+def _w9_cfg(client, org_id: str, store_code: str = "") -> dict:
+    """The W-9 settings, resolved through the ONE config home. The keys are named by the one home."""
+    rows = _pos_settings_rows(client, org_id, store_code)
+    return {k: _poscfg.effective(rows, k, store_code)
+            for k in (_w9.EXEMPT_DEFAULT_KEY, _w9.VALID_MONTHS_KEY, _w9.BLOCK_SALE_KEY,
+                      _w9.FORM_URL_KEY)}
+
+
+def _w9_doc(client, org_id: str, customer_id: str):
+    """This customer's W-9 row, or None. `(False, None)` when mig 1107 is not applied yet."""
+    try:
+        rows = (client.schema("pos").table("customer_tax_doc").select("*")
+                .eq("org_id", org_id).eq("customer_id", customer_id).eq("kind", _w9.W9_KIND)
+                .limit(1).execute().data) or []
+    except Exception:
+        return False, None
+    return True, (rows[0] if rows else None)
+
+
+def _customer_row_or_none(client, org_id: str, customer_id: str):
+    """This customer's row, or None when there is no id, no row, or the read failed."""
+    cid = str(customer_id or "").strip()
+    if not cid:
+        return None
+    try:
+        rows = (client.schema("pos").table("customers").select("*")
+                .eq("org_id", org_id).eq("id", cid).limit(1).execute().data) or []
+    except Exception:
+        return None
+    return rows[0] if rows else None
+
+
+def _customer_row(client, org_id: str, customer_id: str):
+    rows = (client.schema("pos").table("customers").select("*")
+            .eq("org_id", org_id).eq("id", customer_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "that customer could not be found")
+    return rows[0]
+
+
+def _w9_decision(client, org_id: str, customer, store_code: str = "", *, is_admin=False,
+                 override=None):
+    """The one decision, with today's date. Returns `(decision, table_present, doc)`."""
+    present, doc = _w9_doc(client, org_id, (customer or {}).get("id") or "")
+    cfg = _w9_cfg(client, org_id, store_code)
+    d = _w9.may_sell(customer, doc, cfg, now=_dt.date.today(), is_admin=is_admin, override=override)
+    return d, present, doc
+
+
+def _is_pos_admin(authorization: str, org_id: str) -> bool:
+    """May this login go past a missing certificate? The caller's OWN rights, read the way every
+    other POS gate reads them — never a body field claiming them."""
+    try:
+        ctx = _caller_ctx(authorization, org_id) or {}
+    except Exception:
+        return False
+    if ctx.get("super_admin"):
+        return True
+    if str(ctx.get("role") or "").strip().lower() in ("admin", "owner"):
+        return True
+    return bool((ctx.get("perms") or {}).get("pos_settings"))
+
+
+@router.get("/customer-account-types")
+def customer_account_types(org_id: str = ORG_ID):
+    """The customer types this platform knows (`wholesale_w9.ACCOUNT_TYPES`) — read by the customer
+    form so the words are not spelled a third time (the CHECK constraint is the second, generated
+    from the same list by mig 1107)."""
+    return {"account_types": list(_w9.ACCOUNT_TYPES), "wholesale": _w9.WHOLESALE}
+
+
+@router.get("/customers/{customer_id}/w9")
+def customer_w9(customer_id: str, store_code: str = "", authorization: str = Header(default=""),
+                org_id: str = ORG_ID):
+    """What the register needs to draw the W-9 panel for one customer."""
+    client = sb()
+    customer = _customer_row(client, org_id, customer_id)
+    is_admin = _is_pos_admin(authorization, org_id)
+    d, present, doc = _w9_decision(client, org_id, customer, store_code, is_admin=is_admin)
+    cfg = _w9_cfg(client, org_id, store_code)
+    return {**{k: v for k, v in d.items() if k != "override_by"},
+            "form_url": _w9.blank_form_url(cfg),
+            "accepted_formats": list(_upload_format.DEFAULT_FORMATS),
+            "requested_at": (doc or {}).get("requested_at"),
+            "requested_to_email": (doc or {}).get("requested_to_email"),
+            "submitted_at": (doc or {}).get("submitted_at"),
+            "received_at": (doc or {}).get("received_at"),
+            "link_live": _w9.token_live(doc, now=_dt.datetime.utcnow()),
+            "available": bool(present),
+            "setup_note": None if present else W9_MIGRATION}
+
+
+@router.post("/customers/{customer_id}/w9/confirm")
+def confirm_customer_w9(customer_id: str, body: dict = None,
+                        authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """A person confirms the filled-out, signed W-9 is in hand (owner: the exemption follows THIS).
+
+    A customer's own upload never reaches this state by itself — it lands as `submitted` and waits
+    for a human, because this is the row an exemption rests on.
+    """
+    body = body or {}
+    client = sb()
+    customer = _customer_row(client, org_id, customer_id)
+    if not _w9.is_wholesale(customer):
+        raise HTTPException(400, "that customer is not on wholesale terms, so no W-9 is needed")
+    present, doc = _w9_doc(client, org_id, customer_id)
+    if not present:
+        raise HTTPException(503, W9_MIGRATION)
+    who = _caller_employee(authorization, org_id) or ""
+    row = {"status": _w9.STATUS_RECEIVED,
+           "received_at": str(body.get("received_at") or _dt.date.today().isoformat())[:10],
+           "confirmed_by": who,
+           "expires_at": (str(body.get("expires_at"))[:10] if body.get("expires_at") else None),
+           "note": (str(body.get("note") or "").strip() or None),
+           # the door closes: a confirmed certificate needs no open upload link
+           "return_token": None, "token_expires_at": None,
+           "updated_at": _dt.datetime.utcnow().isoformat() + "Z"}
+    if doc:
+        (client.schema("pos").table("customer_tax_doc").update(row)
+         .eq("org_id", org_id).eq("id", doc["id"]).execute())
+    else:
+        client.schema("pos").table("customer_tax_doc").insert(
+            {**row, "org_id": org_id, "customer_id": customer_id, "kind": _w9.W9_KIND}).execute()
+    d, _p, _d = _w9_decision(client, org_id, customer)
+    return {"confirmed": True, "confirmed_by": who, "decision": d,
+            "message": "W-9 recorded as received. Wholesale sales to this customer are now "
+                       + ("tax-free." if d["tax_exempt"] else "allowed.")}
+
+
+@router.post("/customers/{customer_id}/w9/request")
+async def request_customer_w9(customer_id: str, body: dict = None,
+                              authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Email this customer the blank form and a one-use link to send it back.
+
+    The LINK goes to the customer's mailbox; the screen that asked is told the address and that it
+    went, not handed the raw token to display or log (§POS-16.6).
+    """
+    body = body or {}
+    client = sb()
+    customer = _customer_row(client, org_id, customer_id)
+    to = (str(body.get("email") or "").strip() or str(customer.get("email") or "").strip())
+    if not to or "@" not in to:
+        raise HTTPException(400, "no email address for this customer — type one, or add one to "
+                                 "their profile first")
+    present, doc = _w9_doc(client, org_id, customer_id)
+    if not present:
+        raise HTTPException(503, W9_MIGRATION)
+    from app.modules.notify.channels import email_resend as _mail
+    if not _mail.is_configured():
+        raise HTTPException(503, "emailing isn't switched on for this platform yet "
+                                 "(no mail provider configured)")
+    cfg = _w9_cfg(client, org_id)
+    token = _w9.new_token()
+    now = _dt.datetime.utcnow()
+    company = _tenant.display_name(client, org_id)
+    form_url = _w9.blank_form_url(cfg)
+    link = _w9.return_link(settings.APP_PUBLIC_URL, token)
+    name = " ".join(x for x in [customer.get("first_name"), customer.get("last_name")] if x).strip()
+    try:
+        mid = await _mail.send_email(
+            to, _w9.request_subject(company), _w9.request_html(company, form_url, link, name),
+            None, from_name=company or None)
+    except Exception as e:
+        raise HTTPException(502, f"the mail provider refused it: {str(e)[:200]}")
+    row = {"status": _w9.STATUS_REQUESTED, "requested_at": now.isoformat() + "Z",
+           "requested_by": _caller_employee(authorization, org_id) or "",
+           "requested_to_email": to, "return_token": token,
+           "token_expires_at": _w9.token_expiry(now).isoformat() + "Z",
+           "updated_at": now.isoformat() + "Z"}
+    if doc:
+        (client.schema("pos").table("customer_tax_doc").update(row)
+         .eq("org_id", org_id).eq("id", doc["id"]).execute())
+    else:
+        client.schema("pos").table("customer_tax_doc").insert(
+            {**row, "org_id": org_id, "customer_id": customer_id, "kind": _w9.W9_KIND}).execute()
+    return {"sent": True, "to": to, "link": link, "provider_message_id": mid or None,
+            "expires_in_days": _w9.RETURN_LINK_DAYS,
+            "message": f"Form W-9 emailed to {to} with a link to send it back. The link stops "
+                       f"working in {_w9.RETURN_LINK_DAYS} days."}
+
+
+# ── the customer's return link (ANONYMOUS, token-gated) ─────────────────────────────────────────
+# The one-use token IS the auth and reaches ONLY this customer's upload slot. Unknown, expired and
+# already-used all answer the SAME 404 with the SAME body, so a probe learns nothing. The page is
+# told who is asking and what file to send — never anything from the customer's record.
+def _w9_by_token(token: str):
+    try:
+        rows = (sb().schema("pos").table("customer_tax_doc").select("*")
+                .eq("return_token", (token or "").strip()).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    doc = rows[0] if rows else None
+    if not doc or not _w9.token_live(doc, now=_dt.datetime.utcnow()):
+        raise HTTPException(404, _w9.LINK_DEAD)
+    return doc
+
+
+def _store_tax_doc_file(org_id: str, customer_id: str, data: bytes, filename: str, fmt: str):
+    """Put the returned document in the private bucket. Separate so the upload route has one job."""
+    import uuid as _uuid
+    safe = (filename or "w9").replace("/", "_")[-80:]
+    path = f"{org_id}/{customer_id}/{_uuid.uuid4().hex}_{safe}"
+    c = sb()
+    try:
+        c.storage.get_bucket(W9_BUCKET)
+    except Exception:
+        try:
+            c.storage.create_bucket(W9_BUCKET)   # private by default
+        except Exception:
+            pass
+    try:
+        c.storage.from_(W9_BUCKET).upload(path, data, {"content-type": "application/octet-stream"})
+    except Exception as e:
+        raise HTTPException(500, f"the upload could not be stored: {str(e)[:160]}")
+    return {"path": path, "format": fmt}
+
+
+@router.get("/public/w9/{token}")
+def public_w9_meta(token: str):
+    """What the customer's browser loads: who is asking, the blank form, what file to send."""
+    doc = _w9_by_token(token)
+    cfg = _w9_cfg(sb(), doc["org_id"])
+    company = _tenant.display_name(sb(), doc["org_id"])
+    return {"ok": True, "company_name": company, "form_url": _w9.blank_form_url(cfg),
+            "accepted_formats": list(_upload_format.DEFAULT_FORMATS),
+            "what_we_need": "a completed, signed Form W-9"}
+
+
+@router.post("/public/w9/{token}/upload")
+async def public_w9_upload(token: str, file: UploadFile = File(...)):
+    """The customer sends the completed form back.
+
+    It lands as `submitted`, NOT as received: the exemption follows a person confirming the form is
+    in hand (the owner's wording), and an anonymous caller cannot be that person. The token is
+    cleared here — one use, then the door closes.
+    """
+    doc = _w9_by_token(token)
+    data = await file.read()
+    ok, detected = _upload_format.allowed(data, file.filename or "", _upload_format.DEFAULT_FORMATS)
+    if not ok:
+        raise HTTPException(400, _upload_format.refusal_sentence(
+            _upload_format.DEFAULT_FORMATS, detected))
+    stored = _store_tax_doc_file(doc["org_id"], doc["customer_id"], data, file.filename or "", detected)
+    now = _dt.datetime.utcnow().isoformat() + "Z"
+    (sb().schema("pos").table("customer_tax_doc")
+     .update({"status": "submitted", "submitted_at": now, "file_path": stored["path"],
+              "file_format": stored["format"], "return_token": None, "token_expires_at": None,
+              "updated_at": now})
+     .eq("org_id", doc["org_id"]).eq("id", doc["id"]).execute())
+    return {"received": True,
+            "message": "Thank you — your Form W-9 has been sent. Nothing else is needed from you."}
+
+
+# ── The tenders a register may take (owner 2026-10-30, index §POS-15) ─────────────────────────────
+# `pos/tender_vocabulary.py` is THE home for "which tenders exist, which this org offers, and what a
+# Terms sale needs". This endpoint and the checkout below both DEREFERENCE it; neither spells a
+# tender word, a day count or a refusal of its own. The register reads this instead of carrying its
+# own array of buttons, which is what made adding one tender type a three-file edit before.
+def _tender_cfg(client, org_id: str, store_code: str = "") -> dict:
+    """The register settings the tender vocabulary asks about, resolved through the ONE config home
+    (store override → org default → declared default). The KEYS are named by the vocabulary, so a
+    new setting is added in one place."""
+    rows = _pos_settings_rows(client, org_id, store_code)
+    return {k: _poscfg.effective(rows, k, store_code)
+            for k in (_tender.SUSPEND_CARDS_KEY, _tender.TERMS_ENABLED_KEY, _tender.TERMS_DAYS_KEY)}
+
+
+TERMS_MIGRATION = ("apply migration 1106 (database/migrations/1106_pos_terms_tender.sql) — until it "
+                   "is applied the database will not accept a sale paid on account")
+
+
+def _terms_schema_ready(client) -> bool:
+    """Is the database ready to STORE a terms sale (§POS-15, mig 1106)?
+
+    This is not belt-and-braces. `pos.sale_payments` carries `CHECK (payment_method IN …)` from mig
+    725, and until 1106 widens it the database REFUSES a terms leg. Offering the button before then
+    would put a Terms key on every register that fails at the till — the cashier's sale lost, with a
+    constraint error for an explanation. So the tender is offered only once its storage exists.
+    The probe asks for the column 1106 adds; any failure reads as "not applied", never as ready."""
+    try:
+        client.schema("pos").table("sale_payments").select("terms_days").limit(1).execute()
+        return True
+    except Exception:
+        return False
+
+
+@router.get("/tender-types")
+def tender_types(store_code: str = "", org_id: str = ORG_ID):
+    """Which tenders THIS register offers, each with the facts the screen needs to draw it."""
+    client = sb()
+    cfg = _tender_cfg(client, org_id, store_code)
+    ready = _terms_schema_ready(client)
+    if not ready:
+        # The org's own declaration is left alone — this is the SCHEMA not being ready, which is a
+        # platform fact and not a change to what the tenant asked for. When 1106 lands, the tender
+        # appears with no further configuration.
+        cfg = {**cfg, _tender.TERMS_ENABLED_KEY: False}
+    return {"tenders": _tender.offered(cfg),
+            "terms_day_options": list(_tender.terms_day_options(cfg)),
+            "terms_available": ready,
+            **({} if ready else {"setup_note": TERMS_MIGRATION})}
+
+
 @router.post("/sales/checkout")
 def checkout(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Atomic checkout via pos.checkout: sale + items + payments in ONE transaction (the
@@ -1786,6 +2164,112 @@ def checkout(body: dict, authorization: str = Header(default=""), org_id: str = 
         raise HTTPException(403, "your login isn't linked to an employee record — "
                                  "ask an admin to set your Employee ID in Roles & Access")
     sale["employee_id"] = eid   # never trust a body-supplied rep on the money path
+    # WHICH STORE IS THIS SALE FOR (index §POS-14, owner 2026-10-30). This gate did not exist: the
+    # endpoint took whatever store the body named — any store in the tenant — and took NO store at
+    # all, which `pos.checkout` writes as NULL and `_span_filter` then shows to every store-scoped
+    # manager in the tenant. A sale nobody can attribute is not a sale, so the refusal is the one
+    # sentence `working_store` owns rather than a second wording invented here.
+    # ONE span, read once: the refusal and the spelling must be two readings of the SAME answer. Two
+    # reads could disagree if the roster read failed between them, and the second one losing would
+    # write a NULL store onto a sale the first one had just authorised.
+    _span = _working_span(authorization, org_id)
+    _refusal = _wstore.sale_refusal(_span, sale.get("store_code"))
+    if _refusal:
+        raise HTTPException(403, _refusal)
+    # The ROSTER'S spelling, not the terminal's. Store codes are compared without case folding
+    # across this platform, and a lower-cased code once became a phantom store holding a day's money.
+    sale["store_code"] = _wstore.resolve(_span, sale.get("store_code"))["store_code"]
+    # ── THE WHOLESALE GATE AND THE TAX (§POS-16), asked before a single row is written ──
+    # Both gates below run AFTER the working-store gate above, and must: that gate resolves
+    # `sale["store_code"]` to the roster's own spelling, and every per-store declaration read here
+    # (the tenders this org offers, the W-9 refresh period, the tax rate) is keyed by that code.
+    # Reading the terminal's spelling instead is how a lower-cased code once became a phantom store.
+    # `pos.checkout` stores the figures it is handed, so without this a till could ring a wholesale
+    # sale with no certificate on file, or charge no tax on one that has none, and be obeyed.
+    # A customer id that resolves to no row reads as "no customer", never as a refusal: the gate's
+    # job is to stop an unsupported exemption, and `pos.sales.customer_id` has a foreign key that
+    # already refuses a sale pointing at nobody. Failing the whole sale on a read would be a new
+    # way for a till to stop working.
+    customer = _customer_row_or_none(sb(), org_id, sale.get("customer_id"))
+    # The override comes from the CALLER's own rights, never from the body: a body field claiming
+    # an override is exactly the shape this gate exists to refuse.
+    wants_override = bool(sale.pop("w9_override", False))
+    sale.pop("w9_override_by", None)
+    is_admin = _is_pos_admin(authorization, org_id) if customer is not None else False
+    w9d = {"blocked": False, "tax_exempt": False, "exempt_basis": None, "override_by": None}
+    if customer is not None:
+        w9d, _present, _doc = _w9_decision(
+            sb(), org_id, customer, sale.get("store_code") or "", is_admin=is_admin,
+            override=(eid if wants_override else None))
+        if w9d["blocked"]:
+            raise HTTPException(400, w9d["refusal"])
+    # WHAT TAX DO THESE LINES CARRY. Asked only so that a TAX-EXEMPT sale can be refused if it
+    # carries tax anyway — never to second-guess the sale's own `tax_total`. An earlier revision of
+    # this gate refused a sale whose `tax_total` disagreed with its lines; main's working-store
+    # tests showed why that was wrong: the server resolves the rate itself (§POS-14), so a till
+    # holding a stale rate sends a figure that legitimately differs, and refusing it would stop a
+    # register from ringing anything. A disagreement there is not the till lying — it is the till
+    # being out of date, which is not this gate's business.
+    def _n(v):
+        try:
+            return round(float(v or 0), 2)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _line_tax(i):
+        """The tax ONE line carries, in whichever shape its caller speaks: the register sends
+        `tax_value` already multiplied by qty, while the activation leg and other callers send a
+        `tax_rate` against the line's extended price. Reading only the first shape would read a
+        perfectly taxed line as untaxed, which on an exempt sale is the wrong way round to be
+        wrong."""
+        if i.get("tax_value") not in (None, ""):
+            return _n(i.get("tax_value"))
+        if i.get("tax_rate") not in (None, ""):
+            ext = i.get("extended_price")
+            if ext in (None, ""):
+                ext = _n(i.get("qty") or 1) * _n(i.get("unit_price")) - _n(i.get("discount"))
+            return round(_n(i.get("tax_rate")) * _n(ext), 2)
+        return 0.0
+
+    line_tax = round(sum(_line_tax(i) for i in items if isinstance(i, dict)), 2)
+    if w9d["tax_exempt"]:
+        if line_tax > 0.009 or _n(sale.get("tax_total")) > 0.009:
+            raise HTTPException(400, "this is a tax-exempt wholesale sale, so no line may carry "
+                                     "sales tax — clear the cart and re-add the items, or ask an "
+                                     "admin if the exemption is wrong")
+        sale["tax_exempt_basis"] = w9d["exempt_basis"]
+    else:
+        sale["tax_exempt_basis"] = None
+    sale["w9_override_by"] = w9d["override_by"]
+
+    # THE TENDER DECISION (§POS-15). `pos.checkout` stores what it is handed, so a till sending a
+    # tender this org does not offer, a Terms sale with nobody to owe it, or a day count nobody
+    # declared would otherwise be obeyed. The refusal is the one home's own sentence.
+    # EVERY payment leg is asked about, not just the first: a sale split across a card and an
+    # account is the case where validating one leg and trusting the other writes the wrong balance.
+    tcfg = _tender_cfg(sb(), org_id, sale.get("store_code") or "")
+    # A screen loaded before mig 1106 landed (or cached since) can still SEND a terms leg. Refuse it
+    # by name here rather than let `pos.sale_payments`'s CHECK constraint refuse it as a 500.
+    if not _terms_schema_ready(sb()):
+        tcfg = {**tcfg, _tender.TERMS_ENABLED_KEY: False}
+    checked, owed = [], 0.0
+    for raw in (payments or []):
+        pay = dict(raw) if isinstance(raw, dict) else {}
+        plan = _tender.plan_payment(
+            pay.get("payment_method"), tcfg, customer_id=sale.get("customer_id"),
+            terms_days=pay.get("terms_days"),
+            sale_date=sale.get("date") or sale.get("created_at"),
+            total=pay.get("amount") if len(payments) > 1 else sale.get("total"))
+        if plan["refusal"]:
+            raise HTTPException(400, plan["refusal"])
+        pay["terms_days"] = plan["terms_days"]
+        pay["due_date"] = plan["due_date"].isoformat() if plan["due_date"] else None
+        owed += plan["balance"]
+        checked.append(pay)
+    payments = checked
+    # The figure is OURS, not the body's: what is owed is the sum of the legs that did not settle,
+    # whatever balance the screen sent.
+    sale["balance"] = round(owed, 2)
     # The register may now edit unit_price (owner directive 2026-08-11). Keep what the product was
     # LISTED at so an override is visible afterwards as list_price <> unit_price — a line that
     # records only what was charged makes a discounted sale indistinguishable from a cheap product.
@@ -1832,7 +2316,7 @@ def void_sale(sale_id: str, authorization: str = Header(default=""), org_id: str
 # are absent. The plan endpoint then answers `available: false` with the setup note, so the Sale Log
 # simply does not offer the button rather than offering one that errors.
 from app.modules.pos import sale_amendment as _amend
-# The cash / credit mismatch an edit leaves behind (§POS-14). A SECOND one home beside the first,
+# The cash / credit mismatch an edit leaves behind (§POS-17). A SECOND one home beside the first,
 # not a bigger one: `sale_amendment` answers "may this be edited and what does it come to", and
 # `sale_settlement` answers "what was tendered against it and what does that leave outstanding".
 # The second question has callers the first does not (the void path, and the mismatch report), which
@@ -1858,7 +2342,7 @@ def _sale_payments(client, org_id: str, sale_id: str) -> list:
 
 
 def _tender_log_available(client, org_id: str) -> bool:
-    """Whether mig 1106 has been applied. A PROBE, not a claim — the same shape as
+    """Whether mig 1108 has been applied. A PROBE, not a claim — the same shape as
     `_amend_available`: ask the database for the column and let it answer."""
     try:
         (client.schema("pos").table("sale_amendments").select("tender_variance")
@@ -1903,7 +2387,7 @@ def sale_amend_plan(sale_id: str, authorization: str = Header(default=""), org_i
         cart = _amend.cart_from(items) if reason is None else []
     except _amend.AmendmentError as e:
         reason, cart = str(e), []
-    # What stands tendered against this sale RIGHT NOW (§POS-14), so the till can show the cashier
+    # What stands tendered against this sale RIGHT NOW (§POS-17), so the till can show the cashier
     # what was taken before they move what is owed. The verdict is deliberately NOT previewed from
     # here: a cart the cashier has not sent yet is not a figure this endpoint has seen, and the
     # browser must not derive the mismatch itself. The dry run on the save route is what previews it,
@@ -1966,7 +2450,7 @@ def amend_sale_items(sale_id: str, body: dict, authorization: str = Header(defau
     if not plan["allowed"]:
         raise HTTPException(400, plan["reason"])
 
-    # ── the cash / credit mismatch this edit leaves behind (§POS-14) ─────────────────────────────
+    # ── the cash / credit mismatch this edit leaves behind (§POS-17) ─────────────────────────────
     # Measured against the RESTATED total, because that is what will be owed once this write lands,
     # and against the tender as RECORDED, which this write does not touch. Both figures come from
     # the one home; nothing here subtracts anything itself.
@@ -1993,14 +2477,14 @@ def amend_sale_items(sale_id: str, body: dict, authorization: str = Header(defau
     # held up by a migration it does not use.
     if settlement["mismatch"] and not _tender_log_available(client, org_id):
         raise HTTPException(503, "this edit would leave " + tender_sentence.rstrip(".") +
-                                 ", and migration 1106 has not been applied, so that mismatch "
+                                 ", and migration 1108 has not been applied, so that mismatch "
                                  "could not be logged — the edit was not saved")
 
     patch = {**plan["totals"],
              "change_summary": plan["diff"]["summary"],
              "change_detail": plan["diff"],
              "notes": (body.get("notes") or "").strip() or None,
-             # Travels in the patch rather than as a new parameter, so mig 1106 replaces
+             # Travels in the patch rather than as a new parameter, so mig 1108 replaces
              # `pos.amend_sale` at its existing signature and creates no overload.
              "tender": tender}
     try:
@@ -2204,7 +2688,7 @@ def list_settings(store_code: str = "", org_id: str = ORG_ID):
          .eq("org_id", org_id))
     if store_code:
         # THE STORE CODE IS CHECKED BEFORE IT IS INTERPOLATED, through the ONE home for that
-        # decision (security pass 2026-10-30, index §POS-14) — this endpoint built the same
+        # decision (security pass 2026-10-30, index §POS-17) — this endpoint built the same
         # f-string filter from the same raw query parameter, and any signed-in POS user reaches it.
         #
         # FAIL-SAFE MEANS NARROW HERE, and that differs from `_pos_settings_rows` on purpose: that
@@ -2387,6 +2871,8 @@ def update_receipt_template(template_id: str, body: dict,
 # tenant printing "in its POS's layout" prints the layout its own uploads are reprinted in.
 from app.modules.pos import sale_receipt as _sr
 from app.modules.pos import pos_config_effective as _poscfg
+from app.modules.pos import tender_vocabulary as _tender
+from app.modules.pos import wholesale_w9 as _w9
 from app.modules.pos import receipt_escpos as _escpos
 from app.modules.pos import receipt_remit as _remit
 from app.modules.pos import customer_bill_to as _bill_to
@@ -2431,7 +2917,7 @@ def _pos_settings_rows(client, org_id: str, store_code: str = ""):
     resolved through `pos_config_effective`, which is the server's one home for the store-override →
     org-default → declared-default rule the browser applies.
 
-    THE STORE CODE IS CHECKED BEFORE IT IS INTERPOLATED (security pass 2026-10-30, index §POS-14).
+    THE STORE CODE IS CHECKED BEFORE IT IS INTERPOLATED (security pass 2026-10-30, index §POS-17).
     It used to go straight into the `or` filter as an f-string. Every caller then passed a value read
     from a database row or sat behind the `pos_settings` grant, so nothing user-supplied reached it —
     and `GET /pos/reports/tender-mismatch` was the first path that would have. Fixed HERE rather than
@@ -2999,6 +3485,15 @@ def create_activation(body: dict, authorization: str = Header(default=""), org_i
                                  "ask an admin to set your Employee ID in Roles & Access")
     ins["employee_id"] = eid
     ins["org_id"] = org_id
+    # THE SIBLING of the checkout gate (index §POS-14). An activation is the carrier leg of the
+    # same sale and carries the same store_code into the commission feed, so it answered the same
+    # question — "which store is this for?" — with the same absence of an answer. Same one home,
+    # same sentence, same canonical spelling.
+    _aspan = _working_span(authorization, org_id)
+    _arefusal = _wstore.sale_refusal(_aspan, ins.get("store_code"))
+    if _arefusal:
+        raise HTTPException(403, _arefusal)
+    ins["store_code"] = _wstore.resolve(_aspan, ins.get("store_code"))["store_code"]
     if ins.get("status") == "cancelled":
         _require_pos_perm(authorization, org_id, "pos_activations_cancel")
     r = sb().schema("pos").table("activations").insert(ins).execute()
@@ -3566,7 +4061,7 @@ def report_sales(date_from: str = "", date_to: str = "", store_code: str = "",
 def report_tender_mismatch(date_from: str = "", date_to: str = "", store_code: str = "",
                            employee_id: str = "", kind: str = "mismatch",
                            authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """THE LOG of the cash / credit mismatch (§POS-14) — owner ask 2026-10-30.
+    """THE LOG of the cash / credit mismatch (§POS-17) — owner ask 2026-10-30.
 
     DERIVED LIVE over `pos.sales` and `pos.sale_payments` rather than read from the filed rows
     alone, and that is the design point, not an implementation detail: an edit is only ONE of the
@@ -3574,7 +4069,7 @@ def report_tender_mismatch(date_from: str = "", date_to: str = "", store_code: s
     and it files nothing. Deriving the comparison here means the void sibling is covered by the same
     one home, on the same screen, without reopening a function that moves money correctly today.
 
-    The filed row (mig 1106) is joined on where it exists, because it carries what the till SAW at
+    The filed row (mig 1108) is joined on where it exists, because it carries what the till SAW at
     the moment of the edit and who has settled it since — facts no live derivation can recover.
 
     NOT MEASURABLE IS NOT A FINDING. 4,603 of the 4,605 live sales are imported receipt history with

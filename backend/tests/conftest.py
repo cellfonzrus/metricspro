@@ -118,6 +118,26 @@ def api_client(app_module):
         yield client
 
 
+@pytest.fixture(autouse=True)
+def _no_cached_store_universe():
+    """Drop `core.scope`'s cached store/market universe around EVERY test.
+
+    `app.core.scope` caches the market index per org_id for a TTL, process-wide. That is correct in
+    a server and poisonous in a suite: the first test to ask for an org's markets fills the cache
+    from ITS seeded roster, and every later test in the same process reads that roster instead of
+    its own. The symptom is the worst kind — a test that passes alone and fails in the suite, or
+    passes in the suite and would fail alone, depending on file order.
+
+    It is autouse rather than opt-in because the hazard belongs to the cache, not to the tests that
+    happen to trip over it: a market-scoped sales-tax test found this on 2026-10-30, and nothing
+    would have stopped the next one from finding it again.
+    """
+    from app.core import scope as _scope
+    _scope.invalidate_market_index()
+    yield
+    _scope.invalidate_market_index()
+
+
 @pytest.fixture
 def fake_supabase():
     """An empty in-memory database double. Seed it with `.seed("schema.table", rows)`.

@@ -197,6 +197,42 @@ export const POS_SETTING_SECTIONS: PosSettingSection[] = [
         type: 'boolean', default: false,
       },
       {
+        key: 'tender_terms_enabled',
+        label: 'Offer the Terms tender (sell on account)',
+        hint: 'Adds a Terms button at the register. A sale on terms collects nothing now: it is recorded against the customer with a due date.',
+        type: 'boolean', default: true,
+      },
+      {
+        key: 'tender_terms_day_options',
+        label: 'Payment terms offered (days)',
+        hint: 'The day counts a Terms sale may be written for, comma-separated. Blank falls back to 15, 30 and 60.',
+        type: 'text', default: '15,30,60',
+      },
+      {
+        key: 'wholesale_tax_exempt_default',
+        label: 'Wholesale customers are tax-exempt once a W-9 is on file',
+        hint: 'A wholesale sale charges no sales tax while a signed, in-date W-9 is recorded for that customer. Turn this off if your wholesale sales are still taxable.',
+        type: 'boolean', default: true,
+      },
+      {
+        key: 'w9_block_sale',
+        label: 'Block a wholesale sale until a W-9 is on file',
+        hint: 'A cashier cannot complete a wholesale sale without a signed W-9. An admin can still allow one through as a taxable sale.',
+        type: 'boolean', default: true,
+      },
+      {
+        key: 'w9_valid_months',
+        label: 'Refresh a W-9 after (months)',
+        hint: 'How long a W-9 counts as current. 0 means it never goes out of date. A certificate that carries its own expiry date is judged by that date instead.',
+        type: 'number', default: 36,
+      },
+      {
+        key: 'w9_blank_form_url',
+        label: 'Blank W-9 form link',
+        hint: 'The form a customer is sent. Blank uses the IRS copy. Must be an https:// link.',
+        type: 'text', default: '',
+      },
+      {
         key: 'require_billing_info',
         label: 'Card holder billing info is required',
         hint: 'Address and postal code must be entered on card payments.',

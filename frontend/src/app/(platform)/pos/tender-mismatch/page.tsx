@@ -1,5 +1,5 @@
 'use client'
-// THE LOG of the cash / credit mismatch (index §POS-14).
+// THE LOG of the cash / credit mismatch (index §POS-17).
 //
 // Owner 2026-10-30: "create log of the cash or credit mismatch".
 //
@@ -145,7 +145,7 @@ export default function TenderMismatchPage() {
     <>
       {sentence}
       {!data.log_available && (
-        <PlatformDetail detail="1106_pos_sale_tender_mismatch" style={{ marginLeft: 6 }} />
+        <PlatformDetail detail="1108_pos_sale_tender_mismatch" style={{ marginLeft: 6 }} />
       )}
     </>
   )

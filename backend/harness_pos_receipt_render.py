@@ -200,8 +200,14 @@ for key, server_default in pc.SERVER_DEFAULTS.items():
         mismatched.append(f"{key}: server={server_default!r} browser={value!r}")
 check("B1 every key the server declares EXISTS in the browser registry", not missing, f"missing: {missing}")
 check("B2 and carries the SAME default on both sides", not mismatched, f"{mismatched}")
+# The cap is an ANTI-COPY tripwire, not a budget: the browser registry holds ~60 keys and the point
+# is that the server never grows a second copy of it. Raised 24 → 36 on 2026-10-30 when §POS-15 gave
+# the server two tender settings and §POS-16 four W-9 settings, all of them genuinely read (the
+# tender-types endpoint, the W-9 panel's endpoint and the checkout's two gates). The
+# load-bearing half of this check is the second clause: a key the server does not read must not
+# appear here, and `require_customer` is the named witness.
 check("B3 the server declares only what it reads (not a second copy of the whole registry)",
-      len(pc.SERVER_DEFAULTS) < 25 and "require_customer" not in pc.SERVER_DEFAULTS)
+      len(pc.SERVER_DEFAULTS) < 36 and "require_customer" not in pc.SERVER_DEFAULTS)
 check("B4 the ts_default reader actually works (a known key resolves)",
       ts_default("brand_company_name") == ("ok", "") and ts_default("receipt_auto_print") == ("ok", False))
 

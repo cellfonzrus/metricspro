@@ -1360,14 +1360,45 @@ _all_routes = _flatten_routes(real_app.routes)
 # than over either side: §COMMCALC-48 landed two routes the same day, so 1812 + 3 = 1815 and neither
 # change asserts the other's figure. Re-taken on a counted,
 # named addition, never relaxed for CI.
-# Re-pinned 1815 -> 1816 on 2026-10-30 for §POS-14, the cash / credit mismatch log: ONE added route,
-# `GET /api/v1/pos/reports/tender-mismatch`. VERIFIED rather than assumed, which is what this pin is
-# for — `origin/main` was counted in a clean worktree at 1815 and this branch at 1816, and the only
-# route template matching the feature is that one. The three §POS-14 writes that touch the register
-# (`amend-plan`, `PUT items`, `amendments`) are pre-existing routes that gained behaviour, not new
-# ones, and the dry run is a BODY FLAG on the save route rather than a route of its own — which is
-# the §POS-14.6 design point, and is why the count moves by one and not by two.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1816"))
+# Re-pinned 1815 -> 1816 on 2026-10-30 for §POS-14, the working store: ONE added route, counted and
+# named — `GET /pos/working-store` (read-only: which stores this login may ring a sale at, whether a
+# confirmation is owed, and the rate that applies at the confirmed one). It is NOT money-touching:
+# it computes nothing and writes nothing, and the two money paths it serves (`POST
+# /pos/sales/checkout`, `POST /pos/activations`) only gained a REFUSAL — they add no input to any
+# report, statement, GP, commission or tax figure, and the PR adds no route to db_resilience itself
+# (I0b proves that independently of this number). Verified rather than inferred from the count: the
+# app's own leaf routes were enumerated on `origin/main` in a worktree and on this head, and the set
+# difference is exactly `['/api/v1/pos/working-store']` added with NOTHING removed; and
+# `git diff origin/main -- backend/app/ | grep -E '^[+-].*@router\.(get|post|put|patch|delete)\('`
+# prints 1 added decorator and 0 removed. Taken over the MERGED base, not over either side: main
+# advanced by three PRs (#604, #605, #607) while this was in flight and none of them added a route,
+# so 1815 + 1 = 1816. Re-taken on a counted, named addition, never relaxed for CI.
+# Re-pinned 1816 -> 1823 on 2026-10-30 (§POS-15 / §POS-16, the register's Terms tender and the
+# wholesale W-9 gate). Verified the house way, with THIS file's own _flatten_routes run against an
+# origin/main worktree and against the branch, and
+# `git diff origin/main <branch> -- backend/ | grep -E '^[+-].*@router\.'` printing exactly these
+# SEVEN added decorators and NONE removed:
+#     + /tender-types                        GET   (what this org may be paid with)
+#     + /customer-account-types              GET   (Personal / Business / Wholesale, one list)
+#     + /customers/{customer_id}/w9          GET   (the panel's state for one customer)
+#     + /customers/{customer_id}/w9/confirm  POST  (a PERSON records the certificate received)
+#     + /customers/{customer_id}/w9/request  POST  (email the blank form + mint the return link)
+#     + /public/w9/{token}                   GET   (the customer's page: company name + blank form)
+#     + /public/w9/{token}/upload            POST  (the customer returns the signed form)
+# None of the seven reads a payout, writes a ledger or feeds a report, statement, GP, commission or
+# tax figure, and none is a route of db_resilience itself (I0b proves that independently of this
+# number). Taken over the MERGED base, not over either side: the working-store PR (#610) landed its
+# own single route while this was in flight, so 1815 + 1 + 7 = 1823 and neither change asserts the
+# other's figure. Re-taken on a counted, named addition — never relaxed for CI.
+# Re-pinned 1823 -> 1824 on 2026-10-30 for §POS-17, the cash / credit mismatch log: ONE added
+# route, `GET /api/v1/pos/reports/tender-mismatch`. VERIFIED rather than assumed, which is what
+# this pin is for — the only route template matching the feature is that one, and the three writes
+# that touch the register (`amend-plan`, `PUT items`, `amendments`) are pre-existing routes that
+# gained behaviour, not new ones. The dry run is a BODY FLAG on the save route rather than a route
+# of its own — the §POS-17.6 design point, and why the count moves by one and not by two. Taken
+# over the MERGED base, not over either side: main advanced to 1823 with the working-store route
+# (#610) and the Terms / W-9 seven (#612) while this was in flight, so 1823 + 1 = 1824.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1824"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

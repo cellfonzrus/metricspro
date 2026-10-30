@@ -160,7 +160,7 @@ class _Query:
             # (app/modules/asset/router.py, commcalc/epay_ingest.py, account/statement_engine.py).
             # The double used to compare the STRING "null" to the column and so answered False for
             # every NULL row, silently returning [] for a read that works in production. Found while
-            # testing the §POS-14 settings fix, 2026-10-30.
+            # testing the §POS-17 settings fix, 2026-10-30.
             if val is None or (isinstance(val, str) and val.strip().lower() == "null"):
                 return got in (None, _MISSING)
             if isinstance(val, str) and val.strip().lower() in ("true", "false"):

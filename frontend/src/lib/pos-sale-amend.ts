@@ -27,7 +27,7 @@ import type { HeldLine } from '@/lib/pos-held-sale'
 // from a suspended cart interchangeable.
 export type AmendLine = HeldLine
 
-// WHAT WAS TENDERED, AND WHAT THE EDIT LEAVES OUTSTANDING (index §POS-14).
+// WHAT WAS TENDERED, AND WHAT THE EDIT LEAVES OUTSTANDING (index §POS-17).
 //
 // Owner 2026-10-30: "create log of the cash or credit mismatch". Editing a sale moves what is OWED;
 // it does not move what was TAKEN, so an edit can leave money to collect or refund.
@@ -75,7 +75,7 @@ export interface AmendPlan {
   available: boolean
   /** What stands tendered against this sale right now, before any edit. */
   tender: AmendTender | null
-  /** False until migration 1106 is applied: an edit that WOULD leave a mismatch is then refused
+  /** False until migration 1108 is applied: an edit that WOULD leave a mismatch is then refused
    *  with a 503 rather than saved unlogged, so the till can warn before the cashier starts. */
   tender_log_available: boolean
 }
@@ -87,7 +87,7 @@ export interface AmendSaved {
   changed: string
   /** The sentence to show the cashier, including the reminder to print a fresh receipt. */
   message: string
-  /** The cash / credit mismatch this edit leaves behind (§POS-14), as the server measured it. */
+  /** The cash / credit mismatch this edit leaves behind (§POS-17), as the server measured it. */
   tender: AmendTender | null
   /** The server's sentence about that mismatch. Shown verbatim; never composed here. */
   tender_message: string

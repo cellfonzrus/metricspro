@@ -1,5 +1,5 @@
 """THE one home for "what tender stands against this sale, and what does that leave outstanding"
-(§POS-14).
+(§POS-17).
 
 OWNER ASK 2026-10-30, verbatim (OWNER-QUOTE-BEGIN):
   "i need the pos POS — Cash Register to have the ability to edit the sale from the prior day and
@@ -69,7 +69,7 @@ records what it returns.
 
 PURE: no I/O, no framework import, no clock, no org id, no tenant, carrier or product name.
 Proof: `backend/harness_pos_sale_settlement.py`, `tests/unit/test_pos_sale_settlement.py`.
-Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §POS-14.
+Registered in docs/SYSTEM_DATA_FLOW_INDEX.md §POS-17.
 """
 from __future__ import annotations
 

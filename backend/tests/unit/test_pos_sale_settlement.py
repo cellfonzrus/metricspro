@@ -1,4 +1,4 @@
-"""UNIT: what tender stands against a sale, and what moving its total leaves outstanding (§POS-14).
+"""UNIT: what tender stands against a sale, and what moving its total leaves outstanding (§POS-17).
 
 Owner 2026-10-30: *"i need the pos POS — Cash Register to have the ability to edit the sale from the
 prior day and create log of the cash or credit mismatch"*.

@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════
--- 1106 — THE CASH / CREDIT MISMATCH AN EDIT LEAVES BEHIND, LOGGED (index §POS-14)
+-- 1108 — THE CASH / CREDIT MISMATCH AN EDIT LEAVES BEHIND, LOGGED (index §POS-17)
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════
 --
 -- OWNER ASK 2026-10-30, verbatim:
@@ -71,7 +71,7 @@ alter table pos.sale_amendments
   add column if not exists settled_note       text;
 
 -- The words the verdict and the direction may take. A CHECK rather than a lookup table: these are
--- the platform's existing vocabularies (deposit_recon's three states, and §POS-14's three
+-- the platform's existing vocabularies (deposit_recon's three states, and §POS-17's three
 -- directions), so a fourth spelling arriving here is a defect, not a tenant's choice.
 do $$
 begin
@@ -104,7 +104,7 @@ grant select, insert, update, delete on pos.sale_amendments to service_role;
 
 comment on column pos.sale_amendments.tender_variance is
   'tendered − expected at the moment of this edit; NEGATIVE is short, as on every other recon '
-  'surface. NULL means the comparison was not measurable — never that it matched (index §POS-14).';
+  'surface. NULL means the comparison was not measurable — never that it matched (index §POS-17).';
 
 -- ── 2) pos.amend_sale files the tender record with the superseded version ───────────────────────
 -- SAME SIGNATURE, so no overload is created and a backend deployed before this migration keeps
@@ -164,7 +164,7 @@ begin
 
   v_before := to_jsonb(s);
 
-  -- THE TENDER RECORD TRAVELS IN THE PATCH (mig 1106), under `tender`. The signature does not
+  -- THE TENDER RECORD TRAVELS IN THE PATCH (mig 1108), under `tender`. The signature does not
   -- change and no overload is created, so a backend deployed before this migration still calls this
   -- function successfully and simply files no tender columns. `pos/sale_settlement.record` is the
   -- ONE home that builds this object; nothing is re-derived here, because a second derivation in
@@ -185,7 +185,7 @@ begin
           nullif(btrim(coalesce(p_reason, '')), ''),
           nullif(btrim(coalesce(p_employee, '')), ''),
           -- NULL, never 0.00, when the one home could not measure it: an unmeasured figure that
-          -- stored as zero would read on the log as "the tender matched" (index §POS-14).
+          -- stored as zero would read on the log as "the tender matched" (index §POS-17).
           (v_tender->>'tender_total')::numeric,
           (v_tender->>'tender_expected')::numeric,
           (v_tender->>'tender_variance')::numeric,
@@ -266,4 +266,4 @@ comment on function pos.amend_sale(uuid, uuid, jsonb, jsonb, text, text) is
   'the new ones exactly as pos.checkout does, and restates the header — all in one transaction. The '
   'caller prices the lines and computes the totals through pos/sale_amendment.py, and the cash / '
   'credit mismatch the edit leaves behind through pos/sale_settlement.py, passed in p_sale_patch '
-  'under `tender` (mig 1106, index §POS-14).';
+  'under `tender` (mig 1108, index §POS-17).';

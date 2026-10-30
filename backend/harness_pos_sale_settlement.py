@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PROOF + LOCK: the cash / credit mismatch an edit leaves behind (index §POS-14).
+"""PROOF + LOCK: the cash / credit mismatch an edit leaves behind (index §POS-17).
 
 DB-free. Imports the REAL module, reads the REAL router, the REAL migration and the REAL page, so a
 lock here fails the build rather than describing an intention.
@@ -38,7 +38,7 @@ from app.modules.pos import sale_settlement as S             # noqa: E402
 
 MOD = (ROOT / "app/modules/pos/sale_settlement.py").read_text()
 ROUTER = (ROOT / "app/modules/pos/router.py").read_text()
-MIG = (ROOT.parent / "database/migrations/1106_pos_sale_tender_mismatch.sql").read_text()
+MIG = (ROOT.parent / "database/migrations/1108_pos_sale_tender_mismatch.sql").read_text()
 MIG_1103 = (ROOT.parent / "database/migrations/1103_pos_sale_amendment.sql").read_text()
 PAGE = (ROOT.parent / "frontend/src/app/(platform)/pos/sales/page.tsx").read_text()
 
@@ -110,7 +110,7 @@ def pay(method, amount):
     return {"payment_method": method, "amount": amount}
 
 
-# The region of the router that owns §POS-14's reads. Bounded for the same reason §POS-12's is: an
+# The region of the router that owns §POS-17's reads. Bounded for the same reason §POS-12's is: an
 # unbounded split would make every count below meaningless.
 REGION = ROUTER.split("# ── Editing a rung sale in place", 1)
 REGION = (REGION[1].split("# ── Register (cash drawer) sessions", 1)[0] if len(REGION) == 2 else "")
@@ -287,7 +287,7 @@ ok("I7. the record travels in the patch, so no new parameter is needed",
 
 
 # ── §J the migration extends, it does not sibling ────────────────────────────────────────────────
-print("\n§J  mig 1106 extends mig 1103's own table and signature")
+print("\n§J  mig 1108 extends mig 1103's own table and signature")
 ok("J1. it alters mig 1103's table rather than creating another",
    "alter table pos.sale_amendments" in MIG)
 ok("J2. it creates NO new table", not re.search(r"create\s+table", MIG, re.I))
@@ -310,7 +310,7 @@ ok("J9. it declares that it moves no money", "MOVES NO MONEY" in MIG)
 ok("J10. it files the record from the one home rather than re-deriving in plpgsql",
    "sale_settlement" in MIG and "tender_variance')::numeric" in MIG)
 ok("J11. the migration number is not claimed twice",
-   len(list((ROOT.parent / "database/migrations").glob("1106_*.sql"))) == 1)
+   len(list((ROOT.parent / "database/migrations").glob("1108_*.sql"))) == 1)
 
 
 # ── §K negative controls ─────────────────────────────────────────────────────────────────────────

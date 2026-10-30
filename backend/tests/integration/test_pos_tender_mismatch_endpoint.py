@@ -1,4 +1,4 @@
-"""Integration: the cash / credit mismatch an edit leaves behind, through the real endpoints (§POS-14).
+"""Integration: the cash / credit mismatch an edit leaves behind, through the real endpoints (§POS-17).
 
 Real routing, the real router body, the real one home — over the in-memory database double, with
 conftest blocking every outbound socket. There is no staging Supabase, so "integration" here means
@@ -105,7 +105,7 @@ def test_adding_an_item_leaves_the_difference_to_collect_in_cash(wired, api_clie
 
 
 def test_the_record_reaches_the_database_inside_the_patch(wired, api_client):
-    """It travels under `tender` in `p_sale_patch`, which is why mig 1106 needs no new parameter and
+    """It travels under `tender` in `p_sale_patch`, which is why mig 1108 needs no new parameter and
     creates no overload on `pos.amend_sale`."""
     _save(api_client, [PHONE, CHARGER])
     tender = wired.calls[-1]["p_sale_patch"]["tender"]
@@ -188,7 +188,7 @@ def test_an_edit_that_would_create_unexplained_money_is_refused_when_it_cannot_b
 
 def test_a_settled_edit_is_not_held_up_by_a_migration_it_does_not_use(monkeypatch, wired, api_client):
     """An edit that moves no money needs no log row, so the refusal above must not become a blanket
-    block on editing — that would be §POS-12 regressed in the name of §POS-14."""
+    block on editing — that would be §POS-12 regressed in the name of §POS-17."""
     monkeypatch.setattr("app.modules.pos.router._tender_log_available", lambda *a, **k: False)
     res = _save(api_client, [dict(PHONE, description="Samsung A9 Plus")])
     assert res.status_code == 200, res.text
@@ -326,7 +326,7 @@ def test_the_report_of_a_tenant_with_no_register_sales_is_empty_not_an_error(wir
 
 
 # ── the store a caller may ask about, and the filter it is allowed to build ──────────────────────
-# Found by the §POS-14 security pass (2026-10-30). The report is the FIRST path that reaches
+# Found by the §POS-17 security pass (2026-10-30). The report is the FIRST path that reaches
 # `_pos_settings_rows` with a raw query-string store code: every pre-existing caller passes a value
 # read from a database row or sits behind the `pos_settings` grant. That helper interpolates the
 # value into a PostgREST `or` filter with an f-string, so the report handed an injection sink a
@@ -376,7 +376,7 @@ def test_an_ordinary_store_code_still_builds_its_filter(wired):
 
 
 def test_the_settings_endpoint_sibling_is_fixed_too(monkeypatch, wired, api_client):
-    """THE SIBLING, found by the §POS-14 lock rather than by reading. `GET /pos/settings` built the
+    """THE SIBLING, found by the §POS-17 lock rather than by reading. `GET /pos/settings` built the
     same interpolated `or` filter from the same raw query parameter, and its own docstring says any
     signed-in POS user reaches it. It is MORE exposed than the band read: it returns the setting rows
     themselves, so a widened read there leaks other stores' rows rather than being discarded.
