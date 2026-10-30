@@ -21,7 +21,7 @@ import ChatEnvelope from '@/components/ChatEnvelope'
 import PlatformBanners from '@/components/PlatformBanners'
 import FlowReturnBar from '@/components/FlowReturnBar'
 import { apiUrl } from '@/lib/apiBase'
-import { useNarrowViewport } from '@/lib/viewport'
+import { menuFrame, useNarrowViewport } from '@/lib/viewport'
 // ONE findable world for BOTH search boxes (§54.12). The sidebar's ⌘K search used to build its own
 // index from NAV alone and rank it with its own private ladder, so 27 menu-less pages could not be
 // found here while ⌘/ found every one of them. Both now gate and fold through `viewerCatalog` and
@@ -240,14 +240,14 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   // already builds, so the fix reuses the existing layout rather than inventing a phone one. The
   // button still works on a desk; narrow simply wins while it lasts, and a rotation restores it.
   const narrow = useNarrowViewport()
-  // The viewport decides UNLESS this viewport was the one the operator pressed in. An explicit
-  // press still wins — the rail's own search button expands the menu, and on a phone that has to
-  // keep working — and the press is REMEMBERED WITH THE WIDTH IT WAS MADE AT, so a rotation hands
-  // the choice back to the viewport instead of leaving a 248px menu over a 390px screen. Derived,
-  // so there is no effect writing state back on every rotation.
-  const [collapsePref, setCollapsePref] = useState<{ at: boolean; value: boolean } | null>(null)
-  const collapsed = collapsePref && collapsePref.at === narrow ? collapsePref.value : narrow
-  const setCollapsed = useCallback((value: boolean) => setCollapsePref({ at: narrow, value }), [narrow])
+  // The icon rail is a DESK control (see menuFrame): collapsing is the operator's choice on a wide
+  // screen, and a phone never shows the rail at all — it opens the full, labelled menu OVER the
+  // page. So `collapsed` is simply ignored while narrow, and the phone's open/shut is its own
+  // state, defaulting shut so the page starts with its whole width.
+  const [collapsed, setCollapsed] = useState(false)
+  // The phone menu's own open/shut. Named for the NAV so it cannot be confused with `menuOpen`,
+  // which is the account dropdown in the top bar.
+  const [navOpen, setNavOpen] = useState(false)
   const [openGroup, setOpenGroup] = useState<string | null>(null)  // accordion: only one group's items shown at a time
   const [menuOpen, setMenuOpen] = useState(false)
   const [navCfg, setNavCfg] = useState<{ labels?: Record<string, string>; capabilities?: Record<string, boolean | null>; layout?: NavLayout }>({})
@@ -400,9 +400,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-    // `setCollapsed` now remembers the width the press was made at (§CORE-25), so it changes when
-    // the viewport does and the shortcut has to be re-bound with it.
-  }, [setCollapsed])
+  }, [])
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)', flexDirection: 'column' }}>
@@ -421,8 +419,15 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
         actually been visited — it never invents a destination. */}
     <FlowReturnBar />
     <div style={{ display: 'flex', flex: 1, minHeight: 0, background: 'var(--bg)' }}>
-      <aside className="mp-sidebar" style={{ width: collapsed ? 60 : 248, flexShrink: 0,
-        display: 'flex', flexDirection: 'column', transition: 'width 0.18s ease', overflow: 'hidden' }}>
+      {/* THE SCRIM. A phone's menu covers the page, so there has to be somewhere to tap that means
+          "put it back" — the usual way out of an overlay, and the one a thumb finds first. */}
+      {narrow && navOpen && (
+        <div onClick={() => setNavOpen(false)} aria-hidden
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 299 }} />
+      )}
+      <aside className="mp-sidebar" style={{ ...menuFrame(narrow, collapsed, navOpen),
+        display: 'flex', flexDirection: 'column',
+        transition: narrow ? 'transform 0.2s ease' : 'width 0.18s ease', overflow: 'hidden' }}>
         {/* Brand + collapse. The mark keeps the rail identifiable when the wordmark is hidden. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10,
           padding: collapsed ? '16px 0' : '16px 14px', justifyContent: collapsed ? 'center' : 'flex-start' }}>
@@ -449,8 +454,9 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
               {/* The way back to the light app, beside the collapse control because both are about how
                   the app LOOKS rather than what it shows. index §CORE-15. */}
               <ThemeToggle />
-              <button className="mp-icon-btn" onClick={() => setCollapsed(true)} title="Collapse menu"
-                aria-label="Collapse menu">‹</button>
+              <button className="mp-icon-btn" onClick={() => narrow ? setNavOpen(false) : setCollapsed(true)}
+                title={narrow ? 'Close menu' : 'Collapse menu'}
+                aria-label={narrow ? 'Close menu' : 'Collapse menu'}>{narrow ? '✕' : '‹'}</button>
             </div>
           )}
         </div>
@@ -552,6 +558,10 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
               const accent = accentStyle(rowOrder.get(href) ?? 0)
               return (
                 <Link key={href} href={href} title={collapsed ? labelOf(href, label) : undefined}
+                  // A destination was chosen, so the overlay has done its job — otherwise it stays
+                  // over the page the person just asked for. Group headers do NOT close it: picking
+                  // a module and then its page is two taps.
+                  onClick={() => { if (narrow) setNavOpen(false) }}
                   className={'mp-nav-item' + (active ? ' is-active' : '')}
                   style={collapsed ? { ...accent, justifyContent: 'center', padding: '9px 0' }
                                    : (inSub ? { ...accent, paddingLeft: 30 } : accent)}>
@@ -616,6 +626,14 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
           height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           position: 'sticky', top: 0, zIndex: 10 }}>
           <div style={{ fontSize: 14, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: narrow ? 8 : 16, minWidth: 0, overflow: 'hidden' }}>
+            {/* THE WAY IN. On a phone the menu is off screen, so the top bar carries the control
+                that brings it back — the first thing in the bar, where a thumb reaches. */}
+            {narrow && (
+              <button onClick={() => setNavOpen(true)} title="Menu" aria-label="Open menu"
+                aria-expanded={navOpen} style={{ background: 'none', border: '1px solid var(--border)',
+                  borderRadius: 8, color: 'var(--text2)', cursor: 'pointer', fontSize: 16,
+                  lineHeight: 1, padding: '6px 9px', flexShrink: 0 }}>☰</button>
+            )}
             <span><span style={{ color: 'var(--text3)' }}>Period: </span><span style={{ fontWeight: 600, color: 'var(--accent)' }}>{period}</span></span>
             <Link href="/portal" title="Open the employee kiosk to clock in / out"
               style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', textDecoration: 'none', border: '1px solid var(--border)', borderRadius: 8, padding: '5px 10px' }}>

@@ -68,6 +68,32 @@ export function twoPaneFrame(
   }
 }
 
+/** The sidebar's two desk widths. Declared here because the menu's width is the fact that decided
+ *  how much page every screen behind it had — 248px of a 390px phone is the whole defect. */
+export const SIDEBAR_W = 248
+export const SIDEBAR_RAIL_W = 60
+
+/** THE menu frame. A desk has two columns and the menu is one of them; a phone has ONE column, so
+ *  the menu is an overlay that slides over it and is never in the flow.
+ *
+ *  WHY THE RAIL IS A DESK CONTROL ONLY. In the rail every group renders OPEN, which on a phone is
+ *  182 unlabelled icons — and, as a flex child of a page with no height bound, it stretched the page
+ *  to 7,452px with the content in the top 664 of it. And expanding it put a 248px column beside a
+ *  390px page, so the page overflowed and the browser zoomed the whole app out. A phone therefore
+ *  opens the FULL, labelled menu, over the page, bounded top to bottom so the MENU scrolls. */
+export function menuFrame(narrow: boolean, collapsed: boolean, open: boolean): {
+  width: number; flexShrink: 0; position: 'fixed' | 'static'; transform: string
+  zIndex: number | 'auto'; top: number | 'auto'; bottom: number | 'auto'; left: number | 'auto'
+} {
+  if (!narrow) {
+    return { width: collapsed ? SIDEBAR_RAIL_W : SIDEBAR_W, flexShrink: 0, position: 'static',
+             transform: 'none', zIndex: 'auto', top: 'auto', bottom: 'auto', left: 'auto' }
+  }
+  return { width: SIDEBAR_W, flexShrink: 0, position: 'fixed',
+           transform: open ? 'translateX(0)' : 'translateX(-100%)',
+           zIndex: 300, top: 0, bottom: 0, left: 0 }
+}
+
 /** Is the viewport narrow, right now, and does it keep answering as the device rotates?
  *  `useSyncExternalStore` rather than state+effect: the browser's media query IS the store, so
  *  there is nothing to mirror and no cascading render on first paint. SSR-safe (false until the

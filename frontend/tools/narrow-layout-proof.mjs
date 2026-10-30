@@ -85,12 +85,23 @@ for (const file of walk(APP)) {
 // The shell's own rail is the other half of the same fact: a sidebar that cannot collapse starves
 // every page behind it, whatever that page's own grid says.
 const shell = readFileSync(join(APP, '(platform)', 'layout.tsx'), 'utf8')
-const shellWired = /useNarrowViewport\s*\(/.test(shell)
 
 let bad = offences.length
-if (!shellWired) {
+if (!/useNarrowViewport\s*\(/.test(shell)) {
   console.error(`FAIL  src/app/(platform)/layout.tsx does not call useNarrowViewport().`)
-  console.error(`      The sidebar is a fixed width; on a phone it must fall back to the icon rail.`)
+  console.error(`      The sidebar is a fixed width; on a phone the page behind it has none left.`)
+  bad++
+}
+// The menu's own frame is the other half of it. A hand-written width here is how the rail came back
+// as a phone's menu: 182 unlabelled icons in a column the page could not spare.
+if (!/menuFrame\s*\(/.test(shell)) {
+  console.error(`FAIL  src/app/(platform)/layout.tsx does not take its sidebar frame from menuFrame().`)
+  console.error(`      A phone's menu is an overlay, not a column. ${HOME} decides which.`)
+  bad++
+}
+for (const m of shell.matchAll(/width:\s*(collapsed|narrow)[^,\n]*\b(\d{2,4})\b/g)) {
+  console.error(`FAIL  src/app/(platform)/layout.tsx:${shell.slice(0, m.index).split('\n').length}  `
+    + `hand-written sidebar width (${m[0].trim()}) — it belongs to menuFrame() in ${HOME}.`)
   bad++
 }
 for (const o of offences) console.error(`FAIL  ${o}`)

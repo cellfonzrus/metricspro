@@ -8,7 +8,7 @@
 // been seen.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { NARROW_MAX, NARROW_QUERY, isNarrowWidth, responsiveColumns, twoPaneColumns, twoPaneFrame, useNarrowViewport } from '../viewport'
+import { NARROW_MAX, NARROW_QUERY, SIDEBAR_RAIL_W, SIDEBAR_W, isNarrowWidth, menuFrame, responsiveColumns, twoPaneColumns, twoPaneFrame, useNarrowViewport } from '../viewport'
 
 describe('isNarrowWidth', () => {
   it('calls a phone narrow and a desk wide', () => {
@@ -114,5 +114,45 @@ describe('useNarrowViewport', () => {
   it('a browser without matchMedia renders the desk layout rather than throwing', () => {
     vi.stubGlobal('matchMedia', undefined)
     expect(renderHook(() => useNarrowViewport()).result.current).toBe(false)
+  })
+})
+
+// ── THE MENU ON A PHONE (owner ask 2026-10-30, tested as a user would) ───────────────────────────
+// Walking the menus at iPhone width found two more faults of the SAME class §CORE-25 names:
+//   · the icon rail renders EVERY group open — 182 icons — and, being a flex child of a page with
+//     no height bound, it stretched the page to 7,452px with the content in the top 664 of it;
+//   · pressing "expand menu" put a 248px column beside the content, so the page overflowed again
+//     (layout viewport 555px instead of 390) and the browser zoomed the whole app out.
+// Both are the same mistake: a phone has one column, so the menu is an OVERLAY, not a column.
+describe('menuFrame', () => {
+  it('on a desk the menu is a column, exactly as it was', () => {
+    expect(menuFrame(false, false, false)).toEqual({
+      width: SIDEBAR_W, flexShrink: 0, position: 'static', transform: 'none', zIndex: 'auto',
+      top: 'auto', bottom: 'auto', left: 'auto',
+    })
+    expect(menuFrame(false, true, false).width).toBe(SIDEBAR_RAIL_W)   // collapsed = the icon rail
+  })
+
+  it('on a phone the menu is an overlay, off screen until it is opened', () => {
+    const shut = menuFrame(true, false, false)
+    expect(shut.position).toBe('fixed')
+    expect(shut.transform).toBe('translateX(-100%)')   // out of the way, still mounted
+    expect(shut.width).toBe(SIDEBAR_W)                 // opens with LABELS, never the icon rail
+  })
+
+  it('an open phone menu covers the page from top to bottom, so the menu scrolls and the page does not', () => {
+    const open = menuFrame(true, false, true)
+    expect(open.transform).toBe('translateX(0)')
+    expect(open.top).toBe(0)
+    expect(open.bottom).toBe(0)
+    expect(open.position).toBe('fixed')
+  })
+
+  it('never takes a column from a phone — open or shut, it is out of the flex flow', () => {
+    for (const open of [true, false]) expect(menuFrame(true, false, open).position).toBe('fixed')
+  })
+
+  it('ignores "collapsed" on a phone: the rail is a desk control and 182 unlabelled icons are not a menu', () => {
+    expect(menuFrame(true, true, true).width).toBe(SIDEBAR_W)
   })
 })
