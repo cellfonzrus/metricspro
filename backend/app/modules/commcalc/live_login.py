@@ -302,12 +302,24 @@ def _lf():
     return lf
 
 
-def _wall_note(vp, page):
+# What the operator is told when no password field could be found. The page itself usually SAYS why,
+# and until §COMMCALC-50 this threw that away: a portal that had plainly refused the request was
+# reported as "the login form may render differently than expected", which sends somebody to read
+# markup on a page that has no form on it at all (owner's UPS billing login, 2026-10-30).
+#
+# So the page's own verdict leads, and the guess is only what is left when the page said nothing.
+def _page_verdict(vp, page, refusal=None, challenge=None):
+    """The portal's own refusal / challenge, or None. Dereferences the ONE vocabulary."""
     try:
-        if vp._looks_like_bot_wall(page):
-            return "The portal served an anti-automation page — route this source through a residential proxy."
+        return vp.page_refusal(page, refusal=refusal, challenge=challenge)
     except Exception:
-        pass
+        return None
+
+
+def _wall_note(vp, page, refusal=None, challenge=None):
+    v = _page_verdict(vp, page, refusal=refusal, challenge=challenge)
+    if v:
+        return v["note"]
     return "The login form may render differently than expected — check the screenshot."
 
 
@@ -1080,7 +1092,13 @@ class LiveLoginSession:
 
             login_fr, pw_el = vp._password_frame(page)
             if not pw_el:
-                self._set(phase="error", message="Could not find the login form. " + _wall_note(vp, page))
+                # LEAD WITH WHAT THE PAGE SAID. "Could not find the login form" is true of a refusal
+                # page too, and saying it first makes the real answer read like a footnote — which is
+                # exactly how an operator ends up checking form markup on a page that refused him.
+                _v = _page_verdict(vp, page)
+                self._set(phase="error",
+                          message=(_v["note"] if _v
+                                   else "Could not find the login form. " + _wall_note(vp, page)))
                 self._capture(page)
                 return
 
