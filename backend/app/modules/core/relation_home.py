@@ -557,10 +557,14 @@ def schema_of(table):
     try:
         return SCHEMA_OF[key]
     except KeyError:
+        # A PROGRAMMING ERROR, never a tenant's setup state: the caller named a relation this map has
+        # never heard of. So the sentence says what the CALLER did wrong and names no schema internals
+        # — §19.36's boundary (harness_carrier_vocab_guard) exists because a sentence about applying
+        # something is a setup hint, and a setup hint must travel as a SetupNotice or not at all.
         raise UnknownRelation(
-            f"no migration in database/migrations/ creates a relation named '{key}', so this module "
-            f"cannot say which schema holds it — add the migration (and the entry the lock will ask "
-            f"for) rather than guessing a schema at the call site") from None
+            f"this map declares no relation named '{key}', so it cannot say which schema holds it — "
+            f"declare it here (with the entry the lock asks for) rather than guessing a schema at the "
+            f"call site") from None
 
 
 def reader(client, table, select="*"):
