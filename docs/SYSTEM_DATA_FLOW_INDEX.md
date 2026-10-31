@@ -6137,6 +6137,90 @@ cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 impo
 "is the feed late", which is why a missing feed here is reported and not alerted.
 
 
+## 15z.1. A MISSING TRADING DAY IS AUDIBLE — the fact had a home, and no surface asked for it (owner 2026-10-31)
+
+> OWNER (verbatim): *"this is a big problem for management iff we wil miss trading days, we need to
+> get this fix right away"*.
+
+**THE INSTANCE.** `957 Pennsylvania Ave` (LuxeLink) never delivered **22 and 23 September 2026**.
+Nothing said so. It surfaced only because a rep's commission claim read **$224.20 of accessories and
+2 boxes above our own data** and somebody went looking. Measured the same day, read-only, over the
+three live tenants: **324 store-days** of sales never received between August and October 2026, and
+several stores missing **whole months** (LuxeLink Oct 65 · Cellfonz Oct 40 · Vzone no feed since
+September · NY LOGISTICS 25). Every commission, target and store-comparison figure over those months
+understates somebody.
+
+**THE CLASS, AND WHY NOTHING NEW DERIVES ABSENCE.** The fact already had ONE home: §15z's
+`zero_sales.store_day_state` has returned `NOT_REPORTED` for a store-day whose feed did not land
+since 2026-09-22, correctly, with the count `None` and never `0` — and the report's own banner has
+been saying *"The fix for those rows is an upload."* all along. **Two surfaces were each
+individually right and the fact fell between them:** `zero_sales.alert_items` DELIBERATELY refuses to
+email a not-reported scope (a missing feed is a pipeline failure, and dressing it as a sales alert
+sends a District Manager after a rep who sold fine) and hands it to §20 import health — which **had
+no check for a missing sales day**. So the only mechanism that knew spoke to nobody.
+
+The fix is the HAND-OFF, not a detector: `zero_sales.feed_gap_items` reads the report's own
+`day_states` and this module's own `NOT_REPORTED`, so a state renamed there reaches the surface with
+no second edit, and there is no sibling definition of "this store did not report" to drift from the
+report the owner reads.
+
+**THE NEGATIVE CONTROL IS THE WHOLE POINT.** `measured_zero` (rows ARRIVED, none was an activation)
+is **never** reported as a missing upload. One needs a manager, the other needs a file; collapsing
+them is exactly the false chase §15z exists to prevent. `harness_feed_gap_days.py` §A arms the
+assertion — it re-runs the same shape marked not-reported to prove the control can fail.
+
+**TWO KINDS, TWO ITEMS, BECAUSE THEY ARE TWO JOBS.** `FEED_GAP_WHOLE_WINDOW` = every TRADING day in
+the window is missing → a connector to repair (`error`; nothing fixes itself). `FEED_GAP_PARTIAL` =
+the feed delivers and lost days → a file to re-pull (`warning`). One combined item would send both to
+whichever page the louder half named.
+
+**WHAT IS NOT A MISSING DAY.** `closed` / `in_progress` / `off` — a store shut on Sunday has lost no
+upload and an unfinished day is not a gap. So `whole_window` compares the missing days against the
+days actually EVALUATED, never against the calendar. The window ends **yesterday** for the same
+reason `include_today` is false.
+
+**A MISSING FEED IS ONE STORE PROBLEM.** Store grain only: `rep_day_state` makes every rep under a
+gapped store `not_reported` by inheritance, so counting rep rows would report one store's missing
+upload once per person on the schedule.
+
+**CONFIG, AND A THRESHOLD THAT CANNOT SILENCE IT.** `commission_org_config.audit_feed_gap_window_days`
+(default 30, clamped to the fold's own 2–186) and `audit_feed_gap_min_days` (default
+`FEED_GAP_MIN_DAYS` = 1 — one lost trading day is a day of sales). A `min_days` below one is
+**REFUSED** rather than honoured: it would restore exactly the silence this ends.
+
+**EVERY TENANT (project rule 2026-10-30).** `p_sales_feed_days` runs the real `_zero_sales_core` fold
+per org: the tenant's OWN stores, OWN activation rules and OWN schedule decide its answer, so no
+tenant's vocabulary or calendar can answer for another's. Verified live against production for all
+four orgs, and in CI for three seeded orgs each with its own store and its own missing day — the
+cross-tenant test asserts one tenant's store code can never appear in another's finding. A tenant
+with no feed, no stores or a refused activation rule contributes nothing rather than a false alarm.
+
+**STILL OFF, AND WHY.** §15z's own alerting is `alerts_enabled: false`, inherited from
+`zero_sales.HOUSE_CONFIG`, because **mig `1016` was never applied** — there is no `zero_sales_config`
+table to hold a row that turns it on. That migration is surfaced for owner approval; this change
+needs none.
+
+| | |
+|---|---|
+| ONE HOME (the fact) | `commcalc/zero_sales.store_day_state` → `NOT_REPORTED` (§15z, unchanged) |
+| ONE HOME (the hand-off) | `commcalc/zero_sales.feed_gap_items` + `FEED_GAP_WHOLE_WINDOW` / `FEED_GAP_PARTIAL` / `FEED_GAP_KINDS` / `FEED_GAP_MIN_DAYS` — PURE, DB-free |
+| THE WORDING | `commcalc/import_audit.feed_gap_attention` (PURE, no clock) + `_feed_gap_window` |
+| THE PROVIDER | `commcalc/import_audit.p_sales_feed_days`, registered `commcalc_feed_gap_days`, group `import`, cost **heavy** → `GET /core/attention?deep=1` |
+| SURFACE | the admin attention list / red-green board; deep link `/commcalc/zero-sales?date_from=&date_to=` |
+| READ-ONLY | books nothing, pays nobody, writes no flag. No migration, no table, no new endpoint |
+| PROOFS | `harness_feed_gap_days.py` (29, wired into `carrier-vocab-guard.yml`), `tests/unit/test_feed_gap_days.py` (23), `tests/integration/test_feed_gap_attention.py` (16, three tenants) |
+
+**DUPLICATE CHECK (stated for the build gate).** Searched the index for an existing mechanism before
+building: §15z Zero Sales (the day state — **EXTENDED, this is its hand-off**), §19.48
+`pay_data_quality.day_coverage_gap` and §19.54 `statement_month_coverage` (the CARRIER PAY feed's
+days, a different feed and a different question), §19.52 `sales_recon.comparability` /
+`sales_derive_gap` (the month-end ARCHIVE vs the live feed, transaction counts not store-days), §68
+`entitlement_coverage` (expected-but-absent at store × MONTH grain, carrier payments not sales), §20
+import health (is a feed LATE — never which store-days it lost). Reused, not rebuilt: the day state,
+the report fold, the attention item shape, the `_org_config` threshold reader, the deep-link page.
+Nothing derives absence twice.
+
+
 ## 15v. DISTRIBUTOR INVOICES — the standard filters, over a feed with no market column (owner 2026-10-03)
 
 **Owner (verbatim):** *"add date range and market with standard filters for distributor invoices"*.
@@ -7243,7 +7327,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `core.module_price` (mig `975`; price per plan x module, effective-dated; UNPRICED = the ABSENCE of a row) | `PUT /billing/module-pricing` (super-admin, `changed_by`) | `statement.price_for` → `module_line` / `pricing_grid` |
 | `core.billing_statement` (mig `975`; FROZEN itemized statements incl. the `complete` flag) | `POST /billing/statement/close` | `statement.build_statement(frozen=)` — read, NEVER recomputed |
 | `storeops.pricing_package` / `storeops.tenants.package_key` (mig `908`, REUSED) | existing `/billing/*` pricing endpoints | the PLAN TIERS (free/starter/premium are ROWS, not an enum) + the monthly-fee line on every statement |
-| `commcalc.zero_sales_config` (mig `1016`, **NOT applied**; HOUSE row = the default every tenant inherits, tenant row wins — `.in_("org_id", [org, HOUSE_ORG])`. Absent/unreadable ⇒ `zero_sales.HOUSE_CONFIG`, the shipped behaviour, so the report works before the migration) | `PUT /commcalc/zero-sales-config` (THE one writer; validates through `zero_sales.resolve_config` BEFORE writing, so a refused value is a 400 and never a stored row) | `router._zero_sales_config` → `_zero_sales_core` (`GET /commcalc/zero-sales`) and `_run_zero_sales_alerts` (§15z) |
+| `commcalc.zero_sales_config` (mig `1016`, **NOT applied**; HOUSE row = the default every tenant inherits, tenant row wins — `.in_("org_id", [org, HOUSE_ORG])`. Absent/unreadable ⇒ `zero_sales.HOUSE_CONFIG`, the shipped behaviour, so the report works before the migration) | `PUT /commcalc/zero-sales-config` (THE one writer; validates through `zero_sales.resolve_config` BEFORE writing, so a refused value is a 400 and never a stored row) | `router._zero_sales_config` → `_zero_sales_core` (`GET /commcalc/zero-sales`) and `_run_zero_sales_alerts` (§15z) and `import_audit._feed_gap_window` reads the window/threshold off `commission_org_config` (`audit_feed_gap_window_days` / `audit_feed_gap_min_days`), NOT off this table — the attention check works before mig `1016` lands (§15z.1) |
 | `storeops.alert_log` — **the `channel` column** (mig `1051`) | `storeops/alert_log.record_sent` / `record_silence` — the ONLY writer of this table | `storeops/alert_log.already_sent` / `sent_pairs` — the ONLY readers, reached through `notify/digest_delivery.py`. A row says WHICH CHANNEL carried the finding to WHICH address, so a channel that failed is still owed it (§15.1, §15.2) |
 | `storeops.alert_log` — **scope `'billpay_declaration'`** (mig `433` table, no new table) | `closing/router._run_billpay_declaration_alerts` via the ONE send record (§15.1, `storeops/alert_log.py`) driven by `notify/digest_delivery.py` | the ref_key SPELLING is `manager_digest.ref_key`, the third scope to dereference it. A row is written ONLY when a channel actually delivered, so a dead channel cannot mark a finding escalated (§47.13) |
 | `storeops.tenants` — **the bill-pay declaration-alert config** (mig `1043`: `billpay_declaration_alerts_enabled` / `_alert_time` / `_alert_tolerance` / `_alert_channels` / `_alert_lookback_days` / `_alert_last_run` / `_alert_last_detail`; house defaults in `billpay_declaration_alerts.HOUSE_CONFIG`, enabled FALSE) | owner, per tenant (the mig-905 posture) | `billpay_declaration_alerts.resolve_config` → `_run_billpay_declaration_alerts`; the send time is compared by `manager_digest.due_now` (§47.13) |
@@ -7846,6 +7930,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | Portal-reported units / $ per declared category (per store, day, worker) | `portal_metric_day.units` / `.amount`, with `metric_basis` saying whether the category is the TENANT's word (`line_map` / `label`) or a text match | `pos_report_feed.normalize` → `totals_by_store_day` (rows with no resolved store are reported and EXCLUDED, never counted as $0 for a store); §COMMCALC-07. No money books from it — it exists to be compared against the declaration, and a disagreement is reported to a human |
 | POS-merchant settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='pos_merchant'` | same reader, `pos_merchant` role (§12a) |
 | **Zero-sales day state** (`had_sales` / `measured_zero` / `not_reported` / `closed` / `in_progress` / `off` / `rule_refused`) and **consecutive zero days** | `daily_sales_feed` ∪ `raw_sales` per (store × day) via `_sales_rows_union`, classified by `line_class` inside `_sales_cell_agg`; feed COVERAGE from the raw rows before the skip rules; trading days from `storeops.shifts.scheduled_hours` | `zero_sales.store_day_state` / `rep_day_state` / `walk_run` ← `router._zero_sales_core` → `GET /commcalc/zero-sales`. **An unmeasured day's count is `null`, never `0`** — armed negative control in `harness_zero_sales.py` §A. Alert threshold `consecutive_days` (config, house default 2) → `zero_sales.alert_items` → `manager_digest` → `storeops.alert_log` scope `'zero_sales'` (§15z) |
+| **Store-days of sales we NEVER RECEIVED** — the missing trading day, and whether the feed is dead or merely short | the §15z day state above, STORE grain only; `NOT_REPORTED` days counted against the days actually EVALUATED (`closed` / `in_progress` / `off` excluded) | `zero_sales.feed_gap_items` (PURE; `FEED_GAP_WHOLE_WINDOW` = a dead feed, `FEED_GAP_PARTIAL` = lost days) → `import_audit.p_sales_feed_days` → `GET /core/attention?deep=1`. **A `measured_zero` day is NEVER reported as a missing upload** — rows landed and none was an activation; that needs a manager, this needs a file (armed control, `harness_feed_gap_days.py` §A). Dereferences the state, derives no absence of its own; `min_days` below 1 is REFUSED (§15z.1) |
 | Exec-MTD LINE metrics (Bill Payment Qty/$ · Total Phones · Activation Fee · Total Protect) | `raw_sales.department` / `.category` / `.product_desc` matched against `commcalc.exec_metric_config.rules` (EXACT membership for dept/cat, substring for `product_desc_contains`) | `exec_metric_defs.resolve` (tenant row > house `carrier` PRESET > `CODE_DEFAULTS`, mig `962`) → `exec_metric_defs.line_match` inside `_sales_cell_agg`; silent-zero detector `bucket_coverage` → `GET /exec-mtd/*` key `metric_coverage` → Exec-MTD banner. Also the SECONDARY basis for `/metric-recon` and Leg B of the mig-`944` 3-way bill-pay recon; the mig-`939` P&L carve-out does NOT read it. Proof `harness_exec_metric_defs.py` (§3) |
 | Which of THE TWO WAYS a plan pays employee commission through (Option 1 flat from Executive MTD \| Option 2 customised rules) — and the order every surface presents them in | `commcalc.commission_plan.commission_basis` (mig `298`: `'exec_mtd'` \| `'rules'` default) | `_lib/commissionWays.wayForBasis` (READ-ONLY on the structure page + plan editor header; the plan editor's checkbox is the only writer); order + header = `COMMISSION_WAYS` (one home, §6e); pay path unchanged: `_resolve_plan_by_rep` → `_override_plan_by_rep_with_mtd` (§6c) |
 | Which uploads FEED a given report screen (the way back from a report to its upload pages, frontend) | `GET /commcalc/report-kinds` `kinds[].shows_in.consumers[].screen` + `kinds[].where` (from the one `landing_identity.CONSUMERS` map) | `lib/report-kinds.feedsForScreen` / `useReportKinds().feedsFor('exec_mtd')` → `CommissionWaysHeader.ExecMtdFeeds` (§6e); the Executive MTD page itself uses the backend twin `feeds_for_table` on its own `landing` payload (§32) |

@@ -1357,6 +1357,12 @@ on:
       # the sweep that asks for the window, the upload handler's day-keyed derivation and the three
       # frontend files that render what an upload replaces, so a change to any of them must run it.
       - "backend/harness_statement_month_coverage.py"
+      # index §15z.1 — a trading day of sales that never arrived is REPORTED, and a store that
+      # reported and sold nothing is never called a missing upload. The lock reads the one home for
+      # the day state, the attention surface that now raises it, and the provider's wording.
+      - "backend/harness_feed_gap_days.py"
+      - "backend/app/modules/commcalc/zero_sales.py"
+      - "backend/app/modules/commcalc/import_audit.py"
       - "backend/app/modules/commcalc/feed_period.py"
       - "backend/app/modules/commcalc/epay_sweep.py"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
@@ -2098,6 +2104,9 @@ jobs:
       - name: Run the statement month-end coverage lock (the window we ASK for has one home and cannot lose its last day; a CLOSED month whose statement misses a day is reported incomplete, named and priced; the shipped day-coverage question is dereferenced, not re-derived; what an upload REPLACES is the registry's answer on every surface — owner 2026-10-08, index §19.54)
         working-directory: backend
         run: python3 harness_statement_month_coverage.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the missing-trading-day lock (a store-day whose sales feed never landed is REPORTED to the surface that can fix it, and a store that reported and sold nothing is NEVER called a missing upload; the day state is dereferenced from its one home, not respelled; closed and unfinished days are not gaps; a threshold that would silence every finding is refused — owner 2026-10-31, index §15z.1)
+        working-directory: backend
+        run: python3 harness_feed_gap_days.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the earned-crosscheck lock (a statement's crosscheck verdict is COMPUTED, never defaulted; `not_measured` is never a pass; both statement writers dereference the one resolver — owner 2026-10-06, index §19.49)
         working-directory: backend
         run: python3 harness_statement_crosscheck_earned.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
