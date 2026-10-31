@@ -19,6 +19,15 @@ BACKEND-ONLY table commcalc.b2b_sweep_config; the password is never returned to 
 from datetime import datetime, timezone
 
 import requests
+
+from app.modules.notify import report_filters as _report_filters  # THE tenant's-today home (pure leaf)
+
+# TODAY, IN THE TENANT'S ZONE. A DEREFERENCE of the one home — `feed_today` IS
+# `report_filters.business_today`, the same function object, so no second zoneinfo ladder can
+# appear here. A portal window built on the container's UTC day asks for a day that has not
+# begun where the portal lives; that cost the comp report every automatic run it ever made
+# (index §COMMCALC-52), and this driver asked the same question the same wrong way.
+feed_today = _report_filters.business_today
 from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
 
 
@@ -509,7 +518,7 @@ def write_inventory_values(client, org_id, store_values, as_of_date):
     return saved
 
 
-def run_inventory_sweep(client, org_id, user, pw, store_field=None, value_field=None, connector=None):
+def run_inventory_sweep(client, org_id, user, pw, store_field=None, value_field=None, connector=None, *, tz):
     """Log in → fetch Inventory Aging → normalize → upsert swept values. Returns a summary dict.
     Raises B2BNotConfigured until the portal client stubs above are implemented.
     `connector` = the connector registry row (label / host) the copy and the client dereference."""
@@ -518,7 +527,9 @@ def run_inventory_sweep(client, org_id, user, pw, store_field=None, value_field=
     login(session, user, pw, connector=connector)
     raw = fetch_inventory_aging(session, connector=connector)
     store_values = normalize_inventory(raw, store_field, value_field)
-    as_of = datetime.now(timezone.utc).date().isoformat()
+    # The day this inventory was OBSERVED, in the tenant's zone — a snapshot filed under the
+    # container's UTC date lands on tomorrow for every tenant west of UTC.
+    as_of = feed_today(tz).isoformat()
     saved = write_inventory_values(client, org_id, store_values, as_of)
     total = round(sum(store_values.values()), 2)
     return {"stores": saved, "total_value": total, "as_of_date": as_of}

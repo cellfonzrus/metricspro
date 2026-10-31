@@ -767,6 +767,56 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/vidapay_sweep.py': ('_lo',),
         },
     },
+    # ── §COMMCALC-52 — what day is it where this portal lives ────────────────────────────────────
+    'tenant_today': {
+        "question": 'A feed window, an "as of" stamp, a staleness age — WHAT DAY IS IT, for this '
+                    'tenant? Three portal drivers resolved it against the CONTAINER\'s clock '
+                    '(datetime.now(timezone.utc).date()), which is not any tenant\'s calendar. '
+                    'Measured 2026-10-31: the comprehensive comp report has never once arrived '
+                    'automatically since the leg was built — not one `epay auto-sweep` row in '
+                    'commcalc.upload_log, for any org. Its slot is 23:30 in the tenant\'s zone, '
+                    'deliberately, because the portal posts a day\'s compensation at about 23:30 '
+                    'local; 23:30 America/New_York is 03:30 UTC THE NEXT DAY, so on eight '
+                    'consecutive recorded runs the window asked for a day one ahead of the tenant\'s '
+                    'and the portal answered zero rows — read as "no compensation posted", for four '
+                    'months. The rule already had a home, written 2026-07-30 for a scheduled send, '
+                    'whose docstring states this exact defect ("resolving a relative date off the '
+                    'server\'s UTC day would put an 8pm-Eastern Friday run on Saturday\'s date"); '
+                    'nothing in commcalc read it. §19.18\'s shape for the fifth time. Each driver '
+                    'now BINDS that function (feed_today IS business_today — the same object, so the '
+                    'lock asserts identity and no second zoneinfo ladder can appear), and `tz` is '
+                    'keyword-only with NO default at every window-building entry point, because the '
+                    'defect was a caller that had never asked the org what day it was and still got '
+                    'an answer. The zone comes from the connector\'s own `*_sweep_config.timezone` '
+                    'row, a column that already exists NOT NULL on every sweep config table, so '
+                    'nothing had to be added to the schema. '
+                    'EXCUSED SIBLING, pinned shrink-only: feed_period.month_state defaults `today` '
+                    'to the container\'s day, excused because it is MONTH grain (the two clocks can '
+                    'disagree only either side of midnight on the 1st) and `today` is already '
+                    'injectable there, so a caller that cares passes the tenant\'s day.',
+        "homes": ('app/modules/notify/report_filters.py',),
+        "index": ('COMMCALC-52',),
+        "locks": ('harness_feed_window_tenant_day.py',),
+        # SNAPSHOT — written BY HAND (§50). Each driver binds the home's function object rather than
+        # calling through a wrapper, so the dereference is provable by identity, not by grep.
+        "callers": {
+            # ── the three portal drivers, which never asked it until 2026-10-31. Each imports the
+            # MODULE and binds its function object (`feed_today = _report_filters.business_today`),
+            # so the dereference is provable by identity rather than by grep.
+            # the window that cost the comp report every automatic run it ever made
+            'app/modules/commcalc/epay_sweep.py': ('_report_filters',),
+            # the invoice window and the PayGo cutoff
+            'app/modules/commcalc/vip_sweep.py': ('_report_filters',),
+            # the day an inventory snapshot is filed under
+            'app/modules/commcalc/b2b_sweep.py': ('_report_filters',),
+            # ── the notify side, which has read this home correctly since it was written
+            'app/modules/notify/attention.py': ('report_filters',),
+            'app/modules/notify/finance_reports.py': ('ReportConfigError',),
+            'app/modules/notify/report_registry.py': ('ReportConfigError', '_business_today',
+                                                      '_resolve_billing_friday', '_validate_filters'),
+            'app/modules/notify/workforce_reports.py': ('_business_today',),
+        },
+    },
     # ── §COMMCALC-38 — what a supplier billed us ─────────────────────────────────────────────────
     'supplier_invoice_line': {
         "question": 'What did a supplier bill us, and which shipment was it for? Asked so every '
