@@ -638,7 +638,7 @@ on:
       # index §56 — one home for a chart's plain-language caption; every Trends chart card wired
       - "backend/harness_trends_chart_notes.py"
       - "frontend/src/components/ChartNote.tsx"
-      # index §CORE-27 — the COMPANY-PICKER label lock (owner report 2026-10-30). Sibling of the
+      # index §CORE-26 — the COMPANY-PICKER label lock (owner report 2026-10-30). Sibling of the
       # scope display-name lock below: same rule, different registry.
       - "backend/harness_company_label_lock.py"
       - "backend/app/modules/core/tenant_identity.py"
@@ -649,6 +649,13 @@ on:
       - "mobile/app/choose-company.tsx"
       - "mobile/app/(app)/(tabs)/settings.tsx"
       - "frontend/src/app/login/page.tsx"
+      # index §CORE-29 — the RUNNING-BUNDLE lock: the app can always say which code it is running,
+      # and the over-the-air compatibility policy is pinned (measured 2026-10-31).
+      - "backend/harness_running_bundle_lock.py"
+      - "mobile/src/lib/running-bundle.ts"
+      - "mobile/src/lib/useRunningBundle.ts"
+      - "mobile/src/lib/running-bundle.test.ts"
+      - "mobile/app.config.ts"
       # index §13b.1 — the scope DISPLAY-NAME lock + proofs (owner report 2026-10-03)
       - "backend/harness_scope_label.py"
       - "backend/harness_scope_label_lock.py"
@@ -1654,9 +1661,12 @@ jobs:
       - name: Run the chart-caption lock (every Trends chart says what a move MEANS; one home, ungated — index §56)
         working-directory: backend
         run: python3 harness_trends_chart_notes.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the company-picker label lock (one home for what a human calls a company; no `… || org_id`; both halves run and compared — index §CORE-27)
+      - name: Run the company-picker label lock (one home for what a human calls a company; no `… || org_id`; both halves run and compared — index §CORE-26)
         working-directory: backend
         run: python3 harness_company_label_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the running-bundle lock (the app can say which code it is running; the OTA compatibility policy is pinned — index §CORE-29)
+        working-directory: backend
+        run: python3 harness_running_bundle_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the scope display-name lock (one home for a scope's name; no `scope_label || scope_key`; every finance surface wired — index §13b.1)
         working-directory: backend
         run: python3 harness_scope_label_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

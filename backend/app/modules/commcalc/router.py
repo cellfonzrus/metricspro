@@ -38,6 +38,7 @@ from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-0
 from app.modules.commcalc import accessory_order_catalog as _aocat  # 2026-10-30 — THE accessory ORDERING vocabulary (index §COMMCALC-49.12; pure)
 from app.modules.commcalc import accessory_order_plan as _aop          # 2026-10-29 — THE accessory ORDER plan (index §COMMCALC-49; pure)
 from app.modules.commcalc import device_model_family as _dmf           # 2026-10-30 — THE "same phone, different colour" grain (index §COMMCALC-49.11; pure)
+from app.modules.pos import device_condition as _cond                 # 2026-10-31 — THE device condition vocabulary (index §POS-18; pure)
 from app.modules.commcalc import accessory_order_drilldown as _aopdd   # 2026-10-29 — that report's drill declaration (§CORE-17.3y; declaration only, pure)
 from app.modules.commcalc import demand_projection as _dp   # 2026-10-29 — THE device velocity/horizon projection + device-line test (§COMMCALC-49; pure)
 from app.modules.commcalc import device_vocabulary as _devvocab   # 2026-10-30 — THE one place to ask which departments an org calls a device (§COMMCALC-49)
@@ -33993,7 +33994,7 @@ def my_shelf(as_of: str = "", authorization: str = Header(default=""), org_id: s
     reports WHY — no snapshot, no span, or a span with no devices — rather than rendering as zero.
     """
     from app.modules.commcalc import inventory_stock_age as _isa
-    from app.modules.commcalc import unsold_inventory as _unsold
+    from app.modules.payables import unsold_inventory as _unsold
     from app.modules.asset.inventory_buckets import inv_bucket
     from app.modules.storeops.router import scope_keyset, in_keyset
     require_org(org_id)
@@ -37583,7 +37584,7 @@ def productivity_insights(period: str, store_code: str, metric: str = "acc", org
     from datetime import datetime as _dt2, timedelta as _td2
     from app.modules.commcalc import productivity_fit as _pf
     from app.modules.storeops.router import _biz_tz_for_store
-    from app.modules.commcalc.staffing_heatmap import hhmm_to_hours
+    from app.modules.storeops.staffing_heatmap import hhmm_to_hours
     require_org(org_id)
     sc = str(store_code).strip()
     client = sb()
@@ -50472,7 +50473,10 @@ _AOP_CFG_COLUMNS = ("accessory_order_case_mix", "accessory_order_attach_plan",
                     # owner 2026-10-30 — the catalog, the per-option mixes, which product classes
                     # take an accessory at all, and the colour WORDS this org's own feed uses.
                     "accessory_order_catalog", "accessory_order_option_mix",
-                    "accessory_order_device_classes", "device_colour_tokens")
+                    "accessory_order_device_classes", "device_colour_tokens",
+                    # owner 2026-10-31 — *"cpo is certified pre owned is adifferent device than
+                    # new"*: the words THIS org's feed uses to mark a device's condition.
+                    "device_condition_tokens")
 
 
 def _accessory_order_config(client, org_id):
@@ -50567,6 +50571,11 @@ class PutAccessoryOrderConfigIn(LaxModel):
     option_mix: Any = None
     device_classes: Any = None
     colour_tokens: Any = None
+    # owner 2026-10-31 — *"cpo is certified pre owned is adifferent device than new"*: either a
+    # flat list of this feed's markers, or `{condition_key: [words]}` for a feed that marks more
+    # than one. The condition KEYS are the platform's (`pos/device_condition`); the WORDS are this
+    # tenant's own.
+    condition_tokens: Any = None
 
 
 class PutAccessoryModelSpecIn(LaxModel):
@@ -50682,11 +50691,15 @@ def get_accessory_order_plan(period: str = "", months: int = 0, horizon: int = 0
             model = _pmix.model_of(r.get("product_desc"), promo_tokens)
             if not model:
                 continue
-            # The canonical model, through the SAME alias map the device forecast reads, so one phone
-            # is one row on both screens rather than two spellings of it here.
-            canon = alias.get(model.strip().lower(), model)
-            units.setdefault(canon, {})
-            units[canon][p] = units[canon].get(p, 0) + 1
+            # THE RAW SPELLING IS KEPT HERE, and the alias is applied by `device_model_family`
+            # below instead. It used to be applied at this line, which silently defeated the
+            # condition split: by the time the family grain was asked, a curated alias had already
+            # replaced `HANDSET A 128GB Pink CPO` with `HANDSET A`, so a pre-owned handset landed on
+            # the new one's row with the marker gone. Caught by the integration test for the owner's
+            # 2026-10-31 ruling. One home applies BOTH the curation and the condition, in that
+            # order, which is the only order that cannot lose one of them.
+            units.setdefault(model, {})
+            units[model][p] = units[model].get(p, 0) + 1
             lines_read += 1
 
     # ── ONE PHONE, NOT ONE COLOUR OF IT (owner 2026-10-30) ───────────────────────────────────────
@@ -50696,7 +50709,16 @@ def get_accessory_order_plan(period: str = "", months: int = 0, horizon: int = 0
     # org that has declared none gets its raw spellings and the screen SAYS why (CLAUDE.md, "every
     # feature is for EVERY tenant" — a colour word is a tenant's vocabulary, not a policy).
     colour_tokens, colour_basis = _dmf.resolve_colour_tokens(cfg.get("device_colour_tokens"))
-    fam_units, fam_variants = _dmf.group_units(units, colour_tokens=colour_tokens, alias=None)
+    # ── A CONDITION IS A DIFFERENT DEVICE (owner 2026-10-31) ─────────────────────────────────────
+    # *"cpo is certified pre owned is adifferent device than new , imnei is unique"*. The condition
+    # VOCABULARY has one home — `pos/device_condition` — shared with the inventory screen and mig
+    # 725's CHECK; the WORDS a feed marks it with are this org's own declaration, with no house
+    # fallback, so an org that has declared none identifies no condition and the screen says so.
+    cond_tokens, cond_basis, cond_markers = _cond.resolve_feed_tokens(
+        cfg.get("device_condition_tokens"))
+    fam_units, fam_variants, fam_conditions = _dmf.group_units(
+        units, colour_tokens=colour_tokens, condition_tokens=cond_tokens, alias=alias,
+        condition_markers=cond_markers)
 
     out = _aop.plan(units_by_model=fam_units, months=periods, lifecycle=rulings, horizon_months=fwd,
                     case_mix=cfg.get("accessory_order_case_mix"),
@@ -50704,9 +50726,12 @@ def get_accessory_order_plan(period: str = "", months: int = 0, horizon: int = 0
                     catalog=cfg.get("accessory_order_catalog"),
                     option_mix=cfg.get("accessory_order_option_mix"),
                     model_specs=_accessory_model_specs(client, org_id),
-                    variants=fam_variants)
+                    variants=fam_variants, conditions=fam_conditions)
     out["colour_tokens"] = list(colour_tokens)
     out["colour_tokens_basis"] = colour_basis
+    out["condition_tokens"] = sorted(cond_tokens)
+    out["condition_tokens_basis"] = cond_basis
+    out["device_conditions"] = _cond.offered()
     out["accessory_device_classes"] = sorted(accessory_classes)
     out["period"] = cperiod
     out["store_options"] = sorted(opt_stores)
@@ -50821,18 +50846,21 @@ def put_accessory_order_config(body: Optional[PutAccessoryOrderConfigIn] = None,
         patch["accessory_order_device_classes"] = b.device_classes
     if b.colour_tokens is not None:
         patch["device_colour_tokens"] = b.colour_tokens
+    if b.condition_tokens is not None:
+        patch["device_condition_tokens"] = b.condition_tokens
     if len(patch) == 1:
         raise HTTPException(400, "Nothing to save: send case_mix, attach_plan, lookback_months, "
-                                 "horizon_months, catalog, option_mix, device_classes or "
-                                 "colour_tokens.")
+                                 "horizon_months, catalog, option_mix, device_classes, "
+                                 "colour_tokens or condition_tokens.")
     try:
         (client.schema("commcalc").table("accessory_config")
          .upsert(patch, on_conflict="org_id").execute())
     except Exception as e:
         raise HTTPException(409, "The declaration was not stored. The accessory settings cannot "
-                                 "hold a colour mix, an attach plan or default planning windows "
-                                 "until migration 1104 has been applied; ask an administrator to "
-                                 "run it, then try again.") from e
+                                 "hold a colour mix, an attach plan, default planning windows or "
+                                 "this feed's condition words until the accessory settings "
+                                 "migrations have been applied; ask an administrator to run them, "
+                                 "then try again.") from e
     try:
         from app.modules.commcalc import accessory_catalog as _accat
         _accat.invalidate(org_id)
@@ -50841,6 +50869,7 @@ def put_accessory_order_config(body: Optional[PutAccessoryOrderConfigIn] = None,
     mix, mix_basis = _aop.resolve_case_mix(patch.get("accessory_order_case_mix"))
     cats, cat_basis = _aocat.resolve_catalog(patch.get("accessory_order_catalog"))
     tokens, tokens_basis = _dmf.resolve_colour_tokens(patch.get("device_colour_tokens"))
+    ctok, ctok_basis, _cmark = _cond.resolve_feed_tokens(patch.get("device_condition_tokens"))
     return {"saved": True, "case_mix": [dict(m) for m in mix], "case_mix_basis": mix_basis,
             "attach_plan": [dict(i) for i in _aop.resolve_attach_plan(
                 patch.get("accessory_order_attach_plan"))],
@@ -50848,6 +50877,8 @@ def put_accessory_order_config(body: Optional[PutAccessoryOrderConfigIn] = None,
             "horizon_months": patch.get("accessory_order_horizon_months"),
             "catalog": [c["key"] for c in cats], "catalog_basis": cat_basis,
             "colour_tokens": list(tokens), "colour_tokens_basis": tokens_basis,
+            "condition_tokens": sorted(ctok), "condition_tokens_basis": ctok_basis,
+            "device_conditions": _cond.offered(),
             "org_id": org_id}
 
 

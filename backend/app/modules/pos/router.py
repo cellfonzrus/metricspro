@@ -2148,6 +2148,31 @@ def tender_types(store_code: str = "", org_id: str = ORG_ID):
             **({} if ready else {"setup_note": TERMS_MIGRATION})}
 
 
+@router.get("/device-conditions")
+def device_conditions(org_id: str = ORG_ID):
+    """The vocabularies the inventory screen draws its two dropdowns from (index §POS-18).
+
+    OWNER ASK 2026-10-31: *"cpo is certified pre owned is adifferent device than new , imnei is
+    unique"*. Both lists were written down twice before this — a `CHECK` constraint on
+    `pos.inventory_serial` (mig 725, widened by mig 1018) and a literal array on the screen — so
+    adding a condition or a status meant editing a constraint and a page with nothing checking that
+    the two agreed. Each now has ONE home and this endpoint serves them:
+
+      * the conditions — `pos/device_condition.HOUSE_CONDITIONS`
+      * the unit statuses — `pos/inventory_integrity.UNIT_STATUSES`
+
+    DEREFERENCED, never restated: no condition or status word is spelled out in this function.
+
+    No tenant data is read: both lists are the PLATFORM's policy, the same four conditions and nine
+    statuses for every org (RULE TWO), which is why this endpoint takes no store and reads no row.
+    What a tenant declares is the WORDS ITS FEED uses for a condition, and that lives on its own
+    accessory settings — not here."""
+    return {"conditions": _devcond.offered(),
+            "unmarked_condition": _devcond.unmarked_condition(),
+            "statuses": [{"key": k, "label": k.replace("_", " ")} for k in _inv.UNIT_STATUSES],
+            "org_id": org_id}
+
+
 @router.post("/sales/checkout")
 def checkout(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Atomic checkout via pos.checkout: sale + items + payments in ONE transaction (the
@@ -2872,6 +2897,8 @@ def update_receipt_template(template_id: str, body: dict,
 from app.modules.pos import sale_receipt as _sr
 from app.modules.pos import pos_config_effective as _poscfg
 from app.modules.pos import tender_vocabulary as _tender
+from app.modules.pos import device_condition as _devcond        # 2026-10-31 — THE device condition vocabulary (§POS-18; pure)
+from app.modules.pos import inventory_integrity as _inv         # THE unit-status vocabulary, dereferenced not restated
 from app.modules.pos import wholesale_w9 as _w9
 from app.modules.pos import receipt_escpos as _escpos
 from app.modules.pos import receipt_remit as _remit
