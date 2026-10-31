@@ -3157,7 +3157,21 @@ FACTS: dict[str, dict] = {
                     'the page or the row — it runs on the hot path), `activity` the one reader, and '
                     '`state`/`frame_since` DEREFERENCE it rather than composing their own, so the '
                     'line moves on an unchanged frame payload too. Frame age is None before the '
-                    'first frame, never a fabricated 0 that would read as "just updated".',
+                    'first frame, never a fabricated 0 that would read as "just updated". '
+                    'AND the eighth (2026-10-31): HAS THIS SESSION PASSED THE PORTAL SIGN-IN. '
+                    'Three things asked it and the browser got it wrong: `can_pull` and '
+                    '`can_calibrate` each carried the phase tuple inline, while the live window '
+                    'compared the phase to the single word "authenticated" and cancelled the '
+                    'session for anything else. Signing in immediately starts the post-login pull, '
+                    'whose phase is `pulling`, so the operator closing the window during it '
+                    'CANCELLED the session he had just made and the report capture then had nothing '
+                    'to read. `signed_in` over `_SIGNED_IN_PHASES` is the one answer, PUBLISHED in '
+                    '`state` so a surface dereferences it; an absent field reads as do-not-cancel, '
+                    'because a cancelled session cannot be recovered. It deliberately excludes '
+                    'thread liveness, which `can_pull`/`can_calibrate` add, so a momentary hiccup '
+                    'cannot read as "never signed in". The capture CONTROL moved into the live '
+                    'window too (it opens the one report editor over it), because the filters are '
+                    'read THROUGH that session and sending the operator elsewhere meant closing it.',
         "homes": ('app/modules/commcalc/live_login.py',),
         "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28', 'COMMCALC-30',
                   'COMMCALC-31'),

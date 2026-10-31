@@ -34104,11 +34104,56 @@ Wired into `carrier-vocab-guard.yml` as *"live-session-host lock"*.
 the fix the scan reported **6** ungated endpoints. The sibling lock is proved red too: making
 `require_session_host` read the environment instead of dereferencing fails **2** of its checks.
 
+### COMMCALC-24.6 "SIGNED IN" IS A FACT THE SESSION OWNS, NOT A WORD A SCREEN MATCHES (owner report 2026-10-31)
+
+Owner, minutes after the login fix in §COMMCALC-50.8 shipped: he signed in to the UPS Store
+reporting portal — row `auth_status='authenticated'`, 21:02:07Z, session saved to 05:02 next
+morning — closed the live window, pressed *Read this page* on the Reports editor, and got **"No
+live session is open for this login."** Two minutes after signing in.
+
+**THE DEFECT.** Signing in starts the automatic report pull, and for its duration the session's
+phase is **`pulling`**, not `authenticated`. The backend knew that: `can_pull` and `can_calibrate`
+both asked `phase in ("authenticated", "pulling")`. The live window's close handler did not — it
+tested `liveState?.phase !== 'authenticated'` and POSTed `/live-login/cancel` for anything else. And
+the window's green *Signed in / Done* bar, whose Done closes **without** cancelling, renders only
+once the pull has RESULTS, so while the pull ran the only control on screen was the destructive one.
+Backdrop click, header Close and the Escape path all ran through it.
+
+**THE CLASS — second sighting the same day.** *A surface decided a fact from a WORD instead of
+asking where the fact lives.* §COMMCALC-50.8 was a page judged by its markup rather than by what it
+was doing; this is a session judged by its phase label rather than by whether it is signed in. Three
+answers to one question, and the one furthest from the fact was the one holding the destructive
+button.
+
+**THE FIX.** `LiveLoginSession.signed_in()` over the declared `_SIGNED_IN_PHASES`, and the two gates
+dereference it instead of keeping a tuple each. It is PUBLISHED as `state()["signed_in"]`, so the
+window reads the session's own answer; cancel now requires an explicit `signed_in === false`, and an
+**absent** field reads as *do not cancel* — a cancelled live session cannot be recovered, while one
+left open closes itself after twenty idle minutes. `signed_in` deliberately excludes thread
+liveness (which `can_pull` / `can_calibrate` still add), so a momentary thread hiccup cannot read as
+"never signed in" and cancel a working session.
+
+**AND THE REASON THE WINDOW WAS BEING CLOSED AT ALL.** Owner, on being offered two browser tabs as
+the way round it: *"opening 2 tabs is not a good relaible way for a user , it is a work around"*. He
+is right, and the workaround was the symptom of a misplaced control: the report filters are read
+**through** the live session, so the button that reads them belongs in the window that is holding it.
+The live window now offers **📄 Reports & filters** once signed in, which opens the SAME
+`PortalReportEditor` over it (one home for folding a captured declaration into the rows — no copy of
+that logic in the window) while the window and its session stay open underneath. Nothing to close,
+no second tab, and no race against the idle timer.
+
+**Locked:** `backend/tests/unit/test_signed_in_is_not_a_phase_word.py` — the one home, the two gates
+dereferencing it, the published field, the browser's close handler carrying no phase word, cancel
+withheld on an absent field, a non-destructive exit always on screen, and the capture reachable from
+the window with exactly one editor in the tree. The `pulling` phase is asserted by name, because it
+is the phase the defect hid behind.
+
 ### COMMCALC-24.5 Cross-references
 
 Same class: §19.18 (a mechanism written and its callers left unwired is not a fix), §COMMCALC-13 (a
-status that outlived the process that owned it). Neighbours: §41 (the split deploy and the
-forwarder), §COMMCALC-10 (the progress watchdog on the same session), §COMMCALC-11 (the human check
+status that outlived the process that owned it), §COMMCALC-50.8 (a page judged by how it is built
+rather than by what it is doing — the same class, the same day, see §COMMCALC-24.6). Neighbours:
+§41 (the split deploy and the forwarder), §COMMCALC-10 (the progress watchdog on the same session), §COMMCALC-11 (the human check
 this session was parked on), §CORE-03 (where the credential it signs in with is sealed), §51 (the
 vendor-ordering door onto the same sessions), §COMMCALC-07 (the UPS pull this login exists to feed).
 

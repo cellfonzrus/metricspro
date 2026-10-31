@@ -743,7 +743,16 @@ export default function EmailImportsPage() {
   }
   async function closeLive(cancel = true) {
     const id = live?.source?.id
-    if (id && cancel && liveState?.phase !== 'authenticated') {
+    // WHETHER THIS SESSION IS SIGNED IN IS THE SESSION'S OWN ANSWER, published by /live-login/state
+    // as `signed_in` (backend one home: LiveLoginSession.signed_in over _SIGNED_IN_PHASES). This used
+    // to compare the phase to the single word 'authenticated', but signing in immediately starts the
+    // post-login pull, whose phase is 'pulling' — so closing the window during the pull CANCELLED a
+    // session the operator had just signed in to (owner, 2026-10-31: his 21:02 UPS session was gone
+    // by 21:04 and the report capture then had nothing to read).
+    // An ABSENT field (an older backend mid-deploy) must read as "do not cancel": a cancelled live
+    // session cannot be recovered, while one left open closes itself after twenty idle minutes.
+    const notSignedIn = liveState?.signed_in === false
+    if (id && cancel && notSignedIn) {
       try { await api(`/api/v1/commcalc/data-sources/${id}/live-login/cancel`, { method: 'POST', body: '{}' }) } catch { /* best-effort */ }
     }
     setLive(null); setLiveState(null); setLiveCode('')
@@ -1491,7 +1500,26 @@ export default function EmailImportsPage() {
                 <div style={{ fontWeight: 700, fontSize: 15 }}>🔴 Live login — <span style={{ fontWeight: 400 }}>{live.source?.label || live.source?.username || live.source?.processor}</span></div>
                 <span style={{ display: 'inline-block', padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: bd.c, background: bd.b }}>{bd.t}</span>
                 <div style={{ flex: 1 }} />
-                <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => closeLive(true)}>Close</button>
+                {/* THE CAPTURE BELONGS WHERE THE SESSION IS (owner, 2026-10-31: "opening 2 tabs is
+                    not a good relaible way for a user , it is a work around"). The report filters are
+                    read THROUGH this live session, so sending the operator out of this window to find
+                    the button meant closing the window — and closing it during the post-login pull
+                    cancelled the session the capture needed. This opens the SAME PortalReportEditor
+                    (one home for folding a captured declaration into the rows, no copy of it here) on
+                    top of this window, which stays open underneath with the session alive. */}
+                {liveState?.signed_in && live?.source && (
+                  <button className="btn btn-secondary" style={{ fontSize: 12 }}
+                          title="Read this login's report pages through THIS live session and fill in each report's filters — the window stays open and the session stays signed in"
+                          onClick={() => setReportsFor(live.source)}>📄 Reports &amp; filters</button>
+                )}
+                {/* One exit, labelled for what it actually does. While the session is NOT signed in,
+                    leaving ends the login attempt; once it IS signed in the browser stays open on the
+                    server for the report capture and the pull, so the button says so. The green
+                    "Signed in" bar further down also carries a Done, but only once the pull has
+                    RESULTS — during the pull this was the only control on screen, and it cancelled. */}
+                {liveState?.signed_in
+                  ? <button className="btn btn-secondary" style={{ fontSize: 12 }} title="Closes this window and LEAVES the portal session signed in on the server, so Reports → Read this page and ▶ Pull now can use it" onClick={() => closeLive(false)}>Done — keep the session</button>
+                  : <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => closeLive(true)}>Close</button>}
               </div>
               <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 4px' }}>{liveState?.message || 'Starting…'}</p>
               {/* §COMMCALC-31 — the owner's 2026-10-26 report was "it should show what is going on, it
