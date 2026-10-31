@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app.modules.commcalc import accessory_order_catalog as cat   # noqa: E402
 from app.modules.commcalc import accessory_order_plan as aop      # noqa: E402
 from app.modules.commcalc import device_model_family as dmf       # noqa: E402
+from app.modules.pos import device_condition as devcond           # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -48,6 +49,11 @@ FAMILY_CALLERS = (os.path.join(HERE, "app", "modules", "commcalc", "router.py"),
 #: is for EVERY tenant" rule bans a house default that is really one tenant's vocabulary.
 COLOUR_WORDS = ("blk", "black", "midnight", "jetblack", "navy", "pink", "graphite", "titanium",
                 "dblue", "corange", "cloud silver", "space gray", "space grey")
+#: Words that would mean a tenant's own CONDITION vocabulary had been written into code. The
+#: CONDITIONS are the platform's policy and have a home; the WORDS a feed marks one with are the
+#: tenant's (`CPO` in one feed, `CERTIFIED_PREOWNED` in another), so they may only ever be declared.
+CONDITION_WORDS = ("cpo", "certified preowned", "certified_preowned", "certified pre-owned",
+                   "pre-owned", "preowned", "refurb", "renewed", "open box", "openbox")
 #: Words that would mean a carrier, a tenant or a brand had been written into code (RULE TWO).
 BRAND_WORDS = ("boost", "verizon", "iphone", "samsung", "galaxy", "motorola", "moto", "apple",
                "luxelink", "cellfonz", "vzone", "tcl", "celero", "nxtpaper", "ppd-usa")
@@ -108,7 +114,7 @@ _colour_literals = [w for w in COLOUR_WORDS if any(w == v or w in v.split(",")
 check("A2 no colour WORD is a value in the home (AST, so the header may still quote the live "
       "spellings that motivated the fix)", not _colour_literals, f"found: {_colour_literals}")
 
-_undeclared = dmf.family_of("Apple iPhone 13 128GB Pink CPO TO", colour_tokens=())
+_undeclared = dmf.family_of("Apple iPhone 13 128GB Pink CPO TO", colour_tokens=(), condition_tokens={})
 check("A3 an org that has declared no colour words gets NO collapsing and the basis SAYS so — never "
       "another tenant's colour list, because a confident wrong grouping is worse than an ungrouped "
       "list and an ungrouped list sends somebody to the setup panel",
@@ -116,39 +122,42 @@ check("A3 an org that has declared no colour words gets NO collapsing and the ba
       and _undeclared["label"] == "Apple iPhone 13 Pink CPO TO", str(_undeclared))
 
 _off = [os.path.basename(c) for c in FAMILY_CALLERS
-        if _calls(c, "group_units") and "resolve_colour_tokens" not in open(c, encoding="utf-8").read()]
-check("A4 every caller that groups models reads the org's colour words through the one home "
-      "(`resolve_colour_tokens`), never a list of its own", not _off, f"off the declaration: {_off}")
+        if _calls(c, "group_units")
+        and ("resolve_colour_tokens" not in open(c, encoding="utf-8").read()
+             or "resolve_feed_tokens" not in open(c, encoding="utf-8").read())]
+check("A4 every caller that groups models reads BOTH of the org's vocabularies through their one "
+      "homes (`resolve_colour_tokens`, `resolve_feed_tokens`), never a list of its own",
+      not _off, f"off the declaration: {_off}")
 
 _cf = ("blk", "black", "blue")
 _ll = ("black", "midnight", "pink")
 check("A5 one tenant's colour words never collapse another tenant's spelling: a feed that says "
       "`Midnight` is untouched by a vocabulary that only knows `BLK`",
-      dmf.family_of("Apple iPhone 13 Midnight TO", colour_tokens=_cf)["label"]
+      dmf.family_of("Apple iPhone 13 Midnight TO", colour_tokens=_cf, condition_tokens={})["label"]
       == "Apple iPhone 13 Midnight TO"
-      and dmf.family_of("Apple iPhone 13 Midnight TO", colour_tokens=_ll)["label"]
+      and dmf.family_of("Apple iPhone 13 Midnight TO", colour_tokens=_ll, condition_tokens={})["label"]
       == "Apple iPhone 13 TO")
 
 check("A6 THE OWNER'S OWN DISTINCTION: a Pro is not a colour of the non-Pro, and nothing but a "
       "declared colour and a capacity is ever dropped",
-      dmf.family_of("Apple iPhone 13 Pro 128GB Black TO", colour_tokens=_ll)["key"]
-      != dmf.family_of("Apple iPhone 13 128GB Black TO", colour_tokens=_ll)["key"])
+      dmf.family_of("Apple iPhone 13 Pro 128GB Black TO", colour_tokens=_ll, condition_tokens={})["key"]
+      != dmf.family_of("Apple iPhone 13 128GB Black TO", colour_tokens=_ll, condition_tokens={})["key"])
 
 check("A7a the capacity is still dropped with NO colour vocabulary, because it is a format and not "
       "a vocabulary — but the basis keeps saying `no_vocabulary`, because that is the question a "
       "reader needs answered",
-      dmf.family_of("Apple iPhone 13 128GB Pink CPO TO", colour_tokens=())["label"]
+      dmf.family_of("Apple iPhone 13 128GB Pink CPO TO", colour_tokens=(), condition_tokens={})["label"]
       == "Apple iPhone 13 Pink CPO TO")
 check("A7 the capacity goes by PATTERN, glued or split, because a number followed by a storage unit "
       "is a format and not anybody's vocabulary",
-      dmf.family_of("SAM GALAXY S25 FE 128 GB", colour_tokens=())["label"] == "SAM GALAXY S25 FE"
-      and dmf.family_of("SAM GALAXY S25 FE 256GB", colour_tokens=())["label"] == "SAM GALAXY S25 FE")
+      dmf.family_of("SAM GALAXY S25 FE 128 GB", colour_tokens=(), condition_tokens={})["label"] == "SAM GALAXY S25 FE"
+      and dmf.family_of("SAM GALAXY S25 FE 256GB", colour_tokens=(), condition_tokens={})["label"] == "SAM GALAXY S25 FE")
 
-_u, _v = dmf.group_units(
+_u, _v, _fam = dmf.group_units(
     {"Apple iPhone 13 128GB Pink CPO TO": {"Sep": 23},
      "Apple iPhone 13 128GB Black CPO TO": {"Sep": 6},
      "Apple iPhone 13 Pro 128GB Black TO": {"Sep": 4}},
-    colour_tokens=_ll)
+    colour_tokens=_ll, condition_tokens={})
 check("A8 the folded family carries BOTH the total and what was actually sold under it, so the "
       "drill-down costs no second query",
       _u.get("Apple iPhone 13 CPO TO") == {"Sep": 29}
@@ -294,6 +303,180 @@ check("C11 the variants ride on the model row, so the screen can open a phone wi
       "query against the feed",
       _a["variants"] and _a["variants"][0]["model"] == "Phone A Black")
 
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n== D. A PRE-OWNED DEVICE IS A DIFFERENT DEVICE (owner 2026-10-31) ==")
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# Owner, verbatim: *"cpo is certified pre owned is adifferent device than new  , imnei is unique"*.
+# Before this, a refurbished handset stayed off the new one's row only because the word `CPO`
+# happened to survive the model parse — an accident nothing asserted, and one curated alias row or
+# one promo token would have merged two different devices into one order line silently. These
+# checks are the lock on the fix: the vocabulary has one home, the condition is part of the row's
+# identity, and neither a declaration nor a curation can un-split them.
+CONDITION_HOME = os.path.join(HERE, "app", "modules", "pos", "device_condition.py")
+PLAN_HOME = os.path.join(HERE, "app", "modules", "commcalc", "accessory_order_plan.py")
+INVENTORY_PAGE = os.path.join(HERE, os.pardir, "frontend", "src", "app", "(platform)", "pos",
+                              "inventory", "page.tsx")
+CONDITION_LIB = os.path.join(HERE, os.pardir, "frontend", "src", "lib", "device-conditions.ts")
+MIG_725 = os.path.join(HERE, os.pardir, "database", "migrations", "725_pos_sales.sql")
+
+_fsig = inspect.signature(dmf.family_of)
+_gsig = inspect.signature(dmf.group_units)
+check("D1 `condition_tokens` is KEYWORD-ONLY and REQUIRED on both entry points — a caller that has "
+      "not asked the org which words mark a condition must not be able to answer whether this is a "
+      "different device",
+      all(sig.parameters["condition_tokens"].kind is inspect.Parameter.KEYWORD_ONLY
+          and sig.parameters["condition_tokens"].default is inspect.Parameter.empty
+          for sig in (_fsig, _gsig)))
+
+_cond_literals = sorted({w for w in CONDITION_WORDS
+                         for v in _string_values(FAMILY_HOME) + _string_values(PLAN_HOME)
+                         if w == v or w in v.split(",")})
+check("D2 no condition WORD is a value in the family home or in the plan — they carry the condition, "
+      "they do not know what one looks like (AST, so a header may still quote the live spellings)",
+      not _cond_literals, f"found: {_cond_literals}")
+
+_ct, _cb, _cm = devcond.resolve_feed_tokens(["CPO", "CERTIFIED_PREOWNED"])
+_ll = ("black", "midnight", "pink")
+_silent = dmf.family_of("Apple iPhone 13 128GB Pink CPO TO", colour_tokens=_ll, condition_tokens={})
+check("D3 an org that has declared no condition words identifies NO condition and its keys are "
+      "byte-identical to what they were before this question existed — a tenant the ruling does not "
+      "apply to sees no change, and the surface can say the condition is not identified",
+      _silent["condition"] is None and _silent["condition_basis"] == "no_vocabulary"
+      # `Pink` is a declared COLOUR here, so it still folds; what must not change is that the
+      # condition marker stays IN the key and nothing claims to have identified a condition.
+      and _silent["key"] == "apple iphone 13 cpo to", str(_silent))
+
+_cpo = dmf.family_of("Apple iPhone 13 128GB Pink CPO TO", colour_tokens=_ll,
+                     condition_tokens=_ct, condition_markers=_cm)
+_new = dmf.family_of("Apple iPhone 13 128GB Midnight TO", colour_tokens=_ll,
+                     condition_tokens=_ct, condition_markers=_cm)
+check("D4 THE OWNER'S RULING: a marked device and an unmarked one of the same model are different "
+      "rows, while their colours still fold within each",
+      _cpo["key"] != _new["key"] and _cpo["condition"] != _new["condition"],
+      f"{_cpo['key']} vs {_new['key']}")
+
+_glued = dmf.family_of("CERTIFIED_PREOWNED_IPHONE_13 Pink", colour_tokens=_ll,
+                       condition_tokens=_ct, condition_markers=_cm)
+check("D5 two spellings of ONE condition are one condition — the worded `CPO` and the glued "
+      "`CERTIFIED_PREOWNED_` SKU form read the same, because the marker is matched over flattened "
+      "words at the declaration as well as at the read",
+      _glued["condition"] == _cpo["condition"] == "refurbished"
+      and _glued["condition_basis"] == "declared")
+
+_alias = {"apple iphone 13 128gb pink cpo to": "iPhone 13",
+          "apple iphone 13 128gb midnight to": "iPhone 13"}
+_acpo = dmf.family_of("Apple iPhone 13 128GB Pink CPO TO", colour_tokens=_ll, alias=_alias,
+                      condition_tokens=_ct, condition_markers=_cm)
+_anew = dmf.family_of("Apple iPhone 13 128GB Midnight TO", colour_tokens=_ll, alias=_alias,
+                      condition_tokens=_ct, condition_markers=_cm)
+check("D6 THE SILENT MERGE THIS LOCK EXISTS FOR: a curated alias that calls both spellings "
+      "`iPhone 13` still cannot put a pre-owned handset on the new one's row — the condition is "
+      "applied AFTER the alias, because a human curating a model NAME is not ruling on its condition",
+      _acpo["key"] != _anew["key"] and _acpo["key"].startswith(_anew["key"]),
+      f"{_acpo['key']} vs {_anew['key']}")
+
+check("D7 the UNMARKED condition adds nothing to the key or the label — the baseline is not "
+      "suffixed `New` on every row of every tenant, which would be a word on every line for no "
+      "information",
+      _new["key"] == "apple iphone 13 to" and _new["label"] == "Apple iPhone 13 TO"
+      and _new["condition_basis"] == "unmarked")
+
+check("D8 the ORG'S OWN WORD is what a human is shown, while the stored key stays the platform's "
+      "(what mig 725 allows) — the owner calls it CPO and the schema calls it refurbished, and "
+      "neither has to win",
+      _cpo["condition_marker"] == "CPO" and _cpo["condition"] == "refurbished"
+      and _cpo["condition_label"] == "Refurbished" and _cpo["label"].endswith("· CPO"),
+      f"{_cpo}")
+
+_other, _, _om = devcond.resolve_feed_tokens(["refurb"])
+check("D9 one tenant's condition words never mark another tenant's spelling: a feed whose "
+      "vocabulary is only `Refurb` reads a `CPO` line as unmarked, and says `unmarked` rather than "
+      "claiming to have read it",
+      devcond.condition_of("Apple iPhone 13 CPO TO", feed_tokens=_other,
+                           markers=_om)["basis"] == "unmarked")
+
+_check_sql = open(MIG_725, encoding="utf-8").read()
+_declared_in_sql = None
+for line in _check_sql.splitlines():
+    if "condition" in line and "CHECK" in line and " IN (" in line:
+        _declared_in_sql = tuple(sorted(w.strip().strip("'\"")
+                                        for w in line.split(" IN (")[1].split(")")[0].split(",")))
+check("D10 the house condition keys are the ones the SCHEMA allows, key by key, parsed out of the "
+      "migration — a fifth condition added in code and not in the constraint would fail a write at "
+      "the till, and one added to the constraint and not here would never be offered",
+      _declared_in_sql is not None
+      and _declared_in_sql == tuple(sorted(devcond.condition_keys())),
+      f"sql={_declared_in_sql} code={tuple(sorted(devcond.condition_keys()))}")
+
+_page = open(INVENTORY_PAGE, encoding="utf-8").read()
+#: COMMENTS STRIPPED FIRST, for the same reason A2 reads the AST: a screen may still explain why a
+#: word that used to be hardcoded there is gone, and that explanation is not a copy of the fact.
+_page_code = "\n".join(l for l in _page.splitlines() if not l.lstrip().startswith("//"))
+_page_literals = sorted({k for k in devcond.condition_keys() if f"'{k}'" in _page_code})
+check("D11 the POS inventory screen carries NO condition list of its own and reads the served one "
+      "— the literal array that sat beside a CHECK constraint saying the same thing is what let a "
+      "refurbished handset read as new",
+      "device-conditions" in _page_code and not _page_literals,
+      f"literals left on the page: {_page_literals}")
+
+_lib = "\n".join(l for l in open(CONDITION_LIB, encoding="utf-8").read().splitlines()
+                 if not l.lstrip().startswith(("//", "*", "/*")))
+check("D12 the browser's reader names no condition and no status either, so it cannot become the "
+      "third copy of the vocabulary it was written to remove",
+      not [k for k in devcond.condition_keys() if f"'{k}'" in _lib])
+
+check("D13 `basis` is an ALLOWLIST, so an unruled basis cannot be read as a declaration — the same "
+      "shape as `component_is_evidence` (§66), which exists because a surface reading a placement "
+      "without its basis treated a last resort as evidence",
+      set(devcond.CONDITION_BASES) == {"declared", "unmarked", "no_vocabulary"})
+
+check("D14 the condition home is PURE — no router, no database, no clock — so every caller can ask "
+      "it and no caller can make it read a row",
+      not [i for i in _imports(CONDITION_HOME)
+           if i.split(".")[0] in {"app", "supabase", "fastapi", "datetime", "os", "requests"}],
+      f"{sorted(_imports(CONDITION_HOME))}")
+
+_u2, _v2, _f2 = dmf.group_units(
+    {"Apple iPhone 13 128GB Pink CPO TO": {"Sep": 20},
+     "Apple iPhone 13 128GB Black CPO TO": {"Sep": 5},
+     "Apple iPhone 13 128GB Midnight TO": {"Sep": 12}},
+    colour_tokens=_ll, condition_tokens=_ct, condition_markers=_cm)
+check("D15 the grouped rows carry their condition from the SAME read that folded them, so a screen "
+      "shows it without asking a second time — two derivations of one fact is how the two come to "
+      "disagree",
+      sorted(_u2.values(), key=lambda d: -d["Sep"]) == [{"Sep": 25}, {"Sep": 12}]
+      and {f["condition"] for f in _f2.values()} == {"refurbished", "new"}
+      and all(f["condition_basis"] in devcond.CONDITION_BASES for f in _f2.values()),
+      f"{_u2} {_f2}")
+
+_plan_cond = aop.plan(units_by_model=_u2, months=["Sep"],
+                      lifecycle={k: "current" for k in _u2},
+                      conditions=_f2, variants=_v2)
+check("D16 the plan hands the condition through to the row the buyer reads, and does not derive one "
+      "of its own",
+      {r["condition"] for r in _plan_cond["models"]} == {"refurbished", "new"}
+      and "device_condition" not in str(_imports(PLAN_HOME)))
+
+
+def _group_units_alias_args():
+    """How every caller hands the curated alias to the one home (AST)."""
+    out = []
+    for c in FAMILY_CALLERS:
+        for n in ast.walk(ast.parse(open(c, encoding="utf-8").read())):
+            if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "group_units":
+                kw = {k.arg: k.value for k in n.keywords}
+                a = kw.get("alias")
+                out.append((os.path.basename(c),
+                            a is not None and not (isinstance(a, ast.Constant) and a.value is None)))
+    return out
+
+
+_alias_args = _group_units_alias_args()
+check("D17 the curated alias is HANDED TO the one home, not applied before it — a caller that "
+      "canonicalises first and asks second has already thrown the condition marker away, which is "
+      "exactly what the router did until the integration test for this ruling caught it",
+      _alias_args and all(ok for _c, ok in _alias_args), f"{_alias_args}")
 
 print("\n" + "=" * 70)
 print(f"  {len(PASS)} passed, {len(FAIL)} failed")

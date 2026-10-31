@@ -1294,15 +1294,47 @@ FACTS: dict[str, dict] = {
                     'REQUIRED keyword argument with nothing behind it, an org that has declared none '
                     'gets no grouping and the surface SAYS so, and a curated '
                     '`device_model_alias.canonical_model` outranks the derivation. The folded row '
-                    'carries the spellings that went into it, so the drill-down costs no second query.',
+                    'carries the spellings that went into it, so the drill-down costs no second '
+                    'query. A DEVICE CONDITION is read the same way and applied AFTER the alias '
+                    '(owner 2026-10-31: a pre-owned handset is a different device), which is the '
+                    'only order that cannot lose the marker — the router used to canonicalise '
+                    'first and silently merged the two.',
         "homes": ('app/modules/commcalc/device_model_family.py',),
-        "index": ('COMMCALC-49.11',),
+        "index": ('COMMCALC-49.11', 'POS-18'),
         "locks": ('harness_accessory_order_grid.py',),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50).
         "callers": {
             # The Accessory Order Plan's endpoint: it asks the org for its colour words and folds the
             # raw model counts into phones before the plan is built.
             'app/modules/commcalc/router.py': ('_dmf',),
+        },
+    },
+    'device_condition_vocabulary': {
+        "question": 'WHICH DEVICE CONDITIONS EXIST, and what does THIS feed call one? Two different '
+                    'questions, split on CLAUDE.md\'s line: the four conditions are the '
+                    'platform\'s POLICY (the same for every tenant, and the same four the schema '
+                    'has always allowed on `pos.inventory_serial`, pinned key by key), while '
+                    'the WORDS a product description marks one with are the TENANT\'s vocabulary '
+                    '(`CPO` in one feed, `CERTIFIED_PREOWNED` in another) and may only be declared '
+                    '— a REQUIRED argument with no house fallback, so an org that has declared none '
+                    'identifies no condition and the surface says so rather than reading a '
+                    'refurbished handset as new. An UNMARKED line is the house default with '
+                    '`basis=unmarked`, which keeps an inference apart from a reading. Both lists '
+                    'were written twice before this (a schema constraint and a literal array on the '
+                    'inventory screen) and the accessory grid kept a pre-owned handset off the new '
+                    'one\'s row only because the word happened to survive a parse.',
+        "homes": ('app/modules/pos/device_condition.py',),
+        "index": ('POS-18',),
+        "locks": ('harness_accessory_order_grid.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50).
+        "callers": {
+            # The Accessory Order Plan's endpoint: it asks the org for its condition words so a
+            # pre-owned handset is ordered as its own device.
+            'app/modules/commcalc/router.py': ('_cond',),
+            # The one home for the family grain reads the condition off the raw spelling.
+            'app/modules/commcalc/device_model_family.py': ('_cond',),
+            # The POS inventory screen's two dropdowns are served from here.
+            'app/modules/pos/router.py': ('_devcond',),
         },
     },
     'accessory_order_catalog': {

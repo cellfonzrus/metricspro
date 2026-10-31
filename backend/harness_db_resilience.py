@@ -1411,7 +1411,14 @@ _all_routes = _flatten_routes(real_app.routes)
 # same base. Merged, the app carries BOTH, so the count is 1825 — verified by running this
 # file's own count on the MERGE, not by adding the two numbers on paper. Neither side's
 # reasoning is discarded: each names its route, and this line names the sum.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1825"))
+# Re-pinned 1825 -> 1826 on 2026-10-31 (§POS-18, the device condition vocabulary). Verified the
+# same way: `git diff origin/main -- backend/app/modules/pos/router.py
+# backend/app/modules/commcalc/router.py | grep -E '^[+-]@router\.'` printed exactly ONE added
+# decorator and NONE removed:
+#     + /pos/device-conditions               GET   (the conditions and unit statuses a screen offers)
+# It reads NO tenant row at all — both lists are platform policy — writes nothing, and feeds no
+# report, statement, GP, commission or tax figure. Re-taken on a counted, named addition.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1826"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

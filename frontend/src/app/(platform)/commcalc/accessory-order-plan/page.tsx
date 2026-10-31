@@ -40,6 +40,8 @@ type ModelRow = {
   share: number; lifecycle: string; lifecycle_label: string
   history_basis: string; projected_units: number | null; projection_basis: string
   variants: Variant[]; variant_count: number
+  condition: string | null; condition_label: string | null
+  condition_marker: string | null; condition_basis: string
 }
 type Option = { key: string; label: string; image_url?: string | null }
 type OptionQty = { key: string; label: string; share: number; qty: number | null }
@@ -57,6 +59,7 @@ type ModelOrder = {
   lifecycle: string; lifecycle_label: string
   projected_units: number | null; projection_basis: string
   variants: Variant[]; cells: Record<string, Cell>
+  condition: string | null; condition_marker: string | null; condition_basis: string
 }
 type Dimension = { key: string; label: string; default: string; options: Option[] }
 type ConsolidatedLine = {
@@ -90,6 +93,8 @@ type Plan = {
   catalog: Category[]; catalog_basis: string
   option_mix: Record<string, OptionQty[]>; option_mix_bases: Record<string, string>
   colour_tokens: string[]; colour_tokens_basis: string
+  condition_tokens: string[]; condition_tokens_basis: string
+  device_conditions: { key: string; label: string; unmarked: boolean }[]
   accessory_device_classes: string[]
   case_mix: Colour[]; case_mix_basis: string
   attach_plan: { key: string; label: string; per_device: number; colour_split: boolean }[]
@@ -556,6 +561,22 @@ export default function AccessoryOrderPlanPage() {
                     }} />
                   <span style={{ fontSize: 11, color: 'var(--text3)', alignSelf: 'center' }}>saved when you click away</span>
                 </div>
+
+                <div style={{ fontSize: 12, fontWeight: 700, margin: '16px 0 6px' }}>Condition words in your product descriptions</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                  {data?.condition_tokens_basis === 'declared'
+                    ? <>A device marked <b>{(data?.condition_tokens || []).join(', ')}</b> is ordered as its own phone, because a pre-owned handset is a different device from a new one. Every other line is taken as new.</>
+                    : <>None declared, so no line is identified as pre-owned and the grid shows no condition. Add the words your feed marks them with — <i>cpo</i>, <i>certified pre-owned</i>, <i>refurb</i> — to split them out.</>}
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                  <input style={{ ...sel, width: 420 }} placeholder="cpo, certified pre-owned, refurb, …"
+                    defaultValue={(data?.condition_tokens || []).join(', ')}
+                    onBlur={e => {
+                      const next = e.target.value.split(',').map(t => t.trim()).filter(Boolean)
+                      if (next.join('|') !== (data?.condition_tokens || []).join('|')) void saveConfig({ condition_tokens: next })
+                    }} />
+                  <span style={{ fontSize: 11, color: 'var(--text3)', alignSelf: 'center' }}>saved when you click away</span>
+                </div>
               </div>
             )}
 
@@ -597,6 +618,10 @@ export default function AccessoryOrderPlanPage() {
                               {openRow === r.model ? '▾' : '▸'}
                             </button>}
                           <span style={{ color: 'var(--text3)', marginRight: 6 }}>#{r.rank}</span>{r.model}
+                          {r.condition_marker &&
+                            <span title={`Marked ${r.condition_marker} in your product descriptions — ordered separately from a new one`}
+                              style={{ marginLeft: 6, fontSize: 10, padding: '1px 5px', borderRadius: 4, border: '1px solid var(--border)', color: 'var(--text2)' }}>
+                              {r.condition_marker}</span>}
                           {r.variants.length > 1 &&
                             <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--text3)' }}>
                               ({r.variants.length} colours)
@@ -798,6 +823,10 @@ export default function AccessoryOrderPlanPage() {
                   <tr key={r.model} style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={{ padding: '6px' }}>
                       <span style={{ color: 'var(--text3)', marginRight: 6 }}>#{r.rank}</span>{r.model}
+                      {r.condition_marker &&
+                        <span title={`Marked ${r.condition_marker} in your product descriptions — ordered separately from a new one`}
+                          style={{ marginLeft: 6, fontSize: 10, padding: '1px 5px', borderRadius: 4, border: '1px solid var(--border)', color: 'var(--text2)' }}>
+                          {r.condition_marker}</span>}
                       {r.variant_count > 1 &&
                         <span title={r.variants.map(v => `${v.units_total} x ${v.model}`).join('\n')}
                           style={{ marginLeft: 6, fontSize: 11, color: 'var(--text3)' }}>

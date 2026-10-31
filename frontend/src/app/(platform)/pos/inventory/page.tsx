@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react'
 import { api, localToday } from '@/lib/client'
 import { apiCached } from '@/lib/cache'
 import { savedStore, saveStore } from '@/lib/pos-working-store'
+import { EMPTY_VOCABULARY, keepValid, loadDeviceVocabulary, type DeviceVocabulary } from '@/lib/device-conditions'
 import { useAuth } from '@/lib/auth-context'
 import IntegrityFlags from './integrity-flags'
 import AdjustModal from './adjust-modal'
@@ -66,12 +67,17 @@ interface PurchaseOrder {
 
 interface Vendor { id: string; legal_name: string }
 
-const SERIAL_STATUSES = ['in_stock', 'in_transit', 'sold', 'returned', 'transferred', 'rma', 'lost', 'stolen', 'adjusted_out']
-const CONDITIONS = ['new', 'refurbished', 'used', 'damaged']
+// The unit statuses and the device conditions are NOT listed here. Both were literal arrays on
+// this screen and `CHECK` constraints in the schema at the same time, so adding one meant editing
+// two places with nothing checking they agreed — and a refurbished handset could read as new
+// (owner 2026-10-31, index §POS-18). They now come from their one home on the server, through
+// `@/lib/device-conditions`.
 
 const emptySerialForm = {
   product_id: '', serial_number: '', imei: '', sim_card: '',
-  color: '', storage: '', condition: 'new', status: 'in_stock',
+  // EMPTY, not 'new'/'in_stock': those words belong to the server's vocabulary, and the defaults
+  // are applied from it once it lands (see the `keepValid` effect below).
+  color: '', storage: '', condition: '', status: '',
   cost: 0, date_received: localToday(), po_number: '',
 }
 
@@ -107,6 +113,7 @@ export default function PosInventoryPage() {
   const [tab, setTab] = useState<'serial' | 'standard' | 'transfers' | 'po' | 'integrity'>('serial')
   const [stores, setStores] = useState<Store[]>([])
   const [products, setProducts] = useState<Product[]>([])
+  const [vocab, setVocab] = useState<DeviceVocabulary>(EMPTY_VOCABULARY)
   const [msg, setMsg] = useState('')
 
   // Active store — a property of this terminal (localStorage), falling back to the login's
@@ -194,6 +201,18 @@ export default function PosInventoryPage() {
   }
 
   useEffect(() => {
+    // The form's condition and status default from the SERVED lists, applied where the lists
+    // ARRIVE rather than in an effect body watching them: a choice this screen cannot name has to
+    // come from the answer, and a selection that is no longer offered falls back to the list's own
+    // default (the unmarked condition, the first status).
+    loadDeviceVocabulary(api).then(v => {
+      setVocab(v)
+      setSerialForm(f => ({
+        ...f,
+        condition: keepValid(f.condition, v.conditions, v.unmarked_condition),
+        status: keepValid(f.status, v.statuses),
+      }))
+    }).catch(() => {})
     apiCached('/api/v1/storeops/stores').then(rows => setStores(rows || [])).catch(() => {})
     api('/api/v1/pos/products?active_only=true').then(r => setProducts(r.products || [])).catch(() => {})
   }, [])
@@ -241,7 +260,8 @@ export default function PosInventoryPage() {
       serial_number: selected.serial_number || '',
       imei: selected.imei || '', sim_card: selected.sim_card || '',
       color: selected.color || '', storage: selected.storage || '',
-      condition: selected.condition || 'new', status: selected.status || 'in_stock',
+      condition: selected.condition || vocab.unmarked_condition,
+      status: selected.status || (vocab.statuses[0]?.key || ''),
       cost: Number(selected.cost || 0),
       date_received: selected.date_received ? selected.date_received.split('T')[0] : '',
       po_number: selected.po_number || '',
@@ -559,7 +579,7 @@ export default function PosInventoryPage() {
             </select>
             <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...input, width: 160 }}>
               <option value="">All statuses</option>
-              {SERIAL_STATUSES.map(s => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
+              {vocab.statuses.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
             </select>
             <button className="btn btn-primary" onClick={() => loadSerial()}>Search</button>
             <button className="btn btn-secondary" onClick={() => { setSearch(''); setStatusFilter(''); loadSerial({ search: '', status: '' }) }}>Clear</button>
@@ -854,8 +874,8 @@ export default function PosInventoryPage() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
                 <div><label style={label}>Storage</label><input value={serialForm.storage} onChange={e => setSerialForm(f => ({ ...f, storage: e.target.value }))} style={input} placeholder="e.g. 256GB" /></div>
-                <div><label style={label}>Condition</label><select value={serialForm.condition} onChange={e => setSerialForm(f => ({ ...f, condition: e.target.value }))} style={input}>{CONDITIONS.map(c => <option key={c}>{c}</option>)}</select></div>
-                <div><label style={label}>Status</label><select value={serialForm.status} onChange={e => setSerialForm(f => ({ ...f, status: e.target.value }))} style={input}>{SERIAL_STATUSES.map(s => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}</select></div>
+                <div><label style={label}>Condition</label><select value={serialForm.condition} onChange={e => setSerialForm(f => ({ ...f, condition: e.target.value }))} style={input}>{vocab.conditions.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}</select></div>
+                <div><label style={label}>Status</label><select value={serialForm.status} onChange={e => setSerialForm(f => ({ ...f, status: e.target.value }))} style={input}>{vocab.statuses.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
                 <div><label style={label}>Cost</label><input type="number" step="0.01" value={serialForm.cost} onChange={e => setSerialForm(f => ({ ...f, cost: parseFloat(e.target.value) || 0 }))} style={input} /></div>

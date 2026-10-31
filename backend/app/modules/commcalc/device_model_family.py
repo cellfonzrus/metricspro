@@ -72,6 +72,8 @@ from __future__ import annotations
 
 import re
 
+from app.modules.pos import device_condition as _cond
+
 #: THE CAPACITY PATTERN — a number, optional space, a storage unit, as its own token or glued to the
 #: number. The units are units of measurement, not a vocabulary (see the header).
 _CAPACITY = re.compile(r"^\d+(?:\.\d+)?\s*(?:gb|tb|mb)$", re.I)
@@ -81,6 +83,13 @@ _UNIT_ONLY = re.compile(r"^(?:gb|tb|mb)$", re.I)
 
 #: Why a family reads the way it does.
 FAMILY_BASES = ("declared_alias", "colour_collapsed", "unchanged", "no_vocabulary")
+
+#: The separator between a family's model words and its condition marker in a LABEL. The KEY uses
+#: `KEY_CONDITION_SEP` instead, which cannot occur in a product description.
+LABEL_CONDITION_SEP = " · "
+#: The separator inside a family KEY. A vertical bar is not a character any feed writes in a model
+#: spelling, so a key can never be mistaken for a model and two conditions can never collide.
+KEY_CONDITION_SEP = "|"
 
 
 def resolve_colour_tokens(raw=None):
@@ -141,30 +150,45 @@ def _drop_colours(toks, colour_tokens):
     return [t for t, k in zip(toks, keep) if k]
 
 
-def family_of(model, *, colour_tokens, alias=None):
+def family_of(model, *, colour_tokens, condition_tokens, alias=None, condition_markers=None):
     """One model spelling → the FAMILY it belongs to, for accessory ordering. PURE.
 
-    `colour_tokens` is REQUIRED — a caller that has not asked the org for its colour words must not
-    be able to answer this question (CLAUDE.md, "every feature is for EVERY tenant").
+    `colour_tokens` and `condition_tokens` are both REQUIRED — a caller that has not asked the org
+    for its own words must not be able to answer this question (CLAUDE.md, "every feature is for
+    EVERY tenant").
 
     `alias` is the optional `{model_lower: canonical}` curation off `device_model_alias`; a hit is
     returned unchanged, because a human saying what a model is called outranks any derivation.
 
-    Returns `{'key', 'label', 'basis'}`. `key` is the lowercased, whitespace-collapsed grouping key;
-    `label` is the family spelled the way this member spelled it, so the caller can show the best
-    seller's own words rather than a normalised shout."""
+    Returns `{'key', 'label', 'basis', 'condition', 'condition_label', 'condition_marker',
+    'condition_basis'}`. `key` is the lowercased, whitespace-collapsed grouping key; `label` is the
+    family spelled the way this member spelled it, so the caller can show the best seller's own
+    words rather than a normalised shout."""
     s = " ".join(str(model or "").split())
     if not s:
-        return {"key": "", "label": "", "basis": "unchanged"}
+        return _with_condition({"key": "", "label": "", "basis": "unchanged"},
+                               {"key": None, "label": None, "basis": "no_vocabulary",
+                                "matched": None, "marker": None})
+    # ── A CONDITION IS NOT A SPELLING (owner 2026-10-31) ─────────────────────────────────────────
+    # Owner, verbatim: *"cpo is certified pre owned is adifferent device than new , imnei is
+    # unique"*. So the condition is read FIRST, off the raw spelling, and applied LAST — after the
+    # alias — because a human curating `device_model_alias` is answering "what is this model
+    # called", not "is this one refurbished". Before this, a refurbished handset stayed off the new
+    # one's row only because the word `CPO` happened to survive the parse; one curated alias row
+    # would have merged two different devices into one order line with nothing to notice it.
+    cond = _cond.condition_of(s, feed_tokens=condition_tokens, markers=condition_markers)
     declared = (alias or {}).get(s.lower())
     if declared:
         d = " ".join(str(declared).split())
-        return {"key": d.lower(), "label": d, "basis": "declared_alias"}
+        return _with_condition({"key": d.lower(), "label": d, "basis": "declared_alias"}, cond)
     # THE BASIS REPORTS THE COLOUR QUESTION, NOT THE CAPACITY ONE. The capacity is a format rule
     # that is always on, so letting it set the basis would hide the thing the basis exists to say:
     # whether this org has told the platform its colour words. Caught by the lock (A3) after the
     # first write conflated them.
-    toks = _tokens(s)
+    # The marker words come out of the model spelling, so two spellings of ONE condition fold
+    # together (`iPhone 13 CPO` and `CERTIFIED_PREOWNED_IPHONE_13` are one refurbished iPhone 13)
+    # and the condition travels as a FIELD rather than as whichever words that line used.
+    toks = _tokens(_cond.strip_markers(s, feed_tokens=condition_tokens))
     kept = _drop_capacity(toks)
     if not colour_tokens:
         _basis = "no_vocabulary"
@@ -174,12 +198,37 @@ def family_of(model, *, colour_tokens, alias=None):
         _basis = "colour_collapsed" if kept != before else "unchanged"
     label = " ".join(kept).strip(" -,;") or s
     label = " ".join(label.split())
-    return {"key": label.lower(), "label": label, "basis": _basis}
+    return _with_condition({"key": label.lower(), "label": label, "basis": _basis}, cond)
 
 
-def group_units(units_by_model, *, colour_tokens, alias=None):
-    """`{model: {period: units}}` → `({family_label: {period: units}}, {family_label: [variant, ...]})`.
-    PURE.
+def _with_condition(fam, cond):
+    """A derived family plus the condition read off its raw spelling. PURE.
+
+    The condition joins the KEY only when it is one the org DECLARED a word for. The unmarked
+    condition adds nothing — it is the baseline, and suffixing every row of every tenant with
+    "New" would be a word on every line for no information. An org that has declared no condition
+    vocabulary at all reads `condition=None` and its keys are byte-identical to what they were
+    before this question existed, which is what makes the change safe for a tenant it does not
+    apply to."""
+    out = dict(fam)
+    out["condition"] = cond.get("key")
+    out["condition_label"] = cond.get("label")
+    out["condition_marker"] = cond.get("marker")
+    out["condition_basis"] = cond.get("basis")
+    if cond.get("basis") == "declared" and out["key"]:
+        out["key"] = f"{out['key']}{KEY_CONDITION_SEP}{cond['key']}"
+        out["label"] = f"{out['label']}{LABEL_CONDITION_SEP}{cond.get('marker') or cond['label']}"
+    return out
+
+
+def group_units(units_by_model, *, colour_tokens, condition_tokens, alias=None,
+                condition_markers=None):
+    """`{model: {period: units}}` → `({family_label: {period: units}},
+    {family_label: [variant, ...]}, {family_label: {condition facts}})`. PURE.
+
+    The THIRD return is the condition each family was read as, so a caller shows it from ONE read
+    rather than asking `family_of` again — a second derivation of the same fact is the duplicate
+    defect CLAUDE.md forbids, and it is how the two would come to disagree.
 
     The family's LABEL is the spelling of its best-selling member, which is the name a human
     recognises. Each variant carries its own units so the screen can open the family and show what
@@ -187,10 +236,12 @@ def group_units(units_by_model, *, colour_tokens, alias=None):
     folded rather than a second query."""
     buckets: dict = {}
     for model, by_period in (units_by_model or {}).items():
-        fam = family_of(model, colour_tokens=colour_tokens, alias=alias)
+        fam = family_of(model, colour_tokens=colour_tokens, condition_tokens=condition_tokens,
+                        alias=alias, condition_markers=condition_markers)
         if not fam["key"]:
             continue
-        b = buckets.setdefault(fam["key"], {"labels": {}, "periods": {}, "variants": {}, "bases": set()})
+        b = buckets.setdefault(fam["key"], {"labels": {}, "periods": {}, "variants": {},
+                                            "bases": set(), "cond": fam})
         total = sum(int(v or 0) for v in (by_period or {}).values())
         b["labels"][fam["label"]] = b["labels"].get(fam["label"], 0) + total
         b["bases"].add(fam["basis"])
@@ -199,7 +250,7 @@ def group_units(units_by_model, *, colour_tokens, alias=None):
             b["periods"][p] = b["periods"].get(p, 0) + int(n or 0)
             v[p] = v.get(p, 0) + int(n or 0)
 
-    units, variants = {}, {}
+    units, variants, families = {}, {}, {}
     for b in buckets.values():
         # The best-selling spelling names the family; ties broken by the spelling itself so the
         # label cannot flip between two reads of the same data.
@@ -209,4 +260,12 @@ def group_units(units_by_model, *, colour_tokens, alias=None):
             ({"model": m, "units_by_month": dict(p), "units_total": sum(p.values())}
              for m, p in b["variants"].items()),
             key=lambda r: (-r["units_total"], r["model"]))
-    return units, variants
+        fam = b["cond"]
+        families[label] = {
+            "condition": fam.get("condition"),
+            "condition_label": fam.get("condition_label"),
+            "condition_marker": fam.get("condition_marker"),
+            "condition_basis": fam.get("condition_basis"),
+            "basis": sorted(b["bases"])[0] if b["bases"] else "unchanged",
+        }
+    return units, variants, families
