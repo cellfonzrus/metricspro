@@ -23,7 +23,9 @@ export default defineConfig({
     environment: 'node',
     globals: false,
     setupFiles: ['./tests/setup.ts'],
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // `plugins/` holds the app's own Expo config plugins, whose rules are pure string work
+    // and must be provable without a Mac — two iOS builds failed before one of them existed.
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'plugins/**/*.test.ts'],
     exclude: ['node_modules/**', '.expo/**', 'android/**', 'ios/**'],
   },
 })
