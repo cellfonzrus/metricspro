@@ -42075,6 +42075,23 @@ a new module, a new permission, an SDK bump, a `version` bump (the runtime key i
 `{ policy: 'appVersion' }`) — finds no matching runtime and is simply not delivered, rather than
 shipping something broken. The workflow never builds and never submits to a store.
 
+### §CORE-26.7 Why an update did not reach a phone (owner, 2026-10-31)
+
+Two publishes succeeded — `production` and `preview`, both green — and the owner's TestFlight phone
+still showed the old JavaScript. Three candidate causes were eliminated from the repository alone:
+the build postdates OTA being wired (11 Sep, #221), its version is `0.1.0` so the `appVersion`
+runtime key matches, and both channels were published. What remains can only be read from EAS —
+which channel the installed build actually carries, and whether that channel is linked to the branch
+the publish wrote to (a channel and a branch share a name by convention, not by rule).
+
+Nobody could see it: the publish workflow holds the only credential, and GitHub's job logs are not
+readable from every environment (the log blob host is outside this container's network policy — read
+a failure through `gh api repos/<o>/<r>/check-runs/<job_id>/annotations` instead, which is how the
+yarn failure above was found). So `.github/workflows/mobile-ota-diagnose.yml` gathers the facts and
+**posts them as a comment on an issue**, readable by anyone working on this and needing no Expo
+account of their own. READ-ONLY by construction: every command is a `:list` or a `:view`, it cannot
+publish, build, submit or delete, and it never fires automatically.
+
 The EAS CLI is installed with `npm install -g eas-cli@latest` rather than through
 `expo/expo-github-action`. That action defaults its packager to **yarn** and this project is npm
 (`mobile/package-lock.json`), so the first real publish died in it — run `41225844556`, 2026-10-31,
