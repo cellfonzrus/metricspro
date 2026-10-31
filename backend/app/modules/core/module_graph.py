@@ -714,6 +714,57 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_m',),
             # a landed upload says whether the source was in a cooldown when it was due
             'app/modules/commcalc/import_audit.py': ('_pb',),
+            # the two sweeps that ask the vocabulary when a LOGIN failed, so a page refusing us at
+            # the edge is named a refusal rather than a rejected credential (§COMMCALC-51). Both ask
+            # it against the page's VISIBLE text, never its markup — that is the point of §51.
+            'app/modules/commcalc/epay_sweep.py': ('_pb',),
+            'app/modules/commcalc/dlar_sweep.py': ('_pb',),
+        },
+    },
+    # ── §COMMCALC-51 — what happened to the login we just submitted ─────────────────────────────
+    'login_outcome': {
+        "question": 'We submitted a portal login. WHAT HAPPENED — and what is the ONE thing the '
+                    'operator should do about it? Three portal drivers answered this three ways and '
+                    'the worst of them was load-bearing. epay_sweep decided from page.content() — '
+                    'the MARKUP — with `any(w in body for w in ("invalid","incorrect","failed")) '
+                    'and "passwordinput" in body`, so a single-page application that merely BUNDLES '
+                    '`var M={invalid:"Invalid user name or password"}` read as having SAID it. Its '
+                    'only route to success was the vendor\'s own words in the document title, which '
+                    'is a carrier name in code (RULE TWO) and a false negative for every other '
+                    'tenant\'s portal. Measured 2026-10-31: 1,665 scheduled runs, every 30 minutes, '
+                    'no gap; the last successful login 2026-10-09T19:30:43Z; then 1,056 CONSECUTIVE '
+                    'runs reporting "credentials rejected", and three carrier feeds dark for 22 days '
+                    'because nobody could tell whether that sentence was true. dlar_sweep\'s probe '
+                    'was sound (ask for a page that needs a session) but named every failure a '
+                    'rejected credential; vidapay_sweep\'s was sound too (DOM, never markup) but '
+                    'asserted "Login rejected" for every still-on-the-form case and asked the '
+                    'operator to work the rest out from a diagnostic dict. SO: six named outcomes, '
+                    'each carrying the one remedy that applies to it — signed_in, '
+                    'credentials_rejected, human_check, portal_refused, login_page_changed, unknown '
+                    '— decided from STRUCTURE (is the form still on screen) and VISIBLE text '
+                    '(document.body.innerText, or visible_from_html for a driver with no browser), '
+                    'never markup. The evidence arguments are keyword-only with NO default, so a '
+                    'caller that has not looked at the page cannot get an answer; '
+                    'is_credential_problem is an ALLOWLIST, so an outcome nobody has ruled on stays '
+                    'quiet about the password rather than blaming it. A challenge or refusal is '
+                    'believed only when the form is ABSENT — §COMMCALC-50.8\'s rule applied '
+                    'here, not copied here. EXCUSED SIBLING, pinned shrink-only: router.py\'s '
+                    'MAILBOX sweep says "login rejected" for an IMAP [AUTHENTICATIONFAILED], which '
+                    'is a protocol answer with no page to misread.',
+        "homes": ('app/modules/commcalc/login_outcome.py',),
+        "index": ('COMMCALC-51',),
+        "locks": ('harness_login_outcome.py',),
+        # SNAPSHOT — written BY HAND (§50). All three portal drivers dereference it for the NAME and
+        # for the operator sentence; each still reads its own page its own way, because what the
+        # facts are read OFF differs per driver (a browser frame, an HTTP document, an error region)
+        # and only the decision is shared.
+        "callers": {
+            # the browser driver whose markup predicate caused the outage
+            'app/modules/commcalc/epay_sweep.py': ('_lo',),
+            # the browserless driver: same question, visible_from_html / form_in_html
+            'app/modules/commcalc/dlar_sweep.py': ('_lo',),
+            # the live login: names which of the two a still-on-the-form submit was
+            'app/modules/commcalc/vidapay_sweep.py': ('_lo',),
         },
     },
     # ── §COMMCALC-38 — what a supplier billed us ─────────────────────────────────────────────────
