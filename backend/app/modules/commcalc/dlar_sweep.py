@@ -29,6 +29,11 @@ from app.modules.commcalc import data_lineage_registry as _lineage
 from app.modules.commcalc import portal_cell as _cell
 from app.modules.commcalc import empty_pull_verdict as _empty_verdict
 from app.modules.commcalc import auto_calc as _auto_calc   # the ONE post-landing hook (index §6l)
+# THE one home of "we submitted a login, what happened" (index §COMMCALC-50.9). This driver's
+# DETECTION was already sound — it asks for a page that needs a session — but its REPORTING named
+# every failure a rejected credential, so a portal refusing us at the edge and a changed route both
+# sent the operator to re-type a password. The naming is dereferenced, not re-spelled.
+from app.modules.commcalc import login_outcome as _lo
 
 import requests
 
@@ -172,6 +177,38 @@ def resolve_report_set(raw=None):
     return (tuple(keys) if keys else DEFAULT_REPORT_SET), refused
 
 
+def _login_outcome_of(session, refused):
+    """(outcome, marker) for a protected page that did not come back. Never raises.
+
+    `refused` is the response to the protected page. A redirect carries no body, so where one was
+    served we follow it ONCE — read-only, GET, no form posted — to see what the portal is actually
+    showing. The probe above is untouched: this runs only after it has already failed, so nothing
+    about the signed-in path changes shape.
+    """
+    body = ""
+    try:
+        body = refused.text or ""
+    except Exception:
+        body = ""
+    if not body.strip():
+        try:
+            loc = (refused.headers or {}).get("Location") or f"{BASE}/login"
+            if loc.startswith("/"):
+                loc = BASE + loc
+            body = (session.get(loc, timeout=30).text or "")
+        except Exception:
+            body = ""
+    vis = _lo.visible_from_html(body)
+    pv = None
+    try:
+        from app.modules.commcalc import portal_backoff as _pb
+        pv = _pb.page_verdict(vis)
+    except Exception:
+        pv = None
+    v = _lo.verdict(form_present=_lo.form_in_html(body), visible_text=vis, page_verdict=pv)
+    return v["outcome"], v.get("marker")
+
+
 def login(session, user, pw):
     """Laravel CSRF form login. Raises DlarLoginError if a protected page stays unreachable."""
     r = session.get(f"{BASE}/login", timeout=30)
@@ -187,7 +224,11 @@ def login(session, user, pw):
     )
     chk = session.get(f"{BASE}/reports/dlar", allow_redirects=False, timeout=30)
     if chk.status_code != 200:
-        raise DlarLoginError("Carrier login failed — credentials rejected (or account/2FA changed).")
+        # THE PROBE IS SOUND, THE NAME WAS NOT. A page that needs a session did not come back, which
+        # proves we are not signed in and proves nothing about WHY. Ask the one home, giving it the
+        # same two facts the browser drivers give it — is a sign-in form in front of us, and what
+        # does the page SAY — recovered from the document because this driver has no browser.
+        raise DlarLoginError(_lo.message(*_login_outcome_of(session, chk)))
 
 
 def fetch_report(session, name, page=100):
