@@ -40,6 +40,8 @@ INDEX = os.path.join(REPO, "docs", "SYSTEM_DATA_FLOW_INDEX.md")
 MIGRATION = os.path.join(REPO, "database", "migrations", "1100_derived_build_queue.sql")
 PROOF = os.path.join(HERE, "harness_derived_builds.py")
 
+SCOPE_PERIOD = "period"          # mirrors derived_builds.SCOPE_PERIOD (asserted by §F)
+
 P = F = 0
 
 
@@ -303,6 +305,55 @@ def run(tree=None):
           "resolver, so emptying config_inputs contradicts the code rather than passing quietly",
           not missing_cfg, missing_cfg)
 
+    # §B8 — THE SAME RULE, DERIVED, FOR THE BUILD THAT MOVES REP PAY (owner 2026-10-31). §B7 reads the
+    # DECLARED-INPUT resolver; the commission build has no resolver, it has pay ENGINES that read a plan out
+    # of fixed tables. So the rule is read from those engines: whatever `commission_engine._load_plans` and
+    # `installment_engine._load_schedules` select from must be one of the commission build's config_inputs.
+    # Dropping `commission_plan` from the registry therefore contradicts the code that reads it — which is
+    # the only kind of check that catches its own deletion (§B7's measured lesson, 2026-10-29).
+    PAY_DECLARERS = (
+        ("app/modules/commcalc/commission_engine.py", "_load_plans"),
+        ("app/modules/commcalc/installment_engine.py", "_load_schedules"),
+    )
+    comm = next((b for b in builds if b.get("key") == "commission"), None)
+    missing_pay, unreadable = [], []
+    for (path, fn) in PAY_DECLARERS:
+        hit = [k for k in tree if k.endswith(path)]
+        node = None
+        if hit:
+            for n, nd in functions(tree[hit[0]]):
+                if n == fn:
+                    node = nd
+                    break
+        if node is None:
+            unreadable.append((path, fn))
+            continue
+        for t in sorted(table_calls(node, {"select"})):
+            if not comm or t not in (comm.get("config_inputs") or ()):
+                missing_pay.append((fn, t))
+    check("B8 the pay engines' own plan reads exist to be read (a renamed resolver cannot silence B8)",
+          not unreadable, unreadable)
+    check("B8 every table a pay engine reads a PLAN out of is one of the commission build's config_inputs "
+          "— derived from the engines, so emptying the declaration contradicts the code",
+          not missing_pay, missing_pay)
+    # §B9 — a PERIOD-scoped build that carries a declaration must be able to name the months an edit
+    # restates. Without this, a plan edit queues nothing and reports success: the owner-visible defect of
+    # 2026-10-31 restored, exactly as C4 would restore the one of 2026-10-29.
+    no_periods = [b["key"] for b in builds
+                  if b.get("config_inputs") and b.get("scope") == SCOPE_PERIOD and not b.get("periods_fn")]
+    check("B9 a period-scoped build with a declaration names the months an edit restates (periods_fn) — "
+          "an edit carries no month of its own", not no_periods, no_periods)
+    bad_pfn = []
+    for b in builds:
+        if not b.get("periods_fn"):
+            continue
+        mod, _, fn = str(b["periods_fn"]).partition(":")
+        rp = mod.replace("app.", "app/", 1).replace(".", "/") + ".py"
+        hit = [k for k in tree if k.endswith(rp)]
+        if not hit or fn_src(tree[hit[0]], fn) is None:
+            bad_pfn.append((b["key"], b["periods_fn"]))
+    check("B9 …and that resolver exists", not bad_pfn, bad_pfn)
+
     # ═══ §C the landing of an input table fires the hook ═════════════════════════════════════════════════
     print("\n§C A LANDING OF AN INPUT TABLE FIRES THE HOOK")
     inputs = set()
@@ -338,6 +389,19 @@ def run(tree=None):
     # the due dates stay on the old ones until an unrelated shipment lands — which is the owner-visible
     # defect of 2026-10-29 restored, one step further back than the button.
     cfg_tables = {t for b in builds for t in (b.get("config_inputs") or ()) if isinstance(t, str)}
+    # THE DOORS ARE DERIVED, NOT LISTED. A writer satisfies this rule by calling the hook itself OR by
+    # calling a shared helper that does — `payables._source_map_changed`, `commcalc._plan_declaration_changed`
+    # (2026-10-31, eight plan writers behind one door). An allowlist of helper names grows a line per
+    # feature and goes stale silently; reading which functions actually reach `landed(` cannot. The helper
+    # must still BE such a function, so renaming it away from the hook turns every caller red.
+    hook_doors = set()
+    for path, src in tree.items():
+        for name, node in functions(src):
+            if "landed(" in seg(src, node) and name not in ("landed",):
+                hook_doors.add(name)
+    check("C4a at least one shared hook door exists and was derived from its own body, not from a list",
+          {"_source_map_changed", "_plan_declaration_changed"} <= hook_doors,
+          sorted(hook_doors)[:12])
     cfg_silent = []
     for path, src in sorted(tree.items()):
         if path in (REG, AUTO) or path.endswith("refresh.py"):
@@ -349,7 +413,7 @@ def run(tree=None):
             if not wrote:
                 continue
             whole = seg(src, node)
-            if "landed(" in whole or "_source_map_changed(" in whole \
+            if "landed(" in whole or any(f"{d}(" in whole for d in hook_doors) \
                     or (path, name) in auto_excused or (path, name) in excused:
                 continue
             cfg_silent.append((path, name, sorted(wrote)))

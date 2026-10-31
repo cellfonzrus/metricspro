@@ -314,6 +314,7 @@ def _summary(name, days, counts, effects):
 from fastapi import APIRouter, Header, HTTPException   # noqa: E402
 
 from app.core.database import get_supabase             # noqa: E402
+from app.modules.core import relation_home as _relation_home   # 2026-10-31 — one home for which schema holds a relation (§CORE-29)
 
 router = APIRouter()
 
@@ -327,7 +328,12 @@ def sb():
 def _employee(org_id, employee_id="", name=""):
     """Resolve the subject. Either key works — the board passes employee_id, a human passes a name."""
     try:
-        q = sb().table("employees").select("employee_id,name,home_store").eq("org_id", org_id)
+        # WHICH SCHEMA HOLDS THIS RELATION, dereferenced (index §CORE-29). `sb()` here is the plain
+        # client, and `employees` is a `storeops` relation — this read was landing on the stale
+        # four-row `public.employees` copy instead of the 142-row live roster. Same wrong fact as the
+        # Run Calculation's `commcalc.employees`, fixed in the same commit rather than left behind.
+        q = (_relation_home.reader(sb(), "employees", "employee_id,name,home_store")
+             .eq("org_id", org_id))
         q = q.eq("employee_id", employee_id) if employee_id else q.ilike("name", name)
         rows = q.limit(1).execute().data or []
         return rows[0] if rows else None
