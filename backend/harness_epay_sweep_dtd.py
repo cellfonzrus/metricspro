@@ -27,6 +27,11 @@ import pandas as pd  # noqa: E402
 import app.modules.commcalc.epay_sweep as S  # noqa: E402
 import app.modules.storeops.merchant_ids as MIDS  # noqa: E402
 
+#: A tenant's business timezone. A feed window's day comes from the ORG's zone, never the
+#: server's UTC day (index §COMMCALC-52), so `_expand_jobs` requires it and these checks supply
+#: one explicitly rather than letting the harness inherit the container's clock.
+TENANT_TZ = "America/New_York"
+
 PASS, FAIL = [], []
 
 
@@ -65,13 +70,18 @@ check("registry: ingest hook wired to ingest_daily_tx", spec.get("ingest") is S.
 check("registry: empty DTD window is allowed", spec.get("empty_ok") is True)
 
 # default refresh_days=1 -> a single-day range ending today
-jobs = S._expand_jobs(["epay_daily_tx"], report_cfg=None)
+jobs = S._expand_jobs(["epay_daily_tx"], report_cfg=None, tz=TENANT_TZ)
 check("expand: one day-range job for DTD", len(jobs) == 1 and jobs[0][0] == "epay_daily_tx", jobs)
 tgt = jobs[0][1]
-check("expand: default window is today only (begin==end)",
-      tgt.get("kind") == "day_range" and tgt.get("begin") == tgt.get("end"), tgt)
+# "One day" is read on `covers_through` (the last day we MEAN to receive), not on `end` — the house
+# end-exclusive boundary deliberately asks one day past the intent (§19.54). And the day itself is the
+# TENANT's today, never the container's UTC day (§COMMCALC-52).
+check("expand: default window is the tenant's today only",
+      tgt.get("kind") == "day_range"
+      and tgt.get("begin") == tgt.get("covers_through")
+      and tgt.get("days") == [S.feed_today(TENANT_TZ).isoformat()], tgt)
 # a wider registry window widens the range in ONE run
-jobs3 = S._expand_jobs(["epay_daily_tx"], report_cfg={"epay_daily_tx": {"refresh_days": 3}})
+jobs3 = S._expand_jobs(["epay_daily_tx"], report_cfg={"epay_daily_tx": {"refresh_days": 3}}, tz=TENANT_TZ)
 t3 = jobs3[0][1]
 check("expand: refresh_days=3 -> a 3-day range in one job",
       t3["kind"] == "day_range" and len(t3["days"]) == 3 and t3["begin"] != t3["end"], t3)

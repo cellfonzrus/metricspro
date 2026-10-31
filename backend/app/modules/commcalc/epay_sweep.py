@@ -34,6 +34,7 @@ WAF-protected, so Railway's datacenter IP must be allowed to reach it; if a run 
 """
 from datetime import datetime, timedelta, timezone
 from app.modules.commcalc import feed_period as _feed_period  # THE feed-row month + per-day stamp (one home, pure)
+from app.modules.notify import report_filters as _report_filters  # THE tenant's-today home (pure leaf; see feed_today)
 
 try:
     from app.modules.commcalc import url_guard as _url_guard      # SSRF guard (finding C4)
@@ -1122,7 +1123,7 @@ def _empty_cfg_evidence(rc_row):
     return out
 
 
-def _landing_evidence(client, org_id, spec):
+def _landing_evidence(client, org_id, spec, *, tz):
     """`ever_landed` / `days_since_last_row` for one report's landing table — the two facts that tell
     a quiet source apart from a path that has never worked. Best-effort: every failure degrades to
     {} so a probe can never fail a sweep, and an absent fact simply cannot trigger its own rule.
@@ -1151,14 +1152,17 @@ def _landing_evidence(client, org_id, spec):
     try:
         from datetime import date as _date
         y, m, d = int(stamp[0:4]), int(stamp[5:7]), int(stamp[8:10])
-        out["days_since_last_row"] = (datetime.now(timezone.utc).date() - _date(y, m, d)).days
+        # The tenant's day, not the container's (§COMMCALC-52): a row stamped with the tenant's
+        # today reads as one day stale between midnight UTC and midnight local, which is exactly
+        # the window the comp report runs in.
+        out["days_since_last_row"] = (feed_today(tz) - _date(y, m, d)).days
     except (ValueError, IndexError):
         pass
     return out
 
 
 def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id=None, ledger=None,
-                    cfg_evidence=None):
+                    cfg_evidence=None, *, tz):
     """Download one report by key, parse, derive its period, and store it. Every report REPLACES its
     period (delete that period + insert the fresh pull). For comp the period comes from the rows'
     own Begin Date (mode 'data'), so the pull lands under the month it belongs to even if the portal
@@ -1185,7 +1189,7 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id
                    "window": win, "period": None,
                    "note": f"nothing posted for {win} — nothing to store (pending verdict)"}
             return _defer_empty(ledger, res, spec, target,
-                                {**_landing_evidence(client, org_id, spec),
+                                {**_landing_evidence(client, org_id, spec, tz=tz),
                                  **(cfg_evidence or {})})
         raise
     if spec.get("grain") == "day":
@@ -1281,16 +1285,42 @@ def _recent_months(n):
     return out
 
 
-def _recent_days(n, today=None):
-    """The last `n` days ending today (UTC), oldest first, as ISO strings."""
-    from datetime import date as _date
-    end = today or datetime.now(timezone.utc).date()
+# ── TODAY, IN THE TENANT'S ZONE — THE ONLY "TODAY" A FEED WINDOW MAY BE BUILT ON ────────────────
+# A DEREFERENCE, not a re-spelling: `feed_today` IS `report_filters.business_today` (the same
+# function object, so a lock can assert identity and no second zoneinfo ladder can appear here).
+#
+# That rule was written on 2026-07-30 and its docstring already stated this exact defect — *"A
+# scheduled send fires at the SCHEDULE's local hour; resolving a relative date off the server's UTC
+# day would put an 8pm-Eastern Friday run on Saturday's date."* This driver never asked it, and that
+# cost the comprehensive comp report every automatic run it ever made (index §COMMCALC-52): its slot
+# is 23:30 local, which is 03:30 UTC the NEXT day, so a window built on the UTC date asked the portal
+# for a day that had not begun where the portal lives. Zero rows, read as "nothing posted", for months.
+#
+# `report_filters` is a deliberately pure leaf (stdlib + settings only), so this import cannot create
+# a cycle. It never raises: an unusable zone falls through that module's own house ladder.
+feed_today = _report_filters.business_today
+
+
+def _recent_days(n, today):
+    """The last `n` days ending on `today`, oldest first, as ISO strings.
+
+    `today` is REQUIRED and has no default. It used to default to the server's UTC date, which is
+    how a caller that had never asked the org what day it was still got an answer — and the answer
+    was a day in the future for every tenant west of UTC. The window widens BACKWARDS only: no
+    width makes tomorrow answerable.
+    """
     n = max(1, int(n or 1))
-    return [(end - timedelta(days=i)).isoformat() for i in range(n - 1, -1, -1)]
+    return [(today - timedelta(days=i)).isoformat() for i in range(n - 1, -1, -1)]
 
 
-def _expand_jobs(keys, report_cfg=None):
+def _expand_jobs(keys, report_cfg=None, *, tz):
     """Expand report keys into (key, target) jobs, driven by commcalc.report_definitions.
+
+    `tz` is the TENANT's business timezone (`<connector>_sweep_config.timezone`), keyword-only and
+    REQUIRED. It has no default on purpose: the defect this closes was a caller that never asked the
+    org what day it was and still got a window (index §COMMCALC-52), and a default here — any
+    default, UTC most of all — is what let it. A caller that cannot name the zone must not be able
+    to build a window.
 
     MONTH-grain (MI): one job per month, current + refresh_months-1 prior closed months. This is
     the setting that existed in the database and was never read — MI only ever pulled the current
@@ -1317,8 +1347,14 @@ def _expand_jobs(keys, report_cfg=None):
             # clean "nothing posted" — forever. The window is now never narrower than the source's
             # configured arrears, so a zero can at least be a meaningful answer. Config, per org
             # (`report_definitions.arrears_days`), with the house default in empty_pull_verdict.
+            # …AND THE DAY IT ENDS ON IS THE TENANT'S DAY, NOT THE SERVER'S (owner 2026-10-31).
+            # See `feed_today`: this slot runs at 23:30 local precisely because the source posts
+            # late, and 23:30 local is the next day in UTC, so every run asked for a day that had
+            # not begun. Measured on eight consecutive runs, the window was always exactly one day
+            # ahead of the tenant's calendar. The width still comes from config; only the END moves.
             days = _recent_days(max(int(rc.get("refresh_days") or DEFAULT_REFRESH_DAYS),
-                                    _verdict.required_window_days(rc.get("arrears_days"))))
+                                    _verdict.required_window_days(rc.get("arrears_days"))),
+                                feed_today(tz))
             # ── AND THE WINDOW WE ASK FOR CANNOT LOSE ITS LAST DAY (owner 2026-10-08) ────────────
             # `days[-1]` is the last day this job INTENDS to cover. What goes in the source's End
             # Date widget is not the same thing, because the source's end boundary is an assumption
@@ -1338,7 +1374,7 @@ def _expand_jobs(keys, report_cfg=None):
     return jobs
 
 
-def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None):
+def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None, *, tz):
     """Launch headless Chromium, log into the epay Owner Portal ONCE, and download + ingest each
     requested report. `reports` = list of REPORTS keys; defaults to ['mi'] for back-compat (MI/ATU
     only). MI/payment pull the current month; comp pulls the current month + COMP_REFRESH_MONTHS-1
@@ -1405,7 +1441,7 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
                     errors.append(f"{spec['label']}: could not resolve a report id — no live menu row "
                                   f"matched label {spec.get('label_match')!r} and no "
                                   f"report_definitions override (portal_report_id) was set")
-            jobs = _expand_jobs([k for k in keys if k in resolved_ids], report_cfg)
+            jobs = _expand_jobs([k for k in keys if k in resolved_ids], report_cfg, tz=tz)
             for idx, (key, target) in enumerate(jobs):
                 if idx > 0:
                     # Reload to a clean app shell between every report run so each opens on a fresh
@@ -1441,12 +1477,12 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
                         source_batch = f"epay-sweep {key}{tgt}".strip()
                         results.append(spec["ingest"](client, org_id, tmp.name, source_batch,
                                                       ledger=ledger, target=target,
-                                                      evidence={**_landing_evidence(client, org_id, spec),
+                                                      evidence={**_landing_evidence(client, org_id, spec, tz=tz),
                                                                 **_cfg_ev}))
                     else:
                         results.append(_process_report(client, org_id, page, key, tmp.name,
                                                        target=target, report_id=resolved_ids[key],
-                                                       ledger=ledger, cfg_evidence=_cfg_ev))
+                                                       ledger=ledger, cfg_evidence=_cfg_ev, tz=tz))
                 except Exception as e:
                     errors.append(f"{REPORTS[key]['label']}{tgt}: {type(e).__name__}: {e}")
                 finally:

@@ -3714,11 +3714,11 @@ def _do_vip_sweep(org_id):
             errs.append(f"{name}: {str(e)[:140]}")
 
     def _invoices():
-        res = vip_sweep.run_invoice_sweep(client, org_id, u, pw, lookback, helpers)
+        res = vip_sweep.run_invoice_sweep(client, org_id, u, pw, lookback, helpers, tz=cfg.get('timezone'))
         return f"{res['invoices']} invoices, {res['lines']} lines, {res['devices']} devices ({res['window']})"
 
     def _paygo():
-        ar = vip_sweep.run_paygo_sweep(client, org_id, u, pw, lookback)
+        ar = vip_sweep.run_paygo_sweep(client, org_id, u, pw, lookback, tz=cfg.get('timezone'))
         owed = f"${ar['current_owed']:,.2f}" if ar.get('current_owed') is not None else "n/a"
         return f"PayGo: {ar['payments']} batches (current owed {owed})"
 
@@ -15627,7 +15627,8 @@ def _do_b2b_sweep(org_id):
         # the connector's registered label / host (mig 1014) — the copy the client raises names it by
         # these, never by a vendor spelled in code
         conn = _connector_scope(_connector_scope_ctx(client, org_id), _sweep_table_slug('b2b_sweep_config', cfg))
-        res = b2b_sweep.run_inventory_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'], connector=conn)
+        res = b2b_sweep.run_inventory_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'],
+                                            connector=conn, tz=cfg.get('timezone'))
         # HONEST ZERO: the login can succeed and the report still parse 0 stores (a renamed store/value
         # column, a layout we don't flatten). That is NOT an import — recording it as 'ok' + a fresh
         # last_run_at is exactly the false green the 2026-07-26 audit removed. Same posture the email
@@ -15810,9 +15811,12 @@ def _do_epay_sweep(org_id, only=None):
             _epay_set_status(client, org_id, 'ok', f'Nothing due to pull ({", ".join(only)})')
             return
     try:
+        # tz: the TENANT's business timezone, passed EXPLICITLY (index §COMMCALC-52). A day-grain
+        # window must end on the tenant's today, and the sweep refuses to build one without being
+        # told which clock to use — that is the whole fix, so this argument is not optional.
         res = epay_sweep.run_epay_sweep(client, org_id, cfg.get('portal_url'),
                                         cfg['portal_user'], cfg['portal_pass'], reports=reports,
-                                        report_cfg=rcfg)
+                                        report_cfg=rcfg, tz=cfg.get('timezone'))
         # run_epay_sweep raises only when EVERY report failed; a mixed run returns res['errors'].
         # That used to be reported as a flat 'ok' (the failed report looked imported) — call it 'partial'
         # so the connectors page and the attention feed can tell the operator WHICH report is missing.
@@ -48568,7 +48572,7 @@ def _epay_portal_pull(client, org_id):
             def _run_dtd_sweep():
                 return epay_sweep.run_epay_sweep(
                     client, org_id, cfg.get("portal_url"), cfg["portal_user"], cfg["portal_pass"],
-                    reports=["epay_daily_tx"], report_cfg=rcfg)
+                    reports=["epay_daily_tx"], report_cfg=rcfg, tz=cfg.get("timezone"))
 
             with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
                 res = _ex.submit(_run_dtd_sweep).result() or {}

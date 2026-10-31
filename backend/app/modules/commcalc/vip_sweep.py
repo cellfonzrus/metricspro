@@ -13,6 +13,15 @@ import re
 from datetime import datetime, timedelta, timezone
 import requests
 
+from app.modules.notify import report_filters as _report_filters  # THE tenant's-today home (pure leaf)
+
+# TODAY, IN THE TENANT'S ZONE. A DEREFERENCE of the one home — `feed_today` IS
+# `report_filters.business_today`, the same function object, so no second zoneinfo ladder can
+# appear here. A portal window built on the container's UTC day asks for a day that has not
+# begun where the portal lives; that cost the comp report every automatic run it ever made
+# (index §COMMCALC-52), and this driver asked the same question the same wrong way.
+feed_today = _report_filters.business_today
+
 
 def _bounded_session(_timeout=60):
     """requests.Session with a DEFAULT per-request timeout (2026-08-04 outage class fix).
@@ -278,7 +287,7 @@ def parse_detail(session, inv_id):
     return lines, devices
 
 
-def run_invoice_sweep(client, org_id, user, pw, lookback_days, helpers):
+def run_invoice_sweep(client, org_id, user, pw, lookback_days, helpers, *, tz):
     """Login, pull invoices in [today-lookback, today], UPSERT invoices and replace the
     line/device rows for the swept invoices. `helpers` = the router's
     (_vip_money, _vip_int, _vip_ts, _vip_period) so storage exactly matches manual upload.
@@ -288,7 +297,7 @@ def run_invoice_sweep(client, org_id, user, pw, lookback_days, helpers):
     session.headers.update({"User-Agent": UA})
     login(session, user, pw)
 
-    today = datetime.now(timezone.utc).date()
+    today = feed_today(tz)
     sdate = (today - timedelta(days=max(1, lookback_days))).strftime("%m/%d/%Y")
     edate = today.strftime("%m/%d/%Y")
     raw = list_invoices(session, sdate, edate)
@@ -431,7 +440,7 @@ def parse_payment_invoices(session, payment_id):
     return out
 
 
-def run_paygo_sweep(client, org_id, user, pw, lookback_days, session=None):
+def run_paygo_sweep(client, org_id, user, pw, lookback_days, session=None, *, tz):
     """Login (or reuse `session`), pull the PayGo pending + approved weekly batches, upsert
     them, and refresh the invoice-number links for the pending batch + approved batches whose
     created_on falls within `lookback_days`. Full history of batches is upserted (cheap: 2 list
@@ -446,7 +455,7 @@ def run_paygo_sweep(client, org_id, user, pw, lookback_days, session=None):
     approved = list_paygo_payments(session, "/PaygoPayment/ApprovedPaymentList")
 
     pay_rows, detail_targets = [], []
-    cutoff = datetime.now(timezone.utc).date() - timedelta(days=max(1, lookback_days))
+    cutoff = feed_today(tz) - timedelta(days=max(1, lookback_days))
     for batch_type, recs in (("pending", pending), ("approved", approved)):
         for rec in recs:
             pid = rec.get("Id")

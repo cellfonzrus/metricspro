@@ -188,6 +188,7 @@ Primary code homes:
 | COMMCALC-49 | **What to order, from what the stores actually sold — and one answer to "how many will sell next"** | "process accessory orders based on the previous 3 months of average sales … asking the user to enter where the spoecific model is end of life or current". The device models the stores sold, ranked, waiting on a human ruling before anything is projected — and the velocity arithmetic that question needs, which was already written twice, factored into one home both older forecasts now read. |
 | COMMCALC-50 | **A page that refuses us is not a login form that renders unexpectedly** | "live login for the billing initated" — and it came back "Could not find the login form. The login form may render differently than expected — check the screenshot." The screenshot showed no form at all: the portal had refused the request in plain words, carrying its own error reference. Three vocabularies answered "is this page refusing us", two of them hardcoded, and none of them held that wording. And the other half of that question — *is a form on this page at all?* — was never asked, so the UPS reporting portal's own sign-in form read as a bot wall because its markup says "captcha" (§50.8, owner 2026-10-31). |
 | COMMCALC-51 | **A login outcome is read off what the page is doing, never off how it is built** | "all these reports should have been updated automatically with the portal access via chron jobs why is this not happeneing neds to be found first and then fixed" — three carrier feeds dark since 9 October while the scheduler fired 1,665 times and 1,056 consecutive runs reported "credentials rejected". That sentence was a substring search over `page.content()`, so a portal that merely BUNDLES the word "invalid" read as having said it, and a human check, an edge refusal and a changed sign-in flow were all reported as a wrong password. |
+| COMMCALC-52 | **A feed window's day comes from the tenant's zone, never the server's** | "if we access to one behind that door then all should be downloaded automatically" — two of the three feeds would, once the login was honest (§COMMCALC-51). The third never had an access problem: the comprehensive comp report has not arrived automatically ONCE since the leg was built, because the window was built on `datetime.now(timezone.utc).date()` while its slot is 23:30 in the tenant's zone — 03:30 UTC the NEXT day. Every run asked the portal for a day that had not begun where the portal lives, and the resulting zero was read as "no compensation posted". The rule already had a home, written 2026-07-30, whose docstring states this exact defect; nothing in commcalc read it. |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
@@ -26190,6 +26191,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-49 | commcalc |
 | COMMCALC-50 | commcalc |
 | COMMCALC-51 | commcalc |
+| COMMCALC-52 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -36405,15 +36407,151 @@ Tests: `tests/unit/test_login_outcome_reads_the_page.py` (28),
   answerable by a login attempt, and the portal's edge refuses this container. What ships is the
   platform telling the operator WHICH of the five things is happening, which is what twenty-two days
   of "credentials rejected" denied them.
-- **The comp report has never once arrived automatically**, and that is a separate, older fault:
-  its `Summarize by` control cannot be set, so the portal returns a header-only workbook (the cause
-  is already written down at `epay_sweep.py`'s comp-cadence note, and the §19.41 ledger has been
-  reporting `unverified_no_data` for it since 2026-10-04). Not touched here.
+- **The comp report has never once arrived automatically**, and that is a separate, older fault —
+  now found and fixed in **§COMMCALC-52**: the window was built on the CONTAINER's UTC day, and the
+  report's slot is 23:30 in the tenant's zone, which is 03:30 UTC the next day, so every run asked
+  the portal for a day that had not begun where the portal lives. CORRECTION, recorded because it
+  was written here first: the `Summarize by` control failure is real but belongs to the **Daily
+  Transaction Detail** leg, not to comp — comp's own recorded runs report a window successfully set
+  and genuinely zero rows. A plausible cause standing next to the right evidence is how this one
+  survived four months.
 - **The upload page still says nothing about a dead automation.** `import_audit.p_connectors`
   already raises `commcalc:failed:epay_sweep_config` as an `error` attention item — the mechanism
   exists and fired — but the surface the owner was actually reading shows the last upload and how it
   arrived, and goes quiet about the automation behind it having last succeeded 22 days ago. That is
   the surface half, and it is the reason this sat so long.
+
+
+## §COMMCALC-52. A FEED WINDOW'S DAY COMES FROM THE TENANT'S ZONE, NEVER THE SERVER'S — one home for "what day is it where this portal lives" (owner report 2026-10-31)
+
+Owner, on being told that one shared login had taken three feeds down: *"if we access to one behind
+that door then all should be downloaded automatically"*. Two of the three will, once the login stops
+lying about what happened (§COMMCALC-51). The third would not have, because it never had an access
+problem at all.
+
+### COMMCALC-52.1 WHAT WAS MEASURED (production, read-only, 2026-10-31)
+
+- `commcalc.upload_log` holds **not one** `epay auto-sweep` row for the comprehensive comp report,
+  for any org, since the leg was built. Every row of `commcalc.raw_comp_report` arrived by hand.
+- `core.job_run` shows the slot firing on time, every night, for months. The scheduler was never the
+  problem — the same finding as §COMMCALC-51, for a different reason.
+- Eight consecutive recorded runs, with the window each one asked the portal for:
+
+  | run start (UTC) | the container's day | the tenant's day | the window asked for |
+  |---|---|---|---|
+  | 2026-09-27T03:31:00Z | 2026-09-27 | 2026-09-26 | 2026-09-27 … 2026-09-27 |
+  | 2026-09-28T03:31:02Z | 2026-09-28 | 2026-09-27 | 2026-09-28 … 2026-09-28 |
+  | 2026-09-29T03:31:07Z | 2026-09-29 | 2026-09-28 | 2026-09-29 … 2026-09-29 |
+  | 2026-09-30T03:30:59Z | 2026-09-30 | 2026-09-29 | 2026-09-30 … 2026-09-30 |
+  | 2026-10-01T03:30:57Z | 2026-10-01 | 2026-09-30 | 2026-10-01 … 2026-10-01 |
+  | 2026-10-02T03:30:39Z | 2026-10-02 | 2026-10-01 | 2026-10-02 … 2026-10-02 |
+  | 2026-10-03T03:31:01Z | 2026-10-03 | 2026-10-02 | 2026-10-03 … 2026-10-03 |
+  | 2026-10-04T03:31:04Z | 2026-10-04 | 2026-10-03 | 2026-10-04 … 2026-10-04 |
+
+  The window is one day wide (`report_definitions.refresh_days = 1`) and lands, every time, on a day
+  that has not started where the portal lives.
+- `commcalc.report_definitions.arrears_days` **does not exist as a column in production**, so the
+  widening knob §19.54 reads is inert here. `refresh_days` exists and is configurable.
+
+### COMMCALC-52.2 THE DEFECT
+
+The slot is 23:30 in the tenant's timezone *deliberately* — the portal posts a day's compensation at
+about 23:30 local, so that is when there is something to fetch. 23:30 `America/New_York` is 03:30 UTC
+**the next day**, and the window was built like this:
+
+```python
+today = datetime.now(timezone.utc).date()      # the CONTAINER's day
+days  = _recent_days(refresh_days, today)      # the window asked of the portal
+```
+
+So the one night the data existed, the sweep asked for tomorrow. The portal answered with zero rows,
+honestly, and zero rows was recorded as *"no compensation posted"* — a feed that could not answer
+read as a source with nothing to say. For four months.
+
+### COMMCALC-52.3 THE CLASS, not the instance
+
+The instance is "comp asks for the wrong day". The class is **"a relative date was resolved against
+the machine's clock instead of the tenant's"**, and it is not confined to a window: the same wrong
+fact stamps *"the day this inventory was observed"* and measures *"how many days stale is this
+feed"*. Anywhere a tenant's calendar is the subject and the container's clock is the source.
+
+### COMMCALC-52.4 THE ONE HOME
+
+`backend/app/modules/notify/report_filters.py :: business_today(tz)` — written **2026-07-30**, for a
+scheduled send, and its docstring already stated this exact defect:
+
+> *"A scheduled send fires at the SCHEDULE's local hour; resolving a relative date off the server's
+> UTC day would put an 8pm-Eastern Friday run on Saturday's date."*
+
+Nothing in `commcalc` ever read it. §19.18's shape for the fifth time: the registry written, the
+callers never wired. The home was not moved and not rewritten — it was already right.
+
+Each driver now binds it, which is a dereference and not a copy, because it is the *same function
+object*:
+
+```python
+from app.modules.notify import report_filters as _report_filters
+feed_today = _report_filters.business_today
+```
+
+`report_filters` is a deliberately pure leaf (stdlib + settings only), so this cannot cycle, and
+`business_today` never raises — an unusable zone falls through its own house ladder. The identity is
+what the lock asserts (`driver.feed_today is report_filters.business_today`), so a driver cannot
+quietly grow a second `zoneinfo` ladder and still pass.
+
+### COMMCALC-52.5 Every caller wired — all three portal drivers, not the one that surfaced it
+
+| driver | what asked the wrong day | now |
+|---|---|---|
+| `commcalc/epay_sweep.py` | `_expand_jobs` built the day-grain window on the UTC date | `feed_today(tz)`; `tz` keyword-only and REQUIRED on `_expand_jobs`, `run_epay_sweep`, `_process_report`, `_landing_evidence` |
+| `commcalc/epay_sweep.py` | `_landing_evidence` measured `days_since_last_row` against the UTC date — one day stale between the two midnights, which is the window comp runs in | `feed_today(tz)` |
+| `commcalc/vip_sweep.py` | `run_invoice_sweep` built `[today-lookback, today]` on the UTC date; `run_paygo_sweep`'s `cutoff` likewise | `feed_today(tz)`, `tz` required on both |
+| `commcalc/b2b_sweep.py` | `run_inventory_sweep` stamped `as_of_date` with the UTC date — a snapshot filed on tomorrow for every tenant west of UTC | `feed_today(tz)`, `tz` required |
+
+`tz` is **keyword-only with no default** everywhere, which is the point: the defect was a caller that
+had never asked the org what day it was and still got an answer. There is now no answer without the
+org. All five router call sites read it from the connector's own config row
+(`tz=cfg.get('timezone')`) — a column that already exists, `NOT NULL`, on every `*_sweep_config`
+table since migrations 011/012/020, **so this fix needs no migration**.
+
+**Excused sibling, named with its reason and pinned shrink-only:** `feed_period.month_state` defaults
+its `today` to the container's day. It is MONTH grain, so the container and the tenant can disagree
+only in the hours either side of midnight on the 1st, and `today` is already an injectable argument
+there — the fix for a caller that cares is to pass the tenant's day, not to change the home. The
+excusal list may only ever shrink (`harness_feed_window_tenant_day.py` §G).
+
+### COMMCALC-52.6 Every tenant, not one
+
+A window is built per org from that org's own declared `timezone`, and the tests assert both halves:
+each zone produces its own window (`America/New_York`, `America/Chicago`, `America/Los_Angeles`,
+`Asia/Kolkata`, `UTC`), and two tenants either side of midnight get *different* windows from the same
+instant. No tenant's clock can decide another's window, and no driver spells an IANA zone literal at
+all — the house fallback lives in `report_filters` alone (RULE TWO).
+
+### COMMCALC-52.7 What this does NOT fix
+
+- **It does not backfill.** Every comp day the sweep asked wrong is still missing from
+  `raw_comp_report` unless it was uploaded by hand. The repair is to widen `refresh_days` once and
+  let the next runs walk back over the gap — config, not code, and the owner's to apply.
+- **The window is still one day wide.** With `refresh_days = 1` the fix makes the sweep ask for the
+  right day, but a single run that flakes still loses that day for good, and `arrears_days` has no
+  column in production to widen it. A config row, surfaced for the owner.
+- **It says nothing about the login.** Two of the three feeds are dark for the reason in
+  §COMMCALC-51 and need a live sign-in before anyone can say whether the credential is refused.
+
+### COMMCALC-52.8 Locked
+
+- `backend/harness_feed_window_tenant_day.py` — 43 checks, DB-free and browser-free. Fails the build
+  if a driver takes a day off the container's clock, stops dereferencing the one home, keeps a zone
+  ladder or an IANA literal of its own, gains a DEFAULT for `tz` at a window-building entry point, or
+  if a router call site stops passing the org's zone, or the excusal list grows. Wired into CI on the
+  `carrier-vocab-guard` workflow.
+- `backend/tests/unit/test_feed_window_is_the_tenants_day.py` — 31 unit tests, including the eight
+  recorded run instants as a parametrised regression.
+- `backend/harness_comp_daily_sweep.py`, `harness_empty_pull_verdict.py`, `harness_epay_sweep_dtd.py`
+  now supply a zone explicitly rather than inheriting the container's clock. Two stale assertions in
+  them were corrected at the same time (they read "one day" off `end`, which §19.54's end-exclusive
+  boundary deliberately widens; the intent is read on `covers_through`).
 
 
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
