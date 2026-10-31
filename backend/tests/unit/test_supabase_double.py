@@ -131,3 +131,41 @@ def test_or_is_anded_with_the_filters_around_it():
 def test_an_or_term_the_double_cannot_read_raises_rather_than_matching_nothing():
     with pytest.raises(NotImplementedError):
         _settings().table("pos_settings").select("*").or_("store_code.like.S%").execute()
+
+
+# ── `.not_` — PostgREST's negation ───────────────────────────────────────────────────────────────
+# Added 2026-10-31 with the Productivity Insights fix. `commcalc/router._tx` composes
+# `.not_.is_("trans_ts", "null")` to read only timestamped sales lines. The double had no `not_` at
+# all, so the attribute lookup raised, the endpoint's broad `except` turned it into "no
+# transaction-time data yet", and the report's busy hours silently fell back to the staffing proxy
+# — a test could have asserted the proxy and called it correct. Semantics pinned here, in the one
+# home, so no test file has to grow a stub of its own.
+def _ts():
+    return FakeSupabase({"commcalc.daily_sales_feed": [
+        {"org_id": ORG, "trans_id": "T-1", "trans_ts": "2026-10-05T11:30:00-04:00", "voided": None},
+        {"org_id": ORG, "trans_id": "T-2", "trans_ts": None, "voided": None},
+        {"org_id": ORG, "trans_id": "T-3", "voided": "Y"},                    # column absent entirely
+    ]})
+
+
+def test_not_is_null_keeps_only_the_rows_that_have_a_value():
+    rows = (_ts().schema("commcalc").table("daily_sales_feed").select("*").eq("org_id", ORG)
+            .not_.is_("trans_ts", "null").execute().data)
+    assert [r["trans_id"] for r in rows] == ["T-1"]
+
+
+def test_not_returns_the_query_so_filters_keep_chaining_after_it():
+    q = (_ts().schema("commcalc").table("daily_sales_feed").select("*")
+         .not_.is_("trans_ts", "null").eq("org_id", "other-org").limit(5))
+    assert q.execute().data == [], "the filter chained AFTER not_ was dropped"
+
+
+def test_only_the_negated_term_is_inverted():
+    rows = (_ts().schema("commcalc").table("daily_sales_feed").select("*")
+            .not_.eq("trans_id", "T-1").eq("org_id", ORG).execute().data)
+    assert sorted(r["trans_id"] for r in rows) == ["T-2", "T-3"]
+
+
+def test_a_not_operator_the_double_cannot_read_raises_rather_than_matching_everything():
+    with pytest.raises(NotImplementedError):
+        _ts().table("daily_sales_feed").select("*").not_.like("trans_id", "T%")

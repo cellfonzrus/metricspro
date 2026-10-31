@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""An app can always say which code it is running (index §CORE-29) — DB-free, the real files.
+
+THE DEFECT THIS LOCKS. Between 2026-09-11 and 2026-10-31 a merged, published, correct mobile fix did
+not reach an installed phone and nothing anywhere said so: Expo was serving the update, the app kept
+running the bundle built into the binary, and expo-updates does that in silence by design. Six weeks
+went into guessing because the one surface that knew the truth never showed it.
+
+THE CLASS, not the instance. The class is not "an over-the-air update failed". It is "the running app
+could not state which code it was running". So the fix is a FACT with one home that every surface
+dereferences, and this harness refuses the three ways that un-wires:
+
+  * the rule stops being pure, so it can no longer be proved without a device;
+  * a surface derives "which bundle am I on" for itself instead of reading the one home;
+  * a value on that surface is allowed to be blank again, which is what hid this in the first place.
+
+It also PINS the over-the-air compatibility policy. `runtimeVersion` is the only thing standing
+between a build and an update it cannot run, so changing it must be a deliberate edit to this file
+and not a quiet edit to a config. Same tripwire discipline as harness_db_resilience.py.
+
+Every check carries a negative control: the check is re-run against text carrying the defect and must
+FAIL there, so a check that has silently stopped looking is itself a failure.
+"""
+from __future__ import annotations
+
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+MOBILE = ROOT / "mobile"
+
+RULE = MOBILE / "src/lib/running-bundle.ts"
+READS = MOBILE / "src/lib/useRunningBundle.ts"
+TESTS = MOBILE / "src/lib/running-bundle.test.ts"
+SETTINGS = MOBILE / "app/(app)/(tabs)/settings.tsx"
+APP_CONFIG = MOBILE / "app.config.ts"
+
+# The over-the-air compatibility policy, pinned. 'appVersion' ties the key to the hand-typed
+# `version`, which carries no information about the native runtime: EAS will then SERVE an update a
+# binary cannot run, and expo-updates discards it in silence. 'fingerprint' hashes the real native
+# dependency set and refuses instead. Either is a defensible choice; neither may change by accident,
+# so moving it means editing this literal and saying why in the PR.
+PINNED_RUNTIME_POLICY = "appVersion"
+
+failures: list[str] = []
+checks = 0
+
+
+def check(name: str, ok: bool, detail: str = "") -> bool:
+    global checks
+    checks += 1
+    if not ok:
+        failures.append(f"{name}: {detail}" if detail else name)
+    return ok
+
+
+def control(name: str, ok_on_defect: bool) -> None:
+    """A check must FAIL on text carrying the defect, or the check has stopped looking."""
+    check(f"{name} [negative control]", not ok_on_defect,
+          "the check passed text that carries the defect — it has stopped looking")
+
+
+def read(path: pathlib.Path) -> str:
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+# ── R1 · both halves exist, and the reading half dereferences the rule ────────────────────────────
+rule_src = read(RULE)
+reads_src = read(READS)
+tests_src = read(TESTS)
+settings_src = read(SETTINGS)
+config_src = read(APP_CONFIG)
+
+check("R1.1 the rule has a home", RULE.exists(), f"{RULE} is missing")
+check("R1.2 the rule exports describeRunningBundle",
+      "export function describeRunningBundle(" in rule_src)
+check("R1.3 the rule exports the no-blank sentinel", "export const BUNDLE_UNKNOWN" in rule_src)
+check("R1.4 the fact-gathering half exists", READS.exists(), f"{READS} is missing")
+
+DEREF = re.compile(r"from\s+'\./running-bundle'")
+check("R1.5 the gathering half READS the rule rather than restating it",
+      bool(DEREF.search(reads_src)),
+      "useRunningBundle.ts must import describeRunningBundle from ./running-bundle")
+control("R1.5", bool(DEREF.search("const d = myOwnDescribe(facts)")))
+
+
+# ── R2 · the rule stays pure, so it can be proved in CI with no device ───────────────────────────
+rule_imports = re.findall(r"^\s*import\s[^\n]*?from\s+'([^']+)'", rule_src, re.M)
+check("R2.1 the rule imports nothing", rule_imports == [],
+      f"running-bundle.ts must stay dependency-free; it imports {rule_imports}")
+control("R2.1", re.findall(r"^\s*import\s[^\n]*?from\s+'([^']+)'",
+                           "import * as Updates from 'expo-updates'", re.M) == [])
+
+check("R2.2 the rule is tested", TESTS.exists(), f"{TESTS} is missing")
+# The three promises the rule makes, each named in the tests so a deleted promise is visible.
+for phrase in ("never renders a blank value", "running the bundle that shipped",
+               "behind", "separately, so a mismatch"):
+    check(f"R2.3 the tests still cover: {phrase}", phrase in tests_src,
+          "a promise of the rule lost its test")
+control("R2.3", "never renders a blank value" in "describe('x', () => { it('works') })")
+
+
+# ── R3 · no value may be blank again ─────────────────────────────────────────────────────────────
+# The rule's own last resorts, read out of the source, must all be non-empty strings. A blank last
+# resort is the original defect wearing a hat.
+sentinels = re.findall(r"export const (BUNDLE_UNKNOWN|EMBEDDED_LABEL)\s*=\s*'([^']*)'", rule_src)
+check("R3.1 the rule declares both last resorts", len(sentinels) == 2,
+      f"expected BUNDLE_UNKNOWN and EMBEDDED_LABEL, found {[s[0] for s in sentinels]}")
+for name, value in sentinels:
+    check(f"R3.2 {name} is not blank", value.strip() != "",
+          "an absent fact must read as words, never as an empty string")
+control("R3.2", "" .strip() != "")
+
+# `said()` is the one funnel every value passes through; its fallback argument may never be ''.
+blank_fallbacks = re.findall(r"said\([^,]+,\s*''\s*\)", rule_src)
+# Two uses of said(x, '') are legitimate INSIDE appBuild, which then funnels the pair through
+# said(version || build, BUNDLE_UNKNOWN). Assert that funnel is still there rather than banning the
+# idiom, so the check cannot be satisfied by renaming.
+check("R3.4 the build line still funnels through the no-blank sentinel",
+      "said(version || build, BUNDLE_UNKNOWN)" in rule_src,
+      f"appBuild must end at BUNDLE_UNKNOWN; found {len(blank_fallbacks)} bare '' fallbacks")
+control("R3.4", "said(version || build, BUNDLE_UNKNOWN)" in "return version || build")
+
+
+# ── R4 · the surface dereferences, and does not read the native modules itself ───────────────────
+check("R4.1 Settings shows the running bundle", "runningBundle" in settings_src,
+      "the Settings screen must render the one home's description")
+check("R4.2 Settings renders the rule's own lines", "bundle.lines.map" in settings_src,
+      "render the lines the rule produced; do not pick fields out and re-label them")
+check("R4.3 Settings surfaces the note", "bundle.note" in settings_src)
+NATIVE_IMPORT_EARLY = re.compile(r"^\s*import\s[^\n]*?from\s+'expo-(updates|constants)'", re.M)
+check("R4.4 Settings does not read the native modules itself",
+      NATIVE_IMPORT_EARLY.search(settings_src) is None,
+      "only useRunningBundle.ts may ask expo-updates / expo-constants about the running code")
+control("R4.4", NATIVE_IMPORT_EARLY.search("import * as U from 'expo-updates'") is None)
+
+
+# ── R5 · no second copy anywhere in the app ──────────────────────────────────────────────────────
+SOURCES = sorted(
+    p for p in list(MOBILE.glob("src/**/*.ts")) + list(MOBILE.glob("src/**/*.tsx"))
+    + list(MOBILE.glob("app/**/*.ts")) + list(MOBILE.glob("app/**/*.tsx"))
+    if "node_modules" not in p.parts
+)
+check("R5.0 the app's sources were found", len(SOURCES) > 20, f"only {len(SOURCES)} files scanned")
+
+NATIVE_IMPORT = re.compile(r"^\s*import\s[^\n]*?from\s+'expo-updates'", re.M)
+native_readers = [p for p in SOURCES if NATIVE_IMPORT.search(read(p))]
+check("R5.1 exactly one file imports expo-updates",
+      native_readers == [READS],
+      "the one home for the native reads is useRunningBundle.ts; also found "
+      + ", ".join(str(p.relative_to(MOBILE)) for p in native_readers if p != READS))
+
+own_derivation = [
+    p for p in SOURCES
+    if p not in (RULE, READS, TESTS) and re.search(r"isEmbeddedLaunch|EMBEDDED_LABEL", read(p))
+]
+check("R5.2 nobody derives 'am I on the embedded bundle' for themselves",
+      own_derivation == [],
+      "re-derived in " + ", ".join(str(p.relative_to(MOBILE)) for p in own_derivation))
+control("R5.1", NATIVE_IMPORT.search("import * as U from 'expo-updates'") is None)
+control("R5.2", not re.search(r"isEmbeddedLaunch|EMBEDDED_LABEL",
+                              "const stale = Updates.isEmbeddedLaunch"))
+
+
+# ── R6 · the over-the-air compatibility policy is declared once, and pinned ──────────────────────
+policies = re.findall(r"runtimeVersion:\s*\{\s*policy:\s*'([^']+)'\s*\}", config_src)
+check("R6.1 the runtime policy is declared exactly once", len(policies) == 1,
+      f"found {len(policies)} declarations of runtimeVersion in app.config.ts")
+check("R6.2 the runtime policy still matches its pin",
+      policies[:1] == [PINNED_RUNTIME_POLICY],
+      f"app.config.ts declares {policies!r} but this harness pins {PINNED_RUNTIME_POLICY!r}. "
+      "Changing the policy changes which builds can receive an update: re-verify the consequence, "
+      "then move PINNED_RUNTIME_POLICY and say why in the PR.")
+control("R6.2", re.findall(r"runtimeVersion:\s*\{\s*policy:\s*'([^']+)'\s*\}",
+                           "runtimeVersion: { policy: 'nativeVersion' }") == [PINNED_RUNTIME_POLICY])
+
+check("R6.3 the updates URL is still declared", "updates: { url:" in config_src,
+      "without updates.url nothing is ever offered to the app")
+
+
+if failures:
+    print(f"FAIL — {len(failures)} of {checks} checks failed\n")
+    for f in failures:
+        print(f"  ✗ {f}")
+    sys.exit(1)
+
+print(f"PASS — {checks} checks")
+print("  the running bundle has one home, the surface dereferences it, no value can be blank,")
+print(f"  and the over-the-air compatibility policy is pinned at {PINNED_RUNTIME_POLICY!r}.")

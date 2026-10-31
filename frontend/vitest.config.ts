@@ -19,6 +19,15 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // A COMPONENT TEST MUST BE ABLE TO IMPORT THE APP'S OWN MODULES. `lib/client` builds its Supabase
+    // client AT IMPORT TIME and throws "supabaseUrl is required" without these, so every component
+    // that touches it (any page, <EntityPicker>, the filter bar) was unrenderable in a test. These are
+    // deliberate NON-SECRETS pointing at a host that does not exist; `setup.ts` already makes any real
+    // fetch throw, so a test still cannot reach a network, let alone production.
+    env: {
+      NEXT_PUBLIC_SUPABASE_URL: 'http://supabase.invalid',
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: 'test-anon-key-not-a-secret',
+    },
     globals: false,
     setupFiles: ['./tests/setup.ts'],
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],

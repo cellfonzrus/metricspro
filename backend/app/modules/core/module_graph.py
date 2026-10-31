@@ -682,7 +682,20 @@ FACTS: dict[str, dict] = {
                     'a time, so a '
                     'select naming them and a shorter one behind it is the column-block ladder that '
                     'rule forbids, and a row predating the kind column simply arrives without the '
-                    'key and reads as the throttle row it always was.',
+                    'key and reads as the throttle row it always was. '
+                    'THE SECOND HALF OF THE QUESTION (2026-10-31): "instead of showing a form" was '
+                    'never asked. These markers match the page\'s MARKUP as well as its words '
+                    '(_page_text reads content()) and "captcha" is a seeded challenge marker, so '
+                    'every portal whose sign-in page ships a reCAPTCHA read as a bot wall \u2014 the '
+                    'owner\'s UPS Store reporting portal says the word nine times, none of it '
+                    'visible, on a working Username + Password form, and his live login spun 60s in '
+                    '_wait_settle and then accused the egress IP while both boxes sat empty. '
+                    'page_verdict now takes form_present and returns NOTHING when the form is '
+                    'there; vidapay_sweep.login_form_present is the one home for that question and '
+                    'is deliberately the same password-frame answer _wait_for_password already acts '
+                    'on. Whether a human check GATES the submit stays a separate DOM question with '
+                    'its own home (human_check_on_sign_in) \u2014 this marker list must not answer '
+                    'it a second time by text search over markup.',
         "homes": ('app/modules/commcalc/portal_backoff.py',),
         "index": ('COMMCALC-50',),
         "locks": ('harness_portal_page_verdict.py',),
@@ -1268,6 +1281,87 @@ FACTS: dict[str, dict] = {
             # The report's endpoint reads the device-line test directly, so the look-back counts the
             # same lines the two ordering screens do.
             'app/modules/commcalc/router.py': ('_devvocab', '_dp'),
+        },
+    },
+    'device_model_family': {
+        "question": 'WHICH SOLD LINES ARE THE SAME PHONE, for the purpose of ordering accessories? A '
+                    'case fits a phone, not a colour of it, so five colours of one handset are one '
+                    'order row — while a Pro is a different phone and must stay one. The capacity is '
+                    'dropped by PATTERN (a number followed by a storage unit is a format marker, like '
+                    'the CellPhone category); the COLOUR is dropped only if the ORG HAS DECLARED THAT '
+                    'WORD, because a colour word is a tenant\'s own spelling and CLAUDE.md bans a '
+                    'house default that is really one tenant\'s vocabulary. So `colour_tokens` is a '
+                    'REQUIRED keyword argument with nothing behind it, an org that has declared none '
+                    'gets no grouping and the surface SAYS so, and a curated '
+                    '`device_model_alias.canonical_model` outranks the derivation. The folded row '
+                    'carries the spellings that went into it, so the drill-down costs no second '
+                    'query. A DEVICE CONDITION is read the same way and applied AFTER the alias '
+                    '(owner 2026-10-31: a pre-owned handset is a different device), which is the '
+                    'only order that cannot lose the marker — the router used to canonicalise '
+                    'first and silently merged the two.',
+        "homes": ('app/modules/commcalc/device_model_family.py',),
+        "index": ('COMMCALC-49.11', 'POS-18'),
+        "locks": ('harness_accessory_order_grid.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50).
+        "callers": {
+            # The Accessory Order Plan's endpoint: it asks the org for its colour words and folds the
+            # raw model counts into phones before the plan is built.
+            'app/modules/commcalc/router.py': ('_dmf',),
+        },
+    },
+    'device_condition_vocabulary': {
+        "question": 'WHICH DEVICE CONDITIONS EXIST, and what does THIS feed call one? Two different '
+                    'questions, split on CLAUDE.md\'s line: the four conditions are the '
+                    'platform\'s POLICY (the same for every tenant, and the same four the schema '
+                    'has always allowed on `pos.inventory_serial`, pinned key by key), while '
+                    'the WORDS a product description marks one with are the TENANT\'s vocabulary '
+                    '(`CPO` in one feed, `CERTIFIED_PREOWNED` in another) and may only be declared '
+                    '— a REQUIRED argument with no house fallback, so an org that has declared none '
+                    'identifies no condition and the surface says so rather than reading a '
+                    'refurbished handset as new. An UNMARKED line is the house default with '
+                    '`basis=unmarked`, which keeps an inference apart from a reading. Both lists '
+                    'were written twice before this (a schema constraint and a literal array on the '
+                    'inventory screen) and the accessory grid kept a pre-owned handset off the new '
+                    'one\'s row only because the word happened to survive a parse.',
+        "homes": ('app/modules/pos/device_condition.py',),
+        "index": ('POS-18',),
+        "locks": ('harness_accessory_order_grid.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50).
+        "callers": {
+            # The Accessory Order Plan's endpoint: it asks the org for its condition words so a
+            # pre-owned handset is ordered as its own device.
+            'app/modules/commcalc/router.py': ('_cond',),
+            # The one home for the family grain reads the condition off the raw spelling.
+            'app/modules/commcalc/device_model_family.py': ('_cond',),
+            # The POS inventory screen's two dropdowns are served from here.
+            'app/modules/pos/router.py': ('_devcond',),
+        },
+    },
+    'accessory_order_catalog': {
+        "question": 'WHAT KINDS OF ACCESSORY CAN BE BOUGHT, and how is each one chosen? The '
+                    'load-bearing distinction is SPLIT against ASSIGNED: a case and a protector are '
+                    'bought FOR a phone and divide across styles, so they are columns per phone; a '
+                    'cable, a charging cube and earphones are bought BY CONNECTOR and consolidate '
+                    'across every phone that takes the same one, because the cables are common to a '
+                    'lot of phones. The option lists are extensible per org, with a picture per '
+                    'option; a house default is correct here because these are the generic names of '
+                    'a kind of product, read against no tenant\'s feed. NOT `accessory_catalog`, '
+                    'which classifies what was SOLD from an uploaded product catalog '
+                    '— one word apart in the filename, two different questions, and writing this '
+                    'feature overwrote that module once before the name was fixed. Also the ONE home '
+                    'for the share-reading rule (percentages or fractions, decided by the total), '
+                    'which the colour mix now dereferences instead of keeping its own copy.',
+        "homes": ('app/modules/commcalc/accessory_order_catalog.py',),
+        "index": ('COMMCALC-49.12',),
+        "locks": ('harness_accessory_order_grid.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50).
+        "callers": {
+            # The plan builds the grid and the consolidated sheet off the resolved catalog, and reads
+            # the share rule for the colour mix through it.
+            'app/modules/commcalc/accessory_order_plan.py': ('_cat',),
+            # The endpoint resolves the catalog to validate a per-phone assignment before storing it,
+            # and reads which product classes take an accessory at all.
+            'app/modules/commcalc/router.py': ('_aocat',),
         },
     },
     'device_cost_store': {

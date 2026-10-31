@@ -35,7 +35,10 @@ from app.modules.commcalc import peer_comparison as _peercmp   # 2026-10-08 — 
 from app.modules.commcalc import product_mix as _pmix       # 2026-10-09 — THE device price mix / port discipline (index §62)
 from app.modules.commcalc import manager_report_card as _mrcard   # 2026-10-08 — THE DM / market-manager report card (index §59.9; pure)
 from app.modules.commcalc import accessory_target_plan as _accplan   # 2026-10-09 — THE accessory company-goal allocation (index §61; pure)
+from app.modules.commcalc import accessory_order_catalog as _aocat  # 2026-10-30 — THE accessory ORDERING vocabulary (index §COMMCALC-49.12; pure)
 from app.modules.commcalc import accessory_order_plan as _aop          # 2026-10-29 — THE accessory ORDER plan (index §COMMCALC-49; pure)
+from app.modules.commcalc import device_model_family as _dmf           # 2026-10-30 — THE "same phone, different colour" grain (index §COMMCALC-49.11; pure)
+from app.modules.pos import device_condition as _cond                 # 2026-10-31 — THE device condition vocabulary (index §POS-18; pure)
 from app.modules.commcalc import accessory_order_drilldown as _aopdd   # 2026-10-29 — that report's drill declaration (§CORE-17.3y; declaration only, pure)
 from app.modules.commcalc import demand_projection as _dp   # 2026-10-29 — THE device velocity/horizon projection + device-line test (§COMMCALC-49; pure)
 from app.modules.commcalc import device_vocabulary as _devvocab   # 2026-10-30 — THE one place to ask which departments an org calls a device (§COMMCALC-49)
@@ -33991,7 +33994,7 @@ def my_shelf(as_of: str = "", authorization: str = Header(default=""), org_id: s
     reports WHY — no snapshot, no span, or a span with no devices — rather than rendering as zero.
     """
     from app.modules.commcalc import inventory_stock_age as _isa
-    from app.modules.commcalc import unsold_inventory as _unsold
+    from app.modules.payables import unsold_inventory as _unsold
     from app.modules.asset.inventory_buckets import inv_bucket
     from app.modules.storeops.router import scope_keyset, in_keyset
     require_org(org_id)
@@ -37581,7 +37584,7 @@ def productivity_insights(period: str, store_code: str, metric: str = "acc", org
     from datetime import datetime as _dt2, timedelta as _td2
     from app.modules.commcalc import productivity_fit as _pf
     from app.modules.storeops.router import _biz_tz_for_store
-    from app.modules.commcalc.staffing_heatmap import hhmm_to_hours
+    from app.modules.storeops.staffing_heatmap import hhmm_to_hours
     require_org(org_id)
     sc = str(store_code).strip()
     client = sb()
@@ -50466,7 +50469,14 @@ def _prospect_pl_labels(homes):
 # in full in `commcalc/accessory_order_plan.py`'s header.
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 _AOP_CFG_COLUMNS = ("accessory_order_case_mix", "accessory_order_attach_plan",
-                    "accessory_order_lookback_months", "accessory_order_horizon_months")
+                    "accessory_order_lookback_months", "accessory_order_horizon_months",
+                    # owner 2026-10-30 — the catalog, the per-option mixes, which product classes
+                    # take an accessory at all, and the colour WORDS this org's own feed uses.
+                    "accessory_order_catalog", "accessory_order_option_mix",
+                    "accessory_order_device_classes", "device_colour_tokens",
+                    # owner 2026-10-31 — *"cpo is certified pre owned is adifferent device than
+                    # new"*: the words THIS org's feed uses to mark a device's condition.
+                    "device_condition_tokens")
 
 
 def _accessory_order_config(client, org_id):
@@ -50514,6 +50524,25 @@ def _device_lifecycle(client, org_id):
     return rulings, alias
 
 
+def _accessory_model_specs(client, org_id):
+    """The org's per-model connector assignments → the rows `accessory_catalog.resolve_model_specs`
+    reads: `[{model, category, dimension, option}, ...]`.
+
+    OWNER ASK 2026-10-30: a cable or a cube is *"assigned ot the phone model in the beinging but ...
+    editable as a drop down if oit changes later"*. So the house standard applies until somebody
+    overrides it FOR ONE PHONE, and the override is stored per model (`commcalc.model_accessory_spec`,
+    mig `1109`) rather than carried on an order. A database where 1109 has not been applied yet
+    returns nothing and every phone keeps the house standard, which is exactly the right answer."""
+    try:
+        rows = (client.schema("commcalc").table("model_accessory_spec")
+                .select("model,category,dimension,option").eq("org_id", org_id)
+                .execute().data) or []
+    except Exception:
+        rows = []
+    return [{"model": r.get("model"), "category": r.get("category"),
+             "dimension": r.get("dimension"), "option": r.get("option")} for r in rows]
+
+
 def _accessory_order_lookback_periods(period: str, months: int):
     """The look-back as a list of canonical 'Month YYYY' periods, OLDEST FIRST, ending at `period`.
 
@@ -50535,6 +50564,23 @@ class PutAccessoryOrderConfigIn(LaxModel):
     attach_plan: Any = None
     lookback_months: Any = None
     horizon_months: Any = None
+    # owner 2026-10-30 — *"the proption of blue black should not be hard coded and but an option
+    # editable by the user"* (case_mix, above, already was) plus the catalog itself, the per-option
+    # mixes, which classes take an accessory, and this feed's own colour words.
+    catalog: Any = None
+    option_mix: Any = None
+    device_classes: Any = None
+    colour_tokens: Any = None
+    # owner 2026-10-31 — *"cpo is certified pre owned is adifferent device than new"*: either a
+    # flat list of this feed's markers, or `{condition_key: [words]}` for a feed that marks more
+    # than one. The condition KEYS are the platform's (`pos/device_condition`); the WORDS are this
+    # tenant's own.
+    condition_tokens: Any = None
+
+
+class PutAccessoryModelSpecIn(LaxModel):
+    specs: Any = None            # [{"model","category","dimension","option"}, ...]
+    clear: Any = None            # [{"model","category","dimension"}, ...] — back to the house standard
 
 
 @router.get("/accessory-order-plan")
@@ -50607,8 +50653,14 @@ def get_accessory_order_plan(period: str = "", months: int = 0, horizon: int = 0
     # declaration already existed: `accessory_config.box_departments` (mig 218), the same list the
     # box count, the product mix and the GP report read. Asked through its one home.
     dept_vocab = _devvocab.declared_device_departments(client, org_id)
+    # WHICH PRODUCT CLASSES TAKE AN ACCESSORY (policy, house default handsets + tablets).
+    _cls = cfg.get("accessory_order_device_classes")
+    accessory_classes = frozenset(
+        str(c).strip().lower() for c in (_cls if isinstance(_cls, (list, tuple)) else ()) if str(c).strip()
+    ) or frozenset(_aocat.HOUSE_ACCESSORY_DEVICE_CLASSES)
     units: dict = {}
     opt_stores, meta_by_period, lines_read = set(), {}, 0
+    skipped_class: dict = {}
     promo_tokens = None
     for p in periods:
         try:
@@ -50627,19 +50679,60 @@ def get_accessory_order_plan(period: str = "", months: int = 0, horizon: int = 0
                 continue
             if not _keep(st):
                 continue
+            # WHAT KIND OF PRODUCT THE LINE SOLD, through §62's classifier. A router, a SIM kit
+            # and a watch sit inside a tenant's own device departments and take NO case: counting
+            # them buys cases for routers, which is what one tenant's September would have done
+            # with 188 such units. Which classes DO take an accessory is a POLICY declaration
+            # (house: handsets and tablets), not a vocabulary, so it has a house default.
+            pclass, _pbasis = _pmix.product_class_of(r.get("product_desc"))
+            if pclass not in accessory_classes:
+                skipped_class[pclass] = skipped_class.get(pclass, 0) + 1
+                continue
             model = _pmix.model_of(r.get("product_desc"), promo_tokens)
             if not model:
                 continue
-            # The canonical model, through the SAME alias map the device forecast reads, so one phone
-            # is one row on both screens rather than two spellings of it here.
-            canon = alias.get(model.strip().lower(), model)
-            units.setdefault(canon, {})
-            units[canon][p] = units[canon].get(p, 0) + 1
+            # THE RAW SPELLING IS KEPT HERE, and the alias is applied by `device_model_family`
+            # below instead. It used to be applied at this line, which silently defeated the
+            # condition split: by the time the family grain was asked, a curated alias had already
+            # replaced `HANDSET A 128GB Pink CPO` with `HANDSET A`, so a pre-owned handset landed on
+            # the new one's row with the marker gone. Caught by the integration test for the owner's
+            # 2026-10-31 ruling. One home applies BOTH the curation and the condition, in that
+            # order, which is the only order that cannot lose one of them.
+            units.setdefault(model, {})
+            units[model][p] = units[model].get(p, 0) + 1
             lines_read += 1
 
-    out = _aop.plan(units_by_model=units, months=periods, lifecycle=rulings, horizon_months=fwd,
+    # ── ONE PHONE, NOT ONE COLOUR OF IT (owner 2026-10-30) ───────────────────────────────────────
+    # *"should combine the accessories for all line items for iphone 13 oin different colors ... iph
+    # 13 is different from 13 pro"*. Asked of `device_model_family`, which is the ONE home for that
+    # grain; the COLOUR WORDS are this org's own declaration and there is no house fallback, so an
+    # org that has declared none gets its raw spellings and the screen SAYS why (CLAUDE.md, "every
+    # feature is for EVERY tenant" — a colour word is a tenant's vocabulary, not a policy).
+    colour_tokens, colour_basis = _dmf.resolve_colour_tokens(cfg.get("device_colour_tokens"))
+    # ── A CONDITION IS A DIFFERENT DEVICE (owner 2026-10-31) ─────────────────────────────────────
+    # *"cpo is certified pre owned is adifferent device than new , imnei is unique"*. The condition
+    # VOCABULARY has one home — `pos/device_condition` — shared with the inventory screen and mig
+    # 725's CHECK; the WORDS a feed marks it with are this org's own declaration, with no house
+    # fallback, so an org that has declared none identifies no condition and the screen says so.
+    cond_tokens, cond_basis, cond_markers = _cond.resolve_feed_tokens(
+        cfg.get("device_condition_tokens"))
+    fam_units, fam_variants, fam_conditions = _dmf.group_units(
+        units, colour_tokens=colour_tokens, condition_tokens=cond_tokens, alias=alias,
+        condition_markers=cond_markers)
+
+    out = _aop.plan(units_by_model=fam_units, months=periods, lifecycle=rulings, horizon_months=fwd,
                     case_mix=cfg.get("accessory_order_case_mix"),
-                    attach_plan=cfg.get("accessory_order_attach_plan"))
+                    attach_plan=cfg.get("accessory_order_attach_plan"),
+                    catalog=cfg.get("accessory_order_catalog"),
+                    option_mix=cfg.get("accessory_order_option_mix"),
+                    model_specs=_accessory_model_specs(client, org_id),
+                    variants=fam_variants, conditions=fam_conditions)
+    out["colour_tokens"] = list(colour_tokens)
+    out["colour_tokens_basis"] = colour_basis
+    out["condition_tokens"] = sorted(cond_tokens)
+    out["condition_tokens_basis"] = cond_basis
+    out["device_conditions"] = _cond.offered()
+    out["accessory_device_classes"] = sorted(accessory_classes)
     out["period"] = cperiod
     out["store_options"] = sorted(opt_stores)
     out["markets"] = sorted({m for m in ([resolve_market(s) for s in opt_stores]
@@ -50647,7 +50740,8 @@ def get_accessory_order_plan(period: str = "", months: int = 0, horizon: int = 0
     out["params"] = {"period": cperiod, "months": look, "horizon": fwd,
                      "markets": sorted(sel_markets), "stores": sorted(sel_stores)}
     out["source_meta"] = {"periods": meta_by_period, "device_lines": lines_read,
-                          "models": len(out["models"])}
+                          "models": len(out["models"]), "raw_models": len(units),
+                          "skipped_by_class": skipped_class}
     # WHERE EVERY FIGURE ON THIS SCREEN CAME FROM (§CORE-17.3y) — attached LAST, after the scope
     # keyset and both filters, so a panel can only fold rows the caller was already served.
     out["drilldown"] = _aopdd.plan_drilldowns(out)
@@ -50744,26 +50838,118 @@ def put_accessory_order_config(body: Optional[PutAccessoryOrderConfigIn] = None,
     if b.horizon_months is not None:
         patch["accessory_order_horizon_months"] = _aop.clamp_months(
             b.horizon_months, _aop.DEFAULT_HORIZON_MONTHS, _aop.MAX_HORIZON_MONTHS)
+    if b.catalog is not None:
+        patch["accessory_order_catalog"] = b.catalog
+    if b.option_mix is not None:
+        patch["accessory_order_option_mix"] = b.option_mix
+    if b.device_classes is not None:
+        patch["accessory_order_device_classes"] = b.device_classes
+    if b.colour_tokens is not None:
+        patch["device_colour_tokens"] = b.colour_tokens
+    if b.condition_tokens is not None:
+        patch["device_condition_tokens"] = b.condition_tokens
     if len(patch) == 1:
-        raise HTTPException(400, "Nothing to save: send case_mix, attach_plan, lookback_months or "
-                                 "horizon_months.")
+        raise HTTPException(400, "Nothing to save: send case_mix, attach_plan, lookback_months, "
+                                 "horizon_months, catalog, option_mix, device_classes, "
+                                 "colour_tokens or condition_tokens.")
     try:
         (client.schema("commcalc").table("accessory_config")
          .upsert(patch, on_conflict="org_id").execute())
     except Exception as e:
         raise HTTPException(409, "The declaration was not stored. The accessory settings cannot "
-                                 "hold a colour mix, an attach plan or default planning windows "
-                                 "until migration 1104 has been applied; ask an administrator to "
-                                 "run it, then try again.") from e
+                                 "hold a colour mix, an attach plan, default planning windows or "
+                                 "this feed's condition words until the accessory settings "
+                                 "migrations have been applied; ask an administrator to run them, "
+                                 "then try again.") from e
     try:
         from app.modules.commcalc import accessory_catalog as _accat
         _accat.invalidate(org_id)
     except Exception:
         pass
     mix, mix_basis = _aop.resolve_case_mix(patch.get("accessory_order_case_mix"))
+    cats, cat_basis = _aocat.resolve_catalog(patch.get("accessory_order_catalog"))
+    tokens, tokens_basis = _dmf.resolve_colour_tokens(patch.get("device_colour_tokens"))
+    ctok, ctok_basis, _cmark = _cond.resolve_feed_tokens(patch.get("device_condition_tokens"))
     return {"saved": True, "case_mix": [dict(m) for m in mix], "case_mix_basis": mix_basis,
             "attach_plan": [dict(i) for i in _aop.resolve_attach_plan(
                 patch.get("accessory_order_attach_plan"))],
             "lookback_months": patch.get("accessory_order_lookback_months"),
             "horizon_months": patch.get("accessory_order_horizon_months"),
+            "catalog": [c["key"] for c in cats], "catalog_basis": cat_basis,
+            "colour_tokens": list(tokens), "colour_tokens_basis": tokens_basis,
+            "condition_tokens": sorted(ctok), "condition_tokens_basis": ctok_basis,
+            "device_conditions": _cond.offered(),
             "org_id": org_id}
+
+
+@router.put("/accessory-order-plan/model-spec")
+def put_accessory_model_spec(body: Optional[PutAccessoryModelSpecIn] = None,
+                             authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Assign one phone model its cable connector, charger ports / wattage or earphone fit.
+
+    OWNER ASK 2026-10-30: the connector is *"assigned ot the phone model in the beinging but it
+    should be editable as a drop down if oit changes later"*. So this stores an OVERRIDE per model;
+    a model with no row keeps the house standard, and `clear` puts one back to it rather than
+    writing the standard in as if somebody had chosen it — the same distinction the lifecycle ruling
+    makes between "ruled" and "not ruled on".
+
+    An option the catalog does not offer is REFUSED here rather than stored and ignored at read
+    time, so a 200 from this route means the sheet will actually show what was chosen."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    b = body or PutAccessoryModelSpecIn()
+    client = sb()
+    cfg = _accessory_order_config(client, org_id)
+    cats, _basis = _aocat.resolve_catalog(cfg.get("accessory_order_catalog"))
+    by_key = {c["key"]: c for c in cats}
+
+    rows = b.specs if isinstance(b.specs, (list, tuple)) else []
+    clear = b.clear if isinstance(b.clear, (list, tuple)) else []
+    if not rows and not clear:
+        raise HTTPException(400, "Nothing to save: send specs or clear.")
+
+    written, removed = 0, 0
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        model = " ".join(str(r.get("model") or "").split())
+        cat = str(r.get("category") or "").strip().lower()
+        dim = str(r.get("dimension") or "").strip().lower()
+        opt = str(r.get("option") or "").strip().lower()
+        if not (model and cat and dim and opt):
+            raise HTTPException(400, "Each spec needs a model, a category, a dimension and an option.")
+        c = by_key.get(cat)
+        if not c:
+            raise HTTPException(400, f"There is no accessory category called '{cat}'.")
+        offered = {d["key"]: {o["key"] for o in d["options"]} for d in c["dimensions"]}
+        if dim not in offered:
+            raise HTTPException(400, f"'{c['label']}' has no '{dim}' to choose.")
+        if opt not in offered[dim]:
+            raise HTTPException(400, f"'{opt}' is not one of the {dim} options on '{c['label']}'. "
+                                     "Add it to the catalog first.")
+        try:
+            (client.schema("commcalc").table("model_accessory_spec")
+             .upsert({"org_id": org_id, "model": model, "category": cat,
+                      "dimension": dim, "option": opt},
+                     on_conflict="org_id,model,category,dimension").execute())
+        except Exception as e:
+            raise HTTPException(409, "The assignment was not stored. Per-model accessory "
+                                     "assignments need migration 1109; ask an administrator to run "
+                                     "it, then try again.") from e
+        written += 1
+    for r in clear:
+        if not isinstance(r, dict):
+            continue
+        model = " ".join(str(r.get("model") or "").split())
+        cat = str(r.get("category") or "").strip().lower()
+        dim = str(r.get("dimension") or "").strip().lower()
+        if not (model and cat and dim):
+            continue
+        try:
+            (client.schema("commcalc").table("model_accessory_spec").delete()
+             .eq("org_id", org_id).eq("model", model).eq("category", cat)
+             .eq("dimension", dim).execute())
+            removed += 1
+        except Exception:
+            pass
+    return {"saved": True, "written": written, "cleared": removed, "org_id": org_id}

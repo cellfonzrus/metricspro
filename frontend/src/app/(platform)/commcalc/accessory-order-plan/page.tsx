@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
@@ -32,12 +32,48 @@ import { agreesToTheCent } from '@/lib/drill-narrow'
 // and `lib/drill-narrow` is used only for the agree-to-the-cent gate, never to narrow a panel.
 
 type MonthUnits = { period: string; units: number }
+type Variant = { model: string; units_total: number; units_by_month: Record<string, number> }
 type ModelRow = {
   model: string; rank: number
   units_by_month: MonthUnits[]
   units_total: number; months_observed: number; avg_monthly: number | null
   share: number; lifecycle: string; lifecycle_label: string
   history_basis: string; projected_units: number | null; projection_basis: string
+  variants: Variant[]; variant_count: number
+  condition: string | null; condition_label: string | null
+  condition_marker: string | null; condition_basis: string
+}
+type Option = { key: string; label: string; image_url?: string | null }
+type OptionQty = { key: string; label: string; share: number; qty: number | null }
+type GridColumn = {
+  category: string; category_label: string
+  dimension: string; dimension_label: string
+  per_device: number | null; options: Option[]
+}
+type Cell = {
+  qty: number | null; per_device: number | null; reason: string | null
+  options: OptionQty[]; colours?: OptionQty[]
+}
+type ModelOrder = {
+  model: string; rank: number; units_total: number
+  lifecycle: string; lifecycle_label: string
+  projected_units: number | null; projection_basis: string
+  variants: Variant[]; cells: Record<string, Cell>
+  condition: string | null; condition_marker: string | null; condition_basis: string
+}
+type Dimension = { key: string; label: string; default: string; options: Option[] }
+type ConsolidatedLine = {
+  spec: Record<string, string>; label: string; qty: number
+  models: { model: string; qty: number; spec_basis: string }[]; spec_basis: string
+}
+type Consolidated = {
+  category: string; category_label: string; per_device: number | null
+  dimensions: Dimension[]; lines: ConsolidatedLine[]; qty: number
+  awaiting: { model: string; reason: string }[]; reason: string | null
+}
+type Category = {
+  key: string; label: string; grain: string; per_device: number | null
+  colour_split: boolean; dimensions: Dimension[]
 }
 type Colour = { key: string; label: string; share: number; qty: number | null }
 type AccessoryRow = {
@@ -51,13 +87,23 @@ type Plan = {
   units_in_window: number; units_declared: number; declared_share: number
   projected_devices: number | null; projected_devices_per_month: number | null
   accessories: AccessoryRow[]
+  grid_columns: GridColumn[]
+  model_orders: ModelOrder[]
+  consolidated: Consolidated[]
+  catalog: Category[]; catalog_basis: string
+  option_mix: Record<string, OptionQty[]>; option_mix_bases: Record<string, string>
+  colour_tokens: string[]; colour_tokens_basis: string
+  condition_tokens: string[]; condition_tokens_basis: string
+  device_conditions: { key: string; label: string; unmarked: boolean }[]
+  accessory_device_classes: string[]
   case_mix: Colour[]; case_mix_basis: string
   attach_plan: { key: string; label: string; per_device: number; colour_split: boolean }[]
   lifecycle_states: string[]; lifecycle_labels: Record<string, string>
   reason: string | null
   store_options: string[]; markets: string[]
   params: Record<string, unknown>
-  source_meta: { device_lines: number; models: number }
+  source_meta: { device_lines: number; models: number; raw_models?: number
+                 skipped_by_class?: Record<string, number> }
   drilldown?: Record<string, DrillPanel>
 }
 
@@ -104,6 +150,17 @@ export default function AccessoryOrderPlanPage() {
   const [pending, setPending] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [reload, setReload] = useState(0)
+  // Which phone's row is open, showing the colours that were actually sold under it (owner
+  // 2026-10-30: *"with a drill down option to see what was sold"*). The variants come down on the
+  // row itself, so opening one costs no query.
+  const [openRow, setOpenRow] = useState('')
+  // The declarations being edited. `null` means "not being edited", which is different from an
+  // empty edit — the panel only ever writes what the user actually touched.
+  const [mixDraft, setMixDraft] = useState<Colour[] | null>(null)
+  const [styleDraft, setStyleDraft] = useState<Record<string, OptionQty[]> | null>(null)
+  const [newOpt, setNewOpt] = useState<Record<string, { label: string; image: string }>>({})
+  const [specDraft, setSpecDraft] = useState<Record<string, string>>({})
+  const [showSetup, setShowSetup] = useState(false)
 
   // THE FETCH LIVES IN THE EFFECT AND SETS STATE ONLY IN ITS CALLBACKS. Flipping `loading` from
   // inside the effect body is a cascading render (`react-hooks/set-state-in-effect`), so the spinner
@@ -178,6 +235,52 @@ export default function AccessoryOrderPlanPage() {
     }
   }
 
+  // ONE writer for every declaration on this screen. The screen never computes a quantity and it
+  // never stores a derived one either: it posts what the user declared and re-reads the plan, so
+  // what is on screen after a save is what the server made of it.
+  const saveConfig = useCallback(async (patch: Record<string, unknown>) => {
+    setSaving(true); setErr('')
+    try {
+      await api(`/api/v1/commcalc/accessory-order-plan/config?org_id=${ORG_ID}`,
+        { method: 'PUT', body: JSON.stringify(patch) })
+      setMixDraft(null); setStyleDraft(null); setNewOpt({})
+      reread()
+    } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)) }
+    finally { setSaving(false) }
+  }, [reread])
+
+  const saveSpecs = useCallback(async () => {
+    const specs = Object.entries(specDraft).filter(([, opt]) => opt)
+      .map(([k, option]) => { const [category, dimension, ...m] = k.split('|'); return { model: m.join('|'), category, dimension, option } })
+    if (!specs.length) return
+    setSaving(true); setErr('')
+    try {
+      await api(`/api/v1/commcalc/accessory-order-plan/model-spec?org_id=${ORG_ID}`,
+        { method: 'PUT', body: JSON.stringify({ specs }) })
+      setSpecDraft({}); reread()
+    } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)) }
+    finally { setSaving(false) }
+  }, [specDraft, reread])
+
+  // The catalog with one option ADDED to a dimension — the *"option to add more with pictures"*
+  // half of the ask. Sent as the whole catalog because that is the shape the declaration is stored
+  // in; the server resolves it and hands back what it kept.
+  const addOption = useCallback((catKey: string, dimKey: string) => {
+    const draft = newOpt[`${catKey}|${dimKey}`]
+    if (!draft?.label.trim() || !data) return
+    const key = draft.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+    if (!key) return
+    const next = data.catalog.map(c => c.key !== catKey ? c : ({
+      ...c,
+      dimensions: c.dimensions.map(d => d.key !== dimKey ? d : ({
+        ...d,
+        options: [...d.options, { key, label: draft.label.trim(),
+                                 image_url: draft.image.trim() || null }],
+      })),
+    }))
+    void saveConfig({ catalog: next })
+  }, [newOpt, data, saveConfig])
+
   function buildPayload(): ExportPayload {
     const ms = data?.months || []
     return {
@@ -197,7 +300,38 @@ export default function AccessoryOrderPlanPage() {
           { header: 'Projected units', get: (r: ModelRow) => r.projected_units ?? '' },
           { header: 'Why', get: (r: ModelRow) => r.projection_basis },
         ] },
-        { name: 'Order', rows: accRows, columns: [
+        // THE ORDER SHEET IS THE GRID, one row per phone and a column per style — the shape the
+        // owner asked for, so the export and the screen are the same sheet.
+        { name: 'Order by phone', rows: data?.model_orders || [], columns: [
+          { header: 'Rank', get: (r: ModelOrder) => r.rank },
+          { header: 'Phone', get: (r: ModelOrder) => r.model },
+          { header: 'Colours sold', get: (r: ModelOrder) => r.variants.map(v => v.model).join(' | ') },
+          { header: 'Sold in look-back', get: (r: ModelOrder) => r.units_total },
+          { header: 'Ruling', get: (r: ModelOrder) => r.lifecycle },
+          { header: 'Projected', get: (r: ModelOrder) => r.projected_units ?? '' },
+          ...(data?.grid_columns || []).flatMap(c => [
+            ...c.options.map(o => ({
+              header: `${c.category_label}: ${o.label}`,
+              get: (r: ModelOrder) => r.cells[c.category]?.options.find(x => x.key === o.key)?.qty ?? '',
+            })),
+            { header: `${c.category_label} total`,
+              get: (r: ModelOrder) => r.cells[c.category]?.qty ?? '' },
+          ]),
+          ...(data?.case_mix || []).map(g => ({
+            header: `Case ${g.label}`,
+            get: (r: ModelOrder) => r.cells.case?.colours?.find(c => c.key === g.key)?.qty ?? '',
+          })),
+        ] },
+        { name: 'Consolidated', rows: (data?.consolidated || []).flatMap(c =>
+            c.lines.map(l => ({ category: c.category_label, label: l.label, qty: l.qty,
+                                models: l.models.map(m => `${m.model} (${m.qty})`).join(' | ') }))),
+          columns: [
+            { header: 'Accessory', get: (r: { category: string }) => r.category },
+            { header: 'Specification', get: (r: { label: string }) => r.label },
+            { header: 'Quantity', get: (r: { qty: number }) => r.qty },
+            { header: 'Phones it covers', get: (r: { models: string }) => r.models },
+          ] },
+        { name: 'Totals', rows: accRows, columns: [
           { header: 'Accessory', get: (r: AccessoryRow) => r.label },
           { header: 'Per device', get: (r: AccessoryRow) => r.per_device },
           { header: 'Quantity', get: (r: AccessoryRow) => r.qty ?? '' },
@@ -291,16 +425,347 @@ export default function AccessoryOrderPlanPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
         <>
-          {/* ── THE ORDER ─────────────────────────────────────────────────────────────────────── */}
-          <div className="card" style={{ padding: '14px 16px', marginBottom: 22 }}>
+          {/* ── THE ORDER, PER PHONE (owner 2026-10-30) ──────────────────────────────────────
+              *"the order is per phone, so it should be not be on top as displayed, the accessory
+              order should be per phone model and on one column and the cases type on the other
+              columns"*. So the headline is the sheet, and the single total moved to the bottom. */}
+          <div className="card" style={{ padding: '14px 16px', marginBottom: 18 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>🛒 What to order</div>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>🛒 Order by phone</div>
               <div style={{ fontSize: 12, color: 'var(--text3)' }}>
                 {data?.projected_devices === null
                   ? 'Nothing yet — the rulings below decide it.'
-                  : `${num(data?.projected_devices)} devices projected (${num(data?.projected_devices_per_month, 1)} a month), cases split by ${MIX_WHY[data?.case_mix_basis || ''] || data?.case_mix_basis}`}
+                  : `${num(data?.projected_devices)} devices projected over ${data?.horizon_months} months · cases split by ${MIX_WHY[data?.case_mix_basis || ''] || data?.case_mix_basis}`}
               </div>
+              <button className="btn" style={{ marginLeft: 'auto' }}
+                onClick={() => setShowSetup(v => !v)}>
+                {showSetup ? 'Hide setup' : '⚙︎ Mix & catalog'}
+              </button>
             </div>
+
+            {/* ── THE DECLARATIONS, EDITABLE HERE ──────────────────────────────────────────────
+                *"the proption of blue black should not be hard coded and but an option editable by
+                the user"* — it is a declaration, and this is where it is written. */}
+            {showSetup && (
+              <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px', marginBottom: 14, background: 'var(--surface2)' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Colour mix for cases</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8 }}>
+                  Currently {MIX_WHY[data?.case_mix_basis || ''] || data?.case_mix_basis}. The shares
+                  are rescaled to 100% if they do not add up, and the colour quantities always foot
+                  to the case quantity.
+                </div>
+                {(mixDraft ?? data?.case_mix ?? []).map((g, i) => (
+                  <div key={g.key} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                    <input style={{ ...sel, width: 220 }} value={g.label}
+                      onChange={e => setMixDraft(d => (d ?? data?.case_mix ?? []).map((x, j) => j === i ? { ...x, label: e.target.value } : x))} />
+                    <input style={{ ...sel, width: 90 }} type="number" min={0} max={100}
+                      value={Math.round((g.share || 0) * 1000) / 10}
+                      onChange={e => setMixDraft(d => (d ?? data?.case_mix ?? []).map((x, j) => j === i ? { ...x, share: Number(e.target.value) / 100 } : x))} />
+                    <span style={{ fontSize: 12, color: 'var(--text3)' }}>%</span>
+                    <button className="btn" style={{ fontSize: 11 }}
+                      onClick={() => setMixDraft(d => (d ?? data?.case_mix ?? []).filter((_, j) => j !== i))}>Remove</button>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                  <button className="btn" style={{ fontSize: 11 }}
+                    onClick={() => setMixDraft(d => [...(d ?? data?.case_mix ?? []), { key: `group_${((d ?? data?.case_mix ?? []).length) + 1}`, label: 'New colour group', share: 0, qty: null }])}>
+                    + Colour group
+                  </button>
+                  <button className="btn" disabled={!mixDraft || saving}
+                    onClick={() => void saveConfig({ case_mix: (mixDraft || []).map(g => ({ key: g.key, label: g.label, share: g.share })) })}>
+                    {saving ? 'Saving…' : 'Save colour mix'}
+                  </button>
+                  {mixDraft && <button className="btn" style={{ fontSize: 11 }} onClick={() => setMixDraft(null)}>Cancel</button>}
+                </div>
+
+                {(data?.grid_columns || []).map(c => (
+                  <div key={c.category} style={{ marginTop: 14 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>
+                      {c.category_label} mix
+                      <span style={{ fontWeight: 400, color: 'var(--text3)', marginLeft: 6 }}>
+                        {data?.option_mix_bases?.[c.category] === 'even_split'
+                          ? 'split evenly — nothing declared yet'
+                          : 'your declared mix'}
+                      </span>
+                    </div>
+                    {(styleDraft?.[c.category] ?? data?.option_mix?.[c.category] ?? []).map((o, i) => (
+                      <div key={o.key} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
+                        <span style={{ fontSize: 12, width: 220 }}>{o.label}</span>
+                        <input style={{ ...sel, width: 90 }} type="number" min={0} max={100}
+                          value={Math.round((o.share || 0) * 1000) / 10}
+                          onChange={e => setStyleDraft(d => ({
+                            ...(d || {}),
+                            [c.category]: (d?.[c.category] ?? data?.option_mix?.[c.category] ?? [])
+                              .map((x, j) => j === i ? { ...x, share: Number(e.target.value) / 100 } : x),
+                          }))} />
+                        <span style={{ fontSize: 12, color: 'var(--text3)' }}>%</span>
+                      </div>
+                    ))}
+                    <button className="btn" style={{ fontSize: 11, marginTop: 4 }}
+                      disabled={saving || !styleDraft?.[c.category]}
+                      onClick={() => void saveConfig({
+                        option_mix: { ...(data?.option_mix || {}), ...(styleDraft || {}) },
+                      })}>
+                      {saving ? 'Saving…' : `Save ${c.category_label.toLowerCase()} mix`}
+                    </button>
+                  </div>
+                ))}
+
+                <div style={{ fontSize: 12, fontWeight: 700, margin: '16px 0 6px' }}>Catalog</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8 }}>
+                  Add a style, a type, a wattage or a connector and it appears as a column or a
+                  dropdown straight away. A picture is optional.
+                </div>
+                {(data?.catalog || []).map(c => (
+                  <div key={c.key} style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>
+                      {c.label}
+                      <span style={{ fontWeight: 400, color: 'var(--text3)', marginLeft: 6 }}>
+                        {c.grain === 'split' ? 'per phone, split across the styles'
+                          : 'one per phone, consolidated across phones'}
+                        {c.per_device === null ? ' · no rate declared, so it is not ordered' : ` · ${c.per_device} per device`}
+                      </span>
+                    </div>
+                    {c.dimensions.map(d => (
+                      <div key={d.key} style={{ margin: '4px 0 0 12px' }}>
+                        <div style={{ fontSize: 11, color: 'var(--text2)' }}>
+                          {d.label}: {d.options.map(o => o.label).join(' · ') || '—'}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                          <input style={{ ...sel, width: 180 }} placeholder={`Add a ${d.label.toLowerCase()}`}
+                            value={newOpt[`${c.key}|${d.key}`]?.label || ''}
+                            onChange={e => setNewOpt(n => ({ ...n, [`${c.key}|${d.key}`]: { label: e.target.value, image: n[`${c.key}|${d.key}`]?.image || '' } }))} />
+                          <input style={{ ...sel, width: 220 }} placeholder="Picture URL (optional)"
+                            value={newOpt[`${c.key}|${d.key}`]?.image || ''}
+                            onChange={e => setNewOpt(n => ({ ...n, [`${c.key}|${d.key}`]: { label: n[`${c.key}|${d.key}`]?.label || '', image: e.target.value } }))} />
+                          <button className="btn" style={{ fontSize: 11 }} disabled={saving || !newOpt[`${c.key}|${d.key}`]?.label?.trim()}
+                            onClick={() => addOption(c.key, d.key)}>Add</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+
+                <div style={{ fontSize: 12, fontWeight: 700, margin: '16px 0 6px' }}>Colour words in your product descriptions</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                  {data?.colour_tokens_basis === 'declared'
+                    ? <>These are the words stripped out so one phone is one row: <b>{(data?.colour_tokens || []).join(', ')}</b>. Add one if a new colour appears and the same phone starts showing twice.</>
+                    : <>None declared, so every colour of a phone is still its own row. Add your feed&rsquo;s colour words here to combine them.</>}
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                  <input style={{ ...sel, width: 420 }} placeholder="black, blue, midnight, pink, …"
+                    defaultValue={(data?.colour_tokens || []).join(', ')}
+                    onBlur={e => {
+                      const next = e.target.value.split(',').map(t => t.trim()).filter(Boolean)
+                      if (next.join('|') !== (data?.colour_tokens || []).join('|')) void saveConfig({ colour_tokens: next })
+                    }} />
+                  <span style={{ fontSize: 11, color: 'var(--text3)', alignSelf: 'center' }}>saved when you click away</span>
+                </div>
+
+                <div style={{ fontSize: 12, fontWeight: 700, margin: '16px 0 6px' }}>Condition words in your product descriptions</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                  {data?.condition_tokens_basis === 'declared'
+                    ? <>A device marked <b>{(data?.condition_tokens || []).join(', ')}</b> is ordered as its own phone, because a pre-owned handset is a different device from a new one. Every other line is taken as new.</>
+                    : <>None declared, so no line is identified as pre-owned and the grid shows no condition. Add the words your feed marks them with — <i>cpo</i>, <i>certified pre-owned</i>, <i>refurb</i> — to split them out.</>}
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                  <input style={{ ...sel, width: 420 }} placeholder="cpo, certified pre-owned, refurb, …"
+                    defaultValue={(data?.condition_tokens || []).join(', ')}
+                    onBlur={e => {
+                      const next = e.target.value.split(',').map(t => t.trim()).filter(Boolean)
+                      if (next.join('|') !== (data?.condition_tokens || []).join('|')) void saveConfig({ condition_tokens: next })
+                    }} />
+                  <span style={{ fontSize: 11, color: 'var(--text3)', alignSelf: 'center' }}>saved when you click away</span>
+                </div>
+              </div>
+            )}
+
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>
+                    <th style={{ padding: '4px 6px' }}>Phone</th>
+                    <th style={{ padding: '4px 6px', textAlign: 'right' }}>Projected</th>
+                    {(data?.grid_columns || []).flatMap(c => [
+                      ...c.options.map(o => (
+                        <th key={`${c.category}:${o.key}`} style={{ padding: '4px 6px', textAlign: 'right' }}
+                          title={`${c.category_label} — ${o.label}`}>
+                          {/* The picture is a URL the user typed for their own catalog, on no
+                              host this app knows, so next/image cannot be configured for it. */}
+                          {o.image_url
+                            ? // eslint-disable-next-line @next/next/no-img-element
+                              <img src={o.image_url} alt={o.label} width={18} height={18}
+                                style={{ verticalAlign: 'middle', marginRight: 4, borderRadius: 3, objectFit: 'cover' }} />
+                            : null}
+                          {o.label}
+                        </th>
+                      )),
+                      <th key={`${c.category}:total`} style={{ padding: '4px 6px', textAlign: 'right', borderLeft: '1px solid var(--border)' }}>
+                        {c.category_label} total
+                      </th>,
+                    ])}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data?.model_orders || []).map(r => (
+                    <Fragment key={r.model}>
+                      <tr style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '6px' }}>
+                          {r.variants.length > 1 &&
+                            <button className="btn" style={{ fontSize: 10, padding: '0 5px', marginRight: 6 }}
+                              onClick={() => setOpenRow(k => k === r.model ? '' : r.model)}
+                              title="Show the colours that were actually sold">
+                              {openRow === r.model ? '▾' : '▸'}
+                            </button>}
+                          <span style={{ color: 'var(--text3)', marginRight: 6 }}>#{r.rank}</span>{r.model}
+                          {r.condition_marker &&
+                            <span title={`Marked ${r.condition_marker} in your product descriptions — ordered separately from a new one`}
+                              style={{ marginLeft: 6, fontSize: 10, padding: '1px 5px', borderRadius: 4, border: '1px solid var(--border)', color: 'var(--text2)' }}>
+                              {r.condition_marker}</span>}
+                          {r.variants.length > 1 &&
+                            <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--text3)' }}>
+                              ({r.variants.length} colours)
+                            </span>}
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'right' }}
+                          title={WHY[r.projection_basis] || r.projection_basis}>
+                          {r.projected_units === null
+                            ? <span style={{ color: 'var(--text3)' }}>— awaiting</span>
+                            : <b>{num(r.projected_units)}</b>}
+                        </td>
+                        {(data?.grid_columns || []).flatMap(c => [
+                          ...c.options.map(o => {
+                            const q = r.cells[c.category]?.options.find(x => x.key === o.key)
+                            return (
+                              <td key={`${c.category}:${o.key}`} style={{ padding: '6px', textAlign: 'right' }}
+                                title={`${o.label} — ${share(q?.share)} of this phone's ${c.category_label.toLowerCase()} order`}>
+                                {num(q?.qty ?? null)}
+                              </td>
+                            )
+                          }),
+                          <td key={`${c.category}:total`} style={{ padding: '6px', textAlign: 'right', fontWeight: 700, borderLeft: '1px solid var(--border)' }}>
+                            {num(r.cells[c.category]?.qty ?? null)}
+                          </td>,
+                        ])}
+                      </tr>
+                      {openRow === r.model && (
+                        <tr style={{ background: 'var(--surface2)' }}>
+                          <td colSpan={2 + (data?.grid_columns || []).reduce((n, c) => n + c.options.length + 1, 0)}
+                            style={{ padding: '8px 10px', fontSize: 12 }}>
+                            <div style={{ fontWeight: 600, marginBottom: 4 }}>What was actually sold under this phone</div>
+                            {r.variants.map(v => (
+                              <div key={v.model} style={{ color: 'var(--text2)' }}>
+                                {v.units_total} × {v.model}
+                              </div>
+                            ))}
+                            {r.cells.case?.colours &&
+                              <div style={{ marginTop: 6, color: 'var(--text2)' }}>
+                                Cases by colour: {r.cells.case.colours.map(c => `${c.label} ${num(c.qty)}`).join('  ·  ')}
+                              </div>}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {(data?.model_orders?.length || 0) === 0 &&
+              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>
+                No device sales in this window for these stores.
+              </div>}
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+              ℹ︎ Each style column is a share of that phone&rsquo;s order and the columns add up to the
+              total. A dash means the order cannot be worked out yet, never a quantity of zero.
+              {(data?.option_mix_bases?.case === 'even_split') &&
+                ' The styles are split evenly because no style mix has been declared — set one under Mix & catalog.'}
+            </div>
+          </div>
+
+          {/* ── CONSOLIDATED: cables, cubes, earphones ───────────────────────────────────────────
+              *"charger and cables should be consolidated based on the sales, not per phone ... the
+              cables are common to a lot of phones"*. One line per connector, with the phones it
+              covers and the dropdown that moves a phone to another one. */}
+          {(data?.consolidated || []).map(c => (
+            <div key={c.category} className="card" style={{ padding: '14px 16px', marginBottom: 18 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>🔌 {c.category_label} — consolidated</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                  {c.reason === 'no_rate'
+                    ? 'No rate declared, so none is being ordered. Set how many per device to start ordering these.'
+                    : `${num(c.qty)} in total, across every phone that takes the same one`}
+                </div>
+              </div>
+              {c.lines.length > 0 && (
+                <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>
+                      <th style={{ padding: '4px 6px' }}>Specification</th>
+                      <th style={{ padding: '4px 6px', textAlign: 'right' }}>Quantity</th>
+                      <th style={{ padding: '4px 6px' }}>Phones it covers</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {c.lines.map(l => (
+                      <tr key={l.label} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '6px' }}>
+                          {l.label}
+                          {l.spec_basis === 'house_default' &&
+                            <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--text3)' }}>(standard)</span>}
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'right', fontWeight: 700 }}>{num(l.qty)}</td>
+                        <td style={{ padding: '6px', color: 'var(--text2)', fontSize: 12 }}>
+                          {l.models.map(m => `${m.model} (${m.qty})`).join('  ·  ')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {/* THE PER-PHONE DROPDOWN — the standard applies until somebody changes it for one
+                  phone, which is what the owner asked for. */}
+              {c.lines.length > 0 && (
+                <details style={{ marginTop: 10 }}>
+                  <summary style={{ fontSize: 12, cursor: 'pointer', color: 'var(--text2)' }}>
+                    Change which {c.category_label.toLowerCase()} a phone takes
+                  </summary>
+                  <div style={{ marginTop: 8 }}>
+                    {(data?.model_orders || []).filter(r => r.projected_units !== null).map(r => (
+                      <div key={r.model} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 12, minWidth: 260 }}>{r.model}</span>
+                        {c.dimensions.map(d => {
+                          const k = `${c.category}|${d.key}|${r.model}`
+                          const current = c.lines.find(l => l.models.some(m => m.model === r.model))?.spec?.[d.key] || d.default
+                          return (
+                            <select key={d.key} style={{ ...sel, fontSize: 12 }}
+                              value={specDraft[k] ?? current}
+                              onChange={e => setSpecDraft(s => ({ ...s, [k]: e.target.value }))}>
+                              {d.options.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                            </select>
+                          )
+                        })}
+                      </div>
+                    ))}
+                    <button className="btn" style={{ marginTop: 8 }} disabled={saving || !Object.keys(specDraft).length}
+                      onClick={() => void saveSpecs()}>
+                      {saving ? 'Saving…' : `Save ${Object.keys(specDraft).length} assignment(s)`}
+                    </button>
+                  </div>
+                </details>
+              )}
+              {c.awaiting.length > 0 &&
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+                  ℹ︎ {c.awaiting.length} phone(s) are not in this total yet
+                  {c.reason === 'no_rate' ? '.' : ' because nobody has ruled on them.'}
+                </div>}
+            </div>
+          ))}
+
+          {/* ── THE TOTALS, now at the bottom (owner 2026-10-30: *"it should be not be on top as
+              displayed"*) — one number per kind, for the buyer who wants the summary beside the
+              sheet that breaks it down. */}
+          <div className="card" style={{ padding: '14px 16px', marginBottom: 18 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Σ Totals across every phone</div>
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ textAlign: 'left', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>
@@ -325,10 +790,6 @@ export default function AccessoryOrderPlanPage() {
                 ))}
               </tbody>
             </table>
-            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
-              ℹ︎ The colour quantities always add up to the case quantity. A dash means the order
-              cannot be worked out yet, never a quantity of zero.
-            </div>
           </div>
 
           {/* ── THE MODELS, BEST SELLER FIRST, EACH AWAITING A RULING ─────────────────────────── */}
@@ -362,6 +823,15 @@ export default function AccessoryOrderPlanPage() {
                   <tr key={r.model} style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={{ padding: '6px' }}>
                       <span style={{ color: 'var(--text3)', marginRight: 6 }}>#{r.rank}</span>{r.model}
+                      {r.condition_marker &&
+                        <span title={`Marked ${r.condition_marker} in your product descriptions — ordered separately from a new one`}
+                          style={{ marginLeft: 6, fontSize: 10, padding: '1px 5px', borderRadius: 4, border: '1px solid var(--border)', color: 'var(--text2)' }}>
+                          {r.condition_marker}</span>}
+                      {r.variant_count > 1 &&
+                        <span title={r.variants.map(v => `${v.units_total} x ${v.model}`).join('\n')}
+                          style={{ marginLeft: 6, fontSize: 11, color: 'var(--text3)' }}>
+                          ({r.variant_count} colours)
+                        </span>}
                       {r.history_basis === 'partial_history' &&
                         <span title={`Only selling for ${r.months_observed} of the ${data?.lookback_months} look-back months, so its average is over those months only.`}
                           style={{ marginLeft: 6, fontSize: 11, color: 'var(--text3)' }}>

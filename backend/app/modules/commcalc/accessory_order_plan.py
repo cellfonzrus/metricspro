@@ -99,6 +99,7 @@ DB-free under `env -i`.
 """
 from __future__ import annotations
 
+from app.modules.commcalc import accessory_order_catalog as _cat
 from app.modules.commcalc import demand_projection as _dp
 
 # ── THE LIFECYCLE RULING (the human step) ────────────────────────────────────────────────────────
@@ -173,32 +174,20 @@ def clamp_months(n, default, maximum):
 def resolve_case_mix(raw=None):
     """A tenant's declared colour mix → `(groups, basis)`, shares summing to 1.0. PURE.
 
-    Shares may be declared as percentages (70) or as fractions (0.7); which was meant is decided by
-    the TOTAL, not per row, so a mix of 0.7 / 0.3 and one of 70 / 30 cannot be read differently. A
-    total that is not 100% is normalised and the basis says so — the missing share is a typo, not a
-    colour nobody named. Missing / junk / no usable row → the house mix."""
-    rows = []
-    if raw is not None and not isinstance(raw, (str, bytes)) and hasattr(raw, "__iter__"):
-        for r in raw:
-            if not isinstance(r, dict):
-                continue
-            key = str(r.get("key") or "").strip().lower()
-            share = _num(r.get("share"), 0.0)
-            if not key or share <= 0:
-                continue
-            rows.append({"key": key, "label": str(r.get("label") or key).strip(), "share": share})
+    THE SHARE-READING RULE IS NOT HERE. Percentages-or-fractions, the normalisation and the basis are
+    `accessory_order_catalog.normalise_shares` — this function shipped with its own copy of that rule and
+    the catalog's option mixes needed the same one, so there is now ONE rule and this is a caller of
+    it. Missing / junk / no usable row → the house mix, which is a POLICY (the owner's own 70/30) and
+    not any tenant's vocabulary.
+
+    The owner asked on 2026-10-30 for the mix to be *"not be hard coded and but an option editable by
+    the user"*: it already was a declaration, and `PUT /accessory-order-plan/config` is where the
+    screen writes it. What this function guarantees is that whatever is written is read back the same
+    way as every other mix on the report."""
+    rows, basis = _cat.normalise_shares(raw)
     if not rows:
         return tuple(dict(m) for m in HOUSE_CASE_MIX), "house_default"
-    total = sum(r["share"] for r in rows)
-    # Percentages or fractions, decided once over the whole declaration.
-    if total > 1.5:
-        total /= 100.0
-        for r in rows:
-            r["share"] /= 100.0
-    basis = "declared" if abs(total - 1.0) <= 0.005 else "declared_normalised"
-    for r in rows:
-        r["share"] = r["share"] / total if total > 0 else 0.0
-    return tuple(rows), basis
+    return rows, basis
 
 
 def resolve_attach_plan(raw=None):
@@ -335,16 +324,191 @@ def accessory_rows(projected_devices, *, mix, plan):
     return rows
 
 
+# ── THE ORDER GRID, PER PHONE (owner 2026-10-30) ─────────────────────────────────────────────────
+# OWNER ASK, verbatim: *"the order is per phone, so it should be not be on top as displayed, the
+# accessory order should be per phone model and on one column and the cases type on the other columns
+# , the screen protector in the other column and charger and cables should be consolidated based on
+# the sales, not per phone"*.
+#
+# So the single total that used to sit above the table is GONE as the headline, and the order is two
+# sheets with different grains, which is the distinction `accessory_order_catalog` holds:
+#   · the GRID — one row per phone, a column per case style and per protector type
+#   · the CONSOLIDATED sheet — cables, cubes and earphones summed across every phone that takes the
+#     same connector, because a buyer orders one line of USB-C cable, not thirty
+def grid_columns(catalog):
+    """The SPLIT categories as the screen's columns: `[{category, label, dimension, options}]`. PURE.
+
+    Declared once here so the header, the cells and the export cannot disagree about which columns
+    exist — the grid is built from this list, never from whatever keys the first row happened to
+    have."""
+    out = []
+    for c in (catalog or ()):
+        if c.get("grain") != _cat.GRAIN_SPLIT:
+            continue
+        dims = c.get("dimensions") or ()
+        dim = dims[0] if dims else {"key": "", "label": "", "options": ()}
+        out.append({"category": c.get("key"), "category_label": c.get("label"),
+                    "dimension": dim.get("key"), "dimension_label": dim.get("label"),
+                    "per_device": c.get("per_device"),
+                    "options": [{"key": o.get("key"), "label": o.get("label"),
+                                 "image_url": o.get("image_url")} for o in dim.get("options") or ()]})
+    return out
+
+
+def _qty(projected, per_device):
+    """One accessory quantity, or None. PURE.
+
+    `None` for an unplanned model AND for an un-rated category: a kind of accessory nobody has set a
+    rate for is not ordered, and saying that with a zero would read as a decision to stock none."""
+    if projected is None or per_device is None:
+        return None
+    return int(round(_num(projected) * _num(per_device)))
+
+
+def model_order_rows(models, *, catalog, option_mixes, case_mix):
+    """One row per phone model: its projected units and, per SPLIT category, the quantity divided
+    across that category's options. PURE.
+
+    The option quantities FOOT to the category quantity (largest remainder, the same rule the colour
+    split uses), so a row's columns can be added up by eye and agree with its total. A model with no
+    projection carries `None` in every cell rather than a zero — the honesty rule the whole report
+    rests on, held once here for the grid as well as for the old totals."""
+    rows = []
+    for m in (models or ()):
+        proj = m.get("projected_units")
+        cells = {}
+        for c in (catalog or ()):
+            if c.get("grain") != _cat.GRAIN_SPLIT:
+                continue
+            key = c.get("key")
+            total = _qty(proj, c.get("per_device"))
+            shares = list(option_mixes.get(key) or ())
+            cell = {"qty": total, "per_device": c.get("per_device"),
+                    "options": [], "reason": None if total is not None else (
+                        "no_rate" if c.get("per_device") is None else m.get("projection_basis"))}
+            if total is None:
+                cell["options"] = [{"key": s.get("key"), "label": s.get("label"),
+                                    "share": s.get("share"), "qty": None} for s in shares]
+            else:
+                parts = _largest_remainder(total, [_num(s.get("share"), 0.0) for s in shares])
+                cell["options"] = [{"key": s.get("key"), "label": s.get("label"),
+                                    "share": s.get("share"), "qty": q}
+                                   for s, q in zip(shares, parts)]
+            # THE COLOUR SPLIT STAYS ON THE CATEGORY TOTAL, not inside every style column. Style x
+            # colour would be twenty-five columns of two-unit cells; the buyer needs the style
+            # columns and the colour totals, and the row carries both.
+            if c.get("colour_split"):
+                groups = list(case_mix or ())
+                if total is None:
+                    cell["colours"] = [{"key": g.get("key"), "label": g.get("label"),
+                                        "share": g.get("share"), "qty": None} for g in groups]
+                else:
+                    cparts = _largest_remainder(total, [_num(g.get("share"), 0.0) for g in groups])
+                    cell["colours"] = [{"key": g.get("key"), "label": g.get("label"),
+                                        "share": g.get("share"), "qty": q}
+                                       for g, q in zip(groups, cparts)]
+            cells[key] = cell
+        rows.append({"model": m.get("model"), "rank": m.get("rank"),
+                     "units_total": m.get("units_total"),
+                     "lifecycle": m.get("lifecycle"), "lifecycle_label": m.get("lifecycle_label"),
+                     "projected_units": proj, "projection_basis": m.get("projection_basis"),
+                     "variants": m.get("variants") or [],
+                     "cells": cells})
+    return rows
+
+
+def consolidated_rows(models, *, catalog, specs=None):
+    """The ASSIGNED categories, summed across every model that takes the same option. PURE.
+
+    *"the cables are common to a lot of phones"* — so the answer is one line per connector with the
+    phones that feed it named, not one line per phone. A model with no projection cannot be added to
+    a line, so it is listed as `awaiting` on the category: the sheet then says how much of the order
+    is still unplannable instead of quietly under-ordering."""
+    out = []
+    for c in (catalog or ()):
+        if c.get("grain") != _cat.GRAIN_ASSIGNED:
+            continue
+        lines, awaiting = {}, []
+        for m in (models or ()):
+            spec, spec_basis = _cat.spec_for(m.get("model"), c, specs)
+            qty = _qty(m.get("projected_units"), c.get("per_device"))
+            if qty is None:
+                awaiting.append({"model": m.get("model"),
+                                 "reason": ("no_rate" if c.get("per_device") is None
+                                            else m.get("projection_basis"))})
+                continue
+            sig = tuple(sorted(spec.items()))
+            line = lines.setdefault(sig, {"spec": dict(spec), "label": _cat.spec_label(c, spec),
+                                          "qty": 0, "models": [], "spec_bases": set()})
+            line["qty"] += qty
+            line["models"].append({"model": m.get("model"), "qty": qty, "spec_basis": spec_basis})
+            line["spec_bases"].add(spec_basis)
+        rows = []
+        for line in sorted(lines.values(), key=lambda l: (-l["qty"], l["label"])):
+            line["models"].sort(key=lambda r: (-r["qty"], r["model"]))
+            rows.append({"spec": line["spec"], "label": line["label"], "qty": line["qty"],
+                         "models": line["models"],
+                         "spec_basis": ("declared" if "declared" in line["spec_bases"]
+                                        else "house_default")})
+        out.append({"category": c.get("key"), "category_label": c.get("label"),
+                    "per_device": c.get("per_device"),
+                    "dimensions": [{"key": d.get("key"), "label": d.get("label"),
+                                    "default": d.get("default"),
+                                    "options": [{"key": o.get("key"), "label": o.get("label"),
+                                                 "image_url": o.get("image_url")}
+                                                for o in d.get("options") or ()]}
+                                   for d in c.get("dimensions") or ()],
+                    "lines": rows, "qty": sum(r["qty"] for r in rows),
+                    "awaiting": awaiting,
+                    "reason": None if rows else ("no_rate" if c.get("per_device") is None
+                                                 else "awaiting_declaration")})
+    return out
+
+
 # ── THE WHOLE PLAN ───────────────────────────────────────────────────────────────────────────────
 def plan(*, units_by_model, months, lifecycle=None, horizon_months=DEFAULT_HORIZON_MONTHS,
-         case_mix=None, attach_plan=None):
-    """The payload the screen reads: the ranked model table, what is still waiting on a ruling, and
-    the order the rulings imply. PURE — every input is handed in."""
+         case_mix=None, attach_plan=None, catalog=None, option_mix=None, model_specs=None,
+         variants=None, conditions=None):
+    """The payload the screen reads: the ranked model table, what is still waiting on a ruling, the
+    per-phone order grid and the consolidated connector sheet. PURE — every input is handed in.
+
+    `variants` is `{model: [{model, units_total, units_by_month}, ...]}` from
+    `device_model_family.group_units` — the colour spellings that were folded into each row, carried
+    so the screen can open a phone and show what was actually sold (owner 2026-10-30, *"with a drill
+    down option to see what was sold"*). It is NOT recomputed here; this module never parses a model
+    name.
+
+    `conditions` is `{model: {condition, condition_label, condition_marker, condition_basis}}` from
+    the same `group_units` call — the condition each row was read as (owner 2026-10-31, *"cpo is
+    certified pre owned is adifferent device than new"*). Carried, never derived: this module does
+    not know what a condition word looks like, and asking a second time is how two reads of one
+    fact come to disagree."""
     periods = [str(p) for p in (months or ())]
     horizon = max(0, int(round(_num(horizon_months, 0))))
     mix, mix_basis = resolve_case_mix(case_mix)
     items = resolve_attach_plan(attach_plan)
+    cats, cat_basis = _cat.resolve_catalog(catalog)
     rows = model_rows(units_by_model, months=periods, lifecycle=lifecycle, horizon_months=horizon)
+    var = dict(variants or {})
+    cond = dict(conditions or {})
+    for r in rows:
+        r["variants"] = list(var.get(r["model"]) or [])
+        r["variant_count"] = len(r["variants"])
+        c = dict(cond.get(r["model"]) or {})
+        r["condition"] = c.get("condition")
+        r["condition_label"] = c.get("condition_label")
+        r["condition_marker"] = c.get("condition_marker")
+        r["condition_basis"] = c.get("condition_basis")
+
+    # The option mix per SPLIT category, declared or an even split that SAYS it is one.
+    declared_mix = {str(k).strip().lower(): v for k, v in dict(option_mix or {}).items()}
+    option_mixes, option_mix_bases = {}, {}
+    for c in cats:
+        if c.get("grain") != _cat.GRAIN_SPLIT:
+            continue
+        shares, basis = _cat.resolve_option_mix(c, declared_mix.get(c["key"]))
+        option_mixes[c["key"]], option_mix_bases[c["key"]] = shares, basis
+    specs = _cat.resolve_model_specs(model_specs)
 
     window_units = sum(r["units_total"] for r in rows)
     declared = [r for r in rows if r["lifecycle"] != LIFECYCLE_UNDECLARED]
@@ -376,6 +540,20 @@ def plan(*, units_by_model, months, lifecycle=None, horizon_months=DEFAULT_HORIZ
         # DERIVED FROM THE TOTAL so the headline rate and the order can never disagree.
         "projected_devices_per_month": (None if devices is None or horizon <= 0
                                         else round(devices / horizon, 2)),
+        # ── THE ORDER, AT THE TWO GRAINS IT IS ACTUALLY BOUGHT AT ────────────────────────────────
+        "grid_columns": grid_columns(cats),
+        "model_orders": model_order_rows(rows, catalog=cats, option_mixes=option_mixes,
+                                         case_mix=mix),
+        "consolidated": consolidated_rows(rows, catalog=cats, specs=specs),
+        "catalog": [dict(c, dimensions=[dict(d, options=[dict(o) for o in d["options"]])
+                                        for d in c["dimensions"]]) for c in cats],
+        "catalog_basis": cat_basis,
+        "option_mix": {k: [dict(s) for s in v] for k, v in option_mixes.items()},
+        "option_mix_bases": option_mix_bases,
+        "model_specs_declared": len(specs),
+        # The flat per-accessory totals the first version shipped with. KEPT, because the drill-down
+        # declaration and the snapshot sender both name these figures, and because a buyer still
+        # wants one number per kind beside the sheet that breaks it down.
         "accessories": accessory_rows(devices, mix=mix, plan=items),
         "case_mix": [dict(m) for m in mix],
         "case_mix_basis": mix_basis,

@@ -92,6 +92,7 @@ Primary code homes:
 | POS-15 | **A sale the customer pays later** | "Also add another tender type as Terms — 15/30/60." What may a till be paid with, who decides, and what does a receipt say about a sale nobody has paid yet? |
 | POS-16 | **A wholesale customer, and the W-9 that makes their sales tax-free** | "A customer type as wholesale where the option to not charge tax will be by default if the user confirms they received the filled out w9 … block the user to make a sale before the system has an updated w9, only the admin can go past … and a return link for the customer to send the w9 back." |
 | POS-17 | **The cash / credit mismatch an edit or a void leaves behind** | "I need the POS Cash Register to have the ability to edit the sale from the prior day and create log of the cash or credit mismatch." Editing a sale moves what the customer owes and voiding one stops them owing it — so where does the money already taken go, who is told, and why was nothing comparing the two? |
+| POS-18 | **A pre-owned device is a different device** | "CPO is certified pre owned is a different device than new, IMEI is unique." Which device conditions exist, what does this feed call one, and why was a refurbished handset staying off the new one's order row only by accident? |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -185,13 +186,15 @@ Primary code homes:
 | COMMCALC-47 | **A frame knows what it shows — one home for where a click on the live screen lands** | "it shows the live scren but cannot click on the box to enter the user id" — the box was in the picture and clicking it did nothing. Every streamed frame arrives telling us what it shows, and that was thrown away, so a click was converted through the window instead. What is a click on a picture of a browser a fact ABOUT? |
 | COMMCALC-48 | **The reports a login pulls are edited, not coded — one editable declaration** | "start defining the reports from the back end again, not hardcoded but consumer defined editable". Which reports a tenant pulls and the filters each one needs were already config — in two columns no screen could write, so in practice they were declarable only in SQL. One derived editor shape over the same two columns, with the round trip pinned as the identity. |
 | COMMCALC-49 | **What to order, from what the stores actually sold — and one answer to "how many will sell next"** | "process accessory orders based on the previous 3 months of average sales … asking the user to enter where the spoecific model is end of life or current". The device models the stores sold, ranked, waiting on a human ruling before anything is projected — and the velocity arithmetic that question needs, which was already written twice, factored into one home both older forecasts now read. |
-| COMMCALC-50 | **A page that refuses us is not a login form that renders unexpectedly** | "live login for the billing initated" — and it came back "Could not find the login form. The login form may render differently than expected — check the screenshot." The screenshot showed no form at all: the portal had refused the request in plain words, carrying its own error reference. Three vocabularies answered "is this page refusing us", two of them hardcoded, and none of them held that wording. |
+| COMMCALC-50 | **A page that refuses us is not a login form that renders unexpectedly** | "live login for the billing initated" — and it came back "Could not find the login form. The login form may render differently than expected — check the screenshot." The screenshot showed no form at all: the portal had refused the request in plain words, carrying its own error reference. Three vocabularies answered "is this page refusing us", two of them hardcoded, and none of them held that wording. And the other half of that question — *is a form on this page at all?* — was never asked, so the UPS reporting portal's own sign-in form read as a bot wall because its markup says "captcha" (§50.8, owner 2026-10-31). |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
+| CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
+| CORE-28 | **Sort by is part of the standard filter bar** | "in the Rep Incentive Report the month range shows, i need it to be sorted by employee store etc, add this to our standard filter bar" — the house has had one comparator and one header-click rule since 2026-08-10; what it had no place for was a CONTROL. Who owns "how are these rows ordered", so a dropdown and a column header can never answer it differently, and what stops the bar from carrying a default list of somebody else's columns? |
 | CORE-22 | **A page load never queries once per item** | "How do we avoid these extra round-trip calls? Which loop shapes really cost one trip per row and which only look like it, what is the count today, and what fails the build the day a new one ships?" |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26203,10 +26206,13 @@ status word rather than a blank that reads as nil.
 | POS-15 | pos |
 | POS-16 | pos |
 | POS-17 | pos |
+| POS-18 | pos |
 | PAYABLES-01 | payables |
 | CORE-25 | core |
 | CORE-26 | core |
 | CORE-27 | core |
+| CORE-28 | core |
+| CORE-29 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -33787,6 +33793,78 @@ with no register sales get an empty answer with a zeroed summary rather than a b
 
 💰 Moves no money. The derivation books nothing and pays nothing; the migration is additive.
 
+## §POS-18. A PRE-OWNED DEVICE IS A DIFFERENT DEVICE — THE CONDITION VOCABULARY HAS ONE HOME (owner ruling 2026-10-31)
+
+Owner, verbatim: *"cpo is certified pre owned is adifferent device than new  , imnei is unique"* —
+answering whether a refurbished handset and a new one of the same model should share a row on the
+accessory order grid (§COMMCALC-49.11). They must not.
+
+**THE CLASS, not the instance.** The ruling is about one grid, but the fact it needs — *which device
+conditions exist, and what does a feed call one* — was written down twice and homed nowhere:
+a `CHECK (condition IN ('new','refurbished','used','damaged'))` on `pos.inventory_serial` (mig 725)
+and a literal `const CONDITIONS = [...]` on the POS inventory screen, two lines from a second copy
+of the unit-status list. A third, worse copy had just appeared by accident: the accessory grid kept
+a CPO handset off the new handset's row **only because the word `CPO` happened to survive the
+model-spelling parse**, which nothing asserted.
+
+**AND THE ACCIDENT WAS ALREADY BROKEN.** `commcalc/router` applied the curated
+`device_model_alias` map *before* asking for the family grain, so a curated alias replaced
+`HANDSET A 128GB Pink CPO` with `HANDSET A` and the marker was gone before anything could read it.
+Found by the integration test for this ruling, not by reading the code. The alias is now handed TO
+the one home, which applies the curation and then the condition — the only order that cannot lose
+one of them — and §D17 of the lock fails the build if a caller canonicalises first again.
+
+### The split, and why it is drawn here
+
+| the fact | where it lives | why |
+|---|---|---|
+| WHICH conditions exist | `pos/device_condition.HOUSE_CONDITIONS` | the platform's POLICY — the same four for every tenant, pinned key-by-key against mig 725's `CHECK` by §D10 |
+| WHAT a feed marks one with | `commcalc.accessory_config.device_condition_tokens` (mig `1110`), read through `resolve_feed_tokens` | the TENANT's vocabulary — `CPO` in one feed, `CERTIFIED_PREOWNED` in another. A REQUIRED argument with no house fallback (CLAUDE.md, "every feature is for EVERY tenant") |
+| WHICH condition an unmarked line is | `unmarked_condition()` → `new`, with `basis='unmarked'` | a feed marks the exception, not the rule; the schema chose the same default first, and the basis keeps a reading apart from an inference |
+| the WORD a human is shown | the org's own first declared spelling (`marker`) | the owner says CPO and the schema says refurbished, and neither has to win |
+
+Nothing declared ⇒ `condition=None`, `basis='no_vocabulary'`, keys byte-identical to what they were
+before the question existed. That is what makes the change safe for Cellfonz, whose feed marks no
+condition on any of its device lines.
+
+### Homes and readers
+
+| question | ONE home | readers |
+|---|---|---|
+| which conditions exist, and what marks one | `backend/app/modules/pos/device_condition.py` | `commcalc/router` (the grid), `pos/router.device_conditions` (the screen), `commcalc/device_model_family` |
+| which sold lines are the same phone | `commcalc/device_model_family.py` (§COMMCALC-49.11) | `commcalc/router` |
+| the unit statuses | `pos/inventory_integrity.UNIT_STATUSES` | served by the same endpoint, dereferenced not restated |
+| both lists, in the browser | `frontend/src/lib/device-conditions.ts` | `pos/inventory/page.tsx` — which now names no condition and no status of its own |
+
+- `GET /pos/device-conditions` — the two vocabularies plus which condition is the unmarked one.
+  Reads no tenant row: both lists are platform policy (RULE TWO).
+- `PUT /commcalc/accessory-order-plan/config` — gained `condition_tokens`, returning the resolved
+  declaration and the four conditions so the panel never names one.
+
+### Measured before a line was written (live feed, 1 Aug – 31 Oct 2026, each org's own departments)
+
+| org | device lines carrying a condition word |
+|---|---|
+| Luxelink Wireless LLC | **191** (`CPO`, plus the glued `CERTIFIED_PREOWNED_…` / `CERTIFIED_IPHONE_…` SKU forms) |
+| Cellfonz R Us | 0 |
+| Vzone | 0 device lines in the window |
+
+So mig `1110` seeds Luxelink only. Seeding the others with words their feeds do not use would
+declare a vocabulary nobody measured.
+
+### Proof
+
+- `backend/harness_accessory_order_grid.py` §D — 17 checks inside the existing CI job. D6 is the
+  silent-merge guard, D10 pins the house keys against the migration's own `CHECK`, D11/D12 fail the
+  build if a condition word reappears on the screen or in the browser's reader, D17 pins the alias
+  ordering. Each was control-tested by breaking the mechanism and watching the right check go red.
+- `backend/tests/unit/test_device_condition.py` — 10 tests, every fixture a live spelling.
+- `backend/tests/integration/test_accessory_order_plan_endpoint.py` — 6 new tests, including the
+  curated-alias merge, the cross-tenant leak, and the degradation before mig 1110 is applied.
+
+💰 Moves no money. The column is NULL on arrival for every org but one; the only reader plans
+quantities to buy and touches no payout, ledger, P&L line, commission or tax figure.
+
 ## §COMMCALC-20. A HANDSET THAT BOOKS A REBATE BOOKS A COST (owner report 2026-10-19)
 
 Owner, on LuxeLink September 2026: *"how come the device cost is less than the device rebate"* —
@@ -36133,10 +36211,81 @@ because `ups.com` is unreachable from the build container and a guessed address 
 was reached in the first place. What ships here is that the next operator is told what the portal
 actually said, instead of being sent to read markup.
 
+### COMMCALC-50.8 THE SECOND HALF OF THE QUESTION — "instead of showing a form" was never asked (owner report 2026-10-31)
+
+Owner, verbatim: *"the ups portal is not getting the iuser id and password autofilled in teh login
+screen"*. He was looking at the portal's REAL sign-in form with both boxes empty.
+
+**Measured, from the build container, 2026-10-31** (no proxy, default headless Chromium, HTTP 200):
+`frs.theupsstore.com/UI/Reporting/POS/POSReports.aspx` → `/Framework/SignIn.aspx`, which renders
+`#UsernameTextBox` and `#UserPasswordTextBox`, both visible. **No WAF page, no IP block, no bot
+wall.** And the markup contains the word *captcha* NINE times: the `recaptcha.net/api.js` include, a
+`renderCaptcha = 'True'` flag, three code comments, and
+`<div id="SignInCaptcha" class="g-recaptcha" data-size="invisible" data-callback="captchaSuccessCallback">`.
+**None of it is in the page's visible text.** Verbatim excerpt kept at
+`backend/tests/fixtures/frs_signin_excerpt.html`.
+
+**THE DEFECT.** `page_verdict` matches its markers against `vidapay_sweep._page_text`, which is
+`page.content()` — the MARKUP — plus the title. `"captcha"` is a seeded challenge marker, so the
+working form read as `kind="challenge"`. `_looks_like_cloudflare` *is* that verdict, so
+`_wait_settle` spun 30s, reloaded, spun again and raised *"The portal's WAF is blocking this egress
+IP (bot challenge did not clear, even after a reload)"* — from inside `_goto_login`, **before
+`_wait_for_password` was ever reached**. Nothing was ever typed into a form that sat there the whole
+time. The stored `auth_message` on the Team Portal row still carried that accusation at 18:03Z.
+
+**THE CLASS.** *A page was judged by how it is BUILT, not by what it is DOING.* The predicate's own
+claim is "refusing or challenging us RATHER THAN showing a form", and it never looked for the form.
+Every portal whose sign-in page carries a reCAPTCHA — most of them — is read the same way, for every
+tenant. **THE SIBLING, already fixed once:** "does a human check gate this sign-in?" has had ONE
+home since §COMMCALC-11, `vidapay_sweep.human_check`, which reads the DOM and tells an armed widget
+from an included one. The `"captcha"` marker was a SECOND answer to that same question by text
+search, and it ran first — two paths, one question, and the cruder one won.
+
+**THE FIX, one rule:** `page_verdict(..., form_present=…)` returns **None** when the form is on the
+page, whatever the markup says. `vidapay_sweep.login_form_present(page)` is the one home for that
+question and is deliberately the same `_password_frame` answer `_wait_for_password` already acts on —
+a second rule for "is the form here" would be a second rule for whether the portal refused us.
+`_looks_like_cloudflare`'s two-signal conjunction obeys it too, because that branch is how the defect
+would walk straight back in. Default `False`, so a caller that has not looked keeps the old answer.
+
+**Formless pages are untouched, deliberately.** A Cloudflare interstitial has no form and its markers
+ARE markup fingerprints (`cf-chl`, `challenge-platform`), so it still stops the login. That is the
+excused half: a page with no form on it is still judged by its markup.
+
+**THE SECOND HALF OF HIS REPORT — a prefill that could not fill reported that it did.** Past the
+false positive, the live session reaches the human-driven path and calls `prefill_login`, which was
+best-effort and **silent**: every step swallowed, nothing returned, nothing read. A blank saved
+credential or a control it could not find left an empty form while `_HUMAN_CHECK_MESSAGE["invisible"]`
+told the operator *"Your details are filled in"*. Same class as §COMMCALC-44: *an absence needs the
+RIGHT reason, not just a reason.* So `prefill_login` now returns `_prefill_report`
+(`filled` / `no_value` / `no_control` / `ok`, field NAMES only — it reaches a status line), proving
+each fill by reading the box back rather than by `fill()` not raising; the "filled in" claim moved
+out of the kind message into `live_login._prefill_note`, which dereferences that report. Nothing
+saved and no control found are two sentences, because they send the operator to two different places.
+`_put` is now the one typing rule, shared with `drive_typed_login`.
+
+**Every tenant.** `portal_block_marker` is per-org config, so the form rule is applied to a tenant's
+CONFIGURED markers exactly as to the house seeds; an empty declaration still means empty. Asserted
+across three org shapes in both test files.
+
+**Locked:** `harness_portal_page_verdict.py` §I (14 checks, incl. the ARMED reproduction of the
+defect) and `harness_human_check_kind.py` §H (24 checks, incl. the wiring — writing a report and not
+reading it has happened three times here, §19.18). Tests: `backend/tests/unit/
+test_portal_challenge_vs_form.py`, `backend/tests/unit/test_prefill_reports_what_it_filled.py`,
+`backend/tests/integration/test_live_login_reaches_the_form.py` (the SEQUENCE — the settle ran before
+the form-finder, which is the whole defect), fake page `backend/tests/fakes/portal_page.py`.
+
+**NOT fixed here, said plainly.** The UPS **Billing** source (§COMMCALC-50.6) is a different row with
+a different problem and is untouched. The Team Portal's stored `auth_message` still carries the WAF
+accusation until the next login overwrites it. And the fourteen declared reports on that source still
+have no real selectors (§COMMCALC-37) — signing in is necessary for that, not sufficient.
+
 ### COMMCALC-50.7 Cross-references
 
 Same home, other axes: §COMMCALC-10 (the live-login phases), §COMMCALC-46 (what a login page wants
-first), §COMMCALC-11 (an invisible human check is still a check — the excused sibling).
+first), §COMMCALC-11 (an invisible human check is still a check — the excused sibling, and the home
+§COMMCALC-50.8 defers the human-check question to), §COMMCALC-44 (an absence needs the RIGHT reason —
+the class the prefill report belongs to).
 Neighbours: §COMMCALC-47 (the live screen the screenshot comes from), the mig-244 cooldown ladder.
 Reading rule dereferenced: §4b.1 (any-subset column reads — see §COMMCALC-50.5a).
 
@@ -40874,6 +41023,72 @@ fails the build until its line is deleted, and `PINNED_MAX` in `run-proofs.mjs` 
 (**4**) and may only go down. The four entries are declared with what is actually wrong with each —
 one real assertion failure, three whose runner lost the `@/` tsconfig path alias when transpiling to
 a temp directory. They are **reported, not hidden**, and fixing them is its own change.
+
+### CORE-19.9 Every internal import resolves, or the build fails (2026-10-31)
+
+**The report.** The owner opened Productivity Insights for one store and got *"A system error
+occurred. Reference: 15fd7054"*. The reference resolved in `core.failure_log` to:
+
+```
+File "/app/app/modules/commcalc/router.py", line 37586, in productivity_insights
+    from app.modules.commcalc.staffing_heatmap import hhmm_to_hours
+ModuleNotFoundError: No module named 'app.modules.commcalc.staffing_heatmap'
+```
+
+`staffing_heatmap` is in `app.modules.storeops` and always has been. Every store, every tenant,
+both metrics: the page could not load at all.
+
+**The class, not the instance (owner directive 2026-09-20).** The general fact that was wrong is
+not "one statement names the wrong package". It is that **a function-local import of our own code
+is checked by nothing in this repo.** It is not executed at boot, so the app starts clean; it is
+reached only when a user presses the button, so CI stays green; and `backend-integration` only
+proves the modules its own tests happen to reach, out of 2,624 such statements.
+
+**The sibling, found by the lock and not by a report.** `GET /commcalc/my-shelf` opened with
+`from app.modules.commcalc import unsold_inventory` — it is in `app.modules.payables`, as its eight
+other callers say. Same defect, unreported, waiting for the first rep to open their shelf. Both
+were fixed in the same PR.
+
+| Fact | Its one home |
+|---|---|
+| Every `app.*` import resolves to a real module and a real symbol | `backend/tests/unit/test_internal_imports_resolve.py` |
+| What `.not_` means on the database double | `backend/tests/fakes/supabase.py` (`_Not`) |
+| The reported surface still loads, per tenant | `backend/tests/integration/test_productivity_insights_endpoint.py` |
+| The sibling surface still loads, per tenant | `backend/tests/integration/test_my_shelf_endpoint.py` |
+
+**Duplicate check (CLAUDE.md build gate) — why `core/module_graph.py` does not already cover it.**
+`app/modules/core/module_graph.py` is the one home for *which files answer the same question*, and
+it DERIVES its callers from the AST import graph, so it reads the very statements this defect lives
+in. It asserts that the declared facts are **interlinked with the index**, not that the imports
+**resolve**: a statement naming a package that does not exist contributes no edge and is not
+reported. `harness_ci_pipefail_lock` and `harness_test_discipline` gate the plumbing around tests,
+not the imports inside endpoints. So no existing mechanism answers "does this import resolve", and
+nothing was duplicated — the new check reads the same AST the graph does, for a different question.
+
+**The lock.** A unit test, so the existing `backend-unit` CI job gates it and nothing joins
+`harness_unrun_pending.txt`. It is **static**: `importlib.util.find_spec` locates a module without
+executing it, and the target module's own source is parsed for the names it defines — importing
+`app.modules.*` for real would pull in config, Supabase clients and route registration, which is
+exactly the work `tests/unit` must not do. Two sweeps plus a floor that fails if the walk stops
+seeing imports at all, and the two fixed statements are additionally pinned by their fixed text so
+a revert names itself. A module whose names cannot be read statically (`import *`, a module-level
+`__getattr__`) has its symbol check skipped rather than guessed at; module resolution still applies
+to it. Verified red before green: both defects failed it, with their own file and line.
+
+**What it deliberately does not claim.** It is a NAME check, not a signature or behaviour check.
+It is a floor under every import, not a substitute for testing what they return.
+
+**Also fixed here, in the double rather than in a test.** `commcalc/router._tx` composes
+`.not_.is_("trans_ts", "null")`. The double had no `not_` at all, so the attribute lookup raised,
+the endpoint's broad `except` turned it into *"no transaction-time data yet"*, and the busy-hours
+row silently fell back to the staffing proxy — a test could have asserted the proxy and called it
+correct. `not_` is now implemented in the one home (`_Not`, a property like the real client's, not
+a method) with its semantics pinned in `tests/unit/test_supabase_double.py`.
+
+**No table, endpoint, report or migration** — nothing to add to §16, §17 or §18.
+
+Same class: §19.25 and its four repeats (a gate that does not run is not a gate), §CORE-19.2.
+
 ## §CORE-22. A PAGE LOAD NEVER QUERIES ONCE PER ITEM, AND THE BACKLOG ONLY SHRINKS (owner ask 2026-10-29)
 
 **Owner 2026-10-29:** *"how to avoid these extr rounds trip calls"*.
@@ -41580,7 +41795,11 @@ so it can be dereferenced from any load order.
 | where every figure on the screen came from | `commcalc/accessory_order_drilldown.py` (declaration only) |
 | the device MODEL out of a promo-decorated description | `commcalc/product_mix.model_of` (§62), dereferenced |
 | which month's sale lines to read | `router._sales_rows_union` (§3) — the DISPLAY union, so the report is never blind on the open month (§19.55 / §4a.3) |
-| the raw → canonical model map AND the lifecycle ruling | `commcalc.device_model_alias` (mig `096`, lifecycle column mig `1104`) |
+| the raw → canonical model map AND the lifecycle ruling | `commcalc.device_model_alias` (mig `096`, lifecycle column mig `1104`) — the ruling is keyed on the PHONE (COMMCALC-49.11) |
+| which sold lines are the SAME PHONE | `commcalc/device_model_family.family_of` / `group_units` — colour words are a REQUIRED argument (COMMCALC-49.11) |
+| what kinds of accessory can be BOUGHT, and how each is chosen | `commcalc/accessory_order_catalog.py` — SPLIT per phone vs ASSIGNED by connector (COMMCALC-49.12). NOT `accessory_catalog`, which classifies what was SOLD (§19.55) |
+| how a declared set of shares is read (percentages or fractions) | `commcalc/accessory_order_catalog.normalise_shares` — the colour mix dereferences it |
+| which cable / charger / earphone ONE phone takes | `commcalc.model_accessory_spec` (mig `1109`); absent = the declared current standard |
 
 **THE UNIT OF THE WINDOW IS THE CALLER'S.** `/payables/forecast` and the PO recommendations count
 DAYS; this report counts MONTHS. Velocity is per window-unit and the horizon is in the same unit, so
@@ -41738,6 +41957,108 @@ copy fails the build, and retiring one lowers the pin.
 The report plans QUANTITIES TO BUY. It reads no payout, writes no ledger, feeds no P&L line, GP
 figure, commission or tax number, and its two writes are admin-gated declarations. CI tripwire:
 `harness_db_resilience.py` route pin re-taken 1810 → 1813 on the three counted, named routes.
+
+### COMMCALC-49.11 ONE PHONE IS ONE ROW, WHATEVER COLOUR IT SOLD IN (owner ask 2026-10-30)
+
+Owner: *"accessory order plan should combine the accessories for all line items for iphone 13 oin
+different colors with a drill down option to see what was sold, , iph 13 is different from 13 pro"*.
+
+**THE DEFECT, measured on the live feed before anything was written.** The report ranked five colours
+of one handset as five handsets, so the best seller showed up as five mid-table rows and its case
+order was split five ways:
+
+| spelling (September 2026, one tenant's own feed) | units |
+|---|---|
+| `Apple iPhone 13 128GB Pink CPO TO` | 23 |
+| `Apple iPhone 13 128GB Black CPO TO` | 6 |
+| `Apple iPhone 13 128GB Red CPO TO` | 6 |
+| `Apple iPhone 13 128GB White CPO TO` | 4 |
+| `Apple iPhone 13 128GB Blue CPO TO` | 3 |
+
+One case SKU fits every one of them, and none of them fits an iPhone 13 Pro. **One home:**
+`commcalc/device_model_family.py` (`resolve_colour_tokens`, `family_of`, `group_units`).
+
+| what is dropped | how, and why that way |
+|---|---|
+| the CAPACITY (`128GB`, `128 GB`, `1TB`) | by PATTERN — a number followed by a storage unit is a file-format marker in every feed here, like the `CellPhone` category tolerance, so it is a house rule |
+| the COLOUR (`Pink`, `BLK`, `Midnight`) | only if the ORG HAS DECLARED THAT WORD (`accessory_config.device_colour_tokens`, mig `1109`). A colour word is a tenant's own spelling, so §COMMCALC-49.10 bans a house list |
+| nothing else, ever | `PRO`, `PLUS`, `MINI`, `5G`, `FE`, `CPO` and the carrier suffix all survive, which is what keeps a Pro a different phone |
+
+- **`colour_tokens` is a REQUIRED keyword argument with nothing behind it.** An org that has declared
+  none gets `basis='no_vocabulary'`, keeps its raw spellings, and the screen says why — it never
+  borrows another tenant's colour list.
+- **A curated `device_model_alias.canonical_model` OUTRANKS the derivation** (`basis='declared_alias'`),
+  so a human can merge two families the rule keeps apart — new and refurbished stock of one handset,
+  for instance, which take the same case.
+- **THE RULING IS NOW KEYED ON THE PHONE, not on a spelling.** `device_model_alias.lifecycle` is
+  written against the family, because that is the name the human actually ruled on. Production
+  carried 148 alias rows and ZERO rulings when this landed, so nothing stored had to be re-keyed.
+- **The folded row carries its variants**, so the drill-down the owner asked for costs no second
+  query against the feed — it is the rows the report already folded.
+- **Live result, both tenants, Aug–Oct 2026:** 46 spellings → 40 phones (house org), 60 → 52 (the
+  other tenant), every unit preserved.
+
+### COMMCALC-49.12 THE ORDER IS BOUGHT AT TWO GRAINS (owner ask 2026-10-30)
+
+Owner: *"the order is per phone, so it should be not be on top as displayed, the accessory order
+should be per phone model and on one column and the cases type on the other columns , the screen
+protector in the other column and charger and cables should be consolidated based on the sales, not
+per phone , the cables are common to a lot of phones, current standard is type c which should be
+assigned ot the phone model in the beinging but it should be editable as a drop down if oit changes
+later"*.
+
+**ONE home for the ordering vocabulary: `commcalc/accessory_order_catalog.py`.** The load-bearing
+distinction it holds:
+
+| grain | what it means | on the screen |
+|---|---|---|
+| **SPLIT** | bought FOR a phone; that phone's quantity divides across the styles on offer | a column per style, one row per phone, footing to the row total by largest remainder |
+| **ASSIGNED** | bought BY CONNECTOR; each phone is assigned one option and the order sums across phones | one line per connector, naming the phones it covers |
+
+House catalog (the owner's own list, in generic words — a house default is right here because these
+are the names of a kind of product, read against no tenant's feed):
+
+| kind | grain | options |
+|---|---|---|
+| Case | split, colour-split | silicone · kickstand · drop proof/heavy duty · floral · diamond |
+| Screen protector | split | clear · privacy |
+| Cable | assigned | USB-C↔USB-C (standard) · USB-C↔Lightning · USB-A↔USB-C · USB-A↔Lightning |
+| Charging cube | assigned, TWO dimensions | ports: single/dual USB-A, USB-C, or one of each · wattage: 5 / 18 / 20 / 45 / 60 / 100 W |
+| Earphones | assigned | USB-C · Lightning · 3.5 mm jack — **no rate declared, so none is ordered and it says so** |
+
+- **`accessory_catalog.py` IS A DIFFERENT MODULE AND A DIFFERENT QUESTION.** That one (migs 230/231,
+  §19.55) classifies a SOLD line from an uploaded product catalog; this one is what can be BOUGHT,
+  with styles, wattages and connectors. The names are one word apart, and writing this feature
+  overwrote that module once before the name was fixed — `harness_accessory_order_grid.py` §B1 now
+  fails the build if either imports the other.
+- **The share-reading rule has ONE home here** (`normalise_shares`: percentages or fractions, decided
+  by the total, normalised with the basis said). `accessory_order_plan.resolve_case_mix` shipped with
+  its own copy and now dereferences it.
+- **An undeclared style mix is an EVEN split that SAYS it is one** (`basis='even_split'`) — a usable
+  starting sheet, never presented as a measurement. A policy default, not a tenant's vocabulary.
+- **A per-phone connector is an OVERRIDE, not a setting.** `commcalc.model_accessory_spec` (mig
+  `1109`, UNIQUE on org × model × category × dimension). Absent = the declared current standard, and
+  the line says which (`spec_basis`). Clearing one DELETES the row rather than writing the standard
+  in as though somebody had chosen it. An option the catalog does not offer is REFUSED by the route
+  and IGNORED by the reader, so a stale row cannot produce an order line nobody can buy.
+- **A ROUTER AND A SIM KIT TAKE NO CASE.** Which product classes get an accessory is a POLICY
+  declaration (`accessory_order_device_classes`, house: `phone` + `tablet`), read through §62's
+  classifier. One tenant's Aug–Oct device departments carried 498 such units, which would have bought
+  498 cases for routers and SIM cards.
+- **An absence is still never a zero.** An unruled phone's cells are `None` with a reason; a phone
+  ruled end of life orders a real 0; an un-rated kind of accessory reports `no_rate`. Three different
+  facts, kept apart.
+- **Endpoints:** `GET /commcalc/accessory-order-plan` (now returning `grid_columns`, `model_orders`,
+  `consolidated`, `catalog`, `option_mix`, `colour_tokens`), `PUT …/config` (+`catalog`,
+  `option_mix`, `device_classes`, `colour_tokens`), `PUT …/model-spec`, `POST …/lifecycle`.
+- **Locked:** `harness_accessory_order_grid.py` (32 checks) — the colour vocabulary cannot become
+  optional, no colour or brand word may be a VALUE in either home, an undeclared org gets no
+  fallback, a caller may not stop asking the declaration, the grid and the consolidated sheet must
+  foot, and an absence may not become a zero. Tests:
+  `backend/tests/unit/test_device_model_family.py` (13),
+  `backend/tests/unit/test_accessory_order_catalog.py` (23), and the cross-tenant endpoint tests in
+  `backend/tests/integration/test_accessory_order_plan_endpoint.py`.
+
 
 ## §CORE-25. A PANE THE VIEWPORT CANNOT AFFORD IS NOT A LAYOUT — one narrow-screen home (owner report 2026-10-30)
 
@@ -41945,6 +42266,37 @@ a new module, a new permission, an SDK bump, a `version` bump (the runtime key i
 `{ policy: 'appVersion' }`) — finds no matching runtime and is simply not delivered, rather than
 shipping something broken. The workflow never builds and never submits to a store.
 
+### §CORE-26.7 Why an update did not reach a phone (owner, 2026-10-31)
+
+Two publishes succeeded — `production` and `preview`, both green — and the owner's TestFlight phone
+still showed the old JavaScript. Three candidate causes were eliminated from the repository alone:
+the build postdates OTA being wired (11 Sep, #221), its version is `0.1.0` so the `appVersion`
+runtime key matches, and both channels were published. What remains can only be read from EAS —
+which channel the installed build actually carries, and whether that channel is linked to the branch
+the publish wrote to (a channel and a branch share a name by convention, not by rule).
+
+Nobody could see it: the publish workflow holds the only credential, and GitHub's job logs are not
+readable from every environment (the log blob host is outside this container's network policy — read
+a failure through `gh api repos/<o>/<r>/check-runs/<job_id>/annotations` instead, which is how the
+yarn failure above was found). So `.github/workflows/mobile-ota-diagnose.yml` gathers the facts and
+**posts them as a comment on an issue**, readable by anyone working on this and needing no Expo
+account of their own. READ-ONLY by construction: every command is a `:list` or a `:view`, it cannot
+publish, build, submit or delete, and it never fires automatically.
+
+It installs the project with `npm ci` before asking anything, and that is not boilerplate: the first
+run of this workflow skipped it and every EAS command died identically with `Error reading Expo
+config at mobile/app.config.ts: Unexpected token '{'`. `app.config.ts` is TypeScript and the loader
+that transpiles it comes from the project's own dependencies, so a job without them cannot read the
+config and fails the same way whatever is actually wrong in EAS. The publish workflow installs
+first, which is why publishing worked while asking questions did not — a reminder that a diagnostic
+which cannot run is indistinguishable from the fault it was built to find.
+
+The EAS CLI is installed with `npm install -g eas-cli@latest` rather than through
+`expo/expo-github-action`. That action defaults its packager to **yarn** and this project is npm
+(`mobile/package-lock.json`), so the first real publish died in it — run `41225844556`, 2026-10-31,
+*"The process '/usr/local/bin/yarn' failed with exit code 1"*. `eas-cli` reads `EXPO_TOKEN` from the
+environment by itself, so the action was buying a second package manager and nothing else.
+
 ### §CORE-26.5 Not money
 
 No endpoint, no table, no migration, no query, no figure. Nothing about what a number IS changes;
@@ -42079,3 +42431,252 @@ call one state two things. §D8 of the gate fails the build if the page spells o
 
 No endpoint, no table, no migration, no query, no figure moved. A toolbar, a pure converter, and a
 build gate. The Zero Sales payload is served exactly as before.
+
+---
+
+## §CORE-28. SORT BY IS PART OF THE STANDARD FILTER BAR (owner ask 2026-10-31)
+
+**What he said:**
+
+> *"in the Rep Incentive Report the month range shows , i need it to be sorted by employee store etc ,
+> add this to our standard filter bar and update the index , do this one urgently and the rest as we
+> go along"*
+
+Two asks again, and again the second is the one that lasts: fix the report he was looking at, and make
+ordering a capability of the SHARED bar so every other report gets it as it is adopted ("the rest as
+we go along").
+
+### §CORE-28.1 DUPLICATE CHECK (build gate)
+
+Searched this index first. **Nothing new was written for comparing cells or for header clicks** — the
+house has had one home for both since the 2026-08-10 directive. What was missing was a *control*:
+
+| The question | Its existing one home | What this change did |
+|---|---|---|
+| "how do two cells compare" (money, dates, text, empties last) | `frontend/src/lib/table-sort.ts` — `compareValues` / `sortRows` | **dereferenced**, untouched. `sortStandard` calls it |
+| "what does clicking the same header again do" | `table-sort.nextSort` (asc → desc → off) | **dereferenced** by `toggleStandardSort` |
+| "the sortable `<th>`" | `frontend/src/components/SortableTh.tsx` | reused as-is on the two Rep Incentive tables |
+| "the standard report filters" | `frontend/src/components/StandardFilterBar.tsx` + `lib/standard-filters.ts` (§3d, §COMMCALC-03.20) | **extended** — one new optional prop, no adopter changed |
+| "which rows a report is showing" | `standard-filters.filterRows` over a `StandardFilterValue` (§3d) | extended with `sort`, so order travels with the narrowing |
+| "which months a rep-range row belongs to" | `commcalc/_lib/repIncentiveRange.monthBlocks` | reused; it keeps the order it is handed, so sorting happens BEFORE grouping |
+
+A second sort rule for the bar was the obvious shape and is exactly the drift §19.18 names: the
+dropdown would have sorted one way and the column headers another on the same table.
+
+### §CORE-28.2 THE CLASS, not the instance
+
+The instance was the Rep Incentive month range. The class is **two states for one question**: a page
+that gains a sort dropdown while its headers keep their own `useTableSort` has two answers to "how are
+these rows ordered", and the exporter can only read one of them. So:
+
+**One sort state per page, on the value the bar already owns.** `StandardFilterValue.sort` is it. The
+dropdown writes it, a header click toggles it through the same `nextSort`, the table renders through
+it, and the export reads the same ordered array — what you see is what exports (RULE FIVE).
+
+A second fact, worth stating because it is the opposite call from §CORE-27: **a sort is not a
+narrowing.** `isStandardFilterActive` deliberately ignores `sort`, so no page starts telling a user
+rows were filtered out when they were only reordered; `isStandardSortActive` is the separate question,
+and the Clear button is shown — and resets both — when either is true.
+
+### §CORE-28.3 WHAT IS SORTABLE IS DECLARED BY THE REPORT, NEVER DEFAULTED
+
+The bar is **handed** its sortable fields (`sortFields`), each one a `{ field, label, get, kind }`
+declaration. It has no column list of its own and no fallback, for the reason the 2026-10-30 directive
+gives: *a default that is really one caller's vocabulary is the per-tenant code RULE TWO forbids*. A
+column list is exactly that shape — one report's (or one tenant's) words answering for everyone's.
+
+* **Nothing declared means nothing offered.** `sortFields` omitted or empty renders **no sort control
+  at all**, rather than a dropdown of somebody else's columns. Every existing adopter of the bar is
+  therefore byte-identical until it declares.
+* **A field nobody declared sorts nothing.** `sortStandard` returns the same array reference for an
+  undeclared field, so a stale URL or a half-migrated page cannot read a column the report never
+  offered.
+* **A getter reads the cell the table PRINTS.** Rep Incentive shows `storeops_name || epay_salesperson`
+  (two feeds, one person), so `repDisplayName` is that same expression — ordering by the other one
+  would order the rows by a string the user cannot see, and a sort nobody can check is not a sort.
+* **Both directions are worded for what the column holds** (`A–Z` / `Z–A`, `low → high`, `oldest
+  first`), from `kind`. The dropdown never says "asc".
+
+### §CORE-28.4 WHERE IT IS WIRED TODAY
+
+| Surface | Declaration | Sortable by |
+|---|---|---|
+| `/commcalc/reports` Rep Breakdown + Compensation (single month) | `commcalc/_lib/repIncentiveSort.REP_SORT_FIELDS` | Employee, Store, Market, Tier, KPIs met, Subtotal, Payout |
+| `/commcalc/reports` **Month range** (the tab he was on) | `…repIncentiveSort.RANGE_SORT_FIELDS` | Employee, Store, Payout, Final |
+
+The range table is sectioned by month, so the sort orders the rows **inside** each month's section and
+the per-month and grand totals are untouched (they are sums). `RANGE_SORT_FIELDS` deliberately offers
+**no Month** and **no Market**: month is the section key, so sorting by it would reorder nothing, and
+the range endpoint's rows carry no market — a control that changes nothing reads as broken, and one
+that sorts a column the data has not got reads as data loss.
+
+Everything downstream of the single-month sort comes from **one memo**: the tables, the header tiles,
+the drill-down narrowing (§CORE-17.3d) and the CSV/XLSX export all read `filtered`, which is now
+`sortStandard(filterRows(…))`. There was nothing to keep in step.
+
+### §CORE-28.5 One home, dereferenced — and the locks
+
+* `frontend/src/lib/standard-filters.ts` — `SortFieldDecl` · `sortFieldCell` · `sortSelectOptions` ·
+  `sortSelectValue` · `parseSortSelect` · `isStandardSortActive` · `toggleStandardSort` ·
+  `sortStandard`. Framework-free, so it is unit-provable; it imports `table-sort` and re-exports
+  `SortState` rather than restating it.
+* `frontend/src/components/StandardFilterBar.tsx` — renders the `Sort by` select (`aria-label="Sort
+  rows by"`, with a real **Report order** option so a sort is undoable without a reload).
+* `frontend/src/app/(platform)/commcalc/_lib/repIncentiveSort.ts` — the report's declaration, nothing
+  else.
+* **Tests, written before the code (project directive 2026-10-28):**
+  `frontend/src/lib/__tests__/standard-sort.test.ts` (14 units — the rules, the refusals, three
+  tenants' store spellings, and that `'104-08 Lefferts Blvd'` sorts as a street and not as the number
+  104); `frontend/src/components/__tests__/StandardFilterBar.sort.test.tsx` (7 component tests in
+  jsdom — the control appears only where fields were declared, emits only `sort`, shows the current
+  sort back, and Clear restores report order);
+  `frontend/src/app/(platform)/commcalc/_lib/__tests__/repIncentiveSort.test.ts` (12 — the two
+  declarations over mixed-case names and three tenants' store vocabularies, **plus the source locks**).
+* **The locks** (same file, §"the page cannot stop dereferencing the shared sort"): the page must hand
+  its declaration to the bar, must order **both** tables through `sortStandard`, must toggle the
+  **same** state from its headers, and must contain **no comparator of its own**. Comment lines are
+  stripped before matching, per the §CORE-27 lesson that a page can otherwise satisfy a source check
+  by *talking* about the thing. Three mutations were run and each turned the suite red.
+* **The 2026-08-10 header-sort ratchet moved down one.** `/commcalc/reports` was line 133 of
+  `frontend/table_sort_pending.txt` — a data table with no sorting at all, which is exactly what the
+  owner hit. Its line is deleted and `harness_table_sort_lock.PINNED_MAX` re-pinned **217 → 216**,
+  downward, as that register requires. The lock caught this itself: wiring the page turned check (b)
+  red ("already sorted, still listed") until the line went.
+* **Also fixed, because it blocked the component test:** `frontend/vitest.config.ts` now supplies
+  non-secret `NEXT_PUBLIC_SUPABASE_*` values. `lib/client` builds its Supabase client at import time
+  and threw `supabaseUrl is required`, which made **every** component that imports it unrenderable in
+  a test — the filter bar among them. The host does not exist and `tests/setup.ts` still makes any real
+  `fetch` throw, so the no-network promise is unchanged.
+
+### §CORE-28.6 Every tenant
+
+Nothing here is per-tenant by construction, and that is the point to keep: the bar never spells a
+store, a market or a person. The option lists come from `optionsFromRows` over the rows the caller
+already loaded (org-scoped by the caller's JWT), the sortable fields come from the report's
+declaration, and the values come from the rows — so Cellfonz's `B-1115`, LuxeLink's
+`104-08 Lefferts Blvd` and a Vzone shop name each order under their own vocabulary. The tests assert
+both halves: each shape orders correctly, and no tenant's spelling decides another's order. A row with
+no value for the sorted column sinks to the bottom in **both** directions (`table-sort`'s empties-last
+rule) — "no answer" is not "first alphabetically", the same posture as §COMMCALC-09 on a figure nobody
+recorded.
+
+### §CORE-28.7 Not money, and what is still owed
+
+No endpoint, no table, no migration, no figure. Sorting reorders rows the browser already holds; every
+total on both tables is a sum and cannot move. A page that paginates server-side would have to sort
+server-side — `sortRows` cannot see rows it was not given — and none of the surfaces here does.
+
+**Still owed, as the owner framed it ("the rest as we go along"):** the other 127 report routes declare
+no `sortFields` yet, so they render no sort control. Each is a one-line declaration, and the right time
+is the batch that lowers `FILTER_OWES_MAX` in §CORE-27.4 — the two asks are the same wiring visit.
+
+**Cross-refs:** §3d (RULE FIVE — the shared bar) · §CORE-27 (every report carries the filters and the
+send bar) · §COMMCALC-03.20 (the month-dropdown defect in this same component) · §COMMCALC-09 (a
+column no writer filled is not a zero) · §CORE-17.3d (the drill panels narrowed to the rows on screen)
+· §19.18 (one fact, one home, dereferenced).
+
+## §CORE-29. AN APP CAN ALWAYS SAY WHICH CODE IT IS RUNNING — one home for the running bundle (measured 2026-10-31)
+
+Between 2026-09-11 (when over-the-air updates were wired, PR #221) and 2026-10-31, a merged,
+published, correct mobile fix did not reach an installed phone — and **nothing anywhere said so.**
+EAS was serving the update: the installed build listens to channel `production`, that channel points
+at branch `production`, and the newest group on that branch carried the fix. The app kept running the
+bundle built into the binary. `expo-updates` does exactly that when an update cannot be applied — it
+reverts to the embedded bundle so the app still opens — and it does it in silence, by design.
+
+Six weeks of guessing followed, and two of this session's own diagnostic workflows had to be fixed
+before either could answer, because the only surface that knew the truth never showed it.
+
+### §CORE-29.1 Duplicate check (the build gate)
+
+Searched the index for an existing home for "which code is this app running" and for any
+version/build display on a mobile surface: there is none. §CORE-26.6 owns *publishing* an update from
+GitHub and §CORE-26.7 records the diagnosis of this incident, but neither answers the question from
+inside the app. `mobile/src/config/env.ts` reads `expo-constants` for `extra` and is a different
+question (which backend am I talking to), so it is left alone rather than widened. Nothing was
+duplicated; §CORE-26.7's finding is what this section acts on.
+
+### §CORE-29.2 The class, not the instance
+
+The instance is "a September fix did not reach one phone". The class is **"the running app could not
+state which code it was running"** — so every absence looked identical: not published, published to
+the wrong channel, wrong runtime, not downloaded, downloaded and discarded. An absence needs the
+RIGHT reason, the same lesson §COMMCALC-44 records about a $0.00 chargeback.
+
+So the fix is not a retry and not a nag. It is a FACT with one home that every surface dereferences:
+
+| | |
+| --- | --- |
+| **The rule** | `mobile/src/lib/running-bundle.ts` — `describeRunningBundle(facts)`, `BUNDLE_UNKNOWN`, `EMBEDDED_LABEL`. Pure, imports **nothing**, which is what lets it be proved in CI with no device, no build and no network. |
+| **The facts** | `mobile/src/lib/useRunningBundle.ts` — the ONLY file in the app that imports `expo-updates`. Every read is defensive, and a read that throws is itself rendered rather than taking the screen down. |
+| **The surface** | `mobile/app/(app)/(tabs)/settings.tsx` → a "This app" card that renders the rule's own `lines`, never fields it picked out and re-labelled. |
+| **The lock** | `backend/harness_running_bundle_lock.py` — 34 checks, every one with a negative control. |
+
+Three promises, each with a test:
+
+1. **No value is ever blank.** An absent fact reads as `not reported`, in words. A blank is what hid
+   this for six weeks, so the last resorts are asserted non-empty in the source, not just in a test.
+2. **It never claims an update is running when the embedded bundle is.** `Running` reads
+   `The bundle built into the app`, and `Published` reads `with the app` — it does not date an update
+   it is not running.
+3. **When the app is behind, it says so and says why.** `behind` is true only when the build *can*
+   take updates (updates enabled AND a channel) and is nevertheless on the embedded bundle — which
+   is precisely the silent-revert symptom, and the only state a user can act on. A build never wired
+   for updates is not flagged; it gets its own sentence instead.
+
+The card also shows **the binary and the bundle separately** — `App build` from
+`Constants.nativeAppVersion`/`nativeBuildVersion`, `Bundle SDK` from `expoConfig.sdkVersion`. That is
+the one line that would have surfaced this on day one: on 2026-10-31 EAS recorded the installed build
+as **SDK 57.0.0** while the repository declared, then and now, **Expo SDK 52 / React Native 0.76.5**
+(lockfile: `expo` 52.0.49, `expo-updates` 0.26.19). Those cannot both describe one app, and nothing
+on the phone could have said which was true. **Reported, not patched** — see §CORE-26.7.
+
+### §CORE-29.3 The over-the-air compatibility policy is PINNED, not merely configured
+
+`runtimeVersion` is the only thing standing between a build and an update it cannot run, so the
+harness pins it (`PINNED_RUNTIME_POLICY`, R6.2) the way `harness_db_resilience.py` pins its version
+and route count. Today it is `appVersion`, which ties the key to the hand-typed `version: '0.1.0'`
+and therefore carries **no information about the native runtime**: EAS will serve a mismatched update
+and `expo-updates` will discard it in silence. `fingerprint` hashes the real native dependency set
+and refuses instead; it is supported here (`@expo/fingerprint` 0.11.11, and the `@expo/config-types`
+enum allows it).
+
+**It has deliberately NOT been switched yet**, and the reason is recorded so nobody re-derives it:
+adopting `fingerprint` stops updates reaching the *existing* binary, which is right if the SDKs
+genuinely mismatch and wrong if they do not. The discriminating test is free — two cold starts, since
+`fallbackToCacheTimeout` defaults to 0 and nothing here overrides it, so new JavaScript only appears
+on the launch *after* the one that downloaded it. That test was put to the owner on 2026-10-31.
+Changing the policy means editing the pin and saying why in the PR.
+
+### §CORE-29.4 What the lock refuses
+
+- The rule losing its purity (an import in `running-bundle.ts`), which would end its CI proof.
+- A **second** file importing `expo-updates`, or any file outside the one home deriving
+  `isEmbeddedLaunch` / the embedded label for itself.
+- Settings picking fields out instead of rendering the rule's `lines`, or dropping the note.
+- Settings reaching for `expo-updates` / `expo-constants` directly.
+- Any last resort becoming the empty string again, including the build line's funnel into
+  `BUNDLE_UNKNOWN`.
+- `runtimeVersion` drifting from its pin, or being declared more than once, or `updates.url` going.
+- A deleted test: the four promises are named in the harness, so losing one fails the build.
+
+Each check is re-run against text carrying the defect and must FAIL there, so a check that has
+silently stopped looking is itself a failure. The four live defects were each injected and caught
+before merge: Settings un-dereferenced (R4.2), a blank sentinel (R3.2), an impure rule (R2.1 + R5.1),
+and a quiet policy change (R6.2).
+
+### §CORE-29.5 Every tenant
+
+Nothing here reads a tenant's vocabulary or data, so the 2026-10-30 cross-tenant directive is
+satisfied trivially — but note *why* it matters that this shipped: the surface it makes visible is
+the one that carried a cross-tenant defect (§CORE-26) to a phone and then hid the repair.
+
+### §CORE-29.6 Not money
+
+No migration, no schema change, no money path. One new pure module, one new native-read module, one
+new card on an existing screen, one new harness. 11 new unit tests (24 in `mobile/` in all).
+
+**Cross-refs:** §CORE-26 (the label defect this carried, and hid) · §CORE-26.6 (publishing an update
+from GitHub) · §CORE-26.7 (the diagnosis that produced this section) · §COMMCALC-44 (an absence needs
+the right reason) · §CORE-13 (a harness that fails the build) · §19.18 (one fact, one home,
+dereferenced).

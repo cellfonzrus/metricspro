@@ -1,0 +1,121 @@
+name: mobile over-the-air diagnose
+
+# WHY AN UPDATE DID NOT REACH A PHONE — the read-only half of §CORE-26.6.
+#
+# 2026-10-31: two publishes succeeded (`production` and `preview`, both green) and the owner's
+# TestFlight phone still showed the old JavaScript. Three candidate causes were eliminated from the
+# repository alone — the build postdates OTA being wired (11 Sep), its version is `0.1.0` so the
+# runtime key matches, and both channels were published. What is left can only be read from EAS:
+# which channel the installed build actually carries, and whether that channel is linked to the
+# branch the publish wrote to (a channel and a branch share a name by convention, not by rule).
+#
+# Nobody could see that. The publish workflow holds the only credential, and GitHub's job logs are
+# not readable from every environment. So the facts are gathered here and POSTED AS A COMMENT on an
+# issue, which is readable by anyone working on this and needs no Expo account of their own.
+#
+# READ-ONLY by construction: every command is a `:list` or `:view`. This workflow cannot publish,
+# build, submit or delete, and it is never triggered automatically.
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Issue or PR number to post the report to"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  diagnose:
+    name: Ask EAS what it actually has
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Is this repository allowed to ask?
+        id: gate
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "${EXPO_TOKEN}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "No \`EXPO_TOKEN\` secret is set, so nothing was read." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v5
+        if: steps.gate.outputs.ready == 'true'
+        with: { node-version: "20", cache: npm, cache-dependency-path: mobile/package-lock.json }
+
+      # REQUIRED, and its absence is what the first run of this workflow actually found (2026-10-31):
+      # every EAS command died with `Error reading Expo config at mobile/app.config.ts: Unexpected
+      # token '{'`. The config is TypeScript, and the loader that transpiles it comes from the
+      # project's own dependencies — so a job that skips `npm ci` cannot read the config, and every
+      # command that needs it fails identically no matter what is actually wrong in EAS. The publish
+      # workflow installs first, which is why publishing worked while asking questions did not.
+      - name: install the project (the Expo config is TypeScript and needs its own loader)
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: mobile
+        run: npm ci
+
+      - name: install the EAS CLI
+        if: steps.gate.outputs.ready == 'true'
+        run: npm install -g eas-cli@latest
+
+      # Each command is allowed to fail on its own: a missing channel is itself the answer, and one
+      # unavailable fact must not cost us the other four.
+      - name: read what EAS has
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          report=../report.md
+          {
+            echo "## Over-the-air diagnosis"
+            echo
+            echo "_From \`${GITHUB_SHA::7}\`, read-only. Every command below is a list or a view._"
+            echo
+            echo "\`eas --version\`: \`$(eas --version 2>&1 | head -n 1)\`"
+          } > "$report"
+          say() {
+            {
+              echo
+              echo "### $1"
+              echo
+              echo '```'
+              shift
+              "$@" 2>&1 | head -n 60 || echo "(command failed — that may itself be the answer)"
+              echo '```'
+            } >> "$report"
+          }
+          # The decisive one: a build row carries the CHANNEL it was stamped with and the RUNTIME it
+          # will accept. An update is invisible to a build unless both match what was published.
+          say "The most recent builds (channel + runtime is what an update must match)" \
+            eas build:list --limit 5 --non-interactive
+          say "Channels, and the branch each one points at" \
+            eas channel:list --non-interactive
+          say "Branches" \
+            eas branch:list --non-interactive
+          say "The most recent updates published" \
+            eas update:list --limit 10 --non-interactive
+          echo "report<<EOF" >> "$GITHUB_ENV"
+          cat "$report" >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: post it where it can be read
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.issue }}
+        run: gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$report"

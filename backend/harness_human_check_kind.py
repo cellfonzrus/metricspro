@@ -232,6 +232,55 @@ for fn in ("begin_login", "begin_login_b2bsoft"):
 ok(VP_SRC.count("human_check_blocked_message(page)") >= 2,
    "both siblings dereference the same home")
 
+print("\n— H. a prefill that could not fill does not report that it did —")
+# Owner, 2026-10-31: the UPS reporting portal's sign-in screen with the user id and password empty.
+# The challenge false-positive that kept him off the form is locked by harness_portal_page_verdict
+# §I; THIS is the half that made the screen unexplainable — the invisible wording asserted "Your
+# details are filled in" while prefill_login swallowed every failure and returned nothing.
+ok(callable(getattr(vp, "prefill_login", None)), "the fill exists")
+ok(vp.PREFILL_FIELDS == ("account id", "user id", "password"),
+   "the three field names are declared once, in the operator's words")
+ok(vp.PREFILL_REQUIRED == ("user id", "password"),
+   "an account id the portal never asks for is not a shortfall (the UPS form is user + password)")
+for k in ("filled", "no_value", "no_control", "ok"):
+    ok(k in vp._prefill_report(), "the report carries %r" % k)
+ok(vp._prefill_report(filled=["password"], no_value=["user id"])["ok"] is False,
+   "a shortfall is not ok")
+ok(vp._prefill_report(filled=["user id", "password"])["ok"] is True, "a complete fill is ok")
+rep_broken = vp.prefill_login(None, None, None, None, "u", "p")
+ok(rep_broken["ok"] is False and sorted(rep_broken["no_control"]) == ["password", "user id"],
+   "a driver that answers nothing reports BOTH fields unfilled rather than claiming a fill",
+   rep_broken)
+ok("def _put(" in VP_SRC and VP_SRC.count("el.type(str(value), delay=25)") == 1,
+   "ONE typing rule, shared with drive_typed_login — two copies is how one path stops working")
+ok("input_value()" in VP_SRC,
+   "a fill is proved by reading the box back, not by the fill call not raising")
+# The operator's words.
+ok(callable(getattr(ll, "_prefill_note", None)), "there is ONE home for what is in the form")
+for kind, m in ll._HUMAN_CHECK_MESSAGE.items():
+    ok("filled in" not in m.lower(),
+       "the %s wording no longer asserts a fill it never looked at" % kind, m)
+ok("filled in" in ll._prefill_note(vp._prefill_report(filled=["user id", "password"])).lower(),
+   "a fill that HAPPENED is confirmed")
+_nv = ll._prefill_note(vp._prefill_report(filled=["password"], no_value=["user id"]))
+_nc = ll._prefill_note(vp._prefill_report(filled=["password"], no_control=["user id"]))
+ok("user id" in _nv.lower() and "saved" in _nv.lower(),
+   "nothing saved sends the operator to the login's settings", _nv)
+ok("user id" in _nc.lower() and _nc != _nv,
+   "a control that could not be found is a DIFFERENT sentence — two causes, two places", _nc)
+ok(ll._prefill_note(None) == "" and ll._prefill_note({}) == "",
+   "no report says NOTHING rather than claiming a fill")
+ok("filled in" not in ll._prefill_note(vp._prefill_report()).lower(),
+   "a fill with nothing to fill makes no claim either")
+# The wiring. Writing the registry and not reading it has happened three times here (index §19.18).
+drive_h = LL_SRC[LL_SRC.index("def _drive("):]
+drive_h = drive_h[:drive_h.index("\n    def ", 10)]
+ok("prefill_login(" in drive_h, "the live session still pre-fills on the human-driven path")
+ok("_prefill_note(" in drive_h, "...and READS the report it gets back — the wiring, locked")
+ok("filled in" not in drive_h, "with no wording spelled at the call site")
+ok(LL_SRC.count("def _prefill_note(") == 1 and LL_SRC.count("_PREFILL_NOTE = {") == 1,
+   "one home for the sentence, one home for its words")
+
 print("\n— G. controls —")
 ok(vp._INVISIBLE_MARK == ("data-size", "invisible") and vp._ARMED_MARK == "data-callback",
    "the two marks are declared, not spelled at the call site")

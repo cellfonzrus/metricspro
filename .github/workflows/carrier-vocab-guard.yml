@@ -638,7 +638,7 @@ on:
       # index §56 — one home for a chart's plain-language caption; every Trends chart card wired
       - "backend/harness_trends_chart_notes.py"
       - "frontend/src/components/ChartNote.tsx"
-      # index §CORE-27 — the COMPANY-PICKER label lock (owner report 2026-10-30). Sibling of the
+      # index §CORE-26 — the COMPANY-PICKER label lock (owner report 2026-10-30). Sibling of the
       # scope display-name lock below: same rule, different registry.
       - "backend/harness_company_label_lock.py"
       - "backend/app/modules/core/tenant_identity.py"
@@ -649,6 +649,13 @@ on:
       - "mobile/app/choose-company.tsx"
       - "mobile/app/(app)/(tabs)/settings.tsx"
       - "frontend/src/app/login/page.tsx"
+      # index §CORE-29 — the RUNNING-BUNDLE lock: the app can always say which code it is running,
+      # and the over-the-air compatibility policy is pinned (measured 2026-10-31).
+      - "backend/harness_running_bundle_lock.py"
+      - "mobile/src/lib/running-bundle.ts"
+      - "mobile/src/lib/useRunningBundle.ts"
+      - "mobile/src/lib/running-bundle.test.ts"
+      - "mobile/app.config.ts"
       # index §13b.1 — the scope DISPLAY-NAME lock + proofs (owner report 2026-10-03)
       - "backend/harness_scope_label.py"
       - "backend/harness_scope_label_lock.py"
@@ -1646,9 +1653,12 @@ jobs:
       - name: Run the chart-caption lock (every Trends chart says what a move MEANS; one home, ungated — index §56)
         working-directory: backend
         run: python3 harness_trends_chart_notes.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the company-picker label lock (one home for what a human calls a company; no `… || org_id`; both halves run and compared — index §CORE-27)
+      - name: Run the company-picker label lock (one home for what a human calls a company; no `… || org_id`; both halves run and compared — index §CORE-26)
         working-directory: backend
         run: python3 harness_company_label_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the running-bundle lock (the app can say which code it is running; the OTA compatibility policy is pinned — index §CORE-29)
+        working-directory: backend
+        run: python3 harness_running_bundle_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the scope display-name lock (one home for a scope's name; no `scope_label || scope_key`; every finance surface wired — index §13b.1)
         working-directory: backend
         run: python3 harness_scope_label_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
@@ -3329,6 +3339,26 @@ jobs:
   # device-department vocabulary that sit on money paths — reported, not quietly fixed, because
   # restating which lines those surfaces treat as a device is a change to booked figures and is the
   # owner's call. That register may only shrink. Stdlib only, DB-free.
+  # ONE PHONE IS ONE ROW, AND THE ORDERING CATALOG IS NOT THE SOLD-LINE CLASSIFIER (index
+  # COMMCALC-49.11 / COMMCALC-49.12). Two facts this report needed were one careless line away from
+  # being written twice: "which sold lines are the same phone", which every model report could
+  # answer with its own string-strip, and "what kinds of accessory exist", whose module sits ONE
+  # WORD away from the classifier of SOLD accessory lines - writing the feature overwrote that
+  # module once before the name was fixed. The lock also holds the grid down: every style column
+  # foots to its row, the consolidated lines foot to their category, and an absence is a reason
+  # rather than a zero. Stdlib only, DB-free.
+  accessory-order-grid-one-home:
+    name: Accessory order grid lock (one phone, one row; the catalog is not the classifier)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the one-home lock (the model family and the ordering catalog - index COMMCALC-49.11 / COMMCALC-49.12)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_accessory_order_grid.py | tail -45 | tee -a "$GITHUB_STEP_SUMMARY"
+
   demand-projection-one-home:
     name: Demand-projection one-home lock (one answer to "how many will sell next")
     runs-on: ubuntu-latest

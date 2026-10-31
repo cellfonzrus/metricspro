@@ -300,6 +300,48 @@ for vendor in ("ups", "cloudflare", "akamai", "vidapay", "t-cetra", "b2bsoft", "
 check("H9 the Cloudflare conjunction that remains is a SHAPE, not a vocabulary",
       SWEEP.count('"cloudflare" in body') == 1 and "ray id" in SWEEP)
 
+# ── §I a page showing the FORM has served nothing instead of it ─────────────────────────────────
+print("\n§I the form question (owner report 2026-10-31 — the UPS reporting portal's own sign-in page)")
+
+# The page, as measured: a working Username + Password form whose MARKUP says "captcha" nine times
+# (the reCAPTCHA include, a renderCaptcha flag, three comments, and an invisible armed widget).
+FRS = open(os.path.join(HERE, "tests/fixtures/frs_signin_excerpt.html")).read().lower()
+
+check("I1 the page's markup really does carry the marker (fixture guard)", "captcha" in FRS)
+check("I2 ARMED: without the form question it reads as a CHALLENGE — the defect, reproduced",
+      (pb.page_verdict(FRS) or {}).get("kind") == pb.CHALLENGE_KIND)
+check("I3 ...and with the form present there is NO verdict",
+      pb.page_verdict(FRS, form_present=True) is None)
+check("I4 the rule is in the vocabulary's home, not at a call site",
+      "def page_verdict(text, refusal=None, challenge=None, form_present" in BACKOFF)
+check("I5 the ONE reader passes it",
+      re.search(r"_pb\.page_verdict\(.{0,160}?form_present=login_form_present\(page\)", SWEEP, re.S)
+      is not None)
+check("I6 there is ONE home for 'is the form here', and it is the same password-frame answer "
+      "_wait_for_password already acts on",
+      re.search(r"def login_form_present\(page\):(.|\n)*?_password_frame\(page\)\[1\]", SWEEP)
+      is not None)
+check("I7 no caller keeps its own form test",
+      SWEEP.count("def login_form_present(") == 1
+      and SWEEP.count("form_present=login_form_present(page)") == 1)
+check("I8 the Cloudflare conjunction obeys the same rule (the way the defect would walk back in)",
+      re.search(r"if login_form_present\(page\):\s*\n\s*return False\s*\n\s*body = _page_text",
+                SWEEP) is not None)
+check("I9 a formless challenge page is untouched — cf markers ARE markup fingerprints",
+      (pb.page_verdict("<script src='/cdn-cgi/challenge-platform/x'></script> just a moment")
+       or {}).get("kind") == pb.CHALLENGE_KIND)
+check("I10 the owner's UPS BILLING refusal (section A) is untouched: it shows no form",
+      (pb.page_verdict(UPS) or {}).get("kind") == pb.REFUSAL_KIND)
+check("I11 one rule, both kinds — a refusal marker is withheld on a form page too",
+      pb.page_verdict("access denied", form_present=True) is None)
+check("I12 a TENANT's own configured challenge words obey it (RULE TWO: the seeds are not special)",
+      pb.page_verdict(FRS, challenge=["captcha", "robot check"]) is not None
+      and pb.page_verdict(FRS, challenge=["captcha", "robot check"], form_present=True) is None)
+check("I13 the form question defaults to FALSE, so a caller that has not looked keeps the old answer",
+      pb.page_verdict("access denied") is not None)
+check("I14 whether a human check GATES the submit is still answered by its own DOM home",
+      "def human_check(page)" in SWEEP and "_widget_is_armed_invisible" in SWEEP)
+
 # ── §Z armed negative controls — each check is planted with its own defect ──────────────────────
 print("\n§Z negative controls")
 

@@ -22,9 +22,12 @@ import DateField from '@/components/DateField'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 import MarketStorePicker from '@/components/MarketStorePicker'
 import { apiCached, LOOKUP } from '@/lib/cache'
-import type { StandardFilterValue } from '@/lib/standard-filters'
+import type { SortFieldDecl, StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
-import { isStandardFilterActive, monthSelectValue, monthNeedsOwnOption } from '@/lib/standard-filters'
+import {
+  isStandardFilterActive, isStandardSortActive, monthSelectValue, monthNeedsOwnOption,
+  parseSortSelect, sortSelectOptions, sortSelectValue,
+} from '@/lib/standard-filters'
 
 type OptIn = EntityOption[] | string[] | undefined
 const toOpts = (o: OptIn): EntityOption[] =>
@@ -55,6 +58,13 @@ export type StandardFilterBarProps = {
   cascadeStores?: StoreOpt[]
   /** Fetch stores/markets/reps from an org-scoped endpoint returning {stores,markets,reps}. Options props win. */
   optionsUrl?: string
+  /** SORT BY (owner ask 2026-10-31, §CORE-28) — the sortable fields THIS report declares, each with
+   *  the label the user reads and the cell to compare. Omitted or empty renders no sort control at
+   *  all: the bar has no column list of its own, because a default list would be one report's (or
+   *  one tenant's) vocabulary answering for every other one. The chosen sort lands in
+   *  `value.sort`, and the page orders its rows with `sortStandard(rows, value, fields)` — the same
+   *  state a sortable column header toggles, so the dropdown and the headers always agree. */
+  sortFields?: SortFieldDecl[]
   /** Appended module-specific controls (allowed; never replaces the core set). */
   right?: React.ReactNode
   storeLabel?: string
@@ -65,7 +75,7 @@ export type StandardFilterBarProps = {
 export default function StandardFilterBar({
   value, onChange, show, periodMode = 'month', periods, storeOptions, marketOptions, repOptions,
   optionsUrl, right, storeLabel = 'Stores…', marketLabel = 'Markets…', repLabel = 'People…',
-  cascadeStores,
+  cascadeStores, sortFields,
 }: StandardFilterBarProps) {
   const s = { period: true, stores: true, markets: true, reps: true, ...(show || {}) }
   const [fetched, setFetched] = useState<{ stores?: EntityOption[]; markets?: EntityOption[]; reps?: EntityOption[] }>({})
@@ -90,7 +100,11 @@ export default function StandardFilterBar({
   const repOpts = useMemo(() => (repOptions ?? fetched.reps ?? []), [repOptions, fetched.reps])
 
   const set = (patch: Partial<StandardFilterValue>) => onChange({ ...value, ...patch })
-  const active = isStandardFilterActive(value, periodMode === 'range')
+  // A SORT IS NOT A NARROWING, but it IS something the Clear button must be able to undo — otherwise
+  // the only way back to the report's own order is a reload. So Clear appears for either, and resets
+  // both; `isStandardFilterActive` itself stays untouched, so no page starts claiming rows are hidden.
+  const sortOpts = useMemo(() => sortSelectOptions(sortFields || []), [sortFields])
+  const active = isStandardFilterActive(value, periodMode === 'range') || isStandardSortActive(value)
   // An EMPTY roster is not cascade mode — otherwise a page whose roster is still loading would render no
   // store/market control at all and silently fall back to nothing, instead of the plain pickers.
   const cascade = !!(cascadeStores && cascadeStores.length)
@@ -145,13 +159,27 @@ export default function StandardFilterBar({
       {s.reps && repOpts.length > 0 && (
         <EntityPicker multi options={repOpts} value={value.reps} onChange={ids => set({ reps: ids })} placeholder={repLabel} width={190} ariaLabel="Filter by person" />
       )}
+      {/* SORT BY — only when the page declared what is sortable (see `sortFields`). "Report order" is a
+          real option, not a placeholder: it is how a user undoes a sort without reloading. */}
+      {sortOpts.length > 0 && (
+        <label style={lbl}>Sort by
+          <select style={sel} aria-label="Sort rows by" value={sortSelectValue(value.sort)}
+            onChange={e => set({ sort: parseSortSelect(e.target.value) })}>
+            <option value="">Report order</option>
+            {sortOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </label>
+      )}
+      {/* A module's own controls sit WITH the core set (owner 2026-10-31: *"it should be next to the
+          filters"*), and Clear is last on every bar — a button that appears and disappears in the
+          middle of a row shifts everything to its right each time a filter is picked. */}
+      {right}
       {active && (
         <button className="btn btn-secondary" style={{ fontSize: 12 }}
-          onClick={() => onChange({ period: periodMode === 'range' ? '' : value.period, periodTo: '', stores: [], markets: [], reps: [] })}>
+          onClick={() => onChange({ period: periodMode === 'range' ? '' : value.period, periodTo: '', stores: [], markets: [], reps: [], sort: null })}>
           Clear filters
         </button>
       )}
-      {right}
     </div>
   )
 }
