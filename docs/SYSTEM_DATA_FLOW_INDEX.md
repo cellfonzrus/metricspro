@@ -7979,6 +7979,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"What page does a receipt print on?"** (every layout, every medium that goes through a browser; owner 2026-10-29) | nothing — it is a property of the PAGE, and no stylesheet here declared one | **ONE home** `sale_receipt.PAGE_CSS` (`@page { size: auto; margin: 0; }`), emitted by `thermal_html` and dereferenced by `receipt_formats/render._page_css`. Without it a browser stamps its own header and footer over the receipt — the date and time of the PRINTING, the document title centred above it, the URL and the page number — which is what the owner saw and read as a reprint stamp contradicting the sale's own date. Each layout then sets its own print padding so the ink does not run to the sheet's edge. Proof `harness_pos_receipt_render.py` §S (12 checks + 2 negative controls) — §POS-11 |
 | **"Does this customer's record hold an address at all?"** (the till print screen and the Sale Log reprint; owner 2026-10-29) | `pos.customers` through `customer_bill_to.FIELDS` | **ONE home** `customer_bill_to.view` → `{lines, on_file, note}`, dereferencing `lines` / `has_address` rather than re-deriving either. The Bill To already printed the address (§POS-07); what was missing was upstream — the till's quick-add customer form asked for a name, a phone and an email and NOT for an address, so a record created at the register could never carry one (measured live 2026-10-29: **1 of 1,636** customer records on the reporting tenant held one). The form now asks for every field `FIELDS` names (§S10 fails the build if it stops), and until a record has one the CASHIER is told, never the customer's receipt — §POS-11 |
 | **"May this rung sale be edited, and with what lines?"** (the Sale Log offering the button, the endpoint allowing it, the till before it saves; owner 2026-10-29) | `pos.sales` + `pos.sale_items` + the declared window on `pos.pos_settings` | **ONE home** `sale_amendment.refusal` / `plan` / `cart_from`, dereferenced by all three callers. Before this there was no amend path at all: `pos.checkout` and `pos.void_sale` (mig 725) were the only two sale functions and the Sale Log's item table was display-only. Every refusal is a SENTENCE, written once, so two screens cannot word one refusal differently. Proof `harness_pos_sale_amendment.py` §A/§G — §POS-12 |
+| **"How far back may THIS caller reopen a sale?"** (the Sale Log offering the button, the save allowing it, the sentence a refused cashier reads, the till banner; owner 2026-10-31) | the TWO declared windows on `pos.pos_settings` (`sale_reopen_window_days`, `sale_reopen_window_days_admin`) + whether the caller holds `pos_amend_any_day` | **ONE home** `sale_amendment.window_for`, dereferenced by both endpoints. §POS-12.6 had it as ONE number for the whole org, which assumed the reach of a rewrite is a property of the tenant alone; it is a property of the tenant AND the asker's standing. The rung is a GRANT KEY resolved by `_pos_grant`, never a role name (RULE TWO), and `_amend_elevated` fails closed. The elevated rung takes the GREATER of the two declarations, so a wider ordinary window can never leave an administrator reaching less far than a cashier — decided here, because a `max()` at a caller is a second answer. Proof `harness_pos_sale_amendment.py` §G/§A8b — §POS-12.9 |
 | **"What does this sale line come to?"** (the edit that restates it, and the totals it rolls up to) | the agreed figures on the line itself | **ONE home** `sale_amendment.line_money` / `totals`, DERIVED from the figures `pos.sale_items` already stores and reproducing transaction 4605's two lines to the cent. It was browser-only arithmetic before, and `pos.checkout` stores whatever it is handed — tolerable for a new sale, not for an edit whose purpose is to move those figures, so the server re-derives and the body's `extended_price` / `tax_value` / totals are DISCARDED. Tax rounds per line then sums, matching what each line stores. Proof §B — §POS-12 |
 | **"What did this sale look like before it was edited?"** (the audit trail that makes an in-place rewrite answerable) | `pos.sale_amendments` (mig **1103**) | **ONE home** `sale_amendment.snapshot` / `current_revision`, filed by `pos.amend_sale` BEFORE it touches anything. Keeps the sale's own STORED figures, never re-derived ones — the point is to record what the customer's receipt said, not what it should have said. A null `revision` reads as 1, so the first edit of an older sale still files the original. The endpoint returns 503 rather than editing when the table is absent. Proof §C — §POS-12 |
 | **"What was tendered against this sale, and what does moving its total leave outstanding?"** (the till before it saves, the save itself, the mismatch log report, and the voided sale nobody refunded; owner 2026-10-30) | `pos.sale_payments` + `pos.sales.total` / `.balance` + the declared band on `pos.pos_settings` | **ONE home** `sale_settlement.outstanding` / `tendered` / `expected`, dereferenced by all four callers. NOTHING compared these two tables before: `pos.amend_sale` (mig 1103) restates the total and `pos.void_sale` (mig 725) stands the sale down, and NEITHER touches the payment rows. An UNRECORDED tender answers `measured: False` with a reason and never $0.00 — 4,603 of the 4,605 live sales have no payment row, so reading absence as zero would have produced 4,603 mismatches. Compared against `total − balance`, never the bare total. Proof `harness_pos_sale_settlement.py` §A/§B/§C/§G — §POS-17 |
@@ -33118,10 +33119,12 @@ call sites so it cannot later look like an oversight.
 ### POS-12.6 Declared window, and a right of its own
 
 How far back a sale may be edited is **declared per org** — `pos.pos_settings` key
-`sale_reopen_window_days`, house default **1 day** (`sale_amendment.HOUSE_WINDOW_DAYS`), seeded
-nowhere. An edit changes a day's takings, and doing that to a day already reported is the one thing a
-cashier must not be able to do by accident. An unreadable declaration falls back to the house default
-and never to "forever".
+`sale_reopen_window_days`, house default **0 days / the same day only**
+(`sale_amendment.HOUSE_WINDOW_DAYS`), seeded nowhere. An edit changes a day's takings, and doing
+that to a day already reported is the one thing a cashier must not be able to do by accident. An
+unreadable declaration falls back to the house default and never to "forever".
+
+**Since 2026-10-31 the window is a function of the RUNG, not of the org alone — see §POS-12.9.**
 
 Editing is gated on **`pos_amend`**, not `pos_void`: rewriting a tendered record is a larger right
 than cancelling one, and unknown keys default to full-scope admin in `_pos_grant`, so this starts
@@ -33137,15 +33140,59 @@ out of date, so print them a fresh one.* The suspended-cart autosave is **off** 
 resumed hold cannot land on top of a sale being edited — either would offer the next session a cart
 for items already sold.
 
+### POS-12.9 How far back may THIS caller reach (owner ask 2026-10-31)
+
+Owner, asked for the one number §POS-12.6 wanted, gave **two**: *"30 days nback for the admin and
+same day for teh sales rep or store manager"*.
+
+**THE CLASS, NOT THE INSTANCE.** Not "add a second setting for admins". §POS-12.6 shipped the window
+as one declared number for the whole org, which encodes an assumption nobody had stated: that how
+far back a record may be rewritten is a property of the **tenant alone**. It is not — it is a
+property of the tenant AND the standing of the person asking, and the same shape recurs wherever a
+record can be reopened. So the window became a function of a rung, answered in one place.
+
+| Who | House window | Their own declaration |
+| --- | --- | --- |
+| an ordinary POS user (a rep, a store manager) | **0 — the day the sale was rung** | `sale_reopen_window_days` |
+| a caller holding `sale_amendment.ELEVATED_GRANT` | **30 days** | `sale_reopen_window_days_admin` |
+
+**THE RUNG IS A GRANT, NEVER A ROLE NAME.** RULE TWO: "admin", "sales rep" and "store manager" are
+words a *tenant* chooses, so they must not appear in a branch. What the code knows is whether the
+caller holds the POS permission key **`pos_amend_any_day`**, resolved by `_pos_grant`'s existing
+precedence — super-admin, then an explicit grant or denial, then a full-scope admin by default. So
+the owner's two numbers land with **no configuration at all** (a full-scope admin already holds the
+key; a scoped rep does not), an owner can revoke the longer reach from an otherwise-full role, and a
+tenant that wants a particular role to reach further grants the key in the Roles screen — a config
+row, not a code change. `_amend_elevated` **fails closed**: an unresolvable caller is not elevated.
+
+**ONE HOME FOR THE RECONCILIATION.** `sale_amendment.window_for(elevated, declared,
+declared_elevated)`. The two declarations are independent, so an org could declare 45 ordinary days
+and leave the elevated one at the house 30 — which would make an administrator's reach **shorter
+than a cashier's**. No declaration like that means that, so the elevated rung takes the greater of
+the two. Decided once, in the one home; a `max()` at a caller would be a second answer to the same
+question. `declared_window(value, house=…)` reads both settings, so the "unreadable never widens"
+rule is one implementation rather than two.
+
+**THE SENTENCE NAMES THE WAY FORWARD, BUT ONLY WHEN THERE IS ONE.** A cashier refused a five-day-old
+sale is told *"An administrator can still edit it for you."* Told that about a sale beyond the
+elevated window too, they would be sent to ask for something nobody can give, so the refusal says it
+only when the elevated window would in fact allow it — and never to a caller who already holds that
+window, which would send them to themselves. `refusal` also reads as English at zero: *"your role
+can only edit a sale **on the same day it was rung**"*, never "within 0 days".
+
+**THE TILL SAYS WHICH WINDOW IT IS WORKING UNDER.** The plan returns `window_days` and `elevated`,
+and the editing banner prints them. The client reads a missing `window_days` as **null, not 0** —
+0 is a real and meaningful window here, so coercing absence to it would state something false.
+
 ### POS-12.8 Files, locks, money
 
 | | |
 | --- | --- |
-| New | `pos/sale_amendment.py` · `database/migrations/1103_pos_sale_amendment.sql` · `harness_pos_sale_amendment.py` (89 checks) · `frontend/src/lib/pos-sale-amend.ts` · `backend/tests/unit/test_pos_sale_amendment.py` (28) · `backend/tests/integration/test_pos_sale_amend_endpoint.py` (16) |
+| New | `pos/sale_amendment.py` · `database/migrations/1103_pos_sale_amendment.sql` · `harness_pos_sale_amendment.py` (**97** checks) · `frontend/src/lib/pos-sale-amend.ts` · `backend/tests/unit/test_pos_sale_amendment.py` (28) · `backend/tests/integration/test_pos_sale_amend_endpoint.py` (16) · §POS-12.9: `backend/tests/unit/test_pos_amend_window_rung.py` (30) · `backend/tests/integration/test_pos_amend_window_rung_endpoint.py` (24) |
 | Changed | `pos/router.py` (+3 routes, `_amend_window` / `_amend_available` / `_sale_with_items`) · the register page (Sale Log edit button, editing mode, `cartItemFromLine` extracted, autosave gated) · `tests/fakes/supabase.py` (`seed_rpc`, and `rpc()` now returns a builder needing `.execute()` like the real client) · `harness_db_resilience.py` I0 re-pinned 1807 → 1810 |
 | Endpoints | `GET /pos/sales/{id}/amend-plan` (read-only) · `PUT /pos/sales/{id}/items` · `GET /pos/sales/{id}/amendments` |
 | Migration | **1103 — NOT APPLIED.** Money-touching (it adds the ability to change a recorded sale total), surfaced for owner approval |
-| Locks | §A one home for the rules, the router holding no second opinion · §B the body's figures never survive · §C the superseded version always kept, and the edit refused without it · §D stock reversed and re-applied by the existing paths, in that order · §E one cart vocabulary, one line→cart map shared by both loaders · §F the struck tax rate not restated · §G declared window, own grant, all three routes gated and org-scoped · §H the till says what is happening · §I ten negative controls |
+| Locks | §A one home for the rules, the router holding no second opinion (§A8b: the router does not reconcile the two windows itself; §A8c: it names no role, only a grant key) · §B the body's figures never survive · §C the superseded version always kept, and the edit refused without it · §D stock reversed and re-applied by the existing paths, in that order · §E one cart vocabulary, one line→cart map shared by both loaders · §F the struck tax rate not restated · §G both windows declared, the rung a grant, the elevated reach never shorter than the ordinary one, the refusal English at zero and pointing somewhere only when it can, all three routes gated and org-scoped · §H the till says what is happening · §I ten negative controls |
 | MONEY IMPACT | **The ability to change a recorded sale total, by design and by the owner's explicit choice.** No stored figure moves on apply; nothing is edited until a cashier with `pos_amend` edits it, inside the declared window, with the superseded version filed first |
 
 Same class: §POS-01 (the register's cart, whose vocabulary and line map this shares), §POS-11 (the
@@ -33573,9 +33620,11 @@ need the edit part to work"*).
 
 **THE FIRST HALF ALREADY WORKED, AND WAS VERIFIED RATHER THAN ASSUMED.** §POS-12 shipped the edit;
 mig 1103 was applied and verified against production on 2026-10-29; the window is DECLARED
-(`sale_amendment.WINDOW_SETTING`) and its house default of **one day already admits yesterday** —
-`refusal` refuses at `age > win`, so a sale rung yesterday (age 1, window 1) passes. Confirmed by
-running the real resolver, not by reading it:
+(`sale_amendment.WINDOW_SETTING`) and its house default **at that time** was one day, which already
+admitted yesterday — `refusal` refuses at `age > win`, so a sale rung yesterday (age 1, window 1)
+passed. Confirmed by running the real resolver, not by reading it. (The house default was later
+replaced by a PER-RUNG pair on the owner's instruction — §POS-12.9 — so the table below records what
+was true on 2026-10-30, not the window in force now.)
 
 | Sale rung | `age_days` | Verdict under the house window |
 |---|---|---|

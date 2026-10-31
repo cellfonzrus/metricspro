@@ -121,7 +121,11 @@ REPORT = (REPORT[1].split('@router.get("/reports/activations")', 1)[0] if len(RE
 # ── §A one home ──────────────────────────────────────────────────────────────────────────────────
 print("\n§A  one home for the comparison")
 ok("A1. the module answers it at all", S.outstanding(sale(), [pay("cash", 190.53)])["measured"])
-ok("A2. the amend region is bounded", 0 < len(REGION) < 14000)
+# RE-VERIFIED THEN RE-PINNED, never relaxed: 14,000 → 16,000 on 2026-10-31 for §POS-12.9, the
+# per-rung edit window. This bounds the SAME router region §POS-12's own harness bounds, so the two
+# pins move together or one of them stops meaning anything; at this re-pin the region was 14,671
+# characters and still stopped before /register/open (asserted there, on the same line).
+ok("A2. the amend region is bounded", 0 < len(REGION) < 16000, len(REGION))
 ok("A3. the report region exists and is bounded", 0 < len(REPORT) < 9000, len(REPORT))
 ok("A4. the save dereferences the one home for the comparison", "_settle.outstanding(" in REGION)
 ok("A5. the save dereferences the one home for the log row", "_settle.record(" in REGION)
