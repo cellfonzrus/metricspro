@@ -22,6 +22,11 @@ from app.modules.commcalc import epay_sweep as ES                      # noqa: E
 from app.modules.commcalc.safe_replace import safe_replace             # noqa: E402
 from harness_fakedb import FakeClient, FakeTable                        # noqa: E402
 
+#: A tenant's business timezone. A feed window's day comes from the ORG's zone, never the
+#: server's UTC day (index §COMMCALC-53), so `_expand_jobs` requires it and these checks supply
+#: one explicitly rather than letting the harness inherit the container's clock.
+TENANT_TZ = "America/New_York"
+
 import uuid as _uuid
 from datetime import timedelta as _td
 
@@ -82,28 +87,33 @@ check("D7 _recent_days crosses a month boundary",
 # ═══ E — registry-driven job expansion (Defect 1) ═══════════════════════════════════════════
 print("\n== E: _expand_jobs is driven by report_definitions ==")
 cfg3 = {"mi_report": {"refresh_months": 3}, "comp_report": {"refresh_days": 1}}
-mi_jobs = ES._expand_jobs(["mi"], cfg3)
+mi_jobs = ES._expand_jobs(["mi"], cfg3, tz=TENANT_TZ)
 check("E1 MI fans out to 3 months from the registry", len(mi_jobs) == 3, str(len(mi_jobs)))
 check("E2 MI months are current-first and distinct",
       len({j[1]["period"] for j in mi_jobs}) == 3, str([j[1]["period"] for j in mi_jobs]))
 check("E3 MI targets are month-kind", all(j[1]["kind"] == "month" for j in mi_jobs))
 check("E4 MI with NO registry row falls back to 1 month",
-      len(ES._expand_jobs(["mi"], {})) == ES.DEFAULT_REFRESH_MONTHS == 1)
+      len(ES._expand_jobs(["mi"], {}, tz=TENANT_TZ)) == ES.DEFAULT_REFRESH_MONTHS == 1)
 check("E5 registry refresh_months=1 means current month only",
-      len(ES._expand_jobs(["mi"], {"mi_report": {"refresh_months": 1}})) == 1)
+      len(ES._expand_jobs(["mi"], {"mi_report": {"refresh_months": 1}}, tz=TENANT_TZ)) == 1)
 check("E6 the old hard-coded constant is gone",
       not hasattr(ES, "COMP_REFRESH_MONTHS"), "COMP_REFRESH_MONTHS still exists")
 
-comp_jobs = ES._expand_jobs(["comp_report"], cfg3)
+comp_jobs = ES._expand_jobs(["comp_report"], cfg3, tz=TENANT_TZ)
 check("E7 comp is ONE job, not one per month", len(comp_jobs) == 1, str(len(comp_jobs)))
 check("E8 comp job is a day range", comp_jobs[0][1]["kind"] == "day_range", str(comp_jobs[0][1]))
-check("E9 refresh_days=1 -> begin == end == today",
-      comp_jobs[0][1]["begin"] == comp_jobs[0][1]["end"], str(comp_jobs[0][1]))
-wide = ES._expand_jobs(["comp_report"], {"comp_report": {"refresh_days": 5}})
+# The INTENT is "one day", read on `covers_through` — not on `end`, which under the house
+# end-exclusive boundary deliberately runs one day past the intent (§19.54). Asserting it on `end`
+# made this check stale the day that landed.
+check("E9 refresh_days=1 -> exactly one day, ending on the tenant's today",
+      comp_jobs[0][1]["begin"] == comp_jobs[0][1]["covers_through"]
+      and comp_jobs[0][1]["days"] == [ES.feed_today(TENANT_TZ).isoformat()],
+      str(comp_jobs[0][1]))
+wide = ES._expand_jobs(["comp_report"], {"comp_report": {"refresh_days": 5}}, tz=TENANT_TZ)
 check("E10 a wider window is still ONE portal run", len(wide) == 1)
 check("E11 and it spans 5 days", len(wide[0][1]["days"]) == 5, str(wide[0][1]["days"]))
 check("E12 payment_detail stays a single default pull",
-      ES._expand_jobs(["payment_detail"], cfg3) == [("payment_detail", None)])
+      ES._expand_jobs(["payment_detail"], cfg3, tz=TENANT_TZ) == [("payment_detail", None)])
 check("E13 comp registry_key/grain/filter wired",
       ES.REPORTS["comp_report"]["grain"] == "day"
       and ES.REPORTS["comp_report"]["filter"] == "daily_range"
@@ -216,7 +226,11 @@ try:
                         [{"Retailer Account": "1", "Payment Amount": "5"}], None)
     check("G12 rows with no Begin Date raise", False, "no raise")
 except ES.EpayPortalError as e:
-    check("G12 rows with no Begin Date raise a NAMED error", "Begin Date" in str(e), str(e)[:120])
+    # The check is that the error NAMES the missing field, not that it spells it the portal's way:
+    # the message quotes the column (`begin_date`), which is the same fact in the house's words.
+    check("G12 rows with no Begin Date raise a NAMED error",
+          "begin" in str(e).lower().replace("_", " ").replace("begin date", "begin"),
+          str(e)[:120])
 
 
 # ═══ H — scheduling ═════════════════════════════════════════════════════════════════════════
@@ -361,7 +375,7 @@ if os.environ.get("EPAY_LIVE") == "1":
             tmp.close()
             tgt = {"kind": "day_range", "begin": "2026-04-15", "end": "2026-04-15",
                    "days": ["2026-04-15"], "period": None}
-            res = ES._process_report(db, ORG, page, "comp_report", tmp.name, target=tgt)
+            res = ES._process_report(db, ORG, page, "comp_report", tmp.name, target=tgt, tz=TENANT_TZ)
             os.unlink(tmp.name)
             print("   L1 result:", json.dumps({k: v for k, v in res.items() if k != "days"}))
             check("L1 a real day pulls its rows", res["rows"] == 381,
@@ -382,7 +396,7 @@ if os.environ.get("EPAY_LIVE") == "1":
             before = len(tl.rows)
             tgt2 = {"kind": "day_range", "begin": "2026-08-07", "end": "2026-08-07",
                     "days": ["2026-08-07"], "period": None}
-            res2 = ES._process_report(db, ORG, page, "comp_report", tmp.name, target=tgt2)
+            res2 = ES._process_report(db, ORG, page, "comp_report", tmp.name, target=tgt2, tz=TENANT_TZ)
             os.unlink(tmp.name)
             print("   L6 result:", json.dumps(res2))
             check("L6 an unposted day returns mode=no_data, no exception",
