@@ -40931,6 +40931,15 @@ were fixed in the same PR.
 | The reported surface still loads, per tenant | `backend/tests/integration/test_productivity_insights_endpoint.py` |
 | The sibling surface still loads, per tenant | `backend/tests/integration/test_my_shelf_endpoint.py` |
 
+**Duplicate check (CLAUDE.md build gate) — why `core/module_graph.py` does not already cover it.**
+`app/modules/core/module_graph.py` is the one home for *which files answer the same question*, and
+it DERIVES its callers from the AST import graph, so it reads the very statements this defect lives
+in. It asserts that the declared facts are **interlinked with the index**, not that the imports
+**resolve**: a statement naming a package that does not exist contributes no edge and is not
+reported. `harness_ci_pipefail_lock` and `harness_test_discipline` gate the plumbing around tests,
+not the imports inside endpoints. So no existing mechanism answers "does this import resolve", and
+nothing was duplicated — the new check reads the same AST the graph does, for a different question.
+
 **The lock.** A unit test, so the existing `backend-unit` CI job gates it and nothing joins
 `harness_unrun_pending.txt`. It is **static**: `importlib.util.find_spec` locates a module without
 executing it, and the target module's own source is parsed for the names it defines — importing
