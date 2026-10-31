@@ -33,6 +33,7 @@ the P&L, the Balance Sheet, GP or commission payout while that decision is open.
 
     python3 backend/harness_vendor_rebate_landing.py
 """
+import ast
 import os
 import sys
 
@@ -216,7 +217,38 @@ _ALLOWED = {"app/modules/commcalc/column_mapping.py", "app/modules/commcalc/inge
             # 2026-09-20: the ONE consumers map names the table so an upload can say where it shows
             # (the read-only Vendor Rebate History page) — a label, not a reader; it queries nothing
             "app/modules/commcalc/landing_identity.py"}
+# MERELY BEING NAMED IN A DECLARATION IS NOT A REFERENCE. The allow-list above already carries one
+# entry on exactly that ground ("a label, not a reader; it queries nothing"), and 2026-10-31 added a
+# second such file — `core/relation_home.py`, the one home for which SCHEMA holds a relation, which by
+# construction names every table in the platform (index §CORE-30). So instead of a third hand-written
+# excuse, the rule now derives what "references the feed" means: the name appearing as an entry in a
+# module-level dict / set / list / tuple is a DECLARATION; the name appearing anywhere else — a query,
+# a call argument, an f-string, a comparison — is a REFERENCE and fails.
+#
+# This does not loosen what the lock guards. A module cannot read or book a feed it only lists in a
+# literal, and the four money modules are checked for the bare name below regardless, so a map entry
+# in coa.py would still be caught. Armed with a planted `.table("raw_vendor_rebate")` below.
+def _declaration_only(body):
+    """True when every mention of the feed in this file is an entry in a module-level data structure."""
+    try:
+        tree = ast.parse(body)
+    except SyntaxError:
+        return False                      # unparseable → treat as a reference, never excuse it
+    declared = set()
+    for node in tree.body:                # MODULE LEVEL only: a dict built inside a function is code
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(
+                getattr(node, "value", None), (ast.Dict, ast.Set, ast.List, ast.Tuple)):
+            for sub in ast.walk(node.value):
+                declared.add(id(sub))
+    for sub in ast.walk(tree):
+        if (isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+                and "raw_vendor_rebate" in sub.value and id(sub) not in declared):
+            return False
+    return True
+
+
 _readers = []
+_declared_only = []
 for base, dirs, files in os.walk(os.path.join(os.path.dirname(__file__), "app")):
     dirs[:] = [d for d in dirs if d != "__pycache__"]
     for fn in files:
@@ -228,8 +260,14 @@ for base, dirs, files in os.walk(os.path.join(os.path.dirname(__file__), "app"))
             body = open(full, encoding="utf-8").read()
         except Exception:
             continue
-        if "raw_vendor_rebate" in body and rel not in _ALLOWED:
-            _readers.append(rel)
+        if "raw_vendor_rebate" not in body or rel in _ALLOWED:
+            continue
+        (_declared_only if _declaration_only(body) else _readers).append(rel)
+ok(_declaration_only('SCHEMA_OF = {"raw_vendor_rebate": "commcalc"}\n')
+   and not _declaration_only('x.table("raw_vendor_rebate").select("*")\n')
+   and not _declaration_only('def f():\n    m = {"raw_vendor_rebate": 1}\n    return m\n'),
+   "the declaration test is armed: a module-level map reads as a declaration, a query does not, and "
+   "neither does a map built inside a function")
 ok(not _readers,
    f"NO module outside the landing path references commcalc.raw_vendor_rebate (found: {_readers or 'none'}) "
    f"— in particular none of account/coa.py, account/ma_store_pnl.py, account/device_cogs.py, "
