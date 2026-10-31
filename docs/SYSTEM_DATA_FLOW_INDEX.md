@@ -43358,6 +43358,24 @@ second hook into a Podfile that then does not parse. The rule is pure string wor
 6 unit tests with no Mac, no build and no network; `mobile/vitest.config.ts` now includes
 `plugins/**/*.test.ts` for exactly that reason.
 
+**A SECOND CORRECTION, after the third failure (EAS `3037ddb8`).** The first version of the plugin
+APPENDED its own `post_install do |installer|` at the end of the Podfile. That removed the Xcode
+deployment-target errors and broke the build one phase earlier instead: *"Unknown error. See logs of
+the Install pods build phase."* Expo's Podfile **already declares** a `post_install` inside the
+target block — it is where `react_native_post_install` runs and where resource-bundle code signing is
+turned off — and CocoaPods will not install a Podfile with two of them.
+
+Confirmed locally rather than guessed, which is the lesson worth keeping: `npx expo prebuild
+--platform ios --no-install` generates the real Podfile in this repository with no Mac and no
+network, and `grep -c 'post_install do |installer|'` returned **2** (lines 47 and 70). The corrected
+plugin injects the loop INSIDE the existing block, the same command now returns **1**, and `ruby -c`
+reports `Syntax OK`. Three builds were spent on a question that command answers in forty seconds.
+
+The plugin also now **throws** when its anchor is absent, so a future Expo template change fails
+loudly at prebuild instead of shipping a Podfile with no floor at all. R6.13–R6.16 refuse the
+regression directly: the plugin may never WRITE a `post_install`, it must inject at the anchor, it
+must keep the loud failure, and the test must COUNT hooks rather than merely check the loop exists.
+
 A `withDangerousMod` was chosen over vendoring an `ios/` directory because the app is managed and EAS
 prebuilds it on every build: there is no checked-in Podfile to edit, and a vendored one would have to
 be maintained by hand forever.

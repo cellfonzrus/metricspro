@@ -235,10 +235,33 @@ check("R6.10 the plugin only raises a floor", "current.to_f <" in plugin_src,
 # hooks is a Podfile that does not parse.
 check("R6.11 the plugin is idempotent", "MARKER" in plugin_src and "includes(MARKER)" in plugin_src,
       "a second prebuild must not stack a second post_install hook")
-check("R6.12 the plugin's rule is tested",
-      (MOBILE / "plugins/with-pod-deployment-floor.test.ts").exists(),
+plugin_tests = read(MOBILE / "plugins/with-pod-deployment-floor.test.ts")
+check("R6.12 the plugin's rule is tested", plugin_tests != "",
       "the Podfile rule is pure string work and must be proved without a Mac")
 control("R6.10", "current.to_f <" in "config.build_settings['X'] = '15.1'")
+
+# R6.13-R6.15 — the regression that cost build 3. The first version of this plugin APPENDED its own
+# `post_install do |installer|`, which removed the Xcode errors and broke the build one phase
+# earlier: EAS 3037ddb8 died in "Install pods", because Expo's Podfile already declares one inside
+# the target block and CocoaPods will not run with two. Verified by generating the real Podfile with
+# `npx expo prebuild --platform ios` — two hooks, lines 47 and 70.
+emits_a_hook = re.search(r"'post_install do \|installer\|',", plugin_src)
+check("R6.13 the plugin never WRITES a post_install hook",
+      emits_a_hook is None,
+      "the floor must be injected into Expo's existing hook; a second hook does not install")
+control("R6.13", re.search(r"'post_install do \|installer\|',",
+                           "    'post_install do |installer|',") is None)
+
+check("R6.14 the plugin injects at the existing hook",
+      "HOOK_OPENER" in plugin_src and "indexOf(HOOK_OPENER)" in plugin_src,
+      "find Expo's own post_install and inject inside it")
+check("R6.15 the plugin THROWS when the anchor is gone",
+      "throw new Error(" in plugin_src,
+      "a template change must fail loudly at prebuild, never ship a Podfile without the floor")
+check("R6.16 the one-hook promise is the test's own assertion",
+      "countHooks" in plugin_tests and "toBe(1)" in plugin_tests,
+      "the regression needs a test that counts hooks, not just one that checks the loop exists")
+control("R6.16", "countHooks" in "expect(out).toContain('targets.each')")
 
 
 if failures:
