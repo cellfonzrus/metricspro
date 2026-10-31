@@ -130,7 +130,6 @@ app/(platform)/commcalc/productivity/page.tsx
 app/(platform)/commcalc/recovery/page.tsx
 app/(platform)/commcalc/rep-aliases/page.tsx
 app/(platform)/commcalc/report-mappings/page.tsx
-app/(platform)/commcalc/reports/page.tsx
 app/(platform)/commcalc/sales-analyzer/page.tsx
 app/(platform)/commcalc/sales-recon/page.tsx
 app/(platform)/commcalc/schematic/page.tsx

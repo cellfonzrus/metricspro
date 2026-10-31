@@ -8,7 +8,12 @@ import { buildCommissionExport, payloadToCsv, repLabel, type CommissionExportInp
 import { useAuth } from '@/lib/auth-context'
 import { carrierMode, payoutRefused } from '@/lib/rbac'
 import StandardFilterBar from '@/components/StandardFilterBar'
-import { emptyStandardFilter, filterRows, optionsFromRows, isStandardFilterActive, type StandardFilterValue } from '@/lib/standard-filters'
+import {
+  emptyStandardFilter, filterRows, optionsFromRows, isStandardFilterActive, sortStandard,
+  toggleStandardSort, type StandardFilterValue,
+} from '@/lib/standard-filters'
+import { SortableTh } from '@/components/SortableTh'
+import { RANGE_SORT_FIELDS, REP_SORT_FIELDS } from '../_lib/repIncentiveSort'
 import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
 import { toPlanLine } from '../_lib/planLines'
 import { monthBlocks, monthInput, RANGE_MAX_MONTHS, spanMonths, type RangeRow } from '../_lib/repIncentiveRange'
@@ -206,7 +211,10 @@ export default function ReportsPage() {
   const acc = { store: (r: Rep) => r.store, market: (r: Rep) => (r as any).market, rep: (r: Rep) => r.epay_salesperson }
   const opts = useMemo(() => optionsFromRows(reps, acc), [reps])   // eslint-disable-line react-hooks/exhaustive-deps
   // FILTERED set drives the breakdown + compensation tables, the header tiles, AND the CSV export (WYSIWYG).
-  const filtered = useMemo(() => filterRows(reps, filt, acc), [reps, filt])   // eslint-disable-line react-hooks/exhaustive-deps
+  // ORDERED, THEN EVERYTHING DOWNSTREAM. The sort is applied HERE, inside the one memo every other
+  // consumer reads — the two tables, the header tiles, the drill narrowing and the CSV/XLSX export —
+  // so the order on screen is the order that exports, with nothing to keep in step (§CORE-28).
+  const filtered = useMemo(() => sortStandard(filterRows(reps, filt, acc), filt, REP_SORT_FIELDS), [reps, filt])   // eslint-disable-line react-hooks/exhaustive-deps
   const totalPayout = filtered.reduce((s, r) => s + (r.total_payout || 0), 0)
   const filterActive = isStandardFilterActive(filt)
 
@@ -283,9 +291,22 @@ export default function ReportsPage() {
       .catch(e => alert(`Could not generate the statement: ${e?.message || e}`))
   }
   // the standard filter applies to the range exactly as to the single-month tabs (same accessors)
+  // …and so does the sort. `monthBlocks` keeps the row order it is handed, so sorting BEFORE the
+  // grouping orders the rows inside each month's section — which is the grain the owner was looking
+  // at when he asked for this ("the month range shows, i need it to be sorted by employee store").
   const rangeView = useMemo(() => monthBlocks(
-    filterRows((rangeData?.rows || []) as any[], filt, acc as any) as RangeRow[], rangeData?.months || []),
+    sortStandard(filterRows((rangeData?.rows || []) as any[], filt, acc as any), filt, RANGE_SORT_FIELDS) as RangeRow[],
+    rangeData?.months || []),
     [rangeData, filt])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // SORT BY, ONE STATE, TWO AFFORDANCES (§CORE-28). The bar's dropdown and a click on a column header
+  // read and write the SAME `filt.sort`, so they can never show different orders; which columns are
+  // offered depends on the tab, because the range table's grain is a rep-MONTH and it carries no
+  // market. The transition (asc → desc → off) is `table-sort.nextSort` via `toggleStandardSort` —
+  // this page owns no sorting rule of its own.
+  const sortFieldsForTab = tab === 'range' ? RANGE_SORT_FIELDS : REP_SORT_FIELDS
+  const onSort = (f: string) => setFilt(toggleStandardSort(filt, f))
+  const sortState = filt.sort ?? null
 
   const currentRep = reps.find(r => r.epay_salesperson === selectedRep) || reps[0]
   // ── GOOGLE STORE RATING (owner 2026-08-06) — display-only, NON-money ───────────────────────────
@@ -641,7 +662,7 @@ export default function ReportsPage() {
           header total AND both the Breakdown and Compensation tables) is always visible + clearable, on any tab. */}
       <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false }}
         storeOptions={opts.stores} marketOptions={opts.markets} repOptions={opts.reps}
-        repLabel="Reps…"
+        repLabel="Reps…" sortFields={sortFieldsForTab}
         right={<span style={{ fontSize: 13, color: 'var(--text2)', alignSelf: 'center' }}>{filtered.length} of {reps.length} rows</span>} />
 
       {/* Tabs */}
@@ -664,17 +685,20 @@ export default function ReportsPage() {
           <div className="table-wrapper">
             <table>
               <thead>
+                {/* A SORTABLE HEADER IS THE SAME SORT AS THE BAR'S (§CORE-28) — `onSort` toggles
+                    `filt.sort`, which is what the dropdown above shows and what orders `filtered`.
+                    Columns the report has not declared sortable stay plain <th>. */}
                 <tr>
-                  <th>Rep</th>
-                  <th>Store</th>
-                  <th>Tier</th>
-                  <th>KPIs</th>
+                  <SortableTh field="rep" sort={sortState} onSort={onSort}>Rep</SortableTh>
+                  <SortableTh field="store" sort={sortState} onSort={onSort}>Store</SortableTh>
+                  <SortableTh field="tier" sort={sortState} onSort={onSort}>Tier</SortableTh>
+                  <SortableTh field="kpis_met" sort={sortState} onSort={onSort}>KPIs</SortableTh>
                   <th>PA</th><th>BA</th><th>UA</th>
                   <th style={{ textAlign: 'right' }}>ACC GP</th>
                   <th style={{ textAlign: 'right' }}>ACIMA</th>
                   {hasInstallment && <th style={{ textAlign: 'right' }} title="Multi-month / Total-carrier installment pay (already inside Payout)">Installment</th>}
-                  <th style={{ textAlign: 'right' }}>Subtotal</th>
-                  <th style={{ textAlign: 'right' }}>Payout</th>
+                  <SortableTh field="subtotal" sort={sortState} onSort={onSort} style={{ textAlign: 'right' }}>Subtotal</SortableTh>
+                  <SortableTh field="total_payout" sort={sortState} onSort={onSort} style={{ textAlign: 'right' }}>Payout</SortableTh>
                   {hasGoogle && <th title="Google rating vs target, per store this rep works at — display only, not part of pay">Google</th>}
                 </tr>
               </thead>
@@ -1169,12 +1193,16 @@ export default function ReportsPage() {
             <div className="table-wrapper">
               <table>
                 <thead>
+                  {/* Month is NOT sortable: it is the section key — the sort orders the rows inside
+                      each month. Same `filt.sort` as the bar's dropdown. */}
                   <tr>
-                    <th>Month</th><th>Rep</th><th>Store</th>
+                    <th>Month</th>
+                    <SortableTh field="rep" sort={sortState} onSort={onSort}>Rep</SortableTh>
+                    <SortableTh field="store" sort={sortState} onSort={onSort}>Store</SortableTh>
                     <th style={{ textAlign: 'right' }}>PA</th><th style={{ textAlign: 'right' }}>BA</th><th style={{ textAlign: 'right' }}>UA</th>
                     <th style={{ textAlign: 'right' }}>Subtotal</th>
-                    <th style={{ textAlign: 'right' }}>Payout</th>
-                    <th style={{ textAlign: 'right' }} title="Payout less chargeback and ops-chargeback deductions">Final</th>
+                    <SortableTh field="total_payout" sort={sortState} onSort={onSort} style={{ textAlign: 'right' }}>Payout</SortableTh>
+                    <SortableTh field="final_payout" sort={sortState} onSort={onSort} style={{ textAlign: 'right' }} title="Payout less chargeback and ops-chargeback deductions">Final</SortableTh>
                   </tr>
                 </thead>
                 <tbody>
