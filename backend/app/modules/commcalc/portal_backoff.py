@@ -135,7 +135,7 @@ def verdict_note(kind):
     return _VERDICT_NOTE.get(str(kind or "").strip().lower(), "")
 
 
-def page_verdict(text, refusal=None, challenge=None):
+def page_verdict(text, refusal=None, challenge=None, form_present=False):
     """Is this page REFUSING us or CHALLENGING us rather than showing a form? PURE.
 
     Returns {"kind", "marker", "note"} or None. A challenge is reported ahead of a refusal when both
@@ -143,9 +143,25 @@ def page_verdict(text, refusal=None, challenge=None):
     or a human) — reporting it as a plain refusal would send the operator to check an address that is
     perfectly correct.
 
+    `form_present` IS THE SECOND HALF OF THE QUESTION, and until 2026-10-31 nothing ever asked it.
+    Every verdict here is the claim "the portal served THIS **instead of** a form"; a page that is
+    handing us the form has served nothing instead of it, whatever its markup happens to contain. So
+    when the caller has looked and the form is there, there is no verdict — the login proceeds.
+
+    That is not a nicety. These markers are matched against the page's MARKUP as well as its words
+    (`vidapay_sweep._page_text` reads `content()`), and `"captcha"` is a seeded challenge marker, so
+    any portal whose sign-in page ships a reCAPTCHA read as a bot wall. The owner's UPS Store
+    reporting portal does exactly that — nine occurrences of the word, none of them visible to a
+    human, on a working Username + Password form — and his live login spent 60s spinning on it and
+    then accused the egress IP (owner report 2026-10-31). Whether a human check GATES the submit is
+    a different question with its own home (`vidapay_sweep.human_check`, §COMMCALC-11), which reads
+    the DOM; this marker list must not answer it a second time by text search.
+
     Throttling is NOT answered here: it is `detect_block`, which alone carries a retry-after and
     alone sets a cooldown. Two questions, two answers, one vocabulary.
     """
+    if form_present:
+        return None
     body = str(text or "").lower()
     if not body:
         return None
