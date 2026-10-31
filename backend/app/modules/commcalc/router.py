@@ -43143,8 +43143,79 @@ def live_login_frame(sid: str, since: int = 0, org_id: str = ORG_ID):
     return sess.frame_since(since)
 
 
+def _calibration_answer(client, org_id, sid, res, editing=None):
+    """THE answer a §COMMCALC-39 capture gives an operator: the EDITOR ROWS with each suggestion
+    already folded in, plus what every page actually said. Writes nothing.
+
+    WHY THE MERGE IS HERE AND NOT IN THE BROWSER (owner, 2026-10-31). `report_declaration.
+    merge_suggestion` has been the declared home for "fold a capture into a row" since §COMMCALC-48,
+    and it had no caller: the editor had written its own copy in TypeScript. The two diverged exactly
+    where it mattered —
+
+      • the capture names the report under `report`, which is this module's convention for a
+        per-report RESULT (`epay_sweep`, `merchant_portal_sweep`, `portal_report_pull.pull_one_report`
+        all spell it that way); the browser's copy looked for `key`, the spelling an editor ROW uses.
+        So `suggested.find(x => x.key === row.key)` never matched, for any tenant and any portal, and
+        the capture of fourteen UPS Store report pages folded in NOTHING while reporting
+        "Read 14 pages". Two spellings of "which report is this" is the defect `pos_report_sweep.
+        spec_key` exists to prevent, and the merge here goes through it;
+      • the browser's copy de-duplicated on the SELECTOR alone, so a filter an operator had already
+        declared by hand under a different selector came back a second time.
+
+    So the capture's suggestions never reach the browser as something to merge. They reach it merged,
+    by the one function that knows how, and the browser only displays what came back. `editing` is the
+    rows as they stand on the operator's screen — unsaved edits included, because a suggestion folded
+    into the STORED rows would silently drop what they had just typed. Absent, the stored declaration
+    is used.
+
+    §COMMCALC-44 — an absence needs the RIGHT reason. `capture` says, per report, whether the page was
+    reached, how many controls it offered, how many filters were suggested, how many were new, and the
+    controls whose purpose the page's own words do not state. Thirteen reports reaching zero filters is
+    an answer only once it says WHICH of those things happened.
+    """
+    from app.modules.commcalc import report_declaration as rd
+    from app.modules.commcalc import pos_report_sweep as _sweep
+    entries = [e for e in ((res or {}).get("reports") or []) if isinstance(e, dict)]
+    if isinstance(editing, list):
+        work = [dict(r) for r in editing if isinstance(r, dict)]
+    else:
+        work = rd.rows(_live_source_row(client, sid, org_id))
+
+    def _counts(rws):
+        out = {}
+        for r in rws:
+            out[_sweep.spec_key(r)] = len(rd.clean_params((r or {}).get("params")))
+        return out
+
+    capture, added_total = [], 0
+    for e in entries:
+        key = e.get("report")
+        before = _counts(work)
+        work = rd.merge_suggestion(work, key, e)
+        after = _counts(work)
+        k = _sweep.spec_key(key)
+        added = max(0, after.get(k, 0) - before.get(k, 0))
+        added_total += added
+        capture.append({
+            "report": key, "label": e.get("label"), "reached": bool(e.get("reached")),
+            "controls_seen": e.get("controls_seen"),
+            "suggested": len(rd.clean_params(e.get("params"))),
+            "added": added,
+            # Named for a human, never guessed into a filter (`suggest_params`' own rule).
+            "unrecognised": [{"label": u.get("label"), "selector": u.get("selector"),
+                              "why": u.get("why")}
+                             for u in (e.get("unrecognised") or []) if isinstance(u, dict)][:12],
+            "error": e.get("error"),
+        })
+    reached = sum(1 for c in capture if c["reached"])
+    return {"ok": True, "reports": work, "capture": capture,
+            "reached": reached, "pages": len(capture), "added": added_total,
+            "note": ("Nothing was saved. Check what was added, then press Save."
+                     if added_total else "Nothing was saved, and no new filter was found to add.")}
+
+
 @router.post("/data-sources/{sid}/live-login/calibrate")
-def live_login_calibrate(sid: str, org_id: str = ORG_ID):
+def live_login_calibrate(sid: str, body: dict = Body(default={}), org_id: str = ORG_ID):
     """READ this login's declared report pages on the live authenticated session and SUGGEST each
     report's declaration — its date boxes, its detail toggle, its Run and Export controls (index
     §COMMCALC-39).
@@ -43176,7 +43247,8 @@ def live_login_calibrate(sid: str, org_id: str = ORG_ID):
         return {"ok": False, "phase": sess.snapshot_phase(),
                 "error": "The report pages could not be read before the session timed out. Nothing "
                          "was changed."}
-    return res
+    return _calibration_answer(client=sb(), org_id=org_id, sid=sid, res=res,
+                               editing=body.get("reports") if isinstance(body, dict) else None)
 
 
 @router.get("/data-sources/{sid}/reports")

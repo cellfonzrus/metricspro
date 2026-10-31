@@ -651,9 +651,20 @@ FACTS: dict[str, dict] = {
                     'DERIVED both ways and never stored, with columns(rows(src)) pinned as the '
                     'identity: opening the editor and saving changes nothing. per_day and problems '
                     'are derived for the same reason a stored copy could disagree with the filters '
-                    'it describes. A capture SUGGESTS and never decides.',
+                    'it describes. A capture SUGGESTS and never decides. AND THE FOLD HAPPENS HERE '
+                    '(2026-10-31): merge_suggestion was declared as the home for folding a capture '
+                    'into a row and had NO caller — PortalReportEditor.tsx had written the fold '
+                    'again in TypeScript, matching a per-report RESULT (keyed `report`, as every '
+                    'per-report result in this module is) against an editor ROW (keyed `key`), so it '
+                    'matched nothing for any tenant and a capture of fourteen report pages added no '
+                    'filter while announcing it had read them. spec_key is the only bridge between '
+                    'the two spellings; the route now folds through this home and the browser only '
+                    'displays what came back.',
         "homes": ('app/modules/commcalc/report_declaration.py',),
         "index": ('COMMCALC-48',),
+        # The pytest lock that pins the fold to this home —
+        # tests/unit/test_capture_merges_where_it_is_declared.py, run by tests.yml — is named in the
+        # question above; `locks` carries harnesses, which is what this guard resolves.
         "locks": ('harness_report_declaration.py',),
         # SNAPSHOT — written BY HAND (§50). The home is PURE: the router is its only caller, and it
         # dereferences spec_key (§COMMCALC-39) and the filter vocabulary (§COMMCALC-37) rather than

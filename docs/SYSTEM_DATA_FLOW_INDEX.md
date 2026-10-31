@@ -36088,6 +36088,54 @@ Same home, other axes: §COMMCALC-07 (the one pull loop), §COMMCALC-37 (declare
 §COMMCALC-46 (the login declaration, which shares the calibration column), §COMMCALC-47 (the live screen
 the capture reads through).
 
+### COMMCALC-48.9 THE FOLD WAS DECLARED HERE AND DONE IN THE BROWSER — fourteen pages read, nothing added (owner report 2026-10-31)
+
+> Owner, 2026-10-31, having just signed in to the UPS Store reporting portal and pressed *Read this
+> page*: *"Read 14 pages (, , , , , , , , , , , , , ). Anything new is added below — nothing you
+> edited was replaced. Check it, then Save."* — followed by all fourteen rows still reading *"no
+> filters are declared, so it will export whatever the page happens to show"*.
+
+**§COMMCALC-48.4 above was already right, and had been right since the day it was written. Only the
+code had its own copy.** `report_declaration.merge_suggestion` is the declared home for folding a
+capture into a row, and it had **no production caller**: `PortalReportEditor.tsx` had written the
+fold again in TypeScript. This is the third-time-lucky failure §19.18 names — a registry written and
+its callers never wired to it — and a documented design is the easiest place for it to hide, because
+the index reads as though the wiring exists.
+
+**The two spellings.** A per-report RESULT names its report `report` throughout this module
+(`epay_sweep`, `merchant_portal_sweep`, `portal_report_pull.pull_one_report`,
+`capture_report_calibration`). An editor ROW names it `key` (`report_declaration.ROW_FIELDS`). The
+browser's copy did `suggested.find(x => x.key === row.key)`, so it compared a row's key against a
+field no capture carries. It matched nothing, for every tenant, every portal and every report, since
+the editor shipped — and printed the same missing field as the fourteen blanks in his message. The one
+bridge between the two spellings is `pos_report_sweep.spec_key` (§COMMCALC-39), which the declared
+merge goes through and the copy did not. The copy also de-duplicated on the SELECTOR alone, so a
+filter an operator had already declared by hand under a different selector came back a second time.
+
+**The fix.** The suggestions never reach the browser as something to merge. `router.
+_calibration_answer` folds them in through `merge_suggestion` and returns the rows already merged;
+the editor displays them. The rows **as they stand on the screen** travel with the request, because a
+merge into the stored declaration would silently drop an unsaved edit. Still writes nothing: the
+operator presses Save.
+
+**An absence needs the RIGHT reason (§COMMCALC-44).** "Read 14 pages" counted answers, not outcomes.
+The answer now carries, per report, whether the page was reached, how many controls it offered, how
+many filters were recognised, how many were NEW, the page's own error where there was one, and the
+controls whose purpose the page's words do not state — named for a human, never guessed into a filter.
+
+**Locked** — `backend/tests/unit/test_capture_merges_where_it_is_declared.py`, 13 tests. It FAILS if a
+capture stops naming its report `report` or starts also carrying `key`, if the route stops calling
+`merge_suggestion`, if a hand-declared filter is added twice, if an unsaved edit is merged over, if
+zero filters stops saying which reason it was, or if the editor folds a capture in again
+(`suggested.find`, `.find(x =>`, `new Set(row.params)`, `x.key` are all banned in `readPage`).
+
+### COMMCALC-48.10 Cross-references (48.9)
+
+§COMMCALC-39 (`spec_key`, the one rule for "which report is this", and the capture itself),
+§COMMCALC-44 (an absence needs the right reason), §COMMCALC-24.6 (the sibling sighting the same day: a
+surface deciding a fact from a word instead of asking where the fact lives), §19.18 (a registry
+written and its callers not wired).
+
 ## §COMMCALC-50. A PAGE THAT REFUSES US IS NOT A LOGIN FORM THAT RENDERS UNEXPECTEDLY — one vocabulary for what a portal answered with (owner report 2026-10-30)
 
 > Owner, 2026-10-30: *"live login for the billing initated"*. The attempt is on the row at
