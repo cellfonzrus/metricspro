@@ -92,6 +92,7 @@ Primary code homes:
 | POS-15 | **A sale the customer pays later** | "Also add another tender type as Terms — 15/30/60." What may a till be paid with, who decides, and what does a receipt say about a sale nobody has paid yet? |
 | POS-16 | **A wholesale customer, and the W-9 that makes their sales tax-free** | "A customer type as wholesale where the option to not charge tax will be by default if the user confirms they received the filled out w9 … block the user to make a sale before the system has an updated w9, only the admin can go past … and a return link for the customer to send the w9 back." |
 | POS-17 | **The cash / credit mismatch an edit or a void leaves behind** | "I need the POS Cash Register to have the ability to edit the sale from the prior day and create log of the cash or credit mismatch." Editing a sale moves what the customer owes and voiding one stops them owing it — so where does the money already taken go, who is told, and why was nothing comparing the two? |
+| POS-18 | **A pre-owned device is a different device** | "CPO is certified pre owned is a different device than new, IMEI is unique." Which device conditions exist, what does this feed call one, and why was a refurbished handset staying off the new one's order row only by accident? |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -26203,6 +26204,7 @@ status word rather than a blank that reads as nil.
 | POS-15 | pos |
 | POS-16 | pos |
 | POS-17 | pos |
+| POS-18 | pos |
 | PAYABLES-01 | payables |
 | CORE-25 | core |
 | CORE-26 | core |
@@ -33739,6 +33741,78 @@ with no register sales get an empty answer with a zeroed summary rather than a b
   the in-memory double.
 
 💰 Moves no money. The derivation books nothing and pays nothing; the migration is additive.
+
+## §POS-18. A PRE-OWNED DEVICE IS A DIFFERENT DEVICE — THE CONDITION VOCABULARY HAS ONE HOME (owner ruling 2026-10-31)
+
+Owner, verbatim: *"cpo is certified pre owned is adifferent device than new  , imnei is unique"* —
+answering whether a refurbished handset and a new one of the same model should share a row on the
+accessory order grid (§COMMCALC-49.11). They must not.
+
+**THE CLASS, not the instance.** The ruling is about one grid, but the fact it needs — *which device
+conditions exist, and what does a feed call one* — was written down twice and homed nowhere:
+a `CHECK (condition IN ('new','refurbished','used','damaged'))` on `pos.inventory_serial` (mig 725)
+and a literal `const CONDITIONS = [...]` on the POS inventory screen, two lines from a second copy
+of the unit-status list. A third, worse copy had just appeared by accident: the accessory grid kept
+a CPO handset off the new handset's row **only because the word `CPO` happened to survive the
+model-spelling parse**, which nothing asserted.
+
+**AND THE ACCIDENT WAS ALREADY BROKEN.** `commcalc/router` applied the curated
+`device_model_alias` map *before* asking for the family grain, so a curated alias replaced
+`HANDSET A 128GB Pink CPO` with `HANDSET A` and the marker was gone before anything could read it.
+Found by the integration test for this ruling, not by reading the code. The alias is now handed TO
+the one home, which applies the curation and then the condition — the only order that cannot lose
+one of them — and §D17 of the lock fails the build if a caller canonicalises first again.
+
+### The split, and why it is drawn here
+
+| the fact | where it lives | why |
+|---|---|---|
+| WHICH conditions exist | `pos/device_condition.HOUSE_CONDITIONS` | the platform's POLICY — the same four for every tenant, pinned key-by-key against mig 725's `CHECK` by §D10 |
+| WHAT a feed marks one with | `commcalc.accessory_config.device_condition_tokens` (mig `1110`), read through `resolve_feed_tokens` | the TENANT's vocabulary — `CPO` in one feed, `CERTIFIED_PREOWNED` in another. A REQUIRED argument with no house fallback (CLAUDE.md, "every feature is for EVERY tenant") |
+| WHICH condition an unmarked line is | `unmarked_condition()` → `new`, with `basis='unmarked'` | a feed marks the exception, not the rule; the schema chose the same default first, and the basis keeps a reading apart from an inference |
+| the WORD a human is shown | the org's own first declared spelling (`marker`) | the owner says CPO and the schema says refurbished, and neither has to win |
+
+Nothing declared ⇒ `condition=None`, `basis='no_vocabulary'`, keys byte-identical to what they were
+before the question existed. That is what makes the change safe for Cellfonz, whose feed marks no
+condition on any of its device lines.
+
+### Homes and readers
+
+| question | ONE home | readers |
+|---|---|---|
+| which conditions exist, and what marks one | `backend/app/modules/pos/device_condition.py` | `commcalc/router` (the grid), `pos/router.device_conditions` (the screen), `commcalc/device_model_family` |
+| which sold lines are the same phone | `commcalc/device_model_family.py` (§COMMCALC-49.11) | `commcalc/router` |
+| the unit statuses | `pos/inventory_integrity.UNIT_STATUSES` | served by the same endpoint, dereferenced not restated |
+| both lists, in the browser | `frontend/src/lib/device-conditions.ts` | `pos/inventory/page.tsx` — which now names no condition and no status of its own |
+
+- `GET /pos/device-conditions` — the two vocabularies plus which condition is the unmarked one.
+  Reads no tenant row: both lists are platform policy (RULE TWO).
+- `PUT /commcalc/accessory-order-plan/config` — gained `condition_tokens`, returning the resolved
+  declaration and the four conditions so the panel never names one.
+
+### Measured before a line was written (live feed, 1 Aug – 31 Oct 2026, each org's own departments)
+
+| org | device lines carrying a condition word |
+|---|---|
+| Luxelink Wireless LLC | **191** (`CPO`, plus the glued `CERTIFIED_PREOWNED_…` / `CERTIFIED_IPHONE_…` SKU forms) |
+| Cellfonz R Us | 0 |
+| Vzone | 0 device lines in the window |
+
+So mig `1110` seeds Luxelink only. Seeding the others with words their feeds do not use would
+declare a vocabulary nobody measured.
+
+### Proof
+
+- `backend/harness_accessory_order_grid.py` §D — 17 checks inside the existing CI job. D6 is the
+  silent-merge guard, D10 pins the house keys against the migration's own `CHECK`, D11/D12 fail the
+  build if a condition word reappears on the screen or in the browser's reader, D17 pins the alias
+  ordering. Each was control-tested by breaking the mechanism and watching the right check go red.
+- `backend/tests/unit/test_device_condition.py` — 10 tests, every fixture a live spelling.
+- `backend/tests/integration/test_accessory_order_plan_endpoint.py` — 6 new tests, including the
+  curated-alias merge, the cross-tenant leak, and the degradation before mig 1110 is applied.
+
+💰 Moves no money. The column is NULL on arrival for every org but one; the only reader plans
+quantities to buy and touches no payout, ledger, P&L line, commission or tax figure.
 
 ## §COMMCALC-20. A HANDSET THAT BOOKS A REBATE BOOKS A COST (owner report 2026-10-19)
 

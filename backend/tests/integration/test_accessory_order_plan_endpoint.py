@@ -649,3 +649,108 @@ def test_the_report_still_works_before_the_new_migration_is_applied(wired, api_c
     assert body["colour_tokens_basis"] == "not_declared"
     assert body["model_specs_declared"] == 0
     assert [c["category"] for c in body["consolidated"]] == ["cable", "charger", "earphones"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# A PRE-OWNED DEVICE IS A DIFFERENT DEVICE (owner 2026-10-31, index §POS-18)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# Owner, verbatim: *"cpo is certified pre owned is adifferent device than new  , imnei is unique"*.
+#
+# The month below is the live Luxelink shape: the same handset sold both marked and unmarked, in
+# several colours each, plus the glued SKU form its promo rows carry. Before the fix the two stayed
+# apart only because `CPO` survived the parse — which is why the alias test underneath matters more
+# than the happy path.
+CONDITION_MONTH = [
+    _sale("D-1", "HANDSET A 128GB Pink CPO", id="d1"),
+    _sale("D-2", "HANDSET A 128GB Black CPO", id="d2"),
+    _sale("D-3", "CERTIFIED_PREOWNED_HANDSET_A Midnight", id="d3"),
+    _sale("D-4", "HANDSET A 128GB Pink", id="d4"),
+    _sale("D-5", "HANDSET A 128GB Midnight", id="d5"),
+]
+CONDITION_WORDS = ["CPO", "CERTIFIED_PREOWNED"]
+
+
+def test_a_marked_handset_is_ordered_separately_from_the_new_one(wired, api_client):
+    """THE OWNER'S RULING, end to end: two rows for one model, each folding its own colours, and the
+    marked row shows the ORG'S OWN word rather than the platform's."""
+    _declare(wired, box_departments=HOUSE_DEPTS, device_colour_tokens=COLOUR_WORDS,
+             device_condition_tokens=CONDITION_WORDS)
+    wired.seed("commcalc.daily_sales_feed", CONDITION_MONTH)
+    body = api_client.get(PATH, params={"period": PERIOD, "months": 1}).json()
+    assert body["condition_tokens_basis"] == "declared"
+    rows = {m["model"]: m for m in body["models"]}
+    assert len(rows) == 2, rows
+    marked = next(m for m in body["models"] if m["condition"] == "refurbished")
+    unmarked = next(m for m in body["models"] if m["condition"] == "new")
+    assert marked["units_total"] == 3, "two worded CPO lines and the glued SKU form"
+    assert unmarked["units_total"] == 2
+    assert marked["condition_marker"] == "CPO" and marked["condition_basis"] == "declared"
+    assert unmarked["condition_marker"] is None and unmarked["condition_basis"] == "unmarked"
+    assert marked["model"].endswith("· CPO")
+
+
+def test_a_curated_alias_cannot_put_a_pre_owned_handset_on_the_new_ones_row(wired, api_client):
+    """The silent merge the fix exists to prevent. A human curating `device_model_alias` is saying
+    what a model is CALLED, which is not a ruling on its condition — so the condition is applied
+    after the alias and the two rows survive being given one name."""
+    _declare(wired, box_departments=HOUSE_DEPTS, device_colour_tokens=COLOUR_WORDS,
+             device_condition_tokens=CONDITION_WORDS)
+    wired.seed("commcalc.daily_sales_feed", CONDITION_MONTH)
+    wired.seed("commcalc.device_model_alias",
+               [{"org_id": ORG, "raw_model": d["product_desc"], "canonical_model": "HANDSET A",
+                 "lifecycle": "current", "id": f"al{i}"} for i, d in enumerate(CONDITION_MONTH)])
+    body = api_client.get(PATH, params={"period": PERIOD, "months": 1}).json()
+    assert {m["condition"] for m in body["models"]} == {"refurbished", "new"}
+    assert len(body["models"]) == 2, "one name, still two devices"
+    assert sum(m["units_total"] for m in body["models"]) == 5
+
+
+def test_without_a_declared_condition_vocabulary_no_line_is_identified(wired, api_client):
+    """CLAUDE.md, *"every feature is for EVERY tenant"*: a condition WORD is a tenant's own spelling,
+    so nothing declared identifies nothing and the surface says so. The rows are exactly what they
+    were before the question existed — this is the property that makes the change safe for the
+    tenant whose feed marks no condition at all."""
+    _declare(wired, box_departments=HOUSE_DEPTS, device_colour_tokens=COLOUR_WORDS)
+    wired.seed("commcalc.daily_sales_feed", CONDITION_MONTH)
+    body = api_client.get(PATH, params={"period": PERIOD, "months": 1}).json()
+    assert body["condition_tokens_basis"] == "not_declared"
+    assert body["condition_tokens"] == []
+    assert {m["condition"] for m in body["models"]} == {None}
+    assert {m["condition_basis"] for m in body["models"]} == {"no_vocabulary"}
+    assert not any("·" in m["model"] for m in body["models"])
+
+
+def test_one_tenants_condition_word_cannot_mark_another_tenants_feed(wired, api_client):
+    """The cross-tenant half. This org declares a word its own feed does not use, so its marked-
+    looking lines read as unmarked rather than borrowing the other tenant's reading."""
+    _declare(wired, box_departments=HOUSE_DEPTS, device_colour_tokens=COLOUR_WORDS,
+             device_condition_tokens=["refurb"])
+    wired.seed("commcalc.daily_sales_feed", CONDITION_MONTH)
+    body = api_client.get(PATH, params={"period": PERIOD, "months": 1}).json()
+    assert {m["condition"] for m in body["models"]} == {"new"}
+    assert {m["condition_basis"] for m in body["models"]} == {"unmarked"}
+
+
+def test_the_condition_words_are_saved_and_read_back_through_the_one_home(wired, api_client):
+    """The setup panel's round trip, and the platform's four conditions travelling with it so the
+    screen never has to name one."""
+    _declare(wired, box_departments=HOUSE_DEPTS)
+    r = api_client.put(PATH + "/config", json={"condition_tokens": CONDITION_WORDS})
+    assert r.status_code == 200, r.text
+    saved = r.json()
+    assert saved["condition_tokens_basis"] == "declared"
+    assert saved["condition_tokens"] == ["certified preowned", "cpo"]
+    assert [c["key"] for c in saved["device_conditions"]] == ["new", "refurbished", "used",
+                                                              "damaged"]
+
+
+def test_the_plan_still_works_before_the_condition_migration_is_applied(wired, api_client):
+    """`device_condition_tokens` does not exist on the config row yet. The report comes back with no
+    condition identified rather than a 500 — the same degradation rule migs 1104 and 1109 were held
+    to, because code deploys on merge while a migration waits for the owner."""
+    wired.seed("commcalc.accessory_config", [{"org_id": ORG, "box_departments": HOUSE_DEPTS,
+                                              "id": "cfg"}])
+    wired.seed("commcalc.daily_sales_feed", CONDITION_MONTH)
+    r = api_client.get(PATH, params={"period": PERIOD, "months": 1})
+    assert r.status_code == 200, r.text
+    assert r.json()["condition_tokens_basis"] == "not_declared"

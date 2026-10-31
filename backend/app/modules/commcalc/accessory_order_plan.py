@@ -468,7 +468,7 @@ def consolidated_rows(models, *, catalog, specs=None):
 # ── THE WHOLE PLAN ───────────────────────────────────────────────────────────────────────────────
 def plan(*, units_by_model, months, lifecycle=None, horizon_months=DEFAULT_HORIZON_MONTHS,
          case_mix=None, attach_plan=None, catalog=None, option_mix=None, model_specs=None,
-         variants=None):
+         variants=None, conditions=None):
     """The payload the screen reads: the ranked model table, what is still waiting on a ruling, the
     per-phone order grid and the consolidated connector sheet. PURE — every input is handed in.
 
@@ -476,7 +476,13 @@ def plan(*, units_by_model, months, lifecycle=None, horizon_months=DEFAULT_HORIZ
     `device_model_family.group_units` — the colour spellings that were folded into each row, carried
     so the screen can open a phone and show what was actually sold (owner 2026-10-30, *"with a drill
     down option to see what was sold"*). It is NOT recomputed here; this module never parses a model
-    name."""
+    name.
+
+    `conditions` is `{model: {condition, condition_label, condition_marker, condition_basis}}` from
+    the same `group_units` call — the condition each row was read as (owner 2026-10-31, *"cpo is
+    certified pre owned is adifferent device than new"*). Carried, never derived: this module does
+    not know what a condition word looks like, and asking a second time is how two reads of one
+    fact come to disagree."""
     periods = [str(p) for p in (months or ())]
     horizon = max(0, int(round(_num(horizon_months, 0))))
     mix, mix_basis = resolve_case_mix(case_mix)
@@ -484,9 +490,15 @@ def plan(*, units_by_model, months, lifecycle=None, horizon_months=DEFAULT_HORIZ
     cats, cat_basis = _cat.resolve_catalog(catalog)
     rows = model_rows(units_by_model, months=periods, lifecycle=lifecycle, horizon_months=horizon)
     var = dict(variants or {})
+    cond = dict(conditions or {})
     for r in rows:
         r["variants"] = list(var.get(r["model"]) or [])
         r["variant_count"] = len(r["variants"])
+        c = dict(cond.get(r["model"]) or {})
+        r["condition"] = c.get("condition")
+        r["condition_label"] = c.get("condition_label")
+        r["condition_marker"] = c.get("condition_marker")
+        r["condition_basis"] = c.get("condition_basis")
 
     # The option mix per SPLIT category, declared or an even split that SAYS it is one.
     declared_mix = {str(k).strip().lower(): v for k, v in dict(option_mix or {}).items()}
