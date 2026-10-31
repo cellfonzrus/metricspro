@@ -78,3 +78,28 @@ def test_restate_months_over_no_stored_month_is_empty_not_a_guess():
 def test_the_bound_is_a_house_default_and_never_a_tenants_word():
     """RULE TWO: the look-back is a POLICY, so a house default is right — and it is a real bound."""
     assert 1 <= auto_calc.DEFAULT_RESTATE_MONTHS <= 36
+
+
+# ── THE HORIZON RIDES THE ONE CONFIG READER ─────────────────────────────────────────────────────────────────
+# `resolve_config` is PURE and is the only place the three auto-calc keys resolve, so the horizon resolves
+# there too rather than opening a second read of commission_org_config (harness_auto_calc_lock §E).
+def test_the_horizon_falls_back_tenant_then_house_then_the_code_default():
+    key = auto_calc.CONFIG_RESTATE_MONTHS
+    assert auto_calc.resolve_config({key: 6}, {key: 9})["restate_months"] == 6
+    assert auto_calc.resolve_config({}, {key: 9})["restate_months"] == 9
+    assert auto_calc.resolve_config({}, {})["restate_months"] == auto_calc.DEFAULT_RESTATE_MONTHS
+    assert auto_calc.resolve_config({}, {})["restate_months_source"] == "default"
+
+
+def test_a_database_without_migration_1111_resolves_the_default_rather_than_refusing():
+    """The column is simply absent from the row, which must read as "unset", not as an error."""
+    row = {"org_id": "x", "auto_calc_on_landing": True}      # no plan_edit_restate_months key at all
+    assert auto_calc.resolve_config(row, None)["restate_months"] == auto_calc.DEFAULT_RESTATE_MONTHS
+
+
+def test_an_out_of_range_or_nonsense_horizon_is_bounded_never_obeyed():
+    lo, hi = auto_calc.RESTATE_MONTHS_BOUNDS
+    key = auto_calc.CONFIG_RESTATE_MONTHS
+    assert auto_calc.resolve_config({key: 999}, None)["restate_months"] == hi
+    assert auto_calc.resolve_config({key: 0}, None)["restate_months"] == lo
+    assert auto_calc.resolve_config({key: "soon"}, None)["restate_months"] == auto_calc.DEFAULT_RESTATE_MONTHS

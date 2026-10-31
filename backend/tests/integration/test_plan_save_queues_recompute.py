@@ -141,3 +141,38 @@ def test_removing_a_plan_restates_too(wired, api_client):
     auto = r.json().get("auto_calc") or {}
     assert auto.get("queued") is True, auto
     assert sorted(auto.get("periods") or []) == sorted(RECENT), auto
+
+
+# ── THE HORIZON IS THE TENANT'S OWN ROW, AND AN UNREADABLE PAY TABLE IS REPORTED ────────────────────────────
+# The READ of the stored months lives in `router._plan_restate_periods` (the build's `periods_fn`) rather than
+# in `auto_calc`, which may not so much as name the pay table. These two prove the join still behaves: the
+# horizon resolves through the ONE config reader, and a failure is REPORTED rather than read as "nothing".
+def test_a_tenants_own_horizon_narrows_what_its_plan_edit_restates(wired, api_client):
+    """mig 1111's per-org column, end to end through the real endpoint. RULE TWO: a config row, not code."""
+    _seed_tenant(wired, LUXELINK, RECENT)
+    wired.seed("commcalc.commission_org_config",
+               [{"org_id": LUXELINK, "auto_calc_on_landing": True, "auto_calc_debounce_minutes": 5,
+                 "plan_edit_restate_months": 2}])
+    r = api_client.post(PATH, params={"org_id": LUXELINK}, json=_edit())
+    auto = r.json().get("auto_calc") or {}
+    # a horizon of 2 keeps this month and last month, and leaves the three older ones as they were
+    assert sorted(auto.get("periods") or []) == sorted(RECENT[-2:]), auto
+
+
+def test_an_unreadable_pay_table_is_reported_never_read_as_nothing_to_restate(wired, api_client, monkeypatch):
+    """() would mean "this edit restates nothing" — silently, which is the defect this work closes."""
+    from app.modules.core import feed_read
+
+    _seed_tenant(wired, HOUSE, RECENT)
+
+    def _boom(*a, **k):
+        raise feed_read.IncompleteRead("the page after 1000 rows never arrived")
+
+    monkeypatch.setattr("app.modules.commcalc.router._feed_read.read_all", _boom)
+    r = api_client.post(PATH, params={"org_id": HOUSE},
+                        json=_edit("Total Comp DM", plan_id=f"plan-{HOUSE}"))
+    assert r.status_code == 200, r.text          # the SAVE worked; only the restatement could not be named
+    auto = r.json().get("auto_calc") or {}
+    assert auto.get("queued") is False
+    assert auto.get("reason") == "error", auto
+    assert "IncompleteRead" in str(auto.get("error") or ""), auto

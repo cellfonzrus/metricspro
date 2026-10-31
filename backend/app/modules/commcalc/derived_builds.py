@@ -109,7 +109,7 @@ BUILDS = (
         # A FEED landing names its own month; AN EDIT DOES NOT. So the build says which months it restates,
         # rather than every endpoint that can save a plan guessing — and it is bounded, because a rate fixed
         # today must not rewrite July 2024.
-        "periods_fn": "app.modules.commcalc.auto_calc:stored_periods",
+        "periods_fn": "app.modules.commcalc.router:_plan_restate_periods",
         "run": "app.modules.commcalc.auto_calc:_default_runner",
         "endpoint": "POST /commcalc/calculate",
         "why": "index §6l — the build this registry generalises; auto_calc runs it per (org, period) itself",

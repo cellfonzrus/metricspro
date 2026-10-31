@@ -59,9 +59,6 @@ from app.modules.commcalc import derived_builds as _builds
 from app.modules.account import _period as _pd
 # THE one home of "a status line that must fit a column keeps its ends" (found 2026-10-27).
 from app.core import status_detail as _status_detail
-# THE complete paged read (index §19.48) — pure, stdlib-only at import, so this module stays importable
-# from the router, the sweeps and a harness.
-from app.modules.core import feed_read as _feed_read
 
 HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
 MIGRATION = "1030_auto_calc_on_landing.sql"
@@ -79,15 +76,17 @@ CONFIG_DEBOUNCE = "auto_calc_debounce_minutes"
 DEFAULT_ON = True
 DEFAULT_DEBOUNCE_MINUTES = 5
 DEBOUNCE_BOUNDS = (1, 240)
+# The horizon a commission-plan edit restates (see "A DECLARATION EDIT CARRIES NO MONTH OF ITS OWN" below).
+# A POLICY, so a house default is the right shape; mig 1111 lets a tenant set its own.
+DEFAULT_RESTATE_MONTHS = 12
+RESTATE_MONTHS_BOUNDS = (1, 36)
+CONFIG_RESTATE_MONTHS = "plan_edit_restate_months"
 # A steady stream of landings (an hourly feed during a long import) must not postpone the calculation forever:
 # once the OLDEST pending landing is this many debounce windows old, the request is due regardless.
 MAX_WAIT_FACTOR = 6
 
 # ── THE STATE — on commcalc.calc_status (UNIQUE org_id, period), mig 1030. ───────────────────────────────────
 STATE_TABLE = "calc_status"
-#: THE calculation's own OUTPUT, and therefore the honest answer to "which months does this org have
-#: commission figures for" — the months a declaration edit restates (`stored_periods`).
-STORED_OUTPUT_TABLE = "rep_commissions"
 COL_REQUESTED = "auto_calc_requested_at"
 COL_LANDINGS = "auto_calc_landings"
 COL_LAST = "auto_calc_last"
@@ -237,8 +236,18 @@ def resolve_config(tenant_row, house_row):
     except (TypeError, ValueError):
         deb, deb_src = DEFAULT_DEBOUNCE_MINUTES, "default"
     lo, hi = DEBOUNCE_BOUNDS
+    # The restatement horizon rides the SAME resolver rather than opening a second read of the same table
+    # (index §6l: load_config is the one reader). A database without migration 1111 simply has no such key,
+    # so `pick` returns the code default and nothing refuses.
+    rm_raw, rm_src = pick(CONFIG_RESTATE_MONTHS)
+    try:
+        rm = int(float(rm_raw)) if rm_raw is not None else DEFAULT_RESTATE_MONTHS
+    except (TypeError, ValueError):
+        rm, rm_src = DEFAULT_RESTATE_MONTHS, "default"
+    rlo, rhi = RESTATE_MONTHS_BOUNDS
     return {"on": bool(on), "on_source": on_src,
-            "debounce_minutes": min(hi, max(lo, deb)), "debounce_source": deb_src}
+            "debounce_minutes": min(hi, max(lo, deb)), "debounce_source": deb_src,
+            "restate_months": min(rhi, max(rlo, rm)), "restate_months_source": rm_src}
 
 
 def is_calc_feed(table):
@@ -256,13 +265,13 @@ def is_calc_feed(table):
 # endpoint. Bounded, because a rate corrected today must not rewrite a month from two years ago: Cellfonz R Us
 # really does hold a `July 2024` row beside its 2026 months (measured 2026-10-31).
 #
+# The READ of the stored months lives with the module that owns the pay table (`router._plan_restate_periods`,
+# the build's `periods_fn`); this module keeps only the pure RULE and the horizon's resolution.
+#
 # RULE TWO: the bound is a POLICY, so a house default is the right shape for it — unlike a tenant's own
 # vocabulary, which may never have a default (owner directive 2026-10-30). A tenant that wants a different
 # horizon sets `commission_org_config.plan_edit_restate_months`; the column is read defensively, so a database
 # without migration 1111 keeps this default and nothing refuses.
-DEFAULT_RESTATE_MONTHS = 12
-RESTATE_MONTHS_BOUNDS = (1, 36)
-CONFIG_RESTATE_MONTHS = "plan_edit_restate_months"
 
 
 def _month_index(value):
@@ -302,37 +311,6 @@ def restate_periods(periods, now, months=None):
         if here is None or idx is None or (here - idx) < bound:
             out.append(p)
     return out
-
-
-def restate_months_config(client, org_id):
-    """The org's own horizon, inheriting the house row, inheriting the code default. Never raises: a database
-    without migration 1111 has no such column and must keep restating on the default rather than refuse."""
-    for who in (org_id, HOUSE_ORG):
-        if not who:
-            continue
-        try:
-            rows = (client.schema("commcalc").table(CONFIG_TABLE).select(CONFIG_RESTATE_MONTHS)
-                    .eq("org_id", who).limit(1).execute().data) or []
-        except Exception:
-            return DEFAULT_RESTATE_MONTHS          # column absent — the whole ladder is unreadable
-        if rows and rows[0].get(CONFIG_RESTATE_MONTHS) is not None:
-            return rows[0][CONFIG_RESTATE_MONTHS]
-    return DEFAULT_RESTATE_MONTHS
-
-
-def stored_periods(client, org_id, now=None):
-    """THE months a commission-plan edit restates for this org: every month that HAS stored rep figures,
-    within the org's horizon. The build's `periods_fn` — so the months come from the registry, not from
-    whichever endpoint happened to be edited.
-
-    `rep_commissions` is the calculation's own OUTPUT, which makes it the honest answer to "which months did
-    this declaration produce figures for". A read failure RAISES rather than returning (), because () here
-    would mean "this edit restates nothing" — silently, which is the defect this module exists to stop.
-    """
-    rows = _feed_read.read_all(lambda: (client.schema("commcalc").table(STORED_OUTPUT_TABLE)
-                                        .select("period").eq("org_id", org_id)))
-    return restate_periods([r.get("period") for r in rows], now or _now(),
-                           restate_months_config(client, org_id))
 
 
 def month_periods(periods):

@@ -40691,14 +40691,22 @@ figures waited for an unrelated upload. `_write_installment_schedule`'s own docs
 
 **A FEED NAMES ITS OWN MONTH; AN EDIT DOES NOT.** That is the one genuinely new question here, and the
 answer belongs to the build, not to the eight endpoints that can save a plan. `BUILDS` carries
-`periods_fn` beside `inputs_fn`: `auto_calc.stored_periods` returns every month that HAS stored rep
+`periods_fn` beside `inputs_fn`: `router._plan_restate_periods` returns every month that HAS stored rep
 figures (`commcalc.rep_commissions` — the calculation's own output, which makes it the honest answer to
 "which months did this declaration produce"), bounded by the org's horizon. The bound earns its place:
 Cellfonz R Us really holds a `July 2026` row beside a `July 2024` one (measured 2026-10-31), and a rate
 corrected today must not rewrite 2024. `plan_edit_restate_months` is a per-org config with a house
-default of 12 and is read defensively, so a database without migration 1111 keeps the default — RULE TWO,
+default of 12, resolved by `auto_calc.load_config` (the ONE reader of that table) and read
+defensively, so a database without migration 1111 keeps the default — RULE TWO,
 and a POLICY is the one thing a house default is still right for (contrast the 2026-10-30 directive,
 which bans a default that is really one tenant's vocabulary).
+
+**The READ of the pay table lives with the module that owns it.** `_plan_restate_periods` is in
+`commcalc/router.py`, not in `auto_calc.py`, because §D of `harness_auto_calc_lock.py` forbids the hook
+module from so much as naming `rep_commissions`: the hook SCHEDULES a calculation and must never be able
+to compute or write pay. `auto_calc` keeps only the pure rule (`restate_periods`, the horizon's
+resolution inside `resolve_config`), and the registry's `periods_fn` string is what joins the two — so
+neither module grows a second copy of the other's fact.
 
 **ONE DOOR, not eight.** Every writer of a plan declaration calls `router._plan_declaration_changed`,
 which calls the SAME `auto_calc.landed` with no period. Eight doors: `POST /commission-plans`, its

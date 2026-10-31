@@ -44,9 +44,16 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+from app.modules.core import module_graph as MG         # noqa: E402 — pure, stdlib-only
+
 REPO = os.path.dirname(HERE)
 APP = os.path.join(HERE, "app")
-HOME = "app/modules/core/relation_home.py"
+#: WHICH FILE IS THE ONE HOME is not spelled here — it is read from the module graph, itself the one
+#: home for "which file answers this question". A lock carrying its own copy of that fact is the
+#: §19.18 defect wearing a lock's hat, and the graph guard's check H2 fails the build over it.
+HOME = MG.FACTS["relation_schema"]["homes"][0]
 MIGRATIONS = os.path.join(REPO, "database", "migrations")
 INDEX = os.path.join(REPO, "docs", "SYSTEM_DATA_FLOW_INDEX.md")
 WORKFLOWS = os.path.join(REPO, ".github", "workflows")

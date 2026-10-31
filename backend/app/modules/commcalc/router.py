@@ -21946,6 +21946,28 @@ def _plan_declaration_changed(client, org_id, table, *, what):
                              source="commission_plan_edit", filename=what)
 
 
+#: THE calculation's own OUTPUT table, and therefore the honest answer to "which months does this org have
+#: commission figures for". It lives HERE, with the module that owns the pay table — `auto_calc` may not so much
+#: as name it (harness_auto_calc_lock §D: the hook schedules a calculation, it never computes or writes pay).
+_STORED_OUTPUT_TABLE = "rep_commissions"
+
+
+def _plan_restate_periods(client, org_id, now=None):
+    """THE months a commission-plan edit restates for this org: every month that HAS stored rep figures, within
+    the org's declared horizon. The `commission` build's `periods_fn` (index §COMMCALC-41.9) — so the months come
+    from the registry, not from whichever of the eight plan endpoints happened to be edited.
+
+    A read failure RAISES rather than returning (), because () here would mean "this edit restates nothing" —
+    silently, which is the whole class of defect this change exists to stop. `read_all` is the complete paged
+    read (index §CORE-05), so a partial feed raises too.
+    """
+    rows = _feed_read.read_all(lambda: (client.schema("commcalc").table(_STORED_OUTPUT_TABLE)
+                                        .select("period").eq("org_id", org_id)))
+    cfg = _auto_calc.load_config(client, org_id)          # THE one reader of commission_org_config (§6l)
+    return _auto_calc.restate_periods([r.get("period") for r in rows], now or datetime.now(timezone.utc),
+                                      cfg.get("restate_months"))
+
+
 @router.post("/commission-plans")
 def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
     """Upsert a plan + REPLACE its rules / tiers / assignments (delete-then-insert children)."""
