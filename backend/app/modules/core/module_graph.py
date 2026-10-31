@@ -651,9 +651,20 @@ FACTS: dict[str, dict] = {
                     'DERIVED both ways and never stored, with columns(rows(src)) pinned as the '
                     'identity: opening the editor and saving changes nothing. per_day and problems '
                     'are derived for the same reason a stored copy could disagree with the filters '
-                    'it describes. A capture SUGGESTS and never decides.',
+                    'it describes. A capture SUGGESTS and never decides. AND THE FOLD HAPPENS HERE '
+                    '(2026-10-31): merge_suggestion was declared as the home for folding a capture '
+                    'into a row and had NO caller — PortalReportEditor.tsx had written the fold '
+                    'again in TypeScript, matching a per-report RESULT (keyed `report`, as every '
+                    'per-report result in this module is) against an editor ROW (keyed `key`), so it '
+                    'matched nothing for any tenant and a capture of fourteen report pages added no '
+                    'filter while announcing it had read them. spec_key is the only bridge between '
+                    'the two spellings; the route now folds through this home and the browser only '
+                    'displays what came back.',
         "homes": ('app/modules/commcalc/report_declaration.py',),
         "index": ('COMMCALC-48',),
+        # The pytest lock that pins the fold to this home —
+        # tests/unit/test_capture_merges_where_it_is_declared.py, run by tests.yml — is named in the
+        # question above; `locks` carries harnesses, which is what this guard resolves.
         "locks": ('harness_report_declaration.py',),
         # SNAPSHOT — written BY HAND (§50). The home is PURE: the router is its only caller, and it
         # dereferences spec_key (§COMMCALC-39) and the filter vocabulary (§COMMCALC-37) rather than
@@ -3157,7 +3168,21 @@ FACTS: dict[str, dict] = {
                     'the page or the row — it runs on the hot path), `activity` the one reader, and '
                     '`state`/`frame_since` DEREFERENCE it rather than composing their own, so the '
                     'line moves on an unchanged frame payload too. Frame age is None before the '
-                    'first frame, never a fabricated 0 that would read as "just updated".',
+                    'first frame, never a fabricated 0 that would read as "just updated". '
+                    'AND the eighth (2026-10-31): HAS THIS SESSION PASSED THE PORTAL SIGN-IN. '
+                    'Three things asked it and the browser got it wrong: `can_pull` and '
+                    '`can_calibrate` each carried the phase tuple inline, while the live window '
+                    'compared the phase to the single word "authenticated" and cancelled the '
+                    'session for anything else. Signing in immediately starts the post-login pull, '
+                    'whose phase is `pulling`, so the operator closing the window during it '
+                    'CANCELLED the session he had just made and the report capture then had nothing '
+                    'to read. `signed_in` over `_SIGNED_IN_PHASES` is the one answer, PUBLISHED in '
+                    '`state` so a surface dereferences it; an absent field reads as do-not-cancel, '
+                    'because a cancelled session cannot be recovered. It deliberately excludes '
+                    'thread liveness, which `can_pull`/`can_calibrate` add, so a momentary hiccup '
+                    'cannot read as "never signed in". The capture CONTROL moved into the live '
+                    'window too (it opens the one report editor over it), because the filters are '
+                    'read THROUGH that session and sending the operator elsewhere meant closing it.',
         "homes": ('app/modules/commcalc/live_login.py',),
         "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28', 'COMMCALC-30',
                   'COMMCALC-31'),

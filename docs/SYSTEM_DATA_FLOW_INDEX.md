@@ -34248,11 +34248,56 @@ Wired into `carrier-vocab-guard.yml` as *"live-session-host lock"*.
 the fix the scan reported **6** ungated endpoints. The sibling lock is proved red too: making
 `require_session_host` read the environment instead of dereferencing fails **2** of its checks.
 
+### COMMCALC-24.6 "SIGNED IN" IS A FACT THE SESSION OWNS, NOT A WORD A SCREEN MATCHES (owner report 2026-10-31)
+
+Owner, minutes after the login fix in §COMMCALC-50.8 shipped: he signed in to the UPS Store
+reporting portal — row `auth_status='authenticated'`, 21:02:07Z, session saved to 05:02 next
+morning — closed the live window, pressed *Read this page* on the Reports editor, and got **"No
+live session is open for this login."** Two minutes after signing in.
+
+**THE DEFECT.** Signing in starts the automatic report pull, and for its duration the session's
+phase is **`pulling`**, not `authenticated`. The backend knew that: `can_pull` and `can_calibrate`
+both asked `phase in ("authenticated", "pulling")`. The live window's close handler did not — it
+tested `liveState?.phase !== 'authenticated'` and POSTed `/live-login/cancel` for anything else. And
+the window's green *Signed in / Done* bar, whose Done closes **without** cancelling, renders only
+once the pull has RESULTS, so while the pull ran the only control on screen was the destructive one.
+Backdrop click, header Close and the Escape path all ran through it.
+
+**THE CLASS — second sighting the same day.** *A surface decided a fact from a WORD instead of
+asking where the fact lives.* §COMMCALC-50.8 was a page judged by its markup rather than by what it
+was doing; this is a session judged by its phase label rather than by whether it is signed in. Three
+answers to one question, and the one furthest from the fact was the one holding the destructive
+button.
+
+**THE FIX.** `LiveLoginSession.signed_in()` over the declared `_SIGNED_IN_PHASES`, and the two gates
+dereference it instead of keeping a tuple each. It is PUBLISHED as `state()["signed_in"]`, so the
+window reads the session's own answer; cancel now requires an explicit `signed_in === false`, and an
+**absent** field reads as *do not cancel* — a cancelled live session cannot be recovered, while one
+left open closes itself after twenty idle minutes. `signed_in` deliberately excludes thread
+liveness (which `can_pull` / `can_calibrate` still add), so a momentary thread hiccup cannot read as
+"never signed in" and cancel a working session.
+
+**AND THE REASON THE WINDOW WAS BEING CLOSED AT ALL.** Owner, on being offered two browser tabs as
+the way round it: *"opening 2 tabs is not a good relaible way for a user , it is a work around"*. He
+is right, and the workaround was the symptom of a misplaced control: the report filters are read
+**through** the live session, so the button that reads them belongs in the window that is holding it.
+The live window now offers **📄 Reports & filters** once signed in, which opens the SAME
+`PortalReportEditor` over it (one home for folding a captured declaration into the rows — no copy of
+that logic in the window) while the window and its session stay open underneath. Nothing to close,
+no second tab, and no race against the idle timer.
+
+**Locked:** `backend/tests/unit/test_signed_in_is_not_a_phase_word.py` — the one home, the two gates
+dereferencing it, the published field, the browser's close handler carrying no phase word, cancel
+withheld on an absent field, a non-destructive exit always on screen, and the capture reachable from
+the window with exactly one editor in the tree. The `pulling` phase is asserted by name, because it
+is the phase the defect hid behind.
+
 ### COMMCALC-24.5 Cross-references
 
 Same class: §19.18 (a mechanism written and its callers left unwired is not a fix), §COMMCALC-13 (a
-status that outlived the process that owned it). Neighbours: §41 (the split deploy and the
-forwarder), §COMMCALC-10 (the progress watchdog on the same session), §COMMCALC-11 (the human check
+status that outlived the process that owned it), §COMMCALC-50.8 (a page judged by how it is built
+rather than by what it is doing — the same class, the same day, see §COMMCALC-24.6). Neighbours:
+§41 (the split deploy and the forwarder), §COMMCALC-10 (the progress watchdog on the same session), §COMMCALC-11 (the human check
 this session was parked on), §CORE-03 (where the credential it signs in with is sealed), §51 (the
 vendor-ordering door onto the same sessions), §COMMCALC-07 (the UPS pull this login exists to feed).
 
@@ -36186,6 +36231,54 @@ Same home, other axes: §COMMCALC-07 (the one pull loop), §COMMCALC-37 (declare
 §COMMCALC-38 (the column vocabulary), §COMMCALC-39 (`spec_key` and the capture). Neighbours:
 §COMMCALC-46 (the login declaration, which shares the calibration column), §COMMCALC-47 (the live screen
 the capture reads through).
+
+### COMMCALC-48.9 THE FOLD WAS DECLARED HERE AND DONE IN THE BROWSER — fourteen pages read, nothing added (owner report 2026-10-31)
+
+> Owner, 2026-10-31, having just signed in to the UPS Store reporting portal and pressed *Read this
+> page*: *"Read 14 pages (, , , , , , , , , , , , , ). Anything new is added below — nothing you
+> edited was replaced. Check it, then Save."* — followed by all fourteen rows still reading *"no
+> filters are declared, so it will export whatever the page happens to show"*.
+
+**§COMMCALC-48.4 above was already right, and had been right since the day it was written. Only the
+code had its own copy.** `report_declaration.merge_suggestion` is the declared home for folding a
+capture into a row, and it had **no production caller**: `PortalReportEditor.tsx` had written the
+fold again in TypeScript. This is the third-time-lucky failure §19.18 names — a registry written and
+its callers never wired to it — and a documented design is the easiest place for it to hide, because
+the index reads as though the wiring exists.
+
+**The two spellings.** A per-report RESULT names its report `report` throughout this module
+(`epay_sweep`, `merchant_portal_sweep`, `portal_report_pull.pull_one_report`,
+`capture_report_calibration`). An editor ROW names it `key` (`report_declaration.ROW_FIELDS`). The
+browser's copy did `suggested.find(x => x.key === row.key)`, so it compared a row's key against a
+field no capture carries. It matched nothing, for every tenant, every portal and every report, since
+the editor shipped — and printed the same missing field as the fourteen blanks in his message. The one
+bridge between the two spellings is `pos_report_sweep.spec_key` (§COMMCALC-39), which the declared
+merge goes through and the copy did not. The copy also de-duplicated on the SELECTOR alone, so a
+filter an operator had already declared by hand under a different selector came back a second time.
+
+**The fix.** The suggestions never reach the browser as something to merge. `router.
+_calibration_answer` folds them in through `merge_suggestion` and returns the rows already merged;
+the editor displays them. The rows **as they stand on the screen** travel with the request, because a
+merge into the stored declaration would silently drop an unsaved edit. Still writes nothing: the
+operator presses Save.
+
+**An absence needs the RIGHT reason (§COMMCALC-44).** "Read 14 pages" counted answers, not outcomes.
+The answer now carries, per report, whether the page was reached, how many controls it offered, how
+many filters were recognised, how many were NEW, the page's own error where there was one, and the
+controls whose purpose the page's words do not state — named for a human, never guessed into a filter.
+
+**Locked** — `backend/tests/unit/test_capture_merges_where_it_is_declared.py`, 13 tests. It FAILS if a
+capture stops naming its report `report` or starts also carrying `key`, if the route stops calling
+`merge_suggestion`, if a hand-declared filter is added twice, if an unsaved edit is merged over, if
+zero filters stops saying which reason it was, or if the editor folds a capture in again
+(`suggested.find`, `.find(x =>`, `new Set(row.params)`, `x.key` are all banned in `readPage`).
+
+### COMMCALC-48.10 Cross-references (48.9)
+
+§COMMCALC-39 (`spec_key`, the one rule for "which report is this", and the capture itself),
+§COMMCALC-44 (an absence needs the right reason), §COMMCALC-24.6 (the sibling sighting the same day: a
+surface deciding a fact from a word instead of asking where the fact lives), §19.18 (a registry
+written and its callers not wired).
 
 ## §COMMCALC-50. A PAGE THAT REFUSES US IS NOT A LOGIN FORM THAT RENDERS UNEXPECTEDLY — one vocabulary for what a portal answered with (owner report 2026-10-30)
 
