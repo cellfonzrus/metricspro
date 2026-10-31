@@ -42246,6 +42246,37 @@ The EAS CLI is installed with `npm install -g eas-cli@latest` rather than throug
 *"The process '/usr/local/bin/yarn' failed with exit code 1"*. `eas-cli` reads `EXPO_TOKEN` from the
 environment by itself, so the action was buying a second package manager and nothing else.
 
+### §CORE-26.8 The app's BINARY reaches a phone by itself (measured 2026-10-31)
+
+The sibling of §CORE-26.6, and the thing §CORE-26.7 proved was needed. `mobile-ota-update.yml`
+carries JavaScript to phones that already hold a COMPATIBLE app; on 2026-10-31 the owner's installed
+build was shown not to be one. So `.github/workflows/mobile-build-and-submit.yml` builds the binary
+and, on request, sends it to TestFlight / Play internal testing — in a browser, because the owner has
+no Mac and no terminal, which is the same reason publishing got a button.
+
+**It is deliberately NEVER automatic, and must not be given a `push:` trigger.** Publishing
+JavaScript is reversible: publish again. A submission to Apple is not — it notifies testers and
+cannot be recalled. The press of the button IS the authorisation, which is why `submit` is an input
+that names its consequence rather than a default hidden in the file. Same ruling as the money and
+migration carve-out in the autonomy directive: autonomy covers merging code, not shipping to a store.
+
+Shape, and what each part is there for:
+
+- **Gate on `EXPO_TOKEN` first**, so the job explains itself instead of dying inside the CLI. A build
+  needs MORE than publishing does — a read-only or publish-only token authenticates and then fails at
+  the build step, which reads as a mystery. The gate's message says so.
+- **`npm ci` before any EAS command.** `app.config.ts` is TypeScript; without the project's own
+  dependencies every command dies with `Unexpected token '{'` (§CORE-26.7).
+- **`npm run test` before building.** A binary reaching testers cannot be recalled, so this is the
+  last gate, not a duplicate of the pull request's.
+- **`eas build --wait`**, so the job's success means a finished binary and not a queued one.
+- **Declared vs resolved Expo version recorded BEFORE the build.** The defect that caused all of this
+  was only ever visible by comparing two version numbers nobody was printing.
+- **The result mirrored to the step summary and, on request, posted as a comment**, because GitHub's
+  job logs are unreachable from this repository's cloud container (the Azure blob host is not in its
+  network allowlist) — `gh api .../check-runs/<id>/annotations` is the only other way in.
+
+
 ### §CORE-26.5 Not money
 
 No endpoint, no table, no migration, no query, no figure. Nothing about what a number IS changes;
