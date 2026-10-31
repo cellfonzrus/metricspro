@@ -59,6 +59,9 @@ from app.modules.commcalc import derived_builds as _builds
 from app.modules.account import _period as _pd
 # THE one home of "a status line that must fit a column keeps its ends" (found 2026-10-27).
 from app.core import status_detail as _status_detail
+# THE complete paged read (index §19.48) — pure, stdlib-only at import, so this module stays importable
+# from the router, the sweeps and a harness.
+from app.modules.core import feed_read as _feed_read
 
 HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
 MIGRATION = "1030_auto_calc_on_landing.sql"
@@ -82,6 +85,9 @@ MAX_WAIT_FACTOR = 6
 
 # ── THE STATE — on commcalc.calc_status (UNIQUE org_id, period), mig 1030. ───────────────────────────────────
 STATE_TABLE = "calc_status"
+#: THE calculation's own OUTPUT, and therefore the honest answer to "which months does this org have
+#: commission figures for" — the months a declaration edit restates (`stored_periods`).
+STORED_OUTPUT_TABLE = "rep_commissions"
 COL_REQUESTED = "auto_calc_requested_at"
 COL_LANDINGS = "auto_calc_landings"
 COL_LAST = "auto_calc_last"
@@ -95,6 +101,10 @@ SOURCE_LABELS = {
     # NOT AN IMPORT AT ALL — a person changed a declaration (net payment terms, which table a carrier reads).
     # The sentence an operator reads has to say so, or a rebuild with nothing uploaded looks unexplained.
     "payable_source_map_edit": "a change to the carrier's payment terms or source settings",
+    # ALSO NOT AN IMPORT — somebody edited a commission plan, its rules, its tiers, its assignments or a
+    # payout schedule. Owner 2026-10-31: a plan edit must restate the months it paid, and the sentence an
+    # operator reads has to say that is why, or a recalculation with nothing uploaded looks unexplained.
+    "commission_plan_edit": "a change to a commission plan or payout schedule",
     "email_sweep": "Email Auto-Import",
     "ftp_sweep": "the FTP drop",
     "onboarding-import": "the mapped upload",
@@ -234,6 +244,95 @@ def resolve_config(tenant_row, house_row):
 def is_calc_feed(table):
     """True when `table` is one the Run Calculation reads — the registry's answer, never a list here."""
     return str(table or "").strip() in _lineage.COMMISSION_CALC_FEEDS
+
+
+# ── A DECLARATION EDIT CARRIES NO MONTH OF ITS OWN ──────────────────────────────────────────────────────────
+# Owner, 2026-10-31: *"i upldated the commission for luxelink in ny plan but it did not get auto updated as we
+# confirmed yesterday that everytime anything is change it will auto update acorss the board, i changed teh
+# comission from june - oct"*.
+#
+# A FEED landing says which month it is for; an EDIT to a commission plan does not. The months it restates are
+# the months whose stored figures that declaration produced — which the build names (`periods_fn`), not the
+# endpoint. Bounded, because a rate corrected today must not rewrite a month from two years ago: Cellfonz R Us
+# really does hold a `July 2024` row beside its 2026 months (measured 2026-10-31).
+#
+# RULE TWO: the bound is a POLICY, so a house default is the right shape for it — unlike a tenant's own
+# vocabulary, which may never have a default (owner directive 2026-10-30). A tenant that wants a different
+# horizon sets `commission_org_config.plan_edit_restate_months`; the column is read defensively, so a database
+# without migration 1111 keeps this default and nothing refuses.
+DEFAULT_RESTATE_MONTHS = 12
+RESTATE_MONTHS_BOUNDS = (1, 36)
+CONFIG_RESTATE_MONTHS = "plan_edit_restate_months"
+
+
+def _month_index(value):
+    """(year*12 + month) for a date, a datetime or any string a month-period parses out of. None if neither."""
+    y = getattr(value, "year", None)
+    m = getattr(value, "month", None)
+    if y and m:
+        return int(y) * 12 + int(m)
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    # An ISO day ('2026-10-31') is the common caller; `parse_period` reads its leading month fine.
+    pm, py = _pd.parse_period(raw)
+    if py and 1 <= pm <= 12:
+        return int(py) * 12 + int(pm)
+    return None
+
+
+def restate_periods(periods, now, months=None):
+    """The months a declaration edit restates: `periods`, canonicalized, deduplicated, oldest first, and
+    dropped once they are more than `months` behind `now`. PURE.
+
+    A month in the FUTURE is kept — a plan edited ahead of the month it pays is a real thing, and silently
+    skipping it is the same class of defect as this whole change.
+    """
+    bound = months if months is not None else DEFAULT_RESTATE_MONTHS
+    try:
+        bound = int(bound)
+    except (TypeError, ValueError):
+        bound = DEFAULT_RESTATE_MONTHS
+    lo, hi = RESTATE_MONTHS_BOUNDS
+    bound = max(lo, min(hi, bound))
+    here = _month_index(now)
+    out = []
+    for p in month_periods(periods):          # the ONE canonicalizer — never a second spelling rule here
+        idx = _month_index(p)
+        if here is None or idx is None or (here - idx) < bound:
+            out.append(p)
+    return out
+
+
+def restate_months_config(client, org_id):
+    """The org's own horizon, inheriting the house row, inheriting the code default. Never raises: a database
+    without migration 1111 has no such column and must keep restating on the default rather than refuse."""
+    for who in (org_id, HOUSE_ORG):
+        if not who:
+            continue
+        try:
+            rows = (client.schema("commcalc").table(CONFIG_TABLE).select(CONFIG_RESTATE_MONTHS)
+                    .eq("org_id", who).limit(1).execute().data) or []
+        except Exception:
+            return DEFAULT_RESTATE_MONTHS          # column absent — the whole ladder is unreadable
+        if rows and rows[0].get(CONFIG_RESTATE_MONTHS) is not None:
+            return rows[0][CONFIG_RESTATE_MONTHS]
+    return DEFAULT_RESTATE_MONTHS
+
+
+def stored_periods(client, org_id, now=None):
+    """THE months a commission-plan edit restates for this org: every month that HAS stored rep figures,
+    within the org's horizon. The build's `periods_fn` — so the months come from the registry, not from
+    whichever endpoint happened to be edited.
+
+    `rep_commissions` is the calculation's own OUTPUT, which makes it the honest answer to "which months did
+    this declaration produce figures for". A read failure RAISES rather than returning (), because () here
+    would mean "this edit restates nothing" — silently, which is the defect this module exists to stop.
+    """
+    rows = _feed_read.read_all(lambda: (client.schema("commcalc").table(STORED_OUTPUT_TABLE)
+                                        .select("period").eq("org_id", org_id)))
+    return restate_periods([r.get("period") for r in rows], now or _now(),
+                           restate_months_config(client, org_id))
 
 
 def month_periods(periods):
@@ -568,8 +667,12 @@ def landed(client, org_id, *, table, periods, source, filename=None, rows=None, 
         # registry's period-scoped build, asked through `is_calc_feed`), and every ORG-scoped snapshot whose
         # declared inputs include this table. A table that is neither is still answered honestly.
         is_feed = is_calc_feed(table)
+        # A DECLARATION OF REP PAY makes the period-scoped commission build stale exactly as a feed does
+        # (index §COMMCALC-41.9). Asked of the REGISTRY, so the plan tables are not a second list here.
+        _comm = _builds.by_key("commission")
+        declares_pay = bool(_comm) and table in _builds.config_inputs(_comm)
         stale = _builds.stale_builds(client, org_id, table)
-        if not is_feed and not stale:
+        if not is_feed and not declares_pay and not stale:
             return {"queued": False, "reason": "not_a_calc_input", "table": table}
         now = now or _now()
         cfg = load_config(client, org_id)
@@ -577,9 +680,17 @@ def landed(client, org_id, *, table, periods, source, filename=None, rows=None, 
         builds_out = _queue_builds(client, org_id, stale, entry, now, cfg)
         # A month-period is what the COMMISSION calculation is keyed on. A snapshot of "what we owe" is not a
         # month's figure, so a landing with no readable period still refreshes the org-scoped builds.
-        ps = month_periods(periods) if is_feed else []
-        if is_feed and not ps:
-            return {"queued": bool(builds_out.get("queued")), "reason": "no_period", "table": table,
+        ps = month_periods(periods) if (is_feed or declares_pay) else []
+        # AN EDIT CARRIES NO MONTH, so the build names the months it restates — bounded by the org's
+        # horizon, oldest first. A resolver failure is REPORTED and never read as "restates nothing".
+        periods_error = None
+        if declares_pay and not ps:
+            _ps, periods_error = _builds.build_periods(client, org_id, _comm, now)
+            ps = month_periods(_ps)
+        if (is_feed or declares_pay) and not ps:
+            return {"queued": bool(builds_out.get("queued")),
+                    "reason": "error" if periods_error else "no_period", "table": table,
+                    **({"error": periods_error} if periods_error else {}),
                     "builds": builds_out}
         if not cfg["on"]:
             for p in ps:
@@ -596,6 +707,7 @@ def landed(client, org_id, *, table, periods, source, filename=None, rows=None, 
                 **({} if queued else {"reason": "error" if builds_out.get("error") else "nothing_queued",
                                       "error": builds_out.get("error")}),
                 "mode": "durable" if durable else "process", "builds": builds_out,
+                **({"periods_error": periods_error} if periods_error else {}),
                 "debounce_minutes": cfg["debounce_minutes"],
                 "sentence": (sentence("queued", ", ".join(ps), [entry], at=_iso(now),
                                       debounce_minutes=cfg["debounce_minutes"]) if ps
