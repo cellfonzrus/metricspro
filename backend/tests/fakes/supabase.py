@@ -88,6 +88,18 @@ class _Query:
     def is_(self, col: str, val: Any) -> "_Query":
         self._filters.append(("is", col, val)); return self
 
+    @property
+    def not_(self) -> "_Not":
+        """PostgREST's negation: `.not_.is_("trans_ts", "null")` = "and it is NOT null".
+
+        The real client exposes `not_` as a PROPERTY returning a builder whose operators negate, so
+        the double does the same — a method would pass a test and fail the app. Added 2026-10-31
+        while testing the Productivity Insights fix: `commcalc/router._tx` composes exactly this
+        call, the double raised AttributeError, and the endpoint's `except` swallowed it into "no
+        transaction-time data yet". A read that works in production must not read as absent here.
+        """
+        return _Not(self)
+
     def or_(self, expr: str, **_kw) -> "_Query":
         """PostgREST's `or=(a.eq.1,b.is.null)` — a comma-separated list of `col.op.value` terms, of
         which ONE must hold. The real client takes it as the raw string the caller composed, so the
@@ -138,6 +150,11 @@ class _Query:
         for op, col, val in self._filters:
             if op == "or":
                 if not any(self._term(row, *t) for t in val):
+                    return False
+                continue
+            if op == "not":
+                inner_op, inner_col, inner_val = val
+                if self._term(row, inner_op, inner_col, inner_val):
                     return False
                 continue
             if not self._term(row, op, col, val):
@@ -239,6 +256,55 @@ class _Query:
             return FakeResponse(removed, count=len(removed))
 
         raise NotImplementedError(f"the Supabase double does not implement '{self._verb}'")
+
+
+class _Not:
+    """The negating half of `_Query.not_`. One operator call, then control returns to the query.
+
+    It owns no state of its own: each operator records a ("not", None, (op, col, val)) filter on the
+    query it wraps and hands the QUERY back, so `.not_.is_(…).eq(…).limit(1)` chains exactly the way
+    the real builder does and only the one negated term is inverted. An operator the double does not
+    implement raises rather than matching everything — the failure mode a test must never pass under.
+    """
+
+    _OPS = ("eq", "neq", "gt", "gte", "lt", "lte", "is_", "in_")
+
+    def __init__(self, query: "_Query"):
+        self._query = query
+
+    def _add(self, op: str, col: str, val: Any) -> "_Query":
+        self._query._filters.append(("not", None, (op, col, val)))
+        return self._query
+
+    def eq(self, col: str, val: Any) -> "_Query":
+        return self._add("eq", col, val)
+
+    def neq(self, col: str, val: Any) -> "_Query":
+        return self._add("neq", col, val)
+
+    def gt(self, col: str, val: Any) -> "_Query":
+        return self._add("gt", col, val)
+
+    def gte(self, col: str, val: Any) -> "_Query":
+        return self._add("gte", col, val)
+
+    def lt(self, col: str, val: Any) -> "_Query":
+        return self._add("lt", col, val)
+
+    def lte(self, col: str, val: Any) -> "_Query":
+        return self._add("lte", col, val)
+
+    def is_(self, col: str, val: Any) -> "_Query":
+        return self._add("is", col, val)
+
+    def in_(self, col: str, vals: Iterable[Any]) -> "_Query":
+        return self._add("in", col, list(vals))
+
+    def __getattr__(self, name: str):
+        raise NotImplementedError(
+            f"the Supabase double does not implement not_.{name}() — implement it here, in the one "
+            f"home, rather than stubbing it in a test"
+        )
 
 
 class _Table:

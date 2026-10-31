@@ -40827,6 +40827,63 @@ fails the build until its line is deleted, and `PINNED_MAX` in `run-proofs.mjs` 
 (**4**) and may only go down. The four entries are declared with what is actually wrong with each —
 one real assertion failure, three whose runner lost the `@/` tsconfig path alias when transpiling to
 a temp directory. They are **reported, not hidden**, and fixing them is its own change.
+
+### CORE-19.9 Every internal import resolves, or the build fails (2026-10-31)
+
+**The report.** The owner opened Productivity Insights for one store and got *"A system error
+occurred. Reference: 15fd7054"*. The reference resolved in `core.failure_log` to:
+
+```
+File "/app/app/modules/commcalc/router.py", line 37586, in productivity_insights
+    from app.modules.commcalc.staffing_heatmap import hhmm_to_hours
+ModuleNotFoundError: No module named 'app.modules.commcalc.staffing_heatmap'
+```
+
+`staffing_heatmap` is in `app.modules.storeops` and always has been. Every store, every tenant,
+both metrics: the page could not load at all.
+
+**The class, not the instance (owner directive 2026-09-20).** The general fact that was wrong is
+not "one statement names the wrong package". It is that **a function-local import of our own code
+is checked by nothing in this repo.** It is not executed at boot, so the app starts clean; it is
+reached only when a user presses the button, so CI stays green; and `backend-integration` only
+proves the modules its own tests happen to reach, out of 2,624 such statements.
+
+**The sibling, found by the lock and not by a report.** `GET /commcalc/my-shelf` opened with
+`from app.modules.commcalc import unsold_inventory` — it is in `app.modules.payables`, as its eight
+other callers say. Same defect, unreported, waiting for the first rep to open their shelf. Both
+were fixed in the same PR.
+
+| Fact | Its one home |
+|---|---|
+| Every `app.*` import resolves to a real module and a real symbol | `backend/tests/unit/test_internal_imports_resolve.py` |
+| What `.not_` means on the database double | `backend/tests/fakes/supabase.py` (`_Not`) |
+| The reported surface still loads, per tenant | `backend/tests/integration/test_productivity_insights_endpoint.py` |
+| The sibling surface still loads, per tenant | `backend/tests/integration/test_my_shelf_endpoint.py` |
+
+**The lock.** A unit test, so the existing `backend-unit` CI job gates it and nothing joins
+`harness_unrun_pending.txt`. It is **static**: `importlib.util.find_spec` locates a module without
+executing it, and the target module's own source is parsed for the names it defines — importing
+`app.modules.*` for real would pull in config, Supabase clients and route registration, which is
+exactly the work `tests/unit` must not do. Two sweeps plus a floor that fails if the walk stops
+seeing imports at all, and the two fixed statements are additionally pinned by their fixed text so
+a revert names itself. A module whose names cannot be read statically (`import *`, a module-level
+`__getattr__`) has its symbol check skipped rather than guessed at; module resolution still applies
+to it. Verified red before green: both defects failed it, with their own file and line.
+
+**What it deliberately does not claim.** It is a NAME check, not a signature or behaviour check.
+It is a floor under every import, not a substitute for testing what they return.
+
+**Also fixed here, in the double rather than in a test.** `commcalc/router._tx` composes
+`.not_.is_("trans_ts", "null")`. The double had no `not_` at all, so the attribute lookup raised,
+the endpoint's broad `except` turned it into *"no transaction-time data yet"*, and the busy-hours
+row silently fell back to the staffing proxy — a test could have asserted the proxy and called it
+correct. `not_` is now implemented in the one home (`_Not`, a property like the real client's, not
+a method) with its semantics pinned in `tests/unit/test_supabase_double.py`.
+
+**No table, endpoint, report or migration** — nothing to add to §16, §17 or §18.
+
+Same class: §19.25 and its four repeats (a gate that does not run is not a gate), §CORE-19.2.
+
 ## §CORE-22. A PAGE LOAD NEVER QUERIES ONCE PER ITEM, AND THE BACKLOG ONLY SHRINKS (owner ask 2026-10-29)
 
 **Owner 2026-10-29:** *"how to avoid these extr rounds trip calls"*.
