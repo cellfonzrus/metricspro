@@ -33993,7 +33993,7 @@ def my_shelf(as_of: str = "", authorization: str = Header(default=""), org_id: s
     reports WHY — no snapshot, no span, or a span with no devices — rather than rendering as zero.
     """
     from app.modules.commcalc import inventory_stock_age as _isa
-    from app.modules.commcalc import unsold_inventory as _unsold
+    from app.modules.payables import unsold_inventory as _unsold
     from app.modules.asset.inventory_buckets import inv_bucket
     from app.modules.storeops.router import scope_keyset, in_keyset
     require_org(org_id)
@@ -37583,7 +37583,7 @@ def productivity_insights(period: str, store_code: str, metric: str = "acc", org
     from datetime import datetime as _dt2, timedelta as _td2
     from app.modules.commcalc import productivity_fit as _pf
     from app.modules.storeops.router import _biz_tz_for_store
-    from app.modules.commcalc.staffing_heatmap import hhmm_to_hours
+    from app.modules.storeops.staffing_heatmap import hhmm_to_hours
     require_org(org_id)
     sc = str(store_code).strip()
     client = sb()
