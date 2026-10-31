@@ -15628,7 +15628,7 @@ def _do_b2b_sweep(org_id):
         # these, never by a vendor spelled in code
         conn = _connector_scope(_connector_scope_ctx(client, org_id), _sweep_table_slug('b2b_sweep_config', cfg))
         res = b2b_sweep.run_inventory_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'],
-                                            connector=conn, tz=cfg.get('timezone'))
+                                            tz=cfg.get('timezone'), connector=conn)
         # HONEST ZERO: the login can succeed and the report still parse 0 stores (a renamed store/value
         # column, a layout we don't flatten). That is NOT an import — recording it as 'ok' + a fresh
         # last_run_at is exactly the false green the 2026-07-26 audit removed. Same posture the email
