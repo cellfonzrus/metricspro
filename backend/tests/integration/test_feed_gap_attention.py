@@ -1,5 +1,5 @@
 """Integration: a trading day of sales that never arrived reaches the attention surface — for EVERY
-tenant (project rule 2026-10-30; index §15z.1).
+tenant (project rule 2026-10-30; index §COMMCALC-51).
 
 Owner (2026-10-31): *"this is a big problem for management iff we wil miss trading days, we need to
 get this fix right away"*.
