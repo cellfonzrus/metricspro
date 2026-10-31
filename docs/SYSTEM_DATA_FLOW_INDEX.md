@@ -187,6 +187,7 @@ Primary code homes:
 | COMMCALC-48 | **The reports a login pulls are edited, not coded — one editable declaration** | "start defining the reports from the back end again, not hardcoded but consumer defined editable". Which reports a tenant pulls and the filters each one needs were already config — in two columns no screen could write, so in practice they were declarable only in SQL. One derived editor shape over the same two columns, with the round trip pinned as the identity. |
 | COMMCALC-49 | **What to order, from what the stores actually sold — and one answer to "how many will sell next"** | "process accessory orders based on the previous 3 months of average sales … asking the user to enter where the spoecific model is end of life or current". The device models the stores sold, ranked, waiting on a human ruling before anything is projected — and the velocity arithmetic that question needs, which was already written twice, factored into one home both older forecasts now read. |
 | COMMCALC-50 | **A page that refuses us is not a login form that renders unexpectedly** | "live login for the billing initated" — and it came back "Could not find the login form. The login form may render differently than expected — check the screenshot." The screenshot showed no form at all: the portal had refused the request in plain words, carrying its own error reference. Three vocabularies answered "is this page refusing us", two of them hardcoded, and none of them held that wording. And the other half of that question — *is a form on this page at all?* — was never asked, so the UPS reporting portal's own sign-in form read as a bot wall because its markup says "captcha" (§50.8, owner 2026-10-31). |
+| COMMCALC-51 | **A login outcome is read off what the page is doing, never off how it is built** | "all these reports should have been updated automatically with the portal access via chron jobs why is this not happeneing neds to be found first and then fixed" — three carrier feeds dark since 9 October while the scheduler fired 1,665 times and 1,056 consecutive runs reported "credentials rejected". That sentence was a substring search over `page.content()`, so a portal that merely BUNDLES the word "invalid" read as having said it, and a human check, an edge refusal and a changed sign-in flow were all reported as a wrong password. |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
@@ -26188,6 +26189,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-48 | commcalc |
 | COMMCALC-49 | commcalc |
 | COMMCALC-50 | commcalc |
+| COMMCALC-51 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -36239,6 +36241,174 @@ first), §COMMCALC-11 (an invisible human check is still a check — the excused
 the class the prefill report belongs to).
 Neighbours: §COMMCALC-47 (the live screen the screenshot comes from), the mig-244 cooldown ladder.
 Reading rule dereferenced: §4b.1 (any-subset column reads — see §COMMCALC-50.5a).
+
+## §COMMCALC-51. A LOGIN OUTCOME IS READ OFF WHAT THE PAGE IS DOING, NEVER OFF HOW IT IS BUILT — one home for "we submitted a login, what happened" (owner report 2026-10-31)
+
+> Owner, 2026-10-31, reading the upload page: *"all these reports should have been updated
+> automatically with the portal access via chron jobs why is this not happeneing neds to be found
+> first and then fixed"*. Three cards, all stale:
+>
+> > Comprehensive comp report — Last upload: Oct 8, 2026, 1:59 PM · 2,439 rows · via manual upload
+> > Commission payment detail (processor) — Last upload: Oct 8, 2026, 1:38 PM · 495 rows · via manual upload
+> > MI & ATU report — Last upload: Oct 9, 2026, 6:05 AM · 45,510 rows
+
+### COMMCALC-51.1 WHAT WAS MEASURED (production, read-only, 2026-10-31)
+
+The scheduler was never the problem, and this is the number that says so:
+
+| fact | value |
+| --- | --- |
+| `commcalc.epay_sweep_config` | `enabled=true`, `frequency=daily`, all three reports ticked |
+| `last_attempt_at` | 2026-10-31T19:30:16Z — **the current half-hour** |
+| `last_run_at` (advances only on a run that IMPORTED) | 2026-10-09T10:07:03Z |
+| `last_detail` | `epay login failed — credentials rejected (or the application/2FA changed).` |
+| `core.job_run` rows `sweep:epay_sweep_config` | 1,665, every 30 minutes, no gap |
+| last run that logged in | 2026-10-09T19:30:43Z — `Login OK · <menu hover timed out>` |
+| first "credentials rejected" | 2026-10-09T20:00:12Z |
+| consecutive identical failures since | **1,056** |
+| `updated_at` on the credential row | 2026-08-09 — so the Railway rotation (2026-10-22) never touched it |
+
+**ONE login broke and all three reports ride it**, which is why three independent feeds froze on the
+same evening. `commcalc.upload_log` says how much automation there ever was:
+
+| feed | automatic loads (`filename = 'epay auto-sweep'`) |
+| --- | --- |
+| `mi_report` | daily, through 2026-10-09T10:05Z (45,510 rows), then none |
+| `payment_detail` | **one**, 2026-10-04T10:06Z (19,954 rows). Everything else manual |
+| `comp_report` | **never, not once.** Every row is a hand-uploaded workbook |
+
+### COMMCALC-51.2 THE DEFECT
+
+Twenty-two days of identical failures and nobody could act, because the one sentence the platform
+offered could not be trusted. It was produced like this:
+
+```python
+body = (page.content() or "").lower()                   # the MARKUP
+if any(w in body for w in ("invalid", "incorrect", "failed")) and "passwordinput" in body:
+    raise EpayLoginError("epay login failed — credentials rejected (or the application/2FA changed).")
+```
+
+`page.content()` serialises every inline script, template, HTML comment and hidden node. A
+single-page application that merely **bundles** `var M={invalid:"Invalid user name or password"}`
+reads as having said it. The verdict is about how the document is BUILT.
+
+Two more faults rode in the same predicate:
+
+- **Success was a brand name.** The only route to "the login worked" was the vendor's own words in
+  the document title (`"owner portal" in title`). A carrier name in code (RULE TWO), and a portal
+  that merely retitles its shell reads as a failed login — for every tenant on it.
+- **Three outcomes wore one coat.** "The portal refused this password", "the portal served a human
+  check" and "the sign-in flow changed" need three different actions: re-enter the credential; sign
+  in live or change egress; a developer. All three were reported as the first, so everyone who read
+  the status went and re-typed a password that may well have been correct.
+
+### COMMCALC-51.3 THE CLASS, not the instance
+
+**A page judged by how it is BUILT, not by what it is DOING.** Second sighting in two days: the same
+shape made a working sign-in form read as a bot wall because its markup carried the word `captcha`
+nine times and its visible text none (§COMMCALC-50.8). The remedy is identical — ask the page what
+it is doing.
+
+### COMMCALC-51.4 THE ONE HOME
+
+`backend/app/modules/commcalc/login_outcome.py` — PURE, stdlib only, no DB, no network, no page
+object. A caller hands it the facts it has already read and gets a named outcome and one operator
+sentence.
+
+| outcome | means | the remedy, and it is the only one offered |
+| --- | --- | --- |
+| `signed_in` | we are inside the application | nothing |
+| `credentials_rejected` | the portal itself said the credential is not accepted | re-enter it; a portal also refuses one it has expired or an account it has locked |
+| `human_check` | an anti-automation check was served instead | live sign-in or a different egress. **The password is not implicated** |
+| `portal_refused` | the portal refused outright; no sign-in was ever offered | check the saved address, or the server's IP. **The password is not implicated** |
+| `login_page_changed` | we reached the form, submitted, and were neither let in nor told why | a developer. Re-entering the credential will not help |
+| `unknown` | the sign-in page went away and we did not recognise what replaced it | say so; never guess |
+
+The rules that make it a design fix rather than a better word list:
+
+- **Structure and VISIBLE text only.** Is the form still on screen (`query_selector` + `is_visible`),
+  and what does the page SAY where a person reads it (`document.body.innerText`).
+- **The evidence is a REQUIRED keyword argument with no default.** A caller that has not looked at
+  the page cannot get an answer. A default here would be the module guessing on a driver's behalf,
+  which is exactly how the markup predicate always had something to say.
+- **`is_credential_problem` is an ALLOWLIST** (`_CREDENTIAL_OUTCOMES`), so an outcome nobody has
+  ruled on stays quiet about the password rather than blaming it.
+- **A refusal beside a live form wins; a signed-in shell wins over everything else; a challenge or
+  refusal is believed only when the form is ABSENT** — §COMMCALC-50.8's rule applied here, not
+  copied here.
+- **RULE TWO:** no carrier, tenant or portal name appears, and the marker lists are POLICY (what any
+  application's shell and any form's error region look like) a caller may override.
+
+### COMMCALC-51.5 Every caller wired — both drivers, not the one that surfaced it
+
+| driver | how it asked before | now |
+| --- | --- | --- |
+| `epay_sweep._login` (browser) | markup substring + brand title | `login_outcome.verdict(...)`, from `login_form_present` + `visible_text` + `portal_backoff.page_verdict` on the VISIBLE text |
+| `dlar_sweep.login` (plain HTTP, no browser) | detection sound — a page that needs a session — but **every** failure named `credentials rejected` | same probe, outcome named by the one home via `login_outcome.visible_from_html` + `form_in_html` |
+
+`dlar_sweep`'s probe is deliberately untouched: asking for a page that needs a session is the right
+test. Only the NAMING was wrong, and only the naming moved. Where a redirect carries no body the
+driver follows it once, read-only, so there is a page to judge instead of a guess.
+
+Two one-homes added inside `login_outcome` for the browserless driver: `visible_from_html` (strip
+comments, `<script>`, `<style>`, `<template>`, `<noscript>`, tags; unescape; collapse) and
+`form_in_html` (keyed on a password INPUT, which is what a sign-in form IS — never the word
+"password" in prose). This is not the banned pattern wearing a hat: the ban is on DECIDING from
+markup, and recovering the readable text first is the remedy. The bundled `var M={invalid:…}` that
+caused the outage lives in a `<script>` and does not survive the recovery.
+
+### COMMCALC-51.6 The refusal vocabulary now holds the page the portal actually serves
+
+Measured live from a cloud container against the portal's own host, 2026-10-31: `GET /` returns
+**HTTP 200** carrying an F5 appliance page — `<title>Request Rejected</title>` / "The requested URL
+was rejected. Please consult with your administrator." It matched **no** marker in
+`portal_backoff.DEFAULT_REFUSAL_MARKERS`, so a portal refusing us at the edge surfaced as
+`Page.wait_for_selector: Timeout 30000ms exceeded` — a selector and no remedy. Both spellings are
+seeded now (`request rejected`, `requested url was rejected`); per-org
+`commcalc.portal_block_marker` rows still override.
+
+A locked account is a refusal and portals phrase it four ways; all four are seeded
+(`is locked` / `been locked` / `account locked` / `locked out`), because a phrasing nobody listed is
+a feed that goes quiet — the shape of this whole section.
+
+### COMMCALC-51.7 Every tenant, not the one that surfaced it
+
+`commcalc.epay_sweep_config` holds ONE row (the house org), so only the house tenant could surface
+this — and every other tenant's portal was equally affected the moment it was configured, because
+the brand-title success test could only ever recognise one portal. Nothing in the one home or in
+either driver's verdict names a portal now; `harness_login_outcome.py` §G asserts it rather than
+trusting it, and the driver tests parametrise three different portal shells.
+
+### COMMCALC-51.8 Locked
+
+`backend/harness_login_outcome.py` — 90 checks, DB-free and browser-free. It fails the build if a
+driver takes a login decision off `page.content()` again, if a driver stops dereferencing the one
+home, if a second home for the question appears, if the credential test stops being an allowlist, if
+an outcome loses its remedy, if the evidence arguments grow defaults, or if a portal name re-enters
+the decision. The source scan strips comments **and** docstrings first, on the 2026-10-30 precedent
+that a comment naming the defect otherwise reads as the fix's own violation.
+
+Tests: `tests/unit/test_login_outcome_reads_the_page.py` (25),
+`tests/integration/test_epay_login_says_what_happened.py` (14),
+`tests/integration/test_dlar_login_says_what_happened.py` (7). The epay page double counts
+`content()` calls and asserts **zero** — the class is locked structurally, not by a text search.
+
+### COMMCALC-51.9 What this does NOT fix, stated plainly
+
+- **It does not restore the feeds.** Whether the saved credential is genuinely refused is only
+  answerable by a login attempt, and the portal's edge refuses this container. What ships is the
+  platform telling the operator WHICH of the five things is happening, which is what twenty-two days
+  of "credentials rejected" denied them.
+- **The comp report has never once arrived automatically**, and that is a separate, older fault:
+  its `Summarize by` control cannot be set, so the portal returns a header-only workbook (the cause
+  is already written down at `epay_sweep.py`'s comp-cadence note, and the §19.41 ledger has been
+  reporting `unverified_no_data` for it since 2026-10-04). Not touched here.
+- **The upload page still says nothing about a dead automation.** `import_audit.p_connectors`
+  already raises `commcalc:failed:epay_sweep_config` as an `error` attention item — the mechanism
+  exists and fired — but the surface the owner was actually reading shows the last upload and how it
+  arrived, and goes quiet about the automation behind it having last succeeded 22 days ago. That is
+  the surface half, and it is the reason this sat so long.
+
 
 ## §CORE-17. A REPORTED FIGURE NAMES THE ROWS BEHIND IT — the one drill-down (owner ask 2026-10-24)
 
