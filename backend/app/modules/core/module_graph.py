@@ -715,13 +715,13 @@ FACTS: dict[str, dict] = {
             # a landed upload says whether the source was in a cooldown when it was due
             'app/modules/commcalc/import_audit.py': ('_pb',),
             # the two sweeps that ask the vocabulary when a LOGIN failed, so a page refusing us at
-            # the edge is named a refusal rather than a rejected credential (§COMMCALC-51). Both ask
+            # the edge is named a refusal rather than a rejected credential (§COMMCALC-52). Both ask
             # it against the page's VISIBLE text, never its markup — that is the point of §51.
             'app/modules/commcalc/epay_sweep.py': ('_pb',),
             'app/modules/commcalc/dlar_sweep.py': ('_pb',),
         },
     },
-    # ── §COMMCALC-51 — what happened to the login we just submitted ─────────────────────────────
+    # ── §COMMCALC-52 — what happened to the login we just submitted ─────────────────────────────
     'login_outcome': {
         "question": 'We submitted a portal login. WHAT HAPPENED — and what is the ONE thing the '
                     'operator should do about it? Three portal drivers answered this three ways and '
@@ -752,7 +752,7 @@ FACTS: dict[str, dict] = {
                     'MAILBOX sweep says "login rejected" for an IMAP [AUTHENTICATIONFAILED], which '
                     'is a protocol answer with no page to misread.',
         "homes": ('app/modules/commcalc/login_outcome.py',),
-        "index": ('COMMCALC-51',),
+        "index": ('COMMCALC-52',),
         "locks": ('harness_login_outcome.py',),
         # SNAPSHOT — written BY HAND (§50). All three portal drivers dereference it for the NAME and
         # for the operator sentence; each still reads its own page its own way, because what the
@@ -767,7 +767,7 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/vidapay_sweep.py': ('_lo',),
         },
     },
-    # ── §COMMCALC-52 — what day is it where this portal lives ────────────────────────────────────
+    # ── §COMMCALC-53 — what day is it where this portal lives ────────────────────────────────────
     'tenant_today': {
         "question": 'A feed window, an "as of" stamp, a staleness age — WHAT DAY IS IT, for this '
                     'tenant? Three portal drivers resolved it against the CONTAINER\'s clock '
@@ -795,7 +795,7 @@ FACTS: dict[str, dict] = {
                     'disagree only either side of midnight on the 1st) and `today` is already '
                     'injectable there, so a caller that cares passes the tenant\'s day.',
         "homes": ('app/modules/notify/report_filters.py',),
-        "index": ('COMMCALC-52',),
+        "index": ('COMMCALC-53',),
         "locks": ('harness_feed_window_tenant_day.py',),
         # SNAPSHOT — written BY HAND (§50). Each driver binds the home's function object rather than
         # calling through a wrapper, so the dereference is provable by identity, not by grep.

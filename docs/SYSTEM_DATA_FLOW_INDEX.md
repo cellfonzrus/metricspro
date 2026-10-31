@@ -187,8 +187,9 @@ Primary code homes:
 | COMMCALC-48 | **The reports a login pulls are edited, not coded — one editable declaration** | "start defining the reports from the back end again, not hardcoded but consumer defined editable". Which reports a tenant pulls and the filters each one needs were already config — in two columns no screen could write, so in practice they were declarable only in SQL. One derived editor shape over the same two columns, with the round trip pinned as the identity. |
 | COMMCALC-49 | **What to order, from what the stores actually sold — and one answer to "how many will sell next"** | "process accessory orders based on the previous 3 months of average sales … asking the user to enter where the spoecific model is end of life or current". The device models the stores sold, ranked, waiting on a human ruling before anything is projected — and the velocity arithmetic that question needs, which was already written twice, factored into one home both older forecasts now read. |
 | COMMCALC-50 | **A page that refuses us is not a login form that renders unexpectedly** | "live login for the billing initated" — and it came back "Could not find the login form. The login form may render differently than expected — check the screenshot." The screenshot showed no form at all: the portal had refused the request in plain words, carrying its own error reference. Three vocabularies answered "is this page refusing us", two of them hardcoded, and none of them held that wording. And the other half of that question — *is a form on this page at all?* — was never asked, so the UPS reporting portal's own sign-in form read as a bot wall because its markup says "captcha" (§50.8, owner 2026-10-31). |
-| COMMCALC-51 | **A login outcome is read off what the page is doing, never off how it is built** | "all these reports should have been updated automatically with the portal access via chron jobs why is this not happeneing neds to be found first and then fixed" — three carrier feeds dark since 9 October while the scheduler fired 1,665 times and 1,056 consecutive runs reported "credentials rejected". That sentence was a substring search over `page.content()`, so a portal that merely BUNDLES the word "invalid" read as having said it, and a human check, an edge refusal and a changed sign-in flow were all reported as a wrong password. |
-| COMMCALC-52 | **A feed window's day comes from the tenant's zone, never the server's** | "if we access to one behind that door then all should be downloaded automatically" — two of the three feeds would, once the login was honest (§COMMCALC-51). The third never had an access problem: the comprehensive comp report has not arrived automatically ONCE since the leg was built, because the window was built on `datetime.now(timezone.utc).date()` while its slot is 23:30 in the tenant's zone — 03:30 UTC the NEXT day. Every run asked the portal for a day that had not begun where the portal lives, and the resulting zero was read as "no compensation posted". The rule already had a home, written 2026-07-30, whose docstring states this exact defect; nothing in commcalc read it. |
+| COMMCALC-51 | **A missing trading day is audible** | "this is a big problem for management iff we wil miss trading days, we need to get this fix right away" — said of a store that never delivered 22 and 23 September, which surfaced only because a rep's commission claim read $224 above our own data. The day state had named it NOT REPORTED all along; the sales report refuses to email a missing feed (correctly) and handed it to import health, which had no check for it. What does a correct fact no surface asks for amount to, and who hears the 324 store-days we never received? |
+| COMMCALC-52 | **A login outcome is read off what the page is doing, never off how it is built** | "all these reports should have been updated automatically with the portal access via chron jobs why is this not happeneing neds to be found first and then fixed" — three carrier feeds dark since 9 October while the scheduler fired 1,665 times and 1,056 consecutive runs reported "credentials rejected". That sentence was a substring search over `page.content()`, so a portal that merely BUNDLES the word "invalid" read as having said it, and a human check, an edge refusal and a changed sign-in flow were all reported as a wrong password. |
+| COMMCALC-53 | **A feed window's day comes from the tenant's zone, never the server's** | "if we access to one behind that door then all should be downloaded automatically" — two of the three feeds would, once the login was honest (§COMMCALC-51). The third never had an access problem: the comprehensive comp report has not arrived automatically ONCE since the leg was built, because the window was built on `datetime.now(timezone.utc).date()` while its slot is 23:30 in the tenant's zone — 03:30 UTC the NEXT day. Every run asked the portal for a day that had not begun where the portal lives, and the resulting zero was read as "no compensation posted". The rule already had a home, written 2026-07-30, whose docstring states this exact defect; nothing in commcalc read it. |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
@@ -6022,7 +6023,7 @@ returning; `Ranganath, Ranganath` / `Namir, Md` / `chowdary, Thanvi` are three r
 | **ATU opportunity** | mig `295` | `atu_opportunity.py`; `/atu-opportunity` `28410` **DRILL-DOWN §CORE-17.3t:** the unconverted recharge and the two activation counts the attach rates are computed from open to the STORE ROWS behind them — two UNITS over one PROVENANCE (§CORE-17.3l), the transaction-grain sales read, whose provenance this endpoint had been DISCARDING (defect 7, carried read-only now). All six tiles are REFUSED and each for a stated reason: the three customer counts are per mobile number and the per-store table carries none; the carry figures, the annualised figure and the customer saving are this fold multiplied by a rate typed into the assumptions and one has no rows at all (§CORE-17.3m); every attach percentage is a rate (§CORE-17.3h). Server-folded. Declaration `commcalc/performance_coaching_drilldown.py` (`atu_drilldowns`), proof `harness_batch20_drilldown.py` §D |
 | **Activation TYPE of a POS sale line — THE predicate (2026-09-21)** | `raw_sales` / `daily_sales_feed` lines (any column: `contract_type`, `category` path, `product_desc`, `department`, `trans_type`) × `accessory_config.activation_details_rules` (`fields` / `tokens` / `exact` / `auto_activation_tokens` / `hints` / `metric_hints` / `broad_attested` — extended mig-313 JSON, NO migration; house defaults = the retired classifiers; THE NO-LEAK RULE: house tokens fill an undeclared class only under the house field) | `commcalc/line_class.py` (PURE: `activation_class` / `classify_line` / `bucket_of` / `resolve_rules` (`house_fill`) / `count_classes` (+ `broad` / `refused`) / `gate_open` / `token_shares` / `broad_tokens` / `refused_tokens` / `rules_refused` / `refusal_sentence` / `norm_broad_ok` / `suggest_rules` / `suggest_metric_rules` / `merge_into_raw`); resolved ONCE by `router._line_rules_resolve` (the loader `_accessory_config_uncached` → `acfg['line_rules']`, and the 2.5a save's guard — no second resolution; + `_line_rules_of`, `_line_skip`); dereferenced by `calculator.calc_rep_commissions` (`cfg['line_class_rules']`, threaded by the calc endpoint + `payout_accrual`), `commission_engine._activation_buckets` / `_read_ct_classification_config`, `plan_options._resolved_bucket`, `router._sales_cell_agg` (Sales Report / Exec MTD / Daily Targets; the Port sub-split is the predicate's `'port'`), `_blank_ct_bucket_map` (the mig-224 transaction rescue SUPPLEMENTS it), `_classification_gaps`, `/sales-report/detail`, `whatif._byod_mdns` / `accessory_byod_correlation`, `sales_comparison.tally` (`line_rules`), `closing.router._b2b_counts_by_store` (+ the tender split) via `_line_rules`, `marketing/event_sales.org_classifier`; written ONLY by `PUT /accessory-config` (`activation_details_rules`, merged — the AD-basis keys beside it untouched) which the intake's `PUT /onboarding/intake/line-class` calls. Proof `harness_line_class.py` (47: predicate, the money pin, the suggestion engine over the measured vocabulary, the aggregation + pay path counting 39/25/23 by distinct invoice, §G the too-broad guard / no-leak / seed); lock `harness_line_class_lock.py` (29) |
 | **Activation-Details basis (b2b activation TYPE buckets)** | `raw_custom_import` (signature-detected sheet: `Serial#`+`Contract Type`); config `accessory_config.activation_details_rules` — mig `313_activation_details_bucket_rules` (per-org token rules; RULE TWO) | `activation_bucketing.py` (PURE: `activation_details_bucket`/`resolve_rules`/`BUCKET_RANK`/`TOTAL_ACTIVATION_EXCLUDED`) ← delegated to by `router._activation_details_bucket`; rules loaded per-org by `_activation_details_rules` (defensive, mig-214 posture); resolver `_cr_resolve_activation_details` (serial-dedup by rank); consumers `_ad_cells_full` → `_apply_activation_basis` (Exec MTD + Sales Report), `_ad_activation_buckets` (metric recon), `GET /activation-counts/{period}`; proof `harness_activation_bucketing.py`. HOUSE DEFAULTS (2026-09-01 approved fix): Edge = whole-word `edge` in CONTRACT TYPE only (`edge_name_tokens` opts device-name matching back in per org — the Motorola-Edge over-match trade-off); `BYOD Upgrade` = its own hidden bucket (excluded from Total Activation exactly like Upgrade, NOT shown in the Upgrade column; `upgrade_hidden_contract_tokens: []` restores one family) |
-| **ZERO SALES — store-days / rep-days with NO activation and NO upgrade** §15z | mig `1016` (`commcalc.zero_sales_config`, **NOT applied**; absent ⇒ `zero_sales.HOUSE_CONFIG`, the shipped behaviour) | `commcalc/zero_sales.py` (PURE; five day states, runs, alert items) + `commcalc/manager_digest.py` (the ONE alert fan-out); `GET /commcalc/zero-sales`, `GET/PUT /commcalc/zero-sales-config`, `POST /commcalc/zero-sales/alerts/run-due|run-now`. READ-ONLY, `books_to` = []. Proofs `harness_zero_sales.py` (79) + lock `harness_zero_sales_lock.py` (39) |
+| **ZERO SALES — store-days / rep-days with NO activation and NO upgrade** §15z | mig `1016` (`commcalc.zero_sales_config`, **APPLIED 2026-10-31** — verified by reading the table back through PostgREST, which also proves the GRANT took: all four orgs carry a row with `alerts_enabled = true`, `consecutive_days` 2, `gap_policy` 'break'. A missing/unreadable row still falls back to `zero_sales.HOUSE_CONFIG`, the shipped behaviour) | `commcalc/zero_sales.py` (PURE; five day states, runs, alert items) + `commcalc/manager_digest.py` (the ONE alert fan-out); `GET /commcalc/zero-sales`, `GET/PUT /commcalc/zero-sales-config`, `POST /commcalc/zero-sales/alerts/run-due|run-now`. READ-ONLY, `books_to` = []. Proofs `harness_zero_sales.py` (79) + lock `harness_zero_sales_lock.py` (39) |
 | **SUBSIDY MONTHS MISSING — a store-month inside a store's own entitlement that never arrived** §68 | mig `1068` (`commission_org_config.mdf_entitlement_config`, **NOT applied**; absent ⇒ `entitlement_coverage.CODE_DEFAULT`, which declares nothing, so the report says `configured: false` and calls no month missing) | `commcalc/entitlement_coverage.py` (PURE, DB-free; `entitlement_store_months` is **the "expected but absent" home at store × month grain**, plus `entitlement_window` / `entitlement_type_matcher` and the five `ROW_*` statuses); `GET /commcalc/mdf-entitlement-coverage`. READ-ONLY, `books_to` = []. Proof `harness_mdf_entitlement_coverage.py` (96) **DRILL-DOWN §CORE-17.3v** (`commcalc/entitlement_coverage_drilldown.py`, proof `harness_batch22_drilldown.py` §E) — the drill-down reads this producer's OWN verdict words, config column and migration name rather than restating any of them, so a verdict renamed here reaches the panel with no second edit |
 
 ## 15z. ZERO SALES — a store-day with no activation, and the three answers it can have (owner 2026-09-22)
@@ -6139,6 +6140,96 @@ absence vocabulary (`carrier_vs_pay` / `labour_coverage` / §30.12), the alert p
 Nothing new was derived twice. `/commcalc/sales-report` answers the opposite question from the same
 cells; `/commcalc/kpi-failing` is KPI-threshold, not activity-absence; §20 import health answers
 "is the feed late", which is why a missing feed here is reported and not alerted.
+
+
+## §COMMCALC-51. A MISSING TRADING DAY IS AUDIBLE — the fact had a home, and no surface asked for it (owner 2026-10-31)
+
+> OWNER (verbatim): *"this is a big problem for management iff we wil miss trading days, we need to
+> get this fix right away"*.
+
+**THE INSTANCE.** `957 Pennsylvania Ave` (LuxeLink) never delivered **22 and 23 September 2026**.
+Nothing said so. It surfaced only because a rep's commission claim read **$224.20 of accessories and
+2 boxes above our own data** and somebody went looking. Measured the same day, read-only, over the
+three live tenants: **324 store-days** of sales never received between August and October 2026, and
+several stores missing **whole months** (LuxeLink Oct 65 · Cellfonz Oct 40 · Vzone no feed since
+September · NY LOGISTICS 25). Every commission, target and store-comparison figure over those months
+understates somebody.
+
+**THE CLASS, AND WHY NOTHING NEW DERIVES ABSENCE.** The fact already had ONE home: §15z's
+`zero_sales.store_day_state` has returned `NOT_REPORTED` for a store-day whose feed did not land
+since 2026-09-22, correctly, with the count `None` and never `0` — and the report's own banner has
+been saying *"The fix for those rows is an upload."* all along. **Two surfaces were each
+individually right and the fact fell between them:** `zero_sales.alert_items` DELIBERATELY refuses to
+email a not-reported scope (a missing feed is a pipeline failure, and dressing it as a sales alert
+sends a District Manager after a rep who sold fine) and hands it to §20 import health — which **had
+no check for a missing sales day**. So the only mechanism that knew spoke to nobody.
+
+The fix is the HAND-OFF, not a detector: `zero_sales.feed_gap_items` reads the report's own
+`day_states` and this module's own `NOT_REPORTED`, so a state renamed there reaches the surface with
+no second edit, and there is no sibling definition of "this store did not report" to drift from the
+report the owner reads.
+
+**THE NEGATIVE CONTROL IS THE WHOLE POINT.** `measured_zero` (rows ARRIVED, none was an activation)
+is **never** reported as a missing upload. One needs a manager, the other needs a file; collapsing
+them is exactly the false chase §15z exists to prevent. `harness_feed_gap_days.py` §A arms the
+assertion — it re-runs the same shape marked not-reported to prove the control can fail.
+
+**TWO KINDS, TWO ITEMS, BECAUSE THEY ARE TWO JOBS.** `FEED_GAP_WHOLE_WINDOW` = every TRADING day in
+the window is missing → a connector to repair (`error`; nothing fixes itself). `FEED_GAP_PARTIAL` =
+the feed delivers and lost days → a file to re-pull (`warning`). One combined item would send both to
+whichever page the louder half named.
+
+**WHAT IS NOT A MISSING DAY.** `closed` / `in_progress` / `off` — a store shut on Sunday has lost no
+upload and an unfinished day is not a gap. So `whole_window` compares the missing days against the
+days actually EVALUATED, never against the calendar. The window ends **yesterday** for the same
+reason `include_today` is false.
+
+**A MISSING FEED IS ONE STORE PROBLEM.** Store grain only: `rep_day_state` makes every rep under a
+gapped store `not_reported` by inheritance, so counting rep rows would report one store's missing
+upload once per person on the schedule.
+
+**CONFIG, AND A THRESHOLD THAT CANNOT SILENCE IT.** `commission_org_config.audit_feed_gap_window_days`
+(default 30, clamped to the fold's own 2–186) and `audit_feed_gap_min_days` (default
+`FEED_GAP_MIN_DAYS` = 1 — one lost trading day is a day of sales). A `min_days` below one is
+**REFUSED** rather than honoured: it would restore exactly the silence this ends.
+
+**EVERY TENANT (project rule 2026-10-30).** `p_sales_feed_days` runs the real `_zero_sales_core` fold
+per org: the tenant's OWN stores, OWN activation rules and OWN schedule decide its answer, so no
+tenant's vocabulary or calendar can answer for another's. Verified live against production for all
+four orgs, and in CI for three seeded orgs each with its own store and its own missing day — the
+cross-tenant test asserts one tenant's store code can never appear in another's finding. A tenant
+with no feed, no stores or a refused activation rule contributes nothing rather than a false alarm.
+
+**WHY NOBODY WAS BEING EMAILED EITHER, AND WHAT THE OWNER THEN DID.** §15z's own alerting was
+`alerts_enabled: false`, inherited from `zero_sales.HOUSE_CONFIG`, because **mig `1016` had never been
+applied** — there was no `zero_sales_config` table to hold a row that turns it on. Surfaced for
+approval and **APPLIED by the owner 2026-10-31**, with the `GRANT` mig 1016 itself lacks (it predates
+the 2026-10-30 grant rule, and without it the table would exist and be UNREADABLE — the report would
+fall back to the house defaults and the alerts would stay off with no error anywhere, this change's
+own failure mode wearing a hat). Read back through PostgREST: four orgs, every one
+`alerts_enabled = true`. **The digest still does not send until the pg_cron job for
+`POST /commcalc/zero-sales/alerts/run-due` is registered** — it needs the API base and the notify
+secret, so it is the owner's one remaining step. This code change needed no migration either way.
+
+| | |
+|---|---|
+| ONE HOME (the fact) | `commcalc/zero_sales.store_day_state` → `NOT_REPORTED` (§15z, unchanged) |
+| ONE HOME (the hand-off) | `commcalc/zero_sales.feed_gap_items` + `FEED_GAP_WHOLE_WINDOW` / `FEED_GAP_PARTIAL` / `FEED_GAP_KINDS` / `FEED_GAP_MIN_DAYS` — PURE, DB-free |
+| THE WORDING | `commcalc/import_audit.feed_gap_attention` (PURE, no clock) + `_feed_gap_window` |
+| THE PROVIDER | `commcalc/import_audit.p_sales_feed_days`, registered `commcalc_feed_gap_days`, group `import`, cost **heavy** → `GET /core/attention?deep=1` |
+| SURFACE | the admin attention list / red-green board; deep link `/commcalc/zero-sales?date_from=&date_to=` |
+| READ-ONLY | books nothing, pays nobody, writes no flag. No migration, no table, no new endpoint |
+| PROOFS | `harness_feed_gap_days.py` (29, wired into `carrier-vocab-guard.yml`), `tests/unit/test_feed_gap_days.py` (23), `tests/integration/test_feed_gap_attention.py` (16, three tenants) |
+
+**DUPLICATE CHECK (stated for the build gate).** Searched the index for an existing mechanism before
+building: §15z Zero Sales (the day state — **EXTENDED, this is its hand-off**), §19.48
+`pay_data_quality.day_coverage_gap` and §19.54 `statement_month_coverage` (the CARRIER PAY feed's
+days, a different feed and a different question), §19.52 `sales_recon.comparability` /
+`sales_derive_gap` (the month-end ARCHIVE vs the live feed, transaction counts not store-days), §68
+`entitlement_coverage` (expected-but-absent at store × MONTH grain, carrier payments not sales), §20
+import health (is a feed LATE — never which store-days it lost). Reused, not rebuilt: the day state,
+the report fold, the attention item shape, the `_org_config` threshold reader, the deep-link page.
+Nothing derives absence twice.
 
 
 ## 15v. DISTRIBUTOR INVOICES — the standard filters, over a feed with no market column (owner 2026-10-03)
@@ -7247,7 +7338,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `core.module_price` (mig `975`; price per plan x module, effective-dated; UNPRICED = the ABSENCE of a row) | `PUT /billing/module-pricing` (super-admin, `changed_by`) | `statement.price_for` → `module_line` / `pricing_grid` |
 | `core.billing_statement` (mig `975`; FROZEN itemized statements incl. the `complete` flag) | `POST /billing/statement/close` | `statement.build_statement(frozen=)` — read, NEVER recomputed |
 | `storeops.pricing_package` / `storeops.tenants.package_key` (mig `908`, REUSED) | existing `/billing/*` pricing endpoints | the PLAN TIERS (free/starter/premium are ROWS, not an enum) + the monthly-fee line on every statement |
-| `commcalc.zero_sales_config` (mig `1016`, **NOT applied**; HOUSE row = the default every tenant inherits, tenant row wins — `.in_("org_id", [org, HOUSE_ORG])`. Absent/unreadable ⇒ `zero_sales.HOUSE_CONFIG`, the shipped behaviour, so the report works before the migration) | `PUT /commcalc/zero-sales-config` (THE one writer; validates through `zero_sales.resolve_config` BEFORE writing, so a refused value is a 400 and never a stored row) | `router._zero_sales_config` → `_zero_sales_core` (`GET /commcalc/zero-sales`) and `_run_zero_sales_alerts` (§15z) |
+| `commcalc.zero_sales_config` (mig `1016`, **APPLIED 2026-10-31**, all four orgs `alerts_enabled = true`, read back through PostgREST so the GRANT is proved; HOUSE row = the default every tenant inherits, tenant row wins — `.in_("org_id", [org, HOUSE_ORG])`. Absent/unreadable ⇒ `zero_sales.HOUSE_CONFIG`, the shipped behaviour, so the report works before the migration) | `PUT /commcalc/zero-sales-config` (THE one writer; validates through `zero_sales.resolve_config` BEFORE writing, so a refused value is a 400 and never a stored row) | `router._zero_sales_config` → `_zero_sales_core` (`GET /commcalc/zero-sales`) and `_run_zero_sales_alerts` (§15z) and `import_audit._feed_gap_window` reads the window/threshold off `commission_org_config` (`audit_feed_gap_window_days` / `audit_feed_gap_min_days`), NOT off this table — the attention check works before mig `1016` lands (§COMMCALC-51) |
 | `storeops.alert_log` — **the `channel` column** (mig `1051`) | `storeops/alert_log.record_sent` / `record_silence` — the ONLY writer of this table | `storeops/alert_log.already_sent` / `sent_pairs` — the ONLY readers, reached through `notify/digest_delivery.py`. A row says WHICH CHANNEL carried the finding to WHICH address, so a channel that failed is still owed it (§15.1, §15.2) |
 | `storeops.alert_log` — **scope `'billpay_declaration'`** (mig `433` table, no new table) | `closing/router._run_billpay_declaration_alerts` via the ONE send record (§15.1, `storeops/alert_log.py`) driven by `notify/digest_delivery.py` | the ref_key SPELLING is `manager_digest.ref_key`, the third scope to dereference it. A row is written ONLY when a channel actually delivered, so a dead channel cannot mark a finding escalated (§47.13) |
 | `storeops.tenants` — **the bill-pay declaration-alert config** (mig `1043`: `billpay_declaration_alerts_enabled` / `_alert_time` / `_alert_tolerance` / `_alert_channels` / `_alert_lookback_days` / `_alert_last_run` / `_alert_last_detail`; house defaults in `billpay_declaration_alerts.HOUSE_CONFIG`, enabled FALSE) | owner, per tenant (the mig-905 posture) | `billpay_declaration_alerts.resolve_config` → `_run_billpay_declaration_alerts`; the send time is compared by `manager_digest.due_now` (§47.13) |
@@ -7850,6 +7941,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | Portal-reported units / $ per declared category (per store, day, worker) | `portal_metric_day.units` / `.amount`, with `metric_basis` saying whether the category is the TENANT's word (`line_map` / `label`) or a text match | `pos_report_feed.normalize` → `totals_by_store_day` (rows with no resolved store are reported and EXCLUDED, never counted as $0 for a store); §COMMCALC-07. No money books from it — it exists to be compared against the declaration, and a disagreement is reported to a human |
 | POS-merchant settled $ (per store-day) | `merchant_settlement_day.net_amount` where `settlement_role='pos_merchant'` | same reader, `pos_merchant` role (§12a) |
 | **Zero-sales day state** (`had_sales` / `measured_zero` / `not_reported` / `closed` / `in_progress` / `off` / `rule_refused`) and **consecutive zero days** | `daily_sales_feed` ∪ `raw_sales` per (store × day) via `_sales_rows_union`, classified by `line_class` inside `_sales_cell_agg`; feed COVERAGE from the raw rows before the skip rules; trading days from `storeops.shifts.scheduled_hours` | `zero_sales.store_day_state` / `rep_day_state` / `walk_run` ← `router._zero_sales_core` → `GET /commcalc/zero-sales`. **An unmeasured day's count is `null`, never `0`** — armed negative control in `harness_zero_sales.py` §A. Alert threshold `consecutive_days` (config, house default 2) → `zero_sales.alert_items` → `manager_digest` → `storeops.alert_log` scope `'zero_sales'` (§15z) |
+| **Store-days of sales we NEVER RECEIVED** — the missing trading day, and whether the feed is dead or merely short | the §15z day state above, STORE grain only; `NOT_REPORTED` days counted against the days actually EVALUATED (`closed` / `in_progress` / `off` excluded) | `zero_sales.feed_gap_items` (PURE; `FEED_GAP_WHOLE_WINDOW` = a dead feed, `FEED_GAP_PARTIAL` = lost days) → `import_audit.p_sales_feed_days` → `GET /core/attention?deep=1`. **A `measured_zero` day is NEVER reported as a missing upload** — rows landed and none was an activation; that needs a manager, this needs a file (armed control, `harness_feed_gap_days.py` §A). Dereferences the state, derives no absence of its own; `min_days` below 1 is REFUSED (§COMMCALC-51) |
 | Exec-MTD LINE metrics (Bill Payment Qty/$ · Total Phones · Activation Fee · Total Protect) | `raw_sales.department` / `.category` / `.product_desc` matched against `commcalc.exec_metric_config.rules` (EXACT membership for dept/cat, substring for `product_desc_contains`) | `exec_metric_defs.resolve` (tenant row > house `carrier` PRESET > `CODE_DEFAULTS`, mig `962`) → `exec_metric_defs.line_match` inside `_sales_cell_agg`; silent-zero detector `bucket_coverage` → `GET /exec-mtd/*` key `metric_coverage` → Exec-MTD banner. Also the SECONDARY basis for `/metric-recon` and Leg B of the mig-`944` 3-way bill-pay recon; the mig-`939` P&L carve-out does NOT read it. Proof `harness_exec_metric_defs.py` (§3) |
 | Which of THE TWO WAYS a plan pays employee commission through (Option 1 flat from Executive MTD \| Option 2 customised rules) — and the order every surface presents them in | `commcalc.commission_plan.commission_basis` (mig `298`: `'exec_mtd'` \| `'rules'` default) | `_lib/commissionWays.wayForBasis` (READ-ONLY on the structure page + plan editor header; the plan editor's checkbox is the only writer); order + header = `COMMISSION_WAYS` (one home, §6e); pay path unchanged: `_resolve_plan_by_rep` → `_override_plan_by_rep_with_mtd` (§6c) |
 | Which uploads FEED a given report screen (the way back from a report to its upload pages, frontend) | `GET /commcalc/report-kinds` `kinds[].shows_in.consumers[].screen` + `kinds[].where` (from the one `landing_identity.CONSUMERS` map) | `lib/report-kinds.feedsForScreen` / `useReportKinds().feedsFor('exec_mtd')` → `CommissionWaysHeader.ExecMtdFeeds` (§6e); the Executive MTD page itself uses the backend twin `feeds_for_table` on its own `landing` payload (§32) |
@@ -7984,6 +8076,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **"What page does a receipt print on?"** (every layout, every medium that goes through a browser; owner 2026-10-29) | nothing — it is a property of the PAGE, and no stylesheet here declared one | **ONE home** `sale_receipt.PAGE_CSS` (`@page { size: auto; margin: 0; }`), emitted by `thermal_html` and dereferenced by `receipt_formats/render._page_css`. Without it a browser stamps its own header and footer over the receipt — the date and time of the PRINTING, the document title centred above it, the URL and the page number — which is what the owner saw and read as a reprint stamp contradicting the sale's own date. Each layout then sets its own print padding so the ink does not run to the sheet's edge. Proof `harness_pos_receipt_render.py` §S (12 checks + 2 negative controls) — §POS-11 |
 | **"Does this customer's record hold an address at all?"** (the till print screen and the Sale Log reprint; owner 2026-10-29) | `pos.customers` through `customer_bill_to.FIELDS` | **ONE home** `customer_bill_to.view` → `{lines, on_file, note}`, dereferencing `lines` / `has_address` rather than re-deriving either. The Bill To already printed the address (§POS-07); what was missing was upstream — the till's quick-add customer form asked for a name, a phone and an email and NOT for an address, so a record created at the register could never carry one (measured live 2026-10-29: **1 of 1,636** customer records on the reporting tenant held one). The form now asks for every field `FIELDS` names (§S10 fails the build if it stops), and until a record has one the CASHIER is told, never the customer's receipt — §POS-11 |
 | **"May this rung sale be edited, and with what lines?"** (the Sale Log offering the button, the endpoint allowing it, the till before it saves; owner 2026-10-29) | `pos.sales` + `pos.sale_items` + the declared window on `pos.pos_settings` | **ONE home** `sale_amendment.refusal` / `plan` / `cart_from`, dereferenced by all three callers. Before this there was no amend path at all: `pos.checkout` and `pos.void_sale` (mig 725) were the only two sale functions and the Sale Log's item table was display-only. Every refusal is a SENTENCE, written once, so two screens cannot word one refusal differently. Proof `harness_pos_sale_amendment.py` §A/§G — §POS-12 |
+| **"How far back may THIS caller reopen a sale?"** (the Sale Log offering the button, the save allowing it, the sentence a refused cashier reads, the till banner; owner 2026-10-31) | the TWO declared windows on `pos.pos_settings` (`sale_reopen_window_days`, `sale_reopen_window_days_admin`) + whether the caller holds `pos_amend_any_day` | **ONE home** `sale_amendment.window_for`, dereferenced by both endpoints. §POS-12.6 had it as ONE number for the whole org, which assumed the reach of a rewrite is a property of the tenant alone; it is a property of the tenant AND the asker's standing. The rung is a GRANT KEY resolved by `_pos_grant`, never a role name (RULE TWO), and `_amend_elevated` fails closed. The elevated rung takes the GREATER of the two declarations, so a wider ordinary window can never leave an administrator reaching less far than a cashier — decided here, because a `max()` at a caller is a second answer. Proof `harness_pos_sale_amendment.py` §G/§A8b — §POS-12.9 |
 | **"What does this sale line come to?"** (the edit that restates it, and the totals it rolls up to) | the agreed figures on the line itself | **ONE home** `sale_amendment.line_money` / `totals`, DERIVED from the figures `pos.sale_items` already stores and reproducing transaction 4605's two lines to the cent. It was browser-only arithmetic before, and `pos.checkout` stores whatever it is handed — tolerable for a new sale, not for an edit whose purpose is to move those figures, so the server re-derives and the body's `extended_price` / `tax_value` / totals are DISCARDED. Tax rounds per line then sums, matching what each line stores. Proof §B — §POS-12 |
 | **"What did this sale look like before it was edited?"** (the audit trail that makes an in-place rewrite answerable) | `pos.sale_amendments` (mig **1103**) | **ONE home** `sale_amendment.snapshot` / `current_revision`, filed by `pos.amend_sale` BEFORE it touches anything. Keeps the sale's own STORED figures, never re-derived ones — the point is to record what the customer's receipt said, not what it should have said. A null `revision` reads as 1, so the first edit of an older sale still files the original. The endpoint returns 503 rather than editing when the table is absent. Proof §C — §POS-12 |
 | **"What was tendered against this sale, and what does moving its total leave outstanding?"** (the till before it saves, the save itself, the mismatch log report, and the voided sale nobody refunded; owner 2026-10-30) | `pos.sale_payments` + `pos.sales.total` / `.balance` + the declared band on `pos.pos_settings` | **ONE home** `sale_settlement.outstanding` / `tendered` / `expected`, dereferenced by all four callers. NOTHING compared these two tables before: `pos.amend_sale` (mig 1103) restates the total and `pos.void_sale` (mig 725) stands the sale down, and NEITHER touches the payment rows. An UNRECORDED tender answers `measured: False` with a reason and never $0.00 — 4,603 of the 4,605 live sales have no payment row, so reading absence as zero would have produced 4,603 mismatches. Compared against `total − balance`, never the bare total. Proof `harness_pos_sale_settlement.py` §A/§B/§C/§G — §POS-17 |
@@ -26192,6 +26285,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-50 | commcalc |
 | COMMCALC-51 | commcalc |
 | COMMCALC-52 | commcalc |
+| COMMCALC-53 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -33128,10 +33222,12 @@ call sites so it cannot later look like an oversight.
 ### POS-12.6 Declared window, and a right of its own
 
 How far back a sale may be edited is **declared per org** — `pos.pos_settings` key
-`sale_reopen_window_days`, house default **1 day** (`sale_amendment.HOUSE_WINDOW_DAYS`), seeded
-nowhere. An edit changes a day's takings, and doing that to a day already reported is the one thing a
-cashier must not be able to do by accident. An unreadable declaration falls back to the house default
-and never to "forever".
+`sale_reopen_window_days`, house default **0 days / the same day only**
+(`sale_amendment.HOUSE_WINDOW_DAYS`), seeded nowhere. An edit changes a day's takings, and doing
+that to a day already reported is the one thing a cashier must not be able to do by accident. An
+unreadable declaration falls back to the house default and never to "forever".
+
+**Since 2026-10-31 the window is a function of the RUNG, not of the org alone — see §POS-12.9.**
 
 Editing is gated on **`pos_amend`**, not `pos_void`: rewriting a tendered record is a larger right
 than cancelling one, and unknown keys default to full-scope admin in `_pos_grant`, so this starts
@@ -33147,15 +33243,59 @@ out of date, so print them a fresh one.* The suspended-cart autosave is **off** 
 resumed hold cannot land on top of a sale being edited — either would offer the next session a cart
 for items already sold.
 
+### POS-12.9 How far back may THIS caller reach (owner ask 2026-10-31)
+
+Owner, asked for the one number §POS-12.6 wanted, gave **two**: *"30 days nback for the admin and
+same day for teh sales rep or store manager"*.
+
+**THE CLASS, NOT THE INSTANCE.** Not "add a second setting for admins". §POS-12.6 shipped the window
+as one declared number for the whole org, which encodes an assumption nobody had stated: that how
+far back a record may be rewritten is a property of the **tenant alone**. It is not — it is a
+property of the tenant AND the standing of the person asking, and the same shape recurs wherever a
+record can be reopened. So the window became a function of a rung, answered in one place.
+
+| Who | House window | Their own declaration |
+| --- | --- | --- |
+| an ordinary POS user (a rep, a store manager) | **0 — the day the sale was rung** | `sale_reopen_window_days` |
+| a caller holding `sale_amendment.ELEVATED_GRANT` | **30 days** | `sale_reopen_window_days_admin` |
+
+**THE RUNG IS A GRANT, NEVER A ROLE NAME.** RULE TWO: "admin", "sales rep" and "store manager" are
+words a *tenant* chooses, so they must not appear in a branch. What the code knows is whether the
+caller holds the POS permission key **`pos_amend_any_day`**, resolved by `_pos_grant`'s existing
+precedence — super-admin, then an explicit grant or denial, then a full-scope admin by default. So
+the owner's two numbers land with **no configuration at all** (a full-scope admin already holds the
+key; a scoped rep does not), an owner can revoke the longer reach from an otherwise-full role, and a
+tenant that wants a particular role to reach further grants the key in the Roles screen — a config
+row, not a code change. `_amend_elevated` **fails closed**: an unresolvable caller is not elevated.
+
+**ONE HOME FOR THE RECONCILIATION.** `sale_amendment.window_for(elevated, declared,
+declared_elevated)`. The two declarations are independent, so an org could declare 45 ordinary days
+and leave the elevated one at the house 30 — which would make an administrator's reach **shorter
+than a cashier's**. No declaration like that means that, so the elevated rung takes the greater of
+the two. Decided once, in the one home; a `max()` at a caller would be a second answer to the same
+question. `declared_window(value, house=…)` reads both settings, so the "unreadable never widens"
+rule is one implementation rather than two.
+
+**THE SENTENCE NAMES THE WAY FORWARD, BUT ONLY WHEN THERE IS ONE.** A cashier refused a five-day-old
+sale is told *"An administrator can still edit it for you."* Told that about a sale beyond the
+elevated window too, they would be sent to ask for something nobody can give, so the refusal says it
+only when the elevated window would in fact allow it — and never to a caller who already holds that
+window, which would send them to themselves. `refusal` also reads as English at zero: *"your role
+can only edit a sale **on the same day it was rung**"*, never "within 0 days".
+
+**THE TILL SAYS WHICH WINDOW IT IS WORKING UNDER.** The plan returns `window_days` and `elevated`,
+and the editing banner prints them. The client reads a missing `window_days` as **null, not 0** —
+0 is a real and meaningful window here, so coercing absence to it would state something false.
+
 ### POS-12.8 Files, locks, money
 
 | | |
 | --- | --- |
-| New | `pos/sale_amendment.py` · `database/migrations/1103_pos_sale_amendment.sql` · `harness_pos_sale_amendment.py` (89 checks) · `frontend/src/lib/pos-sale-amend.ts` · `backend/tests/unit/test_pos_sale_amendment.py` (28) · `backend/tests/integration/test_pos_sale_amend_endpoint.py` (16) |
+| New | `pos/sale_amendment.py` · `database/migrations/1103_pos_sale_amendment.sql` · `harness_pos_sale_amendment.py` (**97** checks) · `frontend/src/lib/pos-sale-amend.ts` · `backend/tests/unit/test_pos_sale_amendment.py` (28) · `backend/tests/integration/test_pos_sale_amend_endpoint.py` (16) · §POS-12.9: `backend/tests/unit/test_pos_amend_window_rung.py` (30) · `backend/tests/integration/test_pos_amend_window_rung_endpoint.py` (24) |
 | Changed | `pos/router.py` (+3 routes, `_amend_window` / `_amend_available` / `_sale_with_items`) · the register page (Sale Log edit button, editing mode, `cartItemFromLine` extracted, autosave gated) · `tests/fakes/supabase.py` (`seed_rpc`, and `rpc()` now returns a builder needing `.execute()` like the real client) · `harness_db_resilience.py` I0 re-pinned 1807 → 1810 |
 | Endpoints | `GET /pos/sales/{id}/amend-plan` (read-only) · `PUT /pos/sales/{id}/items` · `GET /pos/sales/{id}/amendments` |
 | Migration | **1103 — NOT APPLIED.** Money-touching (it adds the ability to change a recorded sale total), surfaced for owner approval |
-| Locks | §A one home for the rules, the router holding no second opinion · §B the body's figures never survive · §C the superseded version always kept, and the edit refused without it · §D stock reversed and re-applied by the existing paths, in that order · §E one cart vocabulary, one line→cart map shared by both loaders · §F the struck tax rate not restated · §G declared window, own grant, all three routes gated and org-scoped · §H the till says what is happening · §I ten negative controls |
+| Locks | §A one home for the rules, the router holding no second opinion (§A8b: the router does not reconcile the two windows itself; §A8c: it names no role, only a grant key) · §B the body's figures never survive · §C the superseded version always kept, and the edit refused without it · §D stock reversed and re-applied by the existing paths, in that order · §E one cart vocabulary, one line→cart map shared by both loaders · §F the struck tax rate not restated · §G both windows declared, the rung a grant, the elevated reach never shorter than the ordinary one, the refusal English at zero and pointing somewhere only when it can, all three routes gated and org-scoped · §H the till says what is happening · §I ten negative controls |
 | MONEY IMPACT | **The ability to change a recorded sale total, by design and by the owner's explicit choice.** No stored figure moves on apply; nothing is edited until a cashier with `pos_amend` edits it, inside the declared window, with the superseded version filed first |
 
 Same class: §POS-01 (the register's cart, whose vocabulary and line map this shares), §POS-11 (the
@@ -33583,9 +33723,11 @@ need the edit part to work"*).
 
 **THE FIRST HALF ALREADY WORKED, AND WAS VERIFIED RATHER THAN ASSUMED.** §POS-12 shipped the edit;
 mig 1103 was applied and verified against production on 2026-10-29; the window is DECLARED
-(`sale_amendment.WINDOW_SETTING`) and its house default of **one day already admits yesterday** —
-`refusal` refuses at `age > win`, so a sale rung yesterday (age 1, window 1) passes. Confirmed by
-running the real resolver, not by reading it:
+(`sale_amendment.WINDOW_SETTING`) and its house default **at that time** was one day, which already
+admitted yesterday — `refusal` refuses at `age > win`, so a sale rung yesterday (age 1, window 1)
+passed. Confirmed by running the real resolver, not by reading it. (The house default was later
+replaced by a PER-RUNG pair on the owner's instruction — §POS-12.9 — so the table below records what
+was true on 2026-10-30, not the window in force now.)
 
 | Sale rung | `age_days` | Verdict under the house window |
 |---|---|---|
@@ -36244,7 +36386,7 @@ the class the prefill report belongs to).
 Neighbours: §COMMCALC-47 (the live screen the screenshot comes from), the mig-244 cooldown ladder.
 Reading rule dereferenced: §4b.1 (any-subset column reads — see §COMMCALC-50.5a).
 
-## §COMMCALC-51. A LOGIN OUTCOME IS READ OFF WHAT THE PAGE IS DOING, NEVER OFF HOW IT IS BUILT — one home for "we submitted a login, what happened" (owner report 2026-10-31)
+## §COMMCALC-52. A LOGIN OUTCOME IS READ OFF WHAT THE PAGE IS DOING, NEVER OFF HOW IT IS BUILT — one home for "we submitted a login, what happened" (owner report 2026-10-31)
 
 > Owner, 2026-10-31, reading the upload page: *"all these reports should have been updated
 > automatically with the portal access via chron jobs why is this not happeneing neds to be found
@@ -36254,7 +36396,7 @@ Reading rule dereferenced: §4b.1 (any-subset column reads — see §COMMCALC-50
 > > Commission payment detail (processor) — Last upload: Oct 8, 2026, 1:38 PM · 495 rows · via manual upload
 > > MI & ATU report — Last upload: Oct 9, 2026, 6:05 AM · 45,510 rows
 
-### COMMCALC-51.1 WHAT WAS MEASURED (production, read-only, 2026-10-31)
+### COMMCALC-52.1 WHAT WAS MEASURED (production, read-only, 2026-10-31)
 
 The scheduler was never the problem, and this is the number that says so:
 
@@ -36279,7 +36421,7 @@ same evening. `commcalc.upload_log` says how much automation there ever was:
 | `payment_detail` | **one**, 2026-10-04T10:06Z (19,954 rows). Everything else manual |
 | `comp_report` | **never, not once.** Every row is a hand-uploaded workbook |
 
-### COMMCALC-51.2 THE DEFECT
+### COMMCALC-52.2 THE DEFECT
 
 Twenty-two days of identical failures and nobody could act, because the one sentence the platform
 offered could not be trusted. It was produced like this:
@@ -36304,14 +36446,14 @@ Two more faults rode in the same predicate:
   in live or change egress; a developer. All three were reported as the first, so everyone who read
   the status went and re-typed a password that may well have been correct.
 
-### COMMCALC-51.3 THE CLASS, not the instance
+### COMMCALC-52.3 THE CLASS, not the instance
 
 **A page judged by how it is BUILT, not by what it is DOING.** Second sighting in two days: the same
 shape made a working sign-in form read as a bot wall because its markup carried the word `captcha`
 nine times and its visible text none (§COMMCALC-50.8). The remedy is identical — ask the page what
 it is doing.
 
-### COMMCALC-51.4 THE ONE HOME
+### COMMCALC-52.4 THE ONE HOME
 
 `backend/app/modules/commcalc/login_outcome.py` — PURE, stdlib only, no DB, no network, no page
 object. A caller hands it the facts it has already read and gets a named outcome and one operator
@@ -36341,7 +36483,7 @@ The rules that make it a design fix rather than a better word list:
 - **RULE TWO:** no carrier, tenant or portal name appears, and the marker lists are POLICY (what any
   application's shell and any form's error region look like) a caller may override.
 
-### COMMCALC-51.5 Every caller wired — both drivers, not the one that surfaced it
+### COMMCALC-52.5 Every caller wired — both drivers, not the one that surfaced it
 
 | driver | how it asked before | now |
 | --- | --- | --- |
@@ -36365,7 +36507,7 @@ comments, `<script>`, `<style>`, `<template>`, `<noscript>`, tags; unescape; col
 markup, and recovering the readable text first is the remedy. The bundled `var M={invalid:…}` that
 caused the outage lives in a `<script>` and does not survive the recovery.
 
-### COMMCALC-51.6 The refusal vocabulary now holds the page the portal actually serves
+### COMMCALC-52.6 The refusal vocabulary now holds the page the portal actually serves
 
 Measured live from a cloud container against the portal's own host, 2026-10-31: `GET /` returns
 **HTTP 200** carrying an F5 appliance page — `<title>Request Rejected</title>` / "The requested URL
@@ -36379,7 +36521,7 @@ A locked account is a refusal and portals phrase it four ways; all four are seed
 (`is locked` / `been locked` / `account locked` / `locked out`), because a phrasing nobody listed is
 a feed that goes quiet — the shape of this whole section.
 
-### COMMCALC-51.7 Every tenant, not the one that surfaced it
+### COMMCALC-52.7 Every tenant, not the one that surfaced it
 
 `commcalc.epay_sweep_config` holds ONE row (the house org), so only the house tenant could surface
 this — and every other tenant's portal was equally affected the moment it was configured, because
@@ -36387,7 +36529,7 @@ the brand-title success test could only ever recognise one portal. Nothing in th
 either driver's verdict names a portal now; `harness_login_outcome.py` §G asserts it rather than
 trusting it, and the driver tests parametrise three different portal shells.
 
-### COMMCALC-51.8 Locked
+### COMMCALC-52.8 Locked
 
 `backend/harness_login_outcome.py` — 103 checks, DB-free and browser-free. It fails the build if a
 driver takes a login decision off `page.content()` again, if a driver stops dereferencing the one
@@ -36401,14 +36543,14 @@ Tests: `tests/unit/test_login_outcome_reads_the_page.py` (28),
 `tests/integration/test_dlar_login_says_what_happened.py` (7). The epay page double counts
 `content()` calls and asserts **zero** — the class is locked structurally, not by a text search.
 
-### COMMCALC-51.9 What this does NOT fix, stated plainly
+### COMMCALC-52.9 What this does NOT fix, stated plainly
 
 - **It does not restore the feeds.** Whether the saved credential is genuinely refused is only
   answerable by a login attempt, and the portal's edge refuses this container. What ships is the
   platform telling the operator WHICH of the five things is happening, which is what twenty-two days
   of "credentials rejected" denied them.
 - **The comp report has never once arrived automatically**, and that is a separate, older fault —
-  now found and fixed in **§COMMCALC-52**: the window was built on the CONTAINER's UTC day, and the
+  now found and fixed in **§COMMCALC-53**: the window was built on the CONTAINER's UTC day, and the
   report's slot is 23:30 in the tenant's zone, which is 03:30 UTC the next day, so every run asked
   the portal for a day that had not begun where the portal lives. CORRECTION, recorded because it
   was written here first: the `Summarize by` control failure is real but belongs to the **Daily
@@ -36422,19 +36564,19 @@ Tests: `tests/unit/test_login_outcome_reads_the_page.py` (28),
   the surface half, and it is the reason this sat so long.
 
 
-## §COMMCALC-52. A FEED WINDOW'S DAY COMES FROM THE TENANT'S ZONE, NEVER THE SERVER'S — one home for "what day is it where this portal lives" (owner report 2026-10-31)
+## §COMMCALC-53. A FEED WINDOW'S DAY COMES FROM THE TENANT'S ZONE, NEVER THE SERVER'S — one home for "what day is it where this portal lives" (owner report 2026-10-31)
 
 Owner, on being told that one shared login had taken three feeds down: *"if we access to one behind
 that door then all should be downloaded automatically"*. Two of the three will, once the login stops
-lying about what happened (§COMMCALC-51). The third would not have, because it never had an access
+lying about what happened (§COMMCALC-52). The third would not have, because it never had an access
 problem at all.
 
-### COMMCALC-52.1 WHAT WAS MEASURED (production, read-only, 2026-10-31)
+### COMMCALC-53.1 WHAT WAS MEASURED (production, read-only, 2026-10-31)
 
 - `commcalc.upload_log` holds **not one** `epay auto-sweep` row for the comprehensive comp report,
   for any org, since the leg was built. Every row of `commcalc.raw_comp_report` arrived by hand.
 - `core.job_run` shows the slot firing on time, every night, for months. The scheduler was never the
-  problem — the same finding as §COMMCALC-51, for a different reason.
+  problem — the same finding as §COMMCALC-52, for a different reason.
 - Eight consecutive recorded runs, with the window each one asked the portal for:
 
   | run start (UTC) | the container's day | the tenant's day | the window asked for |
@@ -36453,7 +36595,7 @@ problem at all.
 - `commcalc.report_definitions.arrears_days` **does not exist as a column in production**, so the
   widening knob §19.54 reads is inert here. `refresh_days` exists and is configurable.
 
-### COMMCALC-52.2 THE DEFECT
+### COMMCALC-53.2 THE DEFECT
 
 The slot is 23:30 in the tenant's timezone *deliberately* — the portal posts a day's compensation at
 about 23:30 local, so that is when there is something to fetch. 23:30 `America/New_York` is 03:30 UTC
@@ -36468,14 +36610,14 @@ So the one night the data existed, the sweep asked for tomorrow. The portal answ
 honestly, and zero rows was recorded as *"no compensation posted"* — a feed that could not answer
 read as a source with nothing to say. For four months.
 
-### COMMCALC-52.3 THE CLASS, not the instance
+### COMMCALC-53.3 THE CLASS, not the instance
 
 The instance is "comp asks for the wrong day". The class is **"a relative date was resolved against
 the machine's clock instead of the tenant's"**, and it is not confined to a window: the same wrong
 fact stamps *"the day this inventory was observed"* and measures *"how many days stale is this
 feed"*. Anywhere a tenant's calendar is the subject and the container's clock is the source.
 
-### COMMCALC-52.4 THE ONE HOME
+### COMMCALC-53.4 THE ONE HOME
 
 `backend/app/modules/notify/report_filters.py :: business_today(tz)` — written **2026-07-30**, for a
 scheduled send, and its docstring already stated this exact defect:
@@ -36499,7 +36641,7 @@ feed_today = _report_filters.business_today
 what the lock asserts (`driver.feed_today is report_filters.business_today`), so a driver cannot
 quietly grow a second `zoneinfo` ladder and still pass.
 
-### COMMCALC-52.5 Every caller wired — all three portal drivers, not the one that surfaced it
+### COMMCALC-53.5 Every caller wired — all three portal drivers, not the one that surfaced it
 
 | driver | what asked the wrong day | now |
 |---|---|---|
@@ -36520,7 +36662,7 @@ only in the hours either side of midnight on the 1st, and `today` is already an 
 there — the fix for a caller that cares is to pass the tenant's day, not to change the home. The
 excusal list may only ever shrink (`harness_feed_window_tenant_day.py` §G).
 
-### COMMCALC-52.6 Every tenant, not one
+### COMMCALC-53.6 Every tenant, not one
 
 A window is built per org from that org's own declared `timezone`, and the tests assert both halves:
 each zone produces its own window (`America/New_York`, `America/Chicago`, `America/Los_Angeles`,
@@ -36528,7 +36670,7 @@ each zone produces its own window (`America/New_York`, `America/Chicago`, `Ameri
 instant. No tenant's clock can decide another's window, and no driver spells an IANA zone literal at
 all — the house fallback lives in `report_filters` alone (RULE TWO).
 
-### COMMCALC-52.7 What this does NOT fix
+### COMMCALC-53.7 What this does NOT fix
 
 - **It does not backfill.** Every comp day the sweep asked wrong is still missing from
   `raw_comp_report` unless it was uploaded by hand. The repair is to widen `refresh_days` once and
@@ -36537,9 +36679,9 @@ all — the house fallback lives in `report_filters` alone (RULE TWO).
   right day, but a single run that flakes still loses that day for good, and `arrears_days` has no
   column in production to widen it. A config row, surfaced for the owner.
 - **It says nothing about the login.** Two of the three feeds are dark for the reason in
-  §COMMCALC-51 and need a live sign-in before anyone can say whether the credential is refused.
+  §COMMCALC-52 and need a live sign-in before anyone can say whether the credential is refused.
 
-### COMMCALC-52.8 Locked
+### COMMCALC-53.8 Locked
 
 - `backend/harness_feed_window_tenant_day.py` — 43 checks, DB-free and browser-free. Fails the build
   if a driver takes a day off the container's clock, stops dereferencing the one home, keeps a zone
@@ -42565,6 +42707,37 @@ The EAS CLI is installed with `npm install -g eas-cli@latest` rather than throug
 (`mobile/package-lock.json`), so the first real publish died in it — run `41225844556`, 2026-10-31,
 *"The process '/usr/local/bin/yarn' failed with exit code 1"*. `eas-cli` reads `EXPO_TOKEN` from the
 environment by itself, so the action was buying a second package manager and nothing else.
+
+### §CORE-26.8 The app's BINARY reaches a phone by itself (measured 2026-10-31)
+
+The sibling of §CORE-26.6, and the thing §CORE-26.7 proved was needed. `mobile-ota-update.yml`
+carries JavaScript to phones that already hold a COMPATIBLE app; on 2026-10-31 the owner's installed
+build was shown not to be one. So `.github/workflows/mobile-build-and-submit.yml` builds the binary
+and, on request, sends it to TestFlight / Play internal testing — in a browser, because the owner has
+no Mac and no terminal, which is the same reason publishing got a button.
+
+**It is deliberately NEVER automatic, and must not be given a `push:` trigger.** Publishing
+JavaScript is reversible: publish again. A submission to Apple is not — it notifies testers and
+cannot be recalled. The press of the button IS the authorisation, which is why `submit` is an input
+that names its consequence rather than a default hidden in the file. Same ruling as the money and
+migration carve-out in the autonomy directive: autonomy covers merging code, not shipping to a store.
+
+Shape, and what each part is there for:
+
+- **Gate on `EXPO_TOKEN` first**, so the job explains itself instead of dying inside the CLI. A build
+  needs MORE than publishing does — a read-only or publish-only token authenticates and then fails at
+  the build step, which reads as a mystery. The gate's message says so.
+- **`npm ci` before any EAS command.** `app.config.ts` is TypeScript; without the project's own
+  dependencies every command dies with `Unexpected token '{'` (§CORE-26.7).
+- **`npm run test` before building.** A binary reaching testers cannot be recalled, so this is the
+  last gate, not a duplicate of the pull request's.
+- **`eas build --wait`**, so the job's success means a finished binary and not a queued one.
+- **Declared vs resolved Expo version recorded BEFORE the build.** The defect that caused all of this
+  was only ever visible by comparing two version numbers nobody was printing.
+- **The result mirrored to the step summary and, on request, posted as a comment**, because GitHub's
+  job logs are unreachable from this repository's cloud container (the Azure blob host is not in its
+  network allowlist) — `gh api .../check-runs/<id>/annotations` is the only other way in.
+
 
 ### §CORE-26.5 Not money
 

@@ -26,7 +26,7 @@ from app.modules.notify import report_filters as _report_filters  # THE tenant's
 # `report_filters.business_today`, the same function object, so no second zoneinfo ladder can
 # appear here. A portal window built on the container's UTC day asks for a day that has not
 # begun where the portal lives; that cost the comp report every automatic run it ever made
-# (index §COMMCALC-52), and this driver asked the same question the same wrong way.
+# (index §COMMCALC-53), and this driver asked the same question the same wrong way.
 feed_today = _report_filters.business_today
 from app.modules.account.store_identity import fold_accents as _sid_fold  # noqa: E402
 

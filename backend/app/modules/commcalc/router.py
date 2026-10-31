@@ -15811,7 +15811,7 @@ def _do_epay_sweep(org_id, only=None):
             _epay_set_status(client, org_id, 'ok', f'Nothing due to pull ({", ".join(only)})')
             return
     try:
-        # tz: the TENANT's business timezone, passed EXPLICITLY (index §COMMCALC-52). A day-grain
+        # tz: the TENANT's business timezone, passed EXPLICITLY (index §COMMCALC-53). A day-grain
         # window must end on the tenant's today, and the sweep refuses to build one without being
         # told which clock to use — that is the whole fix, so this argument is not optional.
         res = epay_sweep.run_epay_sweep(client, org_id, cfg.get('portal_url'),

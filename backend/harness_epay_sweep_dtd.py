@@ -28,7 +28,7 @@ import app.modules.commcalc.epay_sweep as S  # noqa: E402
 import app.modules.storeops.merchant_ids as MIDS  # noqa: E402
 
 #: A tenant's business timezone. A feed window's day comes from the ORG's zone, never the
-#: server's UTC day (index §COMMCALC-52), so `_expand_jobs` requires it and these checks supply
+#: server's UTC day (index §COMMCALC-53), so `_expand_jobs` requires it and these checks supply
 #: one explicitly rather than letting the harness inherit the container's clock.
 TENANT_TZ = "America/New_York"
 
@@ -75,7 +75,7 @@ check("expand: one day-range job for DTD", len(jobs) == 1 and jobs[0][0] == "epa
 tgt = jobs[0][1]
 # "One day" is read on `covers_through` (the last day we MEAN to receive), not on `end` — the house
 # end-exclusive boundary deliberately asks one day past the intent (§19.54). And the day itself is the
-# TENANT's today, never the container's UTC day (§COMMCALC-52).
+# TENANT's today, never the container's UTC day (§COMMCALC-53).
 check("expand: default window is the tenant's today only",
       tgt.get("kind") == "day_range"
       and tgt.get("begin") == tgt.get("covers_through")

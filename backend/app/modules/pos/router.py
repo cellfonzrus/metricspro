@@ -2377,11 +2377,28 @@ def _tender_log_available(client, org_id: str) -> bool:
         return False
 
 
-def _amend_window(client, org_id: str, store_code: str = ""):
-    """The declared edit window for this store, read through the ONE config home and named by the
-    one home for the setting — never a default spelled beside this call."""
+def _amend_elevated(authorization: str, org_id: str) -> bool:
+    """Whether this caller reaches further back than an ordinary POS user (§POS-12.9).
+
+    THE RUNG IS A GRANT, never a role name — `sale_amendment.ELEVATED_GRANT`, resolved by the same
+    `_pos_grant` precedence every other POS right uses. An unseeded key defaults to a full-scope
+    admin there, which is exactly the owner's ask ("30 days nback for the admin and same day for teh
+    sales rep or store manager") with no configuration; a tenant that wants a named role to hold it
+    grants the key in the Roles screen. FAILS CLOSED: an unresolvable caller is not elevated."""
+    return _pos_grant(_caller_ctx(authorization, org_id), _amend.ELEVATED_GRANT)
+
+
+def _amend_window(client, org_id: str, store_code: str = "", elevated: bool = False):
+    """How far back THIS caller may reopen a sale, read through the ONE config home, named by the
+    one home for both settings, and reconciled by the one home for the rung. No default and no
+    reconciliation of the two numbers is spelled beside this call: both belong to the one home, or
+    this becomes a second answer to the same question and the two drift on the first change."""
     rows = _pos_settings_rows(client, org_id, store_code)
-    return _poscfg.effective(rows, _amend.WINDOW_SETTING, store_code)
+    return _amend.window_for(
+        elevated,
+        declared=_poscfg.effective(rows, _amend.WINDOW_SETTING, store_code),
+        declared_elevated=_poscfg.effective(rows, _amend.ELEVATED_WINDOW_SETTING, store_code),
+    )
 
 
 def _sale_with_items(client, org_id: str, sale_id: str):
@@ -2406,8 +2423,14 @@ def sale_amend_plan(sale_id: str, authorization: str = Header(default=""), org_i
     if not _span_filter([{"store_code": sale.get("store_code") or ""}],
                         _caller_store_keyset(authorization, org_id)):
         raise HTTPException(403, "that store is outside your reporting span")
-    reason = _amend.refusal(sale, window_days=_amend_window(client, org_id,
-                                                            sale.get("store_code") or ""))
+    # WHICH RUNG IS ASKING (§POS-12.9). Resolved once and passed in, both so the sentence can name
+    # the way forward when an administrator could still do it and so the Sale Log can say which
+    # window it is offering the button under.
+    _store = sale.get("store_code") or ""
+    elevated = _amend_elevated(authorization, org_id)
+    win = _amend_window(client, org_id, _store, elevated)
+    reason = _amend.refusal(sale, window_days=win,
+                            elevated_window_days=_amend_window(client, org_id, _store, True))
     try:
         cart = _amend.cart_from(items) if reason is None else []
     except _amend.AmendmentError as e:
@@ -2431,6 +2454,11 @@ def sale_amend_plan(sale_id: str, authorization: str = Header(default=""), org_i
         "is_activation_sale": bool(sale.get("is_activation_sale")),
         "store_code": sale.get("store_code"),
         "available": _amend_available(client, org_id),
+        # HOW FAR BACK THIS CALLER MAY REACH, and whether they hold the longer window (§POS-12.9).
+        # Stated rather than left to be inferred, so the Sale Log can word what it offers without
+        # re-deriving the number — the same reason the refusal sentence comes from the server.
+        "window_days": win,
+        "elevated": elevated,
         "tender": standing,
         "tender_log_available": _tender_log_available(client, org_id),
     }
@@ -2468,8 +2496,12 @@ def amend_sale_items(sale_id: str, body: dict, authorization: str = Header(defau
                                  "applied, so the version this edit would supersede could not be "
                                  "kept on file")
     try:
+        _elevated = _amend_elevated(authorization, org_id)
+        _store = sale.get("store_code") or ""
         plan = _amend.plan(sale, items, body.get("items"),
-                           window_days=_amend_window(client, org_id, sale.get("store_code") or ""))
+                           window_days=_amend_window(client, org_id, _store, _elevated),
+                           elevated=_elevated,
+                           elevated_window_days=_amend_window(client, org_id, _store, True))
     except _amend.AmendmentError as e:
         raise HTTPException(400, str(e)) from None
     if not plan["allowed"]:

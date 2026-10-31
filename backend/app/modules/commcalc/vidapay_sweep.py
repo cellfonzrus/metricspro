@@ -2129,7 +2129,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None, label=None):
                 # The SAME question as begin_login's, through the same home (§COMMCALC-11): this is
                 # the path the POS-reports portal family takes, and it is the one the owner hit.
                 blocked = human_check_blocked_message(page)
-                # WHICH of the two it is, NAMED rather than hedged (index §COMMCALC-51). This used to
+                # WHICH of the two it is, NAMED rather than hedged (index §COMMCALC-52). This used to
                 # assert "Login rejected" for every still-on-the-form case and then ask the operator
                 # to work out from the diagnostic whether the portal had actually refused anything.
                 # The portal's own error region is VISIBLE text, which is exactly the evidence

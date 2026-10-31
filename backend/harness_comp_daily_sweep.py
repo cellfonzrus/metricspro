@@ -23,7 +23,7 @@ from app.modules.commcalc.safe_replace import safe_replace             # noqa: E
 from harness_fakedb import FakeClient, FakeTable                        # noqa: E402
 
 #: A tenant's business timezone. A feed window's day comes from the ORG's zone, never the
-#: server's UTC day (index §COMMCALC-52), so `_expand_jobs` requires it and these checks supply
+#: server's UTC day (index §COMMCALC-53), so `_expand_jobs` requires it and these checks supply
 #: one explicitly rather than letting the harness inherit the container's clock.
 TENANT_TZ = "America/New_York"
 

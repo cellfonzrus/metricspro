@@ -73,7 +73,22 @@ MD = src("app/modules/commcalc/manager_digest.py")
 EPAY = src("app/modules/commcalc/epay_alerts.py")
 LAB = src("app/modules/commcalc/labour_coverage.py")
 ROUTER = src("app/modules/commcalc/router.py")
-ZS_BLOCK = ROUTER[ROUTER.index("# ZERO SALES — store-days and rep-days"):]
+# ── WHERE THE ZERO-SALES BLOCK ENDS, AND WHY IT HAS TO HAVE AN END (2026-10-31) ──────────────────
+# This was `ROUTER[marker:]` — the marker to END OF FILE. router.py is appended to, so every feature
+# shipped after this lock was written fell INSIDE the "zero-sales block" and could trip its checks.
+# That is how `d3` went red on `main` and stayed red unseen: DAILY INCENTIVE (mig 1072, line ~49159)
+# has its own `storeops.shifts` read for a store-day's per-employee hours — a legitimately different
+# question from "was this store trading" — and it is not zero-sales code at all.
+#
+# A lock whose SUBJECT grows every time the file grows asserts something it does not say. So the
+# block now ends at the next top-level section banner after its own header, and `d0` below is the
+# control that fails the build if the boundary is ever removed again.
+_ZS_START = ROUTER.index("# ZERO SALES — store-days and rep-days")
+# The marker sits INSIDE the block's own header, whose closing banner is the first `# ═` after it;
+# the block ends at the next top-level banner after THAT.
+_ZS_HDR_END = ROUTER.index("\n# ═", _ZS_START)
+_ZS_NEXT = ROUTER.find("\n# ══", _ZS_HDR_END + 1)
+ZS_BLOCK = ROUTER[_ZS_START:_ZS_NEXT if _ZS_NEXT != -1 else len(ROUTER)]
 
 # ══ (a) the predicate is READ, never restated ═════════════════════════════════════════════════════
 print("\n(a) the activation/upgrade predicate has ONE home and this report reads it")
@@ -169,6 +184,12 @@ check("d1. the month-grain reader delegates to the range reader",
       "return load_shift_hours_range(" in LAB)
 check("d2. exactly one storeops.shifts select in labour_coverage",
       len(re.findall(r'table\("shifts"\)', LAB)) == 1, re.findall(r'table\("shifts"\)', LAB))
+check("d0. CONTROL — the block has an END, so a feature appended to router.py later cannot be "
+      "mistaken for zero-sales code (this is what made d3 red on main)",
+      _ZS_NEXT != -1 and len(ZS_BLOCK) < len(ROUTER) - _ZS_START
+      and "DAILY INCENTIVE" not in ZS_BLOCK
+      and "/zero-sales/alerts/run-now" in ZS_BLOCK,
+      (len(ZS_BLOCK), len(ROUTER) - _ZS_START))
 check("d3. the zero-sales router block does not open its own shifts read",
       'table("shifts")' not in ZS_BLOCK and "_labour.load_shift_hours_range(" in ZS_BLOCK)
 

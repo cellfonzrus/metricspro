@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A FEED WINDOW'S DAY COMES FROM THE TENANT'S ZONE, NEVER THE SERVER'S (index §COMMCALC-52).
+"""A FEED WINDOW'S DAY COMES FROM THE TENANT'S ZONE, NEVER THE SERVER'S (index §COMMCALC-53).
 
 DB-free and browser-free. The owner reported on 2026-10-31 that three carrier feeds had stopped
 refreshing. Two of them had one broken login behind them (§COMMCALC-50). The third — the

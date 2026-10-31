@@ -1,6 +1,6 @@
 """THE DAY A FEED ASKS FOR IS THE TENANT'S DAY, NEVER THE SERVER'S UTC DAY.
 
-The regression (index §COMMCALC-52, owner report 2026-10-31). The comprehensive comp report has
+The regression (index §COMMCALC-53, owner report 2026-10-31). The comprehensive comp report has
 never once arrived automatically — not one `epay auto-sweep` row in `commcalc.upload_log` since the
 leg was built in June. Its schedule is 23:30 in the tenant's timezone, deliberately, because the
 portal posts a day's compensation at about 23:30 local. 23:30 America/New_York is 03:30 UTC THE NEXT

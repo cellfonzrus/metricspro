@@ -1152,7 +1152,7 @@ def _landing_evidence(client, org_id, spec, *, tz):
     try:
         from datetime import date as _date
         y, m, d = int(stamp[0:4]), int(stamp[5:7]), int(stamp[8:10])
-        # The tenant's day, not the container's (§COMMCALC-52): a row stamped with the tenant's
+        # The tenant's day, not the container's (§COMMCALC-53): a row stamped with the tenant's
         # today reads as one day stale between midnight UTC and midnight local, which is exactly
         # the window the comp report runs in.
         out["days_since_last_row"] = (feed_today(tz) - _date(y, m, d)).days
@@ -1292,7 +1292,7 @@ def _recent_months(n):
 # That rule was written on 2026-07-30 and its docstring already stated this exact defect — *"A
 # scheduled send fires at the SCHEDULE's local hour; resolving a relative date off the server's UTC
 # day would put an 8pm-Eastern Friday run on Saturday's date."* This driver never asked it, and that
-# cost the comprehensive comp report every automatic run it ever made (index §COMMCALC-52): its slot
+# cost the comprehensive comp report every automatic run it ever made (index §COMMCALC-53): its slot
 # is 23:30 local, which is 03:30 UTC the NEXT day, so a window built on the UTC date asked the portal
 # for a day that had not begun where the portal lives. Zero rows, read as "nothing posted", for months.
 #
@@ -1318,7 +1318,7 @@ def _expand_jobs(keys, report_cfg=None, *, tz):
 
     `tz` is the TENANT's business timezone (`<connector>_sweep_config.timezone`), keyword-only and
     REQUIRED. It has no default on purpose: the defect this closes was a caller that never asked the
-    org what day it was and still got a window (index §COMMCALC-52), and a default here — any
+    org what day it was and still got a window (index §COMMCALC-53), and a default here — any
     default, UTC most of all — is what let it. A caller that cannot name the zone must not be able
     to build a window.
 

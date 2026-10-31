@@ -1079,7 +1079,7 @@ on:
       # a second list reappearing in either is exactly what this job exists to catch.
       - "backend/harness_portal_page_verdict.py"
       - "backend/app/modules/commcalc/portal_backoff.py"
-      # index §COMMCALC-51 — WHAT HAPPENED TO THE LOGIN WE JUST SUBMITTED. The lock names itself, the
+      # index §COMMCALC-52 — WHAT HAPPENED TO THE LOGIN WE JUST SUBMITTED. The lock names itself, the
       # one home, and ALL THREE portal drivers: a login decision taken off page.content() again, in
       # any of them, is exactly what this job exists to catch.
       - "backend/harness_login_outcome.py"
@@ -1087,7 +1087,7 @@ on:
       - "backend/app/modules/commcalc/epay_sweep.py"
       - "backend/app/modules/commcalc/dlar_sweep.py"
       - "backend/app/modules/commcalc/vidapay_sweep.py"
-      # index §COMMCALC-52 — WHAT DAY IS IT WHERE THIS PORTAL LIVES. The lock names itself, the one
+      # index §COMMCALC-53 — WHAT DAY IS IT WHERE THIS PORTAL LIVES. The lock names itself, the one
       # home (written 2026-07-30 and never dereferenced from commcalc), and all three portal
       # drivers: a window or an "as of" stamp built on the CONTAINER's clock, in any of them, is
       # what this job exists to catch.
@@ -1380,6 +1380,14 @@ on:
       # the sweep that asks for the window, the upload handler's day-keyed derivation and the three
       # frontend files that render what an upload replaces, so a change to any of them must run it.
       - "backend/harness_statement_month_coverage.py"
+      # index §COMMCALC-51 — a trading day of sales that never arrived is REPORTED, and a store that
+      # reported and sold nothing is never called a missing upload. The lock reads the one home for
+      # the day state, the attention surface that now raises it, and the provider's wording.
+      - "backend/harness_feed_gap_days.py"
+      - "backend/harness_zero_sales.py"
+      - "backend/harness_zero_sales_lock.py"
+      - "backend/app/modules/commcalc/zero_sales.py"
+      - "backend/app/modules/commcalc/import_audit.py"
       - "backend/app/modules/commcalc/feed_period.py"
       - "backend/app/modules/commcalc/epay_sweep.py"
       - "backend/app/modules/commcalc/data_lineage_registry.py"
@@ -2036,7 +2044,7 @@ jobs:
       - name: Run the page-verdict lock (a page that REFUSES us is not a login form that renders unexpectedly; one configurable vocabulary for refusal / challenge / throttle, three kinds because the remedies differ, and the portal's own words lead the operator message - index COMMCALC-50)
         working-directory: backend
         run: python3 harness_portal_page_verdict.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the login-outcome lock (a login outcome is read off what the page is DOING - is the form still on screen, what does it SAY - never off page.content(); six outcomes each carrying the one remedy that applies, and only a real rejection sends anybody to re-type a password - index COMMCALC-51)
+      - name: Run the login-outcome lock (a login outcome is read off what the page is DOING - is the form still on screen, what does it SAY - never off page.content(); six outcomes each carrying the one remedy that applies, and only a real rejection sends anybody to re-type a password - index COMMCALC-52)
         working-directory: backend
         run: python3 harness_login_outcome.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the live-frame lock (a click on the streamed live screen is translated through THAT frame's own size, scale and top offset, never through an assumed window; it reduces exactly to the old formula on a plain desktop frame - index COMMCALC-47)
@@ -2121,6 +2129,15 @@ jobs:
       - name: Run the statement month-end coverage lock (the window we ASK for has one home and cannot lose its last day; a CLOSED month whose statement misses a day is reported incomplete, named and priced; the shipped day-coverage question is dereferenced, not re-derived; what an upload REPLACES is the registry's answer on every surface — owner 2026-10-08, index §19.54)
         working-directory: backend
         run: python3 harness_statement_month_coverage.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the zero-sales proofs (absence is never zero — a store-day whose feed did not land is 'not reported' with NO number, never a zero day, never part of a run, never an alert; a rep inherits the store's not-reported state; counting an unmeasured day is REFUSED as config. Wired into CI on 2026-10-31 — both of these sat on the debt list, which is how the lock's own `d3` stayed RED on main unseen; index §15z)
+        working-directory: backend
+        run: python3 harness_zero_sales.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the zero-sales one-home lock (one shifts read, one predicate, one alert fan-out, one dedup key spelling — and the lock's own router BLOCK now has an END, so a feature appended to router.py later cannot be mistaken for zero-sales code)
+        working-directory: backend
+        run: python3 harness_zero_sales_lock.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the missing-trading-day lock (a store-day whose sales feed never landed is REPORTED to the surface that can fix it, and a store that reported and sold nothing is NEVER called a missing upload; the day state is dereferenced from its one home, not respelled; closed and unfinished days are not gaps; a threshold that would silence every finding is refused — owner 2026-10-31, index §COMMCALC-51)
+        working-directory: backend
+        run: python3 harness_feed_gap_days.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the earned-crosscheck lock (a statement's crosscheck verdict is COMPUTED, never defaulted; `not_measured` is never a pass; both statement writers dereference the one resolver — owner 2026-10-06, index §19.49)
         working-directory: backend
         run: python3 harness_statement_crosscheck_earned.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -3387,7 +3404,7 @@ jobs:
   feed-window-tenant-day:
     # THESE THREE REACH `app.*` AT IMPORT TIME, so they cannot live in the no-dependency
     # `carrier-vocab-guard` job: `epay_sweep` now imports `notify/report_filters` (the ONE home
-    # for the tenant's today, index §COMMCALC-52), which imports `app.core.config`, and
+    # for the tenant's today, index §COMMCALC-53), which imports `app.core.config`, and
     # `b2b_sweep` imports `requests`. Without the wheels the step dies with ModuleNotFoundError
     # before check one — a lock that cannot run is not a lock, which is what
     # `harness_ci_pipefail_lock.py` exists to catch, and did.
@@ -3399,7 +3416,7 @@ jobs:
         with: { python-version: "3.11" }
       - name: Install the backend's dependencies
         run: pip install -r backend/requirements.txt
-      - name: Run the tenant-day lock (a feed window's day comes from the ORG's zone, never the container's clock - the comp report's 23:30-local slot is 03:30 UTC the NEXT day, so every run asked the portal for a day that had not begun where the portal lives; `tz` is required at every window-building caller - index COMMCALC-52)
+      - name: Run the tenant-day lock (a feed window's day comes from the ORG's zone, never the container's clock - the comp report's 23:30-local slot is 03:30 UTC the NEXT day, so every run asked the portal for a day that had not begun where the portal lives; `tz` is required at every window-building caller - index COMMCALC-53)
         working-directory: backend
         shell: bash
         run: python3 harness_feed_window_tenant_day.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
