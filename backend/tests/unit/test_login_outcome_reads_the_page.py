@@ -266,3 +266,32 @@ def test_the_html_readers_never_raise_on_junk():
     for junk in (None, "", 0, "<<<>>", "<script>", b"bytes"):
         assert isinstance(lo.visible_from_html(junk), str)
         assert isinstance(lo.form_in_html(junk), bool)
+
+
+# ── THE THIRD DRIVER'S DISTINCTION, WHICH USED TO BE THE OPERATOR'S JOB ──────────────────────────
+# `vidapay_sweep` lands on `state == "login"` after a submit and used to assert "Login rejected"
+# for every such case, then ask the operator to decide from a diagnostic dict whether the portal had
+# actually refused anything. Its evidence is already the right kind - the VISIBLE innerText of the
+# page's error region - so the distinction belongs here, made once.
+
+def test_a_portal_that_said_something_refused_us():
+    """What `_b2b_error(page)` returns when the portal complained."""
+    said = " ".join(["Invalid user name or password."])
+    v = lo.verdict(form_present=True, visible_text=said)
+    assert v["outcome"] == lo.REJECTED
+    assert lo.is_credential_problem(v["outcome"])
+
+
+def test_a_portal_that_said_nothing_has_changed_its_flow():
+    """An EMPTY error region is the case the hedging prose was really about: the form is still
+    there, the portal explained nothing, and no credential will fix that."""
+    v = lo.verdict(form_present=True, visible_text=" ".join([]))
+    assert v["outcome"] == lo.CHANGED
+    assert not lo.is_credential_problem(v["outcome"])
+
+
+def test_an_error_region_listing_several_messages_still_resolves():
+    said = " ".join(["Please correct the errors below.", "Your account has been locked."])
+    v = lo.verdict(form_present=True, visible_text=said)
+    assert v["outcome"] == lo.REJECTED
+    assert v["marker"] == "been locked"

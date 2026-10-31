@@ -326,6 +326,53 @@ check("J16 entities are unescaped so the words match",
       "don't" in lo.visible_from_html("<p>don&#39;t</p>").lower())
 
 
+# ── §K THE THIRD DRIVER: still-on-the-form is NAMED, not hedged ─────────────────────────────────
+print("\n§K the live-login driver names which of the two it is, rather than asking the operator")
+
+VIDA = os.path.join(HERE, "app/modules/commcalc/vidapay_sweep.py")
+VIDA_SRC = open(VIDA).read()
+VIDA_EXEC = executable_text(VIDA)
+check("K1 it imports login_outcome", "login_outcome" in VIDA_SRC)
+check("K2 it asks the one home for the outcome", "_lo.verdict(" in VIDA_EXEC)
+check("K3 it takes the sentence from the one home", "_lo.message(" in VIDA_EXEC)
+check("K4 the hedging prose is GONE (the operator is not asked to read a dict)",
+      "if 'filled' shows your values" not in VIDA_EXEC
+      and "the form didn't accept the fill" not in VIDA_EXEC)
+check("K5 the human-check message still comes FIRST (§COMMCALC-11 keeps precedence)",
+      re.search(r"blocked\s+or\s+_lo\.message\(", VIDA_EXEC) is not None)
+check("K6 the evidence is the portal's own VISIBLE error region, not the markup",
+      "_b2b_error(page)" in VIDA_EXEC and ".content()" not in
+      (function_source(VIDA, "_b2b_error") or ""))
+check("K7 no driver asserts a rejection without evidence any more",
+      not re.search(r"[\"']Login rejected", VIDA_EXEC))
+
+# All three PORTAL drivers, one home, no second copy of the sentence anywhere.
+#
+# EXCUSED BY NAME, with its reason: `router.py`'s mailbox sweep says "login rejected" for an IMAP
+# `[AUTHENTICATIONFAILED]`. That is a different mechanism, not a second copy of this one — a mail
+# server's response code is an AUTHORITATIVE statement from the protocol, there is no page, no form
+# and nothing to misread. This module exists because a PAGE had to be interpreted. The excusal is
+# pinned at one file and may only shrink.
+MAILBOX_EXCUSED = {"router.py"}
+copies = []
+for name in sorted(os.listdir(MODULES)):
+    if not name.endswith(".py") or name == "login_outcome.py" or name in MAILBOX_EXCUSED:
+        continue
+    try:
+        txt = executable_text(os.path.join(MODULES, name))
+    except Exception:
+        continue
+    if re.search(r"(credentials?\s+rejected|login\s+rejected)", txt, re.I):
+        copies.append(name)
+check("K8 no portal driver spells a login-rejection verdict of its own", not copies, str(copies))
+check("K9 the mailbox excusal is pinned at one file (shrink-only)", len(MAILBOX_EXCUSED) == 1)
+check("K10 …and it really is a protocol answer, not a page read",
+      "AUTHENTICATIONFAILED" in open(os.path.join(MODULES, "router.py")).read())
+for drv in ("epay_sweep.py", "dlar_sweep.py", "vidapay_sweep.py"):
+    check("K:%s dereferences the one home" % drv,
+          "login_outcome" in open(os.path.join(MODULES, drv)).read())
+
+
 print("\n%d passed, %d failed" % (_passed, _failed))
 if _failed:
     print("\nFAILED — a login decision must be read off what the page is DOING, from one home.")

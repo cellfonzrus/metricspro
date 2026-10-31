@@ -36345,6 +36345,12 @@ The rules that make it a design fix rather than a better word list:
 | --- | --- | --- |
 | `epay_sweep._login` (browser) | markup substring + brand title | `login_outcome.verdict(...)`, from `login_form_present` + `visible_text` + `portal_backoff.page_verdict` on the VISIBLE text |
 | `dlar_sweep.login` (plain HTTP, no browser) | detection sound — a page that needs a session — but **every** failure named `credentials rejected` | same probe, outcome named by the one home via `login_outcome.visible_from_html` + `form_in_html` |
+| `vidapay_sweep` live login, `state == "login"` | detection sound (DOM, never markup) but asserted `Login rejected` for every still-on-the-form case, then asked the operator to work out from a diagnostic dict whether the portal had refused anything | the same evidence it already read — `_b2b_error(page)`, the error region's VISIBLE innerText — handed to the one home, so a portal that SAID something reads as a rejection and a portal that said nothing reads as a changed flow. `human_check_blocked_message` keeps precedence (§COMMCALC-11) |
+
+EXCUSED BY NAME, and pinned shrink-only in the lock (§K9): `router.py`'s MAILBOX sweep says "login
+rejected" for an IMAP `[AUTHENTICATIONFAILED]`. That is a different mechanism, not a second copy —
+a mail server's response code is an authoritative statement from the protocol, with no page, no form
+and nothing to misread. This one home exists because a PAGE has to be interpreted.
 
 `dlar_sweep`'s probe is deliberately untouched: asking for a page that needs a session is the right
 test. Only the NAMING was wrong, and only the naming moved. Where a redirect carries no body the
@@ -36381,14 +36387,14 @@ trusting it, and the driver tests parametrise three different portal shells.
 
 ### COMMCALC-51.8 Locked
 
-`backend/harness_login_outcome.py` — 90 checks, DB-free and browser-free. It fails the build if a
+`backend/harness_login_outcome.py` — 103 checks, DB-free and browser-free. It fails the build if a
 driver takes a login decision off `page.content()` again, if a driver stops dereferencing the one
 home, if a second home for the question appears, if the credential test stops being an allowlist, if
 an outcome loses its remedy, if the evidence arguments grow defaults, or if a portal name re-enters
 the decision. The source scan strips comments **and** docstrings first, on the 2026-10-30 precedent
 that a comment naming the defect otherwise reads as the fix's own violation.
 
-Tests: `tests/unit/test_login_outcome_reads_the_page.py` (25),
+Tests: `tests/unit/test_login_outcome_reads_the_page.py` (28),
 `tests/integration/test_epay_login_says_what_happened.py` (14),
 `tests/integration/test_dlar_login_says_what_happened.py` (7). The epay page double counts
 `content()` calls and asserts **zero** — the class is locked structurally, not by a text search.

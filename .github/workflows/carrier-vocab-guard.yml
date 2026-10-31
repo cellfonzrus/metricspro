@@ -1079,6 +1079,14 @@ on:
       # a second list reappearing in either is exactly what this job exists to catch.
       - "backend/harness_portal_page_verdict.py"
       - "backend/app/modules/commcalc/portal_backoff.py"
+      # index §COMMCALC-51 — WHAT HAPPENED TO THE LOGIN WE JUST SUBMITTED. The lock names itself, the
+      # one home, and ALL THREE portal drivers: a login decision taken off page.content() again, in
+      # any of them, is exactly what this job exists to catch.
+      - "backend/harness_login_outcome.py"
+      - "backend/app/modules/commcalc/login_outcome.py"
+      - "backend/app/modules/commcalc/epay_sweep.py"
+      - "backend/app/modules/commcalc/dlar_sweep.py"
+      - "backend/app/modules/commcalc/vidapay_sweep.py"
       - "backend/harness_live_frame.py"
       - "backend/app/modules/commcalc/live_frame.py"
       # index §COMMCALC-48 — THE EDITABLE REPORT DECLARATION. The lock names itself, its home, and the
@@ -2020,6 +2028,9 @@ jobs:
       - name: Run the page-verdict lock (a page that REFUSES us is not a login form that renders unexpectedly; one configurable vocabulary for refusal / challenge / throttle, three kinds because the remedies differ, and the portal's own words lead the operator message - index COMMCALC-50)
         working-directory: backend
         run: python3 harness_portal_page_verdict.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the login-outcome lock (a login outcome is read off what the page is DOING - is the form still on screen, what does it SAY - never off page.content(); six outcomes each carrying the one remedy that applies, and only a real rejection sends anybody to re-type a password - index COMMCALC-51)
+        working-directory: backend
+        run: python3 harness_login_outcome.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the live-frame lock (a click on the streamed live screen is translated through THAT frame's own size, scale and top offset, never through an assumed window; it reduces exactly to the old formula on a plain desktop frame - index COMMCALC-47)
         working-directory: backend
         run: python3 harness_live_frame.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

@@ -53,6 +53,16 @@ except ImportError:                                     # loaded by path, not as
     _pb_spec.loader.exec_module(_pb)
     PortalRateLimited = _pb.PortalRateLimited
 try:
+    from app.modules.commcalc import login_outcome as _lo   # THE one home of "what happened to this login"
+except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
+    import importlib.util as _ilu5
+    import os as _osmod5
+    _lo_spec = _ilu5.spec_from_file_location(
+        "commcalc_login_outcome",
+        _osmod5.path.join(_osmod5.path.dirname(_osmod5.path.abspath(__file__)), "login_outcome.py"))
+    _lo = _ilu5.module_from_spec(_lo_spec)
+    _lo_spec.loader.exec_module(_lo)
+try:
     from app.modules.commcalc import empty_pull_verdict as _empty_verdict   # the zero-row vocabulary
 except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
     import importlib.util as _ilu4
@@ -2119,11 +2129,17 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None, label=None):
                 # The SAME question as begin_login's, through the same home (§COMMCALC-11): this is
                 # the path the POS-reports portal family takes, and it is the one the owner hit.
                 blocked = human_check_blocked_message(page)
+                # WHICH of the two it is, NAMED rather than hedged (index §COMMCALC-51). This used to
+                # assert "Login rejected" for every still-on-the-form case and then ask the operator
+                # to work out from the diagnostic whether the portal had actually refused anything.
+                # The portal's own error region is VISIBLE text, which is exactly the evidence
+                # `login_outcome` wants, so the distinction is made here instead of delegated to a
+                # person reading a dict: a portal that said something refused us; a portal that said
+                # nothing has changed its flow, and no credential will fix that.
+                _said = " ".join(_b2b_error(page) or [])
+                _v = _lo.verdict(form_present=True, visible_text=_said)
                 raise VidaPayLoginError(
-                    (blocked or
-                     "Login rejected — still on the login form. What was typed + the portal's own error are in the "
-                     "diagnostic (filled / portal_error) — if 'filled' shows your values, the creds/Access-Code are "
-                     "being refused; if empty, the form didn't accept the fill.")
+                    (blocked or _lo.message(_v["outcome"], marker=_v.get("marker")))
                     + " Diagnostic: " + str(diag))
             return _twofa_result(page, ctx, {"_note": "post-login page not recognized as 2FA/app; send this diagnostic"})
         except Exception as e:   # attach the evidence to EVERY failure, incl. Playwright timeouts
