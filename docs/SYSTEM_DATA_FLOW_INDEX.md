@@ -191,6 +191,7 @@ Primary code homes:
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
+| CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
 | CORE-28 | **Sort by is part of the standard filter bar** | "in the Rep Incentive Report the month range shows, i need it to be sorted by employee store etc, add this to our standard filter bar" — the house has had one comparator and one header-click rule since 2026-08-10; what it had no place for was a CONTROL. Who owns "how are these rows ordered", so a dropdown and a column header can never answer it differently, and what stops the bar from carrying a default list of somebody else's columns? |
@@ -26210,6 +26211,7 @@ status word rather than a blank that reads as nil.
 | CORE-26 | core |
 | CORE-27 | core |
 | CORE-28 | core |
+| CORE-29 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -42523,3 +42525,109 @@ is the batch that lowers `FILTER_OWES_MAX` in §CORE-27.4 — the two asks are t
 send bar) · §COMMCALC-03.20 (the month-dropdown defect in this same component) · §COMMCALC-09 (a
 column no writer filled is not a zero) · §CORE-17.3d (the drill panels narrowed to the rows on screen)
 · §19.18 (one fact, one home, dereferenced).
+
+## §CORE-29. AN APP CAN ALWAYS SAY WHICH CODE IT IS RUNNING — one home for the running bundle (measured 2026-10-31)
+
+Between 2026-09-11 (when over-the-air updates were wired, PR #221) and 2026-10-31, a merged,
+published, correct mobile fix did not reach an installed phone — and **nothing anywhere said so.**
+EAS was serving the update: the installed build listens to channel `production`, that channel points
+at branch `production`, and the newest group on that branch carried the fix. The app kept running the
+bundle built into the binary. `expo-updates` does exactly that when an update cannot be applied — it
+reverts to the embedded bundle so the app still opens — and it does it in silence, by design.
+
+Six weeks of guessing followed, and two of this session's own diagnostic workflows had to be fixed
+before either could answer, because the only surface that knew the truth never showed it.
+
+### §CORE-29.1 Duplicate check (the build gate)
+
+Searched the index for an existing home for "which code is this app running" and for any
+version/build display on a mobile surface: there is none. §CORE-26.6 owns *publishing* an update from
+GitHub and §CORE-26.7 records the diagnosis of this incident, but neither answers the question from
+inside the app. `mobile/src/config/env.ts` reads `expo-constants` for `extra` and is a different
+question (which backend am I talking to), so it is left alone rather than widened. Nothing was
+duplicated; §CORE-26.7's finding is what this section acts on.
+
+### §CORE-29.2 The class, not the instance
+
+The instance is "a September fix did not reach one phone". The class is **"the running app could not
+state which code it was running"** — so every absence looked identical: not published, published to
+the wrong channel, wrong runtime, not downloaded, downloaded and discarded. An absence needs the
+RIGHT reason, the same lesson §COMMCALC-44 records about a $0.00 chargeback.
+
+So the fix is not a retry and not a nag. It is a FACT with one home that every surface dereferences:
+
+| | |
+| --- | --- |
+| **The rule** | `mobile/src/lib/running-bundle.ts` — `describeRunningBundle(facts)`, `BUNDLE_UNKNOWN`, `EMBEDDED_LABEL`. Pure, imports **nothing**, which is what lets it be proved in CI with no device, no build and no network. |
+| **The facts** | `mobile/src/lib/useRunningBundle.ts` — the ONLY file in the app that imports `expo-updates`. Every read is defensive, and a read that throws is itself rendered rather than taking the screen down. |
+| **The surface** | `mobile/app/(app)/(tabs)/settings.tsx` → a "This app" card that renders the rule's own `lines`, never fields it picked out and re-labelled. |
+| **The lock** | `backend/harness_running_bundle_lock.py` — 34 checks, every one with a negative control. |
+
+Three promises, each with a test:
+
+1. **No value is ever blank.** An absent fact reads as `not reported`, in words. A blank is what hid
+   this for six weeks, so the last resorts are asserted non-empty in the source, not just in a test.
+2. **It never claims an update is running when the embedded bundle is.** `Running` reads
+   `The bundle built into the app`, and `Published` reads `with the app` — it does not date an update
+   it is not running.
+3. **When the app is behind, it says so and says why.** `behind` is true only when the build *can*
+   take updates (updates enabled AND a channel) and is nevertheless on the embedded bundle — which
+   is precisely the silent-revert symptom, and the only state a user can act on. A build never wired
+   for updates is not flagged; it gets its own sentence instead.
+
+The card also shows **the binary and the bundle separately** — `App build` from
+`Constants.nativeAppVersion`/`nativeBuildVersion`, `Bundle SDK` from `expoConfig.sdkVersion`. That is
+the one line that would have surfaced this on day one: on 2026-10-31 EAS recorded the installed build
+as **SDK 57.0.0** while the repository declared, then and now, **Expo SDK 52 / React Native 0.76.5**
+(lockfile: `expo` 52.0.49, `expo-updates` 0.26.19). Those cannot both describe one app, and nothing
+on the phone could have said which was true. **Reported, not patched** — see §CORE-26.7.
+
+### §CORE-29.3 The over-the-air compatibility policy is PINNED, not merely configured
+
+`runtimeVersion` is the only thing standing between a build and an update it cannot run, so the
+harness pins it (`PINNED_RUNTIME_POLICY`, R6.2) the way `harness_db_resilience.py` pins its version
+and route count. Today it is `appVersion`, which ties the key to the hand-typed `version: '0.1.0'`
+and therefore carries **no information about the native runtime**: EAS will serve a mismatched update
+and `expo-updates` will discard it in silence. `fingerprint` hashes the real native dependency set
+and refuses instead; it is supported here (`@expo/fingerprint` 0.11.11, and the `@expo/config-types`
+enum allows it).
+
+**It has deliberately NOT been switched yet**, and the reason is recorded so nobody re-derives it:
+adopting `fingerprint` stops updates reaching the *existing* binary, which is right if the SDKs
+genuinely mismatch and wrong if they do not. The discriminating test is free — two cold starts, since
+`fallbackToCacheTimeout` defaults to 0 and nothing here overrides it, so new JavaScript only appears
+on the launch *after* the one that downloaded it. That test was put to the owner on 2026-10-31.
+Changing the policy means editing the pin and saying why in the PR.
+
+### §CORE-29.4 What the lock refuses
+
+- The rule losing its purity (an import in `running-bundle.ts`), which would end its CI proof.
+- A **second** file importing `expo-updates`, or any file outside the one home deriving
+  `isEmbeddedLaunch` / the embedded label for itself.
+- Settings picking fields out instead of rendering the rule's `lines`, or dropping the note.
+- Settings reaching for `expo-updates` / `expo-constants` directly.
+- Any last resort becoming the empty string again, including the build line's funnel into
+  `BUNDLE_UNKNOWN`.
+- `runtimeVersion` drifting from its pin, or being declared more than once, or `updates.url` going.
+- A deleted test: the four promises are named in the harness, so losing one fails the build.
+
+Each check is re-run against text carrying the defect and must FAIL there, so a check that has
+silently stopped looking is itself a failure. The four live defects were each injected and caught
+before merge: Settings un-dereferenced (R4.2), a blank sentinel (R3.2), an impure rule (R2.1 + R5.1),
+and a quiet policy change (R6.2).
+
+### §CORE-29.5 Every tenant
+
+Nothing here reads a tenant's vocabulary or data, so the 2026-10-30 cross-tenant directive is
+satisfied trivially — but note *why* it matters that this shipped: the surface it makes visible is
+the one that carried a cross-tenant defect (§CORE-26) to a phone and then hid the repair.
+
+### §CORE-29.6 Not money
+
+No migration, no schema change, no money path. One new pure module, one new native-read module, one
+new card on an existing screen, one new harness. 11 new unit tests (24 in `mobile/` in all).
+
+**Cross-refs:** §CORE-26 (the label defect this carried, and hid) · §CORE-26.6 (publishing an update
+from GitHub) · §CORE-26.7 (the diagnosis that produced this section) · §COMMCALC-44 (an absence needs
+the right reason) · §CORE-13 (a harness that fails the build) · §19.18 (one fact, one home,
+dereferenced).

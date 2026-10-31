@@ -11,6 +11,9 @@ import {
   type BiometricSupport,
 } from '@/auth/biometric'
 import { useOfflineQueue } from '@/offline/useQueue'
+// "What code is this app actually running" — dereferenced from the one home (index §CORE-29),
+// never derived here. A blank on this screen is what hid a six-week-old fix.
+import { runningBundle } from '@/lib/useRunningBundle'
 import { discardFailed, flushQueue, retryFailed } from '@/offline/queue'
 import { Body, Button, Card, H2, Screen } from '@/components/ui'
 import { colors, font, spacing } from '@/theme'
@@ -20,6 +23,8 @@ export default function Settings() {
   const { pending, failed } = useOfflineQueue()
   const [biometric, setBiometric] = useState<BiometricSupport | null>(null)
   const [lockOn, setLockOn] = useState(false)
+  // Read once per mount: the running bundle cannot change without a relaunch.
+  const [bundle] = useState(runningBundle)
 
   useEffect(() => {
     getBiometricSupport().then(setBiometric)
@@ -105,6 +110,16 @@ export default function Settings() {
           {pending.length === 0 && failed.length === 0 && <Body dim>Everything is synced.</Body>}
         </Card>
 
+        <H2>This app</H2>
+        <Card style={{ gap: spacing.xs }}>
+          {bundle.lines.map((line) => (
+            <Row key={line.label} label={line.label} value={line.value} />
+          ))}
+          {bundle.note !== '' && (
+            <Text style={bundle.behind ? styles.behind : styles.hint}>{bundle.note}</Text>
+          )}
+        </Card>
+
         <View style={{ height: spacing.lg }} />
         <Button title="Sign out" variant="danger" onPress={signOut} />
       </ScrollView>
@@ -128,6 +143,7 @@ const styles = StyleSheet.create({
   rowValue: { color: colors.text, fontSize: font.body, fontWeight: '600', flexShrink: 1, textAlign: 'right' },
   switchRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   hint: { color: colors.textDim, fontSize: font.small },
+  behind: { color: colors.danger, fontSize: font.small, marginTop: spacing.xs },
   failed: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingTop: spacing.sm, gap: spacing.xs },
   failedTitle: { color: colors.text, fontSize: font.body, fontWeight: '600' },
   failedActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
