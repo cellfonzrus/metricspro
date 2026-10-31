@@ -42002,6 +42002,12 @@ a new module, a new permission, an SDK bump, a `version` bump (the runtime key i
 `{ policy: 'appVersion' }`) — finds no matching runtime and is simply not delivered, rather than
 shipping something broken. The workflow never builds and never submits to a store.
 
+The EAS CLI is installed with `npm install -g eas-cli@latest` rather than through
+`expo/expo-github-action`. That action defaults its packager to **yarn** and this project is npm
+(`mobile/package-lock.json`), so the first real publish died in it — run `41225844556`, 2026-10-31,
+*"The process '/usr/local/bin/yarn' failed with exit code 1"*. `eas-cli` reads `EXPO_TOKEN` from the
+environment by itself, so the action was buying a second package manager and nothing else.
+
 ### §CORE-26.5 Not money
 
 No endpoint, no table, no migration, no query, no figure. Nothing about what a number IS changes;
