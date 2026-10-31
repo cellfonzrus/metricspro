@@ -93,16 +93,23 @@ jobs:
         working-directory: mobile
         run: npm run test
 
-      - uses: expo/expo-github-action@v8
+      # The CLI is installed directly rather than through `expo/expo-github-action`. That action
+      # defaults its packager to YARN and this project is npm (`mobile/package-lock.json`), so it
+      # ran `yarn global add` on a runner where that fails — the first real publish died there
+      # (run 41225844556, 2026-10-31: "The process '/usr/local/bin/yarn' failed with exit code 1").
+      # `eas-cli` reads `EXPO_TOKEN` from the environment by itself, so the action bought us
+      # nothing but a second package manager and a Node-20 deprecation warning.
+      - name: install the EAS CLI
         if: steps.gate.outputs.ready == 'true'
-        with:
-          eas-version: latest
-          token: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npm install -g eas-cli@latest
+          eas --version
 
       - name: publish the update
         if: steps.gate.outputs.ready == 'true'
         working-directory: mobile
         env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           CHANNEL: ${{ inputs.channel || 'production' }}
           # Through the environment, never interpolated into the script: a commit message is
           # arbitrary text from anyone who can push, and `${{ }}` would paste it into bash.
