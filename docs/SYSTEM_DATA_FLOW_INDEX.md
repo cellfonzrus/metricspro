@@ -36544,8 +36544,12 @@ all — the house fallback lives in `report_filters` alone (RULE TWO).
 - `backend/harness_feed_window_tenant_day.py` — 43 checks, DB-free and browser-free. Fails the build
   if a driver takes a day off the container's clock, stops dereferencing the one home, keeps a zone
   ladder or an IANA literal of its own, gains a DEFAULT for `tz` at a window-building entry point, or
-  if a router call site stops passing the org's zone, or the excusal list grows. Wired into CI on the
-  `carrier-vocab-guard` workflow.
+  if a router call site stops passing the org's zone, or the excusal list grows. Wired into CI as its
+  own job on `carrier-vocab-guard.yml` — a job that INSTALLS the backend, because `epay_sweep` now
+  reaches `app.core.config` through the one home and `b2b_sweep` imports `requests`, so the step would
+  die with `ModuleNotFoundError` before check one in the no-dependency job. `harness_ci_pipefail_lock`
+  caught exactly that, and the two sibling locks that share the chain (`harness_empty_pull_verdict`,
+  `harness_feed_day_grain`) moved with it.
 - `backend/tests/unit/test_feed_window_is_the_tenants_day.py` — 31 unit tests, including the eight
   recorded run instants as a parametrised regression.
 - `backend/harness_comp_daily_sweep.py`, `harness_empty_pull_verdict.py`, `harness_epay_sweep_dtd.py`

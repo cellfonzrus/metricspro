@@ -2039,9 +2039,6 @@ jobs:
       - name: Run the login-outcome lock (a login outcome is read off what the page is DOING - is the form still on screen, what does it SAY - never off page.content(); six outcomes each carrying the one remedy that applies, and only a real rejection sends anybody to re-type a password - index COMMCALC-51)
         working-directory: backend
         run: python3 harness_login_outcome.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the tenant-day lock (a feed window's day comes from the ORG's zone, never the container's clock - the comp report's 23:30-local slot is 03:30 UTC the NEXT day, so every run asked the portal for a day that had not begun where the portal lives; `tz` is required at every window-building caller - index COMMCALC-52)
-        working-directory: backend
-        run: python3 harness_feed_window_tenant_day.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the live-frame lock (a click on the streamed live screen is translated through THAT frame's own size, scale and top offset, never through an assumed window; it reduces exactly to the old formula on a plain desktop frame - index COMMCALC-47)
         working-directory: backend
         run: python3 harness_live_frame.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -2112,12 +2109,6 @@ jobs:
       - name: Run the supply-ordering proof (vendor setup incl. free-shipping threshold + delivery days; catalog ingest; the cart optimizer with thresholds / lead time / stock / packs; the order recipe never submits on its own; confirmation capture; one lander, one connector key, one pricing copy — index §36)
         working-directory: backend
         run: python3 harness_supply_ordering.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the silent-zero lock (a sweep's reported status is not a record of what it did — one home for "is this zero the source's own answer?", every empty_ok leg routed through it, the window never narrower than the arrears, success is what landed — index §19.41)
-        working-directory: backend
-        run: python3 harness_empty_pull_verdict.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the feed day-grain lock (a feed row's month is its OWN day's month, never the period someone picked; one home for the data-date map, dereferenced by the upload and the sweep; all-or-nothing stamping; every declared feed is day-keyed or declared period-grain with a reason — owner 2026-10-05, index §19.44)
-        working-directory: backend
-        run: python3 harness_feed_day_grain.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the reconciliation-precondition lock (a reconciliation reports a difference only when BOTH sides have arrived; ONE home for "has this month closed, so is its archive due", dereferenced by the router and the recon; a closed month with no archive is ONE condition at period grain, never one leak per transaction; an amount DISAGREEMENT stays reported even mid-month — owner 2026-10-06, index §19.52)
         working-directory: backend
         run: python3 harness_sales_recon_basis.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -3392,3 +3383,31 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_demand_projection.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  feed-window-tenant-day:
+    # THESE THREE REACH `app.*` AT IMPORT TIME, so they cannot live in the no-dependency
+    # `carrier-vocab-guard` job: `epay_sweep` now imports `notify/report_filters` (the ONE home
+    # for the tenant's today, index §COMMCALC-52), which imports `app.core.config`, and
+    # `b2b_sweep` imports `requests`. Without the wheels the step dies with ModuleNotFoundError
+    # before check one — a lock that cannot run is not a lock, which is what
+    # `harness_ci_pipefail_lock.py` exists to catch, and did.
+    name: A feed window asks for the tenant's own day (one home, required at every caller)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Install the backend's dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run the tenant-day lock (a feed window's day comes from the ORG's zone, never the container's clock - the comp report's 23:30-local slot is 03:30 UTC the NEXT day, so every run asked the portal for a day that had not begun where the portal lives; `tz` is required at every window-building caller - index COMMCALC-52)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_feed_window_tenant_day.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the silent-zero lock (a sweep's reported status is not a record of what it did — one home for "is this zero the source's own answer?", every empty_ok leg routed through it, the window never narrower than the arrears, success is what landed — index §19.41)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_empty_pull_verdict.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the feed day-grain lock (a feed row's month is its OWN day's month, never the period someone picked; one home for the data-date map, dereferenced by the upload and the sweep; all-or-nothing stamping; every declared feed is day-keyed or declared period-grain with a reason — owner 2026-10-05, index §19.44)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_feed_day_grain.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
