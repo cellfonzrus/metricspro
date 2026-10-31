@@ -192,6 +192,7 @@ Primary code homes:
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
+| CORE-28 | **Sort by is part of the standard filter bar** | "in the Rep Incentive Report the month range shows, i need it to be sorted by employee store etc, add this to our standard filter bar" — the house has had one comparator and one header-click rule since 2026-08-10; what it had no place for was a CONTROL. Who owns "how are these rows ordered", so a dropdown and a column header can never answer it differently, and what stops the bar from carrying a default list of somebody else's columns? |
 | CORE-22 | **A page load never queries once per item** | "How do we avoid these extra round-trip calls? Which loop shapes really cost one trip per row and which only look like it, what is the count today, and what fails the build the day a new one ships?" |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26206,6 +26207,7 @@ status word rather than a blank that reads as nil.
 | CORE-25 | core |
 | CORE-26 | core |
 | CORE-27 | core |
+| CORE-28 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -42142,3 +42144,146 @@ call one state two things. §D8 of the gate fails the build if the page spells o
 
 No endpoint, no table, no migration, no query, no figure moved. A toolbar, a pure converter, and a
 build gate. The Zero Sales payload is served exactly as before.
+
+---
+
+## §CORE-28. SORT BY IS PART OF THE STANDARD FILTER BAR (owner ask 2026-10-31)
+
+**What he said:**
+
+> *"in the Rep Incentive Report the month range shows , i need it to be sorted by employee store etc ,
+> add this to our standard filter bar and update the index , do this one urgently and the rest as we
+> go along"*
+
+Two asks again, and again the second is the one that lasts: fix the report he was looking at, and make
+ordering a capability of the SHARED bar so every other report gets it as it is adopted ("the rest as
+we go along").
+
+### §CORE-28.1 DUPLICATE CHECK (build gate)
+
+Searched this index first. **Nothing new was written for comparing cells or for header clicks** — the
+house has had one home for both since the 2026-08-10 directive. What was missing was a *control*:
+
+| The question | Its existing one home | What this change did |
+|---|---|---|
+| "how do two cells compare" (money, dates, text, empties last) | `frontend/src/lib/table-sort.ts` — `compareValues` / `sortRows` | **dereferenced**, untouched. `sortStandard` calls it |
+| "what does clicking the same header again do" | `table-sort.nextSort` (asc → desc → off) | **dereferenced** by `toggleStandardSort` |
+| "the sortable `<th>`" | `frontend/src/components/SortableTh.tsx` | reused as-is on the two Rep Incentive tables |
+| "the standard report filters" | `frontend/src/components/StandardFilterBar.tsx` + `lib/standard-filters.ts` (§3d, §COMMCALC-03.20) | **extended** — one new optional prop, no adopter changed |
+| "which rows a report is showing" | `standard-filters.filterRows` over a `StandardFilterValue` (§3d) | extended with `sort`, so order travels with the narrowing |
+| "which months a rep-range row belongs to" | `commcalc/_lib/repIncentiveRange.monthBlocks` | reused; it keeps the order it is handed, so sorting happens BEFORE grouping |
+
+A second sort rule for the bar was the obvious shape and is exactly the drift §19.18 names: the
+dropdown would have sorted one way and the column headers another on the same table.
+
+### §CORE-28.2 THE CLASS, not the instance
+
+The instance was the Rep Incentive month range. The class is **two states for one question**: a page
+that gains a sort dropdown while its headers keep their own `useTableSort` has two answers to "how are
+these rows ordered", and the exporter can only read one of them. So:
+
+**One sort state per page, on the value the bar already owns.** `StandardFilterValue.sort` is it. The
+dropdown writes it, a header click toggles it through the same `nextSort`, the table renders through
+it, and the export reads the same ordered array — what you see is what exports (RULE FIVE).
+
+A second fact, worth stating because it is the opposite call from §CORE-27: **a sort is not a
+narrowing.** `isStandardFilterActive` deliberately ignores `sort`, so no page starts telling a user
+rows were filtered out when they were only reordered; `isStandardSortActive` is the separate question,
+and the Clear button is shown — and resets both — when either is true.
+
+### §CORE-28.3 WHAT IS SORTABLE IS DECLARED BY THE REPORT, NEVER DEFAULTED
+
+The bar is **handed** its sortable fields (`sortFields`), each one a `{ field, label, get, kind }`
+declaration. It has no column list of its own and no fallback, for the reason the 2026-10-30 directive
+gives: *a default that is really one caller's vocabulary is the per-tenant code RULE TWO forbids*. A
+column list is exactly that shape — one report's (or one tenant's) words answering for everyone's.
+
+* **Nothing declared means nothing offered.** `sortFields` omitted or empty renders **no sort control
+  at all**, rather than a dropdown of somebody else's columns. Every existing adopter of the bar is
+  therefore byte-identical until it declares.
+* **A field nobody declared sorts nothing.** `sortStandard` returns the same array reference for an
+  undeclared field, so a stale URL or a half-migrated page cannot read a column the report never
+  offered.
+* **A getter reads the cell the table PRINTS.** Rep Incentive shows `storeops_name || epay_salesperson`
+  (two feeds, one person), so `repDisplayName` is that same expression — ordering by the other one
+  would order the rows by a string the user cannot see, and a sort nobody can check is not a sort.
+* **Both directions are worded for what the column holds** (`A–Z` / `Z–A`, `low → high`, `oldest
+  first`), from `kind`. The dropdown never says "asc".
+
+### §CORE-28.4 WHERE IT IS WIRED TODAY
+
+| Surface | Declaration | Sortable by |
+|---|---|---|
+| `/commcalc/reports` Rep Breakdown + Compensation (single month) | `commcalc/_lib/repIncentiveSort.REP_SORT_FIELDS` | Employee, Store, Market, Tier, KPIs met, Subtotal, Payout |
+| `/commcalc/reports` **Month range** (the tab he was on) | `…repIncentiveSort.RANGE_SORT_FIELDS` | Employee, Store, Payout, Final |
+
+The range table is sectioned by month, so the sort orders the rows **inside** each month's section and
+the per-month and grand totals are untouched (they are sums). `RANGE_SORT_FIELDS` deliberately offers
+**no Month** and **no Market**: month is the section key, so sorting by it would reorder nothing, and
+the range endpoint's rows carry no market — a control that changes nothing reads as broken, and one
+that sorts a column the data has not got reads as data loss.
+
+Everything downstream of the single-month sort comes from **one memo**: the tables, the header tiles,
+the drill-down narrowing (§CORE-17.3d) and the CSV/XLSX export all read `filtered`, which is now
+`sortStandard(filterRows(…))`. There was nothing to keep in step.
+
+### §CORE-28.5 One home, dereferenced — and the locks
+
+* `frontend/src/lib/standard-filters.ts` — `SortFieldDecl` · `sortFieldCell` · `sortSelectOptions` ·
+  `sortSelectValue` · `parseSortSelect` · `isStandardSortActive` · `toggleStandardSort` ·
+  `sortStandard`. Framework-free, so it is unit-provable; it imports `table-sort` and re-exports
+  `SortState` rather than restating it.
+* `frontend/src/components/StandardFilterBar.tsx` — renders the `Sort by` select (`aria-label="Sort
+  rows by"`, with a real **Report order** option so a sort is undoable without a reload).
+* `frontend/src/app/(platform)/commcalc/_lib/repIncentiveSort.ts` — the report's declaration, nothing
+  else.
+* **Tests, written before the code (project directive 2026-10-28):**
+  `frontend/src/lib/__tests__/standard-sort.test.ts` (14 units — the rules, the refusals, three
+  tenants' store spellings, and that `'104-08 Lefferts Blvd'` sorts as a street and not as the number
+  104); `frontend/src/components/__tests__/StandardFilterBar.sort.test.tsx` (7 component tests in
+  jsdom — the control appears only where fields were declared, emits only `sort`, shows the current
+  sort back, and Clear restores report order);
+  `frontend/src/app/(platform)/commcalc/_lib/__tests__/repIncentiveSort.test.ts` (12 — the two
+  declarations over mixed-case names and three tenants' store vocabularies, **plus the source locks**).
+* **The locks** (same file, §"the page cannot stop dereferencing the shared sort"): the page must hand
+  its declaration to the bar, must order **both** tables through `sortStandard`, must toggle the
+  **same** state from its headers, and must contain **no comparator of its own**. Comment lines are
+  stripped before matching, per the §CORE-27 lesson that a page can otherwise satisfy a source check
+  by *talking* about the thing. Three mutations were run and each turned the suite red.
+* **The 2026-08-10 header-sort ratchet moved down one.** `/commcalc/reports` was line 133 of
+  `frontend/table_sort_pending.txt` — a data table with no sorting at all, which is exactly what the
+  owner hit. Its line is deleted and `harness_table_sort_lock.PINNED_MAX` re-pinned **217 → 216**,
+  downward, as that register requires. The lock caught this itself: wiring the page turned check (b)
+  red ("already sorted, still listed") until the line went.
+* **Also fixed, because it blocked the component test:** `frontend/vitest.config.ts` now supplies
+  non-secret `NEXT_PUBLIC_SUPABASE_*` values. `lib/client` builds its Supabase client at import time
+  and threw `supabaseUrl is required`, which made **every** component that imports it unrenderable in
+  a test — the filter bar among them. The host does not exist and `tests/setup.ts` still makes any real
+  `fetch` throw, so the no-network promise is unchanged.
+
+### §CORE-28.6 Every tenant
+
+Nothing here is per-tenant by construction, and that is the point to keep: the bar never spells a
+store, a market or a person. The option lists come from `optionsFromRows` over the rows the caller
+already loaded (org-scoped by the caller's JWT), the sortable fields come from the report's
+declaration, and the values come from the rows — so Cellfonz's `B-1115`, LuxeLink's
+`104-08 Lefferts Blvd` and a Vzone shop name each order under their own vocabulary. The tests assert
+both halves: each shape orders correctly, and no tenant's spelling decides another's order. A row with
+no value for the sorted column sinks to the bottom in **both** directions (`table-sort`'s empties-last
+rule) — "no answer" is not "first alphabetically", the same posture as §COMMCALC-09 on a figure nobody
+recorded.
+
+### §CORE-28.7 Not money, and what is still owed
+
+No endpoint, no table, no migration, no figure. Sorting reorders rows the browser already holds; every
+total on both tables is a sum and cannot move. A page that paginates server-side would have to sort
+server-side — `sortRows` cannot see rows it was not given — and none of the surfaces here does.
+
+**Still owed, as the owner framed it ("the rest as we go along"):** the other 127 report routes declare
+no `sortFields` yet, so they render no sort control. Each is a one-line declaration, and the right time
+is the batch that lowers `FILTER_OWES_MAX` in §CORE-27.4 — the two asks are the same wiring visit.
+
+**Cross-refs:** §3d (RULE FIVE — the shared bar) · §CORE-27 (every report carries the filters and the
+send bar) · §COMMCALC-03.20 (the month-dropdown defect in this same component) · §COMMCALC-09 (a
+column no writer filled is not a zero) · §CORE-17.3d (the drill panels narrowed to the rows on screen)
+· §19.18 (one fact, one home, dereferenced).

@@ -4,6 +4,13 @@
 // and reused identically by every report surface that adopts the bar. Filtering is client-side over the rows
 // a page already loaded (which are already org-scoped by the caller's JWT) — what-you-see-is-what-exports.
 
+// SORTING IS NOT RE-DERIVED HERE. `lib/table-sort` has been the one home for "how two cells compare"
+// and "what a header click does next" since OWNER DIRECTIVE 2026-08-10; this module only gives that
+// rule a place in the shared bar (index §CORE-28). A second comparator would drift from the headers.
+import { nextSort, sortRows, type SortState } from './table-sort'
+
+export type { SortState } from './table-sort'
+
 export type StandardFilterValue = {
   /** 'YYYY-MM' (month mode) or 'YYYY-MM-DD' (range start / single day). '' = no period filter. */
   period?: string
@@ -12,6 +19,94 @@ export type StandardFilterValue = {
   stores: string[]
   markets: string[]
   reps: string[]
+  /** HOW THE ROWS ARE ORDERED (owner ask 2026-10-31, §CORE-28). One state for the whole page, so the
+   *  bar's "Sort by" dropdown and a click on a sortable column header can never disagree about the
+   *  order — they read and write this. `null`/absent = the order the report itself produced. */
+  sort?: SortState
+}
+
+/** A SORTABLE FIELD, DECLARED BY THE PAGE. The bar is handed these; it has no list of its own and no
+ *  default — a default list of column names is one report's (and in the worst case one tenant's)
+ *  vocabulary answering for everybody, which is the class the owner directive of 2026-10-30 bans.
+ *  `kind` only decides how the two directions are WORDED; the comparison itself is `table-sort`'s,
+ *  which infers money/date/text from the cell. */
+export type SortFieldKind = 'text' | 'number' | 'date'
+
+/** A row, as a declaration sees it: a bag of named cells. DELIBERATELY NOT GENERIC over the page's
+ *  own row interface — the declarations travel through the shared bar (which renders labels and never
+ *  reads a cell), and a generic would make every adopter cast at that boundary. A getter therefore
+ *  reads a named cell and returns it; it does no arithmetic, because comparing is `table-sort`'s job. */
+export type SortRow = Record<string, unknown>
+
+export type SortFieldDecl = {
+  field: string
+  label: string
+  kind?: SortFieldKind
+  get: (row: SortRow) => unknown
+}
+
+const DIR_WORDS: Record<SortFieldKind, [string, string]> = {
+  text: ['A\u2013Z', 'Z\u2013A'],
+  number: ['low \u2192 high', 'high \u2192 low'],
+  date: ['oldest first', 'newest first'],
+}
+
+/** Reads one cell THROUGH the page's declaration. A field nobody declared has no cell — it returns
+ *  undefined rather than reaching into the row, so a sort can never read a column the page did not
+ *  offer (the same posture as the option lists: what you can filter by is what you were given). */
+export function sortFieldCell<T>(fields: SortFieldDecl[], row: T, field: string): unknown {
+  const f = (fields || []).find(x => x.field === field)
+  return f ? f.get(row as SortRow) : undefined
+}
+
+/** The dropdown's options: every declared field, in both directions, worded for what it holds.
+ *  EMPTY when the page declared nothing — nothing declared means nothing offered, and the bar then
+ *  renders no sort control at all rather than falling back to somebody else's columns. */
+export function sortSelectOptions(fields: SortFieldDecl[]): { value: string; label: string }[] {
+  const out: { value: string; label: string }[] = []
+  for (const f of fields || []) {
+    const [up, down] = DIR_WORDS[f.kind || 'text']
+    out.push({ value: `${f.field}:asc`, label: `${f.label} (${up})` })
+    out.push({ value: `${f.field}:desc`, label: `${f.label} (${down})` })
+  }
+  return out
+}
+
+/** The `<select>` value for a sort state; '' means "the report's own order". */
+export function sortSelectValue(sort: SortState | undefined): string {
+  return sort && sort.field ? `${sort.field}:${sort.dir}` : ''
+}
+
+/** '' / 'field' / 'field:asc' / 'field:desc' -> a sort state. An unrecognised direction reads as
+ *  ascending rather than throwing: the control is a view, and a bad value must not blank a report. */
+export function parseSortSelect(v: string | undefined): SortState {
+  const s = norm(v)
+  if (!s) return null
+  const [field, dir] = s.split(':')
+  if (!field) return null
+  return { field, dir: dir === 'desc' ? 'desc' : 'asc' }
+}
+
+/** True when the rows are being REORDERED. Deliberately NOT part of `isStandardFilterActive`: a sort
+ *  hides nothing, and a page that counts it as a filter would tell the user rows were left out. */
+export function isStandardSortActive(sel: StandardFilterValue): boolean {
+  return !!(sel?.sort && sel.sort.field)
+}
+
+/** A header click, applied to the shared value: asc -> desc -> off on the same column, ascending on a
+ *  new one. The transition is `table-sort.nextSort` — the headers' own rule, not a second copy. */
+export function toggleStandardSort(sel: StandardFilterValue, field: string): StandardFilterValue {
+  return { ...sel, sort: nextSort(sel?.sort ?? null, field) }
+}
+
+/** THE ORDERED VIEW. Rows already filtered, ordered by `sel.sort` through the page's declaration.
+ *  Returns the SAME array reference when there is nothing to do (no sort, nothing declared, or a
+ *  field this page does not declare), so a report's own order is the default and cheap. */
+export function sortStandard<T>(rows: T[], sel: StandardFilterValue, fields: SortFieldDecl[]): T[] {
+  const sort = sel?.sort ?? null
+  if (!sort || !sort.field) return rows
+  if (!(fields || []).some(f => f.field === sort.field)) return rows
+  return sortRows(rows, sort, (row: T, field: string) => sortFieldCell(fields, row, field))
 }
 
 export type FieldAccessors<T> = {
@@ -64,7 +159,7 @@ export function monthNeedsOwnOption(period: string | undefined, periods?: string
 }
 
 export function emptyStandardFilter(period = ''): StandardFilterValue {
-  return { period, periodTo: '', stores: [], markets: [], reps: [] }
+  return { period, periodTo: '', stores: [], markets: [], reps: [], sort: null }
 }
 
 /** True when any of the four core filters is narrowing the result. Period alone counts only in range mode

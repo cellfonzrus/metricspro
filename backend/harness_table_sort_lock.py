@@ -43,7 +43,7 @@ SORT_HOME = os.path.join(FE, "lib", "table-sort.ts")
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "carrier-vocab-guard.yml")
 
 # Lower this as pages get wired. It may never rise: that is the ratchet.
-PINNED_MAX = 217
+PINNED_MAX = 216
 
 # Any ONE of these means the file's table goes through the shared mechanism.
 SORTED_MARKS = ("SortableTh", "useTableSort", "ReportShell", "DataGrid")
