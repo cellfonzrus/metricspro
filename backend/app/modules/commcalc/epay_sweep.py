@@ -56,6 +56,16 @@ except ImportError:                                     # loaded by path, not as
     _verdict = _ilu3.module_from_spec(_ev_spec)
     _ev_spec.loader.exec_module(_verdict)
 try:
+    from app.modules.commcalc import login_outcome as _lo      # THE one home of "what happened to this login"
+except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
+    import importlib.util as _ilu4
+    import os as _osmod4
+    _lo_spec = _ilu4.spec_from_file_location(
+        "commcalc_login_outcome",
+        _osmod4.path.join(_osmod4.path.dirname(_osmod4.path.abspath(__file__)), "login_outcome.py"))
+    _lo = _ilu4.module_from_spec(_lo_spec)
+    _lo_spec.loader.exec_module(_lo)
+try:
     from app.core.service_role import assert_browser_allowed   # SERVICE_ROLE=api guard
 except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
     def assert_browser_allowed():                        # no-op fallback for path-loaded proof scripts
@@ -451,9 +461,80 @@ def comp_period_from_records(records):
 
 
 # ── headless-browser login + report download ──────────────────────────────────────────────
+def login_form_present(page):
+    """Is the sign-in form STILL on the page, and VISIBLE? THE one structural reader for that
+    question in this driver, so no caller asks it a second way. Never raises.
+
+    Structural on purpose: the control is either on screen or it is not. The predicate this
+    replaces asked whether the string "passwordinput" occurred in `page.content()`, which stays true
+    for a hidden node, a template and a comment alike — see login_outcome's header.
+    """
+    for sel in ("#passwordInput", "input[type=password]"):
+        try:
+            el = page.query_selector(sel)
+            if el is not None and el.is_visible():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def visible_text(page):
+    """What a PERSON would read on this page: the title plus the body's innerText. THE one reader
+    for the driver's page-state decisions. Never `page.content()` — that serialises every script,
+    template, comment and hidden node, and a login decision taken off it cannot tell a portal that
+    SAYS a word from one that merely ships it (index §COMMCALC-50.9). Never raises."""
+    try:
+        t = page.evaluate(
+            "() => ((document.title || '') + ' ' + ((document.body && document.body.innerText) || ''))")
+        return t or ""
+    except Exception:
+        return ""
+
+
+def _page_verdict(page):
+    """`portal_backoff.page_verdict` for THIS page — "is it refusing or challenging us rather than
+    showing a form" — asked against the VISIBLE text, which is the only text that answers it.
+    Never raises; None when that module is unavailable (pre-migration shape)."""
+    try:
+        from app.modules.commcalc import portal_backoff as _pb
+    except Exception:
+        return None
+    try:
+        return _pb.page_verdict(visible_text(page))
+    except Exception:
+        return None
+
+
+def _login_verdict(page):
+    """What happened to the submit we just made — the one home's answer, for this page."""
+    return _lo.verdict(form_present=login_form_present(page),
+                       visible_text=visible_text(page),
+                       page_verdict=_page_verdict(page))
+
+
 def _login(page, user, pw):
-    """Fill the CarrierPortal login window and submit. Raises EpayLoginError on failure."""
-    page.wait_for_selector("#passwordInput", timeout=30000)
+    """Fill the portal's sign-in window and submit. Returns the login verdict dict on success;
+    raises EpayLoginError, carrying the outcome's own remedy, on anything else.
+
+    The OUTCOME IS NOT DECIDED HERE. `commcalc/login_outcome` is the one home for "we submitted a
+    login, what happened" and this function's job is to hand it the facts: is the form still on
+    screen, what does the page SAY, and is the page serving something instead of a form. See that
+    module's header for the 22-day outage that produced it.
+    """
+    try:
+        page.wait_for_selector("#passwordInput", timeout=30000)
+    except Exception as e:
+        # NO FORM EVER APPEARED. Until now this surfaced as the raw Playwright line "Page.
+        # wait_for_selector: Timeout 30000ms exceeded", which names a selector and no remedy. The
+        # page itself usually says exactly what it is doing — a refusal, a human check — so ask.
+        v = _lo.verdict(form_present=False, visible_text=visible_text(page),
+                        page_verdict=_page_verdict(page))
+        if v["outcome"] in (_lo.HUMAN_CHECK, _lo.REFUSED):
+            raise EpayLoginError(_lo.message(v["outcome"], marker=v.get("marker")))
+        raise EpayLoginError(
+            "the portal's sign-in form never appeared, and the page did not say why. "
+            f"Nothing has been pulled. ({type(e).__name__})")
     if page.query_selector("#usernameInput"):
         page.fill("#usernameInput", user)
     else:
@@ -469,14 +550,10 @@ def _login(page, user, pw):
     except Exception:
         pass
     page.wait_for_timeout(4000)
-    title = page.title() or ""
-    body = (page.content() or "").lower()
-    if "owner portal" in title.lower():
-        return  # the post-login app shell renders this title
-    if any(w in body for w in ("invalid", "incorrect", "failed")) and "passwordinput" in body:
-        raise EpayLoginError("epay login failed — credentials rejected (or the application/2FA changed).")
-    if not any(w in body for w in ("logout", "sign out", "commissions", "report", "dashboard")):
-        raise EpayLoginError("epay login did not reach a logged-in page — login form/flow may have changed.")
+    v = _login_verdict(page)
+    if _lo.signed_in(v["outcome"]):
+        return v
+    raise EpayLoginError(_lo.message(v["outcome"], marker=v.get("marker")))
 
 
 def _report_running(page):
@@ -1337,7 +1414,7 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
                     try:
                         page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
                         page.wait_for_timeout(2500)
-                        if page.query_selector("#passwordInput"):
+                        if login_form_present(page):   # the one structural reader, not a second spelling
                             _login(page, user, pw)
                     except Exception:
                         pass

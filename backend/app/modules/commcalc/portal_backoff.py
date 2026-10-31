@@ -102,6 +102,13 @@ DEFAULT_REFUSAL_MARKERS = (
     "unusual activity",
     "request is blocked",           # ← moved out of vidapay_sweep's inline WAF tuple
     "forbidden",
+    # The F5 appliance's own rejection page, measured live on a house portal's host 2026-10-31
+    # (index §COMMCALC-50.9): `<title>Request Rejected</title>` / "The requested URL was rejected.
+    # Please consult with your administrator." It matched NOTHING above, so a portal refusing us at
+    # the edge read as "no sign-in form appeared" and the status named a Playwright selector instead
+    # of a remedy. Both spellings, because the title and the sentence differ in word order.
+    "request rejected",
+    "requested url was rejected",
 )
 DEFAULT_CHALLENGE_MARKERS = (
     "verify you are human",
