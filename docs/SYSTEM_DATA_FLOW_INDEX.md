@@ -42092,6 +42092,14 @@ yarn failure above was found). So `.github/workflows/mobile-ota-diagnose.yml` ga
 account of their own. READ-ONLY by construction: every command is a `:list` or a `:view`, it cannot
 publish, build, submit or delete, and it never fires automatically.
 
+It installs the project with `npm ci` before asking anything, and that is not boilerplate: the first
+run of this workflow skipped it and every EAS command died identically with `Error reading Expo
+config at mobile/app.config.ts: Unexpected token '{'`. `app.config.ts` is TypeScript and the loader
+that transpiles it comes from the project's own dependencies, so a job without them cannot read the
+config and fails the same way whatever is actually wrong in EAS. The publish workflow installs
+first, which is why publishing worked while asking questions did not — a reminder that a diagnostic
+which cannot run is indistinguishable from the fault it was built to find.
+
 The EAS CLI is installed with `npm install -g eas-cli@latest` rather than through
 `expo/expo-github-action`. That action defaults its packager to **yarn** and this project is npm
 (`mobile/package-lock.json`), so the first real publish died in it — run `41225844556`, 2026-10-31,
