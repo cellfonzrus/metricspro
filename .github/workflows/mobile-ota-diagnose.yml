@@ -54,7 +54,18 @@ jobs:
 
       - uses: actions/setup-node@v5
         if: steps.gate.outputs.ready == 'true'
-        with: { node-version: "20" }
+        with: { node-version: "20", cache: npm, cache-dependency-path: mobile/package-lock.json }
+
+      # REQUIRED, and its absence is what the first run of this workflow actually found (2026-10-31):
+      # every EAS command died with `Error reading Expo config at mobile/app.config.ts: Unexpected
+      # token '{'`. The config is TypeScript, and the loader that transpiles it comes from the
+      # project's own dependencies — so a job that skips `npm ci` cannot read the config, and every
+      # command that needs it fails identically no matter what is actually wrong in EAS. The publish
+      # workflow installs first, which is why publishing worked while asking questions did not.
+      - name: install the project (the Expo config is TypeScript and needs its own loader)
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: mobile
+        run: npm ci
 
       - name: install the EAS CLI
         if: steps.gate.outputs.ready == 'true'
