@@ -45,10 +45,17 @@ PINNED_RUNTIME_POLICY = "appVersion"
 
 # The minimum iOS the app declares, pinned for a different reason: EAS builds on a current Xcode,
 # which REFUSES any pod declaring a deployment target below 15.0, and this app's dependency set still
-# carries three that declare 9.0 and 12.0. The first real build from GitHub died on exactly that
-# (2026-10-31, EAS build d4d6b18d). Setting it in app.config.ts raises the floor for every pod
-# through Expo's Podfile post-install — the one lever that reaches dependencies we do not own — so
-# losing it does not fail a test, it fails the BUILD, forty minutes later, on Expo's machines.
+# carries three that declare 9.0 and 12.0 (RNCAsyncStorage, ReachabilitySwift, SDWebImage). The first
+# build from GitHub died on exactly that (2026-10-31, EAS d4d6b18d).
+#
+# CORRECTED after the SECOND failure (EAS d34458a2). `ios.deploymentTarget` raises the Podfile's
+# platform and the APP target ONLY — it does NOT touch the targets CocoaPods generates per pod and
+# per resource bundle, which inherit the pod's own declared minimum. The second build failed on the
+# same three pods WITH this line already set. Reaching them takes the Podfile post-install that a
+# CURRENT Expo template performs for itself and SDK 52's does not: plugins/with-pod-deployment-floor.js.
+#
+# BOTH halves are pinned, because losing either does not fail a test — it fails the BUILD, twenty
+# minutes later, on Expo's machines, with an error that looks like a dependency problem.
 PINNED_IOS_DEPLOYMENT_TARGET = "15.1"
 
 failures: list[str] = []
@@ -201,6 +208,37 @@ check("R6.6 the plugin that applies the floor is still installed",
       and '"expo-build-properties"' in (MOBILE / "package.json").read_text(encoding="utf-8"),
       "ios.deploymentTarget does nothing without the expo-build-properties config plugin")
 control("R6.6", "expo-build-properties" in "plugins: ['expo-router']")
+
+# R6.7 — the half expo-build-properties does not reach. Without this plugin the three old pods keep
+# their own iOS 9 / 12 floors and the build dies in fastlane, which is what happened twice.
+POD_FLOOR_PLUGIN = MOBILE / "plugins/with-pod-deployment-floor.js"
+plugin_src = read(POD_FLOOR_PLUGIN)
+check("R6.7 the per-pod floor plugin exists", POD_FLOOR_PLUGIN.exists(),
+      f"{POD_FLOOR_PLUGIN} is missing; the app target's floor alone does not reach the pods")
+check("R6.8 the app registers the per-pod floor plugin",
+      "./plugins/with-pod-deployment-floor" in config_src,
+      "a plugin that is not in app.config.ts `plugins` never runs")
+control("R6.8", "./plugins/with-pod-deployment-floor" in "plugins: ['expo-router']")
+
+floors = re.findall(r"floor:\s*'([^']+)'", config_src)
+check("R6.9 the per-pod floor matches the app's own floor",
+      floors[:1] == [PINNED_IOS_DEPLOYMENT_TARGET],
+      f"the plugin is given {floors!r} while the app declares "
+      f"{PINNED_IOS_DEPLOYMENT_TARGET!r}; two floors that disagree is the duplicate defect")
+control("R6.9", re.findall(r"floor:\s*'([^']+)'", "{ floor: '12.0' }")
+        == [PINNED_IOS_DEPLOYMENT_TARGET])
+
+# It must RAISE, never lower: a pod declaring iOS 16 keeps 16, or its own code could break.
+check("R6.10 the plugin only raises a floor", "current.to_f <" in plugin_src,
+      "the post-install must compare before writing, so a higher pod floor is preserved")
+# And it must be idempotent: EAS re-runs prebuild on some retries, and two stacked post_install
+# hooks is a Podfile that does not parse.
+check("R6.11 the plugin is idempotent", "MARKER" in plugin_src and "includes(MARKER)" in plugin_src,
+      "a second prebuild must not stack a second post_install hook")
+check("R6.12 the plugin's rule is tested",
+      (MOBILE / "plugins/with-pod-deployment-floor.test.ts").exists(),
+      "the Podfile rule is pure string work and must be proved without a Mac")
+control("R6.10", "current.to_f <" in "config.build_settings['X'] = '15.1'")
 
 
 if failures:

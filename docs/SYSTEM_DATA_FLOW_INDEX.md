@@ -43343,6 +43343,32 @@ Podfile post-install applies it to every pod, not just to the app target. It is 
 still installed — `ios.deploymentTarget` does nothing without it), because losing it does not fail a
 test, it fails the BUILD, forty minutes later, on Expo's machines.
 
+**CORRECTION, after the SECOND failure (EAS `d34458a2`).** `ios.deploymentTarget` raises the
+Podfile's `platform` and the APP target only. It does **not** touch the targets CocoaPods generates
+per pod and per resource bundle, which inherit the pod's own declared minimum — so the second build
+failed on the same three pods with that line already in place. The claim that it "reaches every pod"
+was wrong and has been removed from the config and the harness rather than left to mislead.
+
+Reaching them takes the Podfile `post_install` that a CURRENT Expo template performs for itself and
+SDK 52's does not: `mobile/plugins/with-pod-deployment-floor.js`, a `withDangerousMod` on the
+Podfile. It appends one hook that raises `IPHONEOS_DEPLOYMENT_TARGET` on every generated target, and
+it only ever RAISES — a pod declaring iOS 16 keeps 16, because lowering it could break that pod's own
+code. It carries a marker so a second prebuild (EAS re-runs prebuild on some retries) cannot stack a
+second hook into a Podfile that then does not parse. The rule is pure string work and is proved by
+6 unit tests with no Mac, no build and no network; `mobile/vitest.config.ts` now includes
+`plugins/**/*.test.ts` for exactly that reason.
+
+A `withDangerousMod` was chosen over vendoring an `ios/` directory because the app is managed and EAS
+prebuilds it on every build: there is no checked-in Podfile to edit, and a vendored one would have to
+be maintained by hand forever.
+
+**Both halves are pinned** — R6.4–R6.12 — because losing either does not fail a test. It fails the
+BUILD, twenty minutes later, on Expo's machines, with an error that reads like a dependency problem.
+R6.9 in particular refuses two floors that disagree, which would be the duplicate defect in miniature.
+
+**Delete the plugin, the `expo-build-properties` entry and these pins together with the SDK upgrade.**
+They exist only because this app is pinned to an Expo whose own Podfile template predates the fix.
+
 **This is NOT the whole fix, and saying so is the point.** Raising the floor lets SDK 52 compile on
 today's Xcode; it does not stop the next Xcode from moving past SDK 52 entirely. The design fix is
 the SDK upgrade, which also ends the runtime mismatch permanently by putting the repository and the

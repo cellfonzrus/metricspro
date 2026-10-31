@@ -86,6 +86,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // from moving past it. The design fix is the SDK upgrade, and this buys the time to do it
     // properly rather than under an outage.
     ['expo-build-properties', { ios: { deploymentTarget: '15.1' } }],
+    // And the half `expo-build-properties` does NOT reach. Setting `ios.deploymentTarget` raises the
+    // Podfile's platform and the APP target; it does not touch the targets CocoaPods GENERATES for
+    // each pod and each pod's resource bundle, which inherit the pod's own declared minimum. Three
+    // of this app's dependencies still declare iOS 9 or 12, and the second build failed on exactly
+    // those three WITH the line above already in place (EAS d34458a2). A current Expo Podfile
+    // rewrites them itself; SDK 52's does not. See plugins/with-pod-deployment-floor.js, and delete
+    // it along with this line when the app is upgraded off SDK 52 (index §CORE-29.3b).
+    ['./plugins/with-pod-deployment-floor', { floor: '15.1' }],
     'expo-router',
     'expo-secure-store',
     'expo-local-authentication',
