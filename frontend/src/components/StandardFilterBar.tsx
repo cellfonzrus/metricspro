@@ -170,13 +170,16 @@ export default function StandardFilterBar({
           </select>
         </label>
       )}
+      {/* A module's own controls sit WITH the core set (owner 2026-10-31: *"it should be next to the
+          filters"*), and Clear is last on every bar — a button that appears and disappears in the
+          middle of a row shifts everything to its right each time a filter is picked. */}
+      {right}
       {active && (
         <button className="btn btn-secondary" style={{ fontSize: 12 }}
           onClick={() => onChange({ period: periodMode === 'range' ? '' : value.period, periodTo: '', stores: [], markets: [], reps: [], sort: null })}>
           Clear filters
         </button>
       )}
-      {right}
     </div>
   )
 }

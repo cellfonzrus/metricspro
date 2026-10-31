@@ -284,6 +284,30 @@ export default function ReportsPage() {
     }
     return out
   }, [rangeData])
+  // The window controls themselves, so they can render INSIDE the standard bar (see its `right` prop).
+  const rangeWindowControls = (
+    <>
+      <label style={{ fontSize: 12, color: 'var(--text2)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        From month
+        <input type="month" className="input" style={{ fontSize: 13, padding: '6px 9px' }} value={rangeFrom}
+          max={rangeTo || undefined} onChange={e => setRangeFrom(e.target.value)} />
+      </label>
+      <label style={{ fontSize: 12, color: 'var(--text2)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        To month
+        <input type="month" className="input" style={{ fontSize: 13, padding: '6px 9px' }} value={rangeTo}
+          min={rangeFrom || undefined} onChange={e => setRangeTo(e.target.value)} />
+      </label>
+      <button className="btn btn-primary" style={{ fontSize: 13 }}
+        disabled={rangeBusy || !rangeSpan || rangeSpan > RANGE_MAX_MONTHS}
+        onClick={loadRange}>{rangeBusy ? 'Loading…' : 'Show months'}</button>
+      <span style={{ fontSize: 12, color: rangeSpan > RANGE_MAX_MONTHS || !rangeSpan ? 'var(--c-fg-b91c1c)' : 'var(--text3)' }}>
+        {!rangeSpan ? 'Pick a from-month on or before the to-month.'
+          : rangeSpan > RANGE_MAX_MONTHS ? `${rangeSpan} months — the most one page shows is ${RANGE_MAX_MONTHS}.`
+            : `${rangeSpan} month${rangeSpan === 1 ? '' : 's'} · up to ${RANGE_MAX_MONTHS} on one page`}
+      </span>
+    </>
+  )
+
   function downloadRangeStatement(fmt: 'pdf' | 'csv') {
     if (!rangeRepPick) { alert('Pick an employee.'); return }
     apiDownload(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(rangeRepPick)}`
@@ -663,7 +687,15 @@ export default function ReportsPage() {
       <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false }}
         storeOptions={opts.stores} marketOptions={opts.markets} repOptions={opts.reps}
         repLabel="Reps…" sortFields={sortFieldsForTab}
-        right={<span style={{ fontSize: 13, color: 'var(--text2)', alignSelf: 'center' }}>{filtered.length} of {reps.length} rows</span>} />
+        right={<>
+          {/* THE RANGE'S OWN WINDOW LIVES IN THE SHARED BAR (owner 2026-10-31: *"it should be next to
+              the filters"*). From-month / to-month ARE this tab's filters, so they belong beside the
+              core set and the Sort by control rather than in a row of their own below the tabs. The
+              bar's `right` slot is the documented place for a module-specific control (§3d) — the core
+              set is appended to, never substituted. */}
+          {tab === 'range' && rangeWindowControls}
+          <span style={{ fontSize: 13, color: 'var(--text2)', alignSelf: 'center' }}>{filtered.length} of {reps.length} rows</span>
+        </>} />
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--surface2)', padding: 4, borderRadius: 10, width: 'fit-content' }}>
@@ -1141,25 +1173,6 @@ export default function ReportsPage() {
           recomputes pay. The standard filter bar applies exactly as on the other tabs. */}
       {tab === 'range' && (
         <div>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 14 }}>
-            <label style={{ fontSize: 12 }}>
-              <div style={{ color: 'var(--text3)', marginBottom: 2 }}>From month</div>
-              <input type="month" className="input" value={rangeFrom} max={rangeTo || undefined}
-                onChange={e => setRangeFrom(e.target.value)} />
-            </label>
-            <label style={{ fontSize: 12 }}>
-              <div style={{ color: 'var(--text3)', marginBottom: 2 }}>To month</div>
-              <input type="month" className="input" value={rangeTo} min={rangeFrom || undefined}
-                onChange={e => setRangeTo(e.target.value)} />
-            </label>
-            <button className="btn btn-primary" disabled={rangeBusy || !rangeSpan || rangeSpan > RANGE_MAX_MONTHS}
-              onClick={loadRange}>{rangeBusy ? 'Loading…' : 'Show months'}</button>
-            <span style={{ fontSize: 12, color: rangeSpan > RANGE_MAX_MONTHS || !rangeSpan ? 'var(--c-fg-b91c1c)' : 'var(--text3)' }}>
-              {!rangeSpan ? 'Pick a from-month on or before the to-month.'
-                : rangeSpan > RANGE_MAX_MONTHS ? `${rangeSpan} months — the most one page shows is ${RANGE_MAX_MONTHS}.`
-                : `${rangeSpan} month${rangeSpan === 1 ? '' : 's'} · up to ${RANGE_MAX_MONTHS} on one page`}
-            </span>
-          </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 14 }}>
             <label style={{ fontSize: 12 }}>
               <div style={{ color: 'var(--text3)', marginBottom: 2 }}>One employee over these months</div>

@@ -99,6 +99,16 @@ describe('the lock: the page cannot stop dereferencing the shared sort', () => {
     expect(page).not.toMatch(/\bnew Intl\.Collator\b/)
   })
 
+  it('keeps the month-range window IN the shared bar, next to the sort (owner 2026-10-31)', () => {
+    // *"it should be next to tht filters"*. From-month / to-month ARE the range tab's filters, so they
+    // ride the bar's documented `right` slot instead of a row of their own below the tabs — and there
+    // is only ONE of each control, so the window cannot be set in two places.
+    expect(page).toMatch(/\{tab === 'range' && rangeWindowControls\}/)
+    expect(page.match(/From month/g) || []).toHaveLength(1)
+    expect(page.match(/To month/g) || []).toHaveLength(1)
+    expect(page.match(/onClick=\{loadRange\}/g) || []).toHaveLength(1)
+  })
+
   it('toggles the SAME state from its column headers (one sort, two affordances)', () => {
     expect(page).toMatch(/toggleStandardSort\(filt, f\)/)
     expect(page).toMatch(/SortableTh/)
