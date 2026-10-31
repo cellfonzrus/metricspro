@@ -42630,6 +42630,37 @@ genuinely mismatch and wrong if they do not. The discriminating test is free —
 on the launch *after* the one that downloaded it. That test was put to the owner on 2026-10-31.
 Changing the policy means editing the pin and saying why in the PR.
 
+### §CORE-29.3b The repository could no longer BUILD its own app (measured 2026-10-31)
+
+The first real build from GitHub (EAS `d4d6b18d`) failed, and the failure answers the question
+§CORE-29.2 left open — why the installed binary is SDK 57 when this repository has declared
+`expo: ~52.0.0` since before that binary was made.
+
+EAS builds on a current Xcode, which refuses any pod declaring an iOS deployment target below 15.0.
+This app's SDK-52-era dependency set still carries three that do: `RNCAsyncStorage` at 9.0,
+`ReachabilitySwift` at 12.0, `SDWebImage` at 9.0. fastlane died with *"the range of supported
+deployment target versions is 15.0 to 27.1.x"*.
+
+So **the code in this repository could not be built at all**, and the binary that did get built was
+made with a newer Expo than the repository has ever declared. The repository has been stuck behind
+its own app ever since — which is precisely why nothing published from it can run there. One fact
+explains both halves.
+
+**What shipped: the floor, pinned.** `['expo-build-properties', { ios: { deploymentTarget: '15.1' } }]`
+in `mobile/app.config.ts`. That is the one lever that reaches dependencies we do not own: Expo's
+Podfile post-install applies it to every pod, not just to the app target. It is pinned by
+`harness_running_bundle_lock.py` R6.4–R6.6 (declared exactly once, matching the pin, and the plugin
+still installed — `ios.deploymentTarget` does nothing without it), because losing it does not fail a
+test, it fails the BUILD, forty minutes later, on Expo's machines.
+
+**This is NOT the whole fix, and saying so is the point.** Raising the floor lets SDK 52 compile on
+today's Xcode; it does not stop the next Xcode from moving past SDK 52 entirely. The design fix is
+the SDK upgrade, which also ends the runtime mismatch permanently by putting the repository and the
+binary on one version. It is a few hours across the whole app and is scheduled rather than rushed
+under an outage — stated here so nobody mistakes the floor for the repair. Cost of the floor: iPhones
+below iOS 15.1 are dropped, which is every device Apple itself stopped supporting in 2021.
+
+
 ### §CORE-29.4 What the lock refuses
 
 - The rule losing its purity (an import in `running-bundle.ts`), which would end its CI proof.
