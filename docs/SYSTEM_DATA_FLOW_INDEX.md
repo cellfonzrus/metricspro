@@ -93,6 +93,7 @@ Primary code homes:
 | POS-16 | **A wholesale customer, and the W-9 that makes their sales tax-free** | "A customer type as wholesale where the option to not charge tax will be by default if the user confirms they received the filled out w9 … block the user to make a sale before the system has an updated w9, only the admin can go past … and a return link for the customer to send the w9 back." |
 | POS-17 | **The cash / credit mismatch an edit or a void leaves behind** | "I need the POS Cash Register to have the ability to edit the sale from the prior day and create log of the cash or credit mismatch." Editing a sale moves what the customer owes and voiding one stops them owing it — so where does the money already taken go, who is told, and why was nothing comparing the two? |
 | POS-18 | **A pre-owned device is a different device** | "CPO is certified pre owned is a different device than new, IMEI is unique." Which device conditions exist, what does this feed call one, and why was a refurbished handset staying off the new one's order row only by accident? |
+| POS-19 | **What a customer still owes us, and which certificate lapses when** | "Build them" — the two reports the terms tender and the wholesale W-9 imply. A sale on terms is the platform's first receivable, and nothing measured it. Building it found that the mismatch log would have called every terms sale a $100 refund owed to the customer: "what was tendered" and "what the till has" were one figure until a tender settled later. Which sales are receivables at all, when is a balance late, and what does a report say about a payment the platform cannot yet record? |
 | 33 | **POS product filters** | "On the register's product picker and the product catalog, how do I narrow the products by department, category, system category, manufacturer, serial / standard and what is in stock here — and does it reach past the 500-row list?" |
 | 34 | **Vendor product pricing (UPS Store tenant, phase 1 kit)** | "Which of our supply vendors is cheaper for this item, is it in stock, and what would one order cost at each? How do the vendor logins, the catalog read and the cross-vendor match work, and where will it live in the app?" |
 | 35 | **Tenant vertical (business type) + the Store Operations dashboard** | "What kind of business is this tenant, where is that declared, and why does a franchise store not see commission, activations or distributor pages? Where is the Store Operations dashboard and what does each tile read?" |
@@ -26300,6 +26301,7 @@ status word rather than a blank that reads as nil.
 | POS-16 | pos |
 | POS-17 | pos |
 | POS-18 | pos |
+| POS-19 | pos |
 | PAYABLES-01 | payables |
 | CORE-25 | core |
 | CORE-26 | core |
@@ -33957,6 +33959,141 @@ declare a vocabulary nobody measured.
 
 💰 Moves no money. The column is NULL on arrival for every org but one; the only reader plans
 quantities to buy and touches no payout, ledger, P&L line, commission or tax figure.
+
+## §POS-19. WHAT A CUSTOMER STILL OWES US, AND WHICH CERTIFICATE LAPSES WHEN — the two reports the terms tender and the wholesale W-9 imply (owner ask 2026-10-31)
+
+> Owner, 2026-10-31, having applied migrations 1106 and 1107: *"build them"* — of the two reports
+> named when §POS-15 and §POS-16 went live: the open terms balances, and the W-9s about to lapse.
+
+A sale on terms is the platform's FIRST receivable: money earned and not collected. Nothing measured
+it, and nothing measured whether the certificate that makes a wholesale sale tax-free is about to
+stop counting. Both reports ship with the standard filters and the send bar (§CORE-27), both are in
+the report directory so a user can find them, and both are `flat` in the §CORE-17 ledger because one
+row IS one sale or one customer.
+
+### POS-19.1 Duplicate check (the build gate)
+
+Searched before a line was written. **Nothing answered either question, and four mechanisms answered
+PARTS of them and were reused whole rather than re-derived:**
+
+| Needed | Already existed | What was done |
+| --- | --- | --- |
+| what was tendered against a sale, and what that leaves outstanding | `pos/sale_settlement.py` (§POS-17) | **reused**, and FIXED — see POS-19.3 |
+| whether a tender settles at the till | `pos/tender_vocabulary.py` (§POS-15) | **reused**, reached through `sale_settlement`; no tender word is spelled in the new home |
+| is this certificate current, and may we sell | `pos/wholesale_w9.may_sell` (§POS-16) | **reused** — the report shows the SAME verdict the register is blocked by |
+| how old is this, in which age band | `commcalc/manager_followup.AGE_BANDS` / `age_band` / `age_days` | **dereferenced by identity** (`receivable.BANDS is manager_followup.AGE_BANDS`), never respelled |
+| the payment rows for a set of sales | an inline chunked loop in the mismatch report | **extracted** to `router._sale_payments_by_sale`, and the mismatch report now reads it too |
+| the standard filters and the send bar | `components/ReportShell.tsx` | both pages render it, so neither pin moved |
+
+**Deliberately NOT merged with `payable_source_map.net_terms_days`** (§COMMCALC-25): the same English
+word, the opposite direction of money. That is what the distributor gives US to pay an invoice; this
+is what WE give a customer. One home for both would make "30-day terms" ambiguous in the one place
+it must not be.
+
+### POS-19.2 One fact, one home, dereferenced
+
+`backend/app/modules/pos/receivable.py` is THE home for **"what does a customer still owe us on a
+sale, and how late is it"**. It is a separate home from `sale_settlement` on purpose: that module
+compares two recorded figures *as of the sale* and takes no clock — its own lock fails the build if a
+`datetime` appears in it (§K7) — while collection is a question about TODAY against a due date. So
+the new home takes the figures from the old one and adds only the date arithmetic.
+
+`wholesale_w9.expiry_date` is THE home for **the day a certificate lapses**, extracted from inside
+`w9_state`, which now READS it. A report that needs the day cannot be given a verdict alone: "it
+expires some time" cannot be chased and "it expires on the 14th" can. Because the verdict dereferences
+the date, a manager can never be told a certificate is good on a day the register refuses the sale.
+
+`as_of` is an ARGUMENT with today behind it, never the server's clock read inside the module, so the
+report and its regressions see the same day and the owner can ask for a past date.
+
+### POS-19.3 The sibling §POS-17 shared, and the defect found in it
+
+**§POS-15 and §POS-17 landed the same evening, in different branches, and the two facts never met.**
+`sale_settlement.tendered` summed every row in `pos.sale_payments` regardless of whether the customer
+had actually paid. A $100 sale wholly on terms stores `balance = 100`, so `expected` (= `total −
+balance`) is $0.00 — against a recorded tender of $100.00. That is a **$100 OVER-tender, direction
+`refund`**, and it would have appeared on the cash/credit mismatch log for **every sale the platform
+ever took on account**, telling a manager to hand money back to a customer who has not paid yet.
+
+Neither feature was wrong on its own, which is why nothing caught it: the Terms tender stored exactly
+what it should, and the comparison compared exactly what it was given.
+
+**The class, not the instance.** The instance is "a terms sale looks like an over-tender". The class
+is *"what was tendered" and "what the till has" were the same figure, and a tender that settles later
+made them different.* Fixed at the mechanism: `tendered` now asks the register vocabulary whether each
+leg settles now (`sale_settlement.settles_now` → `tender_vocabulary`), returns the settled sum as
+`total` and carries the deferred part beside it as `deferred_total` rather than dropping it — a screen
+must still be able to say "on 30-day terms".
+
+* **An unknown method is money taken.** Every one of the 4,603 rows of imported receipt history
+  predates the vocabulary, and reading an unknown word as "not yet paid" would turn settled history
+  into a ledger of debts.
+* **Found before a single terms sale existed** (0 rows, measured 2026-10-31 over the REST API), so no
+  stored row needed repair and no money moved.
+* **Locked twice**, in both callers' harnesses: `harness_pos_sale_settlement.py` §M (12 checks,
+  mutation-confirmed — reverting the one line turns M4 red) and `harness_pos_receivable.py` §F.
+
+### POS-19.4 The three things that make the answer honest
+
+1. **A sale with no deferred leg is not a receivable of $0.00 — it is not a receivable.** 4,603 of
+   the 4,605 live sales carry no payment row at all. The population is the sales that HAVE a deferred
+   leg, not every sale filtered by `balance > 0` — which would have admitted a part-tendered cash
+   sale nobody agreed terms on. `assess` answers `receivable: False` with a reason and no figure.
+2. **Not yet due is owed, and it is not late.** Its own state, its own total, out of every overdue
+   figure. Due TODAY is not yet late: a customer has the day they were given.
+3. **An age that cannot be measured is never the newest band.** A deferred leg with no due date is
+   `unknown`, the answer `manager_followup.age_band` already gives — not `0-7`, which is how a
+   year-old debt hides in the freshest bucket. Mig 1106's `sale_payments_terms_shape_check` means the
+   database cannot store such a row, so this guards hand-written and future ones.
+
+### POS-19.5 What is NOT built is reported, not papered over
+
+**Taking a payment against an open balance does not exist in the platform yet.** What is outstanding
+is `pos.sales.balance` — the figure `pos.checkout` computes as the sum of the legs that did not
+settle. Until there is a route that records a payment, a terms sale stays open until somebody amends
+it.
+
+That is carried in the payload as `receivable.COLLECTION_NOT_WIRED`, on the unavailable path as well
+as the normal one, and shown in the report's notice bar. **It is not inferred from a later
+over-tender**, which was the available shortcut and would read every collected debt as money owed
+BACK to the customer — the §COMMCALC-66 fallback-basis defect in a new place. §G of the lock holds
+the sentence's presence and the absence of any variance read in the module.
+
+### POS-19.6 Every tenant (owner directive 2026-10-30)
+
+* No org id, no tenant name and no tender word appears in `receivable.py`; the `Wholesale` word on
+  the W-9 report is `wholesale_w9.WHOLESALE`, dereferenced.
+* The aging bands are a **POLICY** (a window), so a house answer is right — this is not the banned
+  "house default that is really one tenant's vocabulary".
+* Each report reads the ORG's own settings (`_w9_cfg(client, org_id)`), every query is org-scoped,
+  and the store a caller asks for is checked against their span BEFORE it is used — the posture
+  §POS-17's L7 pinned after the security pass, because the value also reaches a config read.
+* **Nothing declared means nothing identified, and the surface says so.** An org with no wholesale
+  customers is told so in words; an org with no terms sale in range is told that too. An empty table
+  reads as "all clear", which is the shape of the defect that directive was written about.
+
+### POS-19.7 The feature degrades until its migration lands
+
+Both migrations are applied in production (verified 2026-10-31 by reading every column back), but the
+reports still answer `available: false` BY NAME when the schema is absent, because another tenant's
+database may not have them and [[feature-must-degrade-until-its-migration-lands]] is a standing rule,
+not a one-time fix. The migration number rides `PlatformDetail` (§19.36), so a tenant sees the
+sentence and only the platform super admin sees which migration.
+
+### POS-19.8 Files, locks, routes
+
+| What | Where |
+| --- | --- |
+| the receivable one home | `backend/app/modules/pos/receivable.py` |
+| the lapse date one home | `backend/app/modules/pos/wholesale_w9.expiry_date` / `days_until_expiry` |
+| the sibling fix | `backend/app/modules/pos/sale_settlement.tendered` / `settles_now` |
+| the shared payment read | `backend/app/modules/pos/router._sale_payments_by_sale` |
+| endpoints | `GET /pos/reports/open-balances`, `GET /pos/reports/w9-status` |
+| screens | `/pos/open-balances`, `/pos/w9-status` (both through `ReportShell`) |
+| locks | `backend/harness_pos_receivable.py` (108 checks, §A–§L), `backend/harness_pos_sale_settlement.py` §M |
+| registered | report directory (`rbac.REPORT_DIRECTORY`), §CORE-17 ledger (`flat`), `core/module_graph.FACTS['pos_open_receivable']` |
+| migrations | **none** — both reports read columns migrations 1106 and 1107 already added |
+| money | **no money moves.** Nothing is written by either report; the §POS-17 fix changes a comparison, and the live effect is that a terms sale no longer reads as a refund owed |
 
 ## §COMMCALC-20. A HANDSET THAT BOOKS A REBATE BOOKS A COST (owner report 2026-10-19)
 
