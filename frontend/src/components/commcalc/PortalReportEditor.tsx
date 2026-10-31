@@ -30,8 +30,27 @@ type Loaded = {
   reports: Row[]; param_kinds: string[]; date_tokens: string[]; exports: string[]
 }
 type Saved = { reports: Row[]; count: number }
-/** What the §COMMCALC-39 capture answers with: suggested rows, or a stated failure. */
-type Capture = { ok?: boolean; error?: string; reports?: { key: string; params?: Param[] }[] }
+/** What the §COMMCALC-39 capture answers with.
+ *
+ *  THE ROWS COME BACK ALREADY MERGED. This used to be a list of suggestions that this component
+ *  folded into its own rows — a second copy of `report_declaration.merge_suggestion`, which is the
+ *  declared home for that fold and had no caller. The two diverged where it mattered: a per-report
+ *  result names its report `report` (the backend's convention for every per-report result), and the
+ *  copy here matched on `key`, the spelling an editor ROW uses, so `find(x => x.key === row.key)`
+ *  never matched and a capture of fourteen report pages added nothing while announcing it had read
+ *  them. The merge now happens once, server-side, through `pos_report_sweep.spec_key`; this file
+ *  displays what came back and never re-decides it.
+ *
+ *  `capture` is what each page actually said (§COMMCALC-44: an absence needs the right reason). */
+type CaptureRow = {
+  report?: string; label?: string | null; reached?: boolean; controls_seen?: number | null
+  suggested?: number; added?: number; error?: string | null
+  unrecognised?: { label?: string | null; selector?: string | null; why?: string | null }[]
+}
+type Capture = {
+  ok?: boolean; error?: string; reports?: Row[]; capture?: CaptureRow[]
+  reached?: number; pages?: number; added?: number; note?: string
+}
 
 /** The message off a thrown value, without widening it to `any` first. */
 function why(e: unknown): string {
@@ -54,6 +73,8 @@ export default function PortalReportEditor(
   const [note, setNote] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)   // the key whose filters are expanded
+  // What each report page said on the last capture — shown rather than summed away (§COMMCALC-44).
+  const [capture, setCapture] = useState<CaptureRow[] | null>(null)
 
   // Every state write happens in the fetch's own CALLBACK, never in the effect body: a setState run
   // synchronously inside an effect cascades a render for nothing. `alive` drops a reply that arrives
@@ -75,7 +96,7 @@ export default function PortalReportEditor(
   }
 
   async function save() {
-    setBusy('save'); setErr(null); setNote(null)
+    setBusy('save'); setErr(null); setNote(null); setCapture(null)
     try {
       const r = await api(`/api/v1/commcalc/data-sources/${sourceId}/reports`,
         { method: 'PUT', body: JSON.stringify({ reports: rows }) }) as Saved
@@ -84,26 +105,21 @@ export default function PortalReportEditor(
     } catch (e: unknown) { setErr(why(e)) } finally { setBusy(null) }
   }
 
-  // The capture runs on the live session, so it needs one to be open and signed in. Its answer is a
-  // SUGGESTION: it is folded in on top of what is here, never over it.
+  // The capture runs on the live session, so it needs one to be open and signed in. What comes back
+  // is this login's rows with every suggestion ALREADY folded in by the one function that knows how
+  // (`report_declaration.merge_suggestion`, server-side) — nothing here re-merges, and nothing is
+  // saved until Save. The rows on screen are sent along so an unsaved edit is merged into, not over.
   async function readPage() {
-    setBusy('read'); setErr(null); setNote(null)
+    setBusy('read'); setErr(null); setNote(null); setCapture(null)
     try {
       const r = await api(`/api/v1/commcalc/data-sources/${sourceId}/live-login/calibrate`,
-        { method: 'POST', body: '{}' }) as Capture
+        { method: 'POST', body: JSON.stringify({ reports: rows }) }) as Capture
       if (r?.ok === false) { setErr(r.error || 'The report pages could not be read.'); return }
-      const suggested = r?.reports || []
-      setRows(rs => rs.map(row => {
-        const s = suggested.find(x => x.key === row.key)
-        if (!s) return row
-        const have = new Set(row.params.map(p => p.selector))
-        const add = (s.params || []).filter(p => p.selector && !have.has(p.selector))
-        return add.length ? { ...row, params: [...row.params, ...add] } : row
-      }))
-      const named = suggested.map(s => s.key).join(', ')
-      setNote(suggested.length
-        ? `Read ${suggested.length} page${suggested.length === 1 ? '' : 's'} (${named}). Anything new is added below — nothing you edited was replaced. Check it, then Save.`
-        : 'The live session answered, but no declared report page could be reached. Check the menu words below.')
+      if (r.reports) setRows(r.reports)
+      setCapture(r.capture || [])
+      const pages = r.pages ?? 0, reached = r.reached ?? 0, added = r.added ?? 0
+      setNote(`Reached ${reached} of ${pages} report page${pages === 1 ? '' : 's'} and added `
+        + `${added} filter${added === 1 ? '' : 's'}. ${r.note || ''}`.trim())
     } catch (e: unknown) { setErr(why(e)) } finally { setBusy(null) }
   }
 
@@ -142,6 +158,40 @@ export default function PortalReportEditor(
           fontSize: 12, marginBottom: 10 }}>{err}</div>}
         {note && <div style={{ background: 'var(--c-bg-f0fdf4)', color: 'var(--c-fg-166534)', borderRadius: 8, padding: '8px 10px',
           fontSize: 12, marginBottom: 10 }}>{note}</div>}
+
+        {/* WHAT EACH PAGE SAID. A capture that reached a page and found no filter, a capture that
+            could not reach the page at all, and a capture that saw controls whose purpose the page
+            does not state are three different answers — summing them to "read 14 pages" is the
+            absence-with-no-reason §COMMCALC-44 names. Each line says which one happened, and the
+            controls nobody could name are listed so a human can declare them by hand. */}
+        {capture && capture.length > 0 && (
+          <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px',
+            fontSize: 12, marginBottom: 10 }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>What each report page said</div>
+            {capture.map((c, i) => (
+              <div key={c.report || i} style={{ borderTop: i ? '1px solid var(--border)' : undefined, padding: '4px 0' }}>
+                <span style={{ fontWeight: 600 }}>{c.label || c.report}</span>
+                {' — '}
+                {c.reached
+                  ? <span>reached it{typeof c.controls_seen === 'number' ? `, ${c.controls_seen} control${c.controls_seen === 1 ? '' : 's'} on the page` : ''}
+                      {`, ${c.suggested ?? 0} filter${(c.suggested ?? 0) === 1 ? '' : 's'} recognised, ${c.added ?? 0} added`}</span>
+                  : <span style={{ color: 'var(--c-fg-991b1b)' }}>could not reach it</span>}
+                {c.error && <div style={{ color: 'var(--text3)' }}>{c.error}</div>}
+                {(c.unrecognised || []).length > 0 && (
+                  <div style={{ color: 'var(--text3)', marginTop: 2 }}>
+                    Controls whose purpose this page does not state — declare them by hand if you need them:
+                    <ul style={{ margin: '2px 0 0 16px' }}>
+                      {(c.unrecognised || []).map((u, j) => (
+                        <li key={j}><code style={{ fontFamily: 'monospace' }}>{u.selector}</code>
+                          {u.label ? ` · ${u.label}` : ''}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
         {!meta ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading…</div> : (
           <>

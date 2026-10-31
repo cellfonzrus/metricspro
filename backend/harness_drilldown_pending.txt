@@ -168,3 +168,5 @@
 /storeops/team	owes	
 /storeops/timeclock	owes	
 /storeops/visits/plan	owes	
+/pos/open-balances	flat	owner ask 2026-10-31 (§POS-19). FLAT, not owing: one row IS one sale's open balance, and the figure on it is that sale's own `pos.sales.balance` — there is no summarised figure with rows hidden behind it. The header totals are sums of the rows on screen, which the standard bar is already filtering
+/pos/w9-status	flat	owner ask 2026-10-31 (§POS-19). FLAT: one row IS one wholesale customer's certificate, with the day it lapses and what that day was judged by. The counts above it are over the rows shown

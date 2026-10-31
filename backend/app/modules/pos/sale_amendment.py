@@ -48,14 +48,30 @@ from datetime import datetime, timezone
 
 from . import held_sale as _hs
 
-#: The house answer to "how many days back may a rung sale still be edited", when the org has
-#: declared none. One day — the sale's own business day and no further, so a figure a manager has
-#: already read does not move under them. A tenant widens it with a config row, never a code change.
-HOUSE_WINDOW_DAYS = 1
+#: The house answer to "how many days back may a rung sale still be edited" for an ORDINARY POS
+#: user, when the org has declared none. Zero — the sale's own day and no further, so a figure a
+#: manager has already read cannot move under them. Owner 2026-10-31: "same day for teh sales rep or
+#: teh store manager". A tenant widens it with a config row, never a code change.
+HOUSE_WINDOW_DAYS = 0
+
+#: The same answer for a caller holding `ELEVATED_GRANT`. Thirty days — owner 2026-10-31: "30 days
+#: nback for the admin". The two are INDEPENDENT declarations, reconciled by `window_for`.
+HOUSE_ELEVATED_WINDOW_DAYS = 30
 
 #: The setting an org declares its own window in. Named here so the endpoint reads the key from the
 #: one home instead of spelling it beside its own default.
 WINDOW_SETTING = "sale_reopen_window_days"
+
+#: And the elevated rung's own declaration, so an org can move either number without touching code.
+ELEVATED_WINDOW_SETTING = "sale_reopen_window_days_admin"
+
+#: WHAT MAKES A CALLER ELEVATED — a POS permission key, never a role name. "Admin", "sales rep" and
+#: "store manager" are words a TENANT chooses, and RULE TWO keeps a tenant's words out of a branch;
+#: what the code may know is whether the caller holds a key. `router._pos_grant` answers that for
+#: any free-form key and defaults an unseeded one to a full-scope admin, so the owner's two numbers
+#: land with no configuration at all — and a tenant that wants a particular role to reach further
+#: grants the key to that role in the Roles screen, which is a config row and not a code change.
+ELEVATED_GRANT = "pos_amend_any_day"
 
 #: The order the write happens in, and the safety argument for it. Mig 725's inventory trigger fires
 #: on `sale_items`, so stock follows the lines: the old lines are REVERSED and the new ones applied,
@@ -83,17 +99,42 @@ def _when(value):
     return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
-def declared_window(value):
+def declared_window(value, house=None):
     """The declared window as a whole number of days. A blank or unreadable declaration falls back
     to the house default rather than to "forever": an unreadable setting must never WIDEN what may
-    be rewritten."""
+    be rewritten. `house` names which house number to fall back to, so the elevated rung's
+    declaration is read by this same function rather than by a second copy of it."""
+    floor = HOUSE_WINDOW_DAYS if house is None else house
     if value in (None, ""):
-        return HOUSE_WINDOW_DAYS
+        return floor
     try:
         n = int(value)
     except (TypeError, ValueError):
-        return HOUSE_WINDOW_DAYS
+        return floor
     return max(n, 0)
+
+
+def window_for(elevated, declared=None, declared_elevated=None):
+    """THE one home for "how far back may THIS caller reopen a sale" (§POS-12.9).
+
+    §POS-12 shipped the window as one declared number for the whole org, which encodes an
+    assumption nobody stated: that how far back a record may be rewritten is a property of the
+    TENANT alone. It is not — it is a property of the tenant AND the standing of the person asking.
+    Owner 2026-10-31, asked for one number, gave two: *"30 days nback for the admin and same day for
+    teh sales rep or store manager"*.
+
+    `elevated` is whether the caller holds `ELEVATED_GRANT`, resolved by the caller (the router owns
+    permissions; this module owns arithmetic and sentences and holds no auth of its own).
+
+    A WIDER ORDINARY WINDOW NEVER OUTRUNS THE ELEVATED ONE. The two are independent declarations, so
+    an org could declare 45 ordinary days and leave the elevated one at the house 30 — which would
+    make an administrator's reach SHORTER than a cashier's. No declaration like that means that, so
+    the elevated rung takes the GREATER of the two. Decided here, once, rather than by each caller.
+    """
+    ordinary = declared_window(declared)
+    if not elevated:
+        return ordinary
+    return max(declared_window(declared_elevated, house=HOUSE_ELEVATED_WINDOW_DAYS), ordinary)
 
 
 def age_days(sale, now=None):
@@ -105,11 +146,26 @@ def age_days(sale, now=None):
     return max((at.date() - rung.date()).days, 0)
 
 
-def refusal(sale, now=None, window_days=None):
+def _window_phrase(win):
+    """How a window reads to a person. "within 0 days" is not English, and a window of nothing but
+    today is exactly the house default now, so the zero case is the common one rather than an edge.
+    """
+    if win <= 0:
+        return "on the same day it was rung"
+    return f"within {win} day" + ("" if win == 1 else "s")
+
+
+def refusal(sale, now=None, window_days=None, elevated_window_days=None):
     """Why this sale may NOT be edited, or `None` when it may.
 
     A sentence rather than a code: every caller shows it to a cashier, and a second mapping from
     code to sentence is a second chance for two screens to word one refusal differently.
+
+    `elevated_window_days` is OPTIONAL and changes no verdict — it only lets the sentence name the
+    way forward when one exists. A cashier refused a five-day-old sale should be told an
+    administrator can still do it; told the same thing about a sale beyond the elevated window too,
+    they would be sent to ask for something nobody can give. So it is said only when it is TRUE, and
+    never to a caller who already holds the longer window: that would send them to themselves.
     """
     win = declared_window(window_days)
     s = sale or {}
@@ -126,10 +182,13 @@ def refusal(sale, now=None, window_days=None):
         return (f"Transaction #{num} does not carry a readable date, so there is no way to tell "
                 "whether it is still within the window for editing.")
     if age > win:
-        day = "day" if win == 1 else "days"
-        return (f"Transaction #{num} was rung {age} days ago, and a sale can only be edited within "
-                f"{win} {day}. Editing it now would change takings for a day that has already been "
-                "reported. Ring the extra items as their own sale instead.")
+        said = (f"Transaction #{num} was rung {age} days ago, and your role can only edit a sale "
+                f"{_window_phrase(win)}. Editing it now would change takings for a day that has "
+                "already been reported.")
+        reach = declared_window(elevated_window_days) if elevated_window_days is not None else win
+        if reach > win and age <= reach:
+            return said + " An administrator can still edit it for you."
+        return said + " Ring the extra items as their own sale instead."
     return None
 
 
@@ -314,7 +373,8 @@ def sentence(sale, dif, tots, reason=None):
             "print them a new one.")
 
 
-def plan(sale, before_items, after_items, now=None, window_days=None):
+def plan(sale, before_items, after_items, now=None, window_days=None,
+         elevated=False, elevated_window_days=None):
     """The whole answer in one shape: may it be edited, with what priced lines, what totals, what
     revision, what changed, and what the cashier is told.
 
@@ -323,7 +383,8 @@ def plan(sale, before_items, after_items, now=None, window_days=None):
     A refused plan carries NO items and NO totals. A caller handed figures alongside a refusal could
     write them anyway, and the refusal would be decoration.
     """
-    reason = refusal(sale, now=now, window_days=window_days)
+    reason = refusal(sale, now=now, window_days=window_days,
+                     elevated_window_days=elevated_window_days)
     items, tots, dif = [], {}, {"added": [], "removed": [], "changed": [], "any": False,
                                 "summary": "no change"}
     if reason is None:
@@ -350,4 +411,9 @@ def plan(sale, before_items, after_items, now=None, window_days=None):
         "diff": dif,
         "snapshot": snapshot(sale, before_items) if reason is None else {},
         "sentence": sentence(sale, dif, tots, reason),
+        # WHICH WINDOW ANSWERED, and whether this caller holds the longer one. Stated rather than
+        # left to be inferred: a screen reading a missing key as falsy is the same defect as reading
+        # an absent tender as $0.00 (§POS-17), so the fact travels explicitly.
+        "window_days": declared_window(window_days),
+        "elevated": bool(elevated),
     }

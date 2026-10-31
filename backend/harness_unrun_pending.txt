@@ -326,5 +326,3 @@ harness_xlsx_tolerant.py
 harness_xreport_tender_vocab.py
 harness_zero_diagnosis.py
 harness_zero_hour_shift_punch.py
-harness_zero_sales.py
-harness_zero_sales_lock.py
