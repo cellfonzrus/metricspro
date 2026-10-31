@@ -114,8 +114,12 @@ def pay(method, amount):
 # unbounded split would make every count below meaningless.
 REGION = ROUTER.split("# ── Editing a rung sale in place", 1)
 REGION = (REGION[1].split("# ── Register (cash drawer) sessions", 1)[0] if len(REGION) == 2 else "")
+# CUT AT THE NEXT ENDPOINT, WHATEVER IT IS. This used to name `/reports/activations` as the closing
+# boundary, which made the region's size a fact about whichever endpoint happened to be written next
+# — §POS-19 inserted two between them on 2026-10-31 and A3 went red over code that had not changed.
+# A region bounded by its own end cannot be moved by a neighbour.
 REPORT = ROUTER.split('@router.get("/reports/tender-mismatch")', 1)
-REPORT = (REPORT[1].split('@router.get("/reports/activations")', 1)[0] if len(REPORT) == 2 else "")
+REPORT = (re.split(r"\n@router\.", REPORT[1], maxsplit=1)[0] if len(REPORT) == 2 else "")
 
 
 # ── §A one home ──────────────────────────────────────────────────────────────────────────────────
@@ -388,6 +392,48 @@ ok("L8. ...and resolves the span ONCE, rather than twice with a chance to differ
 ok("L9. control: the charset really is the thing refusing, not a blanket no",
    RT._safe_settings_store_filter("B-1115") is not None
    and RT._safe_settings_store_filter("B-1115,store_code.not.is.null") is None)
+
+
+# ── §M a tender that settles LATER is not money the till has ────────────────────────────────────
+# THE SIBLING, FOUND 2026-10-31. §POS-15 added the Terms tender the same day this module shipped, in
+# another branch, and the two never met: `tendered` summed every payment row regardless of whether
+# the customer had actually paid. A $100 sale wholly on terms stores `balance = 100` (so `expected`
+# is 0.00) against a $100 payment row — a $100 OVER-tender, direction `refund`, on every sale the
+# platform would ever take on account. Nothing in either feature was wrong on its own.
+print("\n§M  a leg the customer has not paid yet is not tender")
+_terms = pay("terms", 100.0)
+_terms.update({"terms_days": 30, "due_date": "2026-11-30"})
+_tsale = sale(total=100.0, balance=100.0)
+_tt = S.tendered([_terms])
+ok("M1. a deferred leg is RECORDED — the row exists, so this is not the absence case",
+   _tt["present"] is True)
+ok("M2. ...and adds nothing to what settled", _tt["total"] == 0.0)
+ok("M3. ...and is carried beside it rather than dropped, so a screen can still say what was agreed",
+   _tt["deferred_total"] == 100.0 and _tt["deferred_methods"] == ["terms"])
+_to = S.outstanding(_tsale, [_terms])
+ok("M4. REGRESSION — a sale wholly on terms is SETTLED, not a $100 refund",
+   _to["measured"] is True and _to["variance"] == 0.0 and _to["mismatch"] is False)
+ok("M5. ...and nothing asks the customer for money back", _to["direction"] == S.SETTLED)
+# Mixed: half at the till, half on account. The till half still has to agree.
+_half = pay("cash", 40.0)
+_mix = S.outstanding(sale(total=100.0, balance=60.0), [_half, _terms])
+ok("M6. a part-tendered terms sale compares only the part that settled",
+   _mix["measured"] is True and _mix["variance"] == 0.0 and _mix["mismatch"] is False)
+_short = S.outstanding(sale(total=100.0, balance=60.0), [pay("cash", 30.0), _terms])
+ok("M7. ...and a shortfall on the till half is still found",
+   _short["mismatch"] is True and _short["variance"] == -10.0)
+ok("M8. ...attributed to the tender that settled, never to the one that has not been paid",
+   _short["attribution"]["method"] == "cash" and _short["attribution"]["ambiguous"] is False)
+ok("M9. whether a tender settles now is ASKED of the register vocabulary, not decided here",
+   # CODE is the tokenized view, so spacing is normalised — match tokens, not source spelling.
+   "tender_vocabulary" in CODE and '"settles_now"' in CODE and "settles_now ( method )" in CODE)
+ok("M10. an UNKNOWN method is money taken, so 4,603 rows of imported history stay settled",
+   S.tendered([pay("some_word_no_vocabulary_knows", 50.0)])["total"] == 50.0)
+ok("M11. control: the vocabulary really is what makes M2 true — a settling leg still counts",
+   S.tendered([pay("cash", 100.0)])["total"] == 100.0
+   and S.tendered([pay("cash", 100.0)])["deferred_total"] == 0.0)
+ok("M12. RULE TWO holds — the module still spells no tender word in a branch",
+   not re.search(r"(cash|credit_card|debit_card|card_external)", CODE))
 
 
 print(f"\n{_passed} passed, {_failed} failed")

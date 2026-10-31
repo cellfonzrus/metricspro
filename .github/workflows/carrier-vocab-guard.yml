@@ -854,6 +854,11 @@ on:
       - "backend/harness_pos_sale_amendment.py"
       - "backend/harness_pos_sale_settlement.py"
       - "backend/app/modules/pos/sale_settlement.py"
+      - "backend/app/modules/pos/receivable.py"
+      - "backend/harness_pos_receivable.py"
+      - "backend/app/modules/commcalc/manager_followup.py"
+      - "frontend/src/app/(platform)/pos/open-balances/page.tsx"
+      - "frontend/src/app/(platform)/pos/w9-status/page.tsx"
       - "database/migrations/1108_pos_sale_tender_mismatch.sql"
       - "database/migrations/1103_pos_sale_amendment.sql"
       - "frontend/src/lib/pos-sale-amend.ts"
@@ -2577,6 +2582,13 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_pos_sale_settlement.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
+      # §POS-19, beside §POS-17 on purpose: the receivable home is the OTHER caller of
+      # `sale_settlement.tendered`, and §F fails the build if the two ever disagree about what a
+      # deferred leg is. In the installing job because it imports app.modules.pos.
+      - name: Run the POS receivable proof (a sale with no deferred leg is not a receivable of $0.00; not yet due is not late; an age we cannot measure is never the newest band; one aging ladder; a terms leg is not money the till has; what is not built is said — index §POS-19)
+        working-directory: backend
+        shell: bash
+        run: python3 harness_pos_receivable.py | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       # THE HOURS-APPROVAL SAVE PROOF (index §STOREOPS-01). HERE, not in the lock job, because it
       # imports app/modules/storeops/payroll_approval.py, which imports fastapi —
       # harness_ci_pipefail_lock names exactly this class of step and this is the fix it asks for.

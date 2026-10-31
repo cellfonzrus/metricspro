@@ -2347,6 +2347,7 @@ from app.modules.pos import sale_amendment as _amend
 # The second question has callers the first does not (the void path, and the mismatch report), which
 # is precisely why it is its own module rather than more functions on that one.
 from app.modules.pos import sale_settlement as _settle
+from app.modules.pos import receivable as _recv
 
 
 def _tender_band(client, org_id: str, store_code: str = ""):
@@ -4084,6 +4085,67 @@ def report_sales(date_from: str = "", date_to: str = "", store_code: str = "",
     return {"rows": rows}
 
 
+def _recv_as_of(value: str):
+    """The day a receivable report is measured as of: what the caller asked for, else today.
+
+    A report that aged every row against the SERVER's clock could not be reproduced by a test or
+    re-run for a date the owner asks about, so the day is an argument with today behind it. An
+    unreadable value is today, never 1970 — a sentinel date would make every balance 20,000 days
+    late.
+    """
+    import datetime as _d
+    try:
+        return _d.date.fromisoformat(str(value or "")[:10])
+    except (TypeError, ValueError):
+        return _d.date.today()
+
+
+def _sale_payments_by_sale(client, org_id: str, sale_ids) -> dict:
+    """{sale_id: [payment rows]} for these sales, org-scoped, read in chunks PostgREST accepts.
+
+    ONE home for this read: the mismatch log, the open-balance report and anything that follows
+    must see the same payment rows, and a second chunking loop is a second chance to page
+    differently and disagree about what a sale was paid with.
+    """
+    out: dict = {}
+    ids = [i for i in (sale_ids or []) if i]
+    if not ids:
+        return out
+    for chunk in (ids[i:i + 100] for i in range(0, len(ids), 100)):
+        for row in ((client.schema("pos").table("sale_payments")
+                     .select("sale_id,payment_method,amount,card_last_four,terms_days,due_date")
+                     .eq("org_id", org_id).in_("sale_id", chunk).limit(1000).execute().data) or []):
+            out.setdefault(row["sale_id"], []).append(row)
+    return out
+
+
+def _w9_docs_for(client, org_id: str, customer_ids):
+    """{customer_id: tax-doc row} for these customers, and whether the table exists at all.
+
+    `(,{} False)` when mig 1107 has not been applied — the same answer `_w9_doc` gives for one
+    customer, so the report degrades by NAME rather than showing an empty list of wholesale
+    customers who all appear to have no certificate.
+    """
+    ids = [i for i in (customer_ids or []) if i]
+    out: dict = {}
+    if not ids:
+        # Nothing to look up, but the caller still needs to know whether the table is there.
+        try:
+            client.schema("pos").table("customer_tax_doc").select("id").limit(1).execute()
+            return out, True
+        except Exception:
+            return out, False
+    try:
+        for chunk in (ids[i:i + 100] for i in range(0, len(ids), 100)):
+            for row in ((client.schema("pos").table("customer_tax_doc").select("*")
+                         .eq("org_id", org_id).eq("kind", _w9.W9_KIND)
+                         .in_("customer_id", chunk).limit(1000).execute().data) or []):
+                out[row["customer_id"]] = row
+    except Exception:
+        return {}, False
+    return out, True
+
+
 @router.get("/reports/tender-mismatch")
 def report_tender_mismatch(date_from: str = "", date_to: str = "", store_code: str = "",
                            employee_id: str = "", kind: str = "mismatch",
@@ -4131,12 +4193,7 @@ def report_tender_mismatch(date_from: str = "", date_to: str = "", store_code: s
                 "log_available": _tender_log_available(client, org_id)}
 
     ids = [s["id"] for s in sales]
-    pays: dict = {}
-    for chunk in (ids[i:i + 100] for i in range(0, len(ids), 100)):
-        for row in ((client.schema("pos").table("sale_payments")
-                     .select("sale_id,payment_method,amount,card_last_four")
-                     .eq("org_id", org_id).in_("sale_id", chunk).limit(1000).execute().data) or []):
-            pays.setdefault(row["sale_id"], []).append(row)
+    pays = _sale_payments_by_sale(client, org_id, ids)
 
     filed: dict = {}
     log_available = _tender_log_available(client, org_id)
@@ -4196,6 +4253,161 @@ def report_tender_mismatch(date_from: str = "", date_to: str = "", store_code: s
         rows = [r for r in assessed if r["mismatch"]]
     return {"rows": rows, "summary": summary, "blockers": _settle.blockers(assessed),
             "band": band, "log_available": log_available, "kind": kind}
+
+
+@router.get("/reports/open-balances")
+def report_open_balances(date_from: str = "", date_to: str = "", store_code: str = "",
+                         employee_id: str = "", view: str = "open",
+                         as_of: str = "",
+                         authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """OPEN TERMS BALANCES — what customers still owe us, and how late (§POS-19).
+
+    Owner ask 2026-10-31, after the Terms tender landed: *"build them"*.
+
+    THE POPULATION IS THE SALES THAT CARRY A DEFERRED LEG, not every sale narrowed to those with a
+    balance. 4,603 of the 4,605 live sales carry no payment row at all (measured 2026-10-31), and a
+    report that filtered on `balance > 0` would admit a part-tendered cash sale nobody agreed terms
+    on while reading imported history as a debt. Which legs are deferred is `tender_vocabulary`'s
+    answer, reached through `sale_settlement.tendered` — this endpoint spells no tender.
+
+    EVERY FIGURE IS `pos/receivable.assess`'s. This endpoint subtracts no money and ages no row.
+    """
+    client = sb()
+    # The store asked for is checked against the caller's span BEFORE it is used — the same posture
+    # §POS-17's L7 pinned, and for the same reason: an unchecked value reaches a config read.
+    keyset = _caller_store_keyset(authorization, org_id)
+    if store_code and not _span_filter([{"store_code": store_code}], keyset):
+        raise HTTPException(403, "that store is outside your reporting span")
+    today = _recv_as_of(as_of)
+    ready = _terms_schema_ready(client)
+    if not ready:
+        # The §POS-01 posture: the feature says it is not available by NAME rather than answering an
+        # empty table, which would read as "nobody owes us anything".
+        return {"rows": [], "summary": _recv.summarise([]), "available": False,
+                "setup_note": TERMS_MIGRATION, "as_of": today.isoformat(),
+                "view": view, "collection_note": _recv.COLLECTION_NOT_WIRED,
+                "bands": list(_recv.BAND_LABELS)}
+    q = (client.schema("pos").table("sales")
+         .select("id,transaction_id,created_at,total,balance,status,voided_at,revision,"
+                 "customer_id,employee_id,store_code")
+         .eq("org_id", org_id))
+    if date_from:
+        q = q.gte("created_at", _date_bound(date_from, end=False))
+    if date_to:
+        q = q.lte("created_at", _date_bound(date_to, end=True))
+    if store_code:
+        q = q.eq("store_code", store_code)
+    if employee_id:
+        q = q.eq("employee_id", employee_id)
+    sales = q.order("created_at", desc=True).limit(1000).execute().data or []
+    sales = _span_filter(sales, keyset)
+    pays = _sale_payments_by_sale(client, org_id, [s["id"] for s in sales])
+    emp = _employee_names(org_id)
+    cust = _customer_names(org_id, [s.get("customer_id") for s in sales])
+    assessed = []
+    for s in sales:
+        a = _recv.assess(s, pays.get(s["id"], []), as_of=today)
+        if a["state"] == _recv.NOT_RECEIVABLE:
+            continue        # not a receivable of $0.00 — not a receivable. See the module note.
+        c = cust.get(s.get("customer_id")) or {}
+        assessed.append({
+            "sale_id": s["id"], "transaction_id": s.get("transaction_id"),
+            "created_at": s.get("created_at"), "store_code": s.get("store_code"),
+            "employee_id": s.get("employee_id"),
+            "employee_name": emp.get((s.get("employee_id") or "").strip()),
+            "customer_id": s.get("customer_id"), "customer_name": c.get("name"),
+            "customer_phone": c.get("phone"),
+            "total": s.get("total"), "state": a["state"],
+            "terms_days": a["terms_days"], "due_date": a["due_date"],
+            "deferred": a["deferred"], "outstanding": a["outstanding"],
+            "days_past_due": a["days_past_due"], "band": a["band"],
+            "voided": a["voided"], "tenders": ", ".join(a["deferred_methods"]),
+            "note": _recv.sentence(a),
+        })
+    summary = _recv.summarise(assessed)
+    if view == "past_due":
+        rows = [r for r in assessed if r["state"] == _recv.OPEN_PAST_DUE]
+    elif view == "not_due":
+        rows = [r for r in assessed if r["state"] == _recv.OPEN_NOT_DUE]
+    elif view == "all":
+        rows = assessed
+    else:
+        rows = [r for r in assessed
+                if r["state"] in (_recv.OPEN_PAST_DUE, _recv.OPEN_NOT_DUE)]
+    return {"rows": rows, "summary": summary, "available": True, "setup_note": None,
+            "as_of": today.isoformat(), "view": view,
+            "collection_note": _recv.COLLECTION_NOT_WIRED,
+            "bands": list(_recv.BAND_LABELS)}
+
+
+@router.get("/reports/w9-status")
+def report_w9_status(view: str = "attention", as_of: str = "", within_days: int = 60,
+                     authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """THE W-9 STATUS of every wholesale customer — what is missing, what lapses when (§POS-19).
+
+    Owner ask 2026-10-31: *"build them"*, the second of the two.
+
+    THE VERDICT AND THE DATE COME FROM ONE HOME. `wholesale_w9.may_sell` is what blocks a sale and
+    `wholesale_w9.expiry_date` is the day it lapses, and the second now backs the first (§POS-16),
+    so this report cannot tell a manager a certificate is good on a day the register refuses it.
+
+    NOTHING DECLARED MEANS NOTHING IDENTIFIED. `available: False` by NAME until mig 1107 is applied,
+    and `wholesale: 0` said in words when an org has declared no wholesale customers — never an
+    empty table, which reads as "all clear" (owner directive 2026-10-30).
+    """
+    client = sb()
+    today = _recv_as_of(as_of)
+    cfg = _w9_cfg(client, org_id)
+    rows_cust = (client.schema("pos").table("customers")
+                 .select("id,first_name,last_name,company_name,email,phone,account_type")
+                 .eq("org_id", org_id).eq("account_type", _w9.WHOLESALE)
+                 .limit(2000).execute().data) or []
+    docs, present = _w9_docs_for(client, org_id, [c["id"] for c in rows_cust])
+    if not present:
+        return {"rows": [], "summary": _w9.summarise([]), "available": False,
+                "setup_note": W9_MIGRATION, "as_of": today.isoformat(),
+                "view": view, "within_days": within_days,
+                "form_url": _w9.blank_form_url(cfg)}
+    assessed = []
+    for c in rows_cust:
+        doc = docs.get(c["id"])
+        decision = _w9.may_sell(c, doc, cfg, now=today, is_admin=False)
+        exp = _w9.expiry_date(doc, cfg)
+        left = _w9.days_until_expiry(doc, cfg, now=today)
+        name = (c.get("company_name")
+                or " ".join(x for x in [c.get("first_name"), c.get("last_name")] if x).strip()
+                or None)
+        assessed.append({
+            "customer_id": c["id"], "customer_name": name,
+            "email": c.get("email"), "phone": c.get("phone"),
+            "w9_status": decision["w9_status"], "blocked": decision["blocked"],
+            "tax_exempt": decision["tax_exempt"],
+            "received_at": (doc or {}).get("received_at"),
+            "confirmed_by": (doc or {}).get("confirmed_by"),
+            "doc_status": (doc or {}).get("status"),
+            "requested_at": (doc or {}).get("requested_at"),
+            "requested_to_email": (doc or {}).get("requested_to_email"),
+            "expires_at": exp["date"].isoformat() if exp["date"] else None,
+            "expiry_basis": exp["basis"], "expiry_note": exp["reason"],
+            "days_until_expiry": left,
+            "expiring_soon": bool(left is not None and 0 <= left <= max(0, int(within_days or 0))),
+            "needs_w9_request": decision["needs_w9_request"],
+        })
+    summary = _w9.summarise(assessed)
+    if view == "attention":
+        rows = [r for r in assessed
+                if r["w9_status"] != _w9.CURRENT or r["expiring_soon"]]
+    elif view == "expiring":
+        rows = [r for r in assessed if r["expiring_soon"]]
+    elif view == "missing":
+        rows = [r for r in assessed if r["w9_status"] == _w9.MISSING]
+    elif view == "expired":
+        rows = [r for r in assessed if r["w9_status"] == _w9.EXPIRED]
+    else:
+        rows = assessed
+    return {"rows": rows, "summary": summary, "available": True, "setup_note": None,
+            "as_of": today.isoformat(), "view": view, "within_days": within_days,
+            "form_url": _w9.blank_form_url(cfg)}
 
 
 @router.get("/reports/activations")

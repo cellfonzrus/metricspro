@@ -116,25 +116,63 @@ def _add_months(d: _dt.date, months: int) -> _dt.date:
     return _dt.date(y, m + 1, day)
 
 
+#: Why a certificate carries no lapse date. A reason, never a date a reader could sort on.
+NO_EXPIRY_REASONS = {
+    "not_received": "no signed form has been confirmed received, so there is nothing to expire",
+    "never_expires": "this company has declared that a W-9 on file does not go out of date",
+}
+
+
+def expiry_date(doc, cfg) -> dict:
+    """THE day this certificate stops being good for, and WHY when there is no such day.
+
+    `{date, basis, reason}`. `basis` is `own` when the form carries its own expiry and `declared`
+    when the day is the org's refresh period counted from arrival — the same two rungs `w9_state`
+    judged by before this was extracted, which is why `w9_state` now reads it instead of repeating
+    it. A date with no basis would be the fallback-basis defect §COMMCALC-66 exists to prevent: a
+    reader cannot tell a certificate's own deadline from a house refresh rule, and only one of the
+    two is the customer's problem to fix.
+
+    EXTRACTED 2026-10-31 for the W-9 status report, which needs the DAY and not just the verdict:
+    "it expires some time" cannot be chased, and "it expires on the 14th" can.
+    """
+    doc = doc or {}
+    received = _date(doc.get("received_at"))
+    if _s(doc.get("status")) != STATUS_RECEIVED or not received:
+        return {"date": None, "basis": None, "reason": NO_EXPIRY_REASONS["not_received"]}
+    own = _date(doc.get("expires_at"))
+    if own:
+        return {"date": own, "basis": "own", "reason": None}
+    months = valid_months(cfg)
+    if months == 0:
+        return {"date": None, "basis": None, "reason": NO_EXPIRY_REASONS["never_expires"]}
+    return {"date": _add_months(received, months), "basis": "declared", "reason": None}
+
+
 def w9_state(doc, cfg, *, now) -> str:
     """`current` / `expired` / `missing` for ONE certificate row.
 
     A row that only records that we asked is `missing` — the owner's wording is that the exemption
     follows a CONFIRMED receipt of the filled-out form, so an unanswered request is not a document.
-    A certificate carrying its own expiry is judged by that date; otherwise by the org's declared
-    refresh period counted from the day it arrived.
+    WHEN it lapses is `expiry_date`'s single answer and is dereferenced here rather than re-derived,
+    so the verdict a sale is blocked on and the date a report chases can never disagree.
     """
     doc = doc or {}
-    received = _date(doc.get("received_at"))
-    if _s(doc.get("status")) != STATUS_RECEIVED or not received:
+    received = _date((doc or {}).get("received_at"))
+    if _s((doc or {}).get("status")) != STATUS_RECEIVED or not received:
         return MISSING
-    own_expiry = _date(doc.get("expires_at"))
-    if own_expiry:
-        return CURRENT if own_expiry >= now else EXPIRED
-    months = valid_months(cfg)
-    if months == 0:
+    exp = expiry_date(doc, cfg)
+    if exp["date"] is None:
+        # Received, and no day it lapses on: the org declared that it never does.
         return CURRENT
-    return CURRENT if _add_months(received, months) >= now else EXPIRED
+    return CURRENT if exp["date"] >= now else EXPIRED
+
+
+def days_until_expiry(doc, cfg, *, now):
+    """Whole days from `now` until this certificate lapses. Negative once it has, and **None** when
+    there is no lapse date at all — never 0, which a screen would sort beside "lapses today"."""
+    exp = expiry_date(doc, cfg)
+    return None if exp["date"] is None else (exp["date"] - now).days
 
 
 def blank_form_url(cfg) -> str:
@@ -276,3 +314,34 @@ def request_html(company_name: str, form_url: str, link: str, customer_name: str
 #: an anonymous probe cannot tell which it hit (index §POS-16.6).
 LINK_DEAD = ("This upload link is no longer valid. Please ask for a new one and we will send it "
              "straight over.")
+
+
+def summarise(rows) -> dict:
+    """The rollup the W-9 status report's header shows, over rows carrying `w9_status` and
+    `expiring_soon`.
+
+    `wholesale` is the count of wholesale customers the org has declared, and it is reported even
+    when it is zero — an empty table reads as "all clear", and the owner's 2026-10-30 directive is
+    that nothing declared means nothing identified and the surface says so. PURE.
+    """
+    out = {"wholesale": 0, "current": 0, "expired": 0, "missing": 0,
+           "expiring_soon": 0, "blocked": 0, "tax_exempt": 0, "never_requested": 0,
+           "soonest_days": None}
+    for r in rows or []:
+        r = r or {}
+        out["wholesale"] += 1
+        state = _s(r.get("w9_status"))
+        if state in (CURRENT, EXPIRED, MISSING):
+            out[state] += 1
+        if r.get("expiring_soon"):
+            out["expiring_soon"] += 1
+        if r.get("blocked"):
+            out["blocked"] += 1
+        if r.get("tax_exempt"):
+            out["tax_exempt"] += 1
+        if state != CURRENT and not r.get("requested_at"):
+            out["never_requested"] += 1
+        left = r.get("days_until_expiry")
+        if isinstance(left, int) and (out["soonest_days"] is None or left < out["soonest_days"]):
+            out["soonest_days"] = left
+    return out

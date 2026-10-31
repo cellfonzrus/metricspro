@@ -2980,6 +2980,10 @@ FACTS: dict[str, dict] = {
             # The endpoint the register reads, the checkout's gate, and the receipt's money line.
             'app/modules/pos/router.py': ('_tender',),
             'app/modules/pos/sale_receipt.py': ('_tv',),
+            # §POS-19 (2026-10-31): the tender/total comparison asks this home whether a leg
+            # settles at the till. It had summed every leg, so a sale wholly on terms read as an
+            # over-tender — the two facts had never met. See index §POS-19.3.
+            'app/modules/pos/sale_settlement.py': ('_tender',),
         },
     },
     # ── §POS-16 (owner ask 2026-10-30) — a wholesale customer and their W-9 ─────────────────────
@@ -2989,7 +2993,7 @@ FACTS: dict[str, dict] = {
                     'WITH a current exemption certificate on file. Answering the two separately '
                     'produces exactly one failure and it is the expensive one: a sale goes out '
                     'tax-free against a certificate nobody holds and the house carries the '
-                    'liability. So `decide` answers both, no state exists where a sale is exempt '
+                    'liability. So `may_sell` answers both, no state exists where a sale is exempt '
                     'and the certificate is not current, and the sale RECORDS its basis '
                     '(`pos.sales.tax_exempt_basis`) because it cannot be re-derived later — the '
                     'certificate may be filed the next day. An admin override permits a TAXABLE '
@@ -3028,6 +3032,36 @@ FACTS: dict[str, dict] = {
             # W-9 return upload. Neither keeps a sniffer, a magic-byte table or a refusal of its own.
             'app/modules/hr/router.py': ('_upload_format',),
             'app/modules/pos/router.py': ('_upload_format',),
+        },
+    },
+    # ── §POS-19 (owner ask 2026-10-31) — what a customer still owes us, and how late ───────────
+    'pos_open_receivable': {
+        "question": 'WHAT DOES A CUSTOMER STILL OWE US ON A SALE, AND HOW LATE IS IT? The Terms '
+                    'tender (§POS-15) created the platform\'s first receivable, and the question '
+                    'is NOT the one `sale_settlement` answers: that home compares two recorded '
+                    'figures as of the SALE, takes no clock and must not (its lock fails the build '
+                    'on a `datetime` in it), while collection is a question about TODAY against a '
+                    'due date. A sale with no deferred leg is not a receivable of $0.00 — it is '
+                    'not a receivable, which matters because 4,603 of 4,605 live sales carry no '
+                    'payment row at all and a `balance > 0` filter would have admitted every '
+                    'part-tendered cash sale as a debt. Not yet due is owed and is not late, so it '
+                    'has its own state and its own total. An age that cannot be measured is '
+                    '`unknown`, never the newest band. The aging ladder is '
+                    '`manager_followup.AGE_BANDS` dereferenced, because a second spelling of what '
+                    '"61-90 days" means would drift — and these bands are a POLICY, not a '
+                    'tenant\'s own vocabulary. What this home REFUSES to do is infer a payment '
+                    'from a later over-tender: taking money against an open balance is not built '
+                    'yet, and that gap is carried in the payload (`COLLECTION_NOT_WIRED`) and said '
+                    'on the screen rather than guessed at, which would read every collected debt '
+                    'as money owed back to the customer.',
+        "homes": ('app/modules/pos/receivable.py',),
+        "index": ('POS-19',),
+        "locks": ('harness_pos_receivable.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
+        # import graph.
+        "callers": {
+            # The open-balances report endpoint. The screen holds no arithmetic of its own.
+            'app/modules/pos/router.py': ('_recv',),
         },
     },
     'human_check_on_sign_in': {

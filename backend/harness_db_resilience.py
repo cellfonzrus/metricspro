@@ -1418,7 +1418,14 @@ _all_routes = _flatten_routes(real_app.routes)
 #     + /pos/device-conditions               GET   (the conditions and unit statuses a screen offers)
 # It reads NO tenant row at all — both lists are platform policy — writes nothing, and feeds no
 # report, statement, GP, commission or tax figure. Re-taken on a counted, named addition.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1826"))
+# Re-pinned 1826 -> 1828 on 2026-10-31 (§POS-19, the two receivable reports). Verified the house
+# way, NOT by arithmetic: `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` printed
+# exactly TWO added decorators and NONE removed —
+#     + /pos/reports/open-balances           GET   (what customers still owe us, and how late)
+#     + /pos/reports/w9-status               GET   (which certificate lapses when)
+# Both are READS. Each is org-scoped, refuses a store outside the caller's span before reading, and
+# writes nothing: no stored total, statement, GP, commission or tax figure is touched by either.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1828"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
