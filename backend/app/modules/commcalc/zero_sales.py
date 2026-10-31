@@ -616,6 +616,77 @@ def build_report(days, scopes, counted, landed, hours, cfg, rules_refused=False,
             "state_notes": dict(STATE_NOTES), "books_to": []}
 
 
+# ── THE MISSING UPLOAD — the same fact, said to the surface that can fix it ────────────────────────
+# Owner (2026-10-31): *"this is a big problem for management iff we wil miss trading days, we need to
+# get this fix right away"*. `store_day_state` has named a store-day whose feed did not land
+# NOT_REPORTED since 2026-09-22, and `alert_items` below deliberately refuses to email it — a missing
+# feed is a pipeline failure, and dressing it as a sales alert sends a manager after a rep who sold
+# fine. It was handed to the import-health surface (§20), which had no check for it, so the fact fell
+# between the two and 324 store-days across three tenants went unreported (Aug-Oct 2026).
+#
+# This is the HAND-OFF, not a second derivation: it reads the report's own `day_states` and this
+# module's own NOT_REPORTED, so a state renamed here reaches the surface with no second edit, and
+# nothing about absence is decided twice.
+FEED_GAP_WHOLE_WINDOW = "whole_window"   # every TRADING day in the window is missing — a dead feed
+FEED_GAP_PARTIAL = "partial_days"        # the feed arrives and lost days — a short upload
+FEED_GAP_KINDS = (FEED_GAP_WHOLE_WINDOW, FEED_GAP_PARTIAL)
+FEED_GAP_MIN_DAYS = 1                    # ONE lost trading day is a real gap: it is a day of sales
+
+
+def feed_gap_items(report, *, min_days=FEED_GAP_MIN_DAYS):
+    """PURE. The STORE-days that did not report, as the findings the import-health surface raises.
+
+    A finding here means "we never received this store's sales for these dates, and the fix is an
+    upload". It is emphatically NOT `measured_zero`, which means the rows DID arrive and none was an
+    activation — that one needs a manager, this one needs a file, and collapsing them is the defect
+    this whole report exists to prevent (`harness_feed_gap_days.py` §A is the armed control).
+
+    STORE GRAIN ONLY. A rep under a store whose feed did not land is `not_reported` by inheritance
+    (`rep_day_state`), so counting rep rows would report one store's missing upload once per person.
+
+    A day that is `closed`, `in_progress` or `off` is not a missing day — a store shut on Sunday has
+    lost no upload and an unfinished day is not a gap. So `whole_window` compares the missing days
+    against the days that were actually EVALUATED, never against the calendar.
+
+    `min_days` is the tenant's threshold. A value below one is REFUSED rather than honoured: it would
+    silence every finding, which is the same silence this exists to end.
+
+    Worst first (most missing days), then by label, so the order is deterministic."""
+    try:
+        floor = int(min_days)
+    except (TypeError, ValueError):
+        floor = FEED_GAP_MIN_DAYS
+    if floor < FEED_GAP_MIN_DAYS:
+        floor = FEED_GAP_MIN_DAYS
+
+    out = []
+    for r in report.get("rows") or []:
+        if r.get("grain") != GRAIN_STORE:
+            continue
+        states = r.get("day_states") or {}
+        dates = sorted(d for d, st in states.items() if st == NOT_REPORTED)
+        if len(dates) < floor:
+            continue
+        evaluated = sum(1 for st in states.values() if st not in SKIPPED_STATES)
+        kind = (FEED_GAP_WHOLE_WINDOW if evaluated and len(dates) >= evaluated
+                else FEED_GAP_PARTIAL)
+        key = r.get("scope_key")
+        out.append({
+            "store_code": key if isinstance(key, str) else str(key),
+            "label": r.get("label"),
+            "missing_days": len(dates),
+            "dates": dates,
+            "first_missing_day": dates[0],
+            "last_missing_day": dates[-1],
+            "kind": kind,
+            "trading_calendar": r.get("trading_calendar"),
+            "days_had_sales": int(r.get("days_had_sales") or 0),
+            "days_evaluated": evaluated,
+        })
+    out.sort(key=lambda i: (-i["missing_days"], str(i["label"]), str(i["store_code"])))
+    return out
+
+
 # ── NOTIFICATIONS — a new KIND on the existing path, never a second mechanism ──────────────────────
 def alert_items(report, cfg, store_of=None):
     """PURE. The report -> the findings worth an email: scopes whose CURRENT run has reached the
