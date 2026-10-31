@@ -69,6 +69,23 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     ],
   },
   plugins: [
+    // ── The minimum iOS this app declares ─────────────────────────────────────────────────────
+    // REQUIRED, and its absence is what the first real build from GitHub actually found
+    // (2026-10-31, EAS build d4d6b18d): EAS now builds on a current Xcode, which refuses any pod
+    // declaring an iOS deployment target below 15.0 — and this app's dependency set still carries
+    // `RNCAsyncStorage` at 9.0, `ReachabilitySwift` at 12.0 and `SDWebImage` at 9.0. The build died
+    // in fastlane with "the range of supported deployment target versions is 15.0 to 27.1.x".
+    //
+    // Setting it here raises the floor for the app AND, through Expo's Podfile post-install, for
+    // every pod, which is the one lever that reaches dependencies we do not own. It is PINNED by
+    // harness_running_bundle_lock.py (R6.4) so it cannot silently drop back.
+    //
+    // THIS IS NOT THE WHOLE FIX. The underlying fact is that this app is pinned to Expo SDK 52
+    // while the binary in TestFlight is SDK 57 and EAS's image has moved on — see index §CORE-29.3.
+    // Raising the floor lets SDK 52 compile again on today's Xcode; it does not stop the next Xcode
+    // from moving past it. The design fix is the SDK upgrade, and this buys the time to do it
+    // properly rather than under an outage.
+    ['expo-build-properties', { ios: { deploymentTarget: '15.1' } }],
     'expo-router',
     'expo-secure-store',
     'expo-local-authentication',

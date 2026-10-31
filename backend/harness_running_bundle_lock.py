@@ -43,6 +43,14 @@ APP_CONFIG = MOBILE / "app.config.ts"
 # so moving it means editing this literal and saying why in the PR.
 PINNED_RUNTIME_POLICY = "appVersion"
 
+# The minimum iOS the app declares, pinned for a different reason: EAS builds on a current Xcode,
+# which REFUSES any pod declaring a deployment target below 15.0, and this app's dependency set still
+# carries three that declare 9.0 and 12.0. The first real build from GitHub died on exactly that
+# (2026-10-31, EAS build d4d6b18d). Setting it in app.config.ts raises the floor for every pod
+# through Expo's Podfile post-install — the one lever that reaches dependencies we do not own — so
+# losing it does not fail a test, it fails the BUILD, forty minutes later, on Expo's machines.
+PINNED_IOS_DEPLOYMENT_TARGET = "15.1"
+
 failures: list[str] = []
 checks = 0
 
@@ -177,6 +185,22 @@ control("R6.2", re.findall(r"runtimeVersion:\s*\{\s*policy:\s*'([^']+)'\s*\}",
 
 check("R6.3 the updates URL is still declared", "updates: { url:" in config_src,
       "without updates.url nothing is ever offered to the app")
+
+targets = re.findall(r"deploymentTarget:\s*'([^']+)'", config_src)
+check("R6.4 the iOS deployment floor is declared exactly once", len(targets) == 1,
+      f"found {len(targets)} ios.deploymentTarget declarations in app.config.ts")
+check("R6.5 the iOS deployment floor still matches its pin",
+      targets[:1] == [PINNED_IOS_DEPLOYMENT_TARGET],
+      f"app.config.ts declares {targets!r} but this harness pins "
+      f"{PINNED_IOS_DEPLOYMENT_TARGET!r}. Below 15.0 the build fails on Expo's current Xcode; "
+      "raising it drops older iPhones. Either way, say why in the PR and move the pin.")
+control("R6.5", re.findall(r"deploymentTarget:\s*'([^']+)'", "deploymentTarget: '12.0'")
+        == [PINNED_IOS_DEPLOYMENT_TARGET])
+check("R6.6 the plugin that applies the floor is still installed",
+      "expo-build-properties" in config_src
+      and '"expo-build-properties"' in (MOBILE / "package.json").read_text(encoding="utf-8"),
+      "ios.deploymentTarget does nothing without the expo-build-properties config plugin")
+control("R6.6", "expo-build-properties" in "plugins: ['expo-router']")
 
 
 if failures:
