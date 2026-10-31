@@ -329,10 +329,54 @@ def _wall_note(vp, page, refusal=None, challenge=None):
 _HUMAN_CHECK_MESSAGE = {
     "visible": ("Human check detected. Complete the 'I'm not a robot' box on the screen, then click "
                 "Sign in — you're driving this login directly."),
-    "invisible": ("This portal runs a human check when you sign in. Your details are filled in — "
-                  "click Sign in on the screen yourself and complete the check if one appears. "
-                  "Signing in for you would be rejected as a bad password."),
+    "invisible": ("This portal runs a human check when you sign in. Click Sign in on the screen "
+                  "yourself and complete the check if one appears. Signing in for you would be "
+                  "rejected as a bad password."),
 }
+
+# WHAT IS ACTUALLY IN THE FORM — a different fact from what GATES the submit, and that is why it is
+# a different home. The invisible message above used to assert "Your details are filled in" without
+# anything having looked: `vidapay_sweep.prefill_login` swallowed every failure and returned nothing,
+# so a blank saved credential or a control it could not find left the operator staring at an empty
+# form that the status line told him was filled (owner report 2026-10-31, the second half of the UPS
+# reporting-portal login). The fill now reports; these are the only words for that report.
+_PREFILL_NOTE = {
+    "ok": "Your saved sign-in details are filled in for you.",
+    # The two causes of an empty box, which send the operator to two different places.
+    "no_value": ("%s is not saved on this login, so the form is not complete — add it on the login's "
+                 "settings, or type it on the screen now."),
+    "no_control": ("%s could not be put into this page's form — type it on the screen now, and the "
+                   "screenshot shows the form this login was given."),
+}
+
+
+def _and_list(names):
+    """"a", "a and b", "a, b and c" — so a sentence reads like a sentence. PURE."""
+    names = [str(n) for n in (names or []) if str(n or "").strip()]
+    if len(names) <= 1:
+        return names[0] if names else ""
+    return "%s and %s" % (", ".join(names[:-1]), names[-1])
+
+
+def _prefill_note(report):
+    """The ONE sentence about what the pre-fill put in the form, or "" when there is nothing to say.
+
+    Reads `vidapay_sweep.prefill_login`'s report. A missing / empty report says NOTHING rather than
+    claiming a fill, because this sentence exists precisely to stop the surface asserting something
+    nobody checked. Never raises."""
+    try:
+        if not report:
+            return ""
+        if report.get("ok"):
+            return _PREFILL_NOTE["ok"] if report.get("filled") else ""
+        parts = []
+        for key in ("no_value", "no_control"):
+            names = report.get(key) or []
+            if names:
+                parts.append(_PREFILL_NOTE[key] % _and_list(names).capitalize())
+        return " ".join(parts)
+    except Exception:
+        return ""
 
 
 def _human_check_kind(vp, page):
@@ -1114,10 +1158,15 @@ class LiveLoginSession:
             if kind or human:
                 if kind:
                     try:
-                        vp.prefill_login(page, login_fr, pw_el, self.account_id, self.user, self.pw)
+                        _rep = vp.prefill_login(page, login_fr, pw_el, self.account_id,
+                                                self.user, self.pw)
                     except Exception:
-                        pass
-                    self._set(phase="human_action", message=_HUMAN_CHECK_MESSAGE[kind])
+                        _rep = None
+                    # Two homes, two facts: what GATES the submit, and what is in the form. The
+                    # second is read from the fill's own report — never asserted (owner 2026-10-31).
+                    self._set(phase="human_action",
+                              message=(_HUMAN_CHECK_MESSAGE[kind] + " "
+                                       + _prefill_note(_rep)).strip())
                 else:
                     self._set(phase="login",
                               message="You're driving this login — click and type directly on the screen.")

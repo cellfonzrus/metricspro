@@ -506,14 +506,32 @@ def _all_frames_text(page):
     return " ".join(parts).lower()
 
 
+def login_form_present(page):
+    """Is the sign-in form ON this page? THE one answer to that question, and deliberately the SAME
+    one `_wait_for_password` / `_goto_login` already act on: `_password_frame` finding a password
+    field. A second rule for "is the form here" would be a second rule for whether the portal
+    refused us, because `page_refusal` is built on this one. Never raises — a driver this cannot
+    inspect reads as NO form, which keeps the pre-2026-10-31 answer."""
+    try:
+        return bool(_password_frame(page)[1])
+    except Exception:
+        return False
+
+
 def page_refusal(page, refusal=None, challenge=None):
     """What is this page telling us INSTEAD of showing a form — {"kind","marker","note"} or None.
 
     THE one reader for that question in this driver. `refusal` / `challenge` are the tenant's
     configured marker lists (`portal_backoff.load_markers(..., kind=...)`); passing neither uses the
-    seeds, which is what the paths deep in the driver with no DB client get. Never raises."""
+    seeds, which is what the paths deep in the driver with no DB client get. Never raises.
+
+    The "INSTEAD of showing a form" in that first line is now LOAD-BEARING: the form question is
+    asked and passed to the vocabulary, so a page handing us a sign-in form is never read as a
+    refusal or a challenge on the strength of its markup (owner report 2026-10-31 — see
+    `portal_backoff.page_verdict`)."""
     try:
-        return _pb.page_verdict(_page_text(page), refusal=refusal, challenge=challenge)
+        return _pb.page_verdict(_page_text(page), refusal=refusal, challenge=challenge,
+                                form_present=login_form_present(page))
     except Exception:
         return None
 
@@ -524,7 +542,11 @@ def _looks_like_cloudflare(page, challenge=None):
     if v and v["kind"] == _pb.CHALLENGE_KIND:
         return True
     # Cloudflare's own two-signal case: the vendor named AND a ray id. Kept because it is a
-    # CONJUNCTION, which a flat marker list cannot express — not a second vocabulary.
+    # CONJUNCTION, which a flat marker list cannot express — not a second vocabulary. It obeys the
+    # same form rule as the vocabulary does (a page showing us the sign-in form is not an
+    # interstitial), or this branch would be the way the 2026-10-31 defect walked straight back in.
+    if login_form_present(page):
+        return False
     body = _page_text(page)
     return "cloudflare" in body and "ray id" in body
 
@@ -1634,22 +1656,15 @@ def drive_typed_login(page, login_fr, pw_el, account_id, user, pw):
     if login_fr.query_selector("#AccountId") and login_fr.query_selector("#Password"):
         # TYPE (real keystrokes), don't fill: #btnClick is DISABLED until the form's JS validation
         # sees key events — fill() skips them, so the click timed out on "element is not enabled"
-        # (same trait as b2bsoft's progressive form).
+        # (same trait as b2bsoft's progressive form). `_put` is that one typing rule, shared with
+        # prefill_login — two copies of "how do you get a value into a portal's box" is how one of
+        # the two paths quietly stops working.
         def _type_id(sel, val):
             if val in (None, ""):
                 return
             el = login_fr.query_selector(sel)
-            if not el:
-                return
-            try:
-                el.click()
-                el.fill("")
-                el.type(str(val), delay=25)
-            except Exception:
-                try:
-                    el.fill(str(val))
-                except Exception:
-                    pass
+            if el:
+                _put(el, val)
         _type_id("#AccountId", account_id)
         _type_id("#Username", user)
         _type_id("#Password", pw or "")
@@ -1713,54 +1728,102 @@ def drive_typed_login(page, login_fr, pw_el, account_id, user, pw):
                 pass
 
 
-def prefill_login(page, login_fr, pw_el, account_id, user, pw):
-    """Fill the login fields WITHOUT submitting. A convenience for the human-driven path: when a captcha /
-    challenge is present, the live session pre-fills the credentials (so the operator only has to solve the
-    'I'm not a robot' box and click Sign in), but MUST NOT auto-submit past the check. Mirrors
-    drive_typed_login's field logic (pinned #AccountId/#Username/#Password with real keystrokes so the
-    form's enable-validation fires, else heuristic finders) but stops before the submit click.
-    Best-effort; never raises."""
+# The three values a portal login can hold, in the operator's words. ONE home: the fill reports
+# against these names and the operator's sentence is built from them, so neither side spells them.
+PREFILL_FIELDS = ("account id", "user id", "password")
+# An account id is legitimately absent on most portals — the UPS Store reporting form is Username +
+# Password only, and so are the supply vendors. A value nobody asked for is not a shortfall, so a
+# blank one is skipped rather than reported; a blank USER ID or PASSWORD always is.
+PREFILL_REQUIRED = ("user id", "password")
+
+
+def _prefill_report(filled=(), no_value=(), no_control=()):
+    """The shape every prefill answers in. CREDENTIAL-FREE by construction: it carries field NAMES
+    and never a value — it is written to an operator's status line and read back by the UI."""
+    no_value, no_control = list(no_value), list(no_control)
+    return {"filled": list(filled), "no_value": no_value, "no_control": no_control,
+            "ok": not no_value and not no_control}
+
+
+def _put(el, value):
+    """Type `value` into `el` and say whether it STUCK. Real keystrokes first (a form whose submit is
+    enabled by its own JS validation never sees fill()), fill() as the fallback, and the element's
+    own value read back as the proof — "we called fill" is not the same claim as "it is in the box",
+    and only the second one is worth telling an operator. Never raises."""
     try:
-        if login_fr.query_selector("#AccountId") and login_fr.query_selector("#Password"):
-            def _type_id(sel, val):
-                if val in (None, ""):
-                    return
-                el = login_fr.query_selector(sel)
-                if not el:
-                    return
-                try:
-                    el.click()
-                    el.fill("")
-                    el.type(str(val), delay=25)
-                except Exception:
-                    try:
-                        el.fill(str(val))
-                    except Exception:
-                        pass
-            _type_id("#AccountId", account_id)
-            _type_id("#Username", user)
-            _type_id("#Password", pw or "")
+        el.click()
+    except Exception:
+        pass
+    try:
+        el.fill("")
+        el.type(str(value), delay=25)
+    except Exception:
+        try:
+            el.fill(str(value))
+        except Exception:
+            return False
+    try:
+        got = el.input_value()
+    except Exception:
+        return True          # a driver that cannot read back: the fill did not raise, so trust it
+    return str(got or "") == str(value)
+
+
+def prefill_login(page, login_fr, pw_el, account_id, user, pw):
+    """Fill the login fields WITHOUT submitting, and REPORT what actually went in.
+
+    A convenience for the human-driven path: when a captcha / challenge is present, the live session
+    pre-fills the credentials (so the operator only has to solve the check and click Sign in), but
+    MUST NOT auto-submit past it. Mirrors drive_typed_login's field logic (pinned
+    #AccountId/#Username/#Password with real keystrokes so the form's enable-validation fires, else
+    the heuristic finders) and stops before the submit click. Best-effort; never raises.
+
+    THE RETURN VALUE IS THE 2026-10-31 FIX. Every step here is wrapped so a failure cannot end the
+    operator's session — right, but until now it also returned NOTHING, so a blank saved credential
+    or a control this could not find produced an empty form while the operator was told "Your
+    details are filled in". An empty box has three causes (nothing saved, no control found, it did
+    not stick) and they send someone to three different places, so this REPORTS and the caller's
+    words dereference the report. Shape: `_prefill_report`."""
+    filled, no_value, no_control = [], [], []
+
+    def _one(name, el, value):
+        if value in (None, ""):
+            if name in PREFILL_REQUIRED:
+                no_value.append(name)
+            return
+        if el is None:
+            # No control for it. For a REQUIRED field that is a real problem and the operator is
+            # told; for an account id the portal never asks for, it is simply a value this form has
+            # no use for — reporting it would send someone hunting for a box that does not exist.
+            if name in PREFILL_REQUIRED:
+                no_control.append(name)
+            return
+        (filled if _put(el, value) else no_control).append(name)
+
+    try:
+        pinned = bool(login_fr.query_selector("#AccountId") and login_fr.query_selector("#Password"))
+    except Exception:
+        pinned = False
+    try:
+        if pinned:
+            _one("account id", login_fr.query_selector("#AccountId"), account_id)
+            _one("user id", login_fr.query_selector("#Username"), user)
+            _one("password", login_fr.query_selector("#Password"), pw)
         else:
             acct_el = _find_input(login_fr, want=("account", "acct", "agent", "dealer", "merchant"),
                                   avoid=("user", "pass"))
             user_el = _find_input(login_fr, want=("user", "login", "email", "userid", "username"),
                                   avoid=("account", "acct"))
-            if acct_el and account_id:
-                try:
-                    acct_el.fill(str(account_id))
-                except Exception:
-                    pass
-            if user_el and user:
-                try:
-                    user_el.fill(str(user))
-                except Exception:
-                    pass
-            try:
-                pw_el.fill(str(pw or ""))
-            except Exception:
-                pass
+            _one("account id", acct_el, account_id)
+            _one("user id", user_el, user)
+            _one("password", pw_el, pw)
     except Exception:
-        pass
+        # A driver that answers nothing at all. Say so rather than claiming a fill: whatever is in
+        # the form, this call did not put it there.
+        for name in PREFILL_REQUIRED:
+            if name not in filled and name not in no_value and name not in no_control:
+                no_control.append(name)
+    return _prefill_report(filled, no_value, no_control)
 
 
 # ── phase 1: start login ───────────────────────────────────────────────────────────────────────
