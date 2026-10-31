@@ -682,7 +682,20 @@ FACTS: dict[str, dict] = {
                     'a time, so a '
                     'select naming them and a shorter one behind it is the column-block ladder that '
                     'rule forbids, and a row predating the kind column simply arrives without the '
-                    'key and reads as the throttle row it always was.',
+                    'key and reads as the throttle row it always was. '
+                    'THE SECOND HALF OF THE QUESTION (2026-10-31): "instead of showing a form" was '
+                    'never asked. These markers match the page\'s MARKUP as well as its words '
+                    '(_page_text reads content()) and "captcha" is a seeded challenge marker, so '
+                    'every portal whose sign-in page ships a reCAPTCHA read as a bot wall \u2014 the '
+                    'owner\'s UPS Store reporting portal says the word nine times, none of it '
+                    'visible, on a working Username + Password form, and his live login spun 60s in '
+                    '_wait_settle and then accused the egress IP while both boxes sat empty. '
+                    'page_verdict now takes form_present and returns NOTHING when the form is '
+                    'there; vidapay_sweep.login_form_present is the one home for that question and '
+                    'is deliberately the same password-frame answer _wait_for_password already acts '
+                    'on. Whether a human check GATES the submit stays a separate DOM question with '
+                    'its own home (human_check_on_sign_in) \u2014 this marker list must not answer '
+                    'it a second time by text search over markup.',
         "homes": ('app/modules/commcalc/portal_backoff.py',),
         "index": ('COMMCALC-50',),
         "locks": ('harness_portal_page_verdict.py',),

@@ -186,7 +186,7 @@ Primary code homes:
 | COMMCALC-47 | **A frame knows what it shows — one home for where a click on the live screen lands** | "it shows the live scren but cannot click on the box to enter the user id" — the box was in the picture and clicking it did nothing. Every streamed frame arrives telling us what it shows, and that was thrown away, so a click was converted through the window instead. What is a click on a picture of a browser a fact ABOUT? |
 | COMMCALC-48 | **The reports a login pulls are edited, not coded — one editable declaration** | "start defining the reports from the back end again, not hardcoded but consumer defined editable". Which reports a tenant pulls and the filters each one needs were already config — in two columns no screen could write, so in practice they were declarable only in SQL. One derived editor shape over the same two columns, with the round trip pinned as the identity. |
 | COMMCALC-49 | **What to order, from what the stores actually sold — and one answer to "how many will sell next"** | "process accessory orders based on the previous 3 months of average sales … asking the user to enter where the spoecific model is end of life or current". The device models the stores sold, ranked, waiting on a human ruling before anything is projected — and the velocity arithmetic that question needs, which was already written twice, factored into one home both older forecasts now read. |
-| COMMCALC-50 | **A page that refuses us is not a login form that renders unexpectedly** | "live login for the billing initated" — and it came back "Could not find the login form. The login form may render differently than expected — check the screenshot." The screenshot showed no form at all: the portal had refused the request in plain words, carrying its own error reference. Three vocabularies answered "is this page refusing us", two of them hardcoded, and none of them held that wording. |
+| COMMCALC-50 | **A page that refuses us is not a login form that renders unexpectedly** | "live login for the billing initated" — and it came back "Could not find the login form. The login form may render differently than expected — check the screenshot." The screenshot showed no form at all: the portal had refused the request in plain words, carrying its own error reference. Three vocabularies answered "is this page refusing us", two of them hardcoded, and none of them held that wording. And the other half of that question — *is a form on this page at all?* — was never asked, so the UPS reporting portal's own sign-in form read as a bot wall because its markup says "captcha" (§50.8, owner 2026-10-31). |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
@@ -36160,10 +36160,81 @@ because `ups.com` is unreachable from the build container and a guessed address 
 was reached in the first place. What ships here is that the next operator is told what the portal
 actually said, instead of being sent to read markup.
 
+### COMMCALC-50.8 THE SECOND HALF OF THE QUESTION — "instead of showing a form" was never asked (owner report 2026-10-31)
+
+Owner, verbatim: *"the ups portal is not getting the iuser id and password autofilled in teh login
+screen"*. He was looking at the portal's REAL sign-in form with both boxes empty.
+
+**Measured, from the build container, 2026-10-31** (no proxy, default headless Chromium, HTTP 200):
+`frs.theupsstore.com/UI/Reporting/POS/POSReports.aspx` → `/Framework/SignIn.aspx`, which renders
+`#UsernameTextBox` and `#UserPasswordTextBox`, both visible. **No WAF page, no IP block, no bot
+wall.** And the markup contains the word *captcha* NINE times: the `recaptcha.net/api.js` include, a
+`renderCaptcha = 'True'` flag, three code comments, and
+`<div id="SignInCaptcha" class="g-recaptcha" data-size="invisible" data-callback="captchaSuccessCallback">`.
+**None of it is in the page's visible text.** Verbatim excerpt kept at
+`backend/tests/fixtures/frs_signin_excerpt.html`.
+
+**THE DEFECT.** `page_verdict` matches its markers against `vidapay_sweep._page_text`, which is
+`page.content()` — the MARKUP — plus the title. `"captcha"` is a seeded challenge marker, so the
+working form read as `kind="challenge"`. `_looks_like_cloudflare` *is* that verdict, so
+`_wait_settle` spun 30s, reloaded, spun again and raised *"The portal's WAF is blocking this egress
+IP (bot challenge did not clear, even after a reload)"* — from inside `_goto_login`, **before
+`_wait_for_password` was ever reached**. Nothing was ever typed into a form that sat there the whole
+time. The stored `auth_message` on the Team Portal row still carried that accusation at 18:03Z.
+
+**THE CLASS.** *A page was judged by how it is BUILT, not by what it is DOING.* The predicate's own
+claim is "refusing or challenging us RATHER THAN showing a form", and it never looked for the form.
+Every portal whose sign-in page carries a reCAPTCHA — most of them — is read the same way, for every
+tenant. **THE SIBLING, already fixed once:** "does a human check gate this sign-in?" has had ONE
+home since §COMMCALC-11, `vidapay_sweep.human_check`, which reads the DOM and tells an armed widget
+from an included one. The `"captcha"` marker was a SECOND answer to that same question by text
+search, and it ran first — two paths, one question, and the cruder one won.
+
+**THE FIX, one rule:** `page_verdict(..., form_present=…)` returns **None** when the form is on the
+page, whatever the markup says. `vidapay_sweep.login_form_present(page)` is the one home for that
+question and is deliberately the same `_password_frame` answer `_wait_for_password` already acts on —
+a second rule for "is the form here" would be a second rule for whether the portal refused us.
+`_looks_like_cloudflare`'s two-signal conjunction obeys it too, because that branch is how the defect
+would walk straight back in. Default `False`, so a caller that has not looked keeps the old answer.
+
+**Formless pages are untouched, deliberately.** A Cloudflare interstitial has no form and its markers
+ARE markup fingerprints (`cf-chl`, `challenge-platform`), so it still stops the login. That is the
+excused half: a page with no form on it is still judged by its markup.
+
+**THE SECOND HALF OF HIS REPORT — a prefill that could not fill reported that it did.** Past the
+false positive, the live session reaches the human-driven path and calls `prefill_login`, which was
+best-effort and **silent**: every step swallowed, nothing returned, nothing read. A blank saved
+credential or a control it could not find left an empty form while `_HUMAN_CHECK_MESSAGE["invisible"]`
+told the operator *"Your details are filled in"*. Same class as §COMMCALC-44: *an absence needs the
+RIGHT reason, not just a reason.* So `prefill_login` now returns `_prefill_report`
+(`filled` / `no_value` / `no_control` / `ok`, field NAMES only — it reaches a status line), proving
+each fill by reading the box back rather than by `fill()` not raising; the "filled in" claim moved
+out of the kind message into `live_login._prefill_note`, which dereferences that report. Nothing
+saved and no control found are two sentences, because they send the operator to two different places.
+`_put` is now the one typing rule, shared with `drive_typed_login`.
+
+**Every tenant.** `portal_block_marker` is per-org config, so the form rule is applied to a tenant's
+CONFIGURED markers exactly as to the house seeds; an empty declaration still means empty. Asserted
+across three org shapes in both test files.
+
+**Locked:** `harness_portal_page_verdict.py` §I (14 checks, incl. the ARMED reproduction of the
+defect) and `harness_human_check_kind.py` §H (24 checks, incl. the wiring — writing a report and not
+reading it has happened three times here, §19.18). Tests: `backend/tests/unit/
+test_portal_challenge_vs_form.py`, `backend/tests/unit/test_prefill_reports_what_it_filled.py`,
+`backend/tests/integration/test_live_login_reaches_the_form.py` (the SEQUENCE — the settle ran before
+the form-finder, which is the whole defect), fake page `backend/tests/fakes/portal_page.py`.
+
+**NOT fixed here, said plainly.** The UPS **Billing** source (§COMMCALC-50.6) is a different row with
+a different problem and is untouched. The Team Portal's stored `auth_message` still carries the WAF
+accusation until the next login overwrites it. And the fourteen declared reports on that source still
+have no real selectors (§COMMCALC-37) — signing in is necessary for that, not sufficient.
+
 ### COMMCALC-50.7 Cross-references
 
 Same home, other axes: §COMMCALC-10 (the live-login phases), §COMMCALC-46 (what a login page wants
-first), §COMMCALC-11 (an invisible human check is still a check — the excused sibling).
+first), §COMMCALC-11 (an invisible human check is still a check — the excused sibling, and the home
+§COMMCALC-50.8 defers the human-check question to), §COMMCALC-44 (an absence needs the RIGHT reason —
+the class the prefill report belongs to).
 Neighbours: §COMMCALC-47 (the live screen the screenshot comes from), the mig-244 cooldown ladder.
 Reading rule dereferenced: §4b.1 (any-subset column reads — see §COMMCALC-50.5a).
 
@@ -42077,6 +42148,23 @@ Limits, by construction: an over-the-air update carries only JavaScript and asse
 a new module, a new permission, an SDK bump, a `version` bump (the runtime key is
 `{ policy: 'appVersion' }`) — finds no matching runtime and is simply not delivered, rather than
 shipping something broken. The workflow never builds and never submits to a store.
+
+### §CORE-26.7 Why an update did not reach a phone (owner, 2026-10-31)
+
+Two publishes succeeded — `production` and `preview`, both green — and the owner's TestFlight phone
+still showed the old JavaScript. Three candidate causes were eliminated from the repository alone:
+the build postdates OTA being wired (11 Sep, #221), its version is `0.1.0` so the `appVersion`
+runtime key matches, and both channels were published. What remains can only be read from EAS —
+which channel the installed build actually carries, and whether that channel is linked to the branch
+the publish wrote to (a channel and a branch share a name by convention, not by rule).
+
+Nobody could see it: the publish workflow holds the only credential, and GitHub's job logs are not
+readable from every environment (the log blob host is outside this container's network policy — read
+a failure through `gh api repos/<o>/<r>/check-runs/<job_id>/annotations` instead, which is how the
+yarn failure above was found). So `.github/workflows/mobile-ota-diagnose.yml` gathers the facts and
+**posts them as a comment on an issue**, readable by anyone working on this and needing no Expo
+account of their own. READ-ONLY by construction: every command is a `:list` or a `:view`, it cannot
+publish, build, submit or delete, and it never fires automatically.
 
 The EAS CLI is installed with `npm install -g eas-cli@latest` rather than through
 `expo/expo-github-action`. That action defaults its packager to **yarn** and this project is npm
