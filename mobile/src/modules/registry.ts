@@ -11,7 +11,7 @@ import type { MePayload } from '@/api/core'
 // provisioned user; fine-grained actions (PII reveal, void) still gate at the action. When the
 // backend `modules.<key>` entitlement is seeded, tighten `visible` to check it — the UI is already
 // wired to respect it.
-export type ModuleKey = 'timeclock' | 'closing' | 'pos' | 'crm' | 'earnings'
+export type ModuleKey = 'timeclock' | 'schedule' | 'closing' | 'pos' | 'crm' | 'earnings'
 
 export type ModuleDef = {
   key: ModuleKey
@@ -42,6 +42,17 @@ export const MODULES: ModuleDef[] = [
     route: '/timeclock',
     icon: '⏱️',
     description: 'Clock in and out, see your status and hours.',
+    primaryTab: true,
+    visible: provisioned,
+    entitlementKey: 'modules.storeops',
+  },
+  {
+    key: 'schedule',
+    title: 'My Schedule',
+    short: 'Schedule',
+    route: '/schedule',
+    icon: '🗓️',
+    description: 'The week you are rostered for, time off, and asking for cover.',
     primaryTab: true,
     visible: provisioned,
     entitlementKey: 'modules.storeops',
@@ -104,7 +115,9 @@ export const MODULES: ModuleDef[] = [
 export type RoadmapModule = { id: string; title: string; icon: string; description: string }
 export const ROADMAP_MODULES: RoadmapModule[] = [
   { id: 'commcalc', title: 'Commission Admin', icon: '📊', description: 'CommCalc reports, payouts & rates' },
-  { id: 'storeops', title: 'Scheduling & HR', icon: '🗓️', description: 'Shifts, PTO, payroll' },
+  // Shifts, time off and cover requests SHIPPED as the `schedule` module above; what is still only
+  // on the web is the HR record (my pay, documents, total comp) and editing the rota itself.
+  { id: 'hr', title: 'HR & My Record', icon: '🧾', description: 'Your pay, documents and details' },
   { id: 'assets', title: 'Assets & Inventory', icon: '📦', description: 'Phone lending, transfers' },
 ]
 
