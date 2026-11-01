@@ -196,6 +196,7 @@ Primary code homes:
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
 | STOREOPS-04 | **A punch says where it was made, and an off-site one reaches the board management already reads** | "the sales reps when they log in should capture the gos location so they are not clocking out at their homes and the geolocation when they clock out from somewhere else than their usual location which should match the store address should be reported as flag to the management" — the clock-IN had captured a fix since mig 045 and the clock-OUT captured nothing at all, the platform's one geofence decision had never judged a punch, and no store had coordinates to judge one against. Who owns "was this person at the store this record is for", for the clock-in, the clock-out and the DM store visit alike — and what stops "we could not tell" from being read as "they were not there"?
+| STOREOPS-05 | **The phone shows the week the TENANT declared, and whose shifts it shows is the server's answer** | "Make scheduling and hr with store vista and closing live in the app also" — the rota, time off and cover requests existed only on the web, and the phone had no schedule at all. The gates were already right (`gate_person_rows`, §14w) and the week start was already declared per tenant; what was missing was a surface. Who decides which seven days a week IS on a phone, and what stops a client-side filter from being mistaken for a permission? |
 | CORE-31 | **A retention window that deletes nothing is a promise, not a policy** | Found by the security pass §STOREOPS-04 required before going live: that feature shipped a 180-day GPS retention setting and nothing deleted anything — and event check-in GPS had carried the SAME hole since mig 986, declared `unmonitored` on the control box. Who owns "how long may we keep where somebody was", for every relation that stores it, and what stops a purge from taking the flag away with the coordinates? |
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
@@ -26232,6 +26233,7 @@ status word rather than a blank that reads as nil.
 | STOREOPS-02 | storeops |
 | STOREOPS-03 | storeops |
 | STOREOPS-04 | storeops |
+| STOREOPS-05 | storeops |
 | COMMCALC-01 | commcalc |
 | CORE-01 | core |
 | CORE-02 | core |
@@ -43924,3 +43926,109 @@ tri-state as §STOREOPS-04's verdict probe and omits the stamp when it is absent
 stored, and the row simply carries no commitment yet. The sweep answers
 `{"ok": false, "error": "… is migration 1113 applied?"}` rather than 500ing a scheduler, and one
 relation failing never stops the others (`test_C2`).
+
+## §STOREOPS-05. THE PHONE SHOWS THE WEEK THE TENANT DECLARED, AND WHOSE SHIFTS IT SHOWS IS THE SERVER'S ANSWER (owner ask 2026-11-01)
+
+**What he said:**
+
+> *"Make scheduling and hr with store vista and closing live in the app also"*
+
+### STOREOPS-05.1 THE DUPLICATE CHECK, and what it found
+
+Searched before a line was written. **Two of the four features he named already existed on the
+phone**, which narrowed the job from four builds to three:
+
+| he asked for | what was already in `mobile/` | what this PR adds |
+| --- | --- | --- |
+| store visits ("store vista") | `mobile/app/(app)/dm/checklist.tsx` (reached from the `dm/index.tsx` hub) — the DM's store-visit inspection: check in with a GPS fix, run the org's checklist items, record accessories, submit. GPS-stamped and now geofence-judged (§STOREOPS-04) | nothing. It is gated `atLeast(scopeOf(me), 'market')`, which is correct, and is noted below as the one thing a store manager still cannot reach |
+| closing | `mobile/app/(app)/dm/verify.tsx` — the DM's sign-off on a store-day (money totals, gate status, `POST /closing/verify`) | nothing yet. The store's own daily SUBMISSION is a separate PR |
+| scheduling | **nothing** | `mobile/app/(app)/(tabs)/schedule.tsx` — the rostered week, time off, and asking for cover |
+| HR | **nothing** | a separate PR; the roadmap entry is corrected to say so rather than claiming scheduling is still coming |
+
+**No new endpoint, and no second read path.** `GET /storeops/shifts`, `GET /storeops/time-off`,
+`GET /storeops/shift-swaps` and the two POSTs are the same routes the web scheduling pages call. A
+mobile-only route for "which shifts may this person see" would be a second answer free to disagree
+with the first, which is the duplicate defect the build gate forbids.
+
+### STOREOPS-05.2 THE CLASS: a week is a tenant's declaration, never Monday
+
+The class this screen could have joined is the one §COMMCALC-49.10 names — **a tenant's own
+vocabulary with house words defaulted behind it**. A schedule's week start is exactly that shape:
+`storeops.tenants.work_week_start_dow` is declared per org (0 = Monday across the product; one tenant
+here runs **Thursday = 3**), and a phone that assumed Monday would render seven real shifts under the
+wrong seven dates and look entirely plausible doing it. Zero is not the failure mode here; *shifted*
+is, and nothing on the screen would say so.
+
+| the fact | its ONE home |
+| --- | --- |
+| which seven days is this week, for this tenant? | `mobile/src/lib/schedule-week.ts` → `weekOf(startDow, iso?)`. **`startDow` is a REQUIRED argument** — a caller that has not asked the org cannot answer |
+| what did this tenant declare? | `GET /api/v1/core/tenant-settings` → `settings.work_week_start_dow`, read through `mobile/src/api/core.getTenantSettings` — the same endpoint and the same field the web schedule page reads |
+| what if the declaration is unreadable? | `startDowOf` → the HOUSE POLICY (Monday), stated in exactly one place. A policy is what a house default is right for; a tenant's own words are not |
+| the date arithmetic itself | `daterange.addDays` + `period.todayISO`. `schedule-week.ts` adds none of its own |
+
+`schedule-week.ts` is deliberately **not** `daterange.rangeWeek()`: that one is a rolling seven days
+ending today, which is right for a dashboard look-back and wrong for a rota you page through.
+
+**The screen does not render a week at all until the setting resolves.** Showing Monday for a moment
+and then snapping to Thursday would put real shifts under wrong dates on first paint.
+
+### STOREOPS-05.3 A CLIENT-SIDE FILTER IS NOT A PERMISSION
+
+`GET /storeops/shifts` runs `gate_person_rows` (§14w): a rep gets their own week wherever they worked
+it, a manager gets theirs plus the people who work under them. `/time-off` is gated the same way and
+a rep may not read who else is off.
+
+So the screen sends a week and renders what comes back. The **"Just me / My team"** toggle is a VIEW
+over an already-permitted response — it is never the thing keeping anybody's shifts private, and it
+only appears when the response actually contains other people. Nothing is filtered by employee id to
+"hide" it, and no id is ever sent on a read: passing one would let a client ask about somebody else.
+
+### STOREOPS-05.4 WHAT IT REFUSES TO DO
+
+- **It does not edit the rota.** Publishing, assigning and approving stay on the web. The phone files
+  a *request*; `POST /time-off` forces `status = pending` server-side and canonicalises
+  `employee_id` to the business id, so a client cannot mint an approved row or a numerically-keyed one.
+- **A shift with no times renders as itself**, not as `12:00a – 12:00a`. `timeRange` returns `null`
+  rather than inventing midnight, and an impossible hour is refused rather than displayed.
+- **An unreadable response is not an empty week.** `rows()` tolerates both the bare array and
+  `{rows: […]}`, because "you are not rostered" and "we could not read the week" look identical to a
+  rep and only one of them is true.
+- **A person with no linked employee record is told so**, and the request form is disabled — rather
+  than filing a request under no name.
+
+### STOREOPS-05.5 Multi-tenant
+
+`mobile/src/lib/schedule-week.test.ts` (28 checks) covers **all seven** possible declarations, asserts
+that the same Sunday belongs to a *different* week under a Monday tenant and a Thursday tenant, and
+that junk resolves to the house policy and never to today. The screen itself names no tenant, no
+carrier and no store code. There is no literal `0` week-start anywhere on the path: the only Monday
+is `MONDAY` in the one home, reached only when the declaration cannot be read.
+
+### STOREOPS-05.6 What is NOT fixed here, and is reported instead
+
+- **`POST /storeops/time-off` and `POST /storeops/shift-swaps` take no `authorization`** and so do not
+  gate *whose* name a request may be filed under (the reads are gated; the writes are not). This
+  predates the phone — the web pages reach the same routes — and closing it is a policy decision
+  (a manager filing on a rep's behalf is legitimate), so it is REPORTED, not silently changed. The
+  phone sends only the signed-in person's own id.
+- **The store visit and DM closing screens stay DM-scoped.** Both live behind the `dm/` hub's
+  `atLeast(scopeOf(me), 'market')` gate, so a store manager cannot reach either on the phone today. That is the gate working as written, not a bug, and widening it is an entitlement
+  decision rather than a screen change.
+
+
+### §16–18 CROSS-REFERENCES
+
+Depends on: §14w (`gate_person_rows` — whose rows a schedule read may contain), §CORE-07 (who a
+login is), §COMMCALC-49.10 (a tenant's declaration is a required argument, never a default). Feeds:
+§STOREOPS-03 (the schedule time an early clock-in is paid from — the same rota, read on the phone),
+§STOREOPS-04 (the punch the rep makes against the shift this screen shows). Neighbours: §CORE-29
+(which bundle the phone is running — how this screen reaches an installed app at all), §CORE-26 (a
+label a person reads is never an id — the same mobile surface).
+
+No backend change, **no migration**, no new endpoint. CI: the mobile `vitest` suite
+(`mobile/src/lib/schedule-week.test.ts`, 28 checks) and `tsc --noEmit`.
+
+Files: `mobile/app/(app)/(tabs)/schedule.tsx` (**new**), `mobile/src/lib/schedule-week.ts` (**new**),
+`mobile/src/lib/schedule-week.test.ts` (**new**), `mobile/src/api/schedule.ts` (**new**),
+`mobile/src/api/core.ts`, `mobile/src/modules/registry.ts`, `mobile/app/(app)/(tabs)/_layout.tsx`,
+`docs/SYSTEM_DATA_FLOW_INDEX.md`.

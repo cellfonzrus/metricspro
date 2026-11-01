@@ -51,3 +51,17 @@ export function getMe() {
 export function getMyTenants() {
   return api.get<{ tenants: TenantMembership[] }>('/api/v1/core/my-tenants')
 }
+
+// ── The tenant's declared work week ──────────────────────────────────────────────────────────────
+// `GET /core/tenant-settings` is ALREADY the client-reachable home for this declaration — the web
+// schedule page reads `settings.work_week_start_dow` from exactly here. The phone dereferences the
+// same endpoint rather than gaining a route of its own, because "when does this tenant's work week
+// start" answered two ways is two rotas free to disagree (one tenant here runs Thursday).
+export type TenantSettings = {
+  settings?: { work_week_start_dow?: unknown; [k: string]: unknown } | null
+  [k: string]: unknown
+}
+
+export function getTenantSettings() {
+  return api.get<TenantSettings>('/api/v1/core/tenant-settings')
+}

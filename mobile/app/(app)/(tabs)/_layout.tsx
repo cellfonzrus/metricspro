@@ -48,6 +48,10 @@ export default function TabsLayout() {
         options={{ title: 'Time Clock', tabBarIcon: icon('⏱️'), href: can('timeclock') ? undefined : null }}
       />
       <Tabs.Screen
+        name="schedule"
+        options={{ title: 'Schedule', tabBarIcon: icon('🗓️'), href: can('schedule') ? undefined : null }}
+      />
+      <Tabs.Screen
         name="pos"
         options={{ title: 'POS', tabBarIcon: icon('🛒'), href: can('pos') ? undefined : null }}
       />
