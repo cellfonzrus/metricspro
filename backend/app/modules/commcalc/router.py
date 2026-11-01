@@ -43,6 +43,7 @@ from app.modules.pos import device_condition as _cond                 # 2026-10-
 from app.modules.commcalc import accessory_order_drilldown as _aopdd   # 2026-10-29 — that report's drill declaration (§CORE-17.3y; declaration only, pure)
 from app.modules.commcalc import demand_projection as _dp   # 2026-10-29 — THE device velocity/horizon projection + device-line test (§COMMCALC-49; pure)
 from app.modules.commcalc import device_vocabulary as _devvocab   # 2026-10-30 — THE one place to ask which departments an org calls a device (§COMMCALC-49)
+from app.modules.commcalc import plan_workflow as _planwf   # 2026-11-01 — THE "which plan am I on, and what can replace it" workflow (index §COMMCALC-54; pure)
 from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
 from app.modules.commcalc import tender_recon_drilldown as _tender_recon_drilldown   # 2026-10-24 — THE X-report-vs-closing tile drill (index §CORE-17.3a; declaration only, pure)
 from app.modules.asset import device_asset_drilldown as _asset_dd   # 2026-10-25 — THE device-asset family's drill declaration (index §CORE-17.3l; declaration only, pure)
@@ -3980,9 +3981,14 @@ def payout_plans_overview(org_id: str = ORG_ID):
     for c in carriers:
         cid = c.get("id")
         boost = _is_boost(c)
-        cplans  = [p for p in plans if p.get("carrier_id") in (cid, None) and p.get("is_active", True)]
+        # "is this plan live, and does it serve this carrier?" has ONE home — `plan_workflow`
+        # (§COMMCALC-54). This hub, the guided workflow and anything later must read the same
+        # predicate; a private copy here is how the two screens would start disagreeing about
+        # which plan a tenant is on.
+        cplans  = _planwf.live_plans_for_carrier(plans, cid)
         cassign = sum(assign_by_plan.get(p["id"], 0) for p in cplans)
-        cscheds = [s for s in scheds if s.get("carrier_id") in (cid, None) and s.get("is_active", True)]
+        cscheds = [s for s in scheds
+                   if _planwf.plan_serves_carrier(s, cid) and _planwf.plan_is_live(s)]
         if boost:
             pays_via, ready = "boost_rates", True
         elif cassign > 0 or len(cscheds) > 0:
@@ -4002,6 +4008,73 @@ def payout_plans_overview(org_id: str = ORG_ID):
                              "code": default.get("code")} if default else None),
         "carriers": out,
     }
+
+
+# ── INCENTIVE-PLAN WORKFLOW (owner directive 2026-11-01) ─────────────────────────────────────────
+# "When we click on the plan it should show the one which is active and below it should give the
+# option to change the plan ... all of this should be a work flow than random data seen on the
+# screen." Both endpoints are READ-ONLY: the steps are DERIVED by `plan_workflow` (pure, §COMMCALC-54)
+# and the writes stay where they already live — `POST /commission-plans` for a plan,
+# `POST /carrier-template/clone` for a shared carrier's curves. No third write path is created.
+def _workflow_engine(carriers, carrier_id):
+    """Which engine pays this tenant, through the SAME resolver the pay run uses. A carrier lens with
+    its own explicit `engine_mode` (mig 303) answers for itself; otherwise the org-level resolution
+    stands. RULE TWO: no carrier name is consulted here — `_resolve_carrier_mode` owns the legacy
+    name heuristic and this does not duplicate it."""
+    if carrier_id:
+        row = next((c for c in (carriers or []) if str(c.get("id") or "") == str(carrier_id)), None)
+        if row is not None:
+            m = _norm_engine_mode(row.get("engine_mode"))
+            if m is not None:
+                return m
+    return _resolve_carrier_mode(carriers)
+
+
+@router.get("/incentive-plan/workflow")
+def incentive_plan_workflow(carrier_id: str = "", org_id: str = ORG_ID):
+    """THE guided answer to "which incentive plan am I on, and what can replace it?" — step 1 the
+    active plan, step 2 the change action and its options, step 3 what creating one does.
+
+    Read-only. `plan_workflow` holds no tenant identifier and no house default, so every tenant is
+    answered from its own rows and its own engine declaration (project directive 2026-10-30)."""
+    require_org(org_id)
+    client = sb()
+    carriers = _carrier_rows(client, org_id)
+    plans, ready = commission_engine._load_plans(client, org_id)
+    if not ready:
+        return {"ready": False, "engine": None, "steps": [],
+                "note": "Run migration 059_commission_plans.sql to enable incentive plans."}
+    lens = (carrier_id or "").strip() or None
+    try:
+        templates = (template_clone.list_shared_sources(client, org_id) or {}).get("sources") or []
+    except Exception:
+        # a shared template is an OPTION, never a prerequisite: the workflow still works without it.
+        templates = []
+    wf = _planwf.workflow(_workflow_engine(carriers, lens), plans,
+                          templates=templates, carrier_id=lens)
+    wf["ready"] = True
+    wf["carriers"] = [{"id": c.get("id"), "name": c.get("name"), "code": c.get("code"),
+                       "is_default": bool(c.get("is_default"))} for c in carriers]
+    wf["advanced_href"] = "/commcalc/commission-plans"
+    return wf
+
+
+@router.get("/incentive-plan/draft")
+def incentive_plan_draft(option: str, name: str = "", carrier_id: str = "", org_id: str = ORG_ID):
+    """The exact request a chosen option implies: which existing door, and the body for it. WRITES
+    NOTHING — the browser posts the returned body to the returned endpoint, so the money-config
+    payload is assembled in ONE place rather than in TypeScript. An unknown option is refused."""
+    require_org(org_id)
+    client = sb()
+    plans, ready = commission_engine._load_plans(client, org_id)
+    if not ready:
+        raise HTTPException(400, "Run migration 059_commission_plans.sql to enable incentive plans.")
+    try:
+        return _planwf.draft_from_option((option or "").strip(), plans=plans,
+                                         name=(name or ""),
+                                         carrier_id=(carrier_id or "").strip() or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/payout-plans/diagnose")
