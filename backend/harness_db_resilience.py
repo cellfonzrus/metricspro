@@ -1425,7 +1425,15 @@ _all_routes = _flatten_routes(real_app.routes)
 #     + /pos/reports/w9-status               GET   (which certificate lapses when)
 # Both are READS. Each is org-scoped, refuses a store outside the caller's span before reading, and
 # writes nothing: no stored total, statement, GP, commission or tax figure is touched by either.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1828"))
+# Re-pinned 1828 -> 1830 on 2026-11-01 (§COMMCALC-67, the incentive-plan workflow). Verified the
+# house way, NOT by arithmetic: `git diff origin/main -- backend/ | grep -E '^[+-]@router\.'` printed
+# exactly TWO added decorators and NONE removed —
+#     + /commcalc/incentive-plan/workflow    GET   (which plan is active, and what can replace it)
+#     + /commcalc/incentive-plan/draft       GET   (which existing door a chosen option implies)
+# Both are READS. Each is org-scoped through `require_org`, derives its answer in a pure module that
+# holds no org id, and writes nothing: the plan save and the carrier-template cloner remain the only
+# writers, so no stored total, statement, GP, commission or tax figure is touched by either.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1830"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

@@ -14,7 +14,9 @@ WHAT IT PROMISES (and nothing beyond it — an unimplemented verb raises rather 
   • `.schema(name).table(name)` keys a relation as "schema.table"; bare `.table()` means `public`.
   • filters `.eq .neq .in_ .gte .lte .gt .lt .is_` chain and AND together, in any order.
   • `.order(col, desc=) .limit(n) .range(a, b) .single() .maybe_single()`.
-  • writes `.insert .upsert .update .delete`, each returning the affected rows.
+  • writes `.insert .upsert .update .delete`, each returning the affected rows. An inserted row
+    with no `id` is given one, because every `id` column in this schema defaults to
+    `gen_random_uuid()` and the save paths read the new key back out of the response.
   • **a `.delete()` or `.update()` with NO filter is REFUSED** (OutboundWriteRefused). A rebuild
     that lost its filter emptied 11,000 live payable rows once (index §PAYABLES-01); the double will
     not let a test certify that shape as working.
@@ -25,6 +27,7 @@ Stdlib only. No network, no credentials, no postgrest import.
 from __future__ import annotations
 
 import copy
+import uuid as _uuid
 from typing import Any, Dict, Iterable, List, Optional
 
 
@@ -230,6 +233,14 @@ class _Query:
                         existing.update(rec)
                         written.append(copy.deepcopy(existing))
                         continue
+                # POSTGRES GENERATES THE KEY, and a double that does not is a double that lies
+                # about the shape of a create. Every `id` column in this schema carries
+                # `default gen_random_uuid()`, and the backend's save paths READ the id back out of
+                # the insert response (or out of a follow-up select) to attach children to it. A
+                # record inserted without one therefore gets one here — modelling the column
+                # default, not guessing a verb. An `id` the caller supplied is left exactly as it is.
+                if "id" not in rec:
+                    rec["id"] = str(_uuid.uuid4())
                 rows.append(rec)
                 written.append(copy.deepcopy(rec))
             return FakeResponse(written, count=len(written))

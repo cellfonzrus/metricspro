@@ -43588,3 +43588,87 @@ counts as a use, never as an excuse. Pure and stdlib-only, so a harness imports 
 
 Each of the five keeps its own armed controls (a module-level map is a declaration, a `.table(...)`
 call is not, a map built inside a function is not), so the shared answer cannot go quietly wrong.
+
+## §COMMCALC-67. "WHICH PLAN AM I ON?" IS A QUESTION WITH ONE ANSWER AND THREE STEPS (owner report 2026-11-01)
+
+Owner, verbatim: *"the plan which is active in incentive payout when you click on it it takes you to
+the page which has all kinds of Incentive structure listed which becomes confusing even to me ... When
+we click on the plan it should show the one which is active and below it should give the option to
+change the plan and when you click on change the plan it should show what the available options are
+and then clicking on the available options the user should be able to create a new plan — all of this
+should be a work flow than random data seen on the screen"*.
+
+**THE CLASS, NOT THE SCREEN.** The confusing page is a symptom. The general fact that was wrong is that
+**nothing in the platform answered "which plan am I on?"** — three surfaces showed the operator the raw
+plan table and left the question to them: `router.payout_plans_overview` (counts live plans per
+carrier, and owned the live/belongs predicate privately), the plan editor
+`/commcalc/commission-plans` (1,942 lines: every plan beside the pay gate, the dedup audit, the
+exclusions, the setup fee, the coverage wizard and the MTD panel), and `payout_plans_diagnose` (lists
+them a third time). Two paths answering one question is the duplicate defect the house rules forbid;
+three is the same defect wearing a hat.
+
+### The one home
+`backend/app/modules/commcalc/plan_workflow.py` — PURE (no DB, no client, no org id, no tenant or
+carrier name). It owns:
+
+| Fact | Function |
+|---|---|
+| is this plan switched on (an ABSENT `is_active` is live — the column defaults TRUE) | `plan_is_live` |
+| does it apply under this carrier lens (NULL `carrier_id` = the tenant's catch-all) | `plan_serves_carrier` / `live_plans_for_carrier` |
+| **THE plan this tenant pays by right now** — live, in scope AND assigned to somebody | `active_plan` |
+| the three ordered steps the screen renders | `active_step` / `change_step` / `create_step` / `workflow` |
+| every starting point a new plan can be authored from | `options` (`OPTION_KINDS`) |
+| which EXISTING door a chosen option implies, and the body for it | `draft_from_option` |
+
+**AN UNASSIGNED PLAN IS NOT WHAT THE TENANT PAYS.** `active_plan` requires an assignment, because a
+complete-looking plan nobody is assigned to pays $0 — presenting it as active is the plausible-looking
+answer that hides this whole class. A tenant in that state is TOLD it pays nobody.
+
+### Dereferenced, not copied
+`router.payout_plans_overview` now reads `live_plans_for_carrier` / `plan_serves_carrier` /
+`plan_is_live` instead of its own `carrier_id in (cid, None) and is_active` test, so the hub and the
+workflow can never disagree about which plan a tenant is on. Which ENGINE pays the tenant stays with
+`router._resolve_carrier_mode` (the resolver the pay run uses); `_workflow_engine` only lets a carrier
+with its own explicit `engine_mode` (mig 303) answer for itself, and re-implements no name heuristic.
+
+### No third write path, and nothing it creates can move pay
+`GET /commcalc/incentive-plan/workflow` and `GET /commcalc/incentive-plan/draft` are READS. The draft
+names the door that already existed — `POST /commission-plans` for a plan, `POST
+/carrier-template/clone` (§mig 221, `template_clone`) for a shared carrier's curves — and the browser
+posts it unchanged, so the money-config body is never assembled in TypeScript. **Every plan this
+workflow creates is `is_active: false` with `assignments: []`**, carrying the source plan's rules and
+tiers but none of their identity: pay moves only when the operator assigns it and recalculates (which
+the §COMMCALC-41.9 hook then queues). No migration, no new table, no new writer.
+
+### Every tenant (project directive 2026-10-30)
+`engine` is a REQUIRED positional argument on every entry point — the one place a house default is
+BANNED, because which engine pays you is a tenant's own declaration, not a policy. A Boost-engine
+tenant (zero `commission_plan` rows) is told it is paid by the built-in KPI-tier engine and every
+option it is offered carries the caveat that a new plan pays nothing until the carrier's engine is
+switched. Nothing declared means nothing identified, and the surface says so.
+
+### The screen
+`frontend/src/app/(platform)/commcalc/incentive-plan/page.tsx` (`/commcalc/incentive-plan`, nav
+"Your Incentive Plan", tileOnly, so the `/hub/incentive-payout-plans` dashboard tiles it). Three
+steps, rendered from the payload: it holds no option kind, no step list, no headline and no endpoint of
+its own. The payout hub's carrier cards and its toolbar now land here; the full settings page is one
+click away as **All Plan Settings (advanced)** and is otherwise unchanged.
+
+### The locks
+`backend/harness_plan_workflow_lock.py` (38 checks, CI job `carrier-vocab-guard`): the hub
+dereferences the predicate and keeps no private copy; the module imports nothing from `app`, writes
+nothing and names exactly two endpoints; `engine` has no default; every draft is inactive and
+unassigned (behavioural); the page spells no option kind or endpoint; an unknown option, a nameless
+plan and an undeclared engine are REFUSED and the endpoint turns that into a 400. Five negative
+controls. Tests: `backend/tests/unit/test_plan_workflow.py` (25) +
+`backend/tests/integration/test_incentive_plan_workflow_endpoint.py` (20, parametrised over all three
+tenants, including that one tenant's plans never appear in another's options). The database double now
+gives an inserted row an `id` (Postgres does; `tests/unit/test_supabase_double.py` pins it).
+
+**Cross-refs:** §6p (`payout_structure` — the employee-facing rates document, the one home this
+workflow links to rather than restating) · §COMMCALC-41.9 (a plan edit restates the months it paid —
+what happens AFTER this workflow's plan is assigned) · §COMMCALC-06.2 (a mechanism an operator cannot
+reach from the screen is §19.18 — the reason this is a screen and not an endpoint) · §19.18 (one fact,
+one home, dereferenced) · §mig 221 / `template_clone` (the shared carrier template door) · §CORE-27
+(the standard filters + Send bar belong to a REPORT; this is a configuration workflow and carries the
+carrier lens instead).
