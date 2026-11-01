@@ -264,9 +264,16 @@ def sweep_relation(client_for, entry, *, now=None, page=PAGE, max_pages=50):
                 break
             report["scanned"] += len(rows)
             last_id = str(rows[-1].get("id") or last_id)
-            for row, update in plan_purge(rows, entry, now=now):
-                client.table(entry["table"]).update(update).eq("id", row["id"]).execute()
-                report["cleared"] += 1
+            plan = plan_purge(rows, entry, now=now)
+            if plan:
+                # ONE round trip per page, not one per row. Every due row takes the IDENTICAL update
+                # (each coordinate column to NULL), so a per-row loop would buy nothing and would
+                # make the cost of honouring the promise scale with the backlog — which is how a
+                # retention sweep ends up being switched off. Pinned by
+                # `harness_round_trip_ratchet.py` C1, which fails the build on a per-item query.
+                ids = [r["id"] for r, _ in plan]
+                client.table(entry["table"]).update(plan[0][1]).in_("id", ids).execute()
+                report["cleared"] += len(ids)
         else:
             # The cap was reached with a full last page: there is more to do, and a bounded sweep
             # SAYS so rather than leaving a half-honoured promise looking finished.

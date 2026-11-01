@@ -263,3 +263,53 @@ def test_W4_the_store_visit_writer_stamps_it_too(monkeypatch):
 def test_W5_the_marketing_checkin_writer_already_stamped_and_now_shares_the_arithmetic():
     from app.modules.marketing import event_logic as L
     assert L.purge_after_date(NOW, 45) == R.purge_after(now=NOW, days=45)
+
+
+# ── R. one round trip per page, not one per row ──────────────────────────────────────────────────
+class _CountingSchema:
+    """Wraps the fake's schema client and counts how many UPDATE round trips the sweep makes."""
+
+    def __init__(self, inner, counter):
+        self._inner, self._counter = inner, counter
+
+    def table(self, name):
+        return _CountingTable(self._inner.table(name), self._counter)
+
+
+class _CountingTable:
+    def __init__(self, inner, counter):
+        self._inner, self._counter = inner, counter
+
+    def select(self, *a, **k):
+        return self._inner.select(*a, **k)
+
+    def update(self, *a, **k):
+        self._counter.append(1)
+        return self._inner.update(*a, **k)
+
+
+def test_R1_a_whole_page_of_due_rows_is_cleared_in_ONE_update(db):
+    """A per-row loop makes the cost of honouring the promise scale with the backlog, which is how a
+    retention sweep ends up switched off. Pinned here AND by harness_round_trip_ratchet C1."""
+    _seed(db, [_punch(HOUSE, f"p{i}", "2026-05-01") for i in range(9)])
+    writes = []
+    rep = R.sweep_relation(lambda e: _CountingSchema(db.schema(e["schema"]), writes),
+                           PUNCH, now=NOW, page=10)
+    assert rep["cleared"] == 9
+    assert len(writes) == 1, f"{len(writes)} update round trips for one page of 9 rows"
+
+
+def test_R2_a_page_with_nothing_due_makes_no_write_at_all(db):
+    _seed(db, [_punch(HOUSE, "p1", "2027-05-01")])
+    writes = []
+    R.sweep_relation(lambda e: _CountingSchema(db.schema(e["schema"]), writes), PUNCH, now=NOW)
+    assert writes == []
+
+
+def test_R3_three_pages_make_three_writes_not_nine(db):
+    _seed(db, [_punch(HOUSE, f"p{i}", "2026-05-01") for i in range(9)])
+    writes = []
+    rep = R.sweep_relation(lambda e: _CountingSchema(db.schema(e["schema"]), writes),
+                           PUNCH, now=NOW, page=3)
+    assert rep["cleared"] == 9
+    assert len(writes) == 3

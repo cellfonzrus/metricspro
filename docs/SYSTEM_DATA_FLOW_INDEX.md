@@ -43901,6 +43901,13 @@ before it ever ran. It pages by KEYSET on `id` now, and `harness_geo_retention_l
 if the keyset is removed. The general lesson: a sweep whose filter does not exclude the work it has
 already done cannot use "this page changed nothing" as its stopping condition.
 
+Caught by the round-trip ratchet in the same PR: the sweep cleared one row per `UPDATE`. Every due
+row takes the IDENTICAL update (each coordinate column to NULL), so a per-row loop bought nothing and
+made the cost of honouring the promise scale with the backlog — which is how a retention sweep ends
+up switched off. It is now ONE bulk update per page (`.in_("id", ids)`), pinned by
+`harness_round_trip_ratchet.py` C1 (the pin stayed at 101 and was never relaxed) and by `test_R1`/
+`test_R3`, which count the write round trips rather than trusting the shape.
+
 ### CORE-31.6 Multi-tenant
 
 Each row is stamped from its OWN tenant's declared window, so one tenant's policy can never decide
