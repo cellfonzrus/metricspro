@@ -11,7 +11,14 @@ import type { MePayload } from '@/api/core'
 // provisioned user; fine-grained actions (PII reveal, void) still gate at the action. When the
 // backend `modules.<key>` entitlement is seeded, tighten `visible` to check it — the UI is already
 // wired to respect it.
-export type ModuleKey = 'timeclock' | 'schedule' | 'closing' | 'pos' | 'crm' | 'earnings'
+export type ModuleKey =
+  | 'timeclock'
+  | 'schedule'
+  | 'closing'
+  | 'hr'
+  | 'pos'
+  | 'crm'
+  | 'earnings'
 
 export type ModuleDef = {
   key: ModuleKey
@@ -71,6 +78,20 @@ export const MODULES: ModuleDef[] = [
     entitlementKey: 'modules.closing',
   },
   {
+    // The rep's own HR RECORD — paperwork, documents, details. Their PAY and performance record is
+    // app/(app)/dashboards/me.tsx and stays there; these are two different questions about one
+    // person, not one screen with two tabs.
+    key: 'hr',
+    title: 'My HR',
+    short: 'HR',
+    route: '/hr',
+    icon: '🧾',
+    description: 'Your paperwork, documents and details.',
+    primaryTab: false,
+    visible: provisioned,
+    entitlementKey: 'modules.hr',
+  },
+  {
     key: 'pos',
     title: 'Point of Sale',
     short: 'POS',
@@ -115,9 +136,10 @@ export const MODULES: ModuleDef[] = [
 export type RoadmapModule = { id: string; title: string; icon: string; description: string }
 export const ROADMAP_MODULES: RoadmapModule[] = [
   { id: 'commcalc', title: 'Commission Admin', icon: '📊', description: 'CommCalc reports, payouts & rates' },
-  // Shifts, time off and cover requests SHIPPED as the `schedule` module above; what is still only
-  // on the web is the HR record (my pay, documents, total comp) and editing the rota itself.
-  { id: 'hr', title: 'HR & My Record', icon: '🧾', description: 'Your pay, documents and details' },
+  // Shifts, time off and cover requests shipped as the `schedule` module above, and the rep's own HR
+  // record as `hr`. What is still only on the web is EDITING the rota (publish, assign, approve) and
+  // the HR-SIDE screens — the employee database, letters, payroll expenses and compliance review.
+  { id: 'storeops-admin', title: 'Rota & HR Admin', icon: '🗂️', description: 'Publish shifts, employee database, letters' },
   { id: 'assets', title: 'Assets & Inventory', icon: '📦', description: 'Phone lending, transfers' },
 ]
 

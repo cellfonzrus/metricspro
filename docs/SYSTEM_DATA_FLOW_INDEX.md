@@ -141,6 +141,7 @@ Primary code homes:
 | CORE-20 | **A request path is not evidence of which route it reached** | "Act as a security agent and find the vulnerability in the code. Which paths does the platform let through without a login, what declares that list, and what stops a route the list never meant to name from satisfying it?" |
 | CLOSING-02 | **A declared category names what in the sales feed should agree with it** | "Add a field in as no of edge for total and no of financicing in thr daily closing for all employees to declare along with the $amount of edge and acima as they get paid for each transcoding they do, this would then be checked with our system if our system is capturing the sales as declared by the sales rep." Which half of that already existed as config, what had no home at all, and what stops the next category from being checked against a number nobody measured? |
 | CLOSING-03 | **A closing form asks for what the TENANT declared, on the phone too** | "Make scheduling and hr with store vista and closing live in the app also" — the store's own daily closing existed only on the web; the phone had the DM's sign-off and nothing to sign off. Every field on that form is a tenant declaration with real money on it, so what stops a phone build from showing one tenant's tender names to another, or routing a per-person money figure into a store-level tally? |
+| STOREOPS-06 | **A sensitive answer has three states, and a blank box is not one of them** | "Make scheduling and hr with store vista and closing live in the app also" — a rep had no phone surface for their own HR record at all. The server deliberately never echoes a sensitive stored answer back, so on the phone a blank box means *we are not telling you*, not *unanswered*: who owns that distinction, and what stops a screen from nagging a rep about a form they already filled — or letting a required field through unfilled? |
 | CORE-21 | **An in-process cache keyed by something a client can mint is bounded by construction** | "Simulate a thousand users and see what breaks. What does the platform keep in each worker's memory while they are signed in, what decides when an entry leaves, and what fails the build the day a new cache ships without a bound?" |
 | CORE-23 | **One component decides how a date is picked, and the calendar opens on a click** | "for payroll hours approval the calendor should open up instead of enetring it manuallu" — said of a field that already HAD a calendar, reachable only from a glyph a few pixels wide at its right-hand edge, so a click anywhere else put a caret in mm/dd/yyyy and the date got typed digit by digit, on all 168 of them. When is a control's default behaviour the defect, and what stops the 169th from bringing it back? |
 | CORE-24 | **A total names the rows it is over — filtered and unfiltered, from one arithmetic** | "need the total below the hours on the time clock when filtered and without filter" — said of a column whose total lived in a badge above the table and only ever counted the rows a filter had left visible, without saying so, on every report in the product. What is a total of an unnamed population worth, and what does "without filter" honestly mean on a screen whose date range is a server query? |
@@ -26134,6 +26135,7 @@ status word rather than a blank that reads as nil.
 | 12 | closing |
 | 13 | storeops |
 | 14 | storeops, hr |
+| STOREOPS-06 | storeops, hr |
 | 15z | commcalc |
 | 15v | storeops |
 | 16 | core |
@@ -44113,3 +44115,89 @@ No backend change, **no migration**, no new endpoint. CI: the mobile `vitest` su
 Files: `mobile/app/(app)/closing/submit.tsx` (**new**), `mobile/src/lib/closing-submit.ts` (**new**),
 `mobile/src/lib/closing-submit.test.ts` (**new**), `mobile/src/api/closing-submit.ts` (**new**),
 `mobile/src/modules/registry.ts`, `docs/SYSTEM_DATA_FLOW_INDEX.md`.
+
+## §STOREOPS-06. A SENSITIVE ANSWER HAS THREE STATES, AND A BLANK BOX IS NOT ONE OF THEM (owner ask 2026-11-01)
+
+**What he said:**
+
+> *"Make scheduling and hr with store vista and closing live in the app also"*
+
+### STOREOPS-06.1 THE DUPLICATE CHECK, and how much of "HR" was already there
+
+| the question | what was there | what this adds |
+| --- | --- | --- |
+| a rep's PAY and performance record | `mobile/app/(app)/dashboards/me.tsx` — commission, tier, KPIs, hours vs pay, accessory target, report card, chargebacks, upcoming shifts, payout trend, over `GET /core/employee-dashboard` (the same read the web `/employee` page uses) | **nothing.** Half of "HR" on a phone already existed and stays where it is |
+| a rep's HR RECORD — paperwork, documents, details | **nothing on the phone.** The `/hr/onboarding/me*` family existed and was gated correctly; there was simply no native surface | `mobile/app/(app)/hr/index.tsx` |
+| which questions a rep is asked | `onboarding_intake_field` per org, trimmed for a portal by `_public_intake_fields` | nothing — dereferenced |
+| may this rep delete this file? | `_employee_can_delete_document`, computed once server-side *"so every caller renders the identical rule instead of re-deriving it"* (mig `402`) | nothing — the flag is READ |
+| multipart upload from the phone | **nothing.** `api/client.ts` did JSON and raw text only | `apiUpload`, added to that same client so an upload carries the same bearer token, `x-active-org` and 2FA header as every other request |
+
+**No new endpoint, no backend change, no migration.**
+
+### STOREOPS-06.2 THE CLASS: a two-state read of a three-state fact
+
+`GET /hr/onboarding/me` deliberately **never echoes a sensitive stored value back** — the bundle's
+own comment says so, and that is correct. The consequence is the defect waiting to be written: for a
+sensitive field, **blank does not mean unanswered**. It means *not being shown*.
+
+- A screen that reads blank as MISSING nags a rep forever about a form they already filled.
+- A screen that reads blank as ANSWERED lets a required field through unfilled.
+- Both render perfectly plausibly, and neither says anything is wrong.
+
+| the fact | its ONE home |
+| --- | --- |
+| which answers are required, and which of those can even be judged? | `mobile/src/lib/hr-intake.missingRequired` → `{missing, cannotTell}`. A required SENSITIVE field lands in `cannotTell`, never in `missing` |
+| what may a box show? | `valueFor` — a sensitive field renders EMPTY whatever arrived. Defence in depth: a value on screen is a value in a screenshot |
+| which questions exist at all? | `sectionsOf(declared fields)` — the tenant's keys, labels, sections and order. **No field list in the code, not even a fallback**; nothing declared means no form, and the screen says so |
+| whose move is each item? | `taskSummary` — `submitted` counts as waiting on HR, not as outstanding, because telling a rep to redo what they already sent is the same class of lie |
+| may this file be deleted? | `canDeleteDocument` — reads the server's flag and looks at nothing else. An ABSENT flag is NO (§66 allowlist posture) |
+
+A source check in the tests asserts `canDeleteDocument` never mentions `status`, `uploaded_role` or
+`verified` — i.e. that it cannot have quietly re-derived the server's rule.
+
+### STOREOPS-06.3 WHAT IT REFUSES TO CONCLUDE
+
+- **A status this version has never heard of is not counted as done.** It is reported on the card
+  (`unknown`) with "check with HR rather than assuming". The alternative — folding it into *done* —
+  would tell a rep their paperwork is finished when nobody knows that.
+- **An unset work state is named as the reason the checklist looks short.** State tax forms appear
+  only once `work_state` is set, so an unset state produces a plausible, shorter list.
+- **No profile is "no record is linked to this login"**, not an empty record.
+- **No declared checklist is "your company has not set this up"**, not "you are all done".
+- **A blank is never resent on save.** Only what the rep typed this time is sent, because resending
+  a blank for a sensitive field would wipe an answer the server declined to show us.
+- **A form that must be signed says the phone cannot sign it yet**, rather than appearing actionable.
+
+### STOREOPS-06.4 It reads only the `/me` routes, and that is a security property
+
+`GET /hr/onboarding/employee/{employee_id}` is the HR-side read of the same record. It **takes no
+`authorization` parameter at all** and returns the untrimmed payload. A phone screen built on it
+would let anyone signed in read somebody else's record by knowing an employee id. The `/me` family
+resolves the person from the TOKEN (`_me_from_token`), so there is no id to pass and nothing to get
+wrong. **The HR-side route's missing gate is REPORTED here, not changed** — it predates this and the
+web nav restricts who reaches it, but the gap is real and belongs to whoever closes it deliberately.
+
+### STOREOPS-06.5 Multi-tenant
+
+`mobile/src/lib/hr-intake.test.ts` (20 checks) builds a declaration per case rather than asserting
+against any tenant's field list: a declared section order is kept, a field with no section still gets
+a home, a field with no label is shown by its key rather than a prettified guess, a zero counts as an
+answer, whitespace does not, and no declaration means nothing is required.
+
+### §16–18 CROSS-REFERENCES
+
+Depends on: §14 (the storeops/HR module the record lives in), mig `077` (the intake fields), mig
+`082` (fill-and-sign + returned-for-corrections), mig `401` (mandatory / work-auth), mig `402` (the
+multi-file list and the delete rule), §CORE-07 (who a login is). Feeds: nothing — it is a leaf
+surface. Neighbours: §STOREOPS-05 and §CLOSING-03 (the two sibling phone surfaces shipped the same
+day), §CORE-26 (a label a person reads is never an id — the same "do not invent a label" rule),
+§CORE-29 (which bundle the phone is running).
+
+No backend change, **no migration**, no new endpoint. CI: the mobile `vitest` suite
+(`mobile/src/lib/hr-intake.test.ts`, 20 checks) and `tsc --noEmit`.
+
+Files: `mobile/app/(app)/hr/index.tsx` (**new**), `mobile/src/lib/hr-intake.ts` (**new**),
+`mobile/src/lib/hr-intake.test.ts` (**new**), `mobile/src/api/hr.ts` (**new**),
+`mobile/src/api/client.ts` (`apiUpload`), `mobile/src/modules/registry.ts`,
+`docs/SYSTEM_DATA_FLOW_INDEX.md`.
+
