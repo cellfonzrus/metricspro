@@ -40,7 +40,7 @@ const TYPE_LABEL: Record<string, string> = {
 const TYPE_COLOR: Record<string, string> = {
   no_show: '#dc2626', covered_by_other: '#b45309', unscheduled: '#7c3aed',
   late: '#d97706', left_early: '#d97706', late_and_left_early: '#d97706',
-  off_site_clock_in: '#0e7490', off_site_clock_out: '#be123c',
+  off_site_clock_in: 'var(--c-bg-0891b2)', off_site_clock_out: 'var(--c-bg-b91c1c)',
 }
 function TypeBadge({ type, excused }: { type: string; excused?: boolean }) {
   return (
