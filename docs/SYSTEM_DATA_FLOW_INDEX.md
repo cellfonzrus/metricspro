@@ -196,6 +196,7 @@ Primary code homes:
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
 | STOREOPS-04 | **A punch says where it was made, and an off-site one reaches the board management already reads** | "the sales reps when they log in should capture the gos location so they are not clocking out at their homes and the geolocation when they clock out from somewhere else than their usual location which should match the store address should be reported as flag to the management" — the clock-IN had captured a fix since mig 045 and the clock-OUT captured nothing at all, the platform's one geofence decision had never judged a punch, and no store had coordinates to judge one against. Who owns "was this person at the store this record is for", for the clock-in, the clock-out and the DM store visit alike — and what stops "we could not tell" from being read as "they were not there"?
+| CORE-31 | **A retention window that deletes nothing is a promise, not a policy** | Found by the security pass §STOREOPS-04 required before going live: that feature shipped a 180-day GPS retention setting and nothing deleted anything — and event check-in GPS had carried the SAME hole since mig 986, declared `unmonitored` on the control box. Who owns "how long may we keep where somebody was", for every relation that stores it, and what stops a purge from taking the flag away with the coordinates? |
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
@@ -7182,6 +7183,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - `storeops.employees.pay_from_schedule` (mig `1073`) — THE per-employee tick box the owner asked for, next to that employee's name. **NULLABLE on purpose**: NULL = use the org's `payroll_hours_basis_config.pay_from_schedule_default` (seeded TRUE), so a database that has not run 1073 behaves exactly as it does today and nobody stops being paid on apply. Read in ONE place, `storeops/payroll_hours_basis.pay_from_schedule`; a flip writes `storeops.payroll_change_log` with `entry_point = 'pay_from_schedule_change'` (§14y).
 - `storeops.payroll_hours_basis_config.clocked_basis_effective_from` (mig `1076`, date, **NULLABLE**) — the date on and after which this org's `hours_basis_mode` applies (owner ruling 2026-10-12: *"Payroll from clack in should be from Oct 4 th onwards which would be the new cycle"*). A business date STRICTLY BEFORE it resolves exactly as `schedule_fallback` would — with the whole clocked-only switch restored to the house default, `pay_from_schedule_default` and the per-employee tick box included — so recomputing a closed month restates nothing. **NULL = NO FLOOR**, the shipped value for every org, so nothing moves on apply. Read in ONE place, `payroll_hours_basis.effective_from` / `day_is_before_floor` / `config_for_day`; **no date literal exists in application code** and `harness_payroll_hours_basis_lock.py` §H6 fails the build if one appears (§14y.1).
 - `storeops.payroll_hours_basis_config` (mig `1073`, org_id PK) — the per-org knobs for BOTH §14y and §14z: one row, one feature. `hours_basis_mode` (`schedule_fallback` = today / `clocked_only`), `pay_from_schedule_default`, `count_auto_clockout_punches`, `count_open_punches`, `count_manual_hours`, `min_punch_coverage_pct`, `interlock_refuses`, the four `*_enabled` switches, `ask_weekday`/`gate_weekday`/`run_weekday` (0 = Monday, the convention `shift_templates.weekday` already uses), `variance_tolerance_hours`, `clock_source_rule` + `clock_agreement_tolerance_hours` + `clock_feed_is_pay_source` (the owner's 2026-10-10 ruling), and the feed's shape arrays `payable_punch_types` / `non_shift_logins` / `gated_roles` / `gate_exempt_logins` — the only tenant-specific strings in the package, and they are ROWS (RULE TWO). Read in ONE place per half: `payroll_hours_basis.load_config` / `clock_variance.load_config`, over the SAME table.
+- `storeops.timelog.geo_purge_after_date` / `storeops.store_visits.geo_purge_after_date` (mig `1113`) — the GPS retention COMMITMENT, stamped at write time from the tenant's own `punch_geo_retention_days` so the promise lives on the row rather than in a job somebody has to find. NULL means the row predates the stamp: REPORTED as `no_retention_stamp` and never purged on a guess. The sweep clears the COORDINATES and keeps the verdict and the distance, so honouring the promise never changes a flag, a report or an export. One home `core/geo_retention.py`, locked by `harness_geo_retention_lock.py` (§CORE-31).
+- `marketing.marketing_event_checkin.purge_after_date` (mig `986`, swept from `1113`) — the SAME commitment under its own older column spelling, kept because the column is already in production data. It carried the identical hole (declared `unmonitored` on the control box, "no purge job runs") until the §CORE-31 sweep covered it; it is one registry entry, not a second mechanism (§23.5, §CORE-31).
 - `storeops.raw_clock_punch` (mig `1073`) — the B2B clock in / clock out report **as a CLAIM about a store-day**. Written only by `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) / the email sweep, through `_ingest_mapped_df` → `storeops/clock_feed.landing_rows`. Keeps the raw store and employee spellings, the LOCAL stamps **and** their UTC conversion, the file's own declared decimal, and `excluded` naming why a row is not a payable punch. **NEVER writes `storeops.timelog` or `shifts.actual_hours`.** Unique on (org, store_raw, employee_raw, business_date, clock_in_local), so a re-pull restates a day instead of duplicating it. Data-date column `business_date`, freshness column `arrived_at` (§14z).
 - `storeops.clock_variance_correction` (mig `1073`) — what a HUMAN decided about one clock variance, so "all clear" is an assertion by a named person and not an absence of rows. `resolution` ∈ `corrected` / `accepted_ours` / `accepted_feed`, plus the DM's per-row `override_hours` / `override_reason` / `override_by` / `override_at`, which OUT-RANK the org's `clock_source_rule`. A CHECK constraint refuses an override without a reason and a name, so no endpoint or hand-written UPDATE can land a bare number on a pay row (§14z).
 - `storeops.clock_feed_login_link` (mig `1073`) — which B2B login is which employee. **Only `status = 'approved'` binds** (`storeops/payroll_identity.match_is_binding`); a name-token match is a `proposed` row for a human to approve and NEVER an attribution, and a `rejected` row is a human saying "not this person", which is never re-proposed (§14z).
@@ -7451,6 +7454,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `POST /storeops/timeclock/clock-in` · `POST /storeops/timeclock/clock-out` | `storeops/router.py` (`_punch_geo_columns` → `core/store_geofence.evaluate_presence`) | WHERE a punch was made, judged against that punch's OWN store (never the rep's home store — a floater ends their shift where they worked it) and stored beside it. The clock-out carried NO location at all before 2026-11-01. **Never refuses a punch** on its location. Gated on `_punch_geo_present` so an un-migrated database behaves exactly as today (§STOREOPS-04) |
 | `GET /storeops/timeclock/geo-config` · `PUT …` | `storeops/router.py` → `core/store_geofence.resolve_config` | the tenant's punch-geofence policy, read and written through the SAME resolver the judging path uses, so a junk payload cannot write a fence the judging code would then obey. Manager/admin only (§STOREOPS-04) |
 | `GET /storeops/stores/geo-pins` · `PUT /storeops/stores/{store_code}/geo-pin` | `storeops/router.py` → `core/store_geofence.store_pin` | declaring where a store is, and which stores are NOT declared. Audited (`geo_pinned_by`/`geo_pinned_at`), org-scoped by construction (another tenant's store is a 404, never a pin), store code matched case-folded through `_norm_store` because `'b-1115'` once created a phantom store holding a day's money, and half a pin is a 400 rather than a store on the prime meridian (§STOREOPS-04) |
+| `POST /core/location-fixes/prune/run-due` | `core/router.py` → `core/geo_retention.sweep_all` | THE GPS retention sweep for every relation that stores where a person was. Clears COORDINATES, keeps the verdict and the distance. Run-secret guarded with a constant-time compare, platform-wide (a scheduler job honouring each tenant's own window, never a tenant request), keyset-paged and bounded, `dry_run` reports before anything is irreversible, and it degrades to `ok: false` naming the migration rather than 500ing the scheduler (§CORE-31) |
+| `GET /core/location-fixes/retention` | `core/router.py` → `core/geo_retention.retention_summary` | What this tenant holds, what is due, and what carries no commitment at all — the measurable replacement for the control box's `unmonitored` declaration. Super-admin; COUNTS ONLY, never a coordinate (§CORE-31) |
 | `GET /storeops/timeclock/attendance-exceptions` (the `geo` block + `off_site_clock_in` / `off_site_clock_out` rows) | `storeops/attendance_exceptions.compute_attendance_exceptions` pass 3 → `core/store_geofence.punch_off_site_flags` / `punch_geo_coverage` | an off-site punch reaching management, on the board they ALREADY review — not a second report nobody opens. One row per END of the punch. The row carries the DISTANCE and never the coordinates (§23.5). The `geo` block says how many stores are pinned and how many punches could be judged, so zero flags cannot be mistaken for a clean result (§STOREOPS-04) |
 | `GET /commcalc/sales-comparison` | `commcalc/sales_comparison.build` + `expenses_effective.effective_series` / `totals_by_store` | period-over-period change per item sold in **units AND dollars**, plus the month's **store expenses** per store on the same two windows — reported beside the sales and never inside them (§COMMCALC-18); the tile row is SENDABLE through `frontend/src/lib/tile-snapshot.tileSnapshotSheet` + the one sender `SendReportButton`, and a change between two copies of ONE carried expense sheet is withheld as `change_measured: false` by `sales_comparison.expense_change_measured` rather than printed as ± 0% (§COMMCALC-19); a CARRIED month inherits the rent and never the platform's own labour — salary and rep commission come from that month's own actuals through `commcalc/labour_actuals`, with `labour_measured` saying when a month's payroll could not be read (§COMMCALC-23). **DRILL-DOWN §CORE-17.3r:** every per-item and overall figure opens to the rows it was folded from, and THE TWO WINDOWS OPEN SEPARATELY naming their own provenance off each read's OWN meta, because a comparison window is a different period and the union may have answered out of different tables for it (§CORE-17.3n). THREE row lists, therefore three catalogues — the store-and-item rows, the per-store summary and the expense rows, because an expense is not an item sold. Every `Change` and `Change %` gets NO panel (subtracted at the TOTAL, §CORE-17.3k, and both sides drill) and neither do the expense line's unit columns, which the producer pins at 0 because an expense has no unit. Server-folded: the pickers are query parameters. Declaration `commcalc/sales_margin_drilldown.py` (`comparison_drilldowns`), proof `harness_batch18_drilldown.py` §D |
 | `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) · the email sweep | `commcalc/router.py:_ingest_mapped_df` post-step (d) → `storeops/clock_feed.normalize` | the ONLY way the B2B clock report enters the system. A file whose rows do not tie to its own trailer total is REJECTED with both numbers, rather than landed short (§14z) |
@@ -7821,6 +7826,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | --- | --- | --- |
 | **Was this punch made at the store it is for?** | ONE reported position vs the store's DECLARED pin, judged over the interval [distance − accuracy, distance + accuracy] against the tenant's (or the store's own) radius | `core/store_geofence.evaluate_presence` → `core/geo.evaluate_checkin` — THE one decision, for the clock-in, the clock-out and the DM store visit alike. No pin / no fix / a fix too coarse → an `unverified_*` with `within_geofence = NULL`, which is never "they were not there". Lock: `harness_store_geofence_lock.py` (§STOREOPS-04) |
 | **Is this stored verdict a violation?** | an **ALLOWLIST** of decisions (`OFF_SITE_DECISIONS` = `outside`) | `core/store_geofence.is_off_site` — the §66 posture: a decision this version has never heard of reads as NOT a violation. A denylist would one day accuse somebody over a word meaning "unknown" (§STOREOPS-04) |
+| **How long may we keep where somebody was?** | each relation's own tenant-declared window (`punch_geo_retention_days` / `checkin_geo_retention_days`), stamped onto the ROW at write time | `core/geo_retention.purge_after` — the platform's ONE date arithmetic; `marketing/event_logic.purge_after_date` dereferences it rather than keeping the copy it had until 2026-11-01. Junk or blank → the house default, never "delete everything"; zero or negative → clamped up, never obeyed. Lock: `harness_geo_retention_lock.py` (§CORE-31) |
+| **Which rows may be purged, and what survives?** | rows past their own stamp whose coordinates are still present | `core/geo_retention.plan_purge` + `cleared_columns` — pure, so what gets deleted is provable with no database. Clears the COORDINATES; KEEPS the verdict, the distance and the stamp, so a purged punch still reads `outside` at its measured distance and no flag, report or export moves. An UNSTAMPED row is reported, never purged on a guess (§CORE-31) |
 | **How much of a window could be judged at all** | the per-end tally of stored decisions, counting NULL as `not_measured` | `core/store_geofence.punch_geo_coverage`, reported beside the flags on the exceptions board — "0 off-site" next to "0 of 28 stores pinned" is coverage, not compliance (§STOREOPS-04) |
 | **Paid hours, and the BASIS they rest on** | a usable closed punch, else a human correction, else the two clock records under the org's declared rule, else the schedule when that employee's tick box is on — and NEVER `actual_hours or scheduled_hours` | `storeops/payroll_hours_basis.resolve_day` / `resolve_shift_row` — THE one home, returning hours WITH the basis so no caller can show one without the other (§14y). Lock: `harness_payroll_hours_basis_lock.py` |
 | **Punch coverage %**, and THE INTERLOCK | measured employee-days ÷ scheduled employee-days for the period, **counting only days on or after this org's `clocked_basis_effective_from`** | `payroll_hours_basis.coverage` / `interlock` — below `min_punch_coverage_pct` (default 85) a clocked-only period is REFUSED and reported as a data defect, never paid as a shortfall. Pre-floor days are excluded and counted in `pre_effective_from_days`, else June 2026 (no punches by construction) would refuse a period forever (§14y, §14y.1) |
@@ -26329,6 +26336,7 @@ status word rather than a blank that reads as nil.
 | CORE-28 | core |
 | CORE-29 | core |
 | CORE-30 | core |
+| CORE-31 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -43824,3 +43832,95 @@ reach from the screen is §19.18 — the reason this is a screen and not an endp
 one home, dereferenced) · §mig 221 / `template_clone` (the shared carrier template door) · §CORE-27
 (the standard filters + Send bar belong to a REPORT; this is a configuration workflow and carries the
 carrier lens instead).
+
+## §CORE-31. A RETENTION WINDOW THAT DELETES NOTHING IS A PROMISE, NOT A POLICY (security pass 2026-11-01)
+
+Found by the security review the house requires before a feature goes live (owner directive
+2026-10-30: *"security agen should give a pass before it is made live"*). §STOREOPS-04 shipped
+`storeops.tenants.punch_geo_retention_days` with a house default of 180 days and **nothing deleted
+anything**. The honest finding was not "the punch geofence forgot a sweep" — it was that this is the
+SECOND instance of one class, and the first was already written down: event check-in GPS has carried
+`core.marketing_config.checkin_geo_retention_days` since mig `986` with the same hole, declared on the
+control box as `marketing_checkin_gps_retention` = `unmonitored`, "no purge job runs" (§23.7).
+
+A window that deletes nothing is worse than no window, because it reads as a commitment. So the fix is
+the MECHANISM, for every relation that stores where a person was.
+
+### CORE-31.1 Duplicate check — what was searched, and what was reused
+
+| Asked | Found | Done |
+|---|---|---|
+| Is there already a GPS-retention mechanism? | YES — `marketing/event_logic.purge_after_date` + `GET /marketing/checkin-retention`, stamping `purge_after_date` on each row (§23.5) | **REUSED.** Its stamp-on-the-row design is the right one and became the house pattern; its date arithmetic now DEREFERENCES the one home instead of keeping a copy |
+| Is there already a retention SWEEP to extend? | YES — `POST /core/audit/prune/run-due` (mig `857`, §CORE-13 family) | **MIRRORED**: run-secret guarded with a constant-time compare, path ends `/run-due` so the tenant middleware allowlists the JWT-less scheduler, degrades to `ok: false` naming the migration rather than 500ing |
+| Is there already a *personal-data* deletion job? | YES — `storeops/face_retention.py`, the BIPA biometric-template schedule (mig `420`) | **LEFT ALONE, deliberately.** A face is a different fact from a place and its statutory rule is `MIN(purpose satisfied, 1095-day backstop)`; folding it in would lose that. The lock asserts it keeps its own home |
+| Does anything else store coordinates? | `storeops.stores.geo_lat/lng` and `marketing_event.geo_lat/lng` | **EXCUSED, with the reason pinned** in `harness_geo_retention_lock.SWEEP_EXCUSED`: both are a PLACE's pin, not a person's position, so no retention promise applies |
+
+### CORE-31.2 The one home, and every caller
+
+`backend/app/modules/core/geo_retention.py` is THE home for "how long may we keep where somebody was,
+and what happens when that runs out". It holds `LOCATION_RELATIONS` (the registry), `purge_after` (the
+platform's ONE date arithmetic), `plan_purge` (pure, so what gets deleted is provable with no database)
+and `sweep_relation` / `sweep_all`.
+
+| Fact | One home | Callers that dereference it |
+|---|---|---|
+| Which relations store a person's position | `geo_retention.LOCATION_RELATIONS` | the sweep, both report endpoints, the lock |
+| Which columns are the coordinates | **`store_geofence.PUNCH_COLUMNS`** — `geo_retention` spells none of its own and the lock fails the build on a literal | `fix_columns_for`, `cleared_columns` |
+| The date a row's coordinates may go | `geo_retention.purge_after` | `storeops.router._geo_stamp_columns`, `marketing.event_logic.purge_after_date` |
+| The tenant's declared window | each entry's own `policy_table` / `policy_column` | `storeops.router._punch_retention_days` |
+
+The three writers: `storeops/router.py` (both ends of a punch, via `_geo_stamp_columns`),
+`storevisit/router.py` (the DM store visit), `marketing/router.py` (the event check-in, which already
+stamped). `storeops/router._punch_policy_row` is ONE read of the policy row serving both the fence and
+the window — two selects of one row would be two chances to read it from different states.
+
+### CORE-31.3 What a purge removes, and why honouring the promise is free
+
+It clears the COORDINATES (latitude, longitude, accuracy) and KEEPS the verdict and the distance.
+Management's question is "was this punch at the store, and how far away", and both answers survive, so
+a purge **never changes a flag, a report or an export** — only the ability to re-derive one from a raw
+position. `harness_geo_retention_lock` F2/F3 fail the build if a verdict or the stamp ever enters the
+cleared set, and `test_C4` / `test_A3` assert a purged punch still reads `outside` at 4,200 m.
+
+### CORE-31.4 What it refuses to conclude
+
+- **A row with no stamp is never purged on a guess.** Punches written before mig `1113` carry no
+  commitment; the sweep REPORTS them as `no_retention_stamp` and leaves them. Inferring their age from
+  a neighbouring timestamp would invent the commitment the design exists to make explicit. Clearing
+  that backlog is an owner decision, not a side effect.
+- **An unreadable window never resolves to "delete everything".** Junk, blank and `None` fall back to
+  the house default; a zero or negative is clamped up to `MIN_RETENTION_DAYS`, never obeyed.
+- **An unfinished backlog says so.** The sweep is bounded by `max_pages` and reports `more_due`.
+
+### CORE-31.5 The defect inside the fix
+
+The first sweep paged with a plain `.limit()`. Clearing a row does not remove it from the
+`stamp <= today` filter, so page two re-read the rows page one had just cleared, the plan came back
+empty and the loop stopped — **4 of 7 due rows cleared, reported as success.** Caught by `test_B4`
+before it ever ran. It pages by KEYSET on `id` now, and `harness_geo_retention_lock` G2 fails the build
+if the keyset is removed. The general lesson: a sweep whose filter does not exclude the work it has
+already done cannot use "this page changed nothing" as its stopping condition.
+
+Caught by the round-trip ratchet in the same PR: the sweep cleared one row per `UPDATE`. Every due
+row takes the IDENTICAL update (each coordinate column to NULL), so a per-row loop bought nothing and
+made the cost of honouring the promise scale with the backlog — which is how a retention sweep ends
+up switched off. It is now ONE bulk update per page (`.in_("id", ids)`), pinned by
+`harness_round_trip_ratchet.py` C1 (the pin stayed at 101 and was never relaxed) and by `test_R1`/
+`test_R3`, which count the write round trips rather than trusting the shape.
+
+### CORE-31.6 Multi-tenant
+
+Each row is stamped from its OWN tenant's declared window, so one tenant's policy can never decide
+another's deletion date (`test_T2`: three tenants, two due, the third untouched). The window is a
+POLICY — a number of days — which is exactly what a house default is right for, and never a tenant's
+own vocabulary, which may not have one (owner directive 2026-10-30). The sweep is platform-wide by
+design because it is a scheduler job honouring every tenant's declaration, not a tenant request; the
+GET report is super-admin and returns counts only, never a coordinate.
+
+### CORE-31.7 The deploy window
+
+Nothing breaks before mig `1113`. `_geo_stamp_present` probes the stamp column with the same cached
+tri-state as §STOREOPS-04's verdict probe and omits the stamp when it is absent — the fix is still
+stored, and the row simply carries no commitment yet. The sweep answers
+`{"ok": false, "error": "… is migration 1113 applied?"}` rather than 500ing a scheduler, and one
+relation failing never stops the others (`test_C2`).

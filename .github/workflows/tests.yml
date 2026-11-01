@@ -128,6 +128,21 @@ jobs:
         working-directory: backend
         run: python harness_store_geofence_lock.py
 
+  geo-retention-lock:
+    # The design-fix lock for GPS retention (index §CORE-14): one registry of every relation that
+    # stores where a person was, one date arithmetic, one sweep, and a purge that clears coordinates
+    # while KEEPING the verdict and the distance. Wired on the day the harness was written — a
+    # harness no workflow runs is a file, not a gate.
+    name: One GPS retention promise, kept (lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: harness_geo_retention_lock
+        working-directory: backend
+        run: python harness_geo_retention_lock.py
+
   test-discipline:
     # The lock: the framework above cannot quietly come undone. It RUNS conftest's network guard
     # against a production hostname rather than reading the source for it.

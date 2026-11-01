@@ -43,6 +43,50 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    # ── §CORE-31 (security pass 2026-11-01) — a retention window that DELETES ────────────────────
+    'location_fix_retention': {
+        "question": 'HOW LONG MAY WE KEEP WHERE SOMEBODY WAS, AND WHAT HAPPENS WHEN THAT RUNS OUT? '
+                    'Two tenant settings promised a window and nothing deleted anything: '
+                    '`punch_geo_retention_days` (found by the punch geofence\'s own security '
+                    'pass) and `checkin_geo_retention_days` (declared on the control box as '
+                    '`marketing_checkin_gps_retention` = `unmonitored`, "no purge job runs"). '
+                    'One class, two instances. A window that deletes nothing is worse than no '
+                    'window because it READS as a commitment, so this holds the registry of every '
+                    'relation that stores a person\'s position, the ONE date arithmetic, and a '
+                    'sweep that clears the COORDINATES while KEEPING the verdict and the distance '
+                    '— which is what makes honouring the promise free: no flag, report or export '
+                    'moves. A row with no stamp is REPORTED, never purged on a guess. The '
+                    'coordinate column NAMES are not held here: they are dereferenced from '
+                    '`store_geofence.PUNCH_COLUMNS`, because a second copy of a column name is '
+                    'how this class of defect returns. A BIPA face template is a different fact '
+                    'and keeps its own home in `storeops/face_retention.py`. The schema numbers that add each '
+                    'stamp column are carried by index CORE-31 and by the files themselves, not '
+                    'restated in this string: a literal here would be a customer-copy defect under '
+                    'the 19.36 boundary, which reads message keys and never data.',
+        "homes": [
+            "app/modules/core/geo_retention.py"
+        ],
+        "index": [
+            "CORE-31"
+        ],
+        "locks": [
+            "harness_geo_retention_lock.py"
+        ],
+        "callers": {
+            # The nightly sweep and the "what is due" report: the ONLY two surfaces that act on a
+            # retention commitment, and neither holds a relation, column or window of its own.
+            'app/modules/core/router.py': ('_geo_ret',),
+            # The event check-in's stamp (mig 986). It kept its OWN copy of the date arithmetic
+            # until 2026-11-01 — two copies are two windows free to drift — and now dereferences
+            # this home while keeping the public name its callers already use.
+            'app/modules/marketing/event_logic.py': ('_ret',),
+            # Both ends of a punch and the DM store visit: `_geo_stamp_columns` writes the
+            # commitment WITH the fix, because a coordinate stored without its purge date is a
+            # coordinate nothing will ever delete. `storevisit/router.py` reaches it through this
+            # same helper rather than importing the home twice.
+            'app/modules/storeops/router.py': ('_ret',),
+        },
+    },
     # ── §CORE-17 (owner ask 2026-10-24) — a reported figure NAMES the rows behind it ────────────
     'report_drilldown': {
         "question": 'WHERE IS THIS NUMBER COMING FROM? A report that summarises — a tile, a rollup '
@@ -349,7 +393,7 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/accessory_order_drilldown.py': ('_dd',),
         },
     },
-    # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
+    # ── §CORE-31 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
     'internal_self_call': {
         "question": 'When a handler reaches a sibling module through the platform\'s OWN HTTP '
                     'surface (`INTERNAL_API_BASE_URL`, default 127.0.0.1:8000), what identity must '

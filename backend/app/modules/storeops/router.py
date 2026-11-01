@@ -26,6 +26,7 @@ from app.modules.storeops import alert_log as _alert_log   # the ONE send record
 # distance computed in THIS file would be the duplicate defect the CLAUDE.md build gate exists to
 # stop, and harness_store_geofence_lock.py fails the build on one.
 from app.modules.core import store_geofence as _sgeo
+from app.modules.core import geo_retention as _ret
 from app.modules.storeops.pto_accrual import (
     DEFAULT_CONFIG as PTO_DEFAULT_CONFIG,
     resolve_effective_config as pto_resolve_effective_config,
@@ -4724,19 +4725,72 @@ def _punch_geo_present():
     return _PUNCH_GEO_PRESENT
 
 
-def _punch_geo_config(org_id):
+_GEO_STAMP_PRESENT = {}
+
+
+def _geo_stamp_present(relation):
+    """Is the retention stamp column on this relation yet (migration 1113)? Cached tri-state.
+
+    Same posture as `_punch_geo_present`: ANY failure reads as "not applied", so a punch on a
+    pre-1113 tenant is written exactly as it is today rather than refused."""
+    entry = _ret.RELATIONS_BY_NAME[relation]
+    if relation in _GEO_STAMP_PRESENT:
+        return _GEO_STAMP_PRESENT[relation]
+    try:
+        sb().table(entry["table"]).select(entry["stamp"]).limit(1).execute()
+        _GEO_STAMP_PRESENT[relation] = True
+    except Exception:
+        _GEO_STAMP_PRESENT[relation] = False
+    return _GEO_STAMP_PRESENT[relation]
+
+
+def _geo_stamp_columns(relation, policy_row):
+    """The retention commitment to write alongside a fix -> `{stamp: date}` or `{}`.
+
+    Stamped at write time so the promise lives on the row rather than in a job somebody has to find.
+    `{}` before migration 1113: the row then carries no commitment and the sweep REPORTS it as
+    `no_retention_stamp` rather than purging it on a guess (index §CORE-31)."""
+    if not _geo_stamp_present(relation):
+        return {}
+    entry = _ret.RELATIONS_BY_NAME[relation]
+    return _ret.stamp_columns(entry, days=_punch_retention_days(policy_row))
+
+
+def _punch_policy_row(org_id):
+    """THE one read of this tenant's punch-geofence policy row -> `(row_or_None, available)`.
+
+    One read, two derivations: `_punch_geo_config` resolves the fence from it and
+    `_punch_retention_days` reads the retention window from it. Two selects of one row would be two
+    chances for the fence and the window to be read from different states of the same row."""
+    cols = ",".join(_sgeo.CONFIG_COLUMNS) + "," + _ret.RELATIONS_BY_NAME[
+        "storeops.timelog"]["policy_column"]
+    try:
+        rows = (sb().table("tenants").select(cols)
+                .eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        return None, False
+    return (rows[0] if rows else None), True
+
+
+def _punch_geo_config(org_id, policy_row=None, available=None):
     """This tenant's geofence POLICY -> (config, available). Read from its own storeops.tenants row
     and resolved by the ONE resolver, so one tenant's policy can never be resolved two ways. Any
     gap (migration not applied, no tenant row, a junk value) falls back to the house defaults with
-    `available=False` — the check is read-only reporting, so it degrades rather than refusing."""
-    try:
-        rows = (sb().table("tenants").select(",".join(_sgeo.CONFIG_COLUMNS) + ",punch_geo_retention_days")
-                .eq("org_id", org_id).limit(1).execute().data) or []
-    except Exception:
-        return _sgeo.resolve_config(None, available=False)
-    if not rows:
-        return _sgeo.resolve_config(None, available=True)
-    return _sgeo.resolve_config(rows[0], available=True)
+    `available=False` — the check is read-only reporting, so it degrades rather than refusing.
+
+    A caller that has ALREADY read the policy row passes it in, so one punch reads it once."""
+    if available is None:
+        policy_row, available = _punch_policy_row(org_id)
+    return _sgeo.resolve_config(policy_row, available=available)
+
+
+def _punch_retention_days(policy_row):
+    """This tenant's declared GPS retention window, in days, resolved by the ONE resolver.
+
+    The window is a POLICY (a number of days), which is exactly what a house default is right for —
+    never a tenant's own vocabulary, which may never have one (owner directive 2026-10-30)."""
+    entry = _ret.RELATIONS_BY_NAME["storeops.timelog"]
+    return _ret.retention_days((policy_row or {}).get(entry["policy_column"]))
 
 
 def _store_pin_row(org_id, store_code):
@@ -4778,10 +4832,16 @@ def _punch_geo_columns(org_id, kind, store_code, lat, lng, accuracy):
     if not _punch_geo_present():
         return {}
     try:
-        cfg, _ = _punch_geo_config(org_id)
+        policy_row, available = _punch_policy_row(org_id)
+        cfg, _ = _punch_geo_config(org_id, policy_row, available)
         verdict = _sgeo.evaluate_presence(kind, fix_lat=lat, fix_lng=lng, fix_accuracy_m=accuracy,
                                           store_row=_store_pin_row(org_id, store_code), config=cfg)
-        return _sgeo.stored_columns(kind, verdict, fix_lat=lat, fix_lng=lng, fix_accuracy_m=accuracy)
+        cols = _sgeo.stored_columns(kind, verdict, fix_lat=lat, fix_lng=lng,
+                                    fix_accuracy_m=accuracy)
+        # The retention commitment goes on the row WITH the fix, never in a later pass: a
+        # coordinate stored without its purge date is a coordinate nothing will ever delete.
+        cols.update(_geo_stamp_columns("storeops.timelog", policy_row))
+        return cols
     except Exception:
         return {}
 
