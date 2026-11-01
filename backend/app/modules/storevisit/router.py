@@ -11,6 +11,10 @@ from app.core.database import get_supabase
 # The ONE dialect module for a vendor order API. WHICH dialect a vendor speaks is a config value
 # read through supply/order_transport, never a name decided here (RULE TWO).
 from app.modules.supply import shopify_draft_order as _shopify
+# THE one presence decision (mig 1112). This module has CAPTURED a check-in fix since migration 027
+# and never judged one — the sibling of the clock-out defect the owner reported on 2026-11-01, and
+# the same question ("was this person at this store?"). It gets the same answer, not a second one.
+from app.modules.core import store_geofence as _sgeo
 from app.core.schemas import LaxModel
 from datetime import datetime, timezone
 import uuid
@@ -342,8 +346,39 @@ def create_visit(payload: CreateVisitIn, org_id: str = ORG_ID):
         "rep_discrepancy_reason": payload.rep_discrepancy_reason,
         "status": "in_progress",
     }
+    # Judge the fix against the store's own pin and store the verdict beside the visit. Empty — and
+    # therefore byte-identical to the visit this endpoint wrote yesterday — until migration 1112 is
+    # applied and the store is pinned. A visit is NEVER refused over its location: a DM standing in a
+    # store with a bad phone must be able to start their checklist, and the flag is what gets reviewed.
+    body.update(_visit_geo_columns(org_id, payload.store_code,
+                                   payload.check_in_lat, payload.check_in_lng,
+                                   payload.check_in_accuracy))
     r = sb().table("store_visits").insert(body).execute()
     return r.data[0] if r.data else body
+
+
+def _visit_geo_columns(org_id, store_code, lat, lng, accuracy):
+    """The two verdict columns for a store visit, or `{}` when nothing can be judged.
+
+    Dereferences the SAME policy row, the SAME store pin and the SAME decision the punch path uses,
+    through the one home. A copy of this resolution here is exactly the divergence CLAUDE.md's
+    one-fact-one-home rule forbids, so the read is the shared one and only the I/O is local."""
+    try:
+        from app.modules.storeops.router import _punch_geo_config, _store_pin_row, _punch_geo_present
+        if not _punch_geo_present():
+            return {}
+        cfg, _ = _punch_geo_config(org_id)
+        verdict = _sgeo.evaluate_presence(_sgeo.KIND_STORE_VISIT, fix_lat=lat, fix_lng=lng,
+                                          fix_accuracy_m=accuracy,
+                                          store_row=_store_pin_row(org_id, store_code), config=cfg)
+        if not verdict:
+            return {}
+        cols = _sgeo.PUNCH_COLUMNS[_sgeo.KIND_STORE_VISIT]
+        # Only the VERDICT: the three coordinate columns are already written by the caller from the
+        # payload, and rewriting them here would make two statements about one fact.
+        return {cols["decision"]: verdict["decision"], cols["distance"]: verdict["distance_m"]}
+    except Exception:
+        return {}
 
 
 @router.get("/visits/{visit_id}")

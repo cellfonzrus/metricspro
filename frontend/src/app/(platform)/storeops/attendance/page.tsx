@@ -31,10 +31,16 @@ const NO_MARKET = '(no market)'
 const TYPE_LABEL: Record<string, string> = {
   no_show: 'No Show', covered_by_other: 'Covered by Other', unscheduled: 'Unscheduled',
   late: 'Late', left_early: 'Left Early', late_and_left_early: 'Late + Left Early',
+  // Punched away from the store (owner 2026-11-01, mig 1112). The verdict was decided and stored
+  // when the punch was made — this page only shows it. A punch nobody could judge (no store pin, no
+  // fix, a fix too coarse to settle it) never appears here at all, which is why the coverage note
+  // below exists: zero rows can mean "everyone was where they should be" OR "nothing was pinned".
+  off_site_clock_in: 'Clocked in off-site', off_site_clock_out: 'Clocked out off-site',
 }
 const TYPE_COLOR: Record<string, string> = {
   no_show: '#dc2626', covered_by_other: '#b45309', unscheduled: '#7c3aed',
   late: '#d97706', left_early: '#d97706', late_and_left_early: '#d97706',
+  off_site_clock_in: '#0e7490', off_site_clock_out: '#be123c',
 }
 function TypeBadge({ type, excused }: { type: string; excused?: boolean }) {
   return (
@@ -47,7 +53,17 @@ function TypeBadge({ type, excused }: { type: string; excused?: boolean }) {
   )
 }
 
-const FILTER_TYPES = ['no_show', 'covered_by_other', 'unscheduled', 'late', 'left_early']
+// The geofence block GET /storeops/timeclock/attendance-exceptions returns beside the rows.
+type GeofenceState = {
+  available?: boolean
+  config?: { punch_geo_enabled?: boolean; punch_geofence_radius_m?: number; punch_geo_max_accuracy_m?: number }
+  pinned_stores?: { pinned?: number; total?: number; available?: boolean }
+  coverage?: Record<string, Record<string, number>>
+  exception_types?: Record<string, string>
+}
+
+const FILTER_TYPES = ['no_show', 'covered_by_other', 'unscheduled', 'late', 'left_early',
+  'off_site_clock_in', 'off_site_clock_out']
 
 export default function AttendanceExceptionsPage() {
   const today = new Date()
@@ -59,6 +75,9 @@ export default function AttendanceExceptionsPage() {
   const [available, setAvailable] = useState(true)
   const [limitHit, setLimitHit] = useState(false)
   const [cfg, setCfg] = useState<any>(null)
+  // The geofence's own state: the tenant's policy, how many stores carry a map pin, and the per-end
+  // tally of stored verdicts. Shown because zero off-site rows has two very different meanings.
+  const [geo, setGeo] = useState<GeofenceState | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   // RULE FIVE: module-specific filters APPENDED to the standard bar, never substituted.
   const [excTypes, setExcTypes] = useState<string[]>([])   // [] = every type
@@ -79,7 +98,7 @@ export default function AttendanceExceptionsPage() {
     const myReqId = ++reqIdRef.current
     setLoading(true)
     api(`/api/v1/storeops/timeclock/attendance-exceptions?start=${start}&end=${end}`)
-      .then((r: any) => { if (reqIdRef.current !== myReqId) return; setRows(r?.rows || []); setAvailable(r?.available !== false); setLimitHit(!!r?.limit_hit); if (r?.config) setCfg(r.config) })
+      .then((r: any) => { if (reqIdRef.current !== myReqId) return; setRows(r?.rows || []); setAvailable(r?.available !== false); setLimitHit(!!r?.limit_hit); if (r?.config) setCfg(r.config); setGeo(r?.geo || null) })
       .catch((e: any) => { if (reqIdRef.current !== myReqId) return; setMsg('Load failed: ' + (e?.message || e)) })
       .finally(() => { if (reqIdRef.current === myReqId) setLoading(false) })
   }, [filt.period, filt.periodTo])
@@ -144,6 +163,10 @@ export default function AttendanceExceptionsPage() {
     if (r.exception_type === 'no_show') return '—'
     if (r.exception_type === 'covered_by_other') return `Actually worked: ${coverersText(r)}`
     if (r.exception_type === 'unscheduled') return `${fmtTime(r.clock_in)} – ${r.open ? 'still in' : fmtTime(r.clock_out)}`
+    if (r.exception_type === 'off_site_clock_in' || r.exception_type === 'off_site_clock_out') {
+      const when = `${fmtTime(r.clock_in)} – ${r.open ? 'still in' : fmtTime(r.clock_out)}`
+      return r.note ? `${when} · ${r.note}` : when
+    }
     // late / left_early / late_and_left_early
     const parts = [`${fmtTime(r.actual_clock_in)} – ${r.actual_clock_out ? fmtTime(r.actual_clock_out) : 'still in'}`]
     if (r.same_store === false) parts.push(`at ${r.worked_store_code} (scheduled ${r.store_code})`)
@@ -164,6 +187,10 @@ export default function AttendanceExceptionsPage() {
     { header: 'Actual', field: 'actual', get: r => actualText(r) },
     { header: 'Minutes Late', field: 'minutes_late', type: 'number', get: r => r.minutes_late || '' },
     { header: 'Minutes Early', field: 'minutes_early', type: 'number', get: r => r.minutes_early || '' },
+    // How far from the store, for an off-site row. The COORDINATES are deliberately not exported:
+    // a manager needs to know the punch was not at the store, and broadcasting where an employee
+    // actually was, into an emailed report, is a much larger disclosure (index §23.5).
+    { header: 'Metres from store', field: 'distance_m', type: 'number', get: r => r.distance_m ?? '' },
   ]
 
   return (
@@ -189,6 +216,8 @@ export default function AttendanceExceptionsPage() {
           only saving your own Attendance Settings is not available yet. <SetupNotice detail="421" />
         </div>
       )}
+
+      {geo && <GeofenceNotice geo={geo} />}
 
       {limitHit && (
         <div className="card" style={{ marginBottom: 12, padding: '8px 12px', fontSize: 12, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)' }}>
@@ -342,6 +371,60 @@ function AttendanceSettingsPanel({ cfg, available, onSaved, onClose }: { cfg: an
         <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={busy} onClick={save}>{busy ? '…' : 'Save'}</button>
         {msg && <span style={{ fontSize: 12 }}>{msg}</span>}
       </div>
+    </div>
+  )
+}
+
+
+// ── The honest note beside the off-site flags (mig 1112) ─────────────────────────────────────────
+//
+// WHY A SURFACE NEEDS THIS AT ALL. "0 punches off-site" is a true number that tells a false story
+// when no store has a map pin: nothing could be judged, so nothing could be flagged. The owner's
+// own rule — *"Nothing declared means nothing identified, and the surface says so"* (2026-10-30) —
+// is what this renders. It reads the counts the server measured; it never re-derives them.
+function GeofenceNotice({ geo }: { geo: GeofenceState }) {
+  const pinned = geo.pinned_stores?.pinned ?? 0
+  const total = geo.pinned_stores?.total ?? 0
+  const coverage = geo.coverage || {}
+  const judged = (kind: string) => {
+    const c = coverage[kind] || {}
+    return Object.entries(c).reduce((n, [k, v]) => n + (k === 'not_measured' ? 0 : Number(v) || 0), 0)
+  }
+  const unmeasured = (kind: string) => Number((coverage[kind] || {}).not_measured || 0)
+
+  if (geo.available === false) {
+    return (
+      <div className="card" style={{ marginBottom: 12, padding: '8px 12px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
+        📍 Location checking on punches is not switched on in the database yet, so no punch has been
+        judged and no off-site rows can appear. Everything else on this page is unaffected.
+        <SetupNotice detail="1112" />
+      </div>
+    )
+  }
+  if (!geo.config?.punch_geo_enabled) {
+    return (
+      <div className="card" style={{ marginBottom: 12, padding: '8px 12px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
+        📍 Location checking on punches is switched off for this company, so no punch is judged and no
+        off-site rows appear here. Turn it on in Attendance Settings.
+      </div>
+    )
+  }
+  if (total > 0 && pinned === 0) {
+    return (
+      <div className="card" style={{ marginBottom: 12, padding: '8px 12px', fontSize: 12, color: 'var(--c-fg-92400e)', background: 'var(--c-bg-fef3c7)' }}>
+        📍 <strong>No store has a map pin yet</strong>, so no punch can be checked against a location
+        and <strong>no off-site row can appear below</strong> — this is not a clean result. Pin your
+        stores on <a href="/storeops/admin">Store Setup</a> and punches start being checked straight away.
+      </div>
+    )
+  }
+  return (
+    <div className="card" style={{ marginBottom: 12, padding: '8px 12px', fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)' }}>
+      📍 Punch locations checked against a {geo?.config?.punch_geofence_radius_m} m fence ·{' '}
+      {pinned} of {total} stores pinned · in this range {judged('clock_in')} clock-ins and{' '}
+      {judged('clock_out')} clock-outs could be judged
+      {unmeasured('clock_out') > 0 && <> · {unmeasured('clock_out')} clock-outs had no location to judge</>}
+      . A punch nobody could judge is never counted against anyone.
     </div>
   )
 }
