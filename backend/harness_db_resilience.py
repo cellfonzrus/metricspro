@@ -1425,7 +1425,19 @@ _all_routes = _flatten_routes(real_app.routes)
 #     + /pos/reports/w9-status               GET   (which certificate lapses when)
 # Both are READS. Each is org-scoped, refuses a store outside the caller's span before reading, and
 # writes nothing: no stored total, statement, GP, commission or tax figure is touched by either.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1828"))
+# Re-pinned 1828 -> 1832 on 2026-11-01 (§STOREOPS-04, the punch geofence). Verified the house way,
+# NOT by arithmetic: `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` printed exactly
+# FOUR added decorators and NONE removed —
+#     + /storeops/timeclock/geo-config            GET   (this tenant's fence policy + pin coverage)
+#     + /storeops/timeclock/geo-config            PUT   (manager/admin; resolved by the one resolver)
+#     + /storeops/stores/geo-pins                 GET   (which stores are pinned, which are not)
+#     + /storeops/stores/{store_code}/geo-pin     PUT   (declare where a store is; audited)
+# Three are READS or a tenant-policy write; the fourth writes a store's map pin. All four are
+# org-scoped (another tenant's store is a 404, never a pin), the two writes are manager/admin only,
+# and NONE touches a stored total, statement, GP, commission, payable or tax figure — the geofence
+# verdict is read by the attendance board alone. The pin is audited (`geo_pinned_by`/`geo_pinned_at`)
+# because moving it changes who gets flagged. Re-taken on a counted, named addition, never relaxed.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1832"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
