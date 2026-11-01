@@ -11,7 +11,7 @@ import type { MePayload } from '@/api/core'
 // provisioned user; fine-grained actions (PII reveal, void) still gate at the action. When the
 // backend `modules.<key>` entitlement is seeded, tighten `visible` to check it — the UI is already
 // wired to respect it.
-export type ModuleKey = 'timeclock' | 'pos' | 'crm' | 'earnings'
+export type ModuleKey = 'timeclock' | 'closing' | 'pos' | 'crm' | 'earnings'
 
 export type ModuleDef = {
   key: ModuleKey
@@ -45,6 +45,19 @@ export const MODULES: ModuleDef[] = [
     primaryTab: true,
     visible: provisioned,
     entitlementKey: 'modules.storeops',
+  },
+  {
+    // The STORE's own side of the day. The DM's sign-off on it is app/(app)/dm/verify.tsx, reached
+    // from the DM hub — two jobs with two gates, so two entries, not one screen with a mode.
+    key: 'closing',
+    title: 'Daily Closing',
+    short: 'Closing',
+    route: '/closing/submit',
+    icon: '🧮',
+    description: 'Submit your day: money collected, what you sold, expenses, envelope photo.',
+    primaryTab: false,
+    visible: provisioned,
+    entitlementKey: 'modules.closing',
   },
   {
     key: 'pos',
@@ -85,12 +98,14 @@ export const MODULES: ModuleDef[] = [
 // Admin / back-office modules that the platform already has on the web and that will be ported. Listed
 // so the Home grid can show a truthful "coming soon" provision (the user asked for a path to add all
 // items eventually) without pretending they exist yet.
+// The store VISIT inspection shipped as app/(app)/dm/checklist.tsx and the daily CLOSING as the
+// `closing` module above, so neither is listed here any more — a "coming soon" tile for something
+// that has arrived sends a rep looking for it in the wrong place.
 export type RoadmapModule = { id: string; title: string; icon: string; description: string }
 export const ROADMAP_MODULES: RoadmapModule[] = [
   { id: 'commcalc', title: 'Commission Admin', icon: '📊', description: 'CommCalc reports, payouts & rates' },
   { id: 'storeops', title: 'Scheduling & HR', icon: '🗓️', description: 'Shifts, PTO, payroll' },
   { id: 'assets', title: 'Assets & Inventory', icon: '📦', description: 'Phone lending, transfers' },
-  { id: 'closing', title: 'Store Visits & Closing', icon: '✅', description: 'Daily closing, audits' },
 ]
 
 export function visibleModules(me: MePayload | null): ModuleDef[] {

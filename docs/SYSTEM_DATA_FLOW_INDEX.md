@@ -140,6 +140,7 @@ Primary code homes:
 | CORE-19 | **A test is a gate, or it is a file** | "We need to define all development we do to follow the following: unit testing, integration testing, test-driven development. What runs a test in this repo, what stops a test reaching the live database when there is no staging one, and what fails the build the day the framework quietly comes undone?" |
 | CORE-20 | **A request path is not evidence of which route it reached** | "Act as a security agent and find the vulnerability in the code. Which paths does the platform let through without a login, what declares that list, and what stops a route the list never meant to name from satisfying it?" |
 | CLOSING-02 | **A declared category names what in the sales feed should agree with it** | "Add a field in as no of edge for total and no of financicing in thr daily closing for all employees to declare along with the $amount of edge and acima as they get paid for each transcoding they do, this would then be checked with our system if our system is capturing the sales as declared by the sales rep." Which half of that already existed as config, what had no home at all, and what stops the next category from being checked against a number nobody measured? |
+| CLOSING-03 | **A closing form asks for what the TENANT declared, on the phone too** | "Make scheduling and hr with store vista and closing live in the app also" — the store's own daily closing existed only on the web; the phone had the DM's sign-off and nothing to sign off. Every field on that form is a tenant declaration with real money on it, so what stops a phone build from showing one tenant's tender names to another, or routing a per-person money figure into a store-level tally? |
 | CORE-21 | **An in-process cache keyed by something a client can mint is bounded by construction** | "Simulate a thousand users and see what breaks. What does the platform keep in each worker's memory while they are signed in, what decides when an entry leaves, and what fails the build the day a new cache ships without a bound?" |
 | CORE-23 | **One component decides how a date is picked, and the calendar opens on a click** | "for payroll hours approval the calendor should open up instead of enetring it manuallu" — said of a field that already HAD a calendar, reachable only from a glyph a few pixels wide at its right-hand edge, so a click anywhere else put a caret in mm/dd/yyyy and the date got typed digit by digit, on all 168 of them. When is a control's default behaviour the defect, and what stops the 169th from bringing it back? |
 | CORE-24 | **A total names the rows it is over — filtered and unfiltered, from one arithmetic** | "need the total below the hours on the time clock when filtered and without filter" — said of a column whose total lived in a badge above the table and only ever counted the rows a filter had left visible, without saying so, on every report in the product. What is a total of an unnamed population worth, and what does "without filter" honestly mean on a screen whose date range is a server query? |
@@ -26224,6 +26225,7 @@ status word rather than a blank that reads as nil.
 | 74 | closing |
 | CLOSING-01 | closing |
 | CLOSING-02 | closing |
+| CLOSING-03 | closing |
 | 15.1 | notify |
 | 15.2 | notify |
 | 15.3 | notify |
@@ -43924,3 +43926,81 @@ tri-state as §STOREOPS-04's verdict probe and omits the stamp when it is absent
 stored, and the row simply carries no commitment yet. The sweep answers
 `{"ok": false, "error": "… is migration 1113 applied?"}` rather than 500ing a scheduler, and one
 relation failing never stops the others (`test_C2`).
+
+## §CLOSING-03. A CLOSING FORM ASKS FOR WHAT THE TENANT DECLARED, ON THE PHONE TOO (owner ask 2026-11-01)
+
+**What he said:**
+
+> *"Make scheduling and hr with store vista and closing live in the app also"*
+
+### CLOSING-03.1 THE DUPLICATE CHECK, and what it found
+
+| the question | what was there | what this adds |
+| --- | --- | --- |
+| the DM's sign-off on a store-day | `mobile/app/(app)/dm/verify.tsx` → `GET /closing/summary`, `POST /closing/verify` | nothing — it is the screen this submission feeds |
+| the store's own submission, on the web | `frontend/src/components/ClosingSubmitForm.tsx` (shared by `/closing/submit` and the `/portal` kiosk) | nothing on the server. The phone calls the SAME routes |
+| which tenders a closing records | `GET /closing/tender-config` — the tenant's `defs` plus the house `standard` TEMPLATE and a `configured` flag (§29.9) | nothing — dereferenced |
+| where a declared category is stored | `closing/metric_catalog.storage_for` — the ONE rule, locked by `harness_metric_catalog_lock.py` §A8, already resolved into each row's `storage` | nothing — dereferenced |
+| which tender keys are physical columns | `GET /closing/tender-config` → `standard[].tender_key` (mig 111 sends anything else to JSONB) | nothing — dereferenced. **The web form carries its own `STD_KEYS` copy; the phone does not** |
+
+**No new endpoint, no backend change, no migration.** A mobile-only submit route would be a second
+answer to "what did this store declare today".
+
+### CLOSING-03.2 THE CLASS: a closing form is a tenant's vocabulary, with money on it
+
+§COMMCALC-49.10's class — *a tenant's declared words with house words defaulted behind them* — is at
+its most expensive on this form, because every field is a dollar figure that reconciles against the
+carrier feed and feeds the incentive calculation. So:
+
+| the fact | its ONE home |
+| --- | --- |
+| which tenders does this tenant record? | `mobile/src/lib/closing-submit.declaredTenders` — the tenant's `defs`; the house seven only when it has declared NOTHING, and then from the SERVER's `standard`, never a list in the file |
+| which payload slot does a tender take? | `tenderSlots(standard)` — derived from the server's own standard list under one stated prefix (`STD_PREFIX`) |
+| where does a declared category go? | `countsAndLines(catalog, …)` reads each category's `storage` and **never** looks at `value_kind` or `declared_by` |
+| what is the collected total? | `totalCollected` over the tender values the caller passes — accessory revenue is declared separately and is not a tender |
+
+**A configured-but-all-off tender list answers with NOTHING.** `configured` means "this company has
+its own list" (§29.9), so falling back then would put one tenant's tender names on another tenant's
+form. The screen says the sheet is not set up instead.
+
+### CLOSING-03.3 WHAT IT REFUSES TO CONCLUDE
+
+- **A category whose `storage` cannot be read is shown as unplaceable**, not routed on a guess.
+  Guessing is how a per-person money declaration lands in a store-level tally, and nothing on the
+  screen would say so. Mutation-tested: defaulting the missing storage to the counts map turns two
+  tests red.
+- **A metric line with neither a tally nor an amount is dropped**, never declared as a zero nobody
+  typed; a count field the rep left blank IS sent as zero, because the day is a complete declaration.
+- **A failed `PUT /closing/metric-lines` is SAID, never swallowed** — the incentive is computed from
+  those lines, so losing them quietly means somebody is paid less than they earned.
+- **A feed-derived store is refused up front** (`closing_source`, mig 1035), before the rep counts an
+  envelope and types seven figures rather than after.
+- **A recount answer gives the direction and never the amount**, so the rep recounts instead of
+  copying.
+- **Every physical tender column is sent**, so an omitted tender reads as a declared zero. The
+  server's legacy fallback fires only when NO `t_*` field is present, and a half-sent form would
+  silently take that other path.
+
+### CLOSING-03.4 Multi-tenant
+
+`mobile/src/lib/closing-submit.test.ts` (28 checks) covers a tenant with custom tenders, one with the
+house template, one that configured an all-off list, and a catalog carrying both storages — plus a
+check that the payload builder names no tenant, carrier or store code of its own.
+
+### §16–18 CROSS-REFERENCES
+
+Depends on: §29.9 (the tender config and what `configured` means), §CLOSING-02 + the declared-metric
+catalog (`closing/metric_catalog.storage_for`, locked by `harness_metric_catalog_lock.py` §A8),
+§29.12 (an unfinished store-day is never blank), mig `1035` (`closing_source` — who produces this
+store's closing), mig `111` (custom tenders in JSONB), mig `501` (the counts map), mig `1072` (metric
+lines). Feeds: the DM's sign-off (`mobile/app/(app)/dm/verify.tsx`, §29), the day's recon, and the
+incentive calculation that reads the metric lines. Neighbours: §STOREOPS-05 (the sibling phone
+surface shipped the same day, and the same "a declaration is a required argument" class),
+§COMMCALC-49.10 (the class itself), §CORE-29 (which bundle the phone is running).
+
+No backend change, **no migration**, no new endpoint. CI: the mobile `vitest` suite
+(`mobile/src/lib/closing-submit.test.ts`, 28 checks) and `tsc --noEmit`.
+
+Files: `mobile/app/(app)/closing/submit.tsx` (**new**), `mobile/src/lib/closing-submit.ts` (**new**),
+`mobile/src/lib/closing-submit.test.ts` (**new**), `mobile/src/api/closing-submit.ts` (**new**),
+`mobile/src/modules/registry.ts`, `docs/SYSTEM_DATA_FLOW_INDEX.md`.
