@@ -1425,7 +1425,7 @@ _all_routes = _flatten_routes(real_app.routes)
 #     + /pos/reports/w9-status               GET   (which certificate lapses when)
 # Both are READS. Each is org-scoped, refuses a store outside the caller's span before reading, and
 # writes nothing: no stored total, statement, GP, commission or tax figure is touched by either.
-# Re-pinned 1828 -> 1830 on 2026-11-01 (§COMMCALC-67, the incentive-plan workflow). Verified the
+# Re-pinned 1828 -> 1830 on 2026-11-01 (§COMMCALC-54, the incentive-plan workflow). Verified the
 # house way, NOT by arithmetic: `git diff origin/main -- backend/ | grep -E '^[+-]@router\.'` printed
 # exactly TWO added decorators and NONE removed —
 #     + /commcalc/incentive-plan/workflow    GET   (which plan is active, and what can replace it)

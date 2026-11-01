@@ -1,4 +1,4 @@
-"""Integration: the incentive-plan workflow endpoints, through the real app (§COMMCALC-67).
+"""Integration: the incentive-plan workflow endpoints, through the real app (§COMMCALC-54).
 
 Owner, 2026-11-01: *"When we click on the plan it should show the one which is active and below it
 should give the option to change the plan and when you click on change the plan it should show what

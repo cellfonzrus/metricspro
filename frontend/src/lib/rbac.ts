@@ -786,7 +786,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/payout-plans', label: 'Overview', icon: '💳', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // THE GUIDED WORKFLOW (owner directive 2026-11-01): which plan is active, what can replace it,
     // and creating the replacement — three steps instead of the full settings page. The settings page
-    // stays, reached from here as "advanced"; index §COMMCALC-67.
+    // stays, reached from here as "advanced"; index §COMMCALC-54.
     { href: '/commcalc/incentive-plan', label: 'Your Incentive Plan', icon: '🧭', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/commission-plans', label: 'Incentive Plans', icon: '🧮', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/management-incentive', label: 'Management Incentives', icon: '🏆', module: 'commissions', scopes: ['all'], tileOnly: true },

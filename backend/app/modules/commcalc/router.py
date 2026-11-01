@@ -43,7 +43,7 @@ from app.modules.pos import device_condition as _cond                 # 2026-10-
 from app.modules.commcalc import accessory_order_drilldown as _aopdd   # 2026-10-29 — that report's drill declaration (§CORE-17.3y; declaration only, pure)
 from app.modules.commcalc import demand_projection as _dp   # 2026-10-29 — THE device velocity/horizon projection + device-line test (§COMMCALC-49; pure)
 from app.modules.commcalc import device_vocabulary as _devvocab   # 2026-10-30 — THE one place to ask which departments an org calls a device (§COMMCALC-49)
-from app.modules.commcalc import plan_workflow as _planwf   # 2026-11-01 — THE "which plan am I on, and what can replace it" workflow (index §COMMCALC-67; pure)
+from app.modules.commcalc import plan_workflow as _planwf   # 2026-11-01 — THE "which plan am I on, and what can replace it" workflow (index §COMMCALC-54; pure)
 from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
 from app.modules.commcalc import tender_recon_drilldown as _tender_recon_drilldown   # 2026-10-24 — THE X-report-vs-closing tile drill (index §CORE-17.3a; declaration only, pure)
 from app.modules.asset import device_asset_drilldown as _asset_dd   # 2026-10-25 — THE device-asset family's drill declaration (index §CORE-17.3l; declaration only, pure)
@@ -3982,7 +3982,7 @@ def payout_plans_overview(org_id: str = ORG_ID):
         cid = c.get("id")
         boost = _is_boost(c)
         # "is this plan live, and does it serve this carrier?" has ONE home — `plan_workflow`
-        # (§COMMCALC-67). This hub, the guided workflow and anything later must read the same
+        # (§COMMCALC-54). This hub, the guided workflow and anything later must read the same
         # predicate; a private copy here is how the two screens would start disagreeing about
         # which plan a tenant is on.
         cplans  = _planwf.live_plans_for_carrier(plans, cid)
@@ -4013,7 +4013,7 @@ def payout_plans_overview(org_id: str = ORG_ID):
 # ── INCENTIVE-PLAN WORKFLOW (owner directive 2026-11-01) ─────────────────────────────────────────
 # "When we click on the plan it should show the one which is active and below it should give the
 # option to change the plan ... all of this should be a work flow than random data seen on the
-# screen." Both endpoints are READ-ONLY: the steps are DERIVED by `plan_workflow` (pure, §COMMCALC-67)
+# screen." Both endpoints are READ-ONLY: the steps are DERIVED by `plan_workflow` (pure, §COMMCALC-54)
 # and the writes stay where they already live — `POST /commission-plans` for a plan,
 # `POST /carrier-template/clone` for a shared carrier's curves. No third write path is created.
 def _workflow_engine(carriers, carrier_id):

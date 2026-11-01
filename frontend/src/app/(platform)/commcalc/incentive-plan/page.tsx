@@ -12,7 +12,7 @@
 // GET /commcalc/incentive-plan/workflow returns: the active plan, the options, and the sentences that
 // describe them. No label, option list or ordering is kept here — a second copy of the workflow in
 // TypeScript is exactly how this screen and the engine would start disagreeing about which plan a
-// tenant is on (backend: commcalc/plan_workflow.py, index §COMMCALC-67).
+// tenant is on (backend: commcalc/plan_workflow.py, index §COMMCALC-54).
 //
 // IT WRITES THROUGH THE DOORS THAT ALREADY EXISTED. Picking an option asks the backend for the draft
 // that choice implies (which endpoint + which body) and posts it unchanged — the plan save and the

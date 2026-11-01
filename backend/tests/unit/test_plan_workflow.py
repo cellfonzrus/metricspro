@@ -1,4 +1,4 @@
-"""Unit: the incentive-plan WORKFLOW — "what do I pay today, and what can replace it?" (§COMMCALC-67).
+"""Unit: the incentive-plan WORKFLOW — "what do I pay today, and what can replace it?" (§COMMCALC-54).
 
 Owner, 2026-11-01: *"the plan which is active in incentive payout when you click on it it takes you
 to the page which has all kinds of Incentive structure listed which becomes confusing even to me ...
