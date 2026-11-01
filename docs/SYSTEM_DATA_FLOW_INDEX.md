@@ -43521,3 +43521,26 @@ the no-deps job of `org-scope-guard.yml`.
 §CORE-05 (the paged read that correctly started raising, and so exposed this) · §19.18 (one fact, one
 home, dereferenced) · §CORE-08 (`person_identity` — who a person is, the sibling one-home) ·
 §CORE-17 (a surface says where its figure came from).
+
+### CORE-30.1 A FILE THAT NAMES EVERY TABLE TRIPS EVERY NAME SCAN (measured 2026-10-31)
+
+Five locks in this repo answer *"does anything else touch table X"* by searching source text for the
+name. `core/relation_home.py` names **every** relation in the platform, so on its first day all five
+read it as a second home for someone else's fact: `harness_order_transport` §H18
+(`vendor_catalog_price`), `harness_carrier_vocab_guard` (the `UnknownRelation` message, §19.36),
+`harness_vendor_rebate_landing` §G (`raw_vendor_rebate`), `harness_supply_ordering` §L1 (the catalog
+snapshot) and `harness_royalty_lock` (c) (`royalty_report_line`).
+
+**None of them was given a new allow-list entry.** Four of the five allow-lists already carried one
+excused in a comment saying *a declaration is the opposite of a writer* — the lineage registry, which
+registers a feed and queries nothing. That sentence is the rule, so it became the rule, and it has one
+home: **`relation_home.declares_only(source, name)`** — true when every mention of the name is an
+entry in a MODULE-LEVEL dict / set / list / tuple. A mention anywhere else (a query, a call argument,
+an f-string, a structure built inside a function) is a USE and still fails; source that does not parse
+counts as a use, never as an excuse. Pure and stdlib-only, so a harness imports it without the app.
+§H18 asks the narrower question "does it WRITE", which it reads from the file's own AST — from the
+**raw** source, because blanking docstrings leaves a docstring-only class unparseable and
+"unparseable" read as "writes nothing" would be the same hole.
+
+Each of the five keeps its own armed controls (a module-level map is a declaration, a `.table(...)`
+call is not, a map built inside a function is not), so the shared answer cannot go quietly wrong.

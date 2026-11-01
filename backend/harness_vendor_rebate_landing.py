@@ -228,23 +228,10 @@ _ALLOWED = {"app/modules/commcalc/column_mapping.py", "app/modules/commcalc/inge
 # This does not loosen what the lock guards. A module cannot read or book a feed it only lists in a
 # literal, and the four money modules are checked for the bare name below regardless, so a map entry
 # in coa.py would still be caught. Armed with a planted `.table("raw_vendor_rebate")` below.
-def _declaration_only(body):
-    """True when every mention of the feed in this file is an entry in a module-level data structure."""
-    try:
-        tree = ast.parse(body)
-    except SyntaxError:
-        return False                      # unparseable → treat as a reference, never excuse it
-    declared = set()
-    for node in tree.body:                # MODULE LEVEL only: a dict built inside a function is code
-        if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(
-                getattr(node, "value", None), (ast.Dict, ast.Set, ast.List, ast.Tuple)):
-            for sub in ast.walk(node.value):
-                declared.add(id(sub))
-    for sub in ast.walk(tree):
-        if (isinstance(sub, ast.Constant) and isinstance(sub.value, str)
-                and "raw_vendor_rebate" in sub.value and id(sub) not in declared):
-            return False
-    return True
+# WHAT COUNTS AS MERELY DECLARING A RELATION NAME is itself one fact with one home
+# (`core.relation_home.declares_only`, index §CORE-30) — five locks ask it, so none of them keeps a
+# copy of the answer. Pure and stdlib-only, so importing it here costs nothing.
+from app.modules.core.relation_home import declares_only as _declares_only   # noqa: E402
 
 
 _readers = []
@@ -262,10 +249,10 @@ for base, dirs, files in os.walk(os.path.join(os.path.dirname(__file__), "app"))
             continue
         if "raw_vendor_rebate" not in body or rel in _ALLOWED:
             continue
-        (_declared_only if _declaration_only(body) else _readers).append(rel)
-ok(_declaration_only('SCHEMA_OF = {"raw_vendor_rebate": "commcalc"}\n')
-   and not _declaration_only('x.table("raw_vendor_rebate").select("*")\n')
-   and not _declaration_only('def f():\n    m = {"raw_vendor_rebate": 1}\n    return m\n'),
+        (_declared_only if _declares_only(body, "raw_vendor_rebate") else _readers).append(rel)
+ok(_declares_only('M = {"raw_vendor_rebate": "commcalc"}\n', "raw_vendor_rebate")
+   and not _declares_only('x.table("raw_vendor_rebate").select("*")\n', "raw_vendor_rebate")
+   and not _declares_only('def f():\n    return {"raw_vendor_rebate": 1}\n', "raw_vendor_rebate"),
    "the declaration test is armed: a module-level map reads as a declaration, a query does not, and "
    "neither does a map built inside a function")
 ok(not _readers,

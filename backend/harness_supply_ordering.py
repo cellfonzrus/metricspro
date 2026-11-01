@@ -492,16 +492,35 @@ check("J4 every endpoint takes the middleware-rewritten org_id", not no_org, no_
 # ══ L. LOCKS — one home per fact ═════════════════════════════════════════════════════════════════════════
 print("§L locks")
 APP = os.path.join(HERE, "app")
+# "NAMED IN ONE CODE FILE" always meant one file that USES the table. The lineage registry was carved
+# out by name because it only DECLARES it (§36), and 2026-10-31 brought a second such file —
+# `core/relation_home.py`, the one home for which SCHEMA holds a relation, which by construction names
+# every table in the platform (index §CORE-30). So the carve-out becomes the rule: a mention that is an
+# entry in a module-level dict / set / list / tuple is a DECLARATION; a mention anywhere else is CODE,
+# and L1 still demands there be exactly one such file. Nothing is loosened — L2 below still proves the
+# single writing function, and a declaration file cannot write.
+# WHAT COUNTS AS MERELY DECLARING A RELATION NAME is itself one fact with one home
+# (`core.relation_home.declares_only`, index §CORE-30) — five locks ask it, so none of them keeps a
+# copy of the answer. Pure and stdlib-only, so importing it here costs nothing.
+from app.modules.core.relation_home import declares_only as _declares_only   # noqa: E402
+
+
 writers = []
+declarers = []
 for dp, _d, files in os.walk(APP):
     for fn in files:
         if fn.endswith(".py"):
             b = src(dp, fn)
             if "vendor_catalog_price" in b:
-                writers.append(os.path.relpath(os.path.join(dp, fn), APP))
-check("L1 the snapshot table is named in exactly one code file (+ the lineage registry)",
-      sorted(writers) == sorted([os.path.join("modules", "supply", "store.py"),
-                                 os.path.join("modules", "commcalc", "data_lineage_registry.py")]), writers)
+                rel = os.path.relpath(os.path.join(dp, fn), APP)
+                (declarers if _declares_only(b, "vendor_catalog_price") else writers).append(rel)
+check("L1 the snapshot table is used in exactly ONE code file (declaration-only files aside)",
+      sorted(writers) == [os.path.join("modules", "supply", "store.py")], writers)
+check("L1b …and the files set aside really are declaration-only, derived rather than named",
+      declarers and _declares_only('M = {"vendor_catalog_price": "x"}\n', "vendor_catalog_price")
+      and not _declares_only('q.table("vendor_catalog_price")\n', "vendor_catalog_price")
+      and not _declares_only('def f():\n    return {"vendor_catalog_price": 1}\n', "vendor_catalog_price"),
+      declarers)
 ssrc = src(SUP, "store.py")
 _writes = [m.start() for m in re.finditer(r"t\(client, CATALOG_TABLE\)\.(?:insert|upsert|update|delete)\(", ssrc)]
 _owner = [ssrc[:i].rsplit("\ndef ", 1)[-1].split("(")[0] for i in _writes]

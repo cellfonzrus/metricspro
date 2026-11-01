@@ -29,6 +29,9 @@ Stdlib only, no I/O at import — safe to import from the router, the sweeps, a 
 database double (which refuses a wrong-schema read precisely because it reads this map).
 """
 
+import ast as _ast           # for `declares_only` below — pure, stdlib
+
+
 class UnknownRelation(KeyError):
     """A relation this map does not name. RAISED, never defaulted: the whole defect above was a
     reader assuming a schema. A new table is declared by its migration and listed here (the lock
@@ -571,3 +574,37 @@ def reader(client, table, select="*"):
     """`client.schema(<its own schema>).table(table).select(select)` — the dereference a reader that
     takes a table BY NAME must use instead of hard-coding one schema for all of them."""
     return client.schema(schema_of(table)).table(table).select(select)
+
+# ── DOES THIS FILE *USE* A RELATION NAME, OR ONLY DECLARE IT? ────────────────────────────────────────
+# Five locks in this repo answer "does anything else touch table X" by searching source text for the
+# name. THIS FILE names every relation in the platform, so on 2026-10-31 all five read it as a second
+# home for someone else's fact. Each of their allow-lists already carried an entry excused in a
+# comment saying *a declaration is the opposite of a writer* — the lineage registry, which registers a
+# feed and queries nothing. That sentence is the rule, so it lives here, once, and the locks
+# dereference it rather than keeping five copies (or five hand-written excuses).
+#
+# PURE and stdlib-only, so a harness can import it without the app.
+def declares_only(source, name):
+    """True when every mention of `name` in `source` is an entry in a MODULE-LEVEL dict / set / list /
+    tuple — a declaration, which cannot read, write or book anything.
+
+    A mention anywhere else is a USE: a query, a call argument, an f-string, a comparison, or a
+    structure built inside a function (which is code, not a declaration). Source that does not parse
+    counts as a use, never as an excuse — an unparseable file read as "touches nothing" is a hole in
+    whichever lock asked.
+    """
+    try:
+        tree = _ast.parse(source)
+    except SyntaxError:
+        return False
+    declared = set()
+    for node in tree.body:
+        if isinstance(node, (_ast.Assign, _ast.AnnAssign)) and isinstance(
+                getattr(node, "value", None), (_ast.Dict, _ast.Set, _ast.List, _ast.Tuple)):
+            for sub in _ast.walk(node.value):
+                declared.add(id(sub))
+    for sub in _ast.walk(tree):
+        if (isinstance(sub, _ast.Constant) and isinstance(sub.value, str)
+                and name in sub.value and id(sub) not in declared):
+            return False
+    return True
