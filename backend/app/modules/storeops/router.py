@@ -6010,8 +6010,12 @@ def list_store_geo_pins(authorization: str = Header(default=""), org_id: str = O
     RBAC-narrowed on the SAME keyset every other store-span read here uses, so a DM sees the stores
     they are responsible for and not the tenant's whole estate."""
     try:
+        # DELIBERATELY NO `market`. Nothing on this surface groups or filters by market, and
+        # `stores.market` is one of the TWO market vocabularies that are known to diverge (index
+        # §13): a read of it that no caller needs is a third resolution site waiting to happen.
+        # A caller that ever does need market here resolves it through `app.core.scope`, not here.
         rows = (sb().table("stores").select(
-            "store_code,address,market,is_active,geo_lat,geo_lng,geofence_radius_m,"
+            "store_code,address,is_active,geo_lat,geo_lng,geofence_radius_m,"
             "geo_pin_source,geo_pinned_at,geo_pinned_by")
             .eq("org_id", org_id).limit(1000).execute().data) or []
     except Exception:
