@@ -47,9 +47,9 @@ FACTS: dict[str, dict] = {
     'location_fix_retention': {
         "question": 'HOW LONG MAY WE KEEP WHERE SOMEBODY WAS, AND WHAT HAPPENS WHEN THAT RUNS OUT? '
                     'Two tenant settings promised a window and nothing deleted anything: '
-                    '`punch_geo_retention_days` (mig 1112, found by that feature\'s own security '
-                    'pass) and `checkin_geo_retention_days` (mig 986, declared on the control box '
-                    'as `marketing_checkin_gps_retention` = `unmonitored`, "no purge job runs"). '
+                    '`punch_geo_retention_days` (found by the punch geofence\'s own security '
+                    'pass) and `checkin_geo_retention_days` (declared on the control box as '
+                    '`marketing_checkin_gps_retention` = `unmonitored`, "no purge job runs"). '
                     'One class, two instances. A window that deletes nothing is worse than no '
                     'window because it READS as a commitment, so this holds the registry of every '
                     'relation that stores a person\'s position, the ONE date arithmetic, and a '
@@ -59,7 +59,10 @@ FACTS: dict[str, dict] = {
                     'coordinate column NAMES are not held here: they are dereferenced from '
                     '`store_geofence.PUNCH_COLUMNS`, because a second copy of a column name is '
                     'how this class of defect returns. A BIPA face template is a different fact '
-                    'and keeps its own home in `storeops/face_retention.py`.',
+                    'and keeps its own home in `storeops/face_retention.py`. The schema numbers that add each '
+                    'stamp column are carried by index CORE-31 and by the files themselves, not '
+                    'restated in this string: a literal here would be a customer-copy defect under '
+                    'the 19.36 boundary, which reads message keys and never data.',
         "homes": [
             "app/modules/core/geo_retention.py"
         ],
