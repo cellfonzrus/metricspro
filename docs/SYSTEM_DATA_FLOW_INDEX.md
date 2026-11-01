@@ -191,6 +191,7 @@ Primary code homes:
 | COMMCALC-51 | **A missing trading day is audible** | "this is a big problem for management iff we wil miss trading days, we need to get this fix right away" — said of a store that never delivered 22 and 23 September, which surfaced only because a rep's commission claim read $224 above our own data. The day state had named it NOT REPORTED all along; the sales report refuses to email a missing feed (correctly) and handed it to import health, which had no check for it. What does a correct fact no surface asks for amount to, and who hears the 324 store-days we never received? |
 | COMMCALC-52 | **A login outcome is read off what the page is doing, never off how it is built** | "all these reports should have been updated automatically with the portal access via chron jobs why is this not happeneing neds to be found first and then fixed" — three carrier feeds dark since 9 October while the scheduler fired 1,665 times and 1,056 consecutive runs reported "credentials rejected". That sentence was a substring search over `page.content()`, so a portal that merely BUNDLES the word "invalid" read as having said it, and a human check, an edge refusal and a changed sign-in flow were all reported as a wrong password. |
 | COMMCALC-53 | **A feed window's day comes from the tenant's zone, never the server's** | "if we access to one behind that door then all should be downloaded automatically" — two of the three feeds would, once the login was honest (§COMMCALC-51). The third never had an access problem: the comprehensive comp report has not arrived automatically ONCE since the leg was built, because the window was built on `datetime.now(timezone.utc).date()` while its slot is 23:30 in the tenant's zone — 03:30 UTC the NEXT day. Every run asked the portal for a day that had not begun where the portal lives, and the resulting zero was read as "no compensation posted". The rule already had a home, written 2026-07-30, whose docstring states this exact defect; nothing in commcalc read it. |
+| COMMCALC-54 | **"Which plan am I on?" is a question with one answer and three steps** | "the plan which is active in incentive payout when you click on it it takes you to the page which has all kinds of Incentive structure listed which becomes confusing even to me ... all of this should be a work flow than random data seen on the screen" — the confusing page is the symptom. Nothing in the platform ANSWERED "which plan am I on": three surfaces showed the operator the raw plan table and left the question to them, and one of them owned the live/belongs predicate privately. An unassigned plan pays nobody, so calling it active is the plausible-looking answer that hides the class. |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
@@ -26301,6 +26302,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-51 | commcalc |
 | COMMCALC-52 | commcalc |
 | COMMCALC-53 | commcalc |
+| COMMCALC-54 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -43738,3 +43740,87 @@ counts as a use, never as an excuse. Pure and stdlib-only, so a harness imports 
 
 Each of the five keeps its own armed controls (a module-level map is a declaration, a `.table(...)`
 call is not, a map built inside a function is not), so the shared answer cannot go quietly wrong.
+
+## §COMMCALC-54. "WHICH PLAN AM I ON?" IS A QUESTION WITH ONE ANSWER AND THREE STEPS (owner report 2026-11-01)
+
+Owner, verbatim: *"the plan which is active in incentive payout when you click on it it takes you to
+the page which has all kinds of Incentive structure listed which becomes confusing even to me ... When
+we click on the plan it should show the one which is active and below it should give the option to
+change the plan and when you click on change the plan it should show what the available options are
+and then clicking on the available options the user should be able to create a new plan — all of this
+should be a work flow than random data seen on the screen"*.
+
+**THE CLASS, NOT THE SCREEN.** The confusing page is a symptom. The general fact that was wrong is that
+**nothing in the platform answered "which plan am I on?"** — three surfaces showed the operator the raw
+plan table and left the question to them: `router.payout_plans_overview` (counts live plans per
+carrier, and owned the live/belongs predicate privately), the plan editor
+`/commcalc/commission-plans` (1,942 lines: every plan beside the pay gate, the dedup audit, the
+exclusions, the setup fee, the coverage wizard and the MTD panel), and `payout_plans_diagnose` (lists
+them a third time). Two paths answering one question is the duplicate defect the house rules forbid;
+three is the same defect wearing a hat.
+
+### The one home
+`backend/app/modules/commcalc/plan_workflow.py` — PURE (no DB, no client, no org id, no tenant or
+carrier name). It owns:
+
+| Fact | Function |
+|---|---|
+| is this plan switched on (an ABSENT `is_active` is live — the column defaults TRUE) | `plan_is_live` |
+| does it apply under this carrier lens (NULL `carrier_id` = the tenant's catch-all) | `plan_serves_carrier` / `live_plans_for_carrier` |
+| **THE plan this tenant pays by right now** — live, in scope AND assigned to somebody | `active_plan` |
+| the three ordered steps the screen renders | `active_step` / `change_step` / `create_step` / `workflow` |
+| every starting point a new plan can be authored from | `options` (`OPTION_KINDS`) |
+| which EXISTING door a chosen option implies, and the body for it | `draft_from_option` |
+
+**AN UNASSIGNED PLAN IS NOT WHAT THE TENANT PAYS.** `active_plan` requires an assignment, because a
+complete-looking plan nobody is assigned to pays $0 — presenting it as active is the plausible-looking
+answer that hides this whole class. A tenant in that state is TOLD it pays nobody.
+
+### Dereferenced, not copied
+`router.payout_plans_overview` now reads `live_plans_for_carrier` / `plan_serves_carrier` /
+`plan_is_live` instead of its own `carrier_id in (cid, None) and is_active` test, so the hub and the
+workflow can never disagree about which plan a tenant is on. Which ENGINE pays the tenant stays with
+`router._resolve_carrier_mode` (the resolver the pay run uses); `_workflow_engine` only lets a carrier
+with its own explicit `engine_mode` (mig 303) answer for itself, and re-implements no name heuristic.
+
+### No third write path, and nothing it creates can move pay
+`GET /commcalc/incentive-plan/workflow` and `GET /commcalc/incentive-plan/draft` are READS. The draft
+names the door that already existed — `POST /commission-plans` for a plan, `POST
+/carrier-template/clone` (§mig 221, `template_clone`) for a shared carrier's curves — and the browser
+posts it unchanged, so the money-config body is never assembled in TypeScript. **Every plan this
+workflow creates is `is_active: false` with `assignments: []`**, carrying the source plan's rules and
+tiers but none of their identity: pay moves only when the operator assigns it and recalculates (which
+the §COMMCALC-41.9 hook then queues). No migration, no new table, no new writer.
+
+### Every tenant (project directive 2026-10-30)
+`engine` is a REQUIRED positional argument on every entry point — the one place a house default is
+BANNED, because which engine pays you is a tenant's own declaration, not a policy. A Boost-engine
+tenant (zero `commission_plan` rows) is told it is paid by the built-in KPI-tier engine and every
+option it is offered carries the caveat that a new plan pays nothing until the carrier's engine is
+switched. Nothing declared means nothing identified, and the surface says so.
+
+### The screen
+`frontend/src/app/(platform)/commcalc/incentive-plan/page.tsx` (`/commcalc/incentive-plan`, nav
+"Your Incentive Plan", tileOnly, so the `/hub/incentive-payout-plans` dashboard tiles it). Three
+steps, rendered from the payload: it holds no option kind, no step list, no headline and no endpoint of
+its own. The payout hub's carrier cards and its toolbar now land here; the full settings page is one
+click away as **All Plan Settings (advanced)** and is otherwise unchanged.
+
+### The locks
+`backend/harness_plan_workflow_lock.py` (38 checks, CI job `carrier-vocab-guard`): the hub
+dereferences the predicate and keeps no private copy; the module imports nothing from `app`, writes
+nothing and names exactly two endpoints; `engine` has no default; every draft is inactive and
+unassigned (behavioural); the page spells no option kind or endpoint; an unknown option, a nameless
+plan and an undeclared engine are REFUSED and the endpoint turns that into a 400. Five negative
+controls. Tests: `backend/tests/unit/test_plan_workflow.py` (25) +
+`backend/tests/integration/test_incentive_plan_workflow_endpoint.py` (20, parametrised over all three
+tenants, including that one tenant's plans never appear in another's options). The database double now
+gives an inserted row an `id` (Postgres does; `tests/unit/test_supabase_double.py` pins it).
+
+**Cross-refs:** §6p (`payout_structure` — the employee-facing rates document, the one home this
+workflow links to rather than restating) · §COMMCALC-41.9 (a plan edit restates the months it paid —
+what happens AFTER this workflow's plan is assigned) · §COMMCALC-06.2 (a mechanism an operator cannot
+reach from the screen is §19.18 — the reason this is a screen and not an endpoint) · §19.18 (one fact,
+one home, dereferenced) · §mig 221 / `template_clone` (the shared carrier template door) · §CORE-27
+(the standard filters + Send bar belong to a REPORT; this is a configuration workflow and carries the
+carrier lens instead).

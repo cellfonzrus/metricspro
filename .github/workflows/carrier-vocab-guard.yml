@@ -1391,6 +1391,14 @@ on:
       - "backend/harness_feed_gap_days.py"
       - "backend/harness_zero_sales.py"
       - "backend/harness_zero_sales_lock.py"
+      # index §COMMCALC-54 — "which incentive plan am I on, and what can replace it?" has ONE home,
+      # the payout hub dereferences its predicate, and the guided screen renders the steps the
+      # backend declares instead of spelling its own. The lock reads the module, the router block,
+      # the screen and the hub, so a change to any of them must run it.
+      - "backend/harness_plan_workflow_lock.py"
+      - "backend/app/modules/commcalc/plan_workflow.py"
+      - "frontend/src/app/(platform)/commcalc/incentive-plan/page.tsx"
+      - "frontend/src/app/(platform)/commcalc/payout-plans/page.tsx"
       - "backend/app/modules/commcalc/zero_sales.py"
       - "backend/app/modules/commcalc/import_audit.py"
       - "backend/app/modules/commcalc/feed_period.py"
@@ -2140,6 +2148,9 @@ jobs:
       - name: Run the zero-sales one-home lock (one shifts read, one predicate, one alert fan-out, one dedup key spelling — and the lock's own router BLOCK now has an END, so a feature appended to router.py later cannot be mistaken for zero-sales code)
         working-directory: backend
         run: python3 harness_zero_sales_lock.py | tail -20 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the incentive-plan workflow lock (one answer to "which plan am I on" — the payout hub dereferences the predicate instead of keeping its own; no third write path, the two existing doors only; a plan the workflow creates is switched OFF with nobody assigned, so it cannot move pay; the screen spells no option kind, no step list and no endpoint of its own — owner 2026-11-01, index §COMMCALC-54)
+        working-directory: backend
+        run: python3 harness_plan_workflow_lock.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the missing-trading-day lock (a store-day whose sales feed never landed is REPORTED to the surface that can fix it, and a store that reported and sold nothing is NEVER called a missing upload; the day state is dereferenced from its one home, not respelled; closed and unfinished days are not gaps; a threshold that would silence every finding is refused — owner 2026-10-31, index §COMMCALC-51)
         working-directory: backend
         run: python3 harness_feed_gap_days.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

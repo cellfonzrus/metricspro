@@ -169,3 +169,36 @@ def test_only_the_negated_term_is_inverted():
 def test_a_not_operator_the_double_cannot_read_raises_rather_than_matching_everything():
     with pytest.raises(NotImplementedError):
         _ts().table("daily_sales_feed").select("*").not_.like("trans_id", "T%")
+
+
+# ── A CREATE GETS A KEY, because the column it lands in has one ──────────────────────────────────
+# Every `id` in this schema carries `default gen_random_uuid()`, and the backend's save paths read
+# the new key back out of the insert response to attach children to it (`router.save_commission_plan`
+# does exactly that). A double that returned a row with no id would make a create look broken in a
+# test and work in production — the direction nobody is looking.
+def test_an_inserted_row_with_no_id_is_given_one():
+    from tests.fakes.supabase import FakeSupabase
+    fake = FakeSupabase()
+    written = fake.schema("commcalc").table("commission_plan").insert(
+        {"org_id": ORG, "name": "A plan"}).execute().data
+    assert written[0]["id"]
+    stored = fake.rows("commcalc.commission_plan")
+    assert stored[0]["id"] == written[0]["id"]
+
+
+def test_an_id_the_caller_supplied_is_left_alone():
+    from tests.fakes.supabase import FakeSupabase
+    fake = FakeSupabase()
+    fake.schema("commcalc").table("commission_plan").insert(
+        {"id": "chosen-id", "org_id": ORG, "name": "A plan"}).execute()
+    assert fake.rows("commcalc.commission_plan")[0]["id"] == "chosen-id"
+
+
+def test_two_inserts_do_not_collide():
+    from tests.fakes.supabase import FakeSupabase
+    fake = FakeSupabase()
+    t = fake.schema("commcalc").table("commission_plan")
+    a = t.insert({"org_id": ORG, "name": "one"}).execute().data[0]["id"]
+    b = fake.schema("commcalc").table("commission_plan").insert(
+        {"org_id": ORG, "name": "two"}).execute().data[0]["id"]
+    assert a != b
