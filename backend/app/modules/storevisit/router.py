@@ -364,19 +364,28 @@ def _visit_geo_columns(org_id, store_code, lat, lng, accuracy):
     through the one home. A copy of this resolution here is exactly the divergence CLAUDE.md's
     one-fact-one-home rule forbids, so the read is the shared one and only the I/O is local."""
     try:
-        from app.modules.storeops.router import _punch_geo_config, _store_pin_row, _punch_geo_present
+        from app.modules.storeops.router import (_punch_geo_config, _store_pin_row,
+                                                 _punch_geo_present, _punch_policy_row,
+                                                 _geo_stamp_columns)
         if not _punch_geo_present():
             return {}
-        cfg, _ = _punch_geo_config(org_id)
+        policy_row, available = _punch_policy_row(org_id)
+        cfg, _ = _punch_geo_config(org_id, policy_row, available)
         verdict = _sgeo.evaluate_presence(_sgeo.KIND_STORE_VISIT, fix_lat=lat, fix_lng=lng,
                                           fix_accuracy_m=accuracy,
                                           store_row=_store_pin_row(org_id, store_code), config=cfg)
+        # The retention commitment is written whether or not there is a verdict to write with it:
+        # the COORDINATES are stored by the caller either way, and a coordinate with no purge date
+        # is a coordinate nothing will ever delete (index §CORE-31).
+        out = dict(_geo_stamp_columns("storeops.store_visits", policy_row))
         if not verdict:
-            return {}
+            return out
         cols = _sgeo.PUNCH_COLUMNS[_sgeo.KIND_STORE_VISIT]
         # Only the VERDICT: the three coordinate columns are already written by the caller from the
         # payload, and rewriting them here would make two statements about one fact.
-        return {cols["decision"]: verdict["decision"], cols["distance"]: verdict["distance_m"]}
+        out[cols["decision"]] = verdict["decision"]
+        out[cols["distance"]] = verdict["distance_m"]
+        return out
     except Exception:
         return {}
 

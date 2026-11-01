@@ -1445,7 +1445,18 @@ _all_routes = _flatten_routes(real_app.routes)
 # and NONE touches a stored total, statement, GP, commission, payable or tax figure — the geofence
 # verdict is read by the attendance board alone. The pin is audited (`geo_pinned_by`/`geo_pinned_at`)
 # because moving it changes who gets flagged. Re-taken on a counted, named addition, never relaxed.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1834"))
+# Re-pinned 1834 -> 1836 on 2026-11-01 (§CORE-31, the GPS retention sweep). Verified the house way,
+# NOT by arithmetic: `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` printed exactly
+# TWO added decorators and NONE removed —
+#     + /core/location-fixes/prune/run-due   POST  (the nightly sweep; run-secret guarded, platform
+#                                                   wide, honouring each tenant's declared window)
+#     + /core/location-fixes/retention       GET   (what is held, what is due, counts only)
+# The POST is a DELETION path, which is why it is named here in full: it clears COORDINATES and
+# nothing else — the verdict, the distance and the stamp survive, pinned by harness_geo_retention_lock
+# F2/F3 — so no stored total, statement, GP, commission, payable or tax figure can move. It is
+# secret-guarded with a constant-time compare and reachable by no tenant request. The GET is
+# super-admin, counts only, and returns no coordinate.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1836"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

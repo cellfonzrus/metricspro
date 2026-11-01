@@ -52,6 +52,7 @@ from app.modules.billing import trial as _trial
 from app.modules.core import self_lockout as _self_lockout
 # "What is this tenant called / what does a human pick it by" — the ONE home (index §POS-02).
 from app.modules.core import tenant_identity as _tenant_identity
+from app.modules.core import geo_retention as _geo_ret
 
 router = APIRouter(prefix="/core", tags=["Core / RBAC"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -716,6 +717,73 @@ def prune_audit_logs(x_notify_secret: str = Header(default=""),
     except Exception as e:
         # function absent (mig 857 un-run) or DB error → report, never 500 the scheduler
         return {"ok": False, "error": f"{e} (is migration 857 applied?)"}
+
+
+@router.post("/location-fixes/prune/run-due")
+def prune_location_fixes(x_notify_secret: str = Header(default=""), dry_run: bool = False):
+    """Retention sweep for EVERY relation that stores where a person was (index §CORE-31).
+
+    WHY IT EXISTS. Two tenant settings promised a retention window and nothing deleted anything:
+    `punch_geo_retention_days` (mig 1112, found by that feature's security pass) and
+    `checkin_geo_retention_days` (mig 986, declared on the control box as
+    `marketing_checkin_gps_retention` = `unmonitored`, "no purge job runs"). One class, two
+    instances, so this sweep is the mechanism — it reads
+    `core/geo_retention.LOCATION_RELATIONS` and has no notion of any particular relation.
+
+    WHAT IT CLEARS: the COORDINATES. What it KEEPS: the verdict and the distance — so honouring the
+    promise never changes a flag, a report or an export, only the ability to re-derive one from a raw
+    position. A row written before its relation's stamp column existed carries no commitment and is
+    REPORTED (`no_retention_stamp` on the GET below), never purged on a guess.
+
+    Secret-guarded with a CONSTANT-TIME compare, like `/core/audit/prune/run-due` and
+    `/notify/run-due`, and the path ends in `/run-due` so the tenant middleware allowlists it for the
+    JWT-less scheduler. Platform-wide by design: it is a scheduler job honouring every tenant's own
+    declared window, not a tenant request. Degrades to `ok: false` with the migration named rather
+    than 500ing the scheduler."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+
+    def _client_for(entry):
+        return get_supabase_admin().schema(entry["schema"])
+
+    if dry_run:
+        # Report what WOULD be cleared without writing — the first run on real data should be
+        # readable before it is irreversible.
+        out = []
+        for entry in _geo_ret.LOCATION_RELATIONS:
+            try:
+                rows = (_client_for(entry).table(entry["table"])
+                        .select(",".join(("id", entry["stamp"]) + _geo_ret.fix_columns_for(entry)))
+                        .not_.is_(entry["stamp"], "null").limit(_geo_ret.PAGE).execute().data) or []
+                out.append({**_geo_ret.retention_summary(rows, entry), "ok": True})
+            except Exception as e:                             # noqa: BLE001 — reported, never raised
+                out.append({"relation": entry["relation"], "ok": False,
+                            "error": f"{e} (is migration {entry['migration']} applied?)"})
+        return {"ok": all(r.get("ok") for r in out), "dry_run": True, "relations": out}
+
+    return _geo_ret.sweep_all(_client_for)
+
+
+@router.get("/location-fixes/retention")
+def location_fix_retention(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                           org_id: str = ORG_ID):
+    """What this tenant is holding, what is due, and what carries no retention commitment at all.
+
+    This is what makes the promise measurable rather than theoretical, and it is what the control box
+    reads instead of the `unmonitored` declaration it carried before (index §23.7, §CORE-31). Returns
+    counts only — never a coordinate, and never another tenant's rows."""
+    _require_super_admin(authorization, x_active_org)
+    out = []
+    for entry in _geo_ret.LOCATION_RELATIONS:
+        try:
+            rows = (get_supabase_admin().schema(entry["schema"]).table(entry["table"])
+                    .select(",".join(("id", entry["stamp"]) + _geo_ret.fix_columns_for(entry)))
+                    .eq("org_id", org_id).limit(20000).execute().data) or []
+            out.append({**_geo_ret.retention_summary(rows, entry), "ok": True})
+        except Exception as e:                                 # noqa: BLE001 — reported, never raised
+            out.append({"relation": entry["relation"], "what": entry.get("what"), "ok": False,
+                        "error": f"{e} (is migration {entry['migration']} applied?)"})
+    return {"relations": out, "ok": all(r.get("ok") for r in out)}
 
 
 # ── Incident-response containment tools (External Threat Defense Plan §1.1 / §4.2) ────────────────

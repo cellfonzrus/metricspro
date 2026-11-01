@@ -567,7 +567,7 @@ rbac = src(REPO, "frontend", "src", "lib", "rbac.ts")
 # Read the group by its HEAD and then its body, the way every other NAV reader here does
 # (harness_super_admin_toolbox A0, harness_nav_deep_link_lock NAV_GROUP_RE). Pinning the literal
 # field ORDER — `{ group: 'X', module: 'Y', items: [` — made this lock fail the day a new declared
-# field (`icon`, index §CORE-14.5) was added between them, which is a fact about the source's
+# field (`icon`, index §CORE-31.5) was added between them, which is a fact about the source's
 # punctuation, not about the nav group.
 def _nav_group_body(source: str, name: str) -> str:
     """The text of ONE NAV group: from its `{ group: '<name>'` head to the next group head (or the
