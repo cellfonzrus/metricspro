@@ -2899,6 +2899,25 @@ FACTS: dict[str, dict] = {
             'app/modules/account/router.py': ('statement_filter',),
         },
     },
+    'relation_schema': {
+        "question": 'WHICH SCHEMA holds this relation — or did the reader that named the table just '
+                    'assume one, and read an empty table (or no table at all) instead?',
+        "homes": ('app/modules/core/relation_home.py',),
+        "index": ('CORE-30',),
+        "locks": ('harness_relation_home_lock.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            # §CORE-30 — the Run Calculation's input gathering (`_calc_inputs.fetch`) and the rep
+            # self-scope (`_caller_rep_keys`). The first killed EVERY tenant's calculation for about
+            # eight weeks by asking `commcalc` for `employees`; the second asked `public` for
+            # `app_users`, and its failure path means "unrestricted", so no rep was scoped at all.
+            'app/modules/commcalc/router.py': ('_relation_home',),
+            # the sibling reader of `_calc_inputs.fetch`, which swallowed the identical failure
+            'app/modules/commcalc/payout_accrual.py': ('_relation_home',),
+            # the clock-in subject, which was resolving people against the stale `public.employees`
+            'app/modules/storeops/clockin_evidence.py': ('_relation_home',),
+        },
+    },
     'complete_feed_read': {
         "question": 'Have I read ALL of this feed — every row, each exactly once — or only the '
                     'first N rows somebody typed, in whatever order the backend felt like?',

@@ -38,6 +38,7 @@ Run: python3 backend/harness_order_transport.py     (stdlib only, no DB, no netw
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import os
 import re
@@ -520,19 +521,40 @@ _rt_sup = code_text(os.path.join(APP, "modules", "supply", "router.py"))
 ok('store.land_catalog(client, org_id, vendor_id, read["rows"], "api")' in _rt_sup,
    "H17 LOCK: the API read lands through store.land_catalog — the ONE lander the upload and portal "
    "routes already use, so one snapshot table holds every vendor's prices")
-# The lineage registry NAMES the table as a registered feed (§36) and writes nothing — a declaration
-# is the opposite of a second writer, and removing it would un-register the feed.
-CATALOG_NAMING_EXCUSED = (
-    os.path.join(APP, "modules", "supply", "store.py"),                      # the one lander
-    os.path.join(APP, "modules", "commcalc", "data_lineage_registry.py"),    # declares, never writes
-)
-_landers = [f for f in py_files() if f not in CATALOG_NAMING_EXCUSED
-            and "vendor_catalog_price" in code_text(f)]
+# A DECLARATION IS THE OPPOSITE OF A SECOND WRITER. Two files legitimately NAME the table without
+# touching it: the lineage registry (which registers the feed, §36) and `core/relation_home.py` (which
+# says which schema holds it, §CORE-30, and names all ~500 relations). So "names it" is not the rule —
+# derived 2026-10-31, after the relation map tripped this lock on its first day. The rule is now
+# "names it AND performs a write", read from the file's own AST, so the next declaration file needs no
+# third entry on a list and a real second writer still cannot hide behind one.
+WRITE_VERBS = {"insert", "upsert", "update", "delete", "rpc"}
+
+
+def _writes_anything(path):
+    """Whether this file performs ANY write call at all, from its own AST.
+
+    Read from the RAW source, not `code_text`: blanking a docstring leaves a class or function whose
+    body was only that docstring syntactically empty, so `code_text` does not always parse — and an
+    unparseable file read as "writes nothing" would be a hole in the lock. The AST cannot be fooled by
+    prose the way a text scan can, so the raw source is the safer input here, not the looser one.
+    """
+    try:
+        tree = ast.parse(open(path, encoding="utf-8", errors="replace").read())
+    except SyntaxError:
+        return True                 # unparseable → treat as a writer rather than excuse it silently
+    return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+               and n.func.attr in WRITE_VERBS for n in ast.walk(tree))
+
+
+CATALOG_LANDER = os.path.join(APP, "modules", "supply", "store.py")      # the ONE lander
+_named = [f for f in py_files() if f != CATALOG_LANDER and "vendor_catalog_price" in code_text(f)]
+_landers = [f for f in _named if _writes_anything(f)]
 ok(not _landers, f"H18 LOCK: nothing else writes the catalog table {_landers}")
+ok(_named, "H18-armed the name scan still finds the files that merely DECLARE the table — a scan that "
+           "found nothing would excuse a second writer by accident")
 ok("vendor_catalog_price" in 'x.table("vendor_catalog_price").insert(r)',
    "H18-armed the catalog-writer scan matches a real second writer")
-ok(all(os.path.exists(f) for f in CATALOG_NAMING_EXCUSED),
-   "H18b every excused file still exists — a stale excuse is a hole in the lock")
+ok(os.path.exists(CATALOG_LANDER), "H18b the one lander still exists")
 
 # ══ §I  WHO THE ORDER IS FOR — one home, read by the export and by the order ═════════════════════════
 print("\n§I  the customer the export seeds is the customer an order names")

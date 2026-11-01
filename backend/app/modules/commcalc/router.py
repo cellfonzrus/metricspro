@@ -24,6 +24,7 @@ from app.modules.core import portal_secret as _psec   # 2026-10-12 — THE regis
 from app.modules.commcalc import prospect_feed_tally as _pft   # 2026-10-16 — THE per-feed,
 # per-month row tally, in the one shape both its readings produce (index §COMMCALC-TALLY)
 from app.modules.core import feed_read as _feed_read   # 2026-10-06 — THE complete paged feed read; no literal row ceiling (index §19.48)
+from app.modules.core import relation_home as _relation_home   # 2026-10-31 — THE one home of which schema holds a relation (index §CORE-30)
 from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE pay-feed balance: placed, or reported unplaced (index §19.48)
 from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
 from app.modules.commcalc import carrier_device_money as _cdm   # THE device-financing dollars per device (index §COMMCALC-44)
@@ -16874,8 +16875,13 @@ def _calc_inputs(client, org_id, period):
         # Crossing the ceiling was indistinguishable from an empty month. `raw_mi` was next over it
         # (46,047 rows in September, +~4,000/month). A failed read now RAISES rather than returning
         # [] — a partial feed must never be mistaken for a smaller feed.
+        # WHICH SCHEMA HOLDS THIS RELATION is dereferenced, never assumed (index §CORE-30). This
+        # reader takes the table BY NAME, so it cannot know: `employees` and `stores` below are
+        # `storeops` relations and the hard-coded `commcalc` here killed every calculation on its
+        # first line from early September to 2026-10-31 — on every tenant, for every month.
         def _make():
-            q = client.schema('commcalc').table(table).select('*').eq('org_id', org_id)
+            q = (_relation_home.reader(client, table)
+                 .eq('org_id', org_id))
             for k, v in filters.items():
                 # A LIST filter value → .in_ so the read is period-spelling tolerant: the sweeps store
                 # 'July 2026' while a manual /calculate passes '2026-07', and an exact .eq('period', …)
@@ -17442,7 +17448,9 @@ def _caller_rep_keys(authorization: str, org_id: str):
       • set()       — a self rep we could NOT map to a rep → the caller sees NOTHING (never another rep's
                       row; the KPI page shows an empty state + hint, not other people's pay).
     Same identity path My Targets uses (app_user → employee → rep name). Reads app_users/employees
-    (public schema) READ-ONLY, org-scoped. Never raises."""
+    READ-ONLY, org-scoped. Never raises. Both relations are read through
+    `core.relation_home` (index §CORE-30) — this docstring used to claim "(public schema)",
+    which is precisely the assumption that disabled the scoping."""
     try:
         from app.modules.storeops.router import _rbac_enabled, role_is_self_scoped
         from app.modules.core.router import _uid_from_token
@@ -17454,7 +17462,12 @@ def _caller_rep_keys(authorization: str, org_id: str):
         uid = _uid_from_token(authorization)
         if not uid:
             return None
-        urows = (sb().table("app_users").select("role,employee_id")
+        # WHICH SCHEMA HOLDS THIS RELATION, dereferenced (index §CORE-30). `sb()` in THIS module is
+        # the plain client — the `public` schema — and both relations below live in `storeops`
+        # (mig 003). `public.app_users` has never existed, so this read raised PGRST205, the outer
+        # `except` swallowed it, and None here means UNRESTRICTED: every self-scoped rep was handed
+        # every rep's commission rows. Found 2026-10-31 beside the same wrong fact in `_calc_inputs`.
+        urows = (_relation_home.reader(sb(), "app_users", "role,employee_id")
                  .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
         if not urows:
             return None
@@ -17465,7 +17478,10 @@ def _caller_rep_keys(authorization: str, org_id: str):
         eid = (u.get("employee_id") or "").strip()
         if eid:
             try:
-                emp = (sb().table("employees").select("name")
+                # …and the roster, for the same reason. `public.employees` DOES exist — a stale
+                # four-row copy predating the storeops schema — which is why this read looked
+                # plausible for as long as it did; the live roster is `storeops.employees` (142 rows).
+                emp = (_relation_home.reader(sb(), "employees", "name")
                        .eq("org_id", org_id).eq("employee_id", eid).limit(1).execute().data) or []
                 if emp:
                     name = str(emp[0].get("name") or "").strip()
@@ -19272,7 +19288,8 @@ def _write_installment_schedule(client, org_id, body, sid, changed_by):
     """Shared create/update writer (mig 201 + mig 210). sid None → INSERT; else UPDATE that id. Replaces
     the month lines (delete-then-insert). Stamps updated_by/updated_at (mig 210) and records a before/after
     audit row. m1_gate/updated_by degrade if mig 210 isn't applied — retried without them so a save on a
-    mig-201-only DB still works. Does NOT recompute pay (that waits for POST /calculate)."""
+    mig-201-only DB still works. RESTATES the months this schedule paid, through the post-landing hook
+    (§COMMCALC-41.9) — it used to leave that to somebody pressing Run Calculation."""
     action = "update" if sid else "create"
     before = _installment_snapshot(client, org_id, sid) if sid else None
     head = _installment_head(body, org_id)
@@ -19308,6 +19325,12 @@ def _write_installment_schedule(client, org_id, body, sid, changed_by):
 
     after = _installment_snapshot(client, org_id, new_sid)
     _installment_audit(client, org_id, new_sid, action, before, after, changed_by)
+    # EVERY EDIT RESTATES THE MONTHS IT PAID (§COMMCALC-41.9). Placed in the WRITER, not in its two
+    # endpoints: the create and the update are one declaration change, and a hook per endpoint is two
+    # answers to one question. The docstring above used to end "Does NOT recompute pay (that waits for
+    # POST /calculate)" — that sentence was the defect the owner reported on 2026-10-31.
+    _plan_declaration_changed(client, org_id, "plan_installment_schedule",
+                              what="a multi-month payout schedule being saved")
     return new_sid
 
 
@@ -20346,7 +20369,9 @@ def delete_plan_installment(sid: str, authorization: str = Header(default=""), o
     except Exception as e:
         raise HTTPException(500, f"delete failed: {e}")
     _installment_audit(client, org_id, sid, "delete", before, None, _caller_uid(authorization))
-    return {"deleted": True}
+    return {"deleted": True,
+            "auto_calc": _plan_declaration_changed(client, org_id, "plan_installment_schedule",
+                                                   what="a multi-month payout schedule being removed")}
 
 
 # ── Classification-first MRC MAPPING (§7b decision 1): classify imported plan lines + prefill $ MRC ──
@@ -20676,7 +20701,9 @@ def save_payout_schedule(body: SavePayoutScheduleIn, org_id: str = ORG_ID):
             })
         if lines:
             client.schema('commcalc').table('payout_schedule_line').insert(lines).execute()
-        return {"id": sid, "lines": len(lines)}
+        return {"id": sid, "lines": len(lines),
+                "auto_calc": _plan_declaration_changed(client, org_id, "payout_schedule",
+                                                       what="a payout schedule being saved")}
     except HTTPException:
         raise
     except Exception as e:
@@ -20688,7 +20715,9 @@ def delete_payout_schedule(schedule_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema('commcalc').table('payout_schedule_line').delete().eq('org_id', org_id).eq('schedule_id', schedule_id).execute()
     client.schema('commcalc').table('payout_schedule').delete().eq('org_id', org_id).eq('id', schedule_id).execute()
-    return {"deleted": schedule_id}
+    return {"deleted": schedule_id,
+            "auto_calc": _plan_declaration_changed(client, org_id, "payout_schedule",
+                                                   what="a payout schedule being removed")}
 
 
 @router.get("/payout-schedule/preview")
@@ -21902,6 +21931,47 @@ class SaveCommissionPlanIn(LaxModel):
     assignments: Any = None
 
 
+# ── A PLAN EDIT RESTATES THE MONTHS IT PAID (index §COMMCALC-41.9, owner 2026-10-31) ──────────────────────
+# Owner, verbatim: *"i upldated the commission for luxelink in ny plan but it did not get auto updated as we
+# confirmed yesterday that everytime anything is change it will auto update acorss the board, i changed teh
+# comission from june - oct"*.
+#
+# ONE DOOR for every writer of a plan declaration, so eight endpoints cannot grow eight answers to "what does
+# this edit restate". It calls THE post-landing hook (`auto_calc.landed`, index §6l) with NO period: an edit
+# carries no month of its own, so the registry's `periods_fn` names the months — every month that has stored
+# figures, within the org's horizon. The hook's own debounce then coalesces a burst of edits (saving a plan
+# writes four tables) into ONE calculation per (org, month), and every refusal guard it has stays armed.
+#
+# Never raises into an editor: a save that worked must not report failure because the recompute could not be
+# queued. The outcome rides back on the response, which is where an operator reads it.
+def _plan_declaration_changed(client, org_id, table, *, what):
+    """A commission-plan declaration was edited → queue the restatement of the months it paid."""
+    return _auto_calc.landed(client, org_id, table=table, periods=None,
+                             source="commission_plan_edit", filename=what)
+
+
+#: THE calculation's own OUTPUT table, and therefore the honest answer to "which months does this org have
+#: commission figures for". It lives HERE, with the module that owns the pay table — `auto_calc` may not so much
+#: as name it (harness_auto_calc_lock §D: the hook schedules a calculation, it never computes or writes pay).
+_STORED_OUTPUT_TABLE = "rep_commissions"
+
+
+def _plan_restate_periods(client, org_id, now=None):
+    """THE months a commission-plan edit restates for this org: every month that HAS stored rep figures, within
+    the org's declared horizon. The `commission` build's `periods_fn` (index §COMMCALC-41.9) — so the months come
+    from the registry, not from whichever of the eight plan endpoints happened to be edited.
+
+    A read failure RAISES rather than returning (), because () here would mean "this edit restates nothing" —
+    silently, which is the whole class of defect this change exists to stop. `read_all` is the complete paged
+    read (index §CORE-05), so a partial feed raises too.
+    """
+    rows = _feed_read.read_all(lambda: (client.schema("commcalc").table(_STORED_OUTPUT_TABLE)
+                                        .select("period").eq("org_id", org_id)))
+    cfg = _auto_calc.load_config(client, org_id)          # THE one reader of commission_org_config (§6l)
+    return _auto_calc.restate_periods([r.get("period") for r in rows], now or datetime.now(timezone.utc),
+                                      cfg.get("restate_months"))
+
+
 @router.post("/commission-plans")
 def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
     """Upsert a plan + REPLACE its rules / tiers / assignments (delete-then-insert children)."""
@@ -22075,7 +22145,11 @@ def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
         if assigns:
             client.schema('commcalc').table('commission_plan_assignment').insert(assigns).execute()
 
-        return {"id": plan_id, "saved": True}
+        # EVERY EDIT RESTATES THE MONTHS IT PAID (§COMMCALC-41.9). One call for the whole save: the
+        # plan and its three children are one declaration, and the hook's debounce coalesces them anyway.
+        return {"id": plan_id, "saved": True,
+                "auto_calc": _plan_declaration_changed(client, org_id, "commission_plan",
+                                                       what=f"the commission plan \u201c{name}\u201d")}
     except HTTPException:
         raise
     except Exception as e:
@@ -22087,7 +22161,10 @@ def delete_commission_plan(plan_id: str, org_id: str = ORG_ID):
     """Delete a plan (children cascade via FK ON DELETE CASCADE)."""
     client = sb()
     client.schema('commcalc').table('commission_plan').delete().eq('org_id', org_id).eq('id', plan_id).execute()
-    return {"deleted": plan_id}
+    # DELETING a plan changes what the stored months were paid by exactly as editing one does.
+    return {"deleted": plan_id,
+            "auto_calc": _plan_declaration_changed(client, org_id, "commission_plan",
+                                                   what="a commission plan being removed")}
 
 
 # ── THE SINGLE-ASSIGNMENT REMOVER (owner 2026-09-28, index §6n / §17) ─────────────────────────────────────
@@ -22137,7 +22214,9 @@ def delete_commission_plan_assignment(plan_id: str, assignment_id: str,
         raise HTTPException(404, "assignment not found on this plan for this org")
     _invalidate_accessory_config(org_id)
     print(f"INFO commission-plan assignment removed org={org_id} plan={plan_id} row={row}")
-    return {"deleted": row, "plan_id": plan_id}
+    return {"deleted": row, "plan_id": plan_id,
+            "auto_calc": _plan_declaration_changed(sb(), org_id, "commission_plan_assignment",
+                                                   what="a plan assignment being removed")}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -23834,7 +23913,9 @@ async def bulk_assign_commission_plan(body: BulkAssignCommissionPlanIn, org_id: 
         "rows_inserted": inserted, "rows_deleted": deleted,
     }
     return {"ok": True, "plan_id": plan_id, "plan_name": plan_nm,
-            "replace_existing": replace_existing, "results": results, "summary": summary}
+            "replace_existing": replace_existing, "results": results, "summary": summary,
+            "auto_calc": _plan_declaration_changed(client, org_id, "commission_plan_assignment",
+                                                   what=f"reps being assigned to \u201c{plan_nm}\u201d")}
 
 
 # ── SINGLE-REP RECOMPUTE (owner directive 2026-08-22, luxelink; rebuilt 2026-09-27, index §6k) ──────────

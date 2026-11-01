@@ -199,6 +199,7 @@ Primary code homes:
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
 | CORE-28 | **Sort by is part of the standard filter bar** | "in the Rep Incentive Report the month range shows, i need it to be sorted by employee store etc, add this to our standard filter bar" — the house has had one comparator and one header-click rule since 2026-08-10; what it had no place for was a CONTROL. Who owns "how are these rows ordered", so a dropdown and a column header can never answer it differently, and what stops the bar from carrying a default list of somebody else's columns? |
+| CORE-30 | **A relation's schema is one fact with one home** | "i upldated the commission for luxelink in ny plan but it did not get auto updated" — and the answer was that NOTHING had recalculated for anyone since early September: the Run Calculation asked the `commcalc` schema for `employees` and `stores`, which are `storeops` relations. Where does "which schema holds this relation" live, what checks it against the migrations, and what else was reading the wrong copy — including the rep self-scope, which returned *unrestricted* every time it failed? |
 | CORE-22 | **A page load never queries once per item** | "How do we avoid these extra round-trip calls? Which loop shapes really cost one trip per row and which only look like it, what is the count today, and what fails the build the day a new one ships?" |
 | COMMCALC-35 | **A device's arrival on the shelf has ONE date** | "Inventory aging in Luxelink should say sell within 10 days of receiving the phones in stock." It reads as a number change. `received_date` is NULL on all 10,525 rows house-wide — the POS export carries the unit's AGE, not a date — so three callers each derived the receipt date, and one of them read the age off the file instead, reporting 9 days in October for a unit last seen in July. Which date does "received in stock" mean here, who owns it, and what is a snapshot's age the answer to? |
 | COMMCALC-36 | **A deadline belongs on the screen the person lands on** | "...and it should be on every sales rep's dashboard when they log in." The payable ledger and the POS snapshot both claim to know which phones are unsold, and for Luxelink they agree on twelve of 3,095. Which of the two is a rep's shelf, and what does a card say about the units whose deadline it cannot establish? |
@@ -26312,6 +26313,7 @@ status word rather than a blank that reads as nil.
 | CORE-27 | core |
 | CORE-28 | core |
 | CORE-29 | core |
+| CORE-30 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -41356,6 +41358,68 @@ incomplete read is still an incomplete ledger.
   as do 35,645 of 35,645 of the house's. The principle stands and is now §COMMCALC-41.8's: liveness does
   not create a date nobody declared (§COMMCALC-34) — it restates the dates when the declaration changes.
 
+### COMMCALC-41.9 THE DECLARATION THAT MOVES REP PAY (owner report 2026-10-31)
+
+Owner, verbatim: *"i upldated the commission for luxelink in ny plan but it did not get auto updated as
+we confirmed yesterday that everytime anything is change it will auto update acorss the board, i changed
+teh comission from june - oct"*.
+
+**He was right to expect it, and §COMMCALC-41.8's rule had been applied to one build only.** The
+`commission` build — the oldest live one, and the one that moves rep pay — declared its FEEDS and no
+declaration at all. So the one thing a tenant actually edits, the plan, made nothing stale, and the
+figures waited for an unrelated upload. `_write_installment_schedule`'s own docstring said it out loud:
+*"Does NOT recompute pay (that waits for POST /calculate)"*.
+
+**What a plan is read out of**, and therefore what now declares the build —
+`derived_builds.PLAN_DECLARATION`, dereferenced by the build's `config_inputs`:
+
+| read by | tables |
+|---|---|
+| `commission_engine._load_plans` | `commission_plan`, `commission_rule`, `commission_tier`, `commission_plan_assignment` |
+| `installment_engine._load_schedules` | `payout_schedule`, `payout_schedule_line` |
+| the multi-month schedules | `plan_installment_schedule`, `plan_installment_line` |
+
+**A FEED NAMES ITS OWN MONTH; AN EDIT DOES NOT.** That is the one genuinely new question here, and the
+answer belongs to the build, not to the eight endpoints that can save a plan. `BUILDS` carries
+`periods_fn` beside `inputs_fn`: `router._plan_restate_periods` returns every month that HAS stored rep
+figures (`commcalc.rep_commissions` — the calculation's own output, which makes it the honest answer to
+"which months did this declaration produce"), bounded by the org's horizon. The bound earns its place:
+Cellfonz R Us really holds a `July 2026` row beside a `July 2024` one (measured 2026-10-31), and a rate
+corrected today must not rewrite 2024. `plan_edit_restate_months` is a per-org config with a house
+default of 12, resolved by `auto_calc.load_config` (the ONE reader of that table) and read
+defensively, so a database without migration 1111 keeps the default — RULE TWO,
+and a POLICY is the one thing a house default is still right for (contrast the 2026-10-30 directive,
+which bans a default that is really one tenant's vocabulary).
+
+**The READ of the pay table lives with the module that owns it.** `_plan_restate_periods` is in
+`commcalc/router.py`, not in `auto_calc.py`, because §D of `harness_auto_calc_lock.py` forbids the hook
+module from so much as naming `rep_commissions`: the hook SCHEDULES a calculation and must never be able
+to compute or write pay. `auto_calc` keeps only the pure rule (`restate_periods`, the horizon's
+resolution inside `resolve_config`), and the registry's `periods_fn` string is what joins the two — so
+neither module grows a second copy of the other's fact.
+
+**ONE DOOR, not eight.** Every writer of a plan declaration calls `router._plan_declaration_changed`,
+which calls the SAME `auto_calc.landed` with no period. Eight doors: `POST /commission-plans`, its
+delete, the single-assignment delete, `POST /commission-plans/bulk-assign`, `save_payout_schedule`, its
+delete, `_write_installment_schedule` (the one writer behind both installment save endpoints, which is
+why the hook sits in the writer and not in its callers) and `template_clone.clone_carrier_template` —
+the clone fires only when it is not a dry run, because a dry run writes nothing. The debounce coalesces
+a plan save's four table writes into ONE calculation per (org, month), and every refusal guard
+`_run_calculation` has stays armed.
+
+**Locked, derived rather than pinned** (§B7's measured lesson: a pinned list cannot catch its own
+deletion). §B8 reads the pay engines' OWN `select`s and requires each table to be in the build's
+`config_inputs`, so emptying the declaration contradicts the code that reads it. §B9 requires a
+period-scoped build carrying a declaration to name the months an edit restates, and requires that
+resolver to exist. §C4 stopped being an allowlist of helper names and now DERIVES the hook doors from
+which functions actually reach `landed(`, so a ninth door needs no edit here and a renamed door turns
+every caller red. 46 checks, 12 planted violations required RED.
+
+**It could not have worked anyway**, and that is the other half of this day's work: see §CORE-30. Every
+tenant's calculation had been failing since early September on a wrong-schema read, so even a correctly
+queued recompute would have recorded an error. Both halves are in the same change; shipping the trigger
+without the engine would have been a queue feeding a wall.
+
 ### COMMCALC-41.8 A DECLARATION IS AN INPUT (owner ask 2026-10-29)
 
 Owner, verbatim: *"Put the Net term days as 14 from the back , programmable not hard code"*.
@@ -43427,3 +43491,100 @@ new card on an existing screen, one new harness. 11 new unit tests (24 in `mobil
 from GitHub) · §CORE-26.7 (the diagnosis that produced this section) · §COMMCALC-44 (an absence needs
 the right reason) · §CORE-13 (a harness that fails the build) · §19.18 (one fact, one home,
 dereferenced).
+
+## §CORE-30. A RELATION'S SCHEMA IS ONE FACT WITH ONE HOME (owner report 2026-10-31)
+
+Found while answering §COMMCALC-41.9 — the owner asked why a plan edit had not recalculated anything,
+and the answer turned out to be that **nothing had recalculated for anyone since early September.**
+
+**The measured defect.** `commcalc/router._calc_inputs` is the one gathering of every read the full Run
+Calculation makes (§6k). It reads through one local `fetch(table)` that hard-codes
+`client.schema('commcalc')` while taking the table as an ARGUMENT. Two of the names passed to it,
+`employees` and `stores`, are `storeops` relations (migration 003). While that reader ended in
+`except: return []` the two reads returned nothing and the calculation ran on an empty roster; when
+`core/feed_read.read_all` was correctly made to RAISE rather than mistake a failed read for a smaller
+feed (§CORE-05), the same two reads began killing the whole calculation on its FIRST LINE.
+
+Measured on production 2026-10-31, `commcalc.calc_status`:
+
+| tenant | months reading `error` | message |
+|---|---|---|
+| Luxelink Wireless LLC | June, July, August, September, October 2026 | *Could not find the table 'commcalc.employees' in the schema cache* |
+| Cellfonz R Us | July, August, September, October 2026 | the same |
+| Vzone | none — last good run 2026-09-28 | (it predates the change) |
+
+So for about eight weeks no upload, no plan edit and no Run Calculation button could recalculate
+anything, and every stored figure was whatever the last run before the change had left. The auto-calc
+hook itself was never broken: LuxeLink's October run fired on its own at 19:11 UTC that day after a
+sales file landed, and failed on that line.
+
+**MONEY-NEUTRAL, and proved rather than asserted.** `calculator.calc_rep_commissions` uses `employees`
+and `stores` only inside `if G['acc_target_on'] and shifts and employees`, and `_calc_inputs` passes
+`shifts=[]` unconditionally, so `rep_acc_targets` is `{}` either way. Reading the two relations
+correctly restores the run without moving a payout, and
+`tests/integration/test_calc_inputs_read_right_schema.py` asserts the two runs are identical rather
+than saying so in prose.
+
+**THE CLASS, NOT THE INSTANCE.** The instance is "employees is read from the wrong schema". The class is
+**a relation's schema is a fact, and it had no home** — so every reader that names a table carried its
+own assumption. Asking the general question found exactly three sites, and the second is not about money
+at all:
+
+| site | what it read | consequence |
+|---|---|---|
+| `router._calc_inputs` | `commcalc.employees` / `commcalc.stores` | every tenant's calculation dead for eight weeks |
+| `router._caller_rep_keys` | `public.app_users` / `public.employees` | **the one answer to "which rep rows are mine" returned `None`, which is its word for *unrestricted* — so every `sales_rep` was handed everyone's pay.** Five commission surfaces call it |
+| `storeops/clockin_evidence._employee` | `public.employees` | the clock-in subject resolved against a stale four-row copy instead of the 142-row live roster |
+
+`payout_accrual._compute_day_boost` carries the identical reader and was fixed in the same commit; it
+swallowed the failure, so its symptom was an empty roster rather than an error.
+
+**Why it hid for so long:** `public.employees` and `public.stores` really do exist in production, holding
+pre-storeops rows, so a `public` read LOOKED plausible — `_caller_rep_keys`'s docstring still claimed
+"(public schema)". `public.app_users` never existed at all. **Reported, not papered over:** those two
+legacy relations are now read by nothing and no migration creates them; dropping them is the owner's
+call and this change does not touch them.
+
+**The one home.** `app/modules/core/relation_home.py` — `SCHEMA_OF` (504 relations), `schema_of(table)`
+and `reader(client, table, select)`. `schema_of` **raises `UnknownRelation`** on a name it does not know,
+because a default is exactly how this shipped. Every site above dereferences it.
+
+**DERIVED FROM THE SCHEMA OF TRUTH, not kept in step by hand.** `harness_relation_home_lock.py`
+re-derives the map from every `create table <schema>.<relation>` in `database/migrations/` (CLAUDE.md's
+schema of truth) and fails the build on: a claim no migration backs (§A1), a relation named that none
+creates (§A2), a relation created but not named (§A3), a relation name appearing in TWO schemas — the
+assumption the whole map rests on, asserted rather than believed (§A4), `schema_of` gaining a default
+(§B), a reader hard-coding one schema being CALLED with a table that lives in another (§C — derived from
+the call sites, which is why the 93 legitimate such readers need no change and a new wrong one is red),
+a bare-client read naming a non-public relation (§D — three sites on 2026-10-31, now zero), and a revert
+at any of the four measured sites by name (§E). Seven planted violations required RED. Stdlib + ast, in
+the no-deps job of `org-scope-guard.yml`.
+
+**Cross-refs:** §COMMCALC-41.9 (the other half of the same day — a plan edit now restates its months) ·
+§6k (the shared input gathering) · §6l (the post-landing hook, which was working throughout) ·
+§CORE-05 (the paged read that correctly started raising, and so exposed this) · §19.18 (one fact, one
+home, dereferenced) · §CORE-08 (`person_identity` — who a person is, the sibling one-home) ·
+§CORE-17 (a surface says where its figure came from).
+
+### CORE-30.1 A FILE THAT NAMES EVERY TABLE TRIPS EVERY NAME SCAN (measured 2026-10-31)
+
+Five locks in this repo answer *"does anything else touch table X"* by searching source text for the
+name. `core/relation_home.py` names **every** relation in the platform, so on its first day all five
+read it as a second home for someone else's fact: `harness_order_transport` §H18
+(`vendor_catalog_price`), `harness_carrier_vocab_guard` (the `UnknownRelation` message, §19.36),
+`harness_vendor_rebate_landing` §G (`raw_vendor_rebate`), `harness_supply_ordering` §L1 (the catalog
+snapshot) and `harness_royalty_lock` (c) (`royalty_report_line`).
+
+**None of them was given a new allow-list entry.** Four of the five allow-lists already carried one
+excused in a comment saying *a declaration is the opposite of a writer* — the lineage registry, which
+registers a feed and queries nothing. That sentence is the rule, so it became the rule, and it has one
+home: **`relation_home.declares_only(source, name)`** — true when every mention of the name is an
+entry in a MODULE-LEVEL dict / set / list / tuple. A mention anywhere else (a query, a call argument,
+an f-string, a structure built inside a function) is a USE and still fails; source that does not parse
+counts as a use, never as an excuse. Pure and stdlib-only, so a harness imports it without the app.
+§H18 asks the narrower question "does it WRITE", which it reads from the file's own AST — from the
+**raw** source, because blanking docstrings leaves a docstring-only class unparseable and
+"unparseable" read as "writes nothing" would be the same hole.
+
+Each of the five keeps its own armed controls (a module-level map is a declaration, a `.table(...)`
+call is not, a map built inside a function is not), so the shared answer cannot go quietly wrong.

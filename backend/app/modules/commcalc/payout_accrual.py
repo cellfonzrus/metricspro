@@ -685,9 +685,16 @@ def _compute_day_boost(client, org_id, period, lines, cfg, smap, source_table):
     from app.modules.commcalc.calculator import calc_rep_commissions
     from app.modules.commcalc import router as _r
 
+    # THE SAME SIBLING DEFECT, found by the same question (index §CORE-30). This reader also takes
+    # the table BY NAME and also hard-coded `commcalc`, so `employees` and `stores` below silently
+    # read as EMPTY here instead of raising — the identical wrong fact, wearing a quieter symptom.
+    # Fixed in the same commit: one of the two paths repaired and the other not is the patchwork the
+    # house forbids.
+    from app.modules.core import relation_home as _relation_home
+
     def _fetch(table, period_filter=False):
         try:
-            q = (client.schema("commcalc").table(table).select("*").eq("org_id", org_id))
+            q = (_relation_home.reader(client, table).eq("org_id", org_id))
             if period_filter:
                 q = q.in_("period", _pvariants(period))
             return (q.limit(50000).execute().data) or []

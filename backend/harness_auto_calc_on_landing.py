@@ -359,8 +359,20 @@ def land_promotion(client, period=SEPT):
 # ═════════════════════════════════════════════════════════════════════════════════════════════════════════════
 print("── A. the pure rules ──")
 c = AC.resolve_config
-check("A1 no rows anywhere → the code default: ON, 5-minute window",
-      c(None, None) == {"on": True, "on_source": "default", "debounce_minutes": 5, "debounce_source": "default"})
+# Kept as an EXACT comparison deliberately: a new setting resolved here must be stated in this check,
+# so a key that silently appears (or silently stops resolving) fails the build. 2026-10-31 added the
+# restatement horizon a commission-plan edit looks back over (index §COMMCALC-41.9) — it rides this
+# resolver rather than opening a second read of the same config table (§E of the lock).
+check("A1 no rows anywhere → the code default: ON, a 5-minute window, a 12-month restatement horizon",
+      c(None, None) == {"on": True, "on_source": "default", "debounce_minutes": 5,
+                        "debounce_source": "default", "restate_months": 12,
+                        "restate_months_source": "default"})
+check("A1b the horizon inherits tenant → house → default and is bounded, like every other key here",
+      c({"plan_edit_restate_months": 6}, {"plan_edit_restate_months": 9})["restate_months"] == 6
+      and c(None, {"plan_edit_restate_months": 9})["restate_months"] == 9
+      and c(None, {"plan_edit_restate_months": 9})["restate_months_source"] == "house"
+      and c({"plan_edit_restate_months": 999}, None)["restate_months"] == 36
+      and c({"plan_edit_restate_months": "soon"}, None)["restate_months"] == 12)
 check("A2 the house row decides for a tenant with no row of its own; the tenant's row wins over the house",
       c(None, {"auto_calc_on_landing": False})["on"] is False
       and c({"auto_calc_on_landing": True}, {"auto_calc_on_landing": False})["on"] is True
