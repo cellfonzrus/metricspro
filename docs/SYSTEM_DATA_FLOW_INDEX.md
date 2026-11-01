@@ -43940,8 +43940,8 @@ phone**, which narrowed the job from four builds to three:
 
 | he asked for | what was already in `mobile/` | what this PR adds |
 | --- | --- | --- |
-| store visits ("store vista") | `mobile/app/(app)/storevisit/` — the DM's visit screen, GPS-stamped and now geofence-judged (§STOREOPS-04) | nothing. It is gated to market/company scope, which is correct and is noted below as the one thing a store manager still cannot reach |
-| closing | `mobile/app/(app)/closing/` — the DM's sign-off | nothing yet. The store's own daily SUBMISSION is a separate PR |
+| store visits ("store vista") | `mobile/app/(app)/dm/checklist.tsx` (reached from the `dm/index.tsx` hub) — the DM's store-visit inspection: check in with a GPS fix, run the org's checklist items, record accessories, submit. GPS-stamped and now geofence-judged (§STOREOPS-04) | nothing. It is gated `atLeast(scopeOf(me), 'market')`, which is correct, and is noted below as the one thing a store manager still cannot reach |
+| closing | `mobile/app/(app)/dm/verify.tsx` — the DM's sign-off on a store-day (money totals, gate status, `POST /closing/verify`) | nothing yet. The store's own daily SUBMISSION is a separate PR |
 | scheduling | **nothing** | `mobile/app/(app)/(tabs)/schedule.tsx` — the rostered week, time off, and asking for cover |
 | HR | **nothing** | a separate PR; the roadmap entry is corrected to say so rather than claiming scheduling is still coming |
 
@@ -44011,8 +44011,8 @@ is `MONDAY` in the one home, reached only when the declaration cannot be read.
   predates the phone — the web pages reach the same routes — and closing it is a policy decision
   (a manager filing on a rep's behalf is legitimate), so it is REPORTED, not silently changed. The
   phone sends only the signed-in person's own id.
-- **The store visit and DM closing screens stay DM-scoped.** A store manager cannot reach either on
-  the phone today. That is the gate working as written, not a bug, and widening it is an entitlement
+- **The store visit and DM closing screens stay DM-scoped.** Both live behind the `dm/` hub's
+  `atLeast(scopeOf(me), 'market')` gate, so a store manager cannot reach either on the phone today. That is the gate working as written, not a bug, and widening it is an entitlement
   decision rather than a screen change.
 
 
