@@ -484,7 +484,7 @@ export default function StoreOpsAdminPage() {
           <div className="table-wrapper">
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['Store code', 'Address', 'Market', 'Time zone', 'Monthly target', 'Active', ''].map(h =>
+                {['Store code', 'Address', 'Market', 'Time zone', 'Map pin', 'Monthly target', 'Active', ''].map(h =>
                   <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -501,6 +501,7 @@ export default function StoreOpsAdminPage() {
                         {STORE_TZ_OPTS.map(t => <option key={t.v || 'default'} value={t.v}>{t.label}</option>)}
                       </select>
                     </td>
+                    <td style={cell}><StorePinField store={s} onSaved={pin => setStore(s.id, pin)} /></td>
                     <td style={cell}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                         <input style={{ ...sel, width: 120 }} type="number" title="Monthly sales/production target" value={s.monthly_target ?? ''} onChange={ev => setStore(s.id, { monthly_target: ev.target.value })} />
@@ -524,6 +525,99 @@ export default function StoreOpsAdminPage() {
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+
+// ── WHERE THE STORE IS (mig 1112) ────────────────────────────────────────────────────────────────
+//
+// WHY IT IS A SEPARATE SAVE and not another field in the row's PATCH. Moving a pin changes WHO GETS
+// FLAGGED for clocking out away from the store, so it goes through its own audited endpoint
+// (`PUT /storeops/stores/{code}/geo-pin`, which stamps who set it and when). A pin that could be
+// changed in a bulk "Save All" alongside a phone number would be an unattributable edit with
+// somebody's attendance record downstream of it.
+//
+// WHY "USE MY CURRENT LOCATION" IS THE HEADLINE AFFORDANCE. The address is already on the row and
+// is NOT turned into coordinates anywhere in this platform: a geocoded guess would be a fence
+// nobody declared, sitting at the middle of a street or the centre of a ZIP code, and the first
+// thing it would do is flag honest reps. A manager standing in the store pressing one button is
+// both the most accurate pin available and the only one somebody has actually vouched for.
+//
+// An unpinned store is a legitimate state and says so: no punch at it is judged, and the Attendance
+// Exceptions board reports that as missing coverage rather than as a clean result.
+function StorePinField({ store, onSaved }:
+  { store: { store_code?: string; geo_lat?: number | null; geo_lng?: number | null; geofence_radius_m?: number | null }
+    onSaved: (pin: { geo_lat: number | null; geo_lng: number | null }) => void }) {
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+  const pinned = store.geo_lat != null && store.geo_lng != null
+
+  async function save(lat: number | null, lng: number | null) {
+    setBusy(true); setNote('')
+    try {
+      const body = lat == null || lng == null
+        ? { clear: true }
+        : { geo_lat: lat, geo_lng: lng, geofence_radius_m: store.geofence_radius_m ?? null }
+      await api(`/api/v1/storeops/stores/${encodeURIComponent(store.store_code || '')}/geo-pin`,
+        { method: 'PUT', body: JSON.stringify(body) })
+      onSaved({ geo_lat: lat, geo_lng: lng })
+      setNote(lat == null ? '✓ pin removed' : '✓ pinned')
+    } catch (err) {
+      setNote('✗ ' + (err instanceof Error ? err.message : String(err)))
+    } finally { setBusy(false) }
+  }
+
+  async function useMyLocation() {
+    setNote('')
+    const { punchLocation } = await import('@/lib/punchLocation')
+    setBusy(true)
+    // The SAME reading helper the punches use, so a pin and a punch can never be measured by two
+    // different ideas of what a valid coordinate is.
+    const fix = await punchLocation()
+    setBusy(false)
+    if (fix.gps_lat == null || fix.gps_lng == null) {
+      setNote('✗ no location — allow location for this site, or type the coordinates')
+      return
+    }
+    if (fix.gps_accuracy_m != null && fix.gps_accuracy_m > 100) {
+      setNote(`✗ that reading is only accurate to ~${fix.gps_accuracy_m} m — too vague to pin a store. Try again outside or near a window.`)
+      return
+    }
+    await save(fix.gps_lat, fix.gps_lng)
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 190 }}>
+      <div style={{ display: 'flex', gap: 4 }}>
+        <input style={{ ...sel, width: 88 }} placeholder="latitude" inputMode="decimal"
+          defaultValue={store.geo_lat ?? ''} id={`lat-${store.store_code}`} />
+        <input style={{ ...sel, width: 88 }} placeholder="longitude" inputMode="decimal"
+          defaultValue={store.geo_lng ?? ''} id={`lng-${store.store_code}`} />
+      </div>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button type="button" className="btn" style={{ fontSize: 11, padding: '3px 7px' }} disabled={busy}
+          title="Press this while you are standing in the store — the most accurate pin there is"
+          onClick={useMyLocation}>{busy ? '⏳' : '📍 Use my location'}</button>
+        <button type="button" className="btn" style={{ fontSize: 11, padding: '3px 7px' }} disabled={busy}
+          title="Save the typed coordinates"
+          onClick={() => {
+            const lat = Number((document.getElementById(`lat-${store.store_code}`) as HTMLInputElement)?.value)
+            const lng = Number((document.getElementById(`lng-${store.store_code}`) as HTMLInputElement)?.value)
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) { setNote('✗ both coordinates are needed'); return }
+            save(lat, lng)
+          }}>💾</button>
+        {pinned && (
+          <button type="button" className="btn" style={{ fontSize: 11, padding: '3px 7px' }} disabled={busy}
+            title="Remove the pin — punches at this store stop being checked against a location"
+            onClick={() => save(null, null)}>✕</button>
+        )}
+      </div>
+      <span style={{ fontSize: 10.5, color: note.startsWith('✗') ? 'var(--c-fg-b91c1c)' : 'var(--text3)' }}>
+        {note || (pinned
+          ? 'Punches here are checked against this pin.'
+          : 'Not pinned — punches here are recorded but not location-checked.')}
+      </span>
     </div>
   )
 }

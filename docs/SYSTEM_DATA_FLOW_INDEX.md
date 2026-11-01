@@ -195,6 +195,7 @@ Primary code homes:
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
+| STOREOPS-04 | **A punch says where it was made, and an off-site one reaches the board management already reads** | "the sales reps when they log in should capture the gos location so they are not clocking out at their homes and the geolocation when they clock out from somewhere else than their usual location which should match the store address should be reported as flag to the management" — the clock-IN had captured a fix since mig 045 and the clock-OUT captured nothing at all, the platform's one geofence decision had never judged a punch, and no store had coordinates to judge one against. Who owns "was this person at the store this record is for", for the clock-in, the clock-out and the DM store visit alike — and what stops "we could not tell" from being read as "they were not there"?
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
@@ -7174,6 +7175,10 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 ## 16. Cross-reference: by TABLE
 
+- `storeops.stores.geo_lat` / `geo_lng` / `geofence_radius_m` / `geo_pin_source` / `geo_pinned_at` / `geo_pinned_by` (mig `1112`) — WHERE THE STORE IS, as the tenant has DECLARED it. **No default and no geocoding**: a coordinate guessed from the `address` string would be a fence nobody declared and would flag honest reps, so an unpinned store resolves to `None` and every punch at it reads `unverified_no_target`. A CHECK makes a pin both coordinates or neither. `geofence_radius_m` is NULL by design — the store inherits its tenant's radius until somebody declares that THIS store needs a tighter one. Read in ONE place, `core/store_geofence.store_pin`; written only by `PUT /storeops/stores/{store_code}/geo-pin`, which stamps who and when because moving a pin changes who gets flagged (§STOREOPS-04).
+- `storeops.tenants.punch_geo_enabled` / `punch_geofence_radius_m` / `punch_geo_max_accuracy_m` / `punch_geo_retention_days` (mig `1112`) — the punch-geofence POLICY, house defaults ON / 150 m / 200 m / 180 days. POLICY is exactly what a house default is right for (owner 2026-10-30); the PIN above is the tenant's own words and has none. ON for every tenant from day one and safely inert, because an unpinned store cannot produce a verdict. Resolved in ONE place, `core/store_geofence.resolve_config`, which both the punch path and `GET|PUT /storeops/timeclock/geo-config` read through (§STOREOPS-04).
+- `storeops.timelog.clock_out_gps_lat` / `clock_out_gps_lng` / `clock_out_gps_accuracy_m` / `clock_in_geo_decision` / `clock_in_geo_distance_m` / `clock_out_geo_decision` / `clock_out_geo_distance_m` (mig `1112`) — the clock-OUT's own fix and a STORED verdict for each end of the punch. The clock-in keeps mig `045`'s three columns, so no stored punch moves; the clock-out gets its own, because overwriting the clock-in's fix would destroy the only evidence of where the shift BEGAN and *"arrived at the store, left from home"* is the pattern being looked for. A CHECK pins the vocabulary to `core/geo.DECISIONS`; NULL means **never measured**, which is a different and honest thing from any of the five words. Which column holds which fact is declared once, `core/store_geofence.PUNCH_COLUMNS`, read by the writer AND the review board. Two partial indexes on `= 'outside'` so the board never scans the whole clock history (§STOREOPS-04).
+- `storeops.store_visits.check_in_geo_decision` / `check_in_geo_distance_m` (mig `1112`) — THE SIBLING. This table has captured `check_in_lat/lng/accuracy` since mig `027` and never judged one; fixing the punch and leaving it would be the same defect wearing a hat. Same two columns, same one decision, written by `POST /storevisit/visits` through `core/store_geofence.evaluate_presence(KIND_STORE_VISIT, …)` (§STOREOPS-04).
 - `storeops.employees.pay_from_schedule` (mig `1073`) — THE per-employee tick box the owner asked for, next to that employee's name. **NULLABLE on purpose**: NULL = use the org's `payroll_hours_basis_config.pay_from_schedule_default` (seeded TRUE), so a database that has not run 1073 behaves exactly as it does today and nobody stops being paid on apply. Read in ONE place, `storeops/payroll_hours_basis.pay_from_schedule`; a flip writes `storeops.payroll_change_log` with `entry_point = 'pay_from_schedule_change'` (§14y).
 - `storeops.payroll_hours_basis_config.clocked_basis_effective_from` (mig `1076`, date, **NULLABLE**) — the date on and after which this org's `hours_basis_mode` applies (owner ruling 2026-10-12: *"Payroll from clack in should be from Oct 4 th onwards which would be the new cycle"*). A business date STRICTLY BEFORE it resolves exactly as `schedule_fallback` would — with the whole clocked-only switch restored to the house default, `pay_from_schedule_default` and the per-employee tick box included — so recomputing a closed month restates nothing. **NULL = NO FLOOR**, the shipped value for every org, so nothing moves on apply. Read in ONE place, `payroll_hours_basis.effective_from` / `day_is_before_floor` / `config_for_day`; **no date literal exists in application code** and `harness_payroll_hours_basis_lock.py` §H6 fails the build if one appears (§14y.1).
 - `storeops.payroll_hours_basis_config` (mig `1073`, org_id PK) — the per-org knobs for BOTH §14y and §14z: one row, one feature. `hours_basis_mode` (`schedule_fallback` = today / `clocked_only`), `pay_from_schedule_default`, `count_auto_clockout_punches`, `count_open_punches`, `count_manual_hours`, `min_punch_coverage_pct`, `interlock_refuses`, the four `*_enabled` switches, `ask_weekday`/`gate_weekday`/`run_weekday` (0 = Monday, the convention `shift_templates.weekday` already uses), `variance_tolerance_hours`, `clock_source_rule` + `clock_agreement_tolerance_hours` + `clock_feed_is_pay_source` (the owner's 2026-10-10 ruling), and the feed's shape arrays `payable_punch_types` / `non_shift_logins` / `gated_roles` / `gate_exempt_logins` — the only tenant-specific strings in the package, and they are ROWS (RULE TWO). Read in ONE place per half: `payroll_hours_basis.load_config` / `clock_variance.load_config`, over the SAME table.
@@ -7443,6 +7448,10 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 | endpoint | code | what it is the one home of |
 | --- | --- | --- |
+| `POST /storeops/timeclock/clock-in` · `POST /storeops/timeclock/clock-out` | `storeops/router.py` (`_punch_geo_columns` → `core/store_geofence.evaluate_presence`) | WHERE a punch was made, judged against that punch's OWN store (never the rep's home store — a floater ends their shift where they worked it) and stored beside it. The clock-out carried NO location at all before 2026-11-01. **Never refuses a punch** on its location. Gated on `_punch_geo_present` so an un-migrated database behaves exactly as today (§STOREOPS-04) |
+| `GET /storeops/timeclock/geo-config` · `PUT …` | `storeops/router.py` → `core/store_geofence.resolve_config` | the tenant's punch-geofence policy, read and written through the SAME resolver the judging path uses, so a junk payload cannot write a fence the judging code would then obey. Manager/admin only (§STOREOPS-04) |
+| `GET /storeops/stores/geo-pins` · `PUT /storeops/stores/{store_code}/geo-pin` | `storeops/router.py` → `core/store_geofence.store_pin` | declaring where a store is, and which stores are NOT declared. Audited (`geo_pinned_by`/`geo_pinned_at`), org-scoped by construction (another tenant's store is a 404, never a pin), store code matched case-folded through `_norm_store` because `'b-1115'` once created a phantom store holding a day's money, and half a pin is a 400 rather than a store on the prime meridian (§STOREOPS-04) |
+| `GET /storeops/timeclock/attendance-exceptions` (the `geo` block + `off_site_clock_in` / `off_site_clock_out` rows) | `storeops/attendance_exceptions.compute_attendance_exceptions` pass 3 → `core/store_geofence.punch_off_site_flags` / `punch_geo_coverage` | an off-site punch reaching management, on the board they ALREADY review — not a second report nobody opens. One row per END of the punch. The row carries the DISTANCE and never the coordinates (§23.5). The `geo` block says how many stores are pinned and how many punches could be judged, so zero flags cannot be mistaken for a clean result (§STOREOPS-04) |
 | `GET /commcalc/sales-comparison` | `commcalc/sales_comparison.build` + `expenses_effective.effective_series` / `totals_by_store` | period-over-period change per item sold in **units AND dollars**, plus the month's **store expenses** per store on the same two windows — reported beside the sales and never inside them (§COMMCALC-18); the tile row is SENDABLE through `frontend/src/lib/tile-snapshot.tileSnapshotSheet` + the one sender `SendReportButton`, and a change between two copies of ONE carried expense sheet is withheld as `change_measured: false` by `sales_comparison.expense_change_measured` rather than printed as ± 0% (§COMMCALC-19); a CARRIED month inherits the rent and never the platform's own labour — salary and rep commission come from that month's own actuals through `commcalc/labour_actuals`, with `labour_measured` saying when a month's payroll could not be read (§COMMCALC-23). **DRILL-DOWN §CORE-17.3r:** every per-item and overall figure opens to the rows it was folded from, and THE TWO WINDOWS OPEN SEPARATELY naming their own provenance off each read's OWN meta, because a comparison window is a different period and the union may have answered out of different tables for it (§CORE-17.3n). THREE row lists, therefore three catalogues — the store-and-item rows, the per-store summary and the expense rows, because an expense is not an item sold. Every `Change` and `Change %` gets NO panel (subtracted at the TOTAL, §CORE-17.3k, and both sides drill) and neither do the expense line's unit columns, which the producer pins at 0 because an expense has no unit. Server-folded: the pickers are query parameters. Declaration `commcalc/sales_margin_drilldown.py` (`comparison_drilldowns`), proof `harness_batch18_drilldown.py` §D |
 | `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) · the email sweep | `commcalc/router.py:_ingest_mapped_df` post-step (d) → `storeops/clock_feed.normalize` | the ONLY way the B2B clock report enters the system. A file whose rows do not tie to its own trailer total is REJECTED with both numbers, rather than landed short (§14z) |
 | `GET /storeops/payroll/clock-variances` | `storeops/clock_variance_api.py` → `clock_variance.compare` | the variance board the DM works: every (store, employee, day) of the period, each difference CLASSIFIED, with OUR basis and its sentence on every row (§14z) |
@@ -7810,6 +7819,9 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 | metric | basis | where it is decided |
 | --- | --- | --- |
+| **Was this punch made at the store it is for?** | ONE reported position vs the store's DECLARED pin, judged over the interval [distance − accuracy, distance + accuracy] against the tenant's (or the store's own) radius | `core/store_geofence.evaluate_presence` → `core/geo.evaluate_checkin` — THE one decision, for the clock-in, the clock-out and the DM store visit alike. No pin / no fix / a fix too coarse → an `unverified_*` with `within_geofence = NULL`, which is never "they were not there". Lock: `harness_store_geofence_lock.py` (§STOREOPS-04) |
+| **Is this stored verdict a violation?** | an **ALLOWLIST** of decisions (`OFF_SITE_DECISIONS` = `outside`) | `core/store_geofence.is_off_site` — the §66 posture: a decision this version has never heard of reads as NOT a violation. A denylist would one day accuse somebody over a word meaning "unknown" (§STOREOPS-04) |
+| **How much of a window could be judged at all** | the per-end tally of stored decisions, counting NULL as `not_measured` | `core/store_geofence.punch_geo_coverage`, reported beside the flags on the exceptions board — "0 off-site" next to "0 of 28 stores pinned" is coverage, not compliance (§STOREOPS-04) |
 | **Paid hours, and the BASIS they rest on** | a usable closed punch, else a human correction, else the two clock records under the org's declared rule, else the schedule when that employee's tick box is on — and NEVER `actual_hours or scheduled_hours` | `storeops/payroll_hours_basis.resolve_day` / `resolve_shift_row` — THE one home, returning hours WITH the basis so no caller can show one without the other (§14y). Lock: `harness_payroll_hours_basis_lock.py` |
 | **Punch coverage %**, and THE INTERLOCK | measured employee-days ÷ scheduled employee-days for the period, **counting only days on or after this org's `clocked_basis_effective_from`** | `payroll_hours_basis.coverage` / `interlock` — below `min_punch_coverage_pct` (default 85) a clocked-only period is REFUSED and reported as a data defect, never paid as a shortfall. Pre-floor days are excluded and counted in `pre_effective_from_days`, else June 2026 (no punches by construction) would refuse a period forever (§14y, §14y.1) |
 | **When does the clocked-only basis START for this org?** | one config date, `payroll_hours_basis_config.clocked_basis_effective_from` (NULL = no floor) | `payroll_hours_basis.effective_from` / `day_is_before_floor` / `config_for_day` — THE one place the boundary is decided; every resolver routes through it and no date is spelled in code (§14y.1, mig `1076`) |
@@ -26212,6 +26224,7 @@ status word rather than a blank that reads as nil.
 | STOREOPS-01 | storeops |
 | STOREOPS-02 | storeops |
 | STOREOPS-03 | storeops |
+| STOREOPS-04 | storeops |
 | COMMCALC-01 | commcalc |
 | CORE-01 | core |
 | CORE-02 | core |
@@ -40952,6 +40965,143 @@ basis and `payroll_evidence.period_evidence` already the one assembly, so both a
 sibling module, endpoint or table is created. Proof: `harness_payroll_hours_basis.py` **197/197**
 (sections `EC.` the rule, `EW.` the caller wiring) and `harness_payroll_hours_basis_lock.py`
 **103/103**.
+
+## §STOREOPS-04. A PUNCH SAYS WHERE IT WAS MADE, AND AN OFF-SITE ONE REACHES THE BOARD MANAGEMENT ALREADY READS (owner ask 2026-11-01)
+
+**What he said:**
+
+> *"the sales reps when they log in should capture the gos location so they are not clocking out at
+> their homes and the geolocation when they clock out from somewhere else than their usual location
+> which should match the store address should be reported as flag to the management"*
+
+### STOREOPS-04.1 THE DUPLICATE CHECK, and what it found
+
+Searched before a line was written, as the build gate requires. **Two thirds of this already existed
+and one third was missing in the worst possible place:**
+
+| the question | what was there | what this adds |
+| --- | --- | --- |
+| capture a clock-IN fix | `storeops.timelog.gps_lat/gps_lng/gps_accuracy_m` since mig `045`, sent by BOTH the kiosk and the phone app | nothing — the columns are reused verbatim |
+| capture a clock-OUT fix | **nothing.** `ClockOutIn` had no location fields at all | `clock_out_gps_lat/lng/accuracy_m` (mig `1112`) and both clients sending them |
+| judge a fix against a place | `core/geo.evaluate_checkin` — THE geofence decision since mig `986` (§23), accuracy-aware | nothing — it is DEREFERENCED, never re-implemented |
+| where a store IS | **nothing.** `storeops.stores` holds an `address` and no coordinates | `geo_lat/geo_lng/geofence_radius_m` + the pin's audit trail (mig `1112`) |
+| flag it to management | `GET /storeops/timeclock/attendance-exceptions` — the board for no-shows, lateness, left-early, cover | two more `exception_type`s on THAT board, not a second report |
+
+So the one thing genuinely absent was the **inputs** (which store, whose pin, whose radius), and the
+missing capture on the end of the shift the owner was actually asking about.
+
+### STOREOPS-04.2 THE CLASS, not the instance (owner directive 2026-09-20)
+
+The class is **"a punch's location was captured and never judged"**. It was already true of the
+clock-in, newly true of the clock-out, and true of the DM's store visit (`storeops.store_visits`
+has captured `check_in_lat/lng/accuracy` since mig `027` and never judged one — `core/geo.py`'s own
+docstring said so and nobody had come back to it). All three are fixed in this PR, by one function:
+
+| the fact | its ONE home |
+| --- | --- |
+| is this person plausibly at this place? | `core/geo.evaluate_checkin` (unchanged, §23) |
+| was this PUNCH at the store it is for? | `core/store_geofence.evaluate_presence(kind, …)` — `KINDS` = clock-in / clock-out / store visit; an unruled kind **raises** |
+| where is this store? | `core/store_geofence.store_pin(store_row)` — both coordinates or none, parsed by `core.geo`, so half a pin and a junk pin both read as NO pin |
+| which column holds which fact? | `core/store_geofence.PUNCH_COLUMNS` — read by the writer AND by the review board, so they cannot drift |
+| does this stored verdict accuse somebody? | `core/store_geofence.is_off_site` — an **ALLOWLIST** (`OFF_SITE_DECISIONS`), the §66 posture: a decision this version has never heard of reads as NOT a violation |
+| this tenant's fence policy | `core/store_geofence.resolve_config` over `storeops.tenants` (mig `1112`) |
+
+The three callers, each of which the lock below requires to keep dereferencing that home:
+`storeops/router.py` (the clock-in's and clock-out's `_punch_geo_columns`, the policy read
+`_punch_geo_config`, the cached pin read `_store_pin_row`, the migration probe `_punch_geo_present`
+and the pin endpoints), `storevisit/router.py` (`_visit_geo_columns`), and
+`storeops/attendance_exceptions.py` (pass 3, which READS the stored verdict and never re-judges it).
+
+**Lock:** `harness_store_geofence_lock.py` (28 checks, CI job *One geofence decision, one store pin*)
+fails the build on a second distance calculation anywhere in `backend/app`, a second radius
+comparison, a caller that stops dereferencing the home, a verdict column name spelled outside it, a
+second store-pin read, the allowlist being inverted into a denylist, and `block_outside=True`
+reaching a punch. One reviewed exception is pinned: `marketing/router.py` reads an EVENT VENUE pin,
+which is not a store and has no fence to inherit.
+
+### STOREOPS-04.3 WHAT IT REFUSES TO CONCLUDE, and why that is the whole design
+
+**A punch is never refused.** The ask was a flag to management, not a lock on the door: a rep whose
+phone puts them across the street must still be able to end their shift, and the row is what a
+manager reviews. `block_outside` is pinned `False` on every punch path.
+
+**"Could not verify" is never "they were not there."** No pin, no fix, or a fix too coarse to settle
+a borderline each produce an `unverified_*` decision with `within_geofence = NULL` and `off_site =
+false`. This matters on day one rather than in theory: **zero stores are pinned when this ships**, so
+a module that read an unpinned store as a violation would flag every punch in the company at once.
+
+**The address is NOT geocoded.** A coordinate guessed from an address string would be a fence nobody
+declared, sitting at the middle of a street or the centre of a ZIP code, and the first thing it would
+do is flag honest reps. The pin is DECLARED — `PUT /storeops/stores/{store_code}/geo-pin`, audited
+with `geo_pinned_by`/`geo_pinned_at` because moving a pin changes who gets flagged — and the Store
+Setup screen's headline affordance is **"Use my location"**, pressed by a manager standing in the
+store, which is both the most accurate pin available and the only one somebody has vouched for.
+
+**The board says WHY it has no flags.** `GET /timeclock/attendance-exceptions` returns a `geo` block:
+the tenant's policy, how many of its ACTIVE stores carry a pin, and the per-end tally of stored
+decisions (`store_geofence.punch_geo_coverage`). "0 off-site punches" beside "0 of 28 stores pinned"
+is coverage, not compliance, and the surface renders it as such (owner 2026-10-30: *"Nothing declared
+means nothing identified, and the surface says so"*).
+
+**A stored verdict is never recomputed on read.** The decision is written when the punch is made, so
+pinning a store today cannot restate who was flagged last month.
+
+### STOREOPS-04.4 THE DEFECT FOUND WHILE BUILDING IT, which was worse than the gap
+
+The kiosk read the browser's position **once, at sign-in**, and stashed it in a ref that every
+clock-in then re-sent. A rep who signed in at the store and clocked out eight hours later from
+anywhere at all would have re-sent the morning's coordinates — so the evidence would have said *"at
+the store"* however far away they were. A cached fix is not a record of where a punch happened; it is
+a record of where the SESSION started, and storing it as the former is worse than storing nothing.
+
+Fixed for the mechanism: `frontend/src/lib/punchLocation.ts` (`maximumAge: 0`, asserted in its test)
+and `mobile/src/lib/punch-location.ts` are the ONE home per client for "where is this punch being
+made", both punches call them, and both mirror the server's own coordinate parser so a reading either
+client sends is one the server accepts. Both return `{}` — promptly — on a declined permission, a
+missing fix, a hang or a throw, because asking must never cost a rep their punch. The iOS permission
+string now names BOTH ends of the punch; one that named only the clock-in was asking for something
+broader than it admitted.
+
+### STOREOPS-04.5 PRIVACY (index §23.5 applies in full)
+
+Employee coordinates are sensitive personal data. The posture is **single-shot**: one position, one
+place, one verdict, read only at a tap the employee initiated. Nothing anywhere knows a previous
+position, a path, a dwell time or a heading, and the lock fails the build if `store_geofence` grows
+one. Retention is DECLARED per tenant (`storeops.tenants.punch_geo_retention_days`, house 180 — the
+same figure `marketing_config.checkin_geo_retention_days` carries), so the commitment lives in the
+row. **The Attendance Exceptions board and its export carry the DISTANCE and never the coordinates**:
+a manager needs to know the punch was not at the store, and broadcasting where an employee actually
+was, into an emailable report, is a much larger disclosure. The coordinates stay on the punch for
+whoever has the standing to open it. *(No purge job runs yet — the retention window is declared and
+UNMONITORED, exactly as §23's own GPS retention is, and is reported rather than claimed.)*
+
+### STOREOPS-04.6 MULTI-TENANT (project rule 2026-10-30)
+
+The radius, the accuracy limit, the switch and the retention window are **POLICY**, which is what a
+house default is right for (150 m / 200 m / ON / 180 days). The **PIN has no default at all** — it is
+the tenant's own declaration of where its store is, and an unpinned store answers "could not verify"
+rather than falling back to anybody else's coordinates. A store may declare a tighter fence than its
+tenant (a mall kiosk is not a standalone shop) and that per-store radius wins.
+
+Cross-tenant tests ship with it, every case run for three tenant shapes — a pinned store on the house
+fence, a pinned store with a tighter declared fence, and a tenant that has pinned nothing (which is
+what every tenant looks like on day one): `tests/unit/test_store_geofence.py` §T,
+`tests/unit/test_off_site_punch_exceptions.py` §T, `tests/integration/test_punch_geofence_endpoint.py`
+§T — including the negatives, that one tenant's pin never judges another's punch, that no tenant can
+pin or even see another's store, and that no tenant's board shows another's punch.
+
+### STOREOPS-04.7 THE DEPLOY WINDOW (the §19.37 class)
+
+Both hosts auto-deploy from `main` while mig `1112` waits for the owner, so this code goes live
+against a database with none of these columns. Every geofence write is gated on `_punch_geo_present`
+(a cached probe whose column name comes from `PUNCH_COLUMNS`, so it cannot ask for a column the
+writer no longer writes), and the exceptions board builds its SELECT from the same probe — asking
+PostgREST for a missing column is a 400 on the WHOLE select, which would have taken the board down.
+In that window the time clock behaves exactly as it does today: the punch lands, no verdict is
+stored, nobody is flagged, and the settings panel says the feature is not switched on instead of
+offering a control that fails. Pinned by `test_punch_geofence_endpoint.py` §M, which runs the whole
+punch path with the probe reporting ABSENT.
+
 
 ## §CORE-18. A LENGTH CAP DOES NOT DECIDE WHICH PART OF A STATUS SURVIVES (found 2026-10-27)
 

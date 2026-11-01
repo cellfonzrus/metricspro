@@ -113,6 +113,21 @@ jobs:
         working-directory: mobile
         run: npm run test
 
+  punch-geofence-lock:
+    # The design-fix lock for the punch geofence (index §STOREOPS-14): one distance calculation, one
+    # store pin, one column home, and a punch that is flagged rather than refused. Wired here on the
+    # day the harness was written — a harness no workflow runs is a file, not a gate
+    # (backend/harness_unrun_pending.txt's own reason for existing).
+    name: One geofence decision, one store pin (lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: harness_store_geofence_lock
+        working-directory: backend
+        run: python harness_store_geofence_lock.py
+
   test-discipline:
     # The lock: the framework above cannot quietly come undone. It RUNS conftest's network guard
     # against a production hostname rather than reading the source for it.

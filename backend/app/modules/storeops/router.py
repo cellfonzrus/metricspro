@@ -21,6 +21,11 @@ from . import org_chain
 from app.core import identity as _identity
 from app.modules.storeops import google_reviews as _gr
 from app.modules.storeops import alert_log as _alert_log   # the ONE send record (mig 1051)
+# THE one presence decision — "was this punch made at the store it is for?" (mig 1112). It
+# dereferences core/geo.evaluate_checkin, the platform's only geofence rule; a radius compared or a
+# distance computed in THIS file would be the duplicate defect the CLAUDE.md build gate exists to
+# stop, and harness_store_geofence_lock.py fails the build on one.
+from app.modules.core import store_geofence as _sgeo
 from app.modules.storeops.pto_accrual import (
     DEFAULT_CONFIG as PTO_DEFAULT_CONFIG,
     resolve_effective_config as pto_resolve_effective_config,
@@ -4689,6 +4694,98 @@ def _timeclock_432_present():
     return _TC432_PRESENT
 
 
+_PUNCH_GEO_PRESENT = None    # cached tri-state for migration 1112 (the punch geofence columns)
+_STORE_PIN_CACHE = {}        # (org, UPPER store code) -> the store's pin row, for the punch path
+
+
+def _punch_geo_present():
+    """True once migration 1112 has been applied — i.e. storeops.timelog carries the clock-out fix
+    and the two verdict columns. Cached after the first successful probe (a migration is never
+    un-run, so True is permanent); a False answer is NOT cached, so the process self-heals the moment
+    1112 lands without a restart.
+
+    DEPLOY-ORDER SAFETY, and it is the point rather than a courtesy. Both hosts auto-deploy from
+    `main` while a migration waits for the owner to apply it, so between the merge and the SQL this
+    code is live against a database without these columns. Every geofence write is gated on this
+    probe: an un-migrated database keeps clocking in and out EXACTLY as it does today — the punch
+    lands, no verdict is stored, nobody is flagged — instead of a PostgREST 'column does not exist'
+    taking the time clock down. Same posture `_timeclock_432_present` takes for 432."""
+    global _PUNCH_GEO_PRESENT
+    if _PUNCH_GEO_PRESENT:
+        return True
+    try:
+        # The column name comes from the ONE home, so the probe can never ask for a column the
+        # writer no longer writes.
+        sb().table("timelog").select(
+            _sgeo.PUNCH_COLUMNS[_sgeo.KIND_CLOCK_OUT]["decision"]).limit(1).execute()
+        _PUNCH_GEO_PRESENT = True
+    except Exception:
+        _PUNCH_GEO_PRESENT = False
+    return _PUNCH_GEO_PRESENT
+
+
+def _punch_geo_config(org_id):
+    """This tenant's geofence POLICY -> (config, available). Read from its own storeops.tenants row
+    and resolved by the ONE resolver, so one tenant's policy can never be resolved two ways. Any
+    gap (migration not applied, no tenant row, a junk value) falls back to the house defaults with
+    `available=False` — the check is read-only reporting, so it degrades rather than refusing."""
+    try:
+        rows = (sb().table("tenants").select(",".join(_sgeo.CONFIG_COLUMNS) + ",punch_geo_retention_days")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        return _sgeo.resolve_config(None, available=False)
+    if not rows:
+        return _sgeo.resolve_config(None, available=True)
+    return _sgeo.resolve_config(rows[0], available=True)
+
+
+def _store_pin_row(org_id, store_code):
+    """The store row carrying this store's map pin, or `{}` when there is none to be had.
+
+    Matched on the NORMALIZED code (`_norm_store`), not an exact `.eq`: store codes are compared
+    without case-folding elsewhere in this platform and a single `'b-1115'` once created a phantom
+    store holding a day's money (project memory 2026-10-10). A fence resolved off a case-drifted
+    code would silently become "no pin", so this one does the fold.
+
+    Cached per (org, store) like `_biz_tz_for_store`'s zone cache. A pin CHANGES who gets flagged,
+    so the cache holds only rows that were actually found, and a miss is re-read next time — an
+    owner who pins a store does not have to wait for a restart."""
+    sc = _norm_store(store_code)
+    if not sc:
+        return {}
+    key = (str(org_id), sc)
+    hit = _STORE_PIN_CACHE.get(key)
+    if hit is not None:
+        return hit
+    try:
+        rows = (sb().table("stores").select("store_code,geo_lat,geo_lng,geofence_radius_m")
+                .eq("org_id", org_id).limit(500).execute().data) or []
+    except Exception:
+        return {}        # migration 1112 not applied — no pin anywhere, so nothing can be judged
+    for row in rows:
+        if _norm_store(row.get("store_code")) == sc:
+            if _sgeo.store_pin(row) is not None:
+                _STORE_PIN_CACHE[key] = row
+            return row
+    return {}
+
+
+def _punch_geo_columns(org_id, kind, store_code, lat, lng, accuracy):
+    """The columns to write for one punch end: the fix, plus the verdict when one can be reached.
+
+    Returns `{}` when migration 1112 has not been applied — see `_punch_geo_present`. Never raises
+    and never refuses a punch: the owner asked for a flag to management, not a lock on the door."""
+    if not _punch_geo_present():
+        return {}
+    try:
+        cfg, _ = _punch_geo_config(org_id)
+        verdict = _sgeo.evaluate_presence(kind, fix_lat=lat, fix_lng=lng, fix_accuracy_m=accuracy,
+                                          store_row=_store_pin_row(org_id, store_code), config=cfg)
+        return _sgeo.stored_columns(kind, verdict, fix_lat=lat, fix_lng=lng, fix_accuracy_m=accuracy)
+    except Exception:
+        return {}
+
+
 def _pending_permissions_for(org_id, employee_id):
     """This employee's own PENDING time-clock permissions (migration 432), for the kiosk's
     '⏳ Pending your DM's permission' banner. Empty when 432 hasn't run yet (never break
@@ -5163,6 +5260,12 @@ def clock_in(body: ClockInIn, authorization: str = Header(default=""), org_id: s
            "device": body.device, "selfie_path": selfie_path,
            "gps_lat": body.gps_lat, "gps_lng": body.gps_lng,
            "gps_accuracy_m": body.gps_accuracy_m, "face_match_pct": body.face_match_pct}
+    # Judge the fix against THIS store's pin and store the verdict beside the punch (mig 1112). The
+    # three coordinate columns are rewritten with the PARSED values, so a junk latitude is stored as
+    # NULL rather than as a number that would place the store off the coast of Africa. Empty — and
+    # therefore byte-identical to the punch this endpoint wrote yesterday — until 1112 is applied.
+    row.update(_punch_geo_columns(org_id, _sgeo.KIND_CLOCK_IN, req_store,
+                                  body.gps_lat, body.gps_lng, body.gps_accuracy_m))
     if cri:
         row["client_request_id"] = cri
     if is_reclock_pending:
@@ -5428,6 +5531,13 @@ class ClockOutIn(LaxModel):
     override: Any = None
     reason: Any = None
     client_request_id: Any = None   # client-generated UUID, STABLE across retries of the SAME punch
+    # THE GAP THIS CLOSES (owner 2026-11-01). The clock-IN has captured a fix since migration 045;
+    # the clock-OUT captured nothing, which is why "clocking out at their homes" was the one punch
+    # this platform could not see. Optional, always: a denied permission, an indoor phone or an
+    # offline replay must never cost a rep the end of their shift (see §A4 of the unit tests).
+    gps_lat: Any = None
+    gps_lng: Any = None
+    gps_accuracy_m: Any = None
 
 
 def _clockout_ok(row, org_id, replay=False):
@@ -5528,6 +5638,12 @@ def clock_out(body: ClockOutIn, background_tasks: BackgroundTasks = None, author
         except Exception:
             hours = None
     upd = {"clock_out": out_at.isoformat(), "hours": hours}
+    # Where the shift ENDED, judged against the punch's OWN store (`entry`), never the rep's home
+    # store — a floater ends their shift where they worked it. Written to the clock-out's own
+    # columns so the clock-in's fix survives: "arrived at the store, left from home" is exactly the
+    # pattern being looked for, and it is unreadable if one fix overwrites the other.
+    upd.update(_punch_geo_columns(org_id, _sgeo.KIND_CLOCK_OUT, entry.get("store_code"),
+                                  body.gps_lat, body.gps_lng, body.gps_accuracy_m))
     if cri:   # stamp the clock-out's idempotency id so a retry after this close replays (mig 912)
         upd["client_request_id"] = cri
     if auto_stamped and has432:   # only write the new column when migration 432 has added it
@@ -5678,8 +5794,16 @@ def _attendance_rows_for_range(org_id, start, end, client=None):
         "id,employee_id,employee_name,store_code,shift_date,start_time,end_time,is_deleted")
         .eq("org_id", org_id).eq("is_deleted", False)
         .gte("shift_date", start).lte("shift_date", end).limit(FETCH_LIMIT).execute().data) or []
-    punches = (client.table("timelog").select(
-        "id,employee_id,employee_name,store_code,work_date,clock_in,clock_out")
+    # The two stored geofence verdicts come along only once migration 1112 has been applied. Asking
+    # PostgREST for a column that does not exist is a 400 on the WHOLE select, which would take the
+    # exceptions board down between this code deploying and the owner running the SQL — so the
+    # column list is built from the probe, not from hope. The names come from the one column table.
+    _punch_cols = "id,employee_id,employee_name,store_code,work_date,clock_in,clock_out"
+    if _punch_geo_present():
+        _punch_cols += "," + ",".join(
+            _sgeo.PUNCH_COLUMNS[k]["decision"] + "," + _sgeo.PUNCH_COLUMNS[k]["distance"]
+            for k in (_sgeo.KIND_CLOCK_IN, _sgeo.KIND_CLOCK_OUT))
+    punches = (client.table("timelog").select(_punch_cols)
         .eq("org_id", org_id).gte("work_date", start).lte("work_date", end).limit(FETCH_LIMIT).execute().data) or []
     # HONESTY (no-silent-caps doctrine, same convention as lunch_deduction.period_lunch_deduction):
     # hitting the cap is a strong signal (not proof — PostgREST gives no total count without a
@@ -5729,7 +5853,9 @@ def _attendance_rows_for_range(org_id, start, end, client=None):
         except Exception:
             pass
     rows = _attn.compute_attendance_exceptions(shifts, punches, timeoff, cfg, now, tz, store_tz=store_tz)
-    return rows, cfg, available, limit_hit
+    # `punches` comes back so the geofence COVERAGE tally is counted off the same rows the engine
+    # judged, rather than a second fetch that could disagree with it.
+    return rows, cfg, available, limit_hit, punches
 
 
 @router.get("/timeclock/attendance-exceptions")
@@ -5743,7 +5869,7 @@ def attendance_exceptions(start: str = "", end: str = "", authorization: str = H
     if not (start and end):
         raise HTTPException(400, "start and end are required")
     client = sb()
-    rows, cfg, available, limit_hit = _attendance_rows_for_range(org_id, start, end, client)
+    rows, cfg, available, limit_hit, punches = _attendance_rows_for_range(org_id, start, end, client)
 
     # RBAC store-span narrowing — same posture/keyset as GET /shifts, GET /stores, GET /timeclock/list.
     ks = scope_keyset(authorization, org_id)
@@ -5753,7 +5879,19 @@ def attendance_exceptions(start: str = "", end: str = "", authorization: str = H
     counts: dict = {}
     for r in rows:
         counts[r["exception_type"]] = counts.get(r["exception_type"], 0) + 1
-    return {"available": available, "config": cfg, "rows": rows, "counts": counts, "limit_hit": limit_hit}
+    # HONESTY beside the flags (mig 1112). "3 punches off-site" next to 900 that could not be judged
+    # at all is a true number telling a false story, so the board is handed WHY: the per-end tally of
+    # stored decisions, the tenant's policy, and how many of its stores carry a map pin. A manager
+    # reading a small number can see whether it is small because people are where they should be or
+    # because nothing was pinned.
+    geo_cfg, geo_available = _punch_geo_config(org_id)
+    return {"available": available, "config": cfg, "rows": rows, "counts": counts,
+            "limit_hit": limit_hit,
+            "geo": {"available": geo_available and _punch_geo_present(),
+                    "config": geo_cfg,
+                    "exception_types": _attn.OFF_SITE_EXCEPTION_TYPES,
+                    "pinned_stores": _pinned_store_summary(org_id),
+                    "coverage": _sgeo.punch_geo_coverage(punches)}}
 
 
 @router.get("/accountability")
@@ -5814,6 +5952,160 @@ def set_attendance_config(body: dict, authorization: str = Header(default=""), o
     return {"ok": True, "config": cfg}
 
 
+# ── THE GEOFENCE: the tenant's policy, and each store's map pin (mig 1112) ───────────────────────
+#
+# RULE TWO. The radius, the accuracy limit and the switch are POLICY and live as per-org config rows
+# with house defaults. The PIN is the tenant's own declaration of where its store is and has no
+# default at all: an unpinned store answers "could not verify", never another tenant's coordinates.
+def _pinned_store_summary(org_id):
+    """How many of this tenant's ACTIVE stores carry a map pin → `{pinned, total}`.
+
+    The honest denominator for the board. Until a store is pinned no punch at it can be judged, so a
+    board reporting zero off-site punches is reporting coverage, not compliance, and has to say so."""
+    try:
+        rows = (sb().table("stores").select("store_code,is_active,geo_lat,geo_lng")
+                .eq("org_id", org_id).limit(1000).execute().data) or []
+    except Exception:
+        return {"pinned": 0, "total": 0, "available": False}
+    active = [r for r in rows if r.get("is_active") is not False]
+    return {"pinned": sum(1 for r in active if _sgeo.store_pin(r) is not None),
+            "total": len(active), "available": True}
+
+
+@router.get("/timeclock/geo-config")
+def get_punch_geo_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """This tenant's punch-geofence policy, always a full usable config (house defaults when
+    migration 1112 has not run — the same posture GET /timeclock/attendance-config takes for 421).
+
+    `available` is false until the migration lands, which is what the settings panel reads to explain
+    that saving is not possible yet rather than offering a control that 400s."""
+    cfg, available = _punch_geo_config(org_id)
+    return {"config": cfg, "available": bool(available and _punch_geo_present()),
+            "stores": _pinned_store_summary(org_id),
+            "exception_types": _attn.OFF_SITE_EXCEPTION_TYPES}
+
+
+@router.put("/timeclock/geo-config")
+def set_punch_geo_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin only (a tenant-wide setting, the same gate PUT /timeclock/attendance-config has).
+
+    Values are resolved by `store_geofence.resolve_config` — the SAME resolver the punch path reads
+    through — so a junk payload cannot write a fence the judging code would then obey."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    cfg, _ = _sgeo.resolve_config(body)
+    if not _punch_geo_present():
+        raise HTTPException(400, "Couldn't save the setting — is migration 1112 applied?")
+    try:
+        sb().table("tenants").update(dict(cfg)).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save the setting — is migration 1112 applied?")
+    return {"ok": True, "config": cfg}
+
+
+@router.get("/stores/geo-pins")
+def list_store_geo_pins(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Every store this caller may see, with its pin and the fence that would apply to it.
+
+    RBAC-narrowed on the SAME keyset every other store-span read here uses, so a DM sees the stores
+    they are responsible for and not the tenant's whole estate."""
+    try:
+        # DELIBERATELY NO `market`. Nothing on this surface groups or filters by market, and
+        # `stores.market` is one of the TWO market vocabularies that are known to diverge (index
+        # §13): a read of it that no caller needs is a third resolution site waiting to happen.
+        # A caller that ever does need market here resolves it through `app.core.scope`, not here.
+        rows = (sb().table("stores").select(
+            "store_code,address,is_active,geo_lat,geo_lng,geofence_radius_m,"
+            "geo_pin_source,geo_pinned_at,geo_pinned_by")
+            .eq("org_id", org_id).limit(1000).execute().data) or []
+    except Exception:
+        return {"stores": [], "available": False,
+                "message": "Store pins need migration 1112 applied before they can be set."}
+    ks = scope_keyset(authorization, org_id)
+    cfg, _ = _punch_geo_config(org_id)
+    out = []
+    for row in rows:
+        if ks is not None and not in_keyset(ks, row.get("store_code")):
+            continue
+        pin = _sgeo.store_pin(row)
+        out.append({**row, "pinned": pin is not None,
+                    "effective_radius_m": (pin or {}).get("radius_m")
+                                          or cfg["punch_geofence_radius_m"]})
+    out.sort(key=lambda r: str(r.get("store_code") or ""))
+    return {"stores": out, "available": True, "config": cfg}
+
+
+class StoreGeoPinIn(LaxModel):
+    geo_lat: Any = None
+    geo_lng: Any = None
+    geofence_radius_m: Any = None     # None/'' clears it -> the store inherits the tenant's radius
+    clear: Any = None                 # true removes the pin entirely
+
+
+@router.put("/stores/{store_code}/geo-pin")
+def set_store_geo_pin(store_code: str, body: StoreGeoPinIn,
+                      authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Declare where a store IS. Manager/admin only, and audited (`geo_pinned_by` / `geo_pinned_at`):
+    moving a pin changes who gets flagged, so it is never an anonymous edit.
+
+    A pin is BOTH coordinates or NEITHER — half a pin is the shape that silently places a store on
+    the prime meridian, and it is refused here as well as by the database's own CHECK. The
+    coordinates are parsed by `core.geo`, so a junk latitude is a 400 and never a stored 0.0."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    if not _punch_geo_present():
+        raise HTTPException(400, "Store pins need migration 1112 applied first.")
+    code = _norm_store(store_code)
+    rows = (sb().table("stores").select("id,store_code").eq("org_id", org_id)
+            .limit(1000).execute().data) or []
+    match = next((r for r in rows if _norm_store(r.get("store_code")) == code), None)
+    if match is None:
+        # Org-scoped by construction: another tenant's store simply is not in `rows`, so it reads as
+        # "no such store" rather than being pinned from this tenant's request.
+        raise HTTPException(404, f"No store {store_code} in this organisation.")
+
+    if body.clear:
+        upd = {"geo_lat": None, "geo_lng": None, "geo_pin_source": None,
+               "geo_pinned_at": datetime.now(timezone.utc).isoformat(),
+               "geo_pinned_by": mgr.get("email") or mgr.get("employee_id") or "manager"}
+    else:
+        from app.modules.core import geo as _geo
+        lat, lng = _geo.parse_lat(body.geo_lat), _geo.parse_lng(body.geo_lng)
+        if lat is None or lng is None:
+            raise HTTPException(400, "A pin needs both a latitude and a longitude, each a real "
+                                     "coordinate. Nothing was saved.")
+        upd = {"geo_lat": lat, "geo_lng": lng, "geo_pin_source": "manual",
+               "geo_pinned_at": datetime.now(timezone.utc).isoformat(),
+               "geo_pinned_by": mgr.get("email") or mgr.get("employee_id") or "manager"}
+    radius = body.geofence_radius_m
+    upd["geofence_radius_m"] = None if radius in (None, "") else _geofence_radius_or_400(radius)
+    try:
+        sb().table("stores").update(upd).eq("id", match["id"]).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save the pin — is migration 1112 applied?")
+    # A pin changes which punches get flagged, so the cached lookup must not keep serving the old
+    # one. Cleared for every tenant rather than one key: the cache is tiny and a stale fence is not.
+    _STORE_PIN_CACHE.clear()
+    return {"ok": True, "store_code": match.get("store_code"),
+            "pin": _sgeo.store_pin({**upd}), "pinned": not bool(body.clear)}
+
+
+def _geofence_radius_or_400(value):
+    """A per-store radius, or a 400 saying why. Clamped by `core.geo.clamp_radius`, so the stored
+    value is always one the judging code will actually obey — a silently-clamped 5 m fence that the
+    panel displayed as 5 would be a setting nobody could trust."""
+    from app.modules.core import geo as _geo
+    try:
+        asked = int(float(value))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "A store's fence radius must be a number of metres.")
+    clamped = _geo.clamp_radius(asked)
+    if clamped != asked:
+        raise HTTPException(400, f"A store's fence must be between {_geo.MIN_RADIUS_M} m and "
+                                 f"{_geo.MAX_RADIUS_M} m.")
+    return clamped
+
+
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # ACCOUNTABILITY — morning lateness alerts (owner directive 2026-08-18). Every morning at the tenant's
 # configured time (default 10:30 tenant-local), email every manager ABOVE the DM a lateness digest for
@@ -5866,7 +6158,7 @@ def _lateness_late_records(client, org_id, start, end, today):
     store) with the employee's pay-period late count, their late incidents, and whether they were late
     TODAY. Reuses the shared attendance engine + accountability.aggregate — no new lateness logic."""
     from app.modules.storeops import accountability as _acc
-    rows, _cfg, _av, _lh = _attendance_rows_for_range(org_id, start, end, client)
+    rows, _cfg, _av, _lh, _punches = _attendance_rows_for_range(org_id, start, end, client)
     agg = _acc.aggregate(rows, {})
     out = []
     for e in agg["employees"]:

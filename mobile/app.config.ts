@@ -44,8 +44,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     infoPlist: {
       NSFaceIDUsageDescription:
         'MetricsPro uses Face ID to unlock the app and protect store, sales and payroll data.',
+      // Both ENDS of a punch, stated plainly: the clock-out is the one the owner asked for
+      // (2026-11-01) and a permission string that named only the clock-in would be asking for
+      // something broader than it admitted. One reading at each tap; never a background position.
       NSLocationWhenInUseUsageDescription:
-        'MetricsPro records the store location of a clock-in punch for attendance verification.',
+        'MetricsPro records your location when you clock in and when you clock out, to confirm the punch was made at your store. It is read only at that moment and never in the background.',
       NSCameraUsageDescription:
         'MetricsPro uses the camera to capture a verification selfie when you clock in and to photograph a receipt for import.',
       NSPhotoLibraryUsageDescription:
