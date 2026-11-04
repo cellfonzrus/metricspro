@@ -111,6 +111,110 @@ def migration_schemas():
     return out
 
 
+def migration_bodies():
+    """{filename: text} for every migration — the SQL as the owner will actually run it."""
+    out = {}
+    for name in sorted(os.listdir(MIGRATIONS)):
+        if name.endswith(".sql"):
+            out[name] = open(os.path.join(MIGRATIONS, name), encoding="utf-8",
+                             errors="replace").read()
+    return out
+
+
+# The schemas `database/migrations/` CREATEs. DECLARED, not counted: §G below compares the derived
+# set against this one, so a schema that appears is added here deliberately and a schema that
+# disappears names itself instead of hiding inside a number that still looks big enough.
+MIGRATION_CREATED_SCHEMAS = frozenset({
+    "assets", "commcalc", "core", "notify", "pos", "storeops",
+})
+
+# Schemas a migration may name without creating one: Postgres' own, Supabase's own, and the
+# extension schemas. Anything else must be CREATEd by a migration in this repo, or it does not exist
+# on the day the owner presses Run.
+PLATFORM_SCHEMAS = frozenset({
+    "public", "information_schema", "pg_catalog", "pg_temp", "extensions", "auth", "storage",
+    "cron", "net", "vault", "graphql", "graphql_public", "realtime", "pgsodium", "pgsodium_masks",
+    "supabase_functions", "supabase_migrations",
+})
+
+# The keywords after which a schema-qualified name is a RELATION, not prose. Deliberately narrow:
+# this must not fire on `raw_sales.month` in a comment or on `app.modules.core` in a note.
+_REL_POS = re.compile(
+    r"\b(?:alter\s+table|create\s+(?:or\s+replace\s+)?(?:table|view|materialized\s+view)"
+    r"|create\s+(?:unique\s+)?index(?:\s+if\s+not\s+exists)?\s+[a-z0-9_]+\s+on"
+    r"|insert\s+into|update|delete\s+from|truncate|from|join|references"
+    r"|comment\s+on\s+(?:table|column|view)|drop\s+(?:table|view|index)"
+    r"|grant\s+[^;]*?\son)"
+    r"(?:\s+if\s+not\s+exists)?\s+([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)", re.I)
+
+
+# A trigger's pseudo-records and ON CONFLICT's alias are qualified like a relation and are not one.
+RECORD_ALIASES = frozenset({"old", "new", "excluded", "tg_argv"})
+
+
+def _sql_code_only(body):
+    """The SQL with comments and STRING LITERALS blanked, line structure preserved.
+
+    Both are prose. Six `COMMENT ON` bodies in this repo discuss things like
+    `accessory_config.contract_type_map` inside quotes; reading those as relation references would
+    make this check cry wolf, and a check that cries wolf gets deleted.
+    """
+    out, i, n = [], 0, len(body)
+    in_line_comment = in_block_comment = in_literal = False
+    while i < n:
+        ch = body[i]
+        nxt = body[i + 1] if i + 1 < n else ""
+        if ch == "\n":
+            in_line_comment = False
+            out.append(ch)
+            i += 1
+            continue
+        if in_line_comment or in_block_comment or in_literal:
+            if in_block_comment and ch == "*" and nxt == "/":
+                in_block_comment = False
+                out.append("  ")
+                i += 2
+                continue
+            if in_literal and ch == "'":
+                if nxt == "'":                      # '' is an escaped quote, still inside
+                    out.append("  ")
+                    i += 2
+                    continue
+                in_literal = False
+            out.append(" ")
+            i += 1
+            continue
+        if ch == "-" and nxt == "-":
+            in_line_comment = True
+            out.append("  ")
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            in_block_comment = True
+            out.append("  ")
+            i += 2
+            continue
+        if ch == "'":
+            in_literal = True
+            out.append(" ")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def migration_relation_refs(bodies):
+    """[(schema, relation, file, line)] for every schema-qualified relation the SQL actually names."""
+    refs = []
+    for name, body in sorted(bodies.items()):
+        stripped = _sql_code_only(body)
+        for line_no, line in enumerate(stripped.splitlines(), start=1):
+            for schema, table in _REL_POS.findall(line):
+                refs.append((schema.lower(), table.lower(), name, line_no))
+    return refs
+
+
 def home_map(src):
     """relation_home.SCHEMA_OF, read out of the source rather than imported."""
     tree = ast.parse(src)
@@ -207,7 +311,7 @@ def bare_reads(path, src):
 
 
 # ── the checks, each a pure function of (tree, truth) so §N can mutate sources in memory ───────────
-def run(tree, truth):
+def run(tree, truth, migs):
     src_home = tree.get(HOME, "")
     claims = home_map(src_home)
 
@@ -225,6 +329,29 @@ def run(tree, truth):
     ambiguous = {t: sorted(s) for t, s in truth.items() if len(s) > 1}
     check("A4 no relation name appears in two schemas — the assumption one name maps to one schema "
           "rests on this, so it is asserted and not believed", not ambiguous, ambiguous)
+
+    print("\n§G A MIGRATION NAMES NO SCHEMA THAT DOES NOT EXIST")
+    # The 2026-11-04 defect: migration 1113 qualified `marketing_event_checkin` with a `marketing`
+    # schema that no migration creates (the table is in `core`), and the owner's run died with
+    # `3F000: schema "marketing" does not exist`, rolling the whole migration back. CI could not see
+    # it, because nothing in this repo had ever READ a migration's schema names — the one home above
+    # is derived from `create table` alone, so a wrong schema in an index or a grant was invisible.
+    created = set()
+    for body in migs.values():
+        created |= {m.lower() for m in re.findall(
+            r"create\s+schema\s+(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_]*)", body, re.I)}
+    check("G0 the migrations create exactly the schemas this platform is built from — DECLARED, so "
+          "a new one is added here by a human and a lost one names itself",
+          created == MIGRATION_CREATED_SCHEMAS,
+          {"derived": sorted(created), "declared": sorted(MIGRATION_CREATED_SCHEMAS)})
+    allowed = created | PLATFORM_SCHEMAS | RECORD_ALIASES
+    unknown = {}
+    for schema, table, name, line in migration_relation_refs(migs):
+        if schema not in allowed:
+            unknown.setdefault(f"{schema}.{table}", []).append(f"{name}:{line}")
+    check("G1 every schema-qualified relation names a schema some migration CREATEs — a schema that "
+          "does not exist is a migration that cannot run, and CI never pressed Run",
+          not unknown, {k: v[:3] for k, v in sorted(unknown.items())})
 
     print("\n§B NOTHING IS ASSUMED")
     fn_schema_of = next((seg(src_home, n) for nm, n in functions(src_home) if nm == "schema_of"), "")
@@ -281,10 +408,11 @@ def main():
     global P, F
     tree = load_tree()
     truth = migration_schemas()
+    migs = migration_bodies()
     print("§0 SOURCES")
     check("0a the one home is on disk", HOME in tree)
     check("0b the migrations parse into a relation map", len(truth) > 400, len(truth))
-    run(tree, truth)
+    run(tree, truth, migs)
 
     print("\n§F REGISTRATION")
     idx = open(INDEX, encoding="utf-8").read() if os.path.exists(INDEX) else ""
@@ -300,7 +428,7 @@ def main():
 
     # ── §N negative controls ──────────────────────────────────────────────────────────────────────
     print("\n§N NEGATIVE CONTROLS — each planted violation must turn this lock RED")
-    base_tree, base_truth = load_tree(), migration_schemas()
+    base_tree, base_truth, base_migs = load_tree(), migration_schemas(), migration_bodies()
 
     def mutate(path, old, new):
         t = dict(base_tree)
@@ -311,31 +439,39 @@ def main():
 
     controls = [
         ("the one home claims a schema the migrations do not create",
-         mutate(HOME, '"employees": "storeops",', '"employees": "commcalc",'), base_truth),
+         mutate(HOME, '"employees": "storeops",', '"employees": "commcalc",'), base_truth, base_migs),
         ("a relation is named that no migration creates",
          mutate(HOME, '"employees": "storeops",',
-                '"employees": "storeops",\n    "a_table_nobody_creates": "commcalc",'), base_truth),
+                '"employees": "storeops",\n    "a_table_nobody_creates": "commcalc",'), base_truth, base_migs),
         ("schema_of gains a default instead of raising",
          mutate(HOME, "        return SCHEMA_OF[key]",
-                '        return SCHEMA_OF.get(key, "commcalc")'), base_truth),
+                '        return SCHEMA_OF.get(key, "commcalc")'), base_truth, base_migs),
         ("the Run Calculation's gathering goes back to a hard-coded commcalc",
          mutate("app/modules/commcalc/router.py",
                 "            q = (_relation_home.reader(client, table)\n                 .eq('org_id', org_id))",
                 "            q = client.schema('commcalc').table(table).select('*').eq('org_id', org_id)"),
-         base_truth),
+         base_truth, base_migs),
         ("the rep self-scope goes back to reading app_users from public",
          mutate("app/modules/commcalc/router.py",
                 '_relation_home.reader(sb(), "app_users", "role,employee_id")',
-                'sb().table("app_users").select("role,employee_id")'), base_truth),
+                'sb().table("app_users").select("role,employee_id")'), base_truth, base_migs),
         ("the clock-in subject goes back to the stale public roster",
          mutate("app/modules/storeops/clockin_evidence.py",
                 '_relation_home.reader(sb(), "employees", "employee_id,name,home_store")',
-                'sb().table("employees").select("employee_id,name,home_store")'), base_truth),
+                'sb().table("employees").select("employee_id,name,home_store")'), base_truth, base_migs),
         ("a relation name exists in two schemas, so one name no longer means one schema",
-         base_tree, {**base_truth, "employees": {"storeops", "commcalc"}}),
+         base_tree, {**base_truth, "employees": {"storeops", "commcalc"}}, base_migs),
+        # The 2026-11-04 defect, verbatim: migration 1113 named `marketing.marketing_event_checkin`
+        # for a table that lives in `core`, and the owner's run died on
+        # `3F000: schema "marketing" does not exist` with the whole migration rolled back.
+        ("a migration names a schema no migration creates",
+         base_tree, base_truth,
+         {**base_migs, "1113_geo_retention_stamp.sql":
+          base_migs.get("1113_geo_retention_stamp.sql", "")
+          .replace("core.marketing_event_checkin", "marketing.marketing_event_checkin")}),
     ]
     reds = 0
-    for (label, t, tr) in controls:
+    for (label, t, tr, mg) in controls:
         if t is None:
             print(f"  FAIL  N control could not be planted (the source it mutates has moved): {label}")
             F += 1
@@ -344,7 +480,7 @@ def main():
         P = F = 0
         sys.stdout = open(os.devnull, "w")
         try:
-            run(t, tr)
+            run(t, tr, mg)
             red = F > 0
         finally:
             sys.stdout.close()

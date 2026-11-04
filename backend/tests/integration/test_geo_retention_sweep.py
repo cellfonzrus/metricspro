@@ -15,7 +15,7 @@ from app.modules.core import store_geofence as _sgeo
 NOW = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
 PUNCH = R.RELATIONS_BY_NAME["storeops.timelog"]
 VISIT = R.RELATIONS_BY_NAME["storeops.store_visits"]
-CHECKIN = R.RELATIONS_BY_NAME["marketing.marketing_event_checkin"]
+CHECKIN = R.RELATIONS_BY_NAME["core.marketing_event_checkin"]
 
 CI = _sgeo.PUNCH_COLUMNS[_sgeo.KIND_CLOCK_IN]
 CO = _sgeo.PUNCH_COLUMNS[_sgeo.KIND_CLOCK_OUT]
