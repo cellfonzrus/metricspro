@@ -35,6 +35,9 @@ on:
       # the derived-build lock (index §COMMCALC-41) — the registry, the two refresh one homes, the queue's
       # migration; every writer and every snapshot build under backend/app is judged by the paths above
       - "backend/harness_derived_build_lock.py"
+      - "backend/harness_relation_home_lock.py"
+      - "backend/app/modules/core/relation_home.py"
+      - "database/migrations/**"
       - "backend/harness_derived_builds.py"
       - "backend/app/modules/commcalc/derived_builds.py"
       - "backend/app/modules/payables/refresh.py"
@@ -149,6 +152,17 @@ jobs:
       - name: Run the derived-build lock
         working-directory: backend
         run: python3 harness_derived_build_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # A RELATION'S SCHEMA IS ONE FACT WITH ONE HOME (owner report 2026-10-31, index §CORE-29).
+      # The Run Calculation's input gathering asked the `commcalc` schema for `employees` and `stores`,
+      # which are `storeops` relations. Once the paged read was made to raise rather than mistake a failed
+      # read for a small feed, that killed EVERY tenant's calculation on its first line for about eight
+      # weeks. The same wrong fact had disabled the rep self-scope (`app_users` from `public`, so every
+      # sales_rep saw everyone's pay) and pointed the clock-in screen at a stale roster copy. This lock
+      # re-derives the schema of every relation from database/migrations/ — the schema of truth — and goes
+      # red on a reader that assumes one. Seven planted controls inside it; stdlib + ast, no pip.
+      - name: Run the relation-home lock
+        working-directory: backend
+        run: python3 harness_relation_home_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   feed-read-lock:
     # A PAGED READ IS A READ OF THE DATA (owner report 2026-10-14, index §CORE-05). `range()` paging with

@@ -224,9 +224,19 @@ def clone_carrier_template(client, *, target_org_id, source_org_id, source_carri
         for i in range(0, len(new_mrc_rows), 200):
             client.schema(_SCHEMA).table("product_mrc").insert(new_mrc_rows[i:i + 200]).execute()
 
+    # EVERY EDIT RESTATES THE MONTHS IT PAID (§COMMCALC-41.9). A clone WRITES payout schedules into the
+    # target org, so it is a declaration change there like any other — and a DRY RUN writes nothing, so it
+    # must queue nothing. Routed through the SAME door the plan editors use; never a second hook.
+    auto_calc = None
+    if not dry_run:
+        from app.modules.commcalc.router import _plan_declaration_changed
+        auto_calc = _plan_declaration_changed(client, target_org_id, "payout_schedule",
+                                              what=f"a payout template cloned from \u201c{carrier_name}\u201d")
+
     return {
         "ready": True,
         "dry_run": bool(dry_run),
+        "auto_calc": auto_calc,
         "source": {"org_id": source_org_id, "carrier_id": source_carrier_id, "carrier_name": carrier_name},
         "target_org_id": target_org_id,
         "carrier": {"name": carrier_name, "action": carrier_action, "id": target_carrier_id},

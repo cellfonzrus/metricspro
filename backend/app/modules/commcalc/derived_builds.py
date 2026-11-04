@@ -53,6 +53,21 @@ SCOPE_PERIOD = "period"          # rebuilt for ONE month — the commission calc
 SCOPE_ORG = "org"                # rebuilt whole for an org — every snapshot in this registry but commission
 
 
+# ── WHAT DECLARES REP PAY (index §COMMCALC-41.9) ────────────────────────────────────────────────────────────
+# The tables a commission plan is read OUT of by the pay engines. Named here, once, because the `commission`
+# build below declares them and `harness_derived_build_lock.py` §B8 DERIVES the same set from those engines'
+# own reads — so dropping one from this tuple contradicts the code that reads it, rather than passing quietly.
+# (§B7's lesson, 2026-10-29: a pinned list cannot catch its own deletion.)
+PLAN_DECLARATION = (
+    # commission_engine._load_plans — the plan and its three children
+    "commission_plan", "commission_rule", "commission_tier", "commission_plan_assignment",
+    # installment_engine._load_schedules — the payout schedules a plan pays through
+    "payout_schedule", "payout_schedule_line",
+    # the multi-month (installment) schedules
+    "plan_installment_schedule", "plan_installment_line",
+)
+
+
 # ── THE REGISTRY ────────────────────────────────────────────────────────────────────────────────────────────
 # key          — the queue key, and what an outcome is recorded under
 # label        — how the build is named in the one sentence an operator reads
@@ -81,6 +96,20 @@ BUILDS = (
         "scope": SCOPE_PERIOD,
         "inputs": _lineage.COMMISSION_CALC_FEEDS,
         "inputs_fn": None,
+        # A DECLARATION IS AN INPUT — the rule §COMMCALC-41.8 established on 2026-10-29 for the carrier's net
+        # payment terms, applied at last to the build that moves REP PAY. Owner, 2026-10-31: *"i upldated the
+        # commission for luxelink in ny plan but it did not get auto updated as we confirmed yesterday that
+        # everytime anything is change it will auto update acorss the board, i changed teh comission from june
+        # - oct"*. He was right to expect it: the oldest live build declared its feeds and no declaration at
+        # all, so the one thing a tenant actually edits — the plan — made nothing stale, and the figures waited
+        # for an unrelated upload. These are the tables the pay engines read a plan OUT of:
+        # `commission_engine._load_plans` (the plan, its rules, its tiers, its assignments),
+        # `installment_engine._load_schedules` (the payout schedules) and the multi-month plan schedules.
+        "config_inputs": PLAN_DECLARATION,
+        # A FEED landing names its own month; AN EDIT DOES NOT. So the build says which months it restates,
+        # rather than every endpoint that can save a plan guessing — and it is bounded, because a rate fixed
+        # today must not rewrite July 2024.
+        "periods_fn": "app.modules.commcalc.router:_plan_restate_periods",
         "run": "app.modules.commcalc.auto_calc:_default_runner",
         "endpoint": "POST /commcalc/calculate",
         "why": "index §6l — the build this registry generalises; auto_calc runs it per (org, period) itself",
@@ -220,6 +249,25 @@ def declared_inputs(client, org_id, build):
     except Exception as e:
         msg = f"{type(e).__name__}: {e}"
         print(f"WARN derived-build declared inputs unreadable build={build['key']} org={org_id}: {msg}")
+        return (), msg
+
+
+def build_periods(client, org_id, build, now=None):
+    """The months a DECLARATION edit of `build` restates: (periods, error).
+
+    A feed landing names its own month. An edit does not, so the build names the months — through
+    `periods_fn`, exactly as `inputs_fn` names declared inputs. Same posture as `declared_inputs`
+    (§COMMCALC-29): a resolver that raises is REPORTED, never read as "this edit restates nothing",
+    because nothing is the answer that looks like success and leaves the figures stale.
+    """
+    path = build.get("periods_fn")
+    if not path:
+        return (), None
+    try:
+        return tuple(str(p) for p in (_load(path)(client, org_id, now) or ()) if p), None
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        print(f"WARN derived-build restate months unreadable build={build['key']} org={org_id}: {msg}")
         return (), msg
 
 

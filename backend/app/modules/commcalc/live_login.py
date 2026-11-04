@@ -134,6 +134,13 @@ _VIEWER_PRESENT_SECONDS = 30      # a frame/state poll within this long means a 
 # so a '▶ Pull now' can run on the SAME trusted page. The session becomes terminal only on error/cancel
 # (incl. the post-auth idle timeout, which flips it to 'cancelled').
 _TERMINAL = ("error", "cancelled")
+# THE phases in which this session has passed the portal's sign-in. Declared once because THREE
+# things asked it and one of them got it wrong: `can_pull` and `can_calibrate` both carried this
+# tuple inline, and the live window in the browser compared the phase to the single word
+# 'authenticated' — so closing the window during the post-login pull (phase 'pulling') CANCELLED a
+# session the operator had just signed in to, which is how the owner lost his 21:02 UPS session two
+# minutes after making it. 'pulling' is post-authentication: the browser is open and trusted.
+_SIGNED_IN_PHASES = ("authenticated", "pulling")
 
 # ── HOW LONG MAY THIS SESSION STAY IN THIS PHASE? ONE HOME, two different questions ─────────────
 # Owner report 2026-10-15, on a brand-new Team Portal login: *"it has been over 5 minutes it is
@@ -743,10 +750,17 @@ class LiveLoginSession:
     def state(self):
         self._note_viewer()                       # answering about the session IS a sighting (§COMMCALC-30)
         act = self.activity()                     # §COMMCALC-31 — taken BEFORE the lock below (it locks too)
+        # Taken before the lock for the same reason `act` is: `signed_in` takes it too.
+        signed = self.signed_in()
         with self._lock:
             pr = self.pull_result
             return {
                 "phase": self.phase,
+                # PUBLISHED so no surface has to re-derive it from the phase word. The live window
+                # decides from this whether leaving may cancel the session; `pulling` is signed in
+                # and a string compare against 'authenticated' there cost the owner a session he had
+                # just made (2026-10-31).
+                "signed_in": signed,
                 "message": self.message,
                 "shot": ("data:image/jpeg;base64," + self._shot) if self._shot else None,
                 "seq": self._seq,
@@ -845,12 +859,21 @@ class LiveLoginSession:
         self._touch()
         self._cmd_q.put(("CALIBRATE", result_q))
 
+    def signed_in(self):
+        """Has this session passed the portal's sign-in? THE one answer, over `_SIGNED_IN_PHASES`.
+
+        Deliberately says nothing about whether the worker is still alive or what the session can be
+        asked to DO — `can_pull` / `can_calibrate` add those, because "signed in" is the fact a
+        surface needs to decide whether leaving the window may cancel the session, and a liveness
+        check would make a momentary thread hiccup read as "never signed in" and cancel it."""
+        with self._lock:
+            return self.phase in _SIGNED_IN_PHASES
+
     def can_calibrate(self):
         """True only when the worker is alive AND we are post-authentication AND a capture is
         configured. Same shape and the same honest fallback as `can_pull`: a dead or aged-out session
         returns False and the caller says so rather than hanging."""
-        with self._lock:
-            ok_phase = self.phase in ("authenticated", "pulling")
+        ok_phase = self.signed_in()
         alive = bool(self._thread and self._thread.is_alive())
         return ok_phase and alive and self.calibrate_fn is not None
 
@@ -871,8 +894,7 @@ class LiveLoginSession:
         """True only when the worker is alive AND we're post-authentication (browser still open) AND a
         pull_fn is configured — so the router can decide to reuse the live session instead of a cold
         storage_state restore. A dead/aged-out session returns False → the router falls back cleanly."""
-        with self._lock:
-            ok_phase = self.phase in ("authenticated", "pulling")
+        ok_phase = self.signed_in()
         alive = bool(self._thread and self._thread.is_alive())
         return ok_phase and alive and self.pull_fn is not None
 

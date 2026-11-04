@@ -73,6 +73,11 @@ export interface AmendPlan {
   /** False until migration 1103 is applied — the Sale Log offers no button on a database that
    *  cannot keep the version the edit would supersede. */
   available: boolean
+  /** How far back THIS caller may reopen a sale, as the server resolved it (§POS-12.9). Null on an
+   *  older server; the screen then says nothing rather than inventing a number. */
+  window_days: number | null
+  /** Whether the caller holds the longer window. Stated, never inferred from a missing key. */
+  elevated: boolean
   /** What stands tendered against this sale right now, before any edit. */
   tender: AmendTender | null
   /** False until migration 1108 is applied: an edit that WOULD leave a mismatch is then refused
@@ -166,6 +171,11 @@ export async function fetchAmendPlan(saleId: string): Promise<AmendPlan> {
     // Absent on an older server reads as available; the save still fails closed with a 503, so the
     // worst case is a button that explains itself rather than a button that is wrongly hidden.
     available: r?.available !== false,
+    // NOT coerced to 0: an older server that sends nothing must read as "unknown", because 0 is a
+    // real and meaningful window here ("the same day only") and would be a false statement.
+    window_days: r?.window_days === null || r?.window_days === undefined
+      ? null : Number(r.window_days),
+    elevated: r?.elevated === true,
     tender: readTender(r?.tender),
     tender_log_available: r?.tender_log_available !== false,
   }

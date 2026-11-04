@@ -24,6 +24,7 @@ from app.modules.core import portal_secret as _psec   # 2026-10-12 — THE regis
 from app.modules.commcalc import prospect_feed_tally as _pft   # 2026-10-16 — THE per-feed,
 # per-month row tally, in the one shape both its readings produce (index §COMMCALC-TALLY)
 from app.modules.core import feed_read as _feed_read   # 2026-10-06 — THE complete paged feed read; no literal row ceiling (index §19.48)
+from app.modules.core import relation_home as _relation_home   # 2026-10-31 — THE one home of which schema holds a relation (index §CORE-30)
 from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE pay-feed balance: placed, or reported unplaced (index §19.48)
 from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
 from app.modules.commcalc import carrier_device_money as _cdm   # THE device-financing dollars per device (index §COMMCALC-44)
@@ -42,6 +43,7 @@ from app.modules.pos import device_condition as _cond                 # 2026-10-
 from app.modules.commcalc import accessory_order_drilldown as _aopdd   # 2026-10-29 — that report's drill declaration (§CORE-17.3y; declaration only, pure)
 from app.modules.commcalc import demand_projection as _dp   # 2026-10-29 — THE device velocity/horizon projection + device-line test (§COMMCALC-49; pure)
 from app.modules.commcalc import device_vocabulary as _devvocab   # 2026-10-30 — THE one place to ask which departments an org calls a device (§COMMCALC-49)
+from app.modules.commcalc import plan_workflow as _planwf   # 2026-11-01 — THE "which plan am I on, and what can replace it" workflow (index §COMMCALC-54; pure)
 from app.modules.commcalc import spiff_impact as _spiffimp   # 2026-10-08 — ONE pay type against a store's commission revenue and profit (index §60)
 from app.modules.commcalc import tender_recon_drilldown as _tender_recon_drilldown   # 2026-10-24 — THE X-report-vs-closing tile drill (index §CORE-17.3a; declaration only, pure)
 from app.modules.asset import device_asset_drilldown as _asset_dd   # 2026-10-25 — THE device-asset family's drill declaration (index §CORE-17.3l; declaration only, pure)
@@ -3714,11 +3716,11 @@ def _do_vip_sweep(org_id):
             errs.append(f"{name}: {str(e)[:140]}")
 
     def _invoices():
-        res = vip_sweep.run_invoice_sweep(client, org_id, u, pw, lookback, helpers)
+        res = vip_sweep.run_invoice_sweep(client, org_id, u, pw, lookback, helpers, tz=cfg.get('timezone'))
         return f"{res['invoices']} invoices, {res['lines']} lines, {res['devices']} devices ({res['window']})"
 
     def _paygo():
-        ar = vip_sweep.run_paygo_sweep(client, org_id, u, pw, lookback)
+        ar = vip_sweep.run_paygo_sweep(client, org_id, u, pw, lookback, tz=cfg.get('timezone'))
         owed = f"${ar['current_owed']:,.2f}" if ar.get('current_owed') is not None else "n/a"
         return f"PayGo: {ar['payments']} batches (current owed {owed})"
 
@@ -3979,9 +3981,14 @@ def payout_plans_overview(org_id: str = ORG_ID):
     for c in carriers:
         cid = c.get("id")
         boost = _is_boost(c)
-        cplans  = [p for p in plans if p.get("carrier_id") in (cid, None) and p.get("is_active", True)]
+        # "is this plan live, and does it serve this carrier?" has ONE home — `plan_workflow`
+        # (§COMMCALC-54). This hub, the guided workflow and anything later must read the same
+        # predicate; a private copy here is how the two screens would start disagreeing about
+        # which plan a tenant is on.
+        cplans  = _planwf.live_plans_for_carrier(plans, cid)
         cassign = sum(assign_by_plan.get(p["id"], 0) for p in cplans)
-        cscheds = [s for s in scheds if s.get("carrier_id") in (cid, None) and s.get("is_active", True)]
+        cscheds = [s for s in scheds
+                   if _planwf.plan_serves_carrier(s, cid) and _planwf.plan_is_live(s)]
         if boost:
             pays_via, ready = "boost_rates", True
         elif cassign > 0 or len(cscheds) > 0:
@@ -4001,6 +4008,73 @@ def payout_plans_overview(org_id: str = ORG_ID):
                              "code": default.get("code")} if default else None),
         "carriers": out,
     }
+
+
+# ── INCENTIVE-PLAN WORKFLOW (owner directive 2026-11-01) ─────────────────────────────────────────
+# "When we click on the plan it should show the one which is active and below it should give the
+# option to change the plan ... all of this should be a work flow than random data seen on the
+# screen." Both endpoints are READ-ONLY: the steps are DERIVED by `plan_workflow` (pure, §COMMCALC-54)
+# and the writes stay where they already live — `POST /commission-plans` for a plan,
+# `POST /carrier-template/clone` for a shared carrier's curves. No third write path is created.
+def _workflow_engine(carriers, carrier_id):
+    """Which engine pays this tenant, through the SAME resolver the pay run uses. A carrier lens with
+    its own explicit `engine_mode` (mig 303) answers for itself; otherwise the org-level resolution
+    stands. RULE TWO: no carrier name is consulted here — `_resolve_carrier_mode` owns the legacy
+    name heuristic and this does not duplicate it."""
+    if carrier_id:
+        row = next((c for c in (carriers or []) if str(c.get("id") or "") == str(carrier_id)), None)
+        if row is not None:
+            m = _norm_engine_mode(row.get("engine_mode"))
+            if m is not None:
+                return m
+    return _resolve_carrier_mode(carriers)
+
+
+@router.get("/incentive-plan/workflow")
+def incentive_plan_workflow(carrier_id: str = "", org_id: str = ORG_ID):
+    """THE guided answer to "which incentive plan am I on, and what can replace it?" — step 1 the
+    active plan, step 2 the change action and its options, step 3 what creating one does.
+
+    Read-only. `plan_workflow` holds no tenant identifier and no house default, so every tenant is
+    answered from its own rows and its own engine declaration (project directive 2026-10-30)."""
+    require_org(org_id)
+    client = sb()
+    carriers = _carrier_rows(client, org_id)
+    plans, ready = commission_engine._load_plans(client, org_id)
+    if not ready:
+        return {"ready": False, "engine": None, "steps": [],
+                "note": "Run migration 059_commission_plans.sql to enable incentive plans."}
+    lens = (carrier_id or "").strip() or None
+    try:
+        templates = (template_clone.list_shared_sources(client, org_id) or {}).get("sources") or []
+    except Exception:
+        # a shared template is an OPTION, never a prerequisite: the workflow still works without it.
+        templates = []
+    wf = _planwf.workflow(_workflow_engine(carriers, lens), plans,
+                          templates=templates, carrier_id=lens)
+    wf["ready"] = True
+    wf["carriers"] = [{"id": c.get("id"), "name": c.get("name"), "code": c.get("code"),
+                       "is_default": bool(c.get("is_default"))} for c in carriers]
+    wf["advanced_href"] = "/commcalc/commission-plans"
+    return wf
+
+
+@router.get("/incentive-plan/draft")
+def incentive_plan_draft(option: str, name: str = "", carrier_id: str = "", org_id: str = ORG_ID):
+    """The exact request a chosen option implies: which existing door, and the body for it. WRITES
+    NOTHING — the browser posts the returned body to the returned endpoint, so the money-config
+    payload is assembled in ONE place rather than in TypeScript. An unknown option is refused."""
+    require_org(org_id)
+    client = sb()
+    plans, ready = commission_engine._load_plans(client, org_id)
+    if not ready:
+        raise HTTPException(400, "Run migration 059_commission_plans.sql to enable incentive plans.")
+    try:
+        return _planwf.draft_from_option((option or "").strip(), plans=plans,
+                                         name=(name or ""),
+                                         carrier_id=(carrier_id or "").strip() or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/payout-plans/diagnose")
@@ -15627,7 +15701,8 @@ def _do_b2b_sweep(org_id):
         # the connector's registered label / host (mig 1014) — the copy the client raises names it by
         # these, never by a vendor spelled in code
         conn = _connector_scope(_connector_scope_ctx(client, org_id), _sweep_table_slug('b2b_sweep_config', cfg))
-        res = b2b_sweep.run_inventory_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'], connector=conn)
+        res = b2b_sweep.run_inventory_sweep(client, org_id, cfg['portal_user'], cfg['portal_pass'],
+                                            tz=cfg.get('timezone'), connector=conn)
         # HONEST ZERO: the login can succeed and the report still parse 0 stores (a renamed store/value
         # column, a layout we don't flatten). That is NOT an import — recording it as 'ok' + a fresh
         # last_run_at is exactly the false green the 2026-07-26 audit removed. Same posture the email
@@ -15810,9 +15885,12 @@ def _do_epay_sweep(org_id, only=None):
             _epay_set_status(client, org_id, 'ok', f'Nothing due to pull ({", ".join(only)})')
             return
     try:
+        # tz: the TENANT's business timezone, passed EXPLICITLY (index §COMMCALC-53). A day-grain
+        # window must end on the tenant's today, and the sweep refuses to build one without being
+        # told which clock to use — that is the whole fix, so this argument is not optional.
         res = epay_sweep.run_epay_sweep(client, org_id, cfg.get('portal_url'),
                                         cfg['portal_user'], cfg['portal_pass'], reports=reports,
-                                        report_cfg=rcfg)
+                                        report_cfg=rcfg, tz=cfg.get('timezone'))
         # run_epay_sweep raises only when EVERY report failed; a mixed run returns res['errors'].
         # That used to be reported as a flat 'ok' (the failed report looked imported) — call it 'partial'
         # so the connectors page and the attention feed can tell the operator WHICH report is missing.
@@ -16870,8 +16948,13 @@ def _calc_inputs(client, org_id, period):
         # Crossing the ceiling was indistinguishable from an empty month. `raw_mi` was next over it
         # (46,047 rows in September, +~4,000/month). A failed read now RAISES rather than returning
         # [] — a partial feed must never be mistaken for a smaller feed.
+        # WHICH SCHEMA HOLDS THIS RELATION is dereferenced, never assumed (index §CORE-30). This
+        # reader takes the table BY NAME, so it cannot know: `employees` and `stores` below are
+        # `storeops` relations and the hard-coded `commcalc` here killed every calculation on its
+        # first line from early September to 2026-10-31 — on every tenant, for every month.
         def _make():
-            q = client.schema('commcalc').table(table).select('*').eq('org_id', org_id)
+            q = (_relation_home.reader(client, table)
+                 .eq('org_id', org_id))
             for k, v in filters.items():
                 # A LIST filter value → .in_ so the read is period-spelling tolerant: the sweeps store
                 # 'July 2026' while a manual /calculate passes '2026-07', and an exact .eq('period', …)
@@ -17438,7 +17521,9 @@ def _caller_rep_keys(authorization: str, org_id: str):
       • set()       — a self rep we could NOT map to a rep → the caller sees NOTHING (never another rep's
                       row; the KPI page shows an empty state + hint, not other people's pay).
     Same identity path My Targets uses (app_user → employee → rep name). Reads app_users/employees
-    (public schema) READ-ONLY, org-scoped. Never raises."""
+    READ-ONLY, org-scoped. Never raises. Both relations are read through
+    `core.relation_home` (index §CORE-30) — this docstring used to claim "(public schema)",
+    which is precisely the assumption that disabled the scoping."""
     try:
         from app.modules.storeops.router import _rbac_enabled, role_is_self_scoped
         from app.modules.core.router import _uid_from_token
@@ -17450,7 +17535,12 @@ def _caller_rep_keys(authorization: str, org_id: str):
         uid = _uid_from_token(authorization)
         if not uid:
             return None
-        urows = (sb().table("app_users").select("role,employee_id")
+        # WHICH SCHEMA HOLDS THIS RELATION, dereferenced (index §CORE-30). `sb()` in THIS module is
+        # the plain client — the `public` schema — and both relations below live in `storeops`
+        # (mig 003). `public.app_users` has never existed, so this read raised PGRST205, the outer
+        # `except` swallowed it, and None here means UNRESTRICTED: every self-scoped rep was handed
+        # every rep's commission rows. Found 2026-10-31 beside the same wrong fact in `_calc_inputs`.
+        urows = (_relation_home.reader(sb(), "app_users", "role,employee_id")
                  .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
         if not urows:
             return None
@@ -17461,7 +17551,10 @@ def _caller_rep_keys(authorization: str, org_id: str):
         eid = (u.get("employee_id") or "").strip()
         if eid:
             try:
-                emp = (sb().table("employees").select("name")
+                # …and the roster, for the same reason. `public.employees` DOES exist — a stale
+                # four-row copy predating the storeops schema — which is why this read looked
+                # plausible for as long as it did; the live roster is `storeops.employees` (142 rows).
+                emp = (_relation_home.reader(sb(), "employees", "name")
                        .eq("org_id", org_id).eq("employee_id", eid).limit(1).execute().data) or []
                 if emp:
                     name = str(emp[0].get("name") or "").strip()
@@ -19268,7 +19361,8 @@ def _write_installment_schedule(client, org_id, body, sid, changed_by):
     """Shared create/update writer (mig 201 + mig 210). sid None → INSERT; else UPDATE that id. Replaces
     the month lines (delete-then-insert). Stamps updated_by/updated_at (mig 210) and records a before/after
     audit row. m1_gate/updated_by degrade if mig 210 isn't applied — retried without them so a save on a
-    mig-201-only DB still works. Does NOT recompute pay (that waits for POST /calculate)."""
+    mig-201-only DB still works. RESTATES the months this schedule paid, through the post-landing hook
+    (§COMMCALC-41.9) — it used to leave that to somebody pressing Run Calculation."""
     action = "update" if sid else "create"
     before = _installment_snapshot(client, org_id, sid) if sid else None
     head = _installment_head(body, org_id)
@@ -19304,6 +19398,12 @@ def _write_installment_schedule(client, org_id, body, sid, changed_by):
 
     after = _installment_snapshot(client, org_id, new_sid)
     _installment_audit(client, org_id, new_sid, action, before, after, changed_by)
+    # EVERY EDIT RESTATES THE MONTHS IT PAID (§COMMCALC-41.9). Placed in the WRITER, not in its two
+    # endpoints: the create and the update are one declaration change, and a hook per endpoint is two
+    # answers to one question. The docstring above used to end "Does NOT recompute pay (that waits for
+    # POST /calculate)" — that sentence was the defect the owner reported on 2026-10-31.
+    _plan_declaration_changed(client, org_id, "plan_installment_schedule",
+                              what="a multi-month payout schedule being saved")
     return new_sid
 
 
@@ -20342,7 +20442,9 @@ def delete_plan_installment(sid: str, authorization: str = Header(default=""), o
     except Exception as e:
         raise HTTPException(500, f"delete failed: {e}")
     _installment_audit(client, org_id, sid, "delete", before, None, _caller_uid(authorization))
-    return {"deleted": True}
+    return {"deleted": True,
+            "auto_calc": _plan_declaration_changed(client, org_id, "plan_installment_schedule",
+                                                   what="a multi-month payout schedule being removed")}
 
 
 # ── Classification-first MRC MAPPING (§7b decision 1): classify imported plan lines + prefill $ MRC ──
@@ -20672,7 +20774,9 @@ def save_payout_schedule(body: SavePayoutScheduleIn, org_id: str = ORG_ID):
             })
         if lines:
             client.schema('commcalc').table('payout_schedule_line').insert(lines).execute()
-        return {"id": sid, "lines": len(lines)}
+        return {"id": sid, "lines": len(lines),
+                "auto_calc": _plan_declaration_changed(client, org_id, "payout_schedule",
+                                                       what="a payout schedule being saved")}
     except HTTPException:
         raise
     except Exception as e:
@@ -20684,7 +20788,9 @@ def delete_payout_schedule(schedule_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema('commcalc').table('payout_schedule_line').delete().eq('org_id', org_id).eq('schedule_id', schedule_id).execute()
     client.schema('commcalc').table('payout_schedule').delete().eq('org_id', org_id).eq('id', schedule_id).execute()
-    return {"deleted": schedule_id}
+    return {"deleted": schedule_id,
+            "auto_calc": _plan_declaration_changed(client, org_id, "payout_schedule",
+                                                   what="a payout schedule being removed")}
 
 
 @router.get("/payout-schedule/preview")
@@ -21898,6 +22004,47 @@ class SaveCommissionPlanIn(LaxModel):
     assignments: Any = None
 
 
+# ── A PLAN EDIT RESTATES THE MONTHS IT PAID (index §COMMCALC-41.9, owner 2026-10-31) ──────────────────────
+# Owner, verbatim: *"i upldated the commission for luxelink in ny plan but it did not get auto updated as we
+# confirmed yesterday that everytime anything is change it will auto update acorss the board, i changed teh
+# comission from june - oct"*.
+#
+# ONE DOOR for every writer of a plan declaration, so eight endpoints cannot grow eight answers to "what does
+# this edit restate". It calls THE post-landing hook (`auto_calc.landed`, index §6l) with NO period: an edit
+# carries no month of its own, so the registry's `periods_fn` names the months — every month that has stored
+# figures, within the org's horizon. The hook's own debounce then coalesces a burst of edits (saving a plan
+# writes four tables) into ONE calculation per (org, month), and every refusal guard it has stays armed.
+#
+# Never raises into an editor: a save that worked must not report failure because the recompute could not be
+# queued. The outcome rides back on the response, which is where an operator reads it.
+def _plan_declaration_changed(client, org_id, table, *, what):
+    """A commission-plan declaration was edited → queue the restatement of the months it paid."""
+    return _auto_calc.landed(client, org_id, table=table, periods=None,
+                             source="commission_plan_edit", filename=what)
+
+
+#: THE calculation's own OUTPUT table, and therefore the honest answer to "which months does this org have
+#: commission figures for". It lives HERE, with the module that owns the pay table — `auto_calc` may not so much
+#: as name it (harness_auto_calc_lock §D: the hook schedules a calculation, it never computes or writes pay).
+_STORED_OUTPUT_TABLE = "rep_commissions"
+
+
+def _plan_restate_periods(client, org_id, now=None):
+    """THE months a commission-plan edit restates for this org: every month that HAS stored rep figures, within
+    the org's declared horizon. The `commission` build's `periods_fn` (index §COMMCALC-41.9) — so the months come
+    from the registry, not from whichever of the eight plan endpoints happened to be edited.
+
+    A read failure RAISES rather than returning (), because () here would mean "this edit restates nothing" —
+    silently, which is the whole class of defect this change exists to stop. `read_all` is the complete paged
+    read (index §CORE-05), so a partial feed raises too.
+    """
+    rows = _feed_read.read_all(lambda: (client.schema("commcalc").table(_STORED_OUTPUT_TABLE)
+                                        .select("period").eq("org_id", org_id)))
+    cfg = _auto_calc.load_config(client, org_id)          # THE one reader of commission_org_config (§6l)
+    return _auto_calc.restate_periods([r.get("period") for r in rows], now or datetime.now(timezone.utc),
+                                      cfg.get("restate_months"))
+
+
 @router.post("/commission-plans")
 def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
     """Upsert a plan + REPLACE its rules / tiers / assignments (delete-then-insert children)."""
@@ -22071,7 +22218,11 @@ def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
         if assigns:
             client.schema('commcalc').table('commission_plan_assignment').insert(assigns).execute()
 
-        return {"id": plan_id, "saved": True}
+        # EVERY EDIT RESTATES THE MONTHS IT PAID (§COMMCALC-41.9). One call for the whole save: the
+        # plan and its three children are one declaration, and the hook's debounce coalesces them anyway.
+        return {"id": plan_id, "saved": True,
+                "auto_calc": _plan_declaration_changed(client, org_id, "commission_plan",
+                                                       what=f"the commission plan \u201c{name}\u201d")}
     except HTTPException:
         raise
     except Exception as e:
@@ -22083,7 +22234,10 @@ def delete_commission_plan(plan_id: str, org_id: str = ORG_ID):
     """Delete a plan (children cascade via FK ON DELETE CASCADE)."""
     client = sb()
     client.schema('commcalc').table('commission_plan').delete().eq('org_id', org_id).eq('id', plan_id).execute()
-    return {"deleted": plan_id}
+    # DELETING a plan changes what the stored months were paid by exactly as editing one does.
+    return {"deleted": plan_id,
+            "auto_calc": _plan_declaration_changed(client, org_id, "commission_plan",
+                                                   what="a commission plan being removed")}
 
 
 # ── THE SINGLE-ASSIGNMENT REMOVER (owner 2026-09-28, index §6n / §17) ─────────────────────────────────────
@@ -22133,7 +22287,9 @@ def delete_commission_plan_assignment(plan_id: str, assignment_id: str,
         raise HTTPException(404, "assignment not found on this plan for this org")
     _invalidate_accessory_config(org_id)
     print(f"INFO commission-plan assignment removed org={org_id} plan={plan_id} row={row}")
-    return {"deleted": row, "plan_id": plan_id}
+    return {"deleted": row, "plan_id": plan_id,
+            "auto_calc": _plan_declaration_changed(sb(), org_id, "commission_plan_assignment",
+                                                   what="a plan assignment being removed")}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -23830,7 +23986,9 @@ async def bulk_assign_commission_plan(body: BulkAssignCommissionPlanIn, org_id: 
         "rows_inserted": inserted, "rows_deleted": deleted,
     }
     return {"ok": True, "plan_id": plan_id, "plan_name": plan_nm,
-            "replace_existing": replace_existing, "results": results, "summary": summary}
+            "replace_existing": replace_existing, "results": results, "summary": summary,
+            "auto_calc": _plan_declaration_changed(client, org_id, "commission_plan_assignment",
+                                                   what=f"reps being assigned to \u201c{plan_nm}\u201d")}
 
 
 # ── SINGLE-REP RECOMPUTE (owner directive 2026-08-22, luxelink; rebuilt 2026-09-27, index §6k) ──────────
@@ -43143,8 +43301,79 @@ def live_login_frame(sid: str, since: int = 0, org_id: str = ORG_ID):
     return sess.frame_since(since)
 
 
+def _calibration_answer(client, org_id, sid, res, editing=None):
+    """THE answer a §COMMCALC-39 capture gives an operator: the EDITOR ROWS with each suggestion
+    already folded in, plus what every page actually said. Writes nothing.
+
+    WHY THE MERGE IS HERE AND NOT IN THE BROWSER (owner, 2026-10-31). `report_declaration.
+    merge_suggestion` has been the declared home for "fold a capture into a row" since §COMMCALC-48,
+    and it had no caller: the editor had written its own copy in TypeScript. The two diverged exactly
+    where it mattered —
+
+      • the capture names the report under `report`, which is this module's convention for a
+        per-report RESULT (`epay_sweep`, `merchant_portal_sweep`, `portal_report_pull.pull_one_report`
+        all spell it that way); the browser's copy looked for `key`, the spelling an editor ROW uses.
+        So `suggested.find(x => x.key === row.key)` never matched, for any tenant and any portal, and
+        the capture of fourteen UPS Store report pages folded in NOTHING while reporting
+        "Read 14 pages". Two spellings of "which report is this" is the defect `pos_report_sweep.
+        spec_key` exists to prevent, and the merge here goes through it;
+      • the browser's copy de-duplicated on the SELECTOR alone, so a filter an operator had already
+        declared by hand under a different selector came back a second time.
+
+    So the capture's suggestions never reach the browser as something to merge. They reach it merged,
+    by the one function that knows how, and the browser only displays what came back. `editing` is the
+    rows as they stand on the operator's screen — unsaved edits included, because a suggestion folded
+    into the STORED rows would silently drop what they had just typed. Absent, the stored declaration
+    is used.
+
+    §COMMCALC-44 — an absence needs the RIGHT reason. `capture` says, per report, whether the page was
+    reached, how many controls it offered, how many filters were suggested, how many were new, and the
+    controls whose purpose the page's own words do not state. Thirteen reports reaching zero filters is
+    an answer only once it says WHICH of those things happened.
+    """
+    from app.modules.commcalc import report_declaration as rd
+    from app.modules.commcalc import pos_report_sweep as _sweep
+    entries = [e for e in ((res or {}).get("reports") or []) if isinstance(e, dict)]
+    if isinstance(editing, list):
+        work = [dict(r) for r in editing if isinstance(r, dict)]
+    else:
+        work = rd.rows(_live_source_row(client, sid, org_id))
+
+    def _counts(rws):
+        out = {}
+        for r in rws:
+            out[_sweep.spec_key(r)] = len(rd.clean_params((r or {}).get("params")))
+        return out
+
+    capture, added_total = [], 0
+    for e in entries:
+        key = e.get("report")
+        before = _counts(work)
+        work = rd.merge_suggestion(work, key, e)
+        after = _counts(work)
+        k = _sweep.spec_key(key)
+        added = max(0, after.get(k, 0) - before.get(k, 0))
+        added_total += added
+        capture.append({
+            "report": key, "label": e.get("label"), "reached": bool(e.get("reached")),
+            "controls_seen": e.get("controls_seen"),
+            "suggested": len(rd.clean_params(e.get("params"))),
+            "added": added,
+            # Named for a human, never guessed into a filter (`suggest_params`' own rule).
+            "unrecognised": [{"label": u.get("label"), "selector": u.get("selector"),
+                              "why": u.get("why")}
+                             for u in (e.get("unrecognised") or []) if isinstance(u, dict)][:12],
+            "error": e.get("error"),
+        })
+    reached = sum(1 for c in capture if c["reached"])
+    return {"ok": True, "reports": work, "capture": capture,
+            "reached": reached, "pages": len(capture), "added": added_total,
+            "note": ("Nothing was saved. Check what was added, then press Save."
+                     if added_total else "Nothing was saved, and no new filter was found to add.")}
+
+
 @router.post("/data-sources/{sid}/live-login/calibrate")
-def live_login_calibrate(sid: str, org_id: str = ORG_ID):
+def live_login_calibrate(sid: str, body: dict = Body(default={}), org_id: str = ORG_ID):
     """READ this login's declared report pages on the live authenticated session and SUGGEST each
     report's declaration — its date boxes, its detail toggle, its Run and Export controls (index
     §COMMCALC-39).
@@ -43176,7 +43405,8 @@ def live_login_calibrate(sid: str, org_id: str = ORG_ID):
         return {"ok": False, "phase": sess.snapshot_phase(),
                 "error": "The report pages could not be read before the session timed out. Nothing "
                          "was changed."}
-    return res
+    return _calibration_answer(client=sb(), org_id=org_id, sid=sid, res=res,
+                               editing=body.get("reports") if isinstance(body, dict) else None)
 
 
 @router.get("/data-sources/{sid}/reports")
@@ -48568,7 +48798,7 @@ def _epay_portal_pull(client, org_id):
             def _run_dtd_sweep():
                 return epay_sweep.run_epay_sweep(
                     client, org_id, cfg.get("portal_url"), cfg["portal_user"], cfg["portal_pass"],
-                    reports=["epay_daily_tx"], report_cfg=rcfg)
+                    reports=["epay_daily_tx"], report_cfg=rcfg, tz=cfg.get("timezone"))
 
             with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
                 res = _ex.submit(_run_dtd_sweep).result() or {}

@@ -118,6 +118,57 @@ def api_client(app_module):
         yield client
 
 
+def clear_rate_limit_buckets() -> int:
+    """Empty every reachable `RateLimitMiddleware` counter; return how many were found.
+
+    NAMED AND RETURNING A COUNT ON PURPOSE. Starlette builds `app.middleware_stack` when the app
+    starts, so before the first TestClient enters there is no middleware to find — and a fixture
+    that silently found nothing would look like it was clearing a budget it never touched. 0 is the
+    honest answer in that window (nothing has been served, so there is no budget), and
+    `tests/unit/test_rate_limit_budget_not_carried.py` pins that it is NOT 0 once a client exists.
+    """
+    found = 0
+    try:
+        from app.main import app
+        seen, node = set(), getattr(app, "middleware_stack", None)
+        while node is not None and id(node) not in seen:
+            seen.add(id(node))
+            limiter = getattr(node, "_limiter", None)
+            if limiter is not None and hasattr(limiter, "_buckets"):
+                limiter._buckets.clear()
+                found += 1
+            node = getattr(node, "app", None)
+    except Exception:
+        # Fail OPEN, like the limiter itself: a helper that cannot find the middleware must never
+        # be the reason a suite goes red.
+        return found
+    return found
+
+
+@pytest.fixture(autouse=True)
+def _no_carried_rate_limit_budget():
+    """Empty the inbound rate limiter's buckets around EVERY test.
+
+    SAME CLASS AS `_no_cached_store_universe` BELOW, and found the same way. `RateLimitMiddleware`
+    keeps a per-IP fixed-window counter in the process (app/core/rate_limit.py — deliberately
+    in-memory, because the container runs one worker). Every test in the suite reaches the app from
+    the same TestClient address, so they all spend ONE 300-requests-per-minute budget, and a suite
+    that runs long enough to cross a minute boundary spends it unevenly.
+
+    The symptom is the worst kind and it is not local: a test that passes alone fails in the suite
+    with a 429, and the test that fails is whichever one happened to be running when the budget ran
+    out — never the one that spent it. Adding 22 requests in a NEW file (§POS-19, 2026-10-31) made
+    four Zero Sales tests red, in a file that change does not touch.
+
+    It is autouse, and it empties the buckets rather than switching the limiter off with
+    `RATE_LIMIT_ENFORCE`, because the hazard is the CARRIED budget and not the limiter: a test that
+    wants to prove a flood is refused still gets a real 429 inside its own test.
+    """
+    clear_rate_limit_buckets()
+    yield
+    clear_rate_limit_buckets()
+
+
 @pytest.fixture(autouse=True)
 def _no_cached_store_universe():
     """Drop `core.scope`'s cached store/market universe around EVERY test.

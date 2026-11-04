@@ -3,6 +3,10 @@ import { useState, useEffect } from 'react'
 import { api } from '@/lib/client'
 import { fieldsDirty, notSavedNote } from '@/lib/rowSave'
 import ScreenLink from '@/components/ScreenLink'
+// The map pin's ONE home is the Store Setup library, because Store Setup is the page with a
+// sidebar tile and this backward-compat page has none (rbac.ts: tileOnly without a tile). A copy
+// here is how the pin became unreachable in the first place — see the note above StorePinField.
+import { StorePinField } from '../setup/lib'
 
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--border)' }
@@ -484,7 +488,7 @@ export default function StoreOpsAdminPage() {
           <div className="table-wrapper">
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['Store code', 'Address', 'Market', 'Time zone', 'Monthly target', 'Active', ''].map(h =>
+                {['Store code', 'Address', 'Market', 'Time zone', 'Map pin', 'Monthly target', 'Active', ''].map(h =>
                   <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -501,6 +505,7 @@ export default function StoreOpsAdminPage() {
                         {STORE_TZ_OPTS.map(t => <option key={t.v || 'default'} value={t.v}>{t.label}</option>)}
                       </select>
                     </td>
+                    <td style={cell}><StorePinField store={s} onSaved={pin => setStore(s.id, pin)} /></td>
                     <td style={cell}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                         <input style={{ ...sel, width: 120 }} type="number" title="Monthly sales/production target" value={s.monthly_target ?? ''} onChange={ev => setStore(s.id, { monthly_target: ev.target.value })} />
@@ -527,3 +532,5 @@ export default function StoreOpsAdminPage() {
     </div>
   )
 }
+
+

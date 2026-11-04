@@ -34,6 +34,7 @@ WAF-protected, so Railway's datacenter IP must be allowed to reach it; if a run 
 """
 from datetime import datetime, timedelta, timezone
 from app.modules.commcalc import feed_period as _feed_period  # THE feed-row month + per-day stamp (one home, pure)
+from app.modules.notify import report_filters as _report_filters  # THE tenant's-today home (pure leaf; see feed_today)
 
 try:
     from app.modules.commcalc import url_guard as _url_guard      # SSRF guard (finding C4)
@@ -55,6 +56,16 @@ except ImportError:                                     # loaded by path, not as
         _osmod3.path.join(_osmod3.path.dirname(_osmod3.path.abspath(__file__)), "empty_pull_verdict.py"))
     _verdict = _ilu3.module_from_spec(_ev_spec)
     _ev_spec.loader.exec_module(_verdict)
+try:
+    from app.modules.commcalc import login_outcome as _lo      # THE one home of "what happened to this login"
+except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
+    import importlib.util as _ilu4
+    import os as _osmod4
+    _lo_spec = _ilu4.spec_from_file_location(
+        "commcalc_login_outcome",
+        _osmod4.path.join(_osmod4.path.dirname(_osmod4.path.abspath(__file__)), "login_outcome.py"))
+    _lo = _ilu4.module_from_spec(_lo_spec)
+    _lo_spec.loader.exec_module(_lo)
 try:
     from app.core.service_role import assert_browser_allowed   # SERVICE_ROLE=api guard
 except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
@@ -451,9 +462,80 @@ def comp_period_from_records(records):
 
 
 # ── headless-browser login + report download ──────────────────────────────────────────────
+def login_form_present(page):
+    """Is the sign-in form STILL on the page, and VISIBLE? THE one structural reader for that
+    question in this driver, so no caller asks it a second way. Never raises.
+
+    Structural on purpose: the control is either on screen or it is not. The predicate this
+    replaces asked whether the string "passwordinput" occurred in `page.content()`, which stays true
+    for a hidden node, a template and a comment alike — see login_outcome's header.
+    """
+    for sel in ("#passwordInput", "input[type=password]"):
+        try:
+            el = page.query_selector(sel)
+            if el is not None and el.is_visible():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def visible_text(page):
+    """What a PERSON would read on this page: the title plus the body's innerText. THE one reader
+    for the driver's page-state decisions. Never `page.content()` — that serialises every script,
+    template, comment and hidden node, and a login decision taken off it cannot tell a portal that
+    SAYS a word from one that merely ships it (index §COMMCALC-50.9). Never raises."""
+    try:
+        t = page.evaluate(
+            "() => ((document.title || '') + ' ' + ((document.body && document.body.innerText) || ''))")
+        return t or ""
+    except Exception:
+        return ""
+
+
+def _page_verdict(page):
+    """`portal_backoff.page_verdict` for THIS page — "is it refusing or challenging us rather than
+    showing a form" — asked against the VISIBLE text, which is the only text that answers it.
+    Never raises; None when that module is unavailable (pre-migration shape)."""
+    try:
+        from app.modules.commcalc import portal_backoff as _pb
+    except Exception:
+        return None
+    try:
+        return _pb.page_verdict(visible_text(page))
+    except Exception:
+        return None
+
+
+def _login_verdict(page):
+    """What happened to the submit we just made — the one home's answer, for this page."""
+    return _lo.verdict(form_present=login_form_present(page),
+                       visible_text=visible_text(page),
+                       page_verdict=_page_verdict(page))
+
+
 def _login(page, user, pw):
-    """Fill the CarrierPortal login window and submit. Raises EpayLoginError on failure."""
-    page.wait_for_selector("#passwordInput", timeout=30000)
+    """Fill the portal's sign-in window and submit. Returns the login verdict dict on success;
+    raises EpayLoginError, carrying the outcome's own remedy, on anything else.
+
+    The OUTCOME IS NOT DECIDED HERE. `commcalc/login_outcome` is the one home for "we submitted a
+    login, what happened" and this function's job is to hand it the facts: is the form still on
+    screen, what does the page SAY, and is the page serving something instead of a form. See that
+    module's header for the 22-day outage that produced it.
+    """
+    try:
+        page.wait_for_selector("#passwordInput", timeout=30000)
+    except Exception as e:
+        # NO FORM EVER APPEARED. Until now this surfaced as the raw Playwright line "Page.
+        # wait_for_selector: Timeout 30000ms exceeded", which names a selector and no remedy. The
+        # page itself usually says exactly what it is doing — a refusal, a human check — so ask.
+        v = _lo.verdict(form_present=False, visible_text=visible_text(page),
+                        page_verdict=_page_verdict(page))
+        if v["outcome"] in (_lo.HUMAN_CHECK, _lo.REFUSED):
+            raise EpayLoginError(_lo.message(v["outcome"], marker=v.get("marker")))
+        raise EpayLoginError(
+            "the portal's sign-in form never appeared, and the page did not say why. "
+            f"Nothing has been pulled. ({type(e).__name__})")
     if page.query_selector("#usernameInput"):
         page.fill("#usernameInput", user)
     else:
@@ -469,14 +551,10 @@ def _login(page, user, pw):
     except Exception:
         pass
     page.wait_for_timeout(4000)
-    title = page.title() or ""
-    body = (page.content() or "").lower()
-    if "owner portal" in title.lower():
-        return  # the post-login app shell renders this title
-    if any(w in body for w in ("invalid", "incorrect", "failed")) and "passwordinput" in body:
-        raise EpayLoginError("epay login failed — credentials rejected (or the application/2FA changed).")
-    if not any(w in body for w in ("logout", "sign out", "commissions", "report", "dashboard")):
-        raise EpayLoginError("epay login did not reach a logged-in page — login form/flow may have changed.")
+    v = _login_verdict(page)
+    if _lo.signed_in(v["outcome"]):
+        return v
+    raise EpayLoginError(_lo.message(v["outcome"], marker=v.get("marker")))
 
 
 def _report_running(page):
@@ -1045,7 +1123,7 @@ def _empty_cfg_evidence(rc_row):
     return out
 
 
-def _landing_evidence(client, org_id, spec):
+def _landing_evidence(client, org_id, spec, *, tz):
     """`ever_landed` / `days_since_last_row` for one report's landing table — the two facts that tell
     a quiet source apart from a path that has never worked. Best-effort: every failure degrades to
     {} so a probe can never fail a sweep, and an absent fact simply cannot trigger its own rule.
@@ -1074,14 +1152,17 @@ def _landing_evidence(client, org_id, spec):
     try:
         from datetime import date as _date
         y, m, d = int(stamp[0:4]), int(stamp[5:7]), int(stamp[8:10])
-        out["days_since_last_row"] = (datetime.now(timezone.utc).date() - _date(y, m, d)).days
+        # The tenant's day, not the container's (§COMMCALC-53): a row stamped with the tenant's
+        # today reads as one day stale between midnight UTC and midnight local, which is exactly
+        # the window the comp report runs in.
+        out["days_since_last_row"] = (feed_today(tz) - _date(y, m, d)).days
     except (ValueError, IndexError):
         pass
     return out
 
 
 def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id=None, ledger=None,
-                    cfg_evidence=None):
+                    cfg_evidence=None, *, tz):
     """Download one report by key, parse, derive its period, and store it. Every report REPLACES its
     period (delete that period + insert the fresh pull). For comp the period comes from the rows'
     own Begin Date (mode 'data'), so the pull lands under the month it belongs to even if the portal
@@ -1108,7 +1189,7 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id
                    "window": win, "period": None,
                    "note": f"nothing posted for {win} — nothing to store (pending verdict)"}
             return _defer_empty(ledger, res, spec, target,
-                                {**_landing_evidence(client, org_id, spec),
+                                {**_landing_evidence(client, org_id, spec, tz=tz),
                                  **(cfg_evidence or {})})
         raise
     if spec.get("grain") == "day":
@@ -1204,16 +1285,42 @@ def _recent_months(n):
     return out
 
 
-def _recent_days(n, today=None):
-    """The last `n` days ending today (UTC), oldest first, as ISO strings."""
-    from datetime import date as _date
-    end = today or datetime.now(timezone.utc).date()
+# ── TODAY, IN THE TENANT'S ZONE — THE ONLY "TODAY" A FEED WINDOW MAY BE BUILT ON ────────────────
+# A DEREFERENCE, not a re-spelling: `feed_today` IS `report_filters.business_today` (the same
+# function object, so a lock can assert identity and no second zoneinfo ladder can appear here).
+#
+# That rule was written on 2026-07-30 and its docstring already stated this exact defect — *"A
+# scheduled send fires at the SCHEDULE's local hour; resolving a relative date off the server's UTC
+# day would put an 8pm-Eastern Friday run on Saturday's date."* This driver never asked it, and that
+# cost the comprehensive comp report every automatic run it ever made (index §COMMCALC-53): its slot
+# is 23:30 local, which is 03:30 UTC the NEXT day, so a window built on the UTC date asked the portal
+# for a day that had not begun where the portal lives. Zero rows, read as "nothing posted", for months.
+#
+# `report_filters` is a deliberately pure leaf (stdlib + settings only), so this import cannot create
+# a cycle. It never raises: an unusable zone falls through that module's own house ladder.
+feed_today = _report_filters.business_today
+
+
+def _recent_days(n, today):
+    """The last `n` days ending on `today`, oldest first, as ISO strings.
+
+    `today` is REQUIRED and has no default. It used to default to the server's UTC date, which is
+    how a caller that had never asked the org what day it was still got an answer — and the answer
+    was a day in the future for every tenant west of UTC. The window widens BACKWARDS only: no
+    width makes tomorrow answerable.
+    """
     n = max(1, int(n or 1))
-    return [(end - timedelta(days=i)).isoformat() for i in range(n - 1, -1, -1)]
+    return [(today - timedelta(days=i)).isoformat() for i in range(n - 1, -1, -1)]
 
 
-def _expand_jobs(keys, report_cfg=None):
+def _expand_jobs(keys, report_cfg=None, *, tz):
     """Expand report keys into (key, target) jobs, driven by commcalc.report_definitions.
+
+    `tz` is the TENANT's business timezone (`<connector>_sweep_config.timezone`), keyword-only and
+    REQUIRED. It has no default on purpose: the defect this closes was a caller that never asked the
+    org what day it was and still got a window (index §COMMCALC-53), and a default here — any
+    default, UTC most of all — is what let it. A caller that cannot name the zone must not be able
+    to build a window.
 
     MONTH-grain (MI): one job per month, current + refresh_months-1 prior closed months. This is
     the setting that existed in the database and was never read — MI only ever pulled the current
@@ -1240,8 +1347,14 @@ def _expand_jobs(keys, report_cfg=None):
             # clean "nothing posted" — forever. The window is now never narrower than the source's
             # configured arrears, so a zero can at least be a meaningful answer. Config, per org
             # (`report_definitions.arrears_days`), with the house default in empty_pull_verdict.
+            # …AND THE DAY IT ENDS ON IS THE TENANT'S DAY, NOT THE SERVER'S (owner 2026-10-31).
+            # See `feed_today`: this slot runs at 23:30 local precisely because the source posts
+            # late, and 23:30 local is the next day in UTC, so every run asked for a day that had
+            # not begun. Measured on eight consecutive runs, the window was always exactly one day
+            # ahead of the tenant's calendar. The width still comes from config; only the END moves.
             days = _recent_days(max(int(rc.get("refresh_days") or DEFAULT_REFRESH_DAYS),
-                                    _verdict.required_window_days(rc.get("arrears_days"))))
+                                    _verdict.required_window_days(rc.get("arrears_days"))),
+                                feed_today(tz))
             # ── AND THE WINDOW WE ASK FOR CANNOT LOSE ITS LAST DAY (owner 2026-10-08) ────────────
             # `days[-1]` is the last day this job INTENDS to cover. What goes in the source's End
             # Date widget is not the same thing, because the source's end boundary is an assumption
@@ -1261,7 +1374,7 @@ def _expand_jobs(keys, report_cfg=None):
     return jobs
 
 
-def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None):
+def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None, *, tz):
     """Launch headless Chromium, log into the epay Owner Portal ONCE, and download + ingest each
     requested report. `reports` = list of REPORTS keys; defaults to ['mi'] for back-compat (MI/ATU
     only). MI/payment pull the current month; comp pulls the current month + COMP_REFRESH_MONTHS-1
@@ -1328,7 +1441,7 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
                     errors.append(f"{spec['label']}: could not resolve a report id — no live menu row "
                                   f"matched label {spec.get('label_match')!r} and no "
                                   f"report_definitions override (portal_report_id) was set")
-            jobs = _expand_jobs([k for k in keys if k in resolved_ids], report_cfg)
+            jobs = _expand_jobs([k for k in keys if k in resolved_ids], report_cfg, tz=tz)
             for idx, (key, target) in enumerate(jobs):
                 if idx > 0:
                     # Reload to a clean app shell between every report run so each opens on a fresh
@@ -1337,7 +1450,7 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
                     try:
                         page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
                         page.wait_for_timeout(2500)
-                        if page.query_selector("#passwordInput"):
+                        if login_form_present(page):   # the one structural reader, not a second spelling
                             _login(page, user, pw)
                     except Exception:
                         pass
@@ -1364,12 +1477,12 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
                         source_batch = f"epay-sweep {key}{tgt}".strip()
                         results.append(spec["ingest"](client, org_id, tmp.name, source_batch,
                                                       ledger=ledger, target=target,
-                                                      evidence={**_landing_evidence(client, org_id, spec),
+                                                      evidence={**_landing_evidence(client, org_id, spec, tz=tz),
                                                                 **_cfg_ev}))
                     else:
                         results.append(_process_report(client, org_id, page, key, tmp.name,
                                                        target=target, report_id=resolved_ids[key],
-                                                       ledger=ledger, cfg_evidence=_cfg_ev))
+                                                       ledger=ledger, cfg_evidence=_cfg_ev, tz=tz))
                 except Exception as e:
                     errors.append(f"{REPORTS[key]['label']}{tgt}: {type(e).__name__}: {e}")
                 finally:

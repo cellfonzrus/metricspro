@@ -1441,6 +1441,14 @@ export default function PosSalesPage() {
                   — this is not a new sale. Saving keeps the same transaction number, files the
                   version you are replacing, and leaves the printed receipt the customer has out of
                   date, so print them a fresh one afterwards.
+                  {/* HOW FAR BACK THIS LOGIN MAY REACH (§POS-12.9). The server's own number, so
+                      the till never states a window it worked out for itself. Nothing is shown
+                      when it is unknown — a guess here is worse than silence. */}
+                  {amending.window_days !== null && (
+                    <> You can edit {amending.window_days === 0 ? 'sales rung today'
+                      : `sales up to ${amending.window_days} day${amending.window_days === 1 ? '' : 's'} old`}
+                      {amending.elevated ? '' : '; an administrator can reach further back'}.</>
+                  )}
                 </span>
                 <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px', color: 'var(--red)' }} onClick={stopEditing}>Stop editing</button>
               </div>

@@ -56,6 +56,8 @@ MIGRATIONS = os.path.join(ROOT, "database", "migrations")
 BE = os.path.join(ROOT, "backend", "app", "modules")
 sys.path.insert(0, os.path.join(ROOT, "backend"))
 
+import harnesslib as _hl   # noqa: E402 — THE one home for "the strings of a Python source" (§CORE-32)
+
 TOTAL_TERMS = re.compile(
     r"vidapay|t-?cetra|tettra|total\s+wireless|ma\s+handset|ma\s+commission|ma\s+daily\s+tx"
     r"|ma\s+tx\b|ma\s+fulfillment|total\s+access\b", re.I)
@@ -335,7 +337,8 @@ def pos_scan_frontend(files, rx, allow):
 
 
 _DOCSTRING = re.compile(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'')
-_LOG_LINE = re.compile(r"\bprint\s*\(|\blog(?:ger)?\.(?:info|warning|warn|error|debug|exception)\s*\(")
+# (the log-call rule moved WITH the readers, to harnesslib — a second copy here would be the
+#  same divergence this change exists to remove.)
 
 
 def _py_code(src):
@@ -344,57 +347,17 @@ def _py_code(src):
     return "\n".join(l for l in src.split("\n") if not l.strip().startswith("#"))
 
 
-def _strip_braces(text):
-    """'{a} vs {f((b or {}))}' → '{} vs {}' — brace-depth aware, so a nested expression is dropped whole."""
-    out, depth = [], 0
-    for ch in text:
-        if ch == "{":
-            if depth == 0:
-                out.append("{")
-            depth += 1
-        elif ch == "}" and depth:
-            depth -= 1
-            if depth == 0:
-                out.append("}")
-        elif depth == 0:
-            out.append(ch)
-    return "".join(out)
+# "an interpolation is code, not copy" has ONE home (§CORE-32). Kept as a name here because the TSX
+# reader below shares the rule; it holds no second implementation of it.
+_strip_braces = _hl.strip_interpolations
 
 
 def _py_string_literals(src):
-    """The STRING literals of a Python source (tokenize — never a regex across lines), excluding
-    docstrings (a STRING that is a whole statement) and the strings of print()/log lines (operator
-    output, not tenant-facing copy). f-strings yield their literal parts. Yields (line_no, text)."""
-    import io
-    import tokenize
-    out = []
-    try:
-        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
-    except (tokenize.TokenError, SyntaxError):
-        return out
-    lines = src.split("\n")
-    prev_sig = None
-    for t in toks:
-        if t.type in (tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.COMMENT):
-            if t.type == tokenize.NEWLINE:
-                prev_sig = None
-            continue
-        text = None
-        if t.type == tokenize.STRING:
-            if prev_sig is None and t.string.lstrip("rRbBuUfF").startswith(('"""', "\'\'\'")):
-                prev_sig = t; continue                       # a docstring
-            body = t.string.lstrip("rRbBuUfF")
-            text = body[3:-3] if body[:3] in ('"""', "\'\'\'") else body[1:-1]
-            if "f" in t.string[:2].lower():                  # an f-string's {expressions} are code, not copy
-                text = _strip_braces(text)
-        elif getattr(tokenize, "FSTRING_MIDDLE", None) is not None and t.type == tokenize.FSTRING_MIDDLE:
-            text = t.string
-        if text is not None:
-            ln = lines[t.start[0] - 1] if t.start[0] - 1 < len(lines) else ""
-            if not _LOG_LINE.search(ln):
-                out.append((t.start[0], text))
-        prev_sig = t
-    return out
+    """The string literals of a Python source — DEREFERENCED from `harnesslib.py_string_parts`
+    (§CORE-32), which is also what the joined reader below is built on. This file held two private
+    copies of "the strings of a Python source" 500 lines apart; PEP 701 was taught to one of them and
+    not the other, so on Python 3.12+ the other saw no f-string at all."""
+    return _hl.py_string_parts(src)
 
 
 def pos_scan_backend(sources, rx, allow, logic=POS_BACKEND_LOGIC, copy=POS_BACKEND_COPY):
@@ -875,50 +838,16 @@ def setup_scan_frontend(files, detector, excused=SETUP_SUPER_ADMIN_PAGES):
     return fails, seen
 
 
-_PLACEHOLDER = re.compile(r"\{[^{}]*\}|%[sdr]")
 
 
 def _py_joined_literals(src):
-    """(line, text) per STRING EXPRESSION of a Python source: implicitly concatenated literals JOINED (the text
-    the client receives), docstrings and print()/log lines skipped, every {placeholder} / %s read as '000' (the
-    value interpolated after "migration" is a migration id or file)."""
-    import io
-    import tokenize
-    try:
-        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
-    except (tokenize.TokenError, SyntaxError):
-        return []
-    lines = src.split("\n")
-    out, run, state = [], [], {"line": None}
-
-    def flush():
-        if run:
-            out.append((state["line"], "".join(run)))
-        run.clear()
-
-    prev_sig = None
-    for t in toks:
-        if t.type in (tokenize.NL, tokenize.COMMENT):
-            continue
-        if t.type == tokenize.STRING:
-            body = t.string.lstrip("rRbBuUfF")
-            docstring = prev_sig is None and not run and body[:3] in ('"""', "'''")
-            text = body[3:-3] if body[:3] in ('"""', "'''") else body[1:-1]
-            if "f" in t.string[:2].lower():
-                text = _strip_braces(text)
-            ln = lines[t.start[0] - 1] if t.start[0] - 1 < len(lines) else ""
-            if docstring or _LOG_LINE.search(ln):
-                prev_sig = t
-                continue
-            if not run:
-                state["line"] = t.start[0]
-            run.append(_PLACEHOLDER.sub("000", text))
-            prev_sig = t
-            continue
-        flush()
-        prev_sig = None if t.type in (tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT) else t
-    flush()
-    return out
+    """Every string EXPRESSION of a Python source, implicit concatenation joined and every
+    interpolation read as `000` — DEREFERENCED from `harnesslib.py_string_expressions` (§CORE-32).
+    THIS is the reader PEP 701 blinded: from Python 3.12 an f-string is no longer one `STRING` token,
+    so `"… is migration " f"{MIG} applied?"` read as `"… is migration "` alone, which no detector
+    objects to. CI pins 3.11, so it stayed green. The home is proved on whichever interpreter runs it
+    by `tests/unit/test_py_string_expressions.py`."""
+    return _hl.py_string_expressions(src)
 
 
 def setup_scan_backend(sources, detector, allow=SETUP_BACKEND_ALLOW):
@@ -1344,6 +1273,22 @@ def setup_guard():
                            'print("run migration 071 — operator log")\nX = {"migration": MIG}\n'}
     b10, _ = setup_scan_backend(bb, det)
     ok &= _ctl("N10 a split / f-string hint the boundary catches, a log line, a dict key → GREEN", not b10)
+    # N10a/b/c — THE READER IS NOT ALLOWED TO GO BLIND (§CORE-32, found 2026-11-04). N10 above went
+    # red on Python 3.13 and green on 3.11, which is the trap: PEP 701 stopped making an f-string one
+    # STRING token, so from 3.12 the reader saw no f-string at all and the split hint above lost its
+    # second half. These three assert the capability itself, on WHATEVER interpreter is running, so a
+    # future tokenisation change fails here instead of quietly muting the whole lock.
+    bb = {"commcalc/x.py": 'raise HTTPException(500, f"the ledger is waiting on migration {MIG}")\n'}
+    b10a, _ = setup_scan_backend(bb, det)
+    ok &= _ctl("N10a a hint written ONLY as an f-string, which the detector does NOT recognise → RED "
+               f"(python {sys.version_info.major}.{sys.version_info.minor})", bool(b10a))
+    seen = [t for _ln, t in _hl.py_string_expressions('x = f"migration {MIG} applied"')]
+    ok &= _ctl("N10b the reader sees an f-string on this interpreter, interpolation as a value",
+               seen == ["migration 000 applied"])
+    joined = [t for _ln, t in _hl.py_string_expressions(
+        'raise E(500, "is migration "\n    f"{MIG} applied?")\n')]
+    ok &= _ctl("N10c …and joins a literal to the f-string beside it (the shape N10 plants)",
+               joined == ["is migration 000 applied?"])
     _, s11 = setup_scan_backend({}, det, {("commcalc/x.py", "nowhere"): "stale on purpose"})
     ok &= _ctl("N11 a stale backend allow entry → RED", bool(s11))
     w1 = lambda w: w[next(k for k in w if k.startswith("W1"))]

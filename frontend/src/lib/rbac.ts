@@ -403,6 +403,8 @@ export const NAV: NavGroup[] = [
     { href: '/pos/vendors', label: 'Vendors', icon: '🏭', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
     { href: '/pos/reports', label: 'POS Reports', icon: '📈', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
     { href: '/pos/tender-mismatch', label: 'Cash / Credit Mismatch Log', icon: '💵', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/pos/open-balances', label: 'Open Balances — Terms', icon: '⏳', module: 'pos', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/pos/w9-status', label: 'W-9 Status — Wholesale', icon: '📄', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
     { href: '/pos/import', label: 'Import', icon: '📥', module: 'pos', scopes: ['all'], tileOnly: true },
     { href: '/pos/receipts', label: 'POS sales / receipts', icon: '🧾', module: 'pos', scopes: ['all', 'market', 'store'], tileOnly: true },
     { href: '/pos/activation-report', label: 'Activation / Rebate Report', icon: '📶', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
@@ -782,6 +784,10 @@ export const NAV: NavGroup[] = [
     // existing plan editor, accessory settings and coverage wizard — additive, nothing else changes.
     { href: '/commcalc/commission-structure', label: 'Employee Commission Structure', icon: '🧭', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/payout-plans', label: 'Overview', icon: '💳', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    // THE GUIDED WORKFLOW (owner directive 2026-11-01): which plan is active, what can replace it,
+    // and creating the replacement — three steps instead of the full settings page. The settings page
+    // stays, reached from here as "advanced"; index §COMMCALC-54.
+    { href: '/commcalc/incentive-plan', label: 'Your Incentive Plan', icon: '🧭', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/commission-plans', label: 'Incentive Plans', icon: '🧮', module: 'commissions', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/management-incentive', label: 'Management Incentives', icon: '🏆', module: 'commissions', scopes: ['all'], tileOnly: true },
     // Daily incentive on the categories this business declares (mig 1072, index §74). Every rule is a
@@ -1410,6 +1416,8 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
   ['/commcalc/bill-payments', 'sales'],
   ['/crm/reports', 'sales'],
+  // Receivables — the two reports the Terms tender and the wholesale W-9 imply (§POS-19).
+  ['/pos/open-balances', 'sales'], ['/pos/w9-status', 'sales'],
   // Commissions & Pay
   ['/commcalc', 'comm'], ['/commcalc/exec', 'comm'], ['/commcalc/exec/mtd', 'comm'], ['/commcalc/activations', 'comm'], ['/commcalc/schematic', 'comm'], ['/commcalc/onboarding', 'comm'],
   ['/commcalc/reports', 'comm'], ['/commcalc/comp-trend', 'comm'], ['/commcalc/commission-ledger', 'comm'],

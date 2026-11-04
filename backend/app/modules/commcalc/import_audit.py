@@ -890,3 +890,136 @@ def _p_month_focus(client, org_id, ctx):
     return [_item("config", f"month_focus:{out.get('period')}:{it['key']}", it["severity"],
                   it["label"], it["detail"], it["count"], it["deep_link"], it["deep_link_label"])
             for it in (out.get("outstanding") or [])]
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# 8) A TRADING DAY OF SALES WE NEVER RECEIVED  (heavy — runs the zero-sales fold)
+# ════════════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER (2026-10-31, verbatim): *"this is a big problem for management iff we wil miss trading days,
+# we need to get this fix right away"*.
+#
+# THE INSTANCE. 957 Pennsylvania Ave never delivered 22 and 23 September 2026. Nothing said so, and
+# the hole surfaced only when a rep's commission claim read $224 and two boxes above our own data and
+# somebody went looking. Measured the same day across the three live tenants: 324 store-days of sales
+# never received between August and October, several stores missing whole months — every commission,
+# target and store comparison over those months understating somebody.
+#
+# THE CLASS, AND WHY THIS IS A HAND-OFF RATHER THAN A NEW DETECTOR. The fact already had ONE home:
+# `zero_sales.store_day_state` has returned `NOT_REPORTED` for a store-day whose feed did not land
+# since 2026-09-22 (§15z), correctly, with the count `None` and never `0`. It was never silent in the
+# report — and never audible anywhere else, because `zero_sales.alert_items` DELIBERATELY refuses to
+# email a not-reported scope (a missing feed is a pipeline failure; dressing it as a sales alert sends
+# a District Manager after a rep who sold fine) and handed it to THIS surface, §20 import health,
+# which had no check for it. So the fact fell between two surfaces that were each individually right.
+#
+# This provider therefore DEREFERENCES `zero_sales.feed_gap_items` over the real `_zero_sales_core`
+# fold. It classifies no sale line, reads no sales table of its own and derives absence nowhere: a
+# state renamed in `zero_sales` reaches this item with no second edit, and there is no sibling
+# definition of "this store did not report" to drift from the report the owner reads.
+#
+# WHAT IT WILL NOT DO. It never reports a `measured_zero` day. Rows landed on those days and none was
+# an activation; that needs a manager and has its own alert, while this needs a file. Collapsing the
+# two is the one mistake §15z exists to prevent (`harness_feed_gap_days.py` §A is the armed control).
+DEFAULT_FEED_GAP_WINDOW_DAYS = 30   # audit_feed_gap_window_days — how far back a missing day is news
+FEED_GAP_WINDOW_MIN = 2
+FEED_GAP_WINDOW_MAX = 186           # zero_sales caps its own range here; asking for more is a 400
+FEED_GAP_NAMED_IN_DETAIL = 6        # stores named in the sentence before it says "and N more"
+
+
+def _feed_gap_window(client, org_id, now):
+    """(date_from, date_to) — the closed days this check judges, ending YESTERDAY.
+
+    Today is excluded on purpose: a day still trading has not failed to deliver, which is the same
+    reason `zero_sales.HOUSE_CONFIG['include_today']` is false. The length is per-tenant config with
+    a documented default, clamped to what the fold will actually accept rather than passed through to
+    become a 400 the admin page would show as a broken check."""
+    cfg = _org_config(client, org_id)
+    days = int(_num(cfg.get("audit_feed_gap_window_days"), DEFAULT_FEED_GAP_WINDOW_DAYS))
+    days = max(FEED_GAP_WINDOW_MIN, min(FEED_GAP_WINDOW_MAX, days))
+    end = (now - timedelta(days=1)).date()
+    return (end - timedelta(days=days - 1)).isoformat(), end.isoformat(), cfg
+
+
+def feed_gap_attention(items, date_from, date_to, *, whole_kind, named=FEED_GAP_NAMED_IN_DETAIL):
+    """PURE. The feed-gap findings -> the attention items an admin sees. No I/O, no clock.
+
+    TWO ITEMS AT MOST, because they are two different jobs. A store whose feed never arrived in the
+    whole window is a CONNECTOR to repair (error — nothing will fix itself). A store that delivers
+    and lost days is an UPLOAD to re-pull (warning — somebody re-runs a file). One combined item
+    would send both to whichever page the louder half named.
+
+    `whole_kind` is handed in rather than imported so this stays importable with no commcalc on the
+    path, and so the kind cannot be respelled here."""
+    out = []
+    dead = [i for i in items if i.get("kind") == whole_kind]
+    short = [i for i in items if i.get("kind") != whole_kind]
+    span = f"{date_from} to {date_to}"
+    link = f"/commcalc/zero-sales?date_from={date_from}&date_to={date_to}"
+
+    def _names(group):
+        labels = [str(i.get("label") or i.get("store_code")) for i in group[:named]]
+        tail = len(group) - len(labels)
+        return ", ".join(labels) + (f", and {tail} more" if tail > 0 else "")
+
+    if dead:
+        days = sum(int(i.get("missing_days") or 0) for i in dead)
+        out.append(_item(
+            "import", "commcalc:feed_gap:no_feed", "error",
+            f"{len(dead)} store(s) have sent NO sales at all for {span}",
+            (f"These stores delivered nothing in the whole window, so every day of it is a day of "
+             f"sales we never received ({days} store-day(s) in total): {_names(dead)}. Nothing will "
+             f"pick these up on its own. Until the files land, these stores read as having sold "
+             f"nothing in every commission, target and store-comparison figure over the period — "
+             f"they are shown as 'not reported' rather than as zero, but the money is still "
+             f"missing. Check the connector or mailbox rule that should be delivering them, then "
+             f"upload the period by hand."),
+            days, link, "See the missing days"))
+    if short:
+        days = sum(int(i.get("missing_days") or 0) for i in short)
+        worst = short[0]
+        out.append(_item(
+            "import", "commcalc:feed_gap:short_days", "warning",
+            f"{days} trading day(s) of sales never arrived for {len(short)} store(s)",
+            (f"These stores are delivering, and single days are missing from {span} — no rows at "
+             f"all landed for them, so nothing is known about those days: {_names(short)}. The "
+             f"worst is {worst.get('label') or worst.get('store_code')} with "
+             f"{worst.get('missing_days')} day(s), first {worst.get('first_missing_day')}. A "
+             f"missing day is not a zero: it silently understates that store's sales, every rep "
+             f"under it, and any commission calculated for the month. Re-pull those dates from the "
+             f"point of sale and upload them."),
+            days, link, "See the missing days"))
+    return out
+
+
+@register_provider("commcalc_feed_gap_days",
+                   label="Trading days of sales that never arrived",
+                   group="import", cost="heavy")
+def p_sales_feed_days(client, org_id, ctx):
+    """Store-days whose sales feed never landed, for THIS org, over the last N closed days.
+
+    HEAVY (it runs the zero-sales fold over the window), so it belongs to the admin page's full
+    check and never to the login popup.
+
+    READ-ONLY and org-scoped: `_zero_sales_core` reads only `.eq('org_id', org_id)`, classifies with
+    the tenant's OWN activation rules and judges trading days against the tenant's OWN schedule, so
+    no tenant's vocabulary or calendar can answer for another's (project rule 2026-10-30). A tenant
+    with no stores, no feed or a refused activation rule contributes nothing rather than a false
+    alarm."""
+    now = ctx.get("now") or _now()
+    try:
+        from app.modules.commcalc import zero_sales as _zs
+        from app.modules.commcalc.router import _zero_sales_core
+    except Exception:                                 # pragma: no cover - import shape
+        return []
+    lo, hi, cfg = _feed_gap_window(client, org_id, now)
+    try:
+        report = _zero_sales_core(client, org_id, lo, hi, as_of=now.date().isoformat())
+    except Exception:
+        return []                                     # never a false alarm on a read error
+    if report.get("rules_refused"):
+        return []                                     # the report claims nothing; nor do we
+    floor = int(_num(cfg.get("audit_feed_gap_min_days"), _zs.FEED_GAP_MIN_DAYS))
+    items = _zs.feed_gap_items(report, min_days=floor)
+    if not items:
+        return []                                     # in step — this is the healthy answer
+    return feed_gap_attention(items, lo, hi, whole_kind=_zs.FEED_GAP_WHOLE_WINDOW)

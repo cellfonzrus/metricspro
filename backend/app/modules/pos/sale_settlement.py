@@ -107,7 +107,7 @@ def _f(v):
         return 0.0
 
 
-def _is_voided(sale) -> bool:
+def sale_is_voided(sale) -> bool:
     """Whether this sale has been stood down. Read the same way `sale_amendment.refusal` reads it —
     status OR the stamp, because mig 725's `void_sale` sets both and a row touched by hand may carry
     only one."""
@@ -116,27 +116,59 @@ def _is_voided(sale) -> bool:
 
 
 # ── the tender as recorded ───────────────────────────────────────────────────────────────────────
+def settles_now(method: str) -> bool:
+    """Whether a leg on this method is money the till HAS. Asked of the register's tender
+    vocabulary, never decided here — RULE TWO, and the reason no tender word appears in this file.
+
+    A method the vocabulary does not know answers True, deliberately. Every one of the 4,603 rows
+    of imported receipt history predates the vocabulary, and reading an unknown word as "not yet
+    paid" would turn settled history into a ledger of debts. An unknown method is money taken until
+    a declaration says otherwise.
+    """
+    from . import tender_vocabulary as _tender
+    t = _tender.tender(method)
+    return True if t is None else bool(t.get("settles_now"))
+
+
 def tendered(payments) -> dict:
     """What was actually taken against this sale: the sum, and the split by method.
 
     `present: False` with `total: None` when nothing was recorded. That is NOT 0.00, and keeping the
     two apart is the single most important thing in this module — see the 4,603-row finding in the
     module note. Methods are returned SORTED so a log row and a screen never disagree about order.
+
+    A LEG THE CUSTOMER HAS NOT PAID YET IS NOT TENDER. `total` is what SETTLED, so it is the only
+    figure `outstanding` may compare against `expected` (= total − balance, which already excludes
+    the deferred part). The deferred legs are returned beside it rather than dropped, because the
+    screen that asks "what was this sale paid with" must still be able to say "on 30-day terms".
+
+    THE SIBLING THIS CLOSES (2026-10-31). §POS-15 added a tender that settles LATER, and this
+    function summed every leg regardless. A sale of $100 wholly on terms stores `balance = 100`, so
+    `expected` was 0.00 while `tendered` read 100.00 — a $100 OVER-tender, direction `refund`, on
+    every terms sale the platform would ever take. Nothing was wrong with the terms tender and
+    nothing was wrong with the comparison; the two had simply never met. Found before a single terms
+    sale existed (0 rows, measured 2026-10-31), so no stored row has to be repaired.
     """
     rows = payments or []
     if not rows:
-        return {"present": False, "total": None, "by_method": {}, "methods": [], "count": 0}
+        return {"present": False, "total": None, "by_method": {}, "methods": [], "count": 0,
+                "deferred_total": 0.0, "deferred_by_method": {}, "deferred_methods": []}
     by: dict[str, float] = {}
+    deferred: dict[str, float] = {}
     for p in rows:
         method = str((p or {}).get("payment_method") or "").strip()
         if not method:
             method = "unrecorded"
-        by[method] = round(by.get(method, 0.0) + _f((p or {}).get("amount")), 2)
+        into = by if settles_now(method) else deferred
+        into[method] = round(into.get(method, 0.0) + _f((p or {}).get("amount")), 2)
     return {"present": True,
-            "total": round(sum(by.values()), 2),
+            "total": _f(sum(by.values())),
             "by_method": by,
             "methods": sorted(by),
-            "count": len(rows)}
+            "count": len(rows),
+            "deferred_total": _f(sum(deferred.values())),
+            "deferred_by_method": deferred,
+            "deferred_methods": sorted(deferred)}
 
 
 # ── what the tender is compared against ──────────────────────────────────────────────────────────
@@ -150,7 +182,7 @@ def expected(sale) -> dict:
     a second comparison written beside it.
     """
     s = sale or {}
-    if _is_voided(s):
+    if sale_is_voided(s):
         return {"present": True, "amount": 0.0, "voided": True,
                 "total": _f(s.get("total")), "balance": _f(s.get("balance"))}
     if s.get("total") in (None, ""):

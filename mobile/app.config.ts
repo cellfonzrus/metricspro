@@ -44,8 +44,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     infoPlist: {
       NSFaceIDUsageDescription:
         'MetricsPro uses Face ID to unlock the app and protect store, sales and payroll data.',
+      // Both ENDS of a punch, stated plainly: the clock-out is the one the owner asked for
+      // (2026-11-01) and a permission string that named only the clock-in would be asking for
+      // something broader than it admitted. One reading at each tap; never a background position.
       NSLocationWhenInUseUsageDescription:
-        'MetricsPro records the store location of a clock-in punch for attendance verification.',
+        'MetricsPro records your location when you clock in and when you clock out, to confirm the punch was made at your store. It is read only at that moment and never in the background.',
       NSCameraUsageDescription:
         'MetricsPro uses the camera to capture a verification selfie when you clock in and to photograph a receipt for import.',
       NSPhotoLibraryUsageDescription:
@@ -69,6 +72,31 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     ],
   },
   plugins: [
+    // ── The minimum iOS this app declares ─────────────────────────────────────────────────────
+    // REQUIRED, and its absence is what the first real build from GitHub actually found
+    // (2026-10-31, EAS build d4d6b18d): EAS now builds on a current Xcode, which refuses any pod
+    // declaring an iOS deployment target below 15.0 — and this app's dependency set still carries
+    // `RNCAsyncStorage` at 9.0, `ReachabilitySwift` at 12.0 and `SDWebImage` at 9.0. The build died
+    // in fastlane with "the range of supported deployment target versions is 15.0 to 27.1.x".
+    //
+    // Setting it here raises the floor for the app AND, through Expo's Podfile post-install, for
+    // every pod, which is the one lever that reaches dependencies we do not own. It is PINNED by
+    // harness_running_bundle_lock.py (R6.4) so it cannot silently drop back.
+    //
+    // THIS IS NOT THE WHOLE FIX. The underlying fact is that this app is pinned to Expo SDK 52
+    // while the binary in TestFlight is SDK 57 and EAS's image has moved on — see index §CORE-29.3.
+    // Raising the floor lets SDK 52 compile again on today's Xcode; it does not stop the next Xcode
+    // from moving past it. The design fix is the SDK upgrade, and this buys the time to do it
+    // properly rather than under an outage.
+    ['expo-build-properties', { ios: { deploymentTarget: '15.1' } }],
+    // And the half `expo-build-properties` does NOT reach. Setting `ios.deploymentTarget` raises the
+    // Podfile's platform and the APP target; it does not touch the targets CocoaPods GENERATES for
+    // each pod and each pod's resource bundle, which inherit the pod's own declared minimum. Three
+    // of this app's dependencies still declare iOS 9 or 12, and the second build failed on exactly
+    // those three WITH the line above already in place (EAS d34458a2). A current Expo Podfile
+    // rewrites them itself; SDK 52's does not. See plugins/with-pod-deployment-floor.js, and delete
+    // it along with this line when the app is upgraded off SDK 52 (index §CORE-29.3b).
+    ['./plugins/with-pod-deployment-floor', { floor: '15.1' }],
     'expo-router',
     'expo-secure-store',
     'expo-local-authentication',
