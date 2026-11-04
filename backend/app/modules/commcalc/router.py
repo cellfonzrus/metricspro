@@ -43354,11 +43354,18 @@ def _calibration_answer(client, org_id, sid, res, editing=None):
         k = _sweep.spec_key(key)
         added = max(0, after.get(k, 0) - before.get(k, 0))
         added_total += added
+        # WHICH OF THE CONTROLS THIS CAPTURE ACTUALLY SETTLED, named one by one. The pull presses a
+        # Run and an Export control and may go straight to an address; a capture that found the
+        # filters but no Export button has produced a declaration that reads complete and imports
+        # nothing, so the panel says which of the three the row now has and which it still lacks
+        # (§COMMCALC-44 — an absence needs the right reason).
+        after_row = next((x for x in work if _sweep.spec_key(x) == k), {})
         capture.append({
             "report": key, "label": e.get("label"), "reached": bool(e.get("reached")),
             "controls_seen": e.get("controls_seen"),
             "suggested": len(rd.clean_params(e.get("params"))),
             "added": added,
+            "controls": {f: bool(str(after_row.get(f) or "").strip()) for f in rd.CONTROL_FIELDS},
             # Named for a human, never guessed into a filter (`suggest_params`' own rule).
             "unrecognised": [{"label": u.get("label"), "selector": u.get("selector"),
                               "why": u.get("why")}
@@ -43432,7 +43439,9 @@ def data_source_reports(sid: str, org_id: str = ORG_ID):
     return {"source_id": src.get("id"), "label": src.get("label"),
             "processor": src.get("processor"), "portal_url": src.get("portal_url"),
             "reports": rd.rows(src), "param_kinds": list(rd.PARAM_KINDS),
-            "date_tokens": list(rd.DATE_TOKENS), "exports": list(rd.EXPORTS)}
+            "date_tokens": list(rd.DATE_TOKENS), "exports": list(rd.EXPORTS),
+            # The controls the pull presses, DECLARED here rather than listed again in the browser.
+            "control_fields": list(rd.CONTROL_FIELDS)}
 
 
 @router.put("/data-sources/{sid}/reports")

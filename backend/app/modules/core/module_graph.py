@@ -703,7 +703,16 @@ FACTS: dict[str, dict] = {
                     'matched nothing for any tenant and a capture of fourteen report pages added no '
                     'filter while announcing it had read them. spec_key is the only bridge between '
                     'the two spellings; the route now folds through this home and the browser only '
-                    'displays what came back.',
+                    'displays what came back. AND IT CAN WRITE WHAT THE PULL READS (2026-11-04): '
+                    'portal_report_pull resolves FOUR facts per report off portal_calibration — the '
+                    'filters, the Run control, the Export control, and an address or a menu selector '
+                    '— and this editor could write only the filters, so suggest_params\' Run and '
+                    'Export suggestions were discarded on every capture and download_report fell '
+                    'back to hunting for a button saying Export / Download / CSV. A portal spelling '
+                    'its button otherwise imported zero rows while the declaration read complete. '
+                    'CONTROL_FIELDS declares the three a human can answer; a cleared field drops its '
+                    'key so calibrated() still reads "nothing declared"; nav_selector stays out '
+                    '(nothing suggests it) and is folded through untouched.',
         "homes": ('app/modules/commcalc/report_declaration.py',),
         "index": ('COMMCALC-48',),
         # The pytest lock that pins the fold to this home —

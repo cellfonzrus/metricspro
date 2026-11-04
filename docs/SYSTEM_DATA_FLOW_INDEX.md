@@ -36447,6 +36447,74 @@ capture stops naming its report `report` or starts also carrying `key`, if the r
 zero filters stops saying which reason it was, or if the editor folds a capture in again
 (`suggested.find`, `.find(x =>`, `new Set(row.params)`, `x.key` are all banned in `readPage`).
 
+### COMMCALC-48.11 A COMPLETE DECLARATION THAT IMPORTS NOTHING — the controls the pull presses were unreachable from any screen (owner ask 2026-11-04)
+
+> Owner, 2026-11-04, four days after §COMMCALC-48.9 fixed the fold: *"How to get the filters right"*.
+> Nothing had been captured. Measured on his fourteen declared reports the same day: every one of them
+> `params 0 | run None | export None | address None`.
+
+**THE CLASS. A screen that can write one quarter of what its reader reads is not a configuration
+surface, and the quarter it cannot write is invisible.** `portal_report_pull` resolves FOUR facts per
+report off `portal_calibration` —
+
+| fact | read by | who could write it before this |
+| --- | --- | --- |
+| `params` | `report_params` → `apply_params` | the editor |
+| `run_selector` | `run_report` | **nobody** |
+| `export_selector` | `download_report` | **nobody** |
+| `report_url` / `nav_selector` | `navigate_to_report` | **nobody** |
+
+So `suggest_params` returned `run_selector` and `export_selector` under their own keys — correctly,
+because the loop presses them at a fixed point in its order and a param pressing Run would export the
+PREVIOUS run's grid — and `merge_suggestion` read only `params`, discarding both on every capture.
+Two of the three were suggested and thrown away; the third was never suggested at all.
+
+**Why the omission reads as working.** With no `export_selector`, `download_report` hunts for a
+control whose words happen to be Export / Download / CSV / Excel / Export Report. A portal spelling
+its button anything else returns `(None, None)` — zero rows, no error, a declaration that looks
+finished. With no address, `navigate_to_report` can only CLICK the menu words, and on a portal whose
+reports all render on ONE page (the owner's is a single `.aspx`) there is nothing to click: his last
+auto-pull recorded *"Not reached: Consolidated Register Totals, Customer List, Employee Clock In,
+Hourly Totals"*, and no amount of filter work would have moved it.
+
+**THE FIX.** `report_declaration.CONTROL_FIELDS` declares the three a human can answer, ONCE:
+`report_url`, `run_selector`, `export_selector`. The editor row carries them (`ROW_FIELDS`
+dereferences the tuple), `columns` writes them — **dropping the key when the field is cleared**, so
+`calibrated()` reads "nothing declared" exactly as it did before this editor existed — and
+`merge_suggestion` folds a capture's into an EMPTY one only, because the human who typed one was
+looking at the page. `GET /reports` publishes `control_fields` so the browser keeps no list.
+
+**And the capture now suggests the address it arrived at** (`capture_report_calibration` →
+`page.url`): it is the one caller standing on the page, and the address is the only one of the two
+navigation facts that identifies anything on a single-page portal. Suggested, never decided.
+
+**`nav_selector` is deliberately NOT offered** — nothing suggests it and no human would hand-write a
+framework's generated selector. It is still folded through untouched, so a capture that sets it keeps
+working.
+
+**§COMMCALC-44 in the panel.** Each captured report now reports `controls: {report_url, run_selector,
+export_selector}` as three booleans, so "reached the page, 2 filters" can no longer read as success
+while the button that downloads the file is undeclared. `row_problems` says it in the operator's
+words, and "say which menu words reach it" became "…or paste the report page's address", because
+either answer reaches the page.
+
+**Locked** — `backend/tests/unit/test_report_controls_are_declarable.py`, 20 tests: the three are
+declared once and each is a fact a pull step reads; `nav_selector` stays out; the row shows declared
+and blank; `columns(rows(src))` is STILL the identity with three new fields; a fact this editor does
+not edit survives a save; a cleared control drops its key; a selector is taken as written and never
+normalised (a CSS selector is case-sensitive, unlike a report key); the capture suggests `page.url`;
+a capture fills blanks and never overwrites a human's answer; the panel names each control it did and
+did not settle; a row with no export control says so; either the menu words or an address satisfies
+reaching the page; the editor offers every declared field; the backend publishes the names; a new row
+carries the same fields as a stored one. `harness_report_declaration.py` §F raised to the new standard
+(73 checks).
+
+### COMMCALC-48.12 Cross-references (48.11)
+
+§COMMCALC-07 (the pull loop that presses these controls), §COMMCALC-37 (declared filters are
+load-bearing), §COMMCALC-39 (the capture and `spec_key`), §COMMCALC-44 (an absence needs the right
+reason), §COMMCALC-48.9 (the fold this completes).
+
 ### COMMCALC-48.10 Cross-references (48.9)
 
 §COMMCALC-39 (`spec_key`, the one rule for "which report is this", and the capture itself),

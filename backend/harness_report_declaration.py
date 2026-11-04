@@ -181,9 +181,20 @@ dated = rd.row({"key": "x", "nav": ["X"]}, {"params": [{"selector": "#a", "kind"
                                                         "value": "2026-10-01"}]})
 ok(any("same page" in p for p in dated["problems"]),
    "a filter with a literal date instead of a token is flagged — every run would export one day")
-ok(rd.row({"key": "y", "nav": ["Y"]},
-          {"params": [{"selector": "#a", "kind": "fill", "value": "{date}"}]})["problems"] == [],
+# A PROPERLY DECLARED REPORT NOW DECLARES ITS EXPORT CONTROL TOO (owner, 2026-11-04,
+# §COMMCALC-48.11). Without one, `download_report` hunts for a control whose words happen to be
+# Export / Download / CSV, and a portal spelling its button anything else imports zero rows while the
+# declaration reads complete — the one omission that looks like it is working.
+full = {"params": [{"selector": "#a", "kind": "fill", "value": "{date}"}],
+        "export_selector": "#btnCsv"}
+ok(rd.row({"key": "y", "nav": ["Y"]}, full)["problems"] == [],
    "a report declared properly has nothing to say about it")
+ok(any("no export control" in p for p in
+       rd.row({"key": "y", "nav": ["Y"]}, {"params": full["params"]})["problems"]),
+   "…and one with no export control is told so, because the pull would have to guess the button")
+ok(all("menu words" not in p for p in
+       rd.row({"key": "z"}, dict(full, report_url="https://portal.example/r.aspx"))["problems"]),
+   "a pasted report address answers 'how is this page reached' as well as the menu words do")
 eq(rd.row("", None), None, "a row with no key is not a row")
 eq(rd.row(17, None), None, "…and neither is a number")
 
