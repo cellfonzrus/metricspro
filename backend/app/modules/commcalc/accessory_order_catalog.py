@@ -73,7 +73,15 @@ from __future__ import annotations
 #: How a category's quantity is decided. See the header — this is the file's load-bearing idea.
 GRAIN_SPLIT = "split"
 GRAIN_ASSIGNED = "assigned"
-GRAINS = (GRAIN_SPLIT, GRAIN_ASSIGNED)
+#: NOT TIED TO A PHONE AT ALL (owner ask 2026-10-31, measured against the distributor 2026-11-04).
+#: A power bank, a speaker, a watch band and a car mount have no phone model: ordering them per
+#: phone would be nonsense and leaving them out would mean the order sheet is not the order. So they
+#: are ordered against the window's TOTAL projected devices at a declared attach rate, split over
+#: their own options. The distributor's shelf is mostly this grain — power banks are their second
+#: biggest category at 1,190 products, wireless chargers 895, stands 579 — which is how the gap was
+#: found: the first two grains could not express any of it.
+GRAIN_STANDALONE = "standalone"
+GRAINS = (GRAIN_SPLIT, GRAIN_ASSIGNED, GRAIN_STANDALONE)
 
 #: Where a set of shares came from.
 SHARE_BASES = ("even_split", "declared", "declared_normalised")
@@ -96,20 +104,50 @@ def _num(v, default=0.0):
 # (the same honesty rule the rest of this report rests on). The owner named earphones as a kind of
 # thing to carry but gave no rate, so earphones arrive un-rated rather than invented at one each.
 HOUSE_CATALOG = (
+    # HOW A CASE IS BUILT AND HOW IT LOOKS ARE TWO AXES, NOT ONE. Read off the distributor's own
+    # shelf on 2026-11-04: their top split on a case is MagSafe against non-MagSafe (930 products
+    # under the first), and the LOOK is a separate axis of 24 theme families. The first cut of this
+    # catalog put `silicone, kickstand, heavy_duty, floral, diamond` in ONE column, which is
+    # construction and decoration mixed — and with them mixed there is no way to order "20
+    # heavy-duty, half of them floral", which is a real order. The owner's own list is kept whole;
+    # it is split across the axes it was always describing.
     {"key": "case", "label": "Case", "grain": GRAIN_SPLIT, "per_device": 1.0,
      "colour_split": True,
-     "dimensions": ({"key": "style", "label": "Style", "options": (
-         {"key": "silicone", "label": "Silicone"},
-         {"key": "kickstand", "label": "Kickstand"},
-         {"key": "heavy_duty", "label": "Drop proof / heavy duty"},
-         {"key": "floral", "label": "Floral"},
-         {"key": "diamond", "label": "Diamond"},
-     )},)},
+     "dimensions": (
+         {"key": "style", "label": "Style", "options": (
+             {"key": "silicone", "label": "Silicone"},
+             {"key": "kickstand", "label": "Kickstand"},
+             {"key": "heavy_duty", "label": "Drop proof / heavy duty"},
+             {"key": "wallet_folio", "label": "Wallet / folio"},
+             {"key": "clear_hard", "label": "Clear hard shell"},
+         )},
+         {"key": "attach", "label": "Magnetic attach", "options": (
+             {"key": "magnetic_ring", "label": "Magnetic ring"},
+             {"key": "no_magnetic_ring", "label": "No magnetic ring"},
+         )},
+         {"key": "design", "label": "Design", "options": (
+             {"key": "plain", "label": "Plain"},
+             {"key": "floral", "label": "Floral"},
+             {"key": "diamond", "label": "Diamond"},
+             {"key": "marble", "label": "Marble"},
+             {"key": "camo", "label": "Camo"},
+             {"key": "animal_print", "label": "Animal print"},
+             {"key": "celestial", "label": "Celestial"},
+             {"key": "sports", "label": "Sports"},
+             {"key": "seasonal", "label": "Seasonal"},
+         )},
+     )},
     {"key": "screen_protector", "label": "Screen protector", "grain": GRAIN_SPLIT,
      "per_device": 1.0, "colour_split": False,
      "dimensions": ({"key": "type", "label": "Type", "options": (
          {"key": "clear", "label": "Clear"},
          {"key": "privacy", "label": "Privacy"},
+     )},)},
+    {"key": "camera_lens_protector", "label": "Camera lens protector", "grain": GRAIN_SPLIT,
+     "per_device": None, "colour_split": False,
+     "dimensions": ({"key": "finish", "label": "Finish", "options": (
+         {"key": "clear", "label": "Clear"},
+         {"key": "tinted", "label": "Tinted"},
      )},)},
     {"key": "cable", "label": "Cable", "grain": GRAIN_ASSIGNED, "per_device": 1.0,
      "colour_split": False,
@@ -141,10 +179,98 @@ HOUSE_CATALOG = (
      )},
     {"key": "earphones", "label": "Earphones", "grain": GRAIN_ASSIGNED, "per_device": None,
      "colour_split": False,
-     "dimensions": ({"key": "fit", "label": "Fit", "default": "usb_c", "options": (
-         {"key": "usb_c", "label": "USB-C"},
-         {"key": "lightning", "label": "Lightning"},
-         {"key": "jack_3_5mm", "label": "3.5 mm jack"},
+     "dimensions": (
+         {"key": "fit", "label": "Fit", "default": "usb_c", "options": (
+             {"key": "usb_c", "label": "USB-C"},
+             {"key": "lightning", "label": "Lightning"},
+             {"key": "jack_3_5mm", "label": "3.5 mm jack"},
+             {"key": "bluetooth", "label": "Bluetooth"},
+         )},
+         {"key": "form", "label": "Form", "default": "earbuds", "options": (
+             {"key": "earbuds", "label": "Earbuds"},
+             {"key": "open_ear", "label": "Open-ear"},
+             {"key": "over_ear", "label": "Over-ear headphones"},
+         )},
+     )},
+
+    # ── NOT TIED TO A PHONE (the standalone grain; see GRAIN_STANDALONE above) ───────────────────
+    # Every rate here is None. The owner has declared none of them, and this module's own rule is
+    # that an un-rated kind arrives as a dash with its reason rather than invented at one each — the
+    # same treatment earphones got when he named them without a rate. So these categories appear on
+    # the sheet, say they are awaiting a rate, and order nothing until he gives one.
+    {"key": "power_bank", "label": "Power bank", "grain": GRAIN_STANDALONE, "per_device": None,
+     "colour_split": False,
+     "dimensions": (
+         {"key": "capacity", "label": "Capacity", "options": (
+             {"key": "5000mah", "label": "5,000 mAh"},
+             {"key": "10000mah", "label": "10,000 mAh"},
+             {"key": "20000mah", "label": "20,000 mAh"},
+         )},
+         {"key": "attach", "label": "Magnetic attach", "options": (
+             {"key": "magnetic_ring", "label": "Magnetic ring"},
+             {"key": "no_magnetic_ring", "label": "No magnetic ring"},
+         )},
+     )},
+    {"key": "wireless_charger", "label": "Wireless charger", "grain": GRAIN_STANDALONE,
+     "per_device": None, "colour_split": False,
+     "dimensions": ({"key": "form", "label": "Form", "options": (
+         {"key": "pad", "label": "Charging pad"},
+         {"key": "magnetic", "label": "Magnetic"},
+         {"key": "car_vent", "label": "Car vent"},
+         {"key": "stand", "label": "Charging stand"},
+     )},)},
+    {"key": "car_charger", "label": "Car charger", "grain": GRAIN_STANDALONE, "per_device": None,
+     "colour_split": False,
+     "dimensions": (
+         {"key": "ports", "label": "Ports", "options": (
+             {"key": "single_usb_a", "label": "Single USB-A"},
+             {"key": "single_usb_c", "label": "Single USB-C"},
+             {"key": "dual_usb_a_and_c", "label": "Dual, one USB-A and one USB-C"},
+         )},
+         {"key": "wattage", "label": "Wattage", "options": (
+             {"key": "20w", "label": "20 W"},
+             {"key": "45w", "label": "45 W"},
+             {"key": "60w", "label": "60 W"},
+         )},
+     )},
+    {"key": "mount_stand", "label": "Mount / stand", "grain": GRAIN_STANDALONE, "per_device": None,
+     "colour_split": False,
+     "dimensions": ({"key": "kind", "label": "Kind", "options": (
+         {"key": "car_vent_mount", "label": "Car vent mount"},
+         {"key": "bike_mount", "label": "Bike mount"},
+         {"key": "desk_stand", "label": "Desk stand / holder"},
+         {"key": "grip", "label": "Grip"},
+         {"key": "wallet", "label": "Stick-on wallet"},
+         {"key": "tripod", "label": "Tripod / selfie stick"},
+     )},)},
+    {"key": "watch_band", "label": "Watch band", "grain": GRAIN_STANDALONE, "per_device": None,
+     "colour_split": False,
+     "dimensions": (
+         {"key": "fit", "label": "Fit", "options": (
+             {"key": "proprietary_lug", "label": "Proprietary lug"},
+             {"key": "standard_pin_20mm", "label": "Standard pin 20mm"},
+             {"key": "standard_pin_22mm", "label": "Standard pin 22mm"},
+         )},
+         {"key": "material", "label": "Material", "options": (
+             {"key": "silicone", "label": "Silicone"},
+             {"key": "metal", "label": "Metal"},
+             {"key": "leather", "label": "Leather"},
+             {"key": "nylon", "label": "Nylon"},
+         )},
+     )},
+    {"key": "pouch_holster", "label": "Pouch / holster", "grain": GRAIN_STANDALONE,
+     "per_device": None, "colour_split": False,
+     "dimensions": ({"key": "kind", "label": "Kind", "options": (
+         {"key": "pouch", "label": "Pouch"},
+         {"key": "holster", "label": "Holster"},
+         {"key": "belt_clip", "label": "Belt clip"},
+     )},)},
+    {"key": "speaker", "label": "Speaker", "grain": GRAIN_STANDALONE, "per_device": None,
+     "colour_split": False,
+     "dimensions": ({"key": "size", "label": "Size", "options": (
+         {"key": "mini", "label": "Mini"},
+         {"key": "portable", "label": "Portable"},
+         {"key": "party", "label": "Party / large"},
      )},)},
 )
 
@@ -309,14 +435,28 @@ def _category(c, house):
             "dimensions": _dimensions(c.get("dimensions"), h.get("dimensions", ()))}
 
 
-def resolve_option_mix(category, raw=None):
-    """For a SPLIT category: `(shares, basis)` over its first dimension's options. PURE.
+def resolve_option_mix(category, raw=None, dimension=None):
+    """`(shares, basis)` over one of a category's dimensions. PURE.
+
+    `dimension` names which one; left out, it is the FIRST, which is the grid's column axis and the
+    only one the report had when it shipped. A category may carry more — a case is built MagSafe or
+    not AND carries a design, read off the distributor's own shelf on 2026-11-04 — and each of those
+    is its own set of shares over the same category total, the way the colour split already is. They
+    are breakdowns, not a cross-tab: style x design x attach would be a hundred columns of
+    two-unit cells, which is the trade this module already made once for colour.
 
     Nothing declared → an EVEN split with `basis='even_split'`, which the screen states. An even
     split is not a measurement and the report never pretends otherwise; it is there so the grid
     reads as a usable starting sheet instead of a wall of dashes."""
     dims = (category or {}).get("dimensions") or ()
-    opts = dims[0]["options"] if dims else ()
+    opts = ()
+    if dimension:
+        for d in dims:
+            if d.get("key") == dimension:
+                opts = d.get("options") or ()
+                break
+    elif dims:
+        opts = dims[0].get("options") or ()
     rows, basis = normalise_shares(raw, fallback=even_split_over(opts))
     if basis == "even_split":
         return even_split_over(opts), "even_split"
@@ -330,6 +470,15 @@ def resolve_option_mix(category, raw=None):
     for r in kept:
         r["share"] = r["share"] / total if total > 0 else 0.0
     return tuple(kept), basis
+
+
+def secondary_dimensions(category):
+    """The dimensions of a category BEYOND its first — each a breakdown of the same total. PURE.
+
+    The first dimension is the grid's column axis; these are the extra ways the buyer splits the
+    same quantity (MagSafe or not, which design). Returned in declared order, so the screen cannot
+    invent an order of its own."""
+    return tuple((category or {}).get("dimensions") or ())[1:]
 
 
 def default_spec(category):
