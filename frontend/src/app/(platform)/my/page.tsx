@@ -92,7 +92,7 @@ export default function MyDayPage() {
           </div>
           <Link href="/portal" style={{ padding: '12px 20px', borderRadius: 10, border: 'none',
                  background: clockedIn ? 'var(--c-bg-f59e0b)' : 'var(--c-bg-059669)',
-                 color: '#fff', fontWeight: 700, fontSize: 16, textDecoration: 'none' }}>
+                 color: 'var(--c-fg-ffffff)', fontWeight: 700, fontSize: 16, textDecoration: 'none' }}>
             {clockedIn ? 'Clock out' : 'Clock in'}
           </Link>
         </div>

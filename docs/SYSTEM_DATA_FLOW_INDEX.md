@@ -26343,6 +26343,7 @@ status word rather than a blank that reads as nil.
 | CORE-29 | core |
 | CORE-30 | core |
 | CORE-31 | core |
+| CORE-32 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet

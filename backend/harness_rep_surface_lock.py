@@ -105,11 +105,13 @@ check("2e a page's scope restriction binds one segment deeper (the governing nav
 SUB = "/" + "**"
 check("2f the page grammar is mirrored, not reinvented — both sides know the subtree marker and "
       "the carve-out",
-      f"REP_SUBTREE = '/' + '**'" in RBAC and f'SUBTREE = "{SUB}"' in RS
+      "REP_SUBTREE = '/' + REP_STAR + REP_STAR" in RBAC and f'SUBTREE = "{SUB}"' in RS
       and "page_except" in RBAC and "page_except" in RS)
-check("2g the frontend never spells the subtree marker as one literal — a plain text scan reads it "
-      "as the start of a block comment, and two source-text locks read this file that way",
-      ("'" + SUB + "'") not in RBAC and ('"' + SUB + '"') not in RBAC)
+check("2g the frontend never spells the subtree marker as one literal, nor its two stars as one — a "
+      "plain text scan reads the first as the start of a block comment and the second as a filename "
+      "glob, and THREE source-text locks read this file one of those two ways",
+      ("'" + SUB + "'") not in RBAC and ('"' + SUB + '"') not in RBAC
+      and "'" + "**" + "'" not in RBAC and '"' + "**" + '"' not in RBAC)
 
 # ── 3. THE API GATE IS INSTALLED AND UNCONDITIONAL ───────────────────────────────────────────────
 print("\n3. the API gate")

@@ -45,10 +45,13 @@ export function repConfined(perms: Permissions | undefined): boolean {
 export function repPages(perms: Permissions | undefined): string[] {
   return (perms?.rep_surface?.confined && perms.rep_surface.pages) ? perms.rep_surface.pages : []
 }
-// The subtree marker of the server's page grammar, assembled from parts ON PURPOSE: the literal
-// sequence it spells out opens a block comment to a plain text scan, and two source-text locks read
-// this file that way — one of them silently swallowed everything after it (caught 2026-11-04).
-export const REP_SUBTREE = '/' + '**'
+// The subtree marker of the server's page grammar, assembled from parts ON PURPOSE, and never as a
+// quoted literal: spelled out, the sequence opens a block comment to a plain text scan (two
+// source-text locks read this file that way, and one silently swallowed everything after it), and
+// the quoted pair alone reads as a filename glob to harness_report_kind_lock.py. Both caught
+// 2026-11-04. Pinned by harness_rep_surface_lock.py check 2g.
+const REP_STAR = String.fromCharCode(42)
+export const REP_SUBTREE = '/' + REP_STAR + REP_STAR
 /** The server's page grammar, mirrored exactly (`backend/app/core/rep_surface.py` — SUBTREE):
  *  `"/storeops/timeoff"` is that page and NO other; an entry suffixed with REP_SUBTREE is that page
  *  and everything below it; a `page_except` entry carves a manager screen out of a subtree. There is
