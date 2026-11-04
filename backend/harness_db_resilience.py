@@ -21,8 +21,10 @@ the postgrest → httpx → httpcore → socket path is exercised end to end.
      caller gets real parsed data through postgrest `.execute()`. Never twice.
   F. WRITE SAFETY — POST/PATCH/PUT/DELETE (incl. `POST /rpc/*`) are NEVER replayed; the caller gets
      a clean 503 DatabaseUnavailable naming the risk, not a masked 500.
-  G. NON-TARGETS — timeouts and fresh-connect failures are not retried; body-read failures are out
-     of scope by design; a read whose retry also fails surfaces the same clean 503.
+  G. NON-TARGETS — timeouts are not retried by anyone, and a fresh-connect failure is never
+     retried by THIS layer (postgrest 2.34.0 retries one on a GET itself; on a write nobody
+     does); body-read failures are out of scope by design; a read whose retry also fails
+     surfaces the same clean 503.
   H. COUNTERS — the ops counters are accurate and thread-safe.
 """
 from __future__ import annotations
@@ -98,7 +100,27 @@ print("   " + "  ".join(f"{k}={v}" for k, v in VERS.items()))
 # construction, A6-A10 httpcore's HTTP/2 connection having no idle-socket probe). So the diagnosis
 # this package rests on is unchanged by the bump; nothing was re-read on faith and nothing was
 # switched off to get green. `httpx`, `httpcore` and `h2` did not move at all.
-PINNED_STACK = {"supabase": "2.33.0", "postgrest": "2.33.0", "httpx": "0.28.1",
+# 2026-11-04 — `supabase`/`postgrest` moved 2.33.0 -> 2.34.0 and this fired on every open branch at
+# once, same as designed and again with nothing to do with the branches' own changes. This bump is
+# the LARGEST so far: upstream taught `send_with_retry` the very failure class this package was
+# written for. Re-read on the installed 2.34.0, three source-level facts moved, and A2 / A4 / A12
+# below are re-pointed at the NEW sources rather than deleted:
+#   • `send_with_retry` NOW wraps `req.send()` in `try/except (NetworkError, RemoteProtocolError)`
+#     and retries — but only where `_can_retry()` allows, i.e. GET/HEAD. **A write's transport
+#     exception still escapes `.execute()` unhandled**, which is the half of the root cause that
+#     sections E/F rest on, and it is unchanged. A2 now demands exactly that, by verb.
+#   • the verb guard moved OUT of `should_retry` into `_can_retry`. A4 follows it, and still demands
+#     the 2.31.0 `"HTTP"` typo be absent.
+#   • `.schema()` NOW forwards `http_client=` and shares the owner's session. A12 asserted the
+#     opposite; `app/core/database.py` builds each schema's client here regardless (it has to inject
+#     the resilient pool), so nothing in this repo changes — but the fact is re-pinned in its new
+#     direction so a future reversal fires again.
+# A6-A10 — httpcore's HTTP/2 connection having no idle-socket probe, which is the ACTUAL root cause —
+# are untouched: `httpx`, `httpcore` and `h2` did not move. The two layers now compose rather than
+# duplicate, and section G asserts the composition: ours prunes and replays the dead idle socket
+# immediately at attempt 1, so upstream's slower 1-2-4s backoff only ever sees a genuinely repeated
+# network failure. Nothing was switched off to get green; every other check still passes.
+PINNED_STACK = {"supabase": "2.34.0", "postgrest": "2.34.0", "httpx": "0.28.1",
                 "httpcore": "1.0.9", "h2": "4.4.1"}
 check("A1. pinned stack is the one the diagnosis was read from",
       VERS == PINNED_STACK,
@@ -108,8 +130,13 @@ check("A1. pinned stack is the one the diagnosis was read from",
 
 # A2/A3: postgrest's send_with_retry cannot save a transport exception.
 swr_src = inspect.getsource(pg_rb.send_with_retry)
-check("A2. postgrest send_with_retry has NO try/except around req.send()",
-      "except" not in swr_src and "try:" not in swr_src, swr_src)
+can_retry_src = inspect.getsource(pg_base.RequestConfig._can_retry)
+check("A2. postgrest send_with_retry saves a transport exception for GET/HEAD ONLY — a WRITE's "
+      "escapes .execute() unhandled (2.34.0; before it saved none at all)",
+      "except (NetworkError, RemoteProtocolError)" in swr_src
+      and "req._can_retry(attempt_count)" in swr_src
+      and 'self.http_method == "GET" or self.http_method == "HEAD"' in can_retry_src,
+      swr_src + can_retry_src)
 sr_src = inspect.getsource(pg_base.RequestConfig.should_retry)
 check("A3. should_retry only fires on a RETURNED 503/520 response",
       "response.status_code == 503" in sr_src and "520" in sr_src)
@@ -117,9 +144,12 @@ check("A3. should_retry only fires on a RETURNED 503/520 response",
 # `self.http_method == "HTTP"` — a typo for HEAD — so a HEAD request was never retried even on a
 # returned 503/520. Upstream fixed it in 2.32.0. The assertion is re-pointed at the FIXED source
 # rather than deleted, and it demands the typo be ABSENT, so an upstream regression fires here.
-check("A4. …and its verb guard reads GET-or-HEAD (the 2.31.0 'HTTP' typo is fixed upstream)",
-      'self.http_method == "HEAD"' in sr_src and 'self.http_method == "HTTP"' not in sr_src,
-      sr_src)
+check("A4. …and the verb guard (moved to _can_retry in 2.34.0) reads GET-or-HEAD — the 2.31.0 "
+      "'HTTP' typo is still absent",
+      'self.http_method == "HEAD"' in can_retry_src
+      and 'self.http_method == "HTTP"' not in can_retry_src
+      and 'self.http_method == "HTTP"' not in sr_src,
+      can_retry_src)
 send_src = inspect.getsource(pg_base.RequestConfig.send)
 check("A5. RequestConfig.send is a bare session.request() — exception escapes .execute()",
       "try" not in send_src and "self.session.request(" in send_src)
@@ -143,8 +173,12 @@ check("A10. h2 stores the first read error and re-raises it for every later read
 pg_client_src = inspect.getsource(SyncPostgrestClient.__init__)
 check("A11. stock postgrest builds EVERY pool with http2=True (what we override)",
       "http2=True" in pg_client_src)
-check("A12. postgrest .schema() does NOT forward http_client= (so database.py must build pools)",
-      "http_client" not in inspect.getsource(SyncPostgrestClient.schema))
+check("A12. database.py builds each schema's client ITSELF, so whether postgrest's own .schema() "
+      "forwards http_client= (it does from 2.34.0; it did not before) cannot decide which pool a "
+      "schema gets",
+      "http_client=self.session" in inspect.getsource(SyncPostgrestClient.schema)
+      and "build_pool_client" in inspect.getsource(db._SchemaCachingClient._new_schema_client)
+      and "SyncPostgrestClient(" in inspect.getsource(db._SchemaCachingClient._new_schema_client))
 check("A13. postgrest honours an injected http_client verbatim",
       "self.session = http_client or Client(" in pg_client_src)
 
@@ -683,9 +717,12 @@ NON_RETRY = [
     ("ReadTimeout (server may still be working)", httpx.ReadTimeout("timeout")),
     ("ConnectTimeout", httpx.ConnectTimeout("timeout")),
     ("PoolTimeout", httpx.PoolTimeout("timeout")),
-    ("ConnectError (fresh connect failed = real outage)", httpx.ConnectError("refused")),
     ("LocalProtocolError (our own bug)", httpx.LocalProtocolError("bad request")),
 ]
+# ConnectError USED to live in the list above. From postgrest 2.34.0 it is an `httpx.NetworkError`
+# that upstream's own `send_with_retry` retries — on a GET, not on a write. THIS layer still never
+# retries it, which is the fact the list is here to hold, so the claim is asserted per verb below
+# instead of being dropped (§CORE-10: a fact that moved is re-pointed, never deleted).
 for label, exc_obj in NON_RETRY:
     dbr.reset_pool_stats()
     srv = TinyServer()
@@ -700,6 +737,45 @@ for label, exc_obj in NON_RETRY:
           repr(raised))
     srv.close()
     pg.session.close()
+
+# G2a-G2d. a fresh-connect failure, by verb (postgrest 2.34.0 retries one itself, on reads only)
+CONNECT_ERR = httpx.ConnectError("refused")
+dbr.reset_pool_stats()
+srv = TinyServer()
+pg, flaky = flaky_pg(srv, {1}, CONNECT_ERR)
+res, raised = None, None
+try:
+    res = pg.table("t").select("*").execute()
+except BaseException as e:                                          # noqa: BLE001
+    raised = e
+st = dbr.pool_stats()
+check("G2a. a fresh-connect failure on a GET is retried by POSTGREST (2.34.0), not by this layer — "
+      "no read-retry counter of ours moves",
+      flaky.attempts == 2 and (st["read_retried"], st["read_recovered"],
+                               st["read_retry_failed"]) == (0, 0, 0),
+      f"attempts={flaky.attempts} stats={st}")
+check("G2b. …and the caller gets real data, not a masked error",
+      raised is None and res is not None and res.data == [{"id": 1, "v": "ok"}], repr(raised))
+srv.close()
+pg.session.close()
+
+dbr.reset_pool_stats()
+srv = TinyServer()
+pg, flaky = flaky_pg(srv, {1}, CONNECT_ERR)
+raised = None
+try:
+    pg.table("shifts").insert({"a": 1}).execute()
+except BaseException as e:                                          # noqa: BLE001
+    raised = e
+st = dbr.pool_stats()
+check("G2c. a fresh-connect failure on a WRITE is retried by NOBODY — exactly one attempt",
+      flaky.attempts == 1, f"attempts={flaky.attempts} stats={st}")
+check("G2d. …and propagates UNCHANGED, not as our 503: nothing reached the socket, so there is no "
+      "'may already have applied' risk to report and no counter of ours to move",
+      raised is CONNECT_ERR
+      and (st["write_not_retried"], st["read_retried"]) == (0, 0), f"{raised!r} {st}")
+srv.close()
+pg.session.close()
 
 for label, exc_obj in (("ReadError", httpx.ReadError("reset")), ("WriteError", httpx.WriteError("epipe"))):
     dbr.reset_pool_stats()
