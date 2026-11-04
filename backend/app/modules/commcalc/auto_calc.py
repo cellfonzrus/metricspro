@@ -76,6 +76,11 @@ CONFIG_DEBOUNCE = "auto_calc_debounce_minutes"
 DEFAULT_ON = True
 DEFAULT_DEBOUNCE_MINUTES = 5
 DEBOUNCE_BOUNDS = (1, 240)
+# The horizon a commission-plan edit restates (see "A DECLARATION EDIT CARRIES NO MONTH OF ITS OWN" below).
+# A POLICY, so a house default is the right shape; mig 1111 lets a tenant set its own.
+DEFAULT_RESTATE_MONTHS = 12
+RESTATE_MONTHS_BOUNDS = (1, 36)
+CONFIG_RESTATE_MONTHS = "plan_edit_restate_months"
 # A steady stream of landings (an hourly feed during a long import) must not postpone the calculation forever:
 # once the OLDEST pending landing is this many debounce windows old, the request is due regardless.
 MAX_WAIT_FACTOR = 6
@@ -95,6 +100,10 @@ SOURCE_LABELS = {
     # NOT AN IMPORT AT ALL — a person changed a declaration (net payment terms, which table a carrier reads).
     # The sentence an operator reads has to say so, or a rebuild with nothing uploaded looks unexplained.
     "payable_source_map_edit": "a change to the carrier's payment terms or source settings",
+    # ALSO NOT AN IMPORT — somebody edited a commission plan, its rules, its tiers, its assignments or a
+    # payout schedule. Owner 2026-10-31: a plan edit must restate the months it paid, and the sentence an
+    # operator reads has to say that is why, or a recalculation with nothing uploaded looks unexplained.
+    "commission_plan_edit": "a change to a commission plan or payout schedule",
     "email_sweep": "Email Auto-Import",
     "ftp_sweep": "the FTP drop",
     "onboarding-import": "the mapped upload",
@@ -227,13 +236,81 @@ def resolve_config(tenant_row, house_row):
     except (TypeError, ValueError):
         deb, deb_src = DEFAULT_DEBOUNCE_MINUTES, "default"
     lo, hi = DEBOUNCE_BOUNDS
+    # The restatement horizon rides the SAME resolver rather than opening a second read of the same table
+    # (index §6l: load_config is the one reader). A database without migration 1111 simply has no such key,
+    # so `pick` returns the code default and nothing refuses.
+    rm_raw, rm_src = pick(CONFIG_RESTATE_MONTHS)
+    try:
+        rm = int(float(rm_raw)) if rm_raw is not None else DEFAULT_RESTATE_MONTHS
+    except (TypeError, ValueError):
+        rm, rm_src = DEFAULT_RESTATE_MONTHS, "default"
+    rlo, rhi = RESTATE_MONTHS_BOUNDS
     return {"on": bool(on), "on_source": on_src,
-            "debounce_minutes": min(hi, max(lo, deb)), "debounce_source": deb_src}
+            "debounce_minutes": min(hi, max(lo, deb)), "debounce_source": deb_src,
+            "restate_months": min(rhi, max(rlo, rm)), "restate_months_source": rm_src}
 
 
 def is_calc_feed(table):
     """True when `table` is one the Run Calculation reads — the registry's answer, never a list here."""
     return str(table or "").strip() in _lineage.COMMISSION_CALC_FEEDS
+
+
+# ── A DECLARATION EDIT CARRIES NO MONTH OF ITS OWN ──────────────────────────────────────────────────────────
+# Owner, 2026-10-31: *"i upldated the commission for luxelink in ny plan but it did not get auto updated as we
+# confirmed yesterday that everytime anything is change it will auto update acorss the board, i changed teh
+# comission from june - oct"*.
+#
+# A FEED landing says which month it is for; an EDIT to a commission plan does not. The months it restates are
+# the months whose stored figures that declaration produced — which the build names (`periods_fn`), not the
+# endpoint. Bounded, because a rate corrected today must not rewrite a month from two years ago: Cellfonz R Us
+# really does hold a `July 2024` row beside its 2026 months (measured 2026-10-31).
+#
+# The READ of the stored months lives with the module that owns the pay table (`router._plan_restate_periods`,
+# the build's `periods_fn`); this module keeps only the pure RULE and the horizon's resolution.
+#
+# RULE TWO: the bound is a POLICY, so a house default is the right shape for it — unlike a tenant's own
+# vocabulary, which may never have a default (owner directive 2026-10-30). A tenant that wants a different
+# horizon sets `commission_org_config.plan_edit_restate_months`; the column is read defensively, so a database
+# without migration 1111 keeps this default and nothing refuses.
+
+
+def _month_index(value):
+    """(year*12 + month) for a date, a datetime or any string a month-period parses out of. None if neither."""
+    y = getattr(value, "year", None)
+    m = getattr(value, "month", None)
+    if y and m:
+        return int(y) * 12 + int(m)
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    # An ISO day ('2026-10-31') is the common caller; `parse_period` reads its leading month fine.
+    pm, py = _pd.parse_period(raw)
+    if py and 1 <= pm <= 12:
+        return int(py) * 12 + int(pm)
+    return None
+
+
+def restate_periods(periods, now, months=None):
+    """The months a declaration edit restates: `periods`, canonicalized, deduplicated, oldest first, and
+    dropped once they are more than `months` behind `now`. PURE.
+
+    A month in the FUTURE is kept — a plan edited ahead of the month it pays is a real thing, and silently
+    skipping it is the same class of defect as this whole change.
+    """
+    bound = months if months is not None else DEFAULT_RESTATE_MONTHS
+    try:
+        bound = int(bound)
+    except (TypeError, ValueError):
+        bound = DEFAULT_RESTATE_MONTHS
+    lo, hi = RESTATE_MONTHS_BOUNDS
+    bound = max(lo, min(hi, bound))
+    here = _month_index(now)
+    out = []
+    for p in month_periods(periods):          # the ONE canonicalizer — never a second spelling rule here
+        idx = _month_index(p)
+        if here is None or idx is None or (here - idx) < bound:
+            out.append(p)
+    return out
 
 
 def month_periods(periods):
@@ -568,8 +645,12 @@ def landed(client, org_id, *, table, periods, source, filename=None, rows=None, 
         # registry's period-scoped build, asked through `is_calc_feed`), and every ORG-scoped snapshot whose
         # declared inputs include this table. A table that is neither is still answered honestly.
         is_feed = is_calc_feed(table)
+        # A DECLARATION OF REP PAY makes the period-scoped commission build stale exactly as a feed does
+        # (index §COMMCALC-41.9). Asked of the REGISTRY, so the plan tables are not a second list here.
+        _comm = _builds.by_key("commission")
+        declares_pay = bool(_comm) and table in _builds.config_inputs(_comm)
         stale = _builds.stale_builds(client, org_id, table)
-        if not is_feed and not stale:
+        if not is_feed and not declares_pay and not stale:
             return {"queued": False, "reason": "not_a_calc_input", "table": table}
         now = now or _now()
         cfg = load_config(client, org_id)
@@ -577,9 +658,17 @@ def landed(client, org_id, *, table, periods, source, filename=None, rows=None, 
         builds_out = _queue_builds(client, org_id, stale, entry, now, cfg)
         # A month-period is what the COMMISSION calculation is keyed on. A snapshot of "what we owe" is not a
         # month's figure, so a landing with no readable period still refreshes the org-scoped builds.
-        ps = month_periods(periods) if is_feed else []
-        if is_feed and not ps:
-            return {"queued": bool(builds_out.get("queued")), "reason": "no_period", "table": table,
+        ps = month_periods(periods) if (is_feed or declares_pay) else []
+        # AN EDIT CARRIES NO MONTH, so the build names the months it restates — bounded by the org's
+        # horizon, oldest first. A resolver failure is REPORTED and never read as "restates nothing".
+        periods_error = None
+        if declares_pay and not ps:
+            _ps, periods_error = _builds.build_periods(client, org_id, _comm, now)
+            ps = month_periods(_ps)
+        if (is_feed or declares_pay) and not ps:
+            return {"queued": bool(builds_out.get("queued")),
+                    "reason": "error" if periods_error else "no_period", "table": table,
+                    **({"error": periods_error} if periods_error else {}),
                     "builds": builds_out}
         if not cfg["on"]:
             for p in ps:
@@ -596,6 +685,7 @@ def landed(client, org_id, *, table, periods, source, filename=None, rows=None, 
                 **({} if queued else {"reason": "error" if builds_out.get("error") else "nothing_queued",
                                       "error": builds_out.get("error")}),
                 "mode": "durable" if durable else "process", "builds": builds_out,
+                **({"periods_error": periods_error} if periods_error else {}),
                 "debounce_minutes": cfg["debounce_minutes"],
                 "sentence": (sentence("queued", ", ".join(ps), [entry], at=_iso(now),
                                       debounce_minutes=cfg["debounce_minutes"]) if ps

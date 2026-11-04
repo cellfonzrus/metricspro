@@ -38,6 +38,7 @@ WHAT FAILS THE BUILD
   python3 backend/harness_royalty_lock.py
 """
 import os
+import ast
 import re
 import sys
 
@@ -130,11 +131,28 @@ check("(b) no fee-rate literal in the router, coa or the pages (rates are vocabu
 coa = BE[ACC + "coa.py"]
 check("(c) coa.build_inputs books the royalty report through royalty.pl_bookings and adds only its output",
       "_roy.pl_bookings(_roy_reps, _roy_vocab, set(PL_SECTION))" in coa and "for _k, _st, _amt, _dl in _roy_bk:" in coa)
-readers = [rel for rel, src in BE.items() if "royalty_report_line" in src]
+# A DECLARATION IS NOT A READER. The two registries were allowed by NAME because they only declare
+# the table, and 2026-10-31 brought a third such file — `core/relation_home.py`, the one home for
+# which SCHEMA holds a relation (index §CORE-30), which by construction names every table in the
+# platform. So the carve-out becomes the rule: a mention that is an entry in a module-level dict /
+# set / list / tuple is a declaration and cannot read or book anything; a mention anywhere else is a
+# read, and the allow-list below still holds it to the royalty module and its router.
+# WHAT COUNTS AS MERELY DECLARING A RELATION NAME is itself one fact with one home
+# (`core.relation_home.declares_only`, index §CORE-30) — five locks ask it, so none of them keeps a
+# copy of the answer. Pure and stdlib-only, so importing it here costs nothing.
+from app.modules.core.relation_home import declares_only as _declares_only   # noqa: E402
+
+
+readers = [rel for rel, src in BE.items()
+           if "royalty_report_line" in src and not _declares_only(src, "royalty_report_line")]
 ALLOWED_READERS = {ACC + "royalty.py", ROUTER, "backend/app/modules/commcalc/landing_identity.py",
                    "backend/app/modules/commcalc/data_lineage_registry.py"}
-check("(c) only the royalty module, its router and the two registries name royalty_report_line",
+check("(c) only the royalty module, its router and the two registries READ royalty_report_line",
       set(readers) <= ALLOWED_READERS, sorted(set(readers) - ALLOWED_READERS))
+check("(c) …and the declaration test is armed: a module-level map is a declaration, a query is not",
+      _declares_only('M = {"royalty_report_line": 1}\n', "royalty_report_line")
+      and not _declares_only('q.table("royalty_report_line")\n', "royalty_report_line")
+      and not _declares_only('def f():\n    return {"royalty_report_line": 1}\n', "royalty_report_line"))
 
 # ── (d) the vertical is data ─────────────────────────────────────────────────────────────────────────
 VKEYS = [v["key"] for v in V.HOUSE_VERTICALS]

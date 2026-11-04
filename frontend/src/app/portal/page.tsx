@@ -13,6 +13,7 @@ import PortalHelpdesk from '@/components/PortalHelpdesk'
 import PortalOnboarding from '@/components/PortalOnboarding'
 import MyChargebacks from '@/components/MyChargebacks'
 import ScreenLink from '@/components/ScreenLink'
+import { punchLocation } from '@/lib/punchLocation'
 
 // Employee kiosk (Part B / B4 + B2): mobile-first, standalone (no platform chrome). Now GUARDED by a
 // real login — an employee signs in with their email + password, so a punch is locked to the
@@ -97,14 +98,17 @@ export default function PortalPage() {
   // live clock
   useEffect(() => { const t = setInterval(() => setNow(new Date().toLocaleTimeString()), 1000); return () => clearInterval(t) }, [])
 
-  // one-time init once signed in: GPS only (don't prompt before login). The face-api bundle loads in
-  // its OWN effect below, and only when face recognition is actually switched on for this employee.
+  // one-time init once signed in: PRIME the location permission so the first punch doesn't wait on a
+  // dialog (don't prompt before login). The reading is deliberately THROWN AWAY — a punch takes its
+  // own, fresh, at the tap (src/lib/punchLocation.ts). Re-sending this one was the defect: a rep who
+  // signed in at the store and clocked out hours later from anywhere re-sent the morning's
+  // coordinates, so the evidence said "at the store" wherever they actually were.
+  // The face-api bundle loads in its OWN effect below, and only when face recognition is switched on.
   useEffect(() => {
     if (!session || !empId || initedRef.current) return
     initedRef.current = true
     if (navigator.geolocation) navigator.geolocation.getCurrentPosition(
-      p => { gpsRef.current = { lat: p.coords.latitude, lng: p.coords.longitude, acc: Math.round(p.coords.accuracy) } },
-      () => {}, { enableHighAccuracy: true, timeout: 8000 })
+      () => {}, () => {}, { enableHighAccuracy: true, timeout: 8000 })
   }, [session, empId])
 
   // Face models load ONLY when the master switch + this employee's assignment say so (migration 420).
@@ -512,10 +516,13 @@ export default function PortalPage() {
     // call, so a timeout or a mid-flight refresh can never lose it. drivePunch sends it with a stable
     // client_request_id and retries until the server confirms; the camera closes right away.
     const selfie = captureSelfie()
-    const g = gpsRef.current
+    // A FRESH fix for THIS punch, time-boxed, and stashed in the queued body so a retry re-sends the
+    // same evidence rather than a later position. Never blocks: no fix means the punch goes out
+    // without coordinates and the server records it as unverified.
+    const g = await punchLocation()
+    gpsRef.current = { lat: g.gps_lat, lng: g.gps_lng, acc: g.gps_accuracy_m }
     const body: Record<string, unknown> = {
-      selfie, device: 'kiosk', face_match_pct: matchPct, store_code: selStore || undefined,
-      gps_lat: g.lat, gps_lng: g.lng, gps_accuracy_m: g.acc,
+      selfie, device: 'kiosk', face_match_pct: matchPct, store_code: selStore || undefined, ...g,
     }
     const item = pq().enqueue('clock-in', '/api/v1/storeops/timeclock/clock-in', body)
     setMsg(optimisticMessage('clock-in'))
@@ -540,8 +547,12 @@ export default function PortalPage() {
 
   async function clockOut() {
     setBusy(true)
+    // WHERE THE SHIFT ENDED (owner 2026-11-01). Taken fresh at the tap and stashed in the queued
+    // punch, so an offline replay carries the location the rep was at when they tapped, not where
+    // they happen to be when the network comes back.
+    const g = await punchLocation()
     // Save + go optimistic BEFORE the network call; drivePunch retries with a stable id until confirmed.
-    const item = pq().enqueue('clock-out', '/api/v1/storeops/timeclock/clock-out', {})
+    const item = pq().enqueue('clock-out', '/api/v1/storeops/timeclock/clock-out', { ...g })
     setMsg(optimisticMessage('clock-out'))
     await drivePunch(item)
   }

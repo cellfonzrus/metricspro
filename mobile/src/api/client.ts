@@ -179,6 +179,40 @@ export async function apiGetText(path: string, opts: ApiOptions = {}): Promise<s
   return res.text()
 }
 
+/** Authed MULTIPART POST — for an endpoint that takes a file (`UploadFile`) rather than JSON.
+ *
+ *  It lives HERE, beside `request` and `apiGetText`, because "how a request from this app carries
+ *  its identity" is one fact: the bearer token, the active org header and the 2FA token come from
+ *  the same `authHeaders`, and the org scope from the same `withOrgScope`. An api module assembling
+ *  its own headers for an upload would be a second copy of that, free to fall behind the next header
+ *  the platform adds — and an upload that silently loses `x-active-org` would write a file into the
+ *  wrong tenant's record.
+ *
+ *  `Content-Type` is deliberately NOT set: React Native's fetch sets the multipart boundary itself,
+ *  and naming the type here strips it, which the server then cannot parse. */
+export async function apiUpload<T>(path: string, form: FormData, opts: ApiOptions = {}): Promise<T> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS } = opts
+  const headers = await authHeaders()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let res: Response
+  try {
+    res = await fetch(`${ENV.apiUrl}${withOrgScope(path)}`, {
+      method: 'POST', body: form, signal: controller.signal, headers,
+    })
+  } catch (e: any) {
+    clearTimeout(timer)
+    throw new ApiError(e?.name === 'AbortError' ? 'Request timed out' : 'Network unavailable', 0)
+  }
+  clearTimeout(timer)
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new ApiError(errMsg((body as any)?.detail, res.status), res.status, (body as any)?.code)
+  }
+  const text = await res.text()
+  return (text ? JSON.parse(text) : null) as T
+}
+
 /** Force a token refresh (used before a critical mutation to avoid a mid-write expiry). */
 export async function refreshSession(): Promise<void> {
   await supabase.auth.refreshSession().catch(() => {})

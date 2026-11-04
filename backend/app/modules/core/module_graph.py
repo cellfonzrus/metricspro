@@ -43,6 +43,50 @@ from __future__ import annotations
 SCHEMA = 1
 
 FACTS: dict[str, dict] = {
+    # ── §CORE-31 (security pass 2026-11-01) — a retention window that DELETES ────────────────────
+    'location_fix_retention': {
+        "question": 'HOW LONG MAY WE KEEP WHERE SOMEBODY WAS, AND WHAT HAPPENS WHEN THAT RUNS OUT? '
+                    'Two tenant settings promised a window and nothing deleted anything: '
+                    '`punch_geo_retention_days` (found by the punch geofence\'s own security '
+                    'pass) and `checkin_geo_retention_days` (declared on the control box as '
+                    '`marketing_checkin_gps_retention` = `unmonitored`, "no purge job runs"). '
+                    'One class, two instances. A window that deletes nothing is worse than no '
+                    'window because it READS as a commitment, so this holds the registry of every '
+                    'relation that stores a person\'s position, the ONE date arithmetic, and a '
+                    'sweep that clears the COORDINATES while KEEPING the verdict and the distance '
+                    '— which is what makes honouring the promise free: no flag, report or export '
+                    'moves. A row with no stamp is REPORTED, never purged on a guess. The '
+                    'coordinate column NAMES are not held here: they are dereferenced from '
+                    '`store_geofence.PUNCH_COLUMNS`, because a second copy of a column name is '
+                    'how this class of defect returns. A BIPA face template is a different fact '
+                    'and keeps its own home in `storeops/face_retention.py`. The schema numbers that add each '
+                    'stamp column are carried by index CORE-31 and by the files themselves, not '
+                    'restated in this string: a literal here would be a customer-copy defect under '
+                    'the 19.36 boundary, which reads message keys and never data.',
+        "homes": [
+            "app/modules/core/geo_retention.py"
+        ],
+        "index": [
+            "CORE-31"
+        ],
+        "locks": [
+            "harness_geo_retention_lock.py"
+        ],
+        "callers": {
+            # The nightly sweep and the "what is due" report: the ONLY two surfaces that act on a
+            # retention commitment, and neither holds a relation, column or window of its own.
+            'app/modules/core/router.py': ('_geo_ret',),
+            # The event check-in's stamp (mig 986). It kept its OWN copy of the date arithmetic
+            # until 2026-11-01 — two copies are two windows free to drift — and now dereferences
+            # this home while keeping the public name its callers already use.
+            'app/modules/marketing/event_logic.py': ('_ret',),
+            # Both ends of a punch and the DM store visit: `_geo_stamp_columns` writes the
+            # commitment WITH the fix, because a coordinate stored without its purge date is a
+            # coordinate nothing will ever delete. `storevisit/router.py` reaches it through this
+            # same helper rather than importing the home twice.
+            'app/modules/storeops/router.py': ('_ret',),
+        },
+    },
     # ── §CORE-17 (owner ask 2026-10-24) — a reported figure NAMES the rows behind it ────────────
     'report_drilldown': {
         "question": 'WHERE IS THIS NUMBER COMING FROM? A report that summarises — a tile, a rollup '
@@ -349,7 +393,7 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/accessory_order_drilldown.py': ('_dd',),
         },
     },
-    # ── §CORE-14 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
+    # ── §CORE-31 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
     'internal_self_call': {
         "question": 'When a handler reaches a sibling module through the platform\'s OWN HTTP '
                     'surface (`INTERNAL_API_BASE_URL`, default 127.0.0.1:8000), what identity must '
@@ -651,9 +695,20 @@ FACTS: dict[str, dict] = {
                     'DERIVED both ways and never stored, with columns(rows(src)) pinned as the '
                     'identity: opening the editor and saving changes nothing. per_day and problems '
                     'are derived for the same reason a stored copy could disagree with the filters '
-                    'it describes. A capture SUGGESTS and never decides.',
+                    'it describes. A capture SUGGESTS and never decides. AND THE FOLD HAPPENS HERE '
+                    '(2026-10-31): merge_suggestion was declared as the home for folding a capture '
+                    'into a row and had NO caller — PortalReportEditor.tsx had written the fold '
+                    'again in TypeScript, matching a per-report RESULT (keyed `report`, as every '
+                    'per-report result in this module is) against an editor ROW (keyed `key`), so it '
+                    'matched nothing for any tenant and a capture of fourteen report pages added no '
+                    'filter while announcing it had read them. spec_key is the only bridge between '
+                    'the two spellings; the route now folds through this home and the browser only '
+                    'displays what came back.',
         "homes": ('app/modules/commcalc/report_declaration.py',),
         "index": ('COMMCALC-48',),
+        # The pytest lock that pins the fold to this home —
+        # tests/unit/test_capture_merges_where_it_is_declared.py, run by tests.yml — is named in the
+        # question above; `locks` carries harnesses, which is what this guard resolves.
         "locks": ('harness_report_declaration.py',),
         # SNAPSHOT — written BY HAND (§50). The home is PURE: the router is its only caller, and it
         # dereferences spec_key (§COMMCALC-39) and the filter vocabulary (§COMMCALC-37) rather than
@@ -714,6 +769,107 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('_m',),
             # a landed upload says whether the source was in a cooldown when it was due
             'app/modules/commcalc/import_audit.py': ('_pb',),
+            # the two sweeps that ask the vocabulary when a LOGIN failed, so a page refusing us at
+            # the edge is named a refusal rather than a rejected credential (§COMMCALC-52). Both ask
+            # it against the page's VISIBLE text, never its markup — that is the point of §51.
+            'app/modules/commcalc/epay_sweep.py': ('_pb',),
+            'app/modules/commcalc/dlar_sweep.py': ('_pb',),
+        },
+    },
+    # ── §COMMCALC-52 — what happened to the login we just submitted ─────────────────────────────
+    'login_outcome': {
+        "question": 'We submitted a portal login. WHAT HAPPENED — and what is the ONE thing the '
+                    'operator should do about it? Three portal drivers answered this three ways and '
+                    'the worst of them was load-bearing. epay_sweep decided from page.content() — '
+                    'the MARKUP — with `any(w in body for w in ("invalid","incorrect","failed")) '
+                    'and "passwordinput" in body`, so a single-page application that merely BUNDLES '
+                    '`var M={invalid:"Invalid user name or password"}` read as having SAID it. Its '
+                    'only route to success was the vendor\'s own words in the document title, which '
+                    'is a carrier name in code (RULE TWO) and a false negative for every other '
+                    'tenant\'s portal. Measured 2026-10-31: 1,665 scheduled runs, every 30 minutes, '
+                    'no gap; the last successful login 2026-10-09T19:30:43Z; then 1,056 CONSECUTIVE '
+                    'runs reporting "credentials rejected", and three carrier feeds dark for 22 days '
+                    'because nobody could tell whether that sentence was true. dlar_sweep\'s probe '
+                    'was sound (ask for a page that needs a session) but named every failure a '
+                    'rejected credential; vidapay_sweep\'s was sound too (DOM, never markup) but '
+                    'asserted "Login rejected" for every still-on-the-form case and asked the '
+                    'operator to work the rest out from a diagnostic dict. SO: six named outcomes, '
+                    'each carrying the one remedy that applies to it — signed_in, '
+                    'credentials_rejected, human_check, portal_refused, login_page_changed, unknown '
+                    '— decided from STRUCTURE (is the form still on screen) and VISIBLE text '
+                    '(document.body.innerText, or visible_from_html for a driver with no browser), '
+                    'never markup. The evidence arguments are keyword-only with NO default, so a '
+                    'caller that has not looked at the page cannot get an answer; '
+                    'is_credential_problem is an ALLOWLIST, so an outcome nobody has ruled on stays '
+                    'quiet about the password rather than blaming it. A challenge or refusal is '
+                    'believed only when the form is ABSENT — §COMMCALC-50.8\'s rule applied '
+                    'here, not copied here. EXCUSED SIBLING, pinned shrink-only: router.py\'s '
+                    'MAILBOX sweep says "login rejected" for an IMAP [AUTHENTICATIONFAILED], which '
+                    'is a protocol answer with no page to misread.',
+        "homes": ('app/modules/commcalc/login_outcome.py',),
+        "index": ('COMMCALC-52',),
+        "locks": ('harness_login_outcome.py',),
+        # SNAPSHOT — written BY HAND (§50). All three portal drivers dereference it for the NAME and
+        # for the operator sentence; each still reads its own page its own way, because what the
+        # facts are read OFF differs per driver (a browser frame, an HTTP document, an error region)
+        # and only the decision is shared.
+        "callers": {
+            # the browser driver whose markup predicate caused the outage
+            'app/modules/commcalc/epay_sweep.py': ('_lo',),
+            # the browserless driver: same question, visible_from_html / form_in_html
+            'app/modules/commcalc/dlar_sweep.py': ('_lo',),
+            # the live login: names which of the two a still-on-the-form submit was
+            'app/modules/commcalc/vidapay_sweep.py': ('_lo',),
+        },
+    },
+    # ── §COMMCALC-53 — what day is it where this portal lives ────────────────────────────────────
+    'tenant_today': {
+        "question": 'A feed window, an "as of" stamp, a staleness age — WHAT DAY IS IT, for this '
+                    'tenant? Three portal drivers resolved it against the CONTAINER\'s clock '
+                    '(datetime.now(timezone.utc).date()), which is not any tenant\'s calendar. '
+                    'Measured 2026-10-31: the comprehensive comp report has never once arrived '
+                    'automatically since the leg was built — not one `epay auto-sweep` row in '
+                    'commcalc.upload_log, for any org. Its slot is 23:30 in the tenant\'s zone, '
+                    'deliberately, because the portal posts a day\'s compensation at about 23:30 '
+                    'local; 23:30 America/New_York is 03:30 UTC THE NEXT DAY, so on eight '
+                    'consecutive recorded runs the window asked for a day one ahead of the tenant\'s '
+                    'and the portal answered zero rows — read as "no compensation posted", for four '
+                    'months. The rule already had a home, written 2026-07-30 for a scheduled send, '
+                    'whose docstring states this exact defect ("resolving a relative date off the '
+                    'server\'s UTC day would put an 8pm-Eastern Friday run on Saturday\'s date"); '
+                    'nothing in commcalc read it. §19.18\'s shape for the fifth time. Each driver '
+                    'now BINDS that function (feed_today IS business_today — the same object, so the '
+                    'lock asserts identity and no second zoneinfo ladder can appear), and `tz` is '
+                    'keyword-only with NO default at every window-building entry point, because the '
+                    'defect was a caller that had never asked the org what day it was and still got '
+                    'an answer. The zone comes from the connector\'s own `*_sweep_config.timezone` '
+                    'row, a column that already exists NOT NULL on every sweep config table, so '
+                    'nothing had to be added to the schema. '
+                    'EXCUSED SIBLING, pinned shrink-only: feed_period.month_state defaults `today` '
+                    'to the container\'s day, excused because it is MONTH grain (the two clocks can '
+                    'disagree only either side of midnight on the 1st) and `today` is already '
+                    'injectable there, so a caller that cares passes the tenant\'s day.',
+        "homes": ('app/modules/notify/report_filters.py',),
+        "index": ('COMMCALC-53',),
+        "locks": ('harness_feed_window_tenant_day.py',),
+        # SNAPSHOT — written BY HAND (§50). Each driver binds the home's function object rather than
+        # calling through a wrapper, so the dereference is provable by identity, not by grep.
+        "callers": {
+            # ── the three portal drivers, which never asked it until 2026-10-31. Each imports the
+            # MODULE and binds its function object (`feed_today = _report_filters.business_today`),
+            # so the dereference is provable by identity rather than by grep.
+            # the window that cost the comp report every automatic run it ever made
+            'app/modules/commcalc/epay_sweep.py': ('_report_filters',),
+            # the invoice window and the PayGo cutoff
+            'app/modules/commcalc/vip_sweep.py': ('_report_filters',),
+            # the day an inventory snapshot is filed under
+            'app/modules/commcalc/b2b_sweep.py': ('_report_filters',),
+            # ── the notify side, which has read this home correctly since it was written
+            'app/modules/notify/attention.py': ('report_filters',),
+            'app/modules/notify/finance_reports.py': ('ReportConfigError',),
+            'app/modules/notify/report_registry.py': ('ReportConfigError', '_business_today',
+                                                      '_resolve_billing_friday', '_validate_filters'),
+            'app/modules/notify/workforce_reports.py': ('_business_today',),
         },
     },
     # ── §COMMCALC-38 — what a supplier billed us ─────────────────────────────────────────────────
@@ -2787,6 +2943,31 @@ FACTS: dict[str, dict] = {
             'app/modules/account/router.py': ('statement_filter',),
         },
     },
+    'relation_schema': {
+        "question": 'WHICH SCHEMA holds this relation — or did the reader that named the table just '
+                    'assume one, and read an empty table (or no table at all) instead?',
+        "homes": ('app/modules/core/relation_home.py',),
+        "index": ('CORE-30',),
+        "locks": ('harness_relation_home_lock.py',),
+        # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
+        "callers": {
+            # §CORE-30 — the Run Calculation's input gathering (`_calc_inputs.fetch`) and the rep
+            # self-scope (`_caller_rep_keys`). The first killed EVERY tenant's calculation for about
+            # eight weeks by asking `commcalc` for `employees`; the second asked `public` for
+            # `app_users`, and its failure path means "unrestricted", so no rep was scoped at all.
+            'app/modules/commcalc/router.py': ('_relation_home',),
+            # the sibling reader of `_calc_inputs.fetch`, which swallowed the identical failure
+            'app/modules/commcalc/payout_accrual.py': ('_relation_home',),
+            # the clock-in subject, which was resolving people against the stale `public.employees`
+            'app/modules/storeops/clockin_evidence.py': ('_relation_home',),
+            # §CORE-31.8 — the location-retention registry, which carried its own `"schema"` per
+            # entry and said `marketing` for a table that lives in `core`. Migration 1113 carried
+            # the same wrong word, so copy and migration agreed with each other and the owner's Run
+            # died on `3F000: schema "marketing" does not exist`. It now dereferences this home at
+            # import, for the sweep and both /core/location-fixes routes at once.
+            'app/modules/core/geo_retention.py': ('_rel',),
+        },
+    },
     'complete_feed_read': {
         "question": 'Have I read ALL of this feed — every row, each exactly once — or only the '
                     'first N rows somebody typed, in whatever order the backend felt like?',
@@ -2980,6 +3161,10 @@ FACTS: dict[str, dict] = {
             # The endpoint the register reads, the checkout's gate, and the receipt's money line.
             'app/modules/pos/router.py': ('_tender',),
             'app/modules/pos/sale_receipt.py': ('_tv',),
+            # §POS-19 (2026-10-31): the tender/total comparison asks this home whether a leg
+            # settles at the till. It had summed every leg, so a sale wholly on terms read as an
+            # over-tender — the two facts had never met. See index §POS-19.3.
+            'app/modules/pos/sale_settlement.py': ('_tender',),
         },
     },
     # ── §POS-16 (owner ask 2026-10-30) — a wholesale customer and their W-9 ─────────────────────
@@ -2989,7 +3174,7 @@ FACTS: dict[str, dict] = {
                     'WITH a current exemption certificate on file. Answering the two separately '
                     'produces exactly one failure and it is the expensive one: a sale goes out '
                     'tax-free against a certificate nobody holds and the house carries the '
-                    'liability. So `decide` answers both, no state exists where a sale is exempt '
+                    'liability. So `may_sell` answers both, no state exists where a sale is exempt '
                     'and the certificate is not current, and the sale RECORDS its basis '
                     '(`pos.sales.tax_exempt_basis`) because it cannot be re-derived later — the '
                     'certificate may be filed the next day. An admin override permits a TAXABLE '
@@ -3028,6 +3213,36 @@ FACTS: dict[str, dict] = {
             # W-9 return upload. Neither keeps a sniffer, a magic-byte table or a refusal of its own.
             'app/modules/hr/router.py': ('_upload_format',),
             'app/modules/pos/router.py': ('_upload_format',),
+        },
+    },
+    # ── §POS-19 (owner ask 2026-10-31) — what a customer still owes us, and how late ───────────
+    'pos_open_receivable': {
+        "question": 'WHAT DOES A CUSTOMER STILL OWE US ON A SALE, AND HOW LATE IS IT? The Terms '
+                    'tender (§POS-15) created the platform\'s first receivable, and the question '
+                    'is NOT the one `sale_settlement` answers: that home compares two recorded '
+                    'figures as of the SALE, takes no clock and must not (its lock fails the build '
+                    'on a `datetime` in it), while collection is a question about TODAY against a '
+                    'due date. A sale with no deferred leg is not a receivable of $0.00 — it is '
+                    'not a receivable, which matters because 4,603 of 4,605 live sales carry no '
+                    'payment row at all and a `balance > 0` filter would have admitted every '
+                    'part-tendered cash sale as a debt. Not yet due is owed and is not late, so it '
+                    'has its own state and its own total. An age that cannot be measured is '
+                    '`unknown`, never the newest band. The aging ladder is '
+                    '`manager_followup.AGE_BANDS` dereferenced, because a second spelling of what '
+                    '"61-90 days" means would drift — and these bands are a POLICY, not a '
+                    'tenant\'s own vocabulary. What this home REFUSES to do is infer a payment '
+                    'from a later over-tender: taking money against an open balance is not built '
+                    'yet, and that gap is carried in the payload (`COLLECTION_NOT_WIRED`) and said '
+                    'on the screen rather than guessed at, which would read every collected debt '
+                    'as money owed back to the customer.',
+        "homes": ('app/modules/pos/receivable.py',),
+        "index": ('POS-19',),
+        "locks": ('harness_pos_receivable.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
+        # import graph.
+        "callers": {
+            # The open-balances report endpoint. The screen holds no arithmetic of its own.
+            'app/modules/pos/router.py': ('_recv',),
         },
     },
     'human_check_on_sign_in': {
@@ -3157,7 +3372,21 @@ FACTS: dict[str, dict] = {
                     'the page or the row — it runs on the hot path), `activity` the one reader, and '
                     '`state`/`frame_since` DEREFERENCE it rather than composing their own, so the '
                     'line moves on an unchanged frame payload too. Frame age is None before the '
-                    'first frame, never a fabricated 0 that would read as "just updated".',
+                    'first frame, never a fabricated 0 that would read as "just updated". '
+                    'AND the eighth (2026-10-31): HAS THIS SESSION PASSED THE PORTAL SIGN-IN. '
+                    'Three things asked it and the browser got it wrong: `can_pull` and '
+                    '`can_calibrate` each carried the phase tuple inline, while the live window '
+                    'compared the phase to the single word "authenticated" and cancelled the '
+                    'session for anything else. Signing in immediately starts the post-login pull, '
+                    'whose phase is `pulling`, so the operator closing the window during it '
+                    'CANCELLED the session he had just made and the report capture then had nothing '
+                    'to read. `signed_in` over `_SIGNED_IN_PHASES` is the one answer, PUBLISHED in '
+                    '`state` so a surface dereferences it; an absent field reads as do-not-cancel, '
+                    'because a cancelled session cannot be recovered. It deliberately excludes '
+                    'thread liveness, which `can_pull`/`can_calibrate` add, so a momentary hiccup '
+                    'cannot read as "never signed in". The capture CONTROL moved into the live '
+                    'window too (it opens the one report editor over it), because the filters are '
+                    'read THROUGH that session and sending the operator elsewhere meant closing it.',
         "homes": ('app/modules/commcalc/live_login.py',),
         "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28', 'COMMCALC-30',
                   'COMMCALC-31'),

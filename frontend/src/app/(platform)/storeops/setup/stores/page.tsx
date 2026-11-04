@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
-import { sel, cell, STORE_EDIT_FIELDS, STORE_TZ_OPTS, isDirty, MarketField, StoreMultiSelect } from '../lib'
+import { sel, cell, STORE_EDIT_FIELDS, STORE_TZ_OPTS, isDirty, MarketField, StoreMultiSelect, StorePinField } from '../lib'
 import LeasePanel from './LeasePanel'
 import SalesTaxRateLink from '@/components/SalesTaxRateLink'
 
@@ -537,7 +537,7 @@ export default function StoreSetupPage() {
           <div className="table-wrapper">
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['Store code', 'Address', 'Market', 'Time zone', 'Monthly target', 'Daily closing', 'Active', ''].map(h =>
+                {['Store code', 'Address', 'Market', 'Time zone', 'Map pin', 'Monthly target', 'Daily closing', 'Active', ''].map(h =>
                   <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -555,6 +555,10 @@ export default function StoreSetupPage() {
                         {STORE_TZ_OPTS.map(t => <option key={t.v || 'default'} value={t.v}>{t.label}</option>)}
                       </select>
                     </td>
+                    {/* WHERE THE STORE IS (mig 1112). Its own audited save, not part of the row's
+                        PATCH — moving a pin changes who gets flagged for clocking out away from the
+                        store. Same component the combined Admin page uses; see StorePinField. */}
+                    <td style={cell}><StorePinField store={s} onSaved={pin => setStore(s.id, pin)} /></td>
                     <td style={cell}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                         <input style={{ ...sel, width: 120 }} type="number" title="Monthly sales/production target" value={s.monthly_target ?? ''} onChange={ev => setStore(s.id, { monthly_target: ev.target.value })} />

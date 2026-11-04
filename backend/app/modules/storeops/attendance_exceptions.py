@@ -20,6 +20,13 @@ Joins storeops.shifts (the SCHEDULE) against storeops.timelog (the PUNCHES) for 
   left_early         the employee DID show up and (fully) clocked out, but their last CLOSED clock-out
                       that day is more than `early_leave_grace_min` minutes before the shift's end. A
                       still-open punch is never judged left-early (they haven't left yet).
+  off_site_clock_in  the punch's clock-IN was judged OUTSIDE the store's geofence when it was made
+  off_site_clock_out the punch's clock-OUT was judged outside it — the owner's own case (2026-11-01,
+                      verbatim: *"so they are not clocking out at their homes"*). One row per END of
+                      the punch, because "arrived at the store and left from home" and "never came
+                      near the store" are different things to say to somebody. Read from the stored
+                      verdict only: a punch nobody could judge (no store pin, no fix, a fix too
+                      coarse to settle it) produces NO row, ever — see `core/store_geofence`.
 
 A shift that's fully covered, on time, and left on time contributes NOTHING to the output — this module
 returns ONLY the gaps, per the owner's framing ("surface the GAPS between the schedule and reality").
@@ -81,6 +88,12 @@ never a 500, never a hard "unavailable" gate on the report itself.
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+# THE verdict home (mig 1112). "Was this punch made at the store it is for?" was DECIDED and STORED
+# when the punch was made; this module only reads it back, through the same column table the writer
+# used. Nothing here knows what a radius is, and a board that re-judged a punch on read would
+# restate who was flagged last month every time somebody moved a store's pin.
+from app.modules.core import store_geofence as _sgeo
+
 DEFAULT_CONFIG = {
     "late_grace_min": 10,          # minutes after shift start before a clock-in counts as LATE
     "early_leave_grace_min": 10,   # minutes before shift end a clock-out counts as LEFT_EARLY
@@ -90,6 +103,13 @@ DEFAULT_CONFIG = {
 }
 
 _TIMEOFF_MODES = ("label", "suppress")
+
+# The off-site exception name for each punch end, declared ONCE so the board's filters, the engine
+# and the Send bar's summary all spell it the same way. Keyed by `store_geofence.KINDS`.
+OFF_SITE_EXCEPTION_TYPES = {
+    _sgeo.KIND_CLOCK_IN: "off_site_clock_in",
+    _sgeo.KIND_CLOCK_OUT: "off_site_clock_out",
+}
 
 
 def _parse_iso_utc(s):
@@ -371,4 +391,63 @@ def compute_attendance_exceptions(shifts, punches, time_off_rows, config, now_ut
             "excused": False, "excused_reason": None,
         })
 
+    # ── pass 3: every punch -> one row per END that was JUDGED off-site when it was made ─────────
+    #
+    # INDEPENDENT of pass 1 and pass 2 by design. A scheduled punch made from home is the owner's
+    # case; an unscheduled one made from home is worse; and a punch can be late AND off-site. If
+    # these rows were folded into another class, one blind spot would simply be traded for another.
+    #
+    # The verdict is READ, never recomputed: `punch_off_site_flags` is an allowlist over the stored
+    # decision, so a punch nobody could judge — and that is every punch until migration 1112 is
+    # applied and a store is pinned — contributes nothing at all.
+    for p in punches or []:
+        eid = str(p.get("employee_id") or "")
+        wd = str(p.get("work_date") or "")[:10]
+        p_ci = _parse_iso_utc(p.get("clock_in"))
+        if not eid or not wd or p_ci is None:
+            continue
+        flags = _sgeo.punch_off_site_flags(p)
+        if not flags:
+            continue
+        p_co = _parse_iso_utc(p.get("clock_out"))
+        stz = (store_tz or {}).get(p.get("store_code")) or tz
+        for flag in flags:
+            name = OFF_SITE_EXCEPTION_TYPES.get(flag["kind"])
+            if not name:
+                continue      # a kind this version has no board row for is skipped, never guessed at
+            out.append({
+                "exception_type": name,
+                "punch_kind": flag["kind"],
+                "punch_id": p.get("id"), "employee_id": eid,
+                "employee_name": p.get("employee_name"),
+                "store_code": p.get("store_code"), "work_date": wd,
+                "clock_in": p.get("clock_in"), "clock_out": p.get("clock_out"),
+                "clock_in_local": _fmt_local(p_ci, stz),
+                "clock_out_local": _fmt_local(p_co, stz),
+                "open": p.get("clock_out") is None,
+                "distance_m": flag["distance_m"],
+                "geo_decision": flag["decision"],
+                # The coordinates are NOT put on the row. A manager needs to know the punch was not
+                # at the store; broadcasting where an employee actually was, into an emailed board,
+                # is a different and much larger disclosure (index §23.5). The fix stays on the
+                # punch for whoever has the standing to open it.
+                "note": _off_site_note(flag),
+                "excused": False, "excused_reason": None,
+            })
+
     return out
+
+
+def _off_site_note(flag):
+    """The sentence on the row. A flag with no sentence is a number somebody has to interpret, and
+    the interpretation would be re-derived differently on every surface that showed it."""
+    distance = flag.get("distance_m")
+    where = "clocked out" if flag["kind"] == _sgeo.KIND_CLOCK_OUT else "clocked in"
+    if distance is None:
+        return ("The employee %s away from this store, and how far away was not recorded."
+                % (where,))
+    if distance >= 1000:
+        far = "%.1f km" % (distance / 1000.0)
+    else:
+        far = "%d m" % distance
+    return "The employee %s %s from this store's location." % (where, far)

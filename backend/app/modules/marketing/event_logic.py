@@ -712,12 +712,16 @@ def event_readiness(event, staff_rows, checklist_items, vendors=None, now=None,
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 def purge_after_date(now, retention_days):
     """The date a check-in's coordinates may be removed. Stamped onto every row at write time so the
-    retention commitment is visible in the row itself, not buried in a job somebody has to find."""
-    n = now or datetime.now(timezone.utc)
-    days = _int(retention_days, DEFAULT_CONFIG["checkin_geo_retention_days"])
-    if days < 1:
-        days = 1
-    return (n + timedelta(days=days)).date().isoformat()
+    retention commitment is visible in the row itself, not buried in a job somebody has to find.
+
+    DEREFERENCES `core.geo_retention.purge_after`, which is the platform's ONE date arithmetic for a
+    location fix's retention. It kept its own copy until 2026-11-01, when the punch geofence shipped
+    a second window and the security pass found that neither one deleted anything (index §CORE-31).
+    Two copies of this sum would be two windows free to drift; this module keeps the public name its
+    callers already use, and the arithmetic has one home."""
+    from app.modules.core import geo_retention as _ret
+    return _ret.purge_after(now=now, days=retention_days,
+                            default=DEFAULT_CONFIG["checkin_geo_retention_days"])
 
 
 def retention_summary(checkin_rows, now=None):

@@ -98,12 +98,13 @@ ok("A4. the router has the amend region", len(_amend_region) == 2)
 REGION = (_amend_region[1].split("# ── Register (cash drawer) sessions", 1)[0]
           if len(_amend_region) == 2 else "")
 # RE-VERIFIED THEN RE-PINNED, never relaxed (the §COMMCALC db-resilience lesson). Moved 12,000 →
-# 14,000 on 2026-10-30 when §POS-13 wired the tender mismatch into these same three routes. At the
-# re-pin the region was 12,736 characters — 5.5% of a 229,551-character router, still holding
-# EXACTLY the three @router decorators the locks below count, and still stopping before
-# /register/open. The bound is a tripwire for "this split stopped working", not a size budget.
+# 14,000 on 2026-10-30 when §POS-17 wired the tender mismatch into these same three routes, and
+# 14,000 → 16,000 on 2026-10-31 for §POS-12.9, the per-rung window. At THIS re-pin the region was
+# 14,671 characters — 6.3% of a 232,000-character router, still holding EXACTLY the three @router
+# decorators the locks below count, and still stopping before /register/open (both asserted on the
+# same line). The bound is a tripwire for "this split stopped working", not a size budget.
 ok("A4b. the region is bounded, not the rest of the file",
-   0 < len(REGION) < 14000 and "/register/open" not in REGION, len(REGION))
+   0 < len(REGION) < 16000 and "/register/open" not in REGION, len(REGION))
 ok("A5. the router calls the one home for the refusal", "_amend.refusal(" in REGION)
 ok("A6. the router calls the one home for the plan", "_amend.plan(" in REGION)
 # No second opinion: the router must not re-derive status, age or the window default itself.
@@ -112,6 +113,15 @@ ok("A7. the router does not re-judge 'voided' for itself",
    "the router names a sale status; the refusal sentence belongs to the one home")
 ok("A8. the router holds no window default of its own",
    not re.search(r"window_days\s*=\s*\d", REGION))
+# §POS-12.9: reconciling the two declared windows is the one home's job. A `max()` here would be a
+# second answer to "how far back may this caller reach", and the two would drift on the first change.
+ok("A8b. the router does not reconcile the two windows itself",
+   "max(" not in REGION and "HOUSE_" not in REGION,
+   "the rung's window comes from _amend.window_for, not from arithmetic at the caller")
+ok("A8c. the router names NO role, only a grant key",
+   not re.search(r"(?i)[\"']\s*(admin|administrator|sales[_ ]?rep|store[_ ]?manager|cashier|owner)"
+                 r"\s*[\"']", REGION),
+   "RULE TWO: 'admin' and 'store manager' are a tenant's words; the code knows a permission key")
 ok("A9. the refusal SENTENCE is written once — the client composes none",
    "reason ||" in LIB or "plan.reason" in PAGE,
    "the page shows the server's sentence verbatim")
@@ -242,14 +252,45 @@ ok("F5. the migration does not recompute any rate", "tax_rate" in MIG and "* tax
 # ── §G the window is declared; the grant is its own ──────────────────────────────────────────────
 print("\n§G  declared config, and a right of its own")
 
-ok("G1. the house default is one day", SA.HOUSE_WINDOW_DAYS == 1)
+# THE WINDOW IS A FUNCTION OF A RUNG, not of the org alone (§POS-12.9, owner 2026-10-31: "30 days
+# nback for the admin and same day for teh sales rep or store manager"). Both numbers are house
+# defaults overridden by their own declared setting, and the RUNG is a permission key.
+ok("G1. the ordinary house default is the same day only", SA.HOUSE_WINDOW_DAYS == 0)
+ok("G1b. the elevated house default is thirty days", SA.HOUSE_ELEVATED_WINDOW_DAYS == 30)
 ok("G2. an unreadable declaration falls back to the house default, never to 'forever'",
    SA.declared_window("nonsense") == SA.HOUSE_WINDOW_DAYS
-   and SA.declared_window(None) == SA.HOUSE_WINDOW_DAYS)
+   and SA.declared_window(None) == SA.HOUSE_WINDOW_DAYS
+   and SA.window_for(True, declared_elevated="nonsense") == SA.HOUSE_ELEVATED_WINDOW_DAYS)
 ok("G3. a declared window is honoured",
    SA.refusal(dict(SALE, created_at="2026-10-20T14:00:00Z"), now=NOW, window_days=30) is None)
-ok("G4. the setting key is named in the one home and read from it",
-   SA.WINDOW_SETTING == "sale_reopen_window_days" and "_amend.WINDOW_SETTING" in REGION)
+ok("G4. both setting keys are named in the one home and read from it",
+   SA.WINDOW_SETTING == "sale_reopen_window_days"
+   and SA.ELEVATED_WINDOW_SETTING == "sale_reopen_window_days_admin"
+   and "_amend.WINDOW_SETTING" in REGION and "_amend.ELEVATED_WINDOW_SETTING" in REGION)
+ok("G4b. the rung is named by a GRANT key, resolved by the platform's own precedence",
+   SA.ELEVATED_GRANT == "pos_amend_any_day"
+   and "_amend.ELEVATED_GRANT" in REGION and "_pos_grant(" in REGION)
+ok("G4c. the two rungs really answer differently on one sale",
+   SA.window_for(False) == 0 and SA.window_for(True) == 30)
+ok("G4d. an elevated caller is NEVER given a shorter reach than an ordinary one",
+   all(SA.window_for(True, declared=d, declared_elevated=e)
+       >= SA.window_for(False, declared=d)
+       for d in (None, 0, 1, 7, 45, 400, "nonsense", "")
+       for e in (None, 0, 1, 30, 90, "nonsense", "")),
+   "two independent declarations could otherwise leave an admin reaching less far than a cashier")
+ok("G4e. the refusal reads as English at a window of nothing but today",
+   "0 day" not in (SA.refusal(dict(SALE, created_at="2026-10-20T14:00:00Z"), now=NOW,
+                              window_days=0) or "")
+   and "same day" in (SA.refusal(dict(SALE, created_at="2026-10-20T14:00:00Z"), now=NOW,
+                                 window_days=0) or "").lower())
+ok("G4f. the way forward is named only when it EXISTS",
+   "administrator" in (SA.refusal(dict(SALE, created_at="2026-10-20T14:00:00Z"), now=NOW,
+                                  window_days=0, elevated_window_days=30) or "").lower()
+   and "administrator" not in (SA.refusal(dict(SALE, created_at="2025-01-02T14:00:00Z"), now=NOW,
+                                          window_days=0, elevated_window_days=30) or "").lower()
+   and "administrator" not in (SA.refusal(dict(SALE, created_at="2025-01-02T14:00:00Z"), now=NOW,
+                                          window_days=30, elevated_window_days=30) or "").lower(),
+   "a cashier sent to ask for something nobody can give is worse than a plain refusal")
 ok("G5. the migration seeds no per-tenant row (RULE TWO)",
    "insert into pos.pos_settings" not in MIG.lower())
 ok("G6. no carrier, tenant or product is named in the module",
@@ -315,8 +356,17 @@ ok("I2. control: the snapshot reports the STORED total even when the lines disag
    and SA.totals(ITEMS)["total"] != 999.99)
 ok("I3. control: keying a serialised line on its product would hide a swapped IMEI",
    len(SA.diff(ITEMS, [dict(PHONE, serial_number="999"), CASE])["added"]) == 1)
-ok("I4. control: an unreadable window really would widen it if it fell back to 0",
-   SA.declared_window("nonsense") != 0)
+# The house default IS 0 now, so "a fallback of 0 would widen it" no longer states the invariant.
+# What must hold is that NO unreadable declaration ever reaches further than the house number — the
+# house number is the floor, not "forever" — and that the elevated fallback cannot be reached by an
+# ordinary caller.
+ok("I4. control: an unreadable declaration never reaches past its house number",
+   all(SA.window_for(el, declared=bad, declared_elevated=bad)
+       == (SA.HOUSE_ELEVATED_WINDOW_DAYS if el else SA.HOUSE_WINDOW_DAYS)
+       for bad in ("nonsense", "", None, "30 days", [], {})
+       for el in (False, True))
+   and SA.window_for(False, declared_elevated=90) == SA.HOUSE_WINDOW_DAYS,
+   "an ordinary caller must not inherit the elevated declaration")
 ok("I5. control: the module is importable with no database and no app config",
    "get_supabase" not in MOD and "import os" not in MOD)
 ok("I6. control: the module takes no clock of its own",

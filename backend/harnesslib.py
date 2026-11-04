@@ -154,3 +154,142 @@ def coa_movement(base_src, now_src, sanctioned=()):
     moved = sorted(f for f in COA_ATTRIBUTION_FUNCS
                    if f not in sanctioned and f in base and f in now and base[f] != now[f])
     return removed, outside, moved
+
+
+# ── THE STRINGS OF A PYTHON SOURCE — ONE HOME, F-STRINGS INCLUDED (§CORE-32) ─────────────────────
+# WHY THIS IS HERE. Two readers of "the string expressions of a Python source" lived in
+# `harness_carrier_vocab_guard.py`, 500 lines apart. **PEP 701 (Python 3.12) stopped making an
+# f-string one `tokenize.STRING` token** — it is `FSTRING_START` / `FSTRING_MIDDLE` / `FSTRING_END`
+# with the interpolations tokenised between them. One of those two readers had been taught the new
+# shape; the other had not, so on 3.12+ it saw NO f-string at all, and silently dropped the
+# interpolated half of the commonest shape a setup hint takes:
+#
+#     raise HTTPException(500, "could not save (is migration "
+#                              f"{MIG} applied?): {e}")
+#
+# CI pins 3.11, so the suite stayed green: a guard over customer-facing copy was one interpreter
+# upgrade away from reading past every f-string in the codebase and reporting nothing. One fact, one
+# home, dereferenced — and the same fact had already been FIXED in one of the two copies, which is
+# the house's own §19.18 defect in its most expensive direction.
+#
+# VERSION-INDEPENDENT BY CONTRACT: an f-string yields ONE text on every supported interpreter, its
+# interpolations reduced to `{}` (`py_string_parts`) or to the `placeholder` (`py_string_expressions`).
+# A caller never branches on the Python version, and `tests/unit/test_py_string_expressions.py`
+# proves the reader on whichever interpreter runs the suite.
+
+_LOG_CALL = re.compile(r"\bprint\s*\(|\blog(?:ger)?\.(?:info|warning|warn|error|debug|exception)\s*\(")
+_BRACE_OR_PERCENT = re.compile(r"\{[^{}]*\}|%[sdr]")
+
+
+def strip_interpolations(text: str) -> str:
+    """`'{a} vs {f((b or {}))}'` → `'{} vs {}'` — brace-depth aware, so a nested expression is
+    dropped whole and a variable NAME can never be mistaken for copy a customer is shown."""
+    out, depth = [], 0
+    for ch in text:
+        if ch == "{":
+            if depth == 0:
+                out.append("{")
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                out.append("}")
+        elif depth == 0:
+            out.append(ch)
+    return "".join(out)
+
+
+def _string_runs(src):
+    """[[(line, text), …], …] — one inner list per STRING EXPRESSION, its implicitly concatenated
+    parts in order. Docstrings and the strings of `print()` / logger calls are left out: operator
+    output is not copy anybody is shown. An f-string is ONE part with `{}` where its interpolations
+    were, on every interpreter. Source that does not parse yields nothing rather than raising, so a
+    guard can never be taken down by the file it is reading."""
+    import io
+    import tokenize
+    try:
+        toks = [t for t in tokenize.generate_tokens(io.StringIO(src).readline)
+                if t.type not in (tokenize.COMMENT, tokenize.NL)]
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        return []
+    lines = src.split("\n")
+    FS_START = getattr(tokenize, "FSTRING_START", None)
+    FS_MID = getattr(tokenize, "FSTRING_MIDDLE", None)
+    FS_END = getattr(tokenize, "FSTRING_END", None)
+
+    runs, run, prev_sig = [], [], None
+    fs = None          # the f-string being assembled under PEP 701: {"line", "parts", "depth"}
+
+    def flush():
+        if run:
+            runs.append(list(run))
+        run.clear()
+
+    for t in toks:
+        # ── PEP 701 (3.12+): an f-string arrives as START … MIDDLE/code … END ──
+        if fs is not None:
+            if FS_MID is not None and t.type == FS_MID:
+                # Literal text only. Inside an interpolation (`depth` > 0) a MIDDLE token is the
+                # FORMAT SPEC — `03d` of `{n:03d}` — which is code the reader must not read as copy.
+                if not fs["depth"]:
+                    fs["parts"].append(t.string)
+                continue
+            if t.type == tokenize.OP and t.string == "{":
+                fs["depth"] += 1
+                if fs["depth"] == 1:
+                    fs["parts"].append("{}")
+                continue
+            if t.type == tokenize.OP and t.string == "}" and fs["depth"]:
+                fs["depth"] -= 1
+                continue
+            if FS_END is not None and t.type == FS_END and not fs["depth"]:
+                text = "".join(fs["parts"])
+                if not fs["skip"]:
+                    run.append((fs["line"], text))
+                fs = None
+                prev_sig = t
+                continue
+            continue        # the interpolated EXPRESSION is code, not copy
+        if FS_START is not None and t.type == FS_START:
+            ln = lines[t.start[0] - 1] if t.start[0] - 1 < len(lines) else ""
+            fs = {"line": t.start[0], "parts": [], "depth": 0, "skip": bool(_LOG_CALL.search(ln))}
+            if fs["skip"]:
+                flush()
+            continue
+        if t.type == tokenize.STRING:
+            body = t.string.lstrip("rRbBuUfF")
+            triple = body[:3] in ('"""', "'''")
+            docstring = prev_sig is None and not run and triple
+            text = body[3:-3] if triple else body[1:-1]
+            if "f" in t.string[:2].lower():          # pre-3.12: the whole f-string is one STRING
+                text = strip_interpolations(text)
+            ln = lines[t.start[0] - 1] if t.start[0] - 1 < len(lines) else ""
+            if docstring or _LOG_CALL.search(ln):
+                flush()
+                prev_sig = t
+                continue
+            run.append((t.start[0], text))
+            prev_sig = t
+            continue
+        flush()
+        prev_sig = None if t.type in (tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT) else t
+    flush()
+    return runs
+
+
+def py_string_parts(src):
+    """[(line, text)] per string LITERAL of a Python source — the parts, unjoined. An f-string is one
+    part carrying `{}` where each interpolation was. Docstrings and log lines are left out."""
+    return [(ln, text) for run in _string_runs(src) for ln, text in run]
+
+
+def py_string_expressions(src, placeholder="000"):
+    """[(line, text)] per string EXPRESSION of a Python source: implicitly concatenated parts JOINED
+    (the text a client actually receives), each `{…}` and `%s` read as `placeholder` — because the
+    value interpolated after the word "migration" is a migration id or file name, and a guard that
+    reads only the half before it sees nothing to object to. The line is where the expression starts."""
+    out = []
+    for run in _string_runs(src):
+        text = "".join(t for _ln, t in run)
+        out.append((run[0][0], _BRACE_OR_PERCENT.sub(placeholder, text)))
+    return out

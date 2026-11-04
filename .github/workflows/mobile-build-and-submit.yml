@@ -1,0 +1,213 @@
+name: mobile build and submit to TestFlight
+
+# THE APP'S BINARY REACHES A PHONE BY ITSELF — the sibling of the over-the-air workflow (index
+# §CORE-26.8, measured 2026-10-31).
+#
+# WHY THIS EXISTS. `mobile-ota-update.yml` carries JAVASCRIPT to phones that already have a
+# compatible app. On 2026-10-31 it was proved that the owner's installed build is NOT compatible: EAS
+# records it as Expo SDK 57.0.0 while this repository declares SDK 52 / React Native 0.76.5. Expo
+# served the update, the app downloaded it, and `expo-updates` discarded it on launch and fell back
+# to the bundle built into the binary — in silence, by design. Six weeks of a merged, correct fix
+# never reached a phone, and no amount of publishing would have changed that (index §CORE-26.7,
+# §CORE-29).
+#
+# A new BUILD is the only thing that fixes it, and the owner has no Mac and no terminal. So the build
+# gets a button, in a browser, for the same reason publishing did.
+#
+# THIS ONE IS NEVER AUTOMATIC. Publishing JavaScript is reversible — publish again. A submission to
+# TestFlight is not: it goes to Apple, it notifies testers, and it cannot be recalled. So there is no
+# `push:` trigger here and there never should be. The press of the button IS the authorisation, and
+# that is why the inputs name the consequence rather than hiding it behind a default.
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Which app to build"
+        type: choice
+        options: [ios, android]
+        default: ios
+      profile:
+        description: "Build profile from mobile/eas.json (production goes to the store; preview is internal)"
+        type: choice
+        options: [production, preview]
+        default: production
+      submit:
+        description: "After building, send it to TestFlight / Play internal testing (CANNOT be recalled)"
+        type: boolean
+        default: true
+      issue:
+        description: "Issue or PR number to post the result to (optional — the job summary always has it)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+# A second build of the same app at the same time wastes a paid build minute and confuses which
+# binary is newest, so queue them rather than cancelling.
+concurrency:
+  group: mobile-build-${{ inputs.platform }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build the app and (optionally) send it to testers
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      # Read the token ONCE so the job can say plainly why it stopped, instead of dying inside the
+      # CLI with an auth error nobody can act on. A build needs MORE than the publish token does:
+      # a read-only or publish-only token authenticates and then fails at the build step.
+      - name: Is this repository allowed to build?
+        id: gate
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "${EXPO_TOKEN}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Nothing was built"
+              echo
+              echo "No \`EXPO_TOKEN\` secret is set on this repository."
+              echo
+              echo "To switch this on (all in a browser, no terminal):"
+              echo "1. <https://expo.dev> → your account → **Settings → Access tokens** → **Create token**."
+              echo "   It needs permission to **start builds**, not only to publish updates."
+              echo "2. This repository → **Settings → Secrets and variables → Actions** →"
+              echo "   **New repository secret**, named \`EXPO_TOKEN\`, paste it, **Add secret**."
+              echo "3. Come back to **Actions → mobile build and submit to TestFlight** → **Run workflow**."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v5
+        if: steps.gate.outputs.ready == 'true'
+        with: { node-version: "20", cache: npm, cache-dependency-path: mobile/package-lock.json }
+
+      # REQUIRED. `mobile/app.config.ts` is TypeScript and the loader that transpiles it comes from
+      # the project's own dependencies, so every EAS command fails with
+      # `Error reading Expo config … Unexpected token '{'` without this. That absence is what the
+      # first run of the diagnose workflow actually found (index §CORE-26.7).
+      - name: install the project
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: mobile
+        run: npm ci
+
+      # A binary that reaches TestFlight is reviewed by Apple but not by us, and it cannot be
+      # recalled. This is the last gate before it leaves.
+      - name: the app's own tests, before anything is built
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: mobile
+        run: npm run test
+
+      - name: install the EAS CLI
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          npm install -g eas-cli@latest
+          eas --version
+
+      # What the binary will be, recorded BEFORE it is built, because the mismatch that caused all
+      # of this was only ever visible by comparing these two numbers. If they disagree with the
+      # installed build, that is the point: the new one is built from what the repository says.
+      - name: what this build will be
+        id: facts
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          SDK="$(node -p "require('./package.json').dependencies.expo" 2>/dev/null || echo '?')"
+          RN="$(node -p "require('./package.json').dependencies['react-native']" 2>/dev/null || echo '?')"
+          RESOLVED="$(node -p "require('./node_modules/expo/package.json').version" 2>/dev/null || echo '?')"
+          {
+            echo "### Building"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Platform | \`${{ inputs.platform }}\` |"
+            echo "| Profile | \`${{ inputs.profile }}\` |"
+            echo "| Expo declared / resolved | \`$SDK\` / \`$RESOLVED\` |"
+            echo "| React Native | \`$RN\` |"
+            echo "| From commit | \`${GITHUB_SHA::7}\` |"
+            echo "| Will be submitted | \`${{ inputs.submit }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: build it
+        id: build
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -o pipefail
+          # --wait so this job's success genuinely means a finished binary, not a queued one.
+          eas build \
+            --platform "${{ inputs.platform }}" \
+            --profile "${{ inputs.profile }}" \
+            --non-interactive --wait \
+            --message "${GITHUB_SHA::7} built from GitHub" 2>&1 | tee /tmp/build.log
+
+      - name: send it to testers
+        id: submit
+        if: steps.gate.outputs.ready == 'true' && inputs.submit
+        working-directory: mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -o pipefail
+          # --latest submits the build this job just finished. Apple's processing then takes a few
+          # minutes before TestFlight offers it.
+          eas submit \
+            --platform "${{ inputs.platform }}" \
+            --profile "${{ inputs.profile }}" \
+            --latest --non-interactive 2>&1 | tee /tmp/submit.log
+
+      # Always runs, so a FAILED build says why somewhere readable. GitHub's job logs are not
+      # reachable from the cloud container that drives this repository (the Azure blob host is not in
+      # its network allowlist), which is why the result is mirrored to the summary and, when asked,
+      # posted as a comment.
+      - name: say what happened
+        if: always() && steps.gate.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ inputs.issue }}
+        run: |
+          report=/tmp/report.md
+          {
+            echo "## Build result"
+            echo
+            echo "Platform \`${{ inputs.platform }}\`, profile \`${{ inputs.profile }}\`, commit \`${GITHUB_SHA::7}\`."
+            echo
+            echo "- build step: \`${{ steps.build.outcome }}\`"
+            echo "- submit step: \`${{ steps.submit.outcome }}\`"
+            echo
+            echo '```'
+            tail -n 40 /tmp/build.log 2>/dev/null || echo "(no build output — the build step did not run)"
+            echo '```'
+          } > "$report"
+          if [ -s /tmp/submit.log ]; then
+            { echo; echo "### Submission"; echo '```'; tail -n 25 /tmp/submit.log; echo '```'; } >> "$report"
+          fi
+          if [ "${{ steps.build.outcome }}" = "success" ] && [ "${{ inputs.submit }}" = "true" ]; then
+            {
+              echo
+              echo "On the phone: open **TestFlight**, and the new build appears once Apple has"
+              echo "processed it (usually a few minutes). Install it. Over-the-air updates then"
+              echo "apply to THIS build from now on."
+            } >> "$report"
+          fi
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$ISSUE" ]; then
+            gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$report" || \
+              echo "could not comment on #$ISSUE; the summary above has the result"
+          fi

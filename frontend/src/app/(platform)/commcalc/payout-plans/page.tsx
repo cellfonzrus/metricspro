@@ -24,10 +24,14 @@ type Overview = {
   carriers: CarrierRow[]
 }
 
+// WHERE CLICKING A CARD LANDS (owner directive 2026-11-01). It used to land on the full plan-settings
+// page — "all kinds of Incentive structure listed which becomes confusing even to me". It now lands on
+// the guided workflow (/commcalc/incentive-plan): the active plan, then the option to change it. The
+// settings page is still one click away from there, as "advanced".
 const PAYS: Record<string, { label: string; tone: string; href: string; cta: string }> = {
-  boost_rates:      { label: 'Boost KPI‑tier rates (built‑in engine)', tone: 'var(--accent)',  href: '/commcalc/settings',         cta: 'Edit Boost Rates' },
-  commission_plans: { label: 'Configurable Incentive Plans',          tone: '#16a34a',         href: '/commcalc/commission-plans', cta: 'Edit Plans' },
-  unconfigured:     { label: 'Not configured yet',                     tone: '#dc2626',         href: '/commcalc/commission-plans', cta: 'Set up a plan' },
+  boost_rates:      { label: 'Boost KPI‑tier rates (built‑in engine)', tone: 'var(--accent)',  href: '/commcalc/incentive-plan', cta: 'See the active plan' },
+  commission_plans: { label: 'Configurable Incentive Plans',          tone: '#16a34a',         href: '/commcalc/incentive-plan', cta: 'See the active plan' },
+  unconfigured:     { label: 'Not configured yet',                     tone: '#dc2626',         href: '/commcalc/incentive-plan', cta: 'Set up a plan' },
 }
 
 type Diag = {
@@ -90,7 +94,8 @@ export default function PayoutPlansHub() {
 
       {/* configuration surfaces */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
-        <Link href="/commcalc/commission-plans" className="btn btn-sm">🧮 Incentive Plans</Link>
+        <Link href="/commcalc/incentive-plan" className="btn btn-sm">🧭 Your Incentive Plan</Link>
+        <Link href="/commcalc/commission-plans" className="btn btn-sm">🧮 All Plan Settings</Link>
         <Link href="/commcalc/payout-schedules" className="btn btn-sm">📆 Payout Schedules</Link>
         {activeCarrier === 'boost' && <Link href="/commcalc/settings" className="btn btn-sm">⚙️ Boost Rates</Link>}
         <Link href="/commcalc/carrier-mapping" className="btn btn-sm">📡 Carrier Mapping</Link>

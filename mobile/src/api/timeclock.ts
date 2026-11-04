@@ -38,7 +38,17 @@ export type ClockInBody = {
   client_request_id?: string
 }
 
-export type ClockOutBody = { entry_id?: string; override?: boolean; client_request_id?: string }
+// The clock-out carries a fix too (mig 1112). It did not until 2026-11-01, which is why "clocking
+// out at their homes" was the one punch the platform could not see. Optional, always — a declined
+// permission or a basement must never cost a rep the end of their shift.
+export type ClockOutBody = {
+  entry_id?: string
+  override?: boolean
+  client_request_id?: string
+  gps_lat?: number
+  gps_lng?: number
+  gps_accuracy_m?: number
+}
 
 // The clock-in response is a discriminated union: success, or a "needs X" prompt the UI must resolve.
 export type ClockInResult =
