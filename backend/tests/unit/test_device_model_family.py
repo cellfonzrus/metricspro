@@ -143,3 +143,33 @@ def test_rule_two_no_colour_or_brand_word_is_a_value_in_the_module():
               if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs]
     for word in ("blk", "black", "midnight", "pink", "iphone", "samsung", "apple", "cpo"):
         assert not any(word == v or word in v.split() for v in values), word
+
+
+def test_a_generation_is_not_a_variant_of_the_one_before_it():
+    """OWNER, 2026-11-04, verbatim: *"Cpo handset is its own but iPhone 13 will remain iPhone 13 it
+    cannot become iPhone 14 -"*.
+
+    The Pro case is pinned above; this is the stronger statement and the one he made. Nothing this
+    module drops — a capacity, a declared colour, a declared condition marker — may take a model's
+    own NUMBER with it, because an iPhone 13 case does not fit an iPhone 14 and an order built on a
+    merged row would be wrong for both. Control-tested: a capacity rule greedy enough to eat a bare
+    number folds these four rows into two, and this test goes red."""
+    from app.modules.pos import device_condition as dc
+    tokens, _basis, markers = dc.resolve_feed_tokens(["CPO"])
+    colours = ("black", "midnight", "pink")
+    rows = {"Apple iPhone 13 128GB Pink CPO TO": {"Sep": 20},
+            "Apple iPhone 14 128GB Pink CPO TO": {"Sep": 19},
+            "Apple iPhone 13 256GB Midnight TO": {"Sep": 7},
+            "Apple iPhone 14 1TB Black TO": {"Sep": 3}}
+    units, variants, _fams = dmf.group_units(rows, colour_tokens=colours, condition_tokens=tokens,
+                                             condition_markers=markers)
+    assert len(units) == 4, units
+    assert all(len(v) == 1 for v in variants.values())
+    assert sum(sum(d.values()) for d in units.values()) == 49
+
+    # And the negative half, so the test above cannot pass by refusing to group at all.
+    same_gen = dmf.group_units({"Apple iPhone 13 128GB Pink CPO TO": {"Sep": 1},
+                                "Apple iPhone 13 256GB Black CPO TO": {"Sep": 1}},
+                               colour_tokens=colours, condition_tokens=tokens,
+                               condition_markers=markers)[0]
+    assert len(same_gen) == 1
