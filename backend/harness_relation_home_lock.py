@@ -121,6 +121,13 @@ def migration_bodies():
     return out
 
 
+# The schemas `database/migrations/` CREATEs. DECLARED, not counted: §G below compares the derived
+# set against this one, so a schema that appears is added here deliberately and a schema that
+# disappears names itself instead of hiding inside a number that still looks big enough.
+MIGRATION_CREATED_SCHEMAS = frozenset({
+    "assets", "commcalc", "core", "notify", "pos", "storeops",
+})
+
 # Schemas a migration may name without creating one: Postgres' own, Supabase's own, and the
 # extension schemas. Anything else must be CREATEd by a migration in this repo, or it does not exist
 # on the day the owner presses Run.
@@ -333,8 +340,10 @@ def run(tree, truth, migs):
     for body in migs.values():
         created |= {m.lower() for m in re.findall(
             r"create\s+schema\s+(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_]*)", body, re.I)}
-    check("G0 the migrations create the schemas this platform is built from", len(created) >= 5,
-          sorted(created))
+    check("G0 the migrations create exactly the schemas this platform is built from — DECLARED, so "
+          "a new one is added here by a human and a lost one names itself",
+          created == MIGRATION_CREATED_SCHEMAS,
+          {"derived": sorted(created), "declared": sorted(MIGRATION_CREATED_SCHEMAS)})
     allowed = created | PLATFORM_SCHEMAS | RECORD_ALIASES
     unknown = {}
     for schema, table, name, line in migration_relation_refs(migs):
