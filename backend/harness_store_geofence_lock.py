@@ -241,6 +241,79 @@ def check_postures():
        f"{GEOFENCE_HOME} is still single-shot: one position, one place, one verdict")
 
 
+# ── 8. the pin is REACHABLE, and defined once ───────────────────────────────────────────────────
+#
+# THE 2026-11-04 DEFECT. `StorePinField` was defined inside
+# `storeops/admin/page.tsx` — the BACKWARD-COMPAT combined page, which `rbac.ts` declares
+# `tileOnly` WITHOUT a tile of its own, so nothing in the sidebar or on the Store Setup tile leads
+# to it. Everything worked and nobody could reach it: the owner had 51 active stores, none pinned,
+# and asked how to pin one. An unpinned store judges no punch, so the whole geofence feature sat
+# idle behind a page with no door.
+#
+# The class: A FEATURE IS NOT SHIPPED UNTIL IT IS REACHABLE FROM THE SURFACE THAT OWNS THE JOB.
+# Store Setup is the page with the tile and the job ("manage stores"), so the pin lives in the
+# library both pages import and is RENDERED there. This check fails the build if the component
+# gains a second definition, or stops being rendered by Store Setup.
+_FRONT = os.path.join(os.path.dirname(_HERE), "frontend", "src")
+PIN_COMPONENT = "StorePinField"
+# The page that OWNS managing stores, and the one row with a sidebar tile.
+PIN_OWNING_PAGE = "app/(platform)/storeops/setup/stores/page.tsx"
+# Its library — the one home for what Store Setup and the combined Admin page share.
+PIN_HOME = "app/(platform)/storeops/setup/lib.tsx"
+
+
+def _front(rel):
+    try:
+        with open(os.path.join(_FRONT, rel), "r", encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def check_pin_reachable():
+    print()
+    print("8. the map pin has ONE definition and the page that owns stores renders it")
+
+    home = _front(PIN_HOME)
+    ok(f"export function {PIN_COMPONENT}" in home,
+       f"{PIN_HOME} does not EXPORT {PIN_COMPONENT} — the pin's one home is the library both the "
+       f"Store Setup page and the combined Admin page import",
+       f"{PIN_COMPONENT} is exported from {PIN_HOME}")
+
+    # Exactly one definition anywhere under frontend/src. A second one is the copy that let the
+    # reachable page and the unreachable page drift apart in the first place.
+    defs = []
+    for root, _dirs, names in os.walk(_FRONT):
+        for name in names:
+            if not name.endswith((".tsx", ".ts")):
+                continue
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, _FRONT).replace(os.sep, "/")
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    src = fh.read()
+            except OSError:
+                continue
+            if re.search(r"^\s*(export\s+)?(function|const)\s+" + PIN_COMPONENT + r"\b", src, re.M):
+                defs.append(rel)
+    ok(defs == [PIN_HOME],
+       f"{PIN_COMPONENT} is defined in {defs or 'NO file'} — it must be defined once, in "
+       f"{PIN_HOME}, and imported everywhere else",
+       f"{PIN_COMPONENT} is defined exactly once ({PIN_HOME})")
+
+    page = _front(PIN_OWNING_PAGE)
+    ok(f"<{PIN_COMPONENT}" in page,
+       f"{PIN_OWNING_PAGE} does not RENDER {PIN_COMPONENT} — Store Setup is the page with the "
+       f"sidebar tile, so a pin it cannot set is a pin nobody can set (the 2026-11-04 defect: 51 "
+       f"active stores, none pinned, the field only on a page with no door)",
+       f"Store Setup renders {PIN_COMPONENT}")
+    ok("Map pin" in page,
+       f"{PIN_OWNING_PAGE} has no 'Map pin' column heading — the control must be findable by "
+       f"reading the table, not only by knowing it is there",
+       "Store Setup labels the column 'Map pin'")
+
+
+
 def main():
     print("=" * 78)
     print("LOCK: one geofence decision, one store pin, one column home")
@@ -250,6 +323,7 @@ def main():
     check_column_names()
     check_store_pin()
     check_postures()
+    check_pin_reachable()
     print()
     print("=" * 78)
     print(f"RESULT: {PASS} passed, {FAIL} failed")
