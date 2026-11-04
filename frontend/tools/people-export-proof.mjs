@@ -27,17 +27,11 @@
 //      the one buildPayload() that delegates to the proven module.
 //
 // Run:  node frontend/tools/people-export-proof.mjs      (from the repo root, or anywhere)
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { FRONTEND, transpileForProof } from './_proof-transpile.mjs'
 
-const FRONTEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const SRC = path.join(FRONTEND, 'src')
-const OUT = mkdtempSync(path.join(FRONTEND, '.proof-'))
-const CFG = path.join(FRONTEND, `tsconfig${path.basename(OUT)}.json`)
-const cleanup = () => { rmSync(OUT, { recursive: true, force: true }); rmSync(CFG, { force: true }) }
-process.on('exit', cleanup)
 
 let pass = 0, fail = 0
 const ok = (name, cond, detail = '') => {
@@ -46,17 +40,16 @@ const ok = (name, cond, detail = '') => {
 }
 const section = t => console.log(`\n${t}`)
 
-// ── transpile the pure module + the shared export renderer ──────────────────────────────────────
-writeFileSync(CFG, JSON.stringify({
-  extends: './tsconfig.json',
-  compilerOptions: { noEmit: false, incremental: false, outDir: path.basename(OUT), module: 'es2020', target: 'es2020', declaration: false },
-  files: ['src/app/(platform)/storeops/lib/scheduleExport.ts', 'src/lib/export.tsx'],
-  include: [],
-}, null, 2))
-execFileSync('npx', ['tsc', '-p', CFG], { cwd: FRONTEND, stdio: ['ignore', 'ignore', 'inherit'] })
+// ── transpile the pure module + the shared export renderer, through the ONE home ────────────────
+// (tools/_proof-transpile.mjs — see its header for why this proof was red: `tsc` leaves `@/…` in
+// the JS it emits, and `src/lib/export.tsx` gained three such imports after this proof was written.)
+const T = transpileForProof([
+  'src/app/(platform)/storeops/lib/scheduleExport.ts',
+  'src/lib/export.tsx',
+])
 
-const SE = await import(path.join(OUT, 'app', '(platform)', 'storeops', 'lib', 'scheduleExport.js'))
-const EX = await import(path.join(OUT, 'lib', 'export.js'))
+const SE = await import(T.moduleUrl('src/app/(platform)/storeops/lib/scheduleExport.ts'))
+const EX = await import(T.moduleUrl('src/lib/export.tsx'))
 const { buildScheduleExport } = SE
 
 // ── fixture: 2 markets, 3 stores, 4 employees, a full work week ─────────────────────────────────
