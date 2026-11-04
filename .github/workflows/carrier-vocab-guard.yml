@@ -1678,6 +1678,9 @@ jobs:
       - name: Run carrier vocabulary guard (+ the POS vocabulary axis, index §26.10, + the setup-internals axis, §19.36, + the infra-names axis, §19.39)
         working-directory: backend
         run: python3 harness_carrier_vocab_guard.py | tee "$GITHUB_STEP_SUMMARY"
+      - name: Run the Python string-reader lock (a guard that reads source code is told f-strings exist — PEP 701 made an f-string stop being one STRING token, so on 3.12+ the setup-internals guard had stopped seeing them; one home, proved on whichever interpreter runs it, and the blind-reader list may only shrink — found 2026-11-04, index §CORE-32)
+        working-directory: backend
+        run: python3 harness_py_string_reader_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the finance-expenses lock (one home for "expenses"; hub, drill-down, P&L and narrative dereference it)
         working-directory: backend
         run: python3 harness_account_expenses_one_home.py | tee -a "$GITHUB_STEP_SUMMARY"

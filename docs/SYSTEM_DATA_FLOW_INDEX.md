@@ -199,6 +199,7 @@ Primary code homes:
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
 | STOREOPS-04 | **A punch says where it was made, and an off-site one reaches the board management already reads** | "the sales reps when they log in should capture the gos location so they are not clocking out at their homes and the geolocation when they clock out from somewhere else than their usual location which should match the store address should be reported as flag to the management" — the clock-IN had captured a fix since mig 045 and the clock-OUT captured nothing at all, the platform's one geofence decision had never judged a punch, and no store had coordinates to judge one against. Who owns "was this person at the store this record is for", for the clock-in, the clock-out and the DM store visit alike — and what stops "we could not tell" from being read as "they were not there"?
 | STOREOPS-05 | **The phone shows the week the TENANT declared, and whose shifts it shows is the server's answer** | "Make scheduling and hr with store vista and closing live in the app also" — the rota, time off and cover requests existed only on the web, and the phone had no schedule at all. The gates were already right (`gate_person_rows`, §14w) and the week start was already declared per tenant; what was missing was a surface. Who decides which seven days a week IS on a phone, and what stops a client-side filter from being mistaken for a permission? |
+| CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
 | CORE-31 | **A retention window that deletes nothing is a promise, not a policy** | Found by the security pass §STOREOPS-04 required before going live: that feature shipped a 180-day GPS retention setting and nothing deleted anything — and event check-in GPS had carried the SAME hole since mig 986, declared `unmonitored` on the control box. Who owns "how long may we keep where somebody was", for every relation that stores it, and what stops a purge from taking the flag away with the coordinates? |
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
@@ -26343,6 +26344,7 @@ status word rather than a blank that reads as nil.
 | CORE-29 | core |
 | CORE-30 | core |
 | CORE-31 | core |
+| CORE-32 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -44243,3 +44245,60 @@ Files: `mobile/app/(app)/hr/index.tsx` (**new**), `mobile/src/lib/hr-intake.ts` 
 `mobile/src/api/client.ts` (`apiUpload`), `mobile/src/modules/registry.ts`,
 `docs/SYSTEM_DATA_FLOW_INDEX.md`.
 
+## §CORE-32. A GUARD THAT READS SOURCE CODE MUST BE TOLD F-STRINGS EXIST — one home for "the strings of a Python source" (found 2026-11-04)
+
+Found while clearing a red harness the owner asked about: `harness_carrier_vocab_guard.py` — the
+guard that stops our own setup internals ("is migration 1093 applied?") reaching a customer — was
+**RED on Python 3.13 and GREEN on 3.11**, which is CI's pinned version. The cause had nothing to do
+with its subject.
+
+**PEP 701 (Python 3.12) stopped making an f-string one `tokenize.STRING` token.** It is
+`FSTRING_START` / `FSTRING_MIDDLE` / `FSTRING_END` with the interpolations tokenised between them. The
+guard walked `STRING` tokens, so from 3.12 it saw no f-string at all — and lost the interpolated half
+of the commonest shape a hint takes, leaving a text no detector objects to:
+
+```python
+raise HTTPException(500, "could not save (is migration "
+                         f"{MIG} applied?): {e}")      # read as  "could not save (is migration "
+```
+
+### THE CLASS, not the instance — three facts, none of them about f-strings
+
+1. **The same file held TWO readers of "the strings of a Python source", 500 lines apart**
+   (`_py_string_literals` for the POS copy axis, `_py_joined_literals` for the setup-internals axis),
+   and PEP 701 had been taught to **one** of them. §19.18 in its most expensive direction: a fact
+   fixed in one copy and not the other is the same defect wearing a hat.
+2. **The failure surfaced as a NEGATIVE CONTROL** (`N10`, which plants a split hint and requires
+   GREEN). The tempting repair is to delete the control — which would leave the guard silently blind
+   instead of noisily broken. A control going red is evidence about the mechanism, never a nuisance.
+3. **CI pins one interpreter**, so a capability that depends on the interpreter was only ever proved
+   on the version nobody upgrades first. Such a capability must be proved on whatever Python is
+   running, and say which one it proved.
+
+### The one home
+**`backend/harnesslib.py`** (a library, outside the `harness_*.py` glob so the runner does not count
+it as a proof): `strip_interpolations`, `_string_runs` (the single tokenizer walk),
+**`py_string_parts`** (per literal) and **`py_string_expressions`** (per string EXPRESSION, implicit
+concatenation joined, every `{…}` / `%s` read as `000`). **Version-independent by contract:** an
+f-string yields ONE text on every supported interpreter, so no caller branches on the Python version.
+Both of `harness_carrier_vocab_guard`'s readers now delegate, and its `_strip_braces` is an alias of
+the shared rule rather than a second copy.
+
+### Locked
+- **`backend/harness_py_string_reader_lock.py`** (23 checks, 5 negative controls, green on 3.11,
+  3.12 and 3.13; CI job `No cross-side carrier vocabulary in page copy`): §A proves the home
+  behaviourally on whatever interpreter runs it and prints the version; §B the fixed guard
+  dereferences it and keeps no private walk; §C the **ratchet**.
+- **`backend/py_string_reader_pending.txt`** — the 34 harnesses that still walk `tokenize.STRING`
+  themselves. The list may only SHRINK, compared BOTH WAYS (§CORE-10): a blind file that is unlisted
+  fails, and a listed file that has been fixed must leave the list. **Measured 2026-11-04: each of
+  the 34 was run on 3.12 and 3.13 and none changes verdict today**, which is why this is a ratchet and
+  not a 34-file rewrite — but the dangerous direction is quiet, not red, so new ones are refused.
+- **`backend/tests/unit/test_py_string_expressions.py`** (14 unit tests, in CI's `backend-unit`
+  job) — the home proved on whichever interpreter the suite runs, written RED first.
+- `harness_carrier_vocab_guard`'s own `N10a/b/c`: a hint written only as an f-string must go RED, and
+  the reader must demonstrably see and join f-strings, with the interpreter named in the output.
+
+**Cross-refs:** §19.36 (the setup-internals boundary this guard protects) · §19.18 (one fact, one
+home, dereferenced) · §CORE-10 (a derived set is compared both ways) · §19.25 (a proof nothing runs
+is not a gate — this is its sibling: a proof that runs but cannot see).
