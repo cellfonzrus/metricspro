@@ -35,6 +35,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from app.modules.core import relation_home as _rel
 from app.modules.core import store_geofence as _sgeo
 
 # The floor every tenant's window is clamped up to. A zero or negative "days" is a typo, and a typo
@@ -67,9 +68,13 @@ def _verdict_columns(kind):
 # Every relation in the platform that stores where a person was. A relation absent from here is a
 # relation nothing purges, so the lock fails the build on one.
 #
-#   relation        schema-qualified, as the index names it
 #   table           the PostgREST table name the backend reaches it by
-#   schema          the PostgREST schema header
+#
+# `schema` and `relation` are NOT written here. Which schema a relation lives in is a fact with a
+# home of its own — `relation_home.schema_of` (§CORE-30), derived from `database/migrations/` — and
+# this registry DEREFERENCES it per entry below. It was copied here until 2026-11-04 and the copy
+# said `marketing` for a table that lives in `core`, which is also what migration 1113 said; the
+# owner's run died on `3F000: schema "marketing" does not exist`. One fact, one home.
 #   captures        the capture kinds this relation stores, in `store_geofence.KINDS` order
 #   stamp           the column carrying this row's purge-after date
 #   policy_table    the relation holding the tenant's declared window
@@ -77,8 +82,6 @@ def _verdict_columns(kind):
 #   migration       the migration that adds the stamp column (for the honest degrade message)
 LOCATION_RELATIONS = (
     {
-        "relation": "storeops.timelog",
-        "schema": "storeops",
         "table": "timelog",
         "captures": (_sgeo.KIND_CLOCK_IN, _sgeo.KIND_CLOCK_OUT),
         "stamp": PUNCH_STAMP_COLUMN,
@@ -88,8 +91,6 @@ LOCATION_RELATIONS = (
         "what": "where a shift was started and ended",
     },
     {
-        "relation": "storeops.store_visits",
-        "schema": "storeops",
         "table": "store_visits",
         "captures": (_sgeo.KIND_STORE_VISIT,),
         "stamp": PUNCH_STAMP_COLUMN,
@@ -101,8 +102,6 @@ LOCATION_RELATIONS = (
     {
         # Reuses the storevisit capture contract verbatim (mig 027 → mig 986, index §23.5), which is
         # why its fix columns come from the SAME entry of the one home.
-        "relation": "marketing.marketing_event_checkin",
-        "schema": "marketing",
         "table": "marketing_event_checkin",
         "captures": (_sgeo.KIND_STORE_VISIT,),
         "stamp": CHECKIN_STAMP_COLUMN,
@@ -112,6 +111,18 @@ LOCATION_RELATIONS = (
         "what": "where a rep was when they checked in to an event",
     },
 )
+
+def _with_schema(entry):
+    """One registry entry, with `schema` and `relation` READ from the one home for that fact.
+
+    `schema_of` RAISES on a relation no migration creates, so a typo here cannot become a silent
+    read of a schema that does not exist — it stops the import, loudly, in CI.
+    """
+    schema = _rel.schema_of(entry["table"])
+    return {**entry, "schema": schema, "relation": f"{schema}.{entry['table']}"}
+
+
+LOCATION_RELATIONS = tuple(_with_schema(e) for e in LOCATION_RELATIONS)
 
 RELATIONS_BY_NAME = {r["relation"]: r for r in LOCATION_RELATIONS}
 

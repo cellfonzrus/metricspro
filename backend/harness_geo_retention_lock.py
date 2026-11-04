@@ -28,6 +28,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.modules.core import geo_retention as R          # noqa: E402
+from app.modules.core import relation_home as _relhome    # noqa: E402
 from app.modules.core import store_geofence as _sgeo     # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app")
@@ -120,11 +121,11 @@ print("\nC. every relation that stores a location fix is in the registry")
 # The relations are discovered from the writers: a `.table("X")` call in the same statement region as
 # a coordinate column name means X stores a fix. Pinned by name so a NEW one must be added here
 # deliberately, with its registry entry, rather than slipping in unnoticed.
-KNOWN_LOCATION_TABLES = {
-    "timelog": "storeops.timelog",
-    "store_visits": "storeops.store_visits",
-    "marketing_event_checkin": "marketing.marketing_event_checkin",
-}
+# The SCHEMA of each is NOT written here either: it is read from `relation_home` (§CORE-30), the one
+# home for that fact. A lock carrying its own copy would have agreed with the wrong copy it was
+# meant to catch — which is exactly what happened on 2026-11-04, when both this registry and
+# migration 1113 said `marketing` for a table that lives in `core`.
+KNOWN_LOCATION_TABLES = ("timelog", "store_visits", "marketing_event_checkin")
 # A table that holds coordinates but is deliberately NOT swept, with the reviewed reason.
 SWEEP_EXCUSED = {
     "marketing_event": "an EVENT VENUE pin (geo_lat/geo_lng on the event itself) — a place, not a "
@@ -132,13 +133,14 @@ SWEEP_EXCUSED = {
                        "harness_store_geofence_lock.py's PIN_READ_EXCUSED draws)",
     "stores": "a STORE's map pin — a place, not a person (mig 1112, §STOREOPS-04)",
 }
-for table, relation in sorted(KNOWN_LOCATION_TABLES.items()):
+for table in sorted(KNOWN_LOCATION_TABLES):
+    relation = f"{_relhome.schema_of(table)}.{table}"
     check(f"C1[{table}]. registered in LOCATION_RELATIONS as {relation}",
           relation in R.RELATIONS_BY_NAME,
           "a relation absent from the registry purges nothing, and nobody notices")
 
 check("C2. the registry holds nothing BUT those relations",
-      {e["relation"] for e in R.LOCATION_RELATIONS} == set(KNOWN_LOCATION_TABLES.values()),
+      {e["relation"] for e in R.LOCATION_RELATIONS} == {f"{_relhome.schema_of(t)}.{t}" for t in KNOWN_LOCATION_TABLES},
       f"registry = {sorted(e['relation'] for e in R.LOCATION_RELATIONS)}; if a relation was added "
       "on purpose, add it to KNOWN_LOCATION_TABLES here in the same PR")
 
@@ -194,6 +196,27 @@ check("G2. it pages by KEYSET on id, not by a plain limit that re-reads cleared 
 check("G3. it REPORTS an unfinished backlog rather than looking finished", "more_due" in _sweep)
 check("G4. it reports a failure instead of raising into a scheduler",
       'report["ok"] = False' in _sweep)
+
+# ── 7. which schema a relation lives in is READ, never copied ────────────────────────────────────
+print("\nH. the registry dereferences the schema of a relation instead of keeping a copy")
+# THE 2026-11-04 DEFECT, and the class behind it. The registry carried `"schema": "marketing"` for
+# `marketing_event_checkin`, which lives in `core` (mig 986). Migration 1113 carried the same wrong
+# word, so the owner's run died on `3F000: schema "marketing" does not exist` and rolled back. The
+# fact had a home — `relation_home.schema_of`, derived from the migrations — and this registry had a
+# copy of it. A copy of a fact is a future divergence; this is the check that stops it coming back.
+_registry = _home_code[_home_code.index("LOCATION_RELATIONS = ("):_home_code.index("RELATIONS_BY_NAME")]
+check('H1. no entry writes a `"schema":` of its own', '"schema": "' not in _registry,
+      "a schema literal here is a second copy of relation_home.SCHEMA_OF, free to drift from it")
+check('H2. no entry writes a schema-qualified `"relation":` of its own',
+      not re.search(r'"relation": "[a-z_]+\.', _registry),
+      "the qualified name is the schema wearing a different hat")
+check("H3. the registry DEREFERENCES the one home", "relation_home" in _home_code
+      and "schema_of" in _home_code, "the fact is read, not restated")
+for entry in R.LOCATION_RELATIONS:
+    truth = _relhome.schema_of(entry["table"])
+    check(f"H4[{entry['table']}]. its schema is the one the migrations create ({truth})",
+          entry["schema"] == truth and entry["relation"] == f"{truth}.{entry['table']}",
+          f"registry says {entry['schema']}, migrations say {truth}")
 
 print("\n" + "=" * 94)
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")

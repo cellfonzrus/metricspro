@@ -2960,6 +2960,12 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/payout_accrual.py': ('_relation_home',),
             # the clock-in subject, which was resolving people against the stale `public.employees`
             'app/modules/storeops/clockin_evidence.py': ('_relation_home',),
+            # §CORE-31.8 — the location-retention registry, which carried its own `"schema"` per
+            # entry and said `marketing` for a table that lives in `core`. Migration 1113 carried
+            # the same wrong word, so copy and migration agreed with each other and the owner's Run
+            # died on `3F000: schema "marketing" does not exist`. It now dereferences this home at
+            # import, for the sweep and both /core/location-fixes routes at once.
+            'app/modules/core/geo_retention.py': ('_rel',),
         },
     },
     'complete_feed_read': {
