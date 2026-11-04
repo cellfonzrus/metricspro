@@ -100,17 +100,25 @@ let failed = 0
 
 for (const proof of proofs) {
   let ok = true
+  // KEEP the proof's own output. 2026-11-04: three proofs failed in CI and passed on every machine
+  // that could be tried, and this runner's advice was "run it directly" — which is exactly what CI
+  // cannot do. A runner that swallows the evidence turns one diagnosis into one commit per guess.
+  let detail = ''
   try {
-    execFileSync(process.execPath, [join(HERE, proof)], { stdio: 'pipe', cwd: dirname(HERE) })
-  } catch {
+    detail = String(execFileSync(process.execPath, [join(HERE, proof)],
+      { stdio: ['ignore', 'pipe', 'pipe'], cwd: dirname(HERE) }))
+  } catch (e) {
     ok = false
+    detail = String(e.stdout || '') + String(e.stderr || '')
   }
   const known = pending.has(proof)
   if (ok && !known) console.log(`PASS  ${proof}`)
   else if (!ok && known) console.log(`RED   ${proof}  (known, listed in proof_red_pending.txt)`)
   else if (!ok && !known) {
     console.error(`FAIL  ${proof}  — this proof is not on the pending list and must pass.`)
-    console.error('      Run it directly for the detail:  node frontend/tools/' + proof)
+    console.error('      Reproduce with:  node frontend/tools/' + proof)
+    const tail = detail.split('\n').filter(l => l.trim()).slice(-25)
+    for (const l of tail) console.error('      | ' + l)
     failed++
   } else {
     console.error(`FAIL  ${proof}  — listed as RED but it PASSES now.`)

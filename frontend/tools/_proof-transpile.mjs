@@ -184,7 +184,21 @@ export function transpileForProof(entries, { label = 'proof', moduleKind = 'es20
       files: entries,
       include: [],
     }, null, 2))
-    execFileSync('npx', ['tsc', '-p', cfg], { cwd: FRONTEND, stdio: ['ignore', 'ignore', 'inherit'] })
+    // THE LOCAL BINARY, not `npx`. 2026-11-04: `npx tsc` will reach the registry when it decides the
+    // package is not local, which makes a proof depend on the network, and it was the one difference
+    // between three proofs passing here and failing in CI. The binary npm installed is the compiler
+    // this repo pins, so call it.
+    const localTsc = path.join(FRONTEND, 'node_modules/.bin/tsc')
+    const bin = existsSync(localTsc) ? localTsc : 'npx'
+    const argv = bin === 'npx' ? ['tsc', '-p', cfg] : ['-p', cfg]
+    try {
+      // tsc prints its DIAGNOSTICS ON STDOUT, so discarding stdout here discarded the error message
+      // and left "it failed" as the whole report. Captured, and printed only when it failed.
+      execFileSync(bin, argv, { cwd: FRONTEND, stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (e) {
+      const out = String(e.stdout || '') + String(e.stderr || '')
+      throw new Error(`tsc failed for ${label} (${bin}):\n${out.split('\n').slice(0, 40).join('\n')}`)
+    }
 
     for (const rel of emittedFiles(outDir)) {
       const full = path.join(outDir, rel)
