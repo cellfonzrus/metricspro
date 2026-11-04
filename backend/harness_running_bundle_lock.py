@@ -58,6 +58,12 @@ PINNED_RUNTIME_POLICY = "appVersion"
 # minutes later, on Expo's machines, with an error that looks like a dependency problem.
 PINNED_IOS_DEPLOYMENT_TARGET = "15.1"
 
+# The App Store Connect app a production build is submitted to, DECLARED rather than merely required
+# to look plausible. A bare "it is some digits" check would pass a different app's id, and submitting
+# this binary to the wrong record is not a mistake a size check should let through. Supplied by the
+# owner 2026-11-04. Not a secret: it is the app's public App Store Connect identifier.
+PINNED_ASC_APP_ID = "94734403"
+
 failures: list[str] = []
 checks = 0
 
@@ -275,11 +281,12 @@ except Exception as exc:  # a malformed eas.json is itself a build failure
     eas = {}
     check("R6.17 eas.json parses", False, f"{exc}")
 asc = str(((eas.get("submit") or {}).get("production") or {}).get("ios", {}).get("ascAppId") or "")
-check("R6.17 the iOS submit profile names the App Store Connect app",
-      asc.isdigit() and len(asc) >= 8,
-      "submit.production.ios.ascAppId must be the app's App Store Connect id, or a non-interactive "
-      f"`eas submit` cannot run; found {asc!r}")
-control("R6.17", str({}.get("ascAppId") or "").isdigit())
+check("R6.17 the iOS submit profile names the App Store Connect app we mean",
+      asc == PINNED_ASC_APP_ID,
+      f"submit.production.ios.ascAppId is {asc!r} but this harness declares {PINNED_ASC_APP_ID!r}. "
+      "Without it a non-interactive `eas submit` cannot run; with the WRONG one the binary goes to "
+      "another app's record. If the app record really changed, move the declaration and say why.")
+control("R6.17", str({}.get("ascAppId") or "") == PINNED_ASC_APP_ID)
 
 
 if failures:

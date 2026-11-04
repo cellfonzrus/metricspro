@@ -43629,6 +43629,13 @@ Mac never writes the iOS id and a non-interactive one cannot proceed without it.
 `submit.production.ios.ascAppId` (the app's public App Store Connect identifier, not a secret) and
 pinned by R6.17, so the build button submits unattended rather than building and stopping.
 
+R6.17 **declares** the id rather than checking that it looks like one. The first version asserted
+`asc.isdigit() and len(asc) >= 8`, and `harness_subject_set_lock.py` (§CORE-10) failed the build for
+it — correctly: a bare lower bound on a value derived from the repo passes a DIFFERENT app's id, and
+submitting a binary to the wrong App Store Connect record is not a mistake a size check should let
+through. The sibling guard caught a weak assertion in a new lock within minutes of it being written,
+which is the §CORE-10 mechanism working exactly as intended.
+
 **Delete the plugin, the `expo-build-properties` entry and these pins together with the SDK upgrade.**
 They exist only because this app is pinned to an Expo whose own Podfile template predates the fix.
 
