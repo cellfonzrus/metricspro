@@ -7187,7 +7187,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 - `storeops.payroll_hours_basis_config.clocked_basis_effective_from` (mig `1076`, date, **NULLABLE**) — the date on and after which this org's `hours_basis_mode` applies (owner ruling 2026-10-12: *"Payroll from clack in should be from Oct 4 th onwards which would be the new cycle"*). A business date STRICTLY BEFORE it resolves exactly as `schedule_fallback` would — with the whole clocked-only switch restored to the house default, `pay_from_schedule_default` and the per-employee tick box included — so recomputing a closed month restates nothing. **NULL = NO FLOOR**, the shipped value for every org, so nothing moves on apply. Read in ONE place, `payroll_hours_basis.effective_from` / `day_is_before_floor` / `config_for_day`; **no date literal exists in application code** and `harness_payroll_hours_basis_lock.py` §H6 fails the build if one appears (§14y.1).
 - `storeops.payroll_hours_basis_config` (mig `1073`, org_id PK) — the per-org knobs for BOTH §14y and §14z: one row, one feature. `hours_basis_mode` (`schedule_fallback` = today / `clocked_only`), `pay_from_schedule_default`, `count_auto_clockout_punches`, `count_open_punches`, `count_manual_hours`, `min_punch_coverage_pct`, `interlock_refuses`, the four `*_enabled` switches, `ask_weekday`/`gate_weekday`/`run_weekday` (0 = Monday, the convention `shift_templates.weekday` already uses), `variance_tolerance_hours`, `clock_source_rule` + `clock_agreement_tolerance_hours` + `clock_feed_is_pay_source` (the owner's 2026-10-10 ruling), and the feed's shape arrays `payable_punch_types` / `non_shift_logins` / `gated_roles` / `gate_exempt_logins` — the only tenant-specific strings in the package, and they are ROWS (RULE TWO). Read in ONE place per half: `payroll_hours_basis.load_config` / `clock_variance.load_config`, over the SAME table.
 - `storeops.timelog.geo_purge_after_date` / `storeops.store_visits.geo_purge_after_date` (mig `1113`) — the GPS retention COMMITMENT, stamped at write time from the tenant's own `punch_geo_retention_days` so the promise lives on the row rather than in a job somebody has to find. NULL means the row predates the stamp: REPORTED as `no_retention_stamp` and never purged on a guess. The sweep clears the COORDINATES and keeps the verdict and the distance, so honouring the promise never changes a flag, a report or an export. One home `core/geo_retention.py`, locked by `harness_geo_retention_lock.py` (§CORE-31).
-- `marketing.marketing_event_checkin.purge_after_date` (mig `986`, swept from `1113`) — the SAME commitment under its own older column spelling, kept because the column is already in production data. It carried the identical hole (declared `unmonitored` on the control box, "no purge job runs") until the §CORE-31 sweep covered it; it is one registry entry, not a second mechanism (§23.5, §CORE-31).
+- `core.marketing_event_checkin.purge_after_date` (mig `986`, swept from `1113`) — the SAME commitment under its own older column spelling, kept because the column is already in production data. It carried the identical hole (declared `unmonitored` on the control box, "no purge job runs") until the §CORE-31 sweep covered it; it is one registry entry, not a second mechanism (§23.5, §CORE-31).
 - `storeops.raw_clock_punch` (mig `1073`) — the B2B clock in / clock out report **as a CLAIM about a store-day**. Written only by `POST /commcalc/upload-mapped` (`upload_type` `clock_punch`) / the email sweep, through `_ingest_mapped_df` → `storeops/clock_feed.landing_rows`. Keeps the raw store and employee spellings, the LOCAL stamps **and** their UTC conversion, the file's own declared decimal, and `excluded` naming why a row is not a payable punch. **NEVER writes `storeops.timelog` or `shifts.actual_hours`.** Unique on (org, store_raw, employee_raw, business_date, clock_in_local), so a re-pull restates a day instead of duplicating it. Data-date column `business_date`, freshness column `arrived_at` (§14z).
 - `storeops.clock_variance_correction` (mig `1073`) — what a HUMAN decided about one clock variance, so "all clear" is an assertion by a named person and not an absence of rows. `resolution` ∈ `corrected` / `accepted_ours` / `accepted_feed`, plus the DM's per-row `override_hours` / `override_reason` / `override_by` / `override_at`, which OUT-RANK the org's `clock_source_rule`. A CHECK constraint refuses an override without a reason and a name, so no endpoint or hand-written UPDATE can land a bare number on a pay row (§14z).
 - `storeops.clock_feed_login_link` (mig `1073`) — which B2B login is which employee. **Only `status = 'approved'` binds** (`storeops/payroll_identity.match_is_binding`); a name-token match is a `proposed` row for a human to approve and NEVER an attribution, and a `rejected` row is a human saying "not this person", which is never re-proposed (§14z).
@@ -43931,6 +43931,48 @@ tri-state as §STOREOPS-04's verdict probe and omits the stamp when it is absent
 stored, and the row simply carries no commitment yet. The sweep answers
 `{"ok": false, "error": "… is migration 1113 applied?"}` rather than 500ing a scheduler, and one
 relation failing never stops the others (`test_C2`).
+
+### CORE-31.8 THE SCHEMA WAS A COPY, AND THE COPY WAS WRONG (owner report 2026-11-04)
+
+The owner pressed Run on migration `1113` and got
+`ERROR: 3F000: schema "marketing" does not exist`, with the whole migration rolled back (the SQL
+Editor runs each Run in one transaction, so nothing applied — not even the two `ALTER TABLE`s that
+preceded the bad line).
+
+**The instance:** two lines of `1113` — the sweep's partial index and the grant — qualified
+`marketing_event_checkin` with a `marketing` schema. `marketing` is a backend MODULE
+(`app/modules/marketing/`); the table has lived in **`core`** since mig `986`. No migration in this
+repo creates a `marketing` schema, and none ever did.
+
+**The class:** *which schema a relation lives in* is a fact with a home — `relation_home.schema_of`
+(§CORE-30), derived from `database/migrations/`. The retention registry kept its **own copy** of it
+(`"schema": "marketing"` per entry), which is the divergence §19.18 keeps re-learning. The copy and
+the migration agreed with each other and disagreed with the database, so every test passed.
+
+**The fix, for the mechanism:**
+
+- `geo_retention.LOCATION_RELATIONS` entries no longer carry `schema` or `relation` at all. Each
+  declares its `table`; `_with_schema` DEREFERENCES `relation_home.schema_of` at import and fills
+  both. `schema_of` raises on an unknown relation, so a typo stops the import instead of reading a
+  schema that is not there. Both `/core/location-fixes/*` routes and the nightly sweep are fed from
+  that one derivation, so no caller re-states it.
+- `harness_geo_retention_lock.py` §H (4 checks): no entry may write a `"schema":` or a qualified
+  `"relation":` literal, the registry must dereference the one home, and each entry's schema must
+  equal the migrations' answer. `KNOWN_LOCATION_TABLES` in the lock itself was a second copy of the
+  same fact and is now table names only — a lock holding the wrong copy would have agreed with the
+  defect it exists to catch.
+- **`harness_relation_home_lock.py` §G is the check that generalises** — and the one that was
+  missing. `migration_relation_refs` reads every schema-qualified relation the SQL actually names
+  (comments and string literals blanked, trigger pseudo-records `OLD`/`NEW`/`EXCLUDED` excused) and
+  fails the build unless some migration `CREATE SCHEMA`s that schema, or it is a Postgres/Supabase
+  platform schema. §CORE-30 was derived from `create table` alone, so a wrong schema in an index, a
+  grant, a comment or a `FROM` was invisible to CI. Planted control N8 is the 2026-11-04 line
+  verbatim.
+
+Regression: `tests/unit/test_geo_retention.py` §H (`test_H1`–`test_H3`). The lesson that
+generalises: **CI never presses Run.** A migration is the one artefact here that no test executes,
+so a fact it states about the database must be checked against the only authority in the repo —
+the other migrations.
 
 ## §STOREOPS-05. THE PHONE SHOWS THE WEEK THE TENANT DECLARED, AND WHOSE SHIFTS IT SHOWS IS THE SERVER'S ANSWER (owner ask 2026-11-01)
 
