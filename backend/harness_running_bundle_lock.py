@@ -60,9 +60,14 @@ PINNED_IOS_DEPLOYMENT_TARGET = "15.1"
 
 # The App Store Connect app a production build is submitted to, DECLARED rather than merely required
 # to look plausible. A bare "it is some digits" check would pass a different app's id, and submitting
-# this binary to the wrong record is not a mistake a size check should let through. Supplied by the
-# owner 2026-11-04. Not a secret: it is the app's public App Store Connect identifier.
-PINNED_ASC_APP_ID = "94734403"
+# this binary to the wrong record is not a mistake a size check should let through — which is exactly
+# what happened: the first value here, 94734403, was a different number from the same App Store
+# Connect page and Apple refused the submission with "App Store Connect app for application
+# identifier 94734403 was not found". Its error then NAMED the right one, against the right bundle:
+#   Example applications visible to this API key:
+#   - Metricspro (com.metricspro.app) (ID: 6804841051)
+# Not a secret: it is the app's public App Store Connect identifier.
+PINNED_ASC_APP_ID = "6804841051"
 
 failures: list[str] = []
 checks = 0
