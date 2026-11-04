@@ -14,24 +14,22 @@
 // proof cannot pass against a list this file made up.
 //
 // Run:  node frontend/tools/rep-surface-nav-proof.mjs
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import os from 'node:os'
+// 2026-11-04 (index §CORE-34): compiled through `tools/_proof-transpile.mjs`, THE one home for
+// "compile app TypeScript so a proof can import it". It extends the real tsconfig, so the `@/`
+// path alias is the app's alias rather than a flag list this file would have to keep in step; a
+// hand-rolled `tsc` call here is what left three sibling proofs red, each unable to START.
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { transpileForProof } from './_proof-transpile.mjs'
 
 const FRONTEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const OUT = mkdtempSync(path.join(os.tmpdir(), 'repsurf-'))
-writeFileSync(path.join(OUT, 'package.json'), '{"type":"module"}')
-process.on('exit', () => rmSync(OUT, { recursive: true, force: true }))
 let pass = 0, fail = 0
 const ok = (name, cond, why = '') => {
   if (cond) { pass++; console.log(`  PASS  ${name}`) } else { fail++; console.log(`  FAIL  ${name}${why ? ' — ' + why : ''}`) }
 }
-execFileSync(path.join(FRONTEND, 'node_modules/.bin/tsc'), [
-  path.join(FRONTEND, 'src/lib/rbac.ts'), '--outDir', OUT, '--target', 'es2020',
-  '--module', 'es2020', '--moduleResolution', 'node', '--skipLibCheck'], { stdio: 'inherit' })
-const R = await import(pathToFileURL(path.join(OUT, 'rbac.js')).href)
+const T = transpileForProof(['src/lib/rbac.ts'], { label: 'repsurf' })
+const R = await import(T.moduleUrl('src/lib/rbac.ts'))
 
 // ── THE declaration, read from the backend source ────────────────────────────────────────────────
 const SRC = readFileSync(path.join(FRONTEND, '../backend/app/core/rep_surface.py'), 'utf8')

@@ -10,7 +10,7 @@ second copy of a fact the workflows already hold, and it drifts.
 Why it exists: on 2026-10-28 a Claude session reported to the owner that this repo had
 “no frontend CI at all”. `npm run typecheck` and `npm run lint:gate` had been running on
 every frontend change for weeks — inside `carrier-vocab-guard.yml`, whose name says
-neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§CORE-34)
+neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§CORE-35)
 
 ## Workflows, and when they run
 
@@ -26,13 +26,13 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `mobile-ota-diagnose.yml` | 1 | `workflow_dispatch` |
 | `mobile-ota-update.yml` | 1 | `push`, `workflow_dispatch` |
 | `module-graph-guard.yml` | 2 | `pull_request`, `push`, `workflow_dispatch` |
-| `org-scope-guard.yml` | 17 | `pull_request`, `push`, `workflow_dispatch` |
+| `org-scope-guard.yml` | 18 | `pull_request`, `push`, `workflow_dispatch` |
 | `security.yml` | 14 | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `tests.yml` | 13 | `pull_request`, `push`, `workflow_dispatch` |
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 597 gates
+## Gated — 600 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -500,6 +500,8 @@ the Runs on column is how you can tell.
 | `harness_relation_home_lock.py` | `org-scope-guard.yml` | One post-landing hook, one calculation trigger (`auto-calc-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_remediation_ai_async.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_rep_incentive_range.py` | `carrier-vocab-guard.yml` | Customer master proof (DB-free, the real functions) (`customer-master-proof`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_rep_surface.py` | `org-scope-guard.yml` | The employee's reach (`employee-reach`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_rep_surface_lock.py` | `org-scope-guard.yml` | The employee's reach (`employee-reach`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_report_declaration.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_report_drilldown.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_report_kind_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
@@ -640,6 +642,7 @@ the Runs on column is how you can tell.
 | `npm:test` | `tests.yml` | Mobile unit tests (`mobile-tests`) | `pull_request`, `push`, `workflow_dispatch` |
 | `npm:test:proofs` | `tests.yml` | Frontend proofs (shrink-only register) (`frontend-proofs`) | `pull_request`, `push`, `workflow_dispatch` |
 | `npm:typecheck` | `carrier-vocab-guard.yml` | Frontend type check (tsc --noEmit over the whole frontend) (`frontend-typecheck`) | `pull_request`, `push`, `workflow_dispatch` |
+| `pytest` | `org-scope-guard.yml` | The employee's reach (`employee-reach`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest:integration` | `tests.yml` | Backend integration tests (`backend-integration`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest:unit` | `tests.yml` | Backend unit tests (`backend-unit`) | `pull_request`, `push`, `workflow_dispatch` |
 
