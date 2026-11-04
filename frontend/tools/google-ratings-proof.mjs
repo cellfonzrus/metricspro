@@ -13,17 +13,11 @@
 //      no commission page imports mod-people's own GoogleReviewsCard.
 //
 // Run:  node frontend/tools/google-ratings-proof.mjs
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { FRONTEND, transpileForProof } from './_proof-transpile.mjs'
 
-const FRONTEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const SRC = path.join(FRONTEND, 'src')
-const OUT = mkdtempSync(path.join(FRONTEND, '.grproof-'))
-const CFG = path.join(FRONTEND, `tsconfig${path.basename(OUT)}.json`)
-const cleanup = () => { rmSync(OUT, { recursive: true, force: true }); rmSync(CFG, { force: true }) }
-process.on('exit', cleanup)
 
 let pass = 0, fail = 0
 const ok = (name, cond, detail = '') => {
@@ -33,14 +27,12 @@ const ok = (name, cond, detail = '') => {
 const section = t => console.log(`\n${t}`)
 const read = p => readFileSync(path.join(SRC, p), 'utf8')
 
-writeFileSync(CFG, JSON.stringify({
-  extends: './tsconfig.json',
-  compilerOptions: { noEmit: false, incremental: false, outDir: path.basename(OUT), module: 'es2020', target: 'es2020', declaration: false },
-  files: ['src/app/(platform)/commcalc/_lib/commissionExport.ts'],
-  include: [],
-}, null, 2))
-execFileSync('npx', ['tsc', '-p', CFG], { cwd: FRONTEND, stdio: ['ignore', 'ignore', 'inherit'] })
-const { buildCommissionExport } = await import(path.join(OUT, 'app', '(platform)', 'commcalc', '_lib', 'commissionExport.js'))
+// Transpiled through the ONE home (tools/_proof-transpile.mjs): `tsc` leaves `@/…` aliases and
+// extensionless relative imports in the JS it emits, so the emitted module is not runnable as-is.
+const T = transpileForProof(['src/app/(platform)/commcalc/_lib/commissionExport.ts'],
+                            { label: 'grproof' })
+const { buildCommissionExport } = await import(
+  T.moduleUrl('src/app/(platform)/commcalc/_lib/commissionExport.ts'))
 
 // ── fixture: 3 reps, distinct ratings so a leak is unmistakable ───────────────────────────────────
 const mk = (id, name, store, market, payout) => ({
@@ -155,35 +147,20 @@ section('4. The consumer degrades silently and stays inside its own module')
 
 section('5. RENDER proof — the chips actually produce (and withhold) markup')
 {
-  // Transpile the module + lib/client to CommonJS so it can be REQUIRED and server-rendered here.
-  // '@/lib/client' is mapped to the emitted client.js by a resolver hook (node cannot read tsconfig paths).
-  const CFG2 = path.join(FRONTEND, `tsconfig${path.basename(OUT)}-r.json`)
-  process.on('exit', () => rmSync(CFG2, { force: true }))
-  writeFileSync(CFG2, JSON.stringify({
-    extends: './tsconfig.json',
-    compilerOptions: {
-      noEmit: false, incremental: false, module: 'commonjs', moduleResolution: 'node',
-      target: 'es2020', jsx: 'react-jsx', declaration: false, outDir: path.basename(OUT) + '/r',
-    },
-    files: ['src/lib/client.ts', 'src/app/(platform)/commcalc/_lib/googleRatings.tsx'],
-    include: [],
-  }, null, 2))
-  execFileSync('npx', ['tsc', '-p', CFG2], { cwd: FRONTEND, stdio: ['ignore', 'ignore', 'inherit'] })
+  // Transpile the component to CommonJS so it can be REQUIRED and server-rendered here, through
+  // the same ONE home. This block used to monkey-patch `Module._resolveFilename` to map
+  // '@/lib/client' onto the emitted file by hand — a FOURTH copy of "make the alias resolve", and
+  // one that only ever covered the single specifier somebody remembered to list. The home rewrites
+  // every alias in every emitted file, so the hook is gone and nothing has to be remembered.
+  const R = transpileForProof(
+    ['src/lib/client.ts', 'src/app/(platform)/commcalc/_lib/googleRatings.tsx'],
+    { label: 'grproof-cjs', moduleKind: 'commonjs', jsx: 'react-jsx' })
 
-  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://proof.invalid'
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'proof-anon-key'
   const { createRequire } = await import('node:module')
-  const Module = (await import('node:module')).default
   const require = createRequire(path.join(FRONTEND, 'proof.cjs'))
-  const R = path.join(OUT, 'r')
-  const orig = Module._resolveFilename
-  Module._resolveFilename = function (req, ...rest) {
-    if (req === '@/lib/client') return path.join(R, 'lib', 'client.js')
-    return orig.call(this, req, ...rest)
-  }
   const React = require('react')
   const { renderToStaticMarkup } = require('react-dom/server')
-  const GR = require(path.join(R, 'app', '(platform)', 'commcalc', '_lib', 'googleRatings.js'))
+  const GR = require(R.moduleUrl('src/app/(platform)/commcalc/_lib/googleRatings.tsx'))
   const html = (el) => renderToStaticMarkup(el)
 
   ok('no data → renders literally nothing', html(React.createElement(GR.GoogleRatingChips, { list: [] })) === '')
@@ -210,7 +187,6 @@ section('5. RENDER proof — the chips actually produce (and withhold) markup')
   ok('export cell for no data is empty (never "undefined")', GR.ratingsText([]) === '' && GR.ratingsText(undefined) === '')
   ok('"LAST, FIRST" and "First Last" resolve to the SAME person key',
     GR.repNameKey('ALI, MOHAMMAD KHALID') === GR.repNameKey('Mohammad Khalid Ali'))
-  Module._resolveFilename = orig
 }
 
 console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILURES'} — ${pass} passed, ${fail} failed`)

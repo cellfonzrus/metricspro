@@ -1,22 +1,18 @@
 # FRONTEND PROOFS THAT ARE CURRENTLY RED — the debt list, and it may only SHRINK.
 #
-# Before 2026-10-28 NO workflow ran any frontend proof, and no workflow ran the frontend at all:
-# `tools/*-proof.mjs` were 12 programs nobody executed. Measured on this branch, 8 of the 12 pass
-# and 4 do not. Wiring all 12 as a hard gate would land a red build on the first PR, which is how a
-# gate gets switched off; refusing to wire any of them leaves 8 working proofs as decoration.
+# EMPTY as of 2026-11-04, and PINNED_MAX in run-proofs.mjs is 0. Every frontend proof passes.
 #
-# So the rule is the one the house already uses for exactly this (backend/harness_unrun_pending.txt,
-# frontend/table_sort_pending.txt): a proof NOT listed here must pass, a listed proof that STARTS
-# passing fails the build until its line is deleted, and the list may never grow.
+# The four entries this list carried when it was created on 2026-10-28 are all fixed, and none was
+# fixed where it broke:
+#   · commission-export / google-ratings / people-export — `tsc` leaves `@/…` path aliases and
+#     extensionless relative imports in the JS it emits, so the transpile-and-import pattern breaks
+#     whenever a module it never names gains an import. Fixed in ONE home,
+#     `tools/_proof-transpile.mjs` (index §CORE-33), which every such proof now dereferences.
+#   · asset-borrowed-registry — pinned an invariant on the SPELLING of a value
+#     (`return {"markets": sorted(markets)`) and cried wolf when the value moved into a variable.
+#     Fixed in ONE home, `tools/_proof-source.mjs`, which locates a construct by what it is.
 #
-# The four, with what is actually wrong — REPORTED, not hidden:
-#   · asset-borrowed-registry-proof.mjs — a real assertion failure
-#     ("filter-options return statement found"). A genuine red, pre-dating this change.
-#   · commission-export-proof.mjs, google-ratings-proof.mjs, people-export-proof.mjs — each
-#     transpiles a source file to a temp dir and runs it under bare Node, where the `@/…` tsconfig
-#     path alias no longer resolves (ERR_MODULE_NOT_FOUND: Cannot find package '@/lib'). The proofs
-#     are sound; their runner lost the alias. Fixing them is its own change.
-asset-borrowed-registry-proof.mjs
-commission-export-proof.mjs
-google-ratings-proof.mjs
-people-export-proof.mjs
+# THE RULE, unchanged: a proof NOT listed here must pass. A listed proof that STARTS passing fails
+# the build until its line is deleted, so the list can never read as worse than reality. The list
+# may never grow — `PINNED_MAX` is its length and may only go DOWN. At 0, adding anything fails,
+# which is the point: a new proof must pass, not be excused.

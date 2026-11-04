@@ -1,0 +1,35 @@
+# PROOFS THAT STILL HAND-ROLL THEIR OWN TRANSPILE — the debt list, and it may only SHRINK.
+#
+# WHY THIS LIST EXISTS. On 2026-11-04 three proofs were red because `tsc` leaves `@/…` path aliases
+# and extensionless relative imports in the JavaScript it emits, so a proof that transpiles app code
+# and imports it under bare Node breaks the moment a module it never names gains an import. That was
+# fixed in ONE home, `tools/_proof-transpile.mjs` (index §CORE-33).
+#
+# THE SIBLINGS, found and declared rather than left to be discovered one red build at a time. Seven
+# more proofs carry their own copy of the pattern. **All six are GREEN today — and they are green
+# only because the modules they happen to transpile have not yet gained an aliased import.** That is
+# the same stale assumption, not a different situation; the dangerous direction here is quiet, not
+# red. `payout-nav-proof.mjs` carries a second VARIANT of the pattern as well (a direct `tsc` CLI
+# call into `os.tmpdir()` with no tsconfig), which is why this is a migration and not a sed.
+#
+# Migrating six green proofs is its own change, with its own risk of breaking what works, and it
+# is not a decision this runner should make on the owner's behalf. So the rule is the one that
+# actually stops the bleeding, in the shape the house already uses (`harness_unrun_pending.txt`,
+# `tools/proof_red_pending.txt`, `backend/py_string_reader_pending.txt`):
+#
+#   · a proof that transpiles app code and is NOT listed here MUST dereference the home — a new
+#     hand-rolled copy fails the build;
+#   · a listed proof that HAS been migrated must leave the list, so the list can never read as worse
+#     than reality and quietly re-admit debt someone already paid off;
+#   · the list may only SHRINK. PINNED_TRANSPILE_MAX in run-proofs.mjs is its length.
+#
+# Compared BOTH WAYS (§CORE-10): a listed proof that no longer exists, or no longer transpiles, also
+# fails — a stale pin is how a ratchet goes blind. (It fired immediately: asset-export-proof.mjs
+# was pinned here on first writing and does not transpile at all — it only MENTIONS `tsc` in a
+# comment. The ratchet rejected the pin, which is what a both-ways comparison is for.)
+multimonth-offer-proof.mjs
+payout-nav-proof.mjs
+plan-drilldown-proof.mjs
+plan-drilldown-render-proof.mjs
+rep-incentive-range-proof.mjs
+run-commission-proof.mjs
