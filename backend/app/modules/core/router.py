@@ -492,6 +492,15 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
         _carrier = _pa.carrier_view_allowed({"super_admin": u.get("super_admin"), "role": u.get("role"),
                                              "perms": perms}, caller_is_self=_is_self)
         perms = {**perms, "payout": _pa.viewer_payload(_is_self, _carrier)}
+        # WHAT AN INDIVIDUAL CONTRIBUTOR MAY REACH, AND WHERE A STORE-LEVEL VIEWER LANDS (owner
+        # 2026-11-04, index §CORE-33). The SAME `_is_self` answer computed just above — no second
+        # read — through the ONE declaration `app.core.rep_surface`, which is also what the API
+        # middleware refuses on. `lib/rbac.ts` holds no copy of this list; it reads this payload.
+        from app.core import rep_surface as _rs
+        from app.modules.storeops.router import _role_scope as _rscope
+        _rsv = _rs.viewer_payload(_is_self, _rscope(org_id, (u.get("role") or "").strip()))
+        if _rsv is not None:
+            perms = {**perms, "rep_surface": _rsv}
     except Exception:
         pass
     return {"provisioned": True, "user": u, "permissions": perms,
@@ -949,8 +958,8 @@ def _mods(**on):
 _BASE_ROLES = [
     ("admin", "Admin", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, notify=True, helpdesk=True, hr=True, ai_assistant=True, admin=True, franchise_ops=True, supply_ordering=True, royalty=True), "scope": "all", "home": "/commcalc"}),
     ("market_manager", "Market Manager", {"modules": _mods(commissions=True, targets=True, asset=True, vip=True, storeops=True, closing=True, notify=True, helpdesk=True, hr=True, ai_assistant=True, franchise_ops=True, supply_ordering=True, royalty=True), "scope": "market", "home": "/commcalc/targets"}),
-    ("store_manager", "Store Manager", {"modules": _mods(commissions=True, targets=True, asset=True, storeops=True, closing=True, helpdesk=True, ai_assistant=True, franchise_ops=True, supply_ordering=True), "scope": "store", "home": "/commcalc/targets"}),
-    ("sales_rep", "Sales Rep", {"modules": _mods(targets=True, helpdesk=True), "scope": "self", "home": "/commcalc/targets/my"}),
+    ("store_manager", "Store Manager", {"modules": _mods(commissions=True, targets=True, asset=True, storeops=True, closing=True, helpdesk=True, ai_assistant=True, franchise_ops=True, supply_ordering=True), "scope": "store", "home": "/my"}),
+    ("sales_rep", "Sales Rep", {"modules": _mods(targets=True, helpdesk=True), "scope": "self", "home": "/my"}),
 ]
 
 

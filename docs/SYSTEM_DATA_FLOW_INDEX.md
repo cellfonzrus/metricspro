@@ -199,6 +199,7 @@ Primary code homes:
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
 | STOREOPS-04 | **A punch says where it was made, and an off-site one reaches the board management already reads** | "the sales reps when they log in should capture the gos location so they are not clocking out at their homes and the geolocation when they clock out from somewhere else than their usual location which should match the store address should be reported as flag to the management" — the clock-IN had captured a fix since mig 045 and the clock-OUT captured nothing at all, the platform's one geofence decision had never judged a punch, and no store had coordinates to judge one against. Who owns "was this person at the store this record is for", for the clock-in, the clock-out and the DM store visit alike — and what stops "we could not tell" from being read as "they were not there"?
 | STOREOPS-05 | **The phone shows the week the TENANT declared, and whose shifts it shows is the server's answer** | "Make scheduling and hr with store vista and closing live in the app also" — the rota, time off and cover requests existed only on the web, and the phone had no schedule at all. The gates were already right (`gate_person_rows`, §14w) and the week start was already declared per tenant; what was missing was a surface. Who decides which seven days a week IS on a phone, and what stops a client-side filter from being mistaken for a permission? |
+| CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
 | CORE-31 | **A retention window that deletes nothing is a promise, not a policy** | Found by the security pass §STOREOPS-04 required before going live: that feature shipped a 180-day GPS retention setting and nothing deleted anything — and event check-in GPS had carried the SAME hole since mig 986, declared `unmonitored` on the control box. Who owns "how long may we keep where somebody was", for every relation that stores it, and what stops a purge from taking the flag away with the coordinates? |
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
@@ -26345,6 +26346,7 @@ status word rather than a blank that reads as nil.
 | CORE-30 | core |
 | CORE-31 | core |
 | CORE-32 | core |
+| CORE-33 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -44322,3 +44324,128 @@ the shared rule rather than a second copy.
 **Cross-refs:** §19.36 (the setup-internals boundary this guard protects) · §19.18 (one fact, one
 home, dereferenced) · §CORE-10 (a derived set is compared both ways) · §19.25 (a proof nothing runs
 is not a gate — this is its sibling: a proof that runs but cannot see).
+
+## §CORE-33. WHAT AN EMPLOYEE MAY REACH IS ONE DECLARATION, AND THE API IS WHAT ENFORCES IT (owner directive 2026-11-04)
+
+Owner: *"All sales reps should log in to the clock in screen, on ny logistics Manan was able to go past
+it and also see the adjustment hours, this should not be allowed for any sales reps, fix the
+permissions accordingly. Sales reps should have Clock in clock out / Their own commissions / Their own
+schedule / Their own action plan / Help desk. Create a tiled front end for their clock in specifically
+so when the sales reps or the store manager logs in they land on that landing page … this is universal
+across the board."*
+
+### The defect, measured by RUNNING the real permission code (not reading it)
+
+`lib/rbac.ts::canAccessPath`, in its `scope === 'self'` branch, admitted any page whose URL began with
+a menu row the viewer could see:
+
+```ts
+for (const g of NAV) for (const it of g.items)
+  if ((path === it.href || path.startsWith(it.href + '/')) && canSeeItem(perms, it)) return true
+```
+
+A rep whose role carries the `storeops` module sees the `/storeops` "Workforce Dashboard" row, so the
+**whole `/storeops/**` subtree opened by typing the URL — 33 pages**, among them `/storeops/timeclock`
+(Hours Adjustment: add and delete manual hours for any employee) and `/storeops/payroll/approvals`
+(Hours Approval). The child page's own `scopes: ['all','market']` was never consulted because the
+parent matched first. A rep with NO workforce module got `/helpdesk/settings` and `/reports` the same
+way. The branch was added to cure "the tab is there but clicking it does nothing" and was written as
+widening-only on purpose; the PREFIX is the defect, not the intent. The sibling of the same shape lived
+in the non-self branch, which checked a page's scope only on an EXACT href — so `/storeops/payroll`
+being market-and-above did not restrict `/storeops/payroll/approvals`.
+
+### The class, and the half that actually matters
+
+**Whether a viewer may use a surface was decided in the browser, and the API had no audience of its
+own.** `POST /storeops/manual-hours` and its DELETE took no `authorization` parameter at all: any
+signed-in person in the org could write or delete payroll hours for any employee id. Three siblings had
+the same shape and were already REPORTED unfixed on 2026-11-01 — `POST /storeops/time-off`, `POST
+/storeops/shift-swaps`, `GET/PATCH /hr/onboarding/employee/{id}` (the last being the owner's *"I
+moneyed can see anybody else's onboarding paperwork that is a big problem"*). All four are fixed here,
+in one pass, because they are one fact wearing four hats.
+
+### The one home
+
+| fact | home |
+|---|---|
+| What an individual contributor may reach — pages AND the API paths those pages call | **`backend/app/core/rep_surface.py`** (`SURFACES`, `UNIVERSAL_API`, `page_allowed`, `api_allowed`, `tiles`, `viewer_payload`, `LANDING_PAGE`, `landing_applies`). PURE, takes no `org_id` anywhere, so it is one answer for every tenant by construction |
+| WHO is confined | `storeops.router.role_is_self_scoped` (§6j / §14w) — the same answer the payout surfaces and `/me` already ask. A store manager is NOT an individual contributor, so a store manager is not confined and keeps every manager feature |
+| WHERE a viewer lands | `rep_surface.landing_applies(confined, scope)` — confined, or any role whose scope is a single store. Derived from role CONFIG, never a role NAME, because a role name is a tenant's word |
+| The API refusal | **`app.core.tenant_middleware.RepSurfaceMiddleware`**, installed unconditionally in `main.py` OUTER of `TenantScopeMiddleware`. Deliberately NOT a branch of that middleware, which is gated behind `MULTI_TENANT_ENFORCE` (off by default): a permission fix behind an unrelated flag is the browser-only gate with an env variable in front of it. Break-glass `REP_CONFINE=0` |
+| Whether a caller may WRITE a row ABOUT a person | **`storeops.router.require_person_write` / `person_write_allowed`** — dereferences `schedule_emp_ids` (§14w) and adds no second span derivation. `manager_only=True` on the two hours writes additionally refuses an individual contributor writing about themselves |
+| What the browser knows | `/me` → `permissions.rep_surface` (built by `rep_surface.viewer_payload`, reusing the `_is_self` answer `_me_payload` already computed). `lib/rbac.ts` holds NO page list: `repConfined` / `repPages` / `repPageAllowed` read the payload, and `canAccessPath` + `canSeeItem` both ask it FIRST. The confined gate is the one CLOSED gate in that file — a per-function grant and the admin module cannot reopen it |
+| The page grammar | `"/storeops/timeoff"` is EXACT (a page's neighbours are never implied); `"/helpdesk/**"` is that page and everything below; `page_except` carves the two manager screens out of the helpdesk subtree. There is no prefix match on a page's PARENT — that prefix is the defect |
+| The API grammar | `api` is a granted prefix for every method, `api_read` for GET/HEAD only, and **`api_except` carves a manager route out of a grant and is asked FIRST**, exactly as `page_except` is. Its `/**` form means STRICTLY BELOW the entry (`_api_except_matches`), unlike a page subtree which includes its base — because the grant being carved IS the collection, so carving the answer must not refuse the ask |
+
+### A GRANT ON A COLLECTION IS NOT A GRANT ON ITS MEMBERS (the security pass on this change, 2026-11-04)
+
+The house requires a security pass before a tenant-scoped feature goes live (owner directive
+2026-10-30). It found this change's own first draft granting whole API prefixes for every method, and
+that is a second instance of the very class §CORE-33 exists to fix — **a surface whose authority lived
+only in the caller, not in the route**:
+
+| the grant, and why it looked reasonable | what it also carried | the handler behind it |
+|---|---|---|
+| `/api/v1/storeops/time-off` — an employee ASKS for leave with a POST | `PATCH /time-off/{id}`, the manager's APPROVE, and `POST /time-off/reconcile-duplicates`, an org-wide cleanup | `update_time_off` took **no `authorization` parameter at all** — so a rep could approve their own leave, which `rep_surface` was offering the path for; `reconcile_timeoff_duplicates` was ungated |
+| `/api/v1/storeops/shift-swaps` — an employee ASKS for a swap | `PATCH /shift-swaps/{id}`, whose approval REASSIGNS another person's shift | `update_shift_swap` read `authorization` only to stamp the log |
+| `/api/v1/helpdesk` — raising and following one's own ticket | `/helpdesk/config/**` (categories, priorities, teams, SLA) and `/helpdesk/support/**` (the agent console) | the settings **page** was carved out and its whole **API** was not — the browser-only gate again, inside the fix for it |
+| `/api/v1/closing` — reps submit the daily closing from the kiosk | every tender / cash / deposit / sweep CONFIG write and the chargeback decisions | — |
+
+Both halves are fixed, because either alone would be a patch. The DECLARATION no longer offers those
+routes (`api_except`, plus the closing grant narrowed from the `/api/v1/closing` prefix to the three
+routes `ClosingSubmitForm.tsx` actually writes), AND the three handlers now dereference an authority
+check — `require_person_write(..., manager_only=True)` against the employee the STORED row names for
+the two answers, `_require_manager` for the org-wide cleanup. So the refusal never depends on
+`rep_surface` being the only gate. The two granted pages (`/storeops/timeoff`, `/storeops/swaps`) hide
+their Approve / Deny / Revoke / Edit controls for a confined viewer by dereferencing the same
+`repConfined` server fact, so nobody is offered a button that would 403.
+
+What generalises: **ask what METHOD the grant was made for.** A collection granted for the POST that
+asks is not granted for the PATCH that answers, and a carve-out on the page side without the matching
+one on the API side is not a carve-out at all. Pinned by `harness_rep_surface_lock.py` §4g (the carved
+set is DECLARED, not counted) and reproduced-then-closed in `harness_rep_surface.py` §B2 and
+`tests/integration/test_rep_surface_gate.py` (the rep's own approval lands with the gate removed and
+is refused with it).
+
+### The landing
+
+`/my` ("My Day") — `frontend/src/app/(platform)/my/page.tsx`, registered in NAV so it carries a page
+title like every other page, and admitted by `canAccessPath` unconditionally (the same posture as the
+password page) because it shows a person only their own things. It renders the live clock status from
+`GET /storeops/timeclock/status` and **the tiles the SERVER declared, in the server's order** — the
+punch itself stays one home, the kiosk at `/portal`, which the clock tile opens. The five tiles are the
+owner's five: clock in/out, own commissions (`/employee`), own schedule (the person's own next shifts,
+inline, because a rep has no business on the manager's schedule editor), own action plan
+(`/commcalc/targets/action-plan`, already self-scoped by `scope_keyset`, §59.7) and help desk.
+
+### Kept on the record rather than omitted
+
+`SURFACES` also declares four surfaces the owner did not list and that an employee already has: their
+OWN onboarding paperwork (the `/hr/onboarding/me*` family, which resolves the person from the token),
+the daily closing submission reps already make from the kiosk, chat, and training. Each is named with
+its reason; removing one is a one-line edit of that tuple and nothing else. `/reports` and
+`/commcalc/kpi`, which the deleted `SELF_ALLOWED` literal used to admit, are NOT declared.
+
+### Proofs and the lock
+
+- `backend/harness_rep_surface.py` (92) — the grammar, default-deny on the API, the REAL middleware
+  verdict over each role shape, the REAL four handlers over the in-memory double, two tenants, and
+  ★ NO LOCKOUT ★.
+- `frontend/tools/rep-surface-nav-proof.mjs` (48) — the compiled `rbac.ts`; §A **reproduces the prefix
+  hole for real** on the legacy path before §B shows it closed. Reads the declared pages out of the
+  backend source, so it cannot pass against a list it made up.
+- `backend/tests/integration/test_rep_surface_gate.py` (40) — the real FastAPI app, the real scope code
+  deciding whose people are whose, two tenants with the same role NAMES and different configuration.
+- `backend/harness_rep_surface_lock.py` (66, stdlib, CI job **The employee's reach**) — fails the build
+  if a second page list appears, if the prefix widening escapes the legacy branch, if the API gate is
+  un-installed or becomes conditional, if any of the four writes stops dereferencing the gate, or if the
+  landing route drifts between the two sides. Verified it goes red by un-wiring `create_time_off`.
+
+### Reported, not fixed
+
+`MULTI_TENANT_ENFORCE` is OFF by default (`docs/SECURITY_CONTROLS_SPEC.md` already files that as its own
+P0), which is why the API gate above does not live inside that middleware. One consequence was found
+while proving this: a login presenting a token for a tenant it has no `app_users` row in resolved to
+`schedule_emp_ids() is None`, i.e. UNRESTRICTED. `person_write_allowed` now refuses that case
+(platform admins excepted); the general tenant-isolation question is the owner's.
+
