@@ -1,6 +1,8 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api } from '@/lib/client'
+import { useAuth } from '@/lib/auth-context'
+import { repConfined } from '@/lib/rbac'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -19,6 +21,8 @@ function windowRange() {
 }
 
 export default function ShiftSwapsPage() {
+  const { permissions } = useAuth()
+  const confined = repConfined(permissions)
   const [swaps, setSwaps] = useState<any[]>([])
   const [emps, setEmps] = useState<any[]>([])
   const [shifts, setShifts] = useState<any[]>([])
@@ -170,7 +174,11 @@ export default function ShiftSwapsPage() {
                   <td style={cell}><span className={`badge ${STATUS_BADGE[s.status] || ''}`} style={{ fontSize: 11 }}>{s.status}</span></td>
                   <td style={{ ...cell, color: 'var(--text3)' }}>{s.notes || '—'}</td>
                   <td style={cell}>
-                    {s.status === 'pending' ? (
+                    {/* The manager's answer, refused for an individual contributor by the API
+                        (rep_surface api_except, §CORE-33) — the control dereferences that server
+                        fact rather than holding a rule of its own. */}
+                    {confined ? <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
+                      : s.status === 'pending' ? (
                       <span style={{ whiteSpace: 'nowrap' }}>
                         <button className="btn" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => setStatus(s.id, 'approved')}>✓ Approve</button>{' '}
                         <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => setStatus(s.id, 'denied')}>✕ Deny</button>

@@ -471,6 +471,64 @@ def _tenant_2fa_policy(org: str) -> dict:
     return policy
 
 
+# ── THE INDIVIDUAL CONTRIBUTOR'S REACH, ENFORCED BY THE SERVER (owner directive 2026-11-04) ──────
+# Owner: *"Manan was able to go past it and also see the adjustment hours, this should not be allowed
+# for any sales reps, fix the permissions accordingly."* Measured the same day: the ONLY thing keeping
+# a rep off `/storeops/timeclock` (Hours Adjustment) was browser code — `lib/rbac.ts`, which admitted
+# the whole `/storeops/**` subtree because the rep could see the `/storeops` menu row — and the API
+# behind it asked nothing at all. A gate that lives in the browser is not a gate.
+#
+# So the API answers for itself, here, before any handler runs. TWO dereferences and no new rule:
+#   WHO is confined  → `storeops.router.role_is_self_scoped` (§6j / §14w), the one answer the payout
+#                      surfaces and `/me` already ask. A store manager is not an individual
+#                      contributor, so a store manager is NOT confined.
+#   WHAT they reach  → `app.core.rep_surface.api_allowed` (the one declaration `/me` also serves to
+#                      the menu), DEFAULT DENY.
+# A super-admin returns above this and is never confined. An impersonated session is handled by
+# `_handle_impersonated` and is deliberately excused: an admin viewing the app AS a rep must see what
+# that rep sees, and that path has its own refusal registry (`is_forbidden_while_impersonating`).
+#
+# BREAK-GLASS `REP_CONFINE=0`, the same never-strand-anyone posture as REQUIRE_AUTH / TWOFA_ENFORCE:
+# this is the one change in this file that can refuse a request a tenant's staff make every day, and
+# an operator must be able to lift it with one env change and no code rollback.
+_REP_TTL = float(os.environ.get("REP_SCOPE_TTL", "60"))
+_rep_cache = _ttl_cache.TTLCache(ttl=_REP_TTL,
+                                 cap=_ttl_cache.cap_from_env("REP_SCOPE_CACHE_MAX", 1024))
+
+
+def _rep_confine() -> bool:
+    return os.environ.get("REP_CONFINE", "1").lower() not in ("0", "false", "no", "off")
+
+
+def _is_individual_contributor(org: str, role) -> bool:
+    """Cached `role_is_self_scoped(org, role)`. Any failure reads as NOT confined — an unreadable
+    roles table must never start refusing requests that worked a second ago (the 2026-10-03 lesson:
+    unreadable is its own state, and it is never the restrictive one on a hot path)."""
+    key = (str(org or ""), str(role or ""))
+    hit = _rep_cache.get(key)
+    if hit is not None:
+        return bool(hit[0])
+    try:
+        from app.modules.storeops.router import role_is_self_scoped
+        out = bool(role_is_self_scoped(org, role))
+    except Exception:
+        out = False
+    _rep_cache.put(key, (out,))
+    return out
+
+
+def _rep_surface_refusal(org: str, role, path: str, method: str):
+    """The refusal sentence for a confined caller reaching an undeclared API path, else None."""
+    if not _rep_confine():
+        return None
+    from app.core import rep_surface as _rs
+    if _rs.api_allowed(path, method):
+        return None                       # declared — asked before the role read, so the hot path is free
+    if not _is_individual_contributor(org, role):
+        return None
+    return _rs.refusal(path, method)
+
+
 def _tenant_needs_2fa(org: str, role, twofa_enabled) -> bool:
     """Does THIS (org, user) require 2FA? Middleware enforces tenant-wide 'required' (optionally
     role-scoped). 'optional' is user-opt-in (twofa_enabled); 'off' → never."""
@@ -981,6 +1039,17 @@ async def _reject_401(send):
     await send({"type": "http.response.body", "body": body})
 
 
+async def _reject_rep_surface(send, detail: str):
+    """A confined employee reached a manager's API path. 403 with the declaration's own sentence,
+    which names what they CAN use — the person reading it has done nothing wrong."""
+    import json as _json
+    body = _json.dumps({"detail": detail, "code": "not_your_access"}).encode()
+    await send({"type": "http.response.start", "status": 403,
+                "headers": [(b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
 async def _reject_503(send):
     """Identity could not be resolved because the MEMBERSHIP STORE is unreachable — the caller's
     token was fine. Distinct body + code so the UI (and a human reading a log) can tell an outage
@@ -1222,4 +1291,69 @@ class TenantScopeMiddleware:
             qs = parse_qs(scope.get("query_string", b"").decode(), keep_blank_values=True)
             qs["org_id"] = [org]   # override any client-supplied org_id with the resolved active tenant
             scope = {**scope, "query_string": urlencode(qs, doseq=True).encode()}
+        return await self.app(scope, receive, send)
+
+
+class RepSurfaceMiddleware:
+    """THE INDIVIDUAL CONTRIBUTOR'S REACH, ENFORCED BY THE SERVER — its own middleware, ALWAYS ON.
+
+    OWNER (2026-11-04): *"Manan was able to go past it and also see the adjustment hours, this should
+    not be allowed for any sales reps, fix the permissions accordingly."*
+
+    WHY IT IS NOT A BRANCH OF `TenantScopeMiddleware`. That middleware is gated behind
+    `MULTI_TENANT_ENFORCE`, which is OFF unless an operator sets it (`docs/SECURITY_CONTROLS_SPEC.md`
+    calls that out as its own P0). A permission fix that only takes effect when an unrelated flag is
+    on is not a fix — it is the browser-only gate again, with an env variable in front of it. So this
+    runs on every request regardless, resolves identity through the SAME cached `_resolve_identity`
+    (a cache hit when the tenant middleware has already run), and refuses before any handler.
+
+    TWO dereferences, no new rule:
+      WHAT they reach → `app.core.rep_surface.api_allowed`, asked FIRST so a declared path costs one
+                        pure prefix match and never a token verification or a role read.
+      WHO is confined → `storeops.router.role_is_self_scoped` (§6j / §14w), via `_rep_surface_refusal`.
+
+    THE ACTING TENANT IS THE LOGIN'S OWN MEMBERSHIP, never the `?org_id=` the caller passed — the
+    caller controls that string, and asking it "is this role confined" would let them pick a tenant
+    whose role of the same name is not. A super-admin and a membership-less login are not confined
+    (the first administers every tenant; the second reaches no tenant's data to begin with). An
+    impersonated session is excused for the same reason it is excused everywhere: the actor is
+    looking AT an employee's app, and `is_forbidden_while_impersonating` is that path's own gate.
+
+    FAIL OPEN ON ANYTHING UNEXPECTED. ★ NO LOCKOUT ★ (index §22): an unreadable roles table or an
+    identity hiccup must never start refusing requests that worked a second ago. Break-glass
+    `REP_CONFINE=0`.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+        path, method = scope.get("path", ""), (scope.get("method") or "GET").upper()
+        if not _rep_confine():
+            return await self.app(scope, receive, send)
+        from app.core import rep_surface as _rs
+        if _rs.api_allowed(path, method):
+            return await self.app(scope, receive, send)       # declared — no I/O at all
+        if _raw_header(scope, _IMPERSONATE_HEADER):
+            return await self.app(scope, receive, send)       # the impersonation path's own gate
+        headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
+        auth = headers.get("authorization", "")
+        token = auth.split(" ", 1)[1].strip() if auth.lower().startswith("bearer ") else ""
+        if not token:
+            return await self.app(scope, receive, send)       # no identity to confine
+        try:
+            ok, super_admin, member_orgs, default_org, org_info, uid = await asyncio.to_thread(
+                _resolve_identity, token)
+        except Exception:
+            return await self.app(scope, receive, send)       # unreadable is never the strict answer
+        if not ok or super_admin or not member_orgs:
+            return await self.app(scope, receive, send)
+        requested = (headers.get(_ACTIVE_ORG_HEADER, "") or "").strip()
+        org = _pick_active_org(member_orgs, default_org, requested)
+        refusal = await asyncio.to_thread(_rep_surface_refusal, org,
+                                          (org_info.get(org) or {}).get("role"), path, method)
+        if refusal:
+            return await _reject_rep_surface(send, refusal)
         return await self.app(scope, receive, send)

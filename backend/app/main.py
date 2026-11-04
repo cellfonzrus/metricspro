@@ -163,6 +163,15 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # fixes are done + isolation test passes). Derives org_id from the verified token. Default = no-op.
 app.add_middleware(TenantScopeMiddleware)
 
+# THE INDIVIDUAL CONTRIBUTOR'S REACH (owner 2026-11-04, index §CORE-33). ALWAYS ON — deliberately
+# NOT a branch of TenantScopeMiddleware above, which is gated behind MULTI_TENANT_ENFORCE: a
+# permission fix that needs an unrelated env flag is the browser-only gate wearing a disguise.
+# Added AFTER TenantScope ⇒ OUTER of it, so a manager's API path is refused before the identity
+# rewrite and before any handler. A declared path costs one pure prefix match and no I/O.
+# Break-glass REP_CONFINE=0.
+from app.core.tenant_middleware import RepSurfaceMiddleware  # noqa: E402
+app.add_middleware(RepSurfaceMiddleware)
+
 # Inbound rate limiting (Security Controls Spec §4, P0). Per-IP fixed-window limiter — strict on
 # auth-sensitive paths, generous elsewhere. Added AFTER TenantScope but BEFORE AccessLog ⇒ OUTER of
 # TenantScope (a flood is refused before the expensive identity/DB path) and INNER of AccessLog (a

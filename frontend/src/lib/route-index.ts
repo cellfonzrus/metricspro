@@ -301,6 +301,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/marketing/my-checkins' },
   { path: '/marketing/sales-from-events' },
   { path: '/marketing/settings' },
+  { path: '/my' },
   { path: '/notify' },
   { path: '/notify/report-recipients' },
   { path: '/onboarding/intake' },

@@ -583,6 +583,18 @@ def capture_report_calibration(page, src_row, spec, words=None):
     out = suggest_params(controls, words)
     out.update({"report": spec.get("key"), "label": spec.get("label"), "reached": True,
                 "controls_seen": len(controls)})
+    # THE ADDRESS IT ARRIVED AT, suggested like everything else here (owner, 2026-11-04). The menu
+    # words are a hint and `navigate_to_report` tries a declared address FIRST, so on a portal whose
+    # reports all render on one page — the owner's reporting portal is a single `*.aspx` — the address
+    # is the only one of the two that identifies anything. The capture is the one caller that knows
+    # it, because it is standing on the page. Suggested, never decided: `merge_suggestion` keeps a
+    # human's answer over it.
+    try:
+        here = str(page.url or "")
+    except Exception:
+        here = ""
+    if here.startswith(("http://", "https://")):
+        out["report_url"] = here
     if not controls:
         out["error"] = ("Reached the page but it offered no readable controls. It may render inside a "
                         "frame, or the report may still have been loading.")

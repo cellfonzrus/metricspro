@@ -672,7 +672,7 @@ def get_time_off(employee_id: str = None, authorization: str = Header(default=""
                             since=since, until=until)
 
 @router.post("/time-off")
-def create_time_off(request: dict, org_id: str = ORG_ID):
+def create_time_off(request: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     if not (request.get("employee_id") and request.get("start_date") and request.get("end_date")):
         raise HTTPException(400, "employee_id, start_date and end_date are required")
     # Gate-1 REDO N1 fix (2026-07-27, defense in depth): canonicalize to the BUSINESS employee_id
@@ -682,6 +682,13 @@ def create_time_off(request: dict, org_id: str = ORG_ID):
     # table-agnostic — it just resolves a raw id to the canonical business id for an org's roster).
     request = {**request, "employee_id":
                _canonical_shift_employee_id(request.get("org_id") or org_id, request.get("employee_id"))}
+    # WHOSE NAME (reported 2026-11-01, owner's rule 2026-11-04 — "the manager can file for time off
+    # for the employee"). The read side was already gated (`gate_person_rows`); this route asked
+    # nothing, so a request could be filed under anyone's name. A MANAGER filing for their own
+    # employee is exactly what the owner wants and is allowed by the same one answer that allows an
+    # employee to file for themselves — `schedule_emp_ids` contains both.
+    require_person_write(authorization, request.get("org_id") or org_id,
+                         request.get("employee_id"), "Filing time off")
     status = str(request.get("status") or "pending").lower()
     if status not in ("pending", "approved", "denied"):
         status = "pending"
@@ -710,10 +717,23 @@ def create_time_off(request: dict, org_id: str = ORG_ID):
     return r.data[0]
 
 @router.patch("/time-off/{request_id}")
-def update_time_off(request_id: int, updates: dict, org_id: str = ORG_ID):
+def update_time_off(request_id: int, updates: dict, authorization: str = Header(default=""),
+                    org_id: str = ORG_ID):
     """org_id-scoped so a foreign request_id is a no-op. The org_id query param was already present
-    but wasn't actually applied to this UPDATE — a cross-tenant write hole."""
+    but wasn't actually applied to this UPDATE — a cross-tenant write hole.
+
+    Approving, denying, voiding or editing a request is the MANAGER's answer to it, so this
+    dereferences `require_person_write(manager_only=True)` against the employee the stored request
+    names — the same one home `delete_manual_hours` asks. Found by the security pass on §CORE-33,
+    2026-11-04: this route took no `authorization` at all, so any signed-in person in the org could
+    approve their own leave (and `rep_surface` was offering the path). Raising a request is still a
+    plain POST to the collection, which every employee may do."""
     client = sb()
+    before = (client.table("time_off_requests").select("employee_id")
+              .eq("id", request_id).eq("org_id", org_id).limit(1).execute().data or [None])[0]
+    if before:
+        require_person_write(authorization, org_id, before.get("employee_id"),
+                             "Answering a time-off request", manager_only=True)
     updates = {k: v for k, v in updates.items() if k not in ("org_id", "id")}
     r = client.table("time_off_requests").update(updates).eq("id", request_id).eq("org_id", org_id).execute()
     row = (r.data or [None])[0]
@@ -734,11 +754,16 @@ def update_time_off(request_id: int, updates: dict, org_id: str = ORG_ID):
 
 
 @router.post("/time-off/reconcile-duplicates")
-def reconcile_timeoff_duplicates(org_id: str = ORG_ID):
+def reconcile_timeoff_duplicates(authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Idempotent cleanup for the "voided but still can't be scheduled" backlog: when a time-off was
     voided (a 'denied' row exists) but a duplicate 'approved'/'pending' copy for the SAME employee +
     dates survived and keeps blocking scheduling, deny the surviving copy too. Acts ONLY where a denied
-    sibling proves the void intent — never denies a standalone approval (e.g. genuine approved PTO)."""
+    sibling proves the void intent — never denies a standalone approval (e.g. genuine approved PTO).
+
+    An org-wide cleanup, so it is a manager action — gated on `_require_manager` since the security
+    pass on §CORE-33 (2026-11-04) found it ungated and inside a prefix the employee surface grants."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
     client = sb()
     rows = (client.table("time_off_requests")
             .select("id,employee_id,start_date,end_date,status")
@@ -4331,10 +4356,13 @@ def get_shift_swaps(status: str = None, authorization: str = Header(default=""),
 
 
 @router.post("/shift-swaps")
-def create_shift_swap(req: dict, org_id: str = ORG_ID):
+def create_shift_swap(req: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Create a swap request. Body: requester_id, target_id?, shift_id?, target_shift_id?, notes?"""
     if not req.get("requester_id"):
         raise HTTPException(400, "requester_id required")
+    # Whose swap (reported 2026-11-01) — the same one answer as time off. A manager may raise a swap
+    # for someone on their own team; nobody may raise one in a stranger's name.
+    require_person_write(authorization, org_id, req.get("requester_id"), "Raising a shift swap")
     row = {k: req.get(k) for k in ("requester_id", "target_id", "shift_id", "target_shift_id", "notes")}
     row["status"] = "pending"
     row["org_id"] = org_id
@@ -4384,13 +4412,20 @@ def _apply_swap(swap, org_id: str = ORG_ID, who=None):
 
 @router.patch("/shift-swaps/{swap_id}")
 def update_shift_swap(swap_id: int, updates: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Approve/deny/cancel a swap. Approving reassigns the shift(s)."""
+    """Approve/deny/cancel a swap. Approving reassigns the shift(s).
+
+    Answering a swap is the MANAGER's act — it moves another person's shift — so it dereferences
+    `require_person_write(manager_only=True)` against the requester the stored row names. Before the
+    security pass on §CORE-33 (2026-11-04) `authorization` was read only to stamp the log, so the
+    approval itself was unchecked while `rep_surface` offered the path."""
     status = updates.get("status")
     if status not in ("approved", "denied", "pending", "cancelled"):
         raise HTTPException(400, "invalid status")
     cur = sb().table("shift_swap_requests").select("*").eq("org_id", org_id).eq("id", swap_id).limit(1).execute().data or []
     if not cur:
         raise HTTPException(404, "swap not found")
+    require_person_write(authorization, org_id, cur[0].get("requester_id"),
+                         "Answering a shift swap", manager_only=True)
     if status == "approved":
         _apply_swap(cur[0], org_id, who=_who_for_log(authorization, org_id))
     r = sb().table("shift_swap_requests").update({"status": status}).eq("id", swap_id).eq("org_id", org_id).execute()
@@ -8012,6 +8047,11 @@ def add_manual_hours(body: ManualHoursIn, authorization: str = Header(default=""
         raise HTTPException(400, "employee_id and reason are required")
     if body.hours in (None, ""):
         raise HTTPException(400, "hours required")
+    # WHOSE HOURS (owner 2026-11-04): this route took no authority check at all, so any signed-in
+    # person in the org could add payroll hours for any employee id. One answer, dereferenced —
+    # `require_person_write` (§14w / §6j). `manager_only` because adjusting hours is a manager act:
+    # an individual contributor is refused even for themselves.
+    require_person_write(authorization, org_id, employee_id, "Adjusting hours", manager_only=True)
     row = {"org_id": org_id, "employee_id": employee_id,
            "work_date": body.work_date or datetime.now(timezone.utc).date().isoformat(),
            "hours": float(body.hours), "reason": reason, "added_by": body.added_by or None}
@@ -8034,6 +8074,12 @@ def add_manual_hours(body: ManualHoursIn, authorization: str = Header(default=""
 def delete_manual_hours(mid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     before = (sb().table("manual_hours").select("*").eq("org_id", org_id).eq("id", mid)
               .limit(1).execute().data or [{}])[0]
+    # The same authority as the add (owner 2026-11-04). Read FIRST so the check is against the row's
+    # own employee; a row that is already gone (`before` empty) is the no-op the trace rule below
+    # wants and is not a reason to refuse — nothing can be removed from anyone.
+    if before:
+        require_person_write(authorization, org_id, before.get("employee_id"),
+                             "Removing an hours adjustment", manager_only=True)
     sb().table("manual_hours").delete().eq("org_id", org_id).eq("id", mid).execute()
     # A repeat DELETE of an entry that is already gone changed nothing, so it records nothing (§19.45) —
     # the same `if before:` guard delete_shift has. Without it a double-click logged a "delete" with no
@@ -9027,6 +9073,67 @@ def gate_person_rows(rows, authorization: str, org_id: str = ORG_ID, *,
         return [r for r in rows if in_keyset(ks, *[r.get(f) for f in store_fields])]
     ids = scope_emp_ids(authorization, org_id, since=since, until=until)
     return keep_visible_people(rows, ids, *people_fields)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# WRITING *ABOUT A PERSON* — the mirror of the read gate above (owner directive 2026-11-04)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# `gate_person_rows` answers "whose rows may this caller READ". Four routes wrote rows ABOUT a person
+# and asked NOTHING: `POST /manual-hours` + its DELETE (payroll hours for any employee id, no
+# `authorization` parameter at all), `POST /time-off`, `POST /shift-swaps` and, in the HR module,
+# `GET/PATCH /hr/onboarding/employee/{id}`. Three of those were REPORTED unfixed on 2026-11-01; the
+# owner's "Manan was able to … see the adjustment hours" is the fourth and the same fact.
+#
+# ONE ANSWER, DEREFERENCED, NEVER COPIED: whose people these are is `schedule_emp_ids` — the §14w one
+# home the schedule, the punch list and every per-person read already ask. This adds no second
+# derivation of a span, no second roster read and no per-route ladder. `role_is_self_scoped` (§6j) is
+# likewise the only answer to "is this caller an individual contributor".
+#
+# POSTURE. `schedule_emp_ids` returns None for an in-process / tokenless / RBAC-off caller, which is
+# UNRESTRICTED and stays so — a sweep, a cron and a tenant with logins off behave exactly as before.
+# A provisioned login that resolves to nobody gets `set()` and is refused, which is fail-closed.
+def _caller_is_platform_admin(authorization: str) -> bool:
+    """Is this login the PLATFORM super admin (org-independent)? Asked only on the foreign-tenant
+    branch below, so it costs nothing on a normal request."""
+    from app.modules.core.router import _uid_from_token
+    uid = _uid_from_token(authorization)
+    if not uid:
+        return False
+    try:
+        rows = (sb().table("app_users").select("super_admin").eq("auth_id", uid)
+                .eq("super_admin", True).limit(1).execute().data) or []
+        return bool(rows)
+    except Exception:
+        return False
+
+
+def person_write_allowed(authorization: str, org_id: str = ORG_ID, employee_id=None) -> bool:
+    """May this caller write a row ABOUT this person? (themselves, or someone they may see)."""
+    eids = schedule_emp_ids(authorization, org_id)
+    if eids is None:
+        # None is UNRESTRICTED and must stay so for the callers it was written for: an in-process
+        # sweep, a cron, a tenant with logins off. But a request that DOES carry a token and yet
+        # resolves to no app_user row in the org it names is not one of those — it is a login
+        # reaching into a tenant it does not belong to, and `schedule_emp_ids` returns None for it
+        # (`if not au: return None`). Tenant isolation otherwise rests entirely on
+        # MULTI_TENANT_ENFORCE, which is OFF by default. Refused here, platform admins excepted.
+        if (authorization or "").strip() and not _caller_app_user(authorization, org_id):
+            return _caller_is_platform_admin(authorization)
+        return True
+    return str(employee_id or "") in {str(e) for e in eids}
+
+
+def require_person_write(authorization: str, org_id: str, employee_id, what: str,
+                         *, manager_only: bool = False) -> None:
+    """Refuse a write about a person this caller may not write about. `manager_only` additionally
+    refuses an INDIVIDUAL CONTRIBUTOR writing about themselves — adjusting payroll hours is a
+    manager's act, and a rep adjusting their own hours is the very thing the owner stopped."""
+    if manager_only:
+        au = _caller_app_user(authorization, org_id) or {}
+        if au and role_is_self_scoped(org_id, (au.get("role") or "").strip()):
+            raise HTTPException(403, f"{what} is a manager action. Your access does not include it.")
+    if not person_write_allowed(authorization, org_id, employee_id):
+        raise HTTPException(403, f"{what} is not available for this employee — they are not in your team.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════

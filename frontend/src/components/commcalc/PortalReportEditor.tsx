@@ -23,11 +23,18 @@ type Param = { selector: string; kind: string; value: string | null; label: stri
 type Row = {
   key: string; label: string; nav: string[]; export: string
   params: Param[]; line_map?: Record<string, string>
+  // THE CONTROLS THE PULL PRESSES. Until 2026-11-04 this editor could save only `params`, while the
+  // pull reads four facts per report — so a capture that correctly read a portal's Run and Export
+  // buttons had nowhere to put them and the pull fell back to hunting for a button saying "Export",
+  // "Download" or "CSV". A portal that spells its button anything else imported nothing while the
+  // declaration looked complete.
+  report_url?: string; run_selector?: string; export_selector?: string
   per_day?: boolean; problems?: string[]
 }
 type Loaded = {
   source_id: string; label: string; processor: string; portal_url: string
   reports: Row[]; param_kinds: string[]; date_tokens: string[]; exports: string[]
+  control_fields?: string[]
 }
 type Saved = { reports: Row[]; count: number }
 /** What the §COMMCALC-39 capture answers with.
@@ -45,6 +52,7 @@ type Saved = { reports: Row[]; count: number }
 type CaptureRow = {
   report?: string; label?: string | null; reached?: boolean; controls_seen?: number | null
   suggested?: number; added?: number; error?: string | null
+  controls?: Record<string, boolean>
   unrecognised?: { label?: string | null; selector?: string | null; why?: string | null }[]
 }
 type Capture = {
@@ -56,6 +64,14 @@ type Capture = {
 function why(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
+
+/** The controls the pull presses, in the operator's words. The FIELD NAMES come from the backend
+ *  (`control_fields` on GET /reports); these are only the words beside each one. */
+const CONTROL_WORDS: [string, string][] = [
+  ['report_url', 'page address'],
+  ['run_selector', 'Run control'],
+  ['export_selector', 'Export control'],
+]
 
 const BOX: React.CSSProperties = {
   width: '100%', padding: '4px 6px', fontSize: 12, border: '1px solid var(--border)',
@@ -176,6 +192,15 @@ export default function PortalReportEditor(
                   ? <span>reached it{typeof c.controls_seen === 'number' ? `, ${c.controls_seen} control${c.controls_seen === 1 ? '' : 's'} on the page` : ''}
                       {`, ${c.suggested ?? 0} filter${(c.suggested ?? 0) === 1 ? '' : 's'} recognised, ${c.added ?? 0} added`}</span>
                   : <span style={{ color: 'var(--c-fg-991b1b)' }}>could not reach it</span>}
+                {c.controls && (
+                  <div style={{ color: 'var(--text3)' }}>
+                    {CONTROL_WORDS.map(([f, word]) => (
+                      <span key={f} style={{ marginRight: 10 }}>
+                        {c.controls?.[f] ? '✓' : '✕'} {word}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {c.error && <div style={{ color: 'var(--text3)' }}>{c.error}</div>}
                 {(c.unrecognised || []).length > 0 && (
                   <div style={{ color: 'var(--text3)', marginTop: 2 }}>
@@ -255,6 +280,29 @@ export default function PortalReportEditor(
                               What must be set on this report&apos;s page before the export is pressed. A filter
                               that cannot be set stops the export rather than exporting the wrong figures.
                             </div>
+                            {/* THE CONTROLS THE PULL PRESSES, and the address it may go to instead of
+                                clicking menu words. These are read by the pull per report
+                                (`run_selector`, `export_selector`, `report_url`) and were unreachable
+                                from any screen until 2026-11-04, so a login could be fully declared
+                                and still import nothing. Blank means "nothing declared", exactly as
+                                before: the pull then guesses the export words and follows the menu. */}
+                            <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                              <input style={{ ...BOX, flex: 3, fontFamily: 'monospace' }}
+                                     value={r.report_url || ''}
+                                     placeholder="Report page address (optional — tried before the menu words)"
+                                     title="Paste the address of the page this report runs on. It is tried BEFORE the menu words, so on a portal whose reports all render on one page this is the only one of the two that identifies anything."
+                                     onChange={e => patch(i, { report_url: e.target.value })} />
+                              <input style={{ ...BOX, flex: 2, fontFamily: 'monospace' }}
+                                     value={r.run_selector || ''}
+                                     placeholder="Run control (#btnRun)"
+                                     title="The control that makes the portal build the report. Leave blank only if the page needs no Run press — a portal that renders on Run exports the PREVIOUS run's figures without this."
+                                     onChange={e => patch(i, { run_selector: e.target.value })} />
+                              <input style={{ ...BOX, flex: 2, fontFamily: 'monospace' }}
+                                     value={r.export_selector || ''}
+                                     placeholder="Export control (#btnCsv)"
+                                     title="The control that downloads the file. Blank means the pull hunts for a button saying Export, Download or CSV — if the portal spells it differently, nothing is imported."
+                                     onChange={e => patch(i, { export_selector: e.target.value })} />
+                            </div>
                             {(r.params || []).map((p, j) => (
                               <div key={j} style={{ display: 'flex', gap: 6, marginBottom: 5 }}>
                                 <input style={{ ...BOX, flex: 2 }} value={p.label} placeholder="What it is (From date)"
@@ -291,7 +339,8 @@ export default function PortalReportEditor(
             )}
             <div style={{ marginTop: 10 }}>
               <button className="btn btn-secondary" style={{ fontSize: 12 }}
-                      onClick={() => setRows(rs => [...rs, { key: '', label: '', nav: [], export: 'csv', params: [] }])}>
+                      onClick={() => setRows(rs => [...rs, { key: '', label: '', nav: [], export: 'csv', params: [],
+                        report_url: '', run_selector: '', export_selector: '' }])}>
                 + Add a report
               </button>
             </div>

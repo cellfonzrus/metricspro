@@ -22,7 +22,8 @@ from app.core import upload_format as _upload_format
 from app.core.schemas import LaxModel
 from app.core.config import settings
 from app.core import crypto
-from app.modules.storeops.router import scope_emp_ids, _tenant_pp_settings, _employees_with_pay_fields
+from app.modules.storeops.router import (scope_emp_ids, _tenant_pp_settings, _employees_with_pay_fields,
+                                           require_person_write)
 from app.modules.storeops import payroll_salary
 from app.modules.storeops import pay_visibility as _payvis
 # THE ONE HOME for "which hours is this employee paid for, and on what basis" (index §14y).
@@ -892,9 +893,15 @@ def _public_profile(prof):
 
 
 @router.get("/onboarding/employee/{employee_id}")
-def onboarding_for_employee(employee_id: str, org_id: str = ORG_ID):
+def onboarding_for_employee(employee_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The new hire's checklist: every active task merged with their status / uploaded doc / verification.
     State-specific tax forms appear only once the employee's work_state is set (and matches)."""
+    # WHOSE PAPERWORK (reported 2026-11-01; owner 2026-11-04: "I moneyed can see anybody else's
+    # onboarding paperwork that is a big problem"). This route took no `authorization` at all, so
+    # anyone signed in who knew an employee id could read someone else's onboarding record. The same
+    # one answer as every other person-keyed surface (§14w): your own record, or someone you may see.
+    # The `/onboarding/me*` family is untouched — it resolves the person from the token.
+    require_person_write(authorization, org_id, employee_id, "Opening onboarding paperwork")
     so = _so()
     tmpl = onboarding_template(org_id=org_id)
     if not tmpl.get("ready"):
@@ -995,8 +1002,10 @@ class OnboardingSetProfileIn(LaxModel):
 
 
 @router.patch("/onboarding/employee/{employee_id}")
-def onboarding_set_profile(employee_id: str, body: OnboardingSetProfileIn, org_id: str = ORG_ID):
+def onboarding_set_profile(employee_id: str, body: OnboardingSetProfileIn,
+                           authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Set the employee's work_state (drives which state tax form shows)."""
+    require_person_write(authorization, org_id, employee_id, "Changing onboarding paperwork")
     upd = {"org_id": org_id, "employee_id": employee_id}
     if "work_state" in body.model_fields_set:
         upd["work_state"] = _normalize_state(body.work_state)

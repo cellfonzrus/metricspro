@@ -42,7 +42,22 @@ from app.modules.commcalc import report_columns as _rc
 # The fields an editor row carries. Everything here is either stored or DERIVED from what is stored —
 # `per_day` is derived (§COMMCALC-37: a report whose filters mention {date} IS a per-day report, and a
 # flag beside that could disagree with it), and `problems` is advice, never stored.
-ROW_FIELDS = ("key", "label", "nav", "export", "params", "line_map")
+ROW_FIELDS = ("key", "label", "nav", "export", "params", "line_map",
+              "report_url", "run_selector", "export_selector")
+# THE CONTROLS THE PULL PRESSES, and the address it may go to instead of clicking menu words
+# (owner, 2026-11-04: "How to get the filters right"). `portal_report_pull` reads FOUR facts per
+# report off `portal_calibration` — `params`, `run_selector`, `export_selector` and one of
+# `nav_selector` / `report_url` — and until now this editor could write exactly ONE of them. So a
+# capture that correctly read a portal's Run and Export buttons had nowhere to put them
+# (`suggest_params` returns both; `merge_suggestion` read only `params`), and the pull fell back to
+# hunting for a button whose words happen to be "Export" / "Download" / "CSV". On a portal that
+# spells its button anything else, that finds nothing and imports zero rows while the declaration
+# looks complete. Measured on the owner's own fourteen UPS Store reports, 2026-11-04: every one of
+# them `params 0 | run None | export None | address None`.
+#
+# `nav_selector` stays out on purpose: nothing suggests it and no human would hand-write a framework's
+# generated selector. It is still folded through untouched, so a capture that sets it keeps working.
+CONTROL_FIELDS = ("report_url", "run_selector", "export_selector")
 EXPORTS = ("csv", "excel", "xlsx", "pdf", "print")
 MAX_ROWS = 60                 # a portal with more declared reports than this is a mistake, not a tenant
 MAX_PARAMS = 24               # per report
@@ -94,6 +109,16 @@ def clean_params(raw):
     return out
 
 
+def _clean_control(v):
+    """One control the pull presses, from whatever the editor sent: a trimmed string, or "" .
+
+    A selector is typed by a human from what a page shows, so it is taken as written and never
+    normalised — a CSS selector is case-sensitive and a portal's generated id depends on it."""
+    if v is None or isinstance(v, (dict, list, bool)):
+        return ""
+    return str(v).strip()[:300]
+
+
 def row_problems(row):
     """What a human must fix about one row, in their words. Advice — never stored, never a refusal.
 
@@ -103,8 +128,11 @@ def row_problems(row):
     out = []
     if not row.get("key"):
         out.append("give this report a name")
-    if not row.get("nav"):
-        out.append("say which menu words reach it on the portal")
+    if not (row.get("nav") or row.get("report_url")):
+        # EITHER answer reaches the page: `navigate_to_report` tries the declared address before the
+        # menu words, and on a portal whose reports all live on ONE page the address is the only one
+        # of the two that means anything.
+        out.append("say which menu words reach it on the portal, or paste the report page's address")
     params = row.get("params") or []
     if not params:
         out.append("no filters are declared, so it will export whatever the page happens to show")
@@ -112,6 +140,13 @@ def row_problems(row):
         tokens = " ".join(str(p.get("value") or "") for p in params)
         if not any(t in tokens for t in _prp.DATE_TOKENS):
             out.append("no date filter mentions a day, so every run exports the same page")
+    # THE CONTROLS, in the operator's words. Said as advice and not a refusal for the same reason the
+    # rest of this is: a half-declared report is still worth keeping. But an undeclared Export control
+    # is the one omission that reads as working and is not — the pull guesses at the words "Export",
+    # "Download" and "CSV", and a portal that spells its button differently imports nothing.
+    if not row.get("export_selector"):
+        out.append("no export control is declared, so the pull has to guess which button downloads "
+                   "the file")
     return out
 
 
@@ -143,6 +178,10 @@ def row(item, calibration=None):
            "export": export if export in EXPORTS else "csv",
            "params": clean_params(cal.get("params")),
            "line_map": dict(line_map)}
+    # DEREFERENCED from the one declaration of which controls the pull presses, so a field added
+    # there reaches the editor without a second list here.
+    for field in CONTROL_FIELDS:
+        out[field] = _clean_control(cal.get(field))
     out["per_day"] = any("{date}" in str(p.get("value") or "") for p in out["params"])
     out["problems"] = row_problems(out)
     return out
@@ -198,6 +237,15 @@ def columns(editor_rows, existing_calibration=None):
         reports.append(spec)
         entry = dict(keep.get(key) or {})
         entry["params"] = clean_params(item.get("params"))
+        for field in CONTROL_FIELDS:
+            val = _clean_control(item.get(field))
+            # A field CLEARED on the screen is cleared in the declaration — the key is dropped rather
+            # than stored empty, so `calibrated()` reads "nothing declared" exactly as it did before
+            # this editor could write it.
+            if val:
+                entry[field] = val
+            else:
+                entry.pop(field, None)
         cal[key] = entry
         if len(reports) >= MAX_ROWS:
             break
@@ -214,9 +262,17 @@ def merge_suggestion(editor_rows, key, suggestion):
     is kept, and only a filter the row does not have yet is added — a capture that overwrote the
     declaration a tenant had corrected would make the editor untrustworthy on exactly the pages that
     needed correcting. Returns new rows; nothing is mutated in place.
+
+    THE CONTROLS FOLD THE SAME WAY (owner, 2026-11-04). `suggest_params` has always returned
+    `run_selector` and `export_selector` under their OWN keys — deliberately, because the loop presses
+    them at a fixed point in its order and a param pressing Run early would export the previous run's
+    grid — and this function read only `params`, so both were discarded on every capture since
+    §COMMCALC-48 shipped. A control the row ALREADY declares is kept, for the same reason a corrected
+    selector is: the human who typed it was looking at the page.
     """
     want = _sweep.spec_key(key)
-    sug = clean_params((suggestion or {}).get("params"))
+    sent = suggestion or {}
+    sug = clean_params(sent.get("params"))
     out = []
     for item in (editor_rows or []):
         r = dict(item or {})
@@ -231,5 +287,11 @@ def merge_suggestion(editor_rows, key, suggestion):
                 continue
             have.append(p)
         r["params"] = have
+        for field in CONTROL_FIELDS:
+            if _clean_control(r.get(field)):
+                continue                      # a human's answer stands
+            got = _clean_control(sent.get(field))
+            if got:
+                r[field] = got
         out.append(r)
     return out

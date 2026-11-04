@@ -58,6 +58,12 @@ PINNED_RUNTIME_POLICY = "appVersion"
 # minutes later, on Expo's machines, with an error that looks like a dependency problem.
 PINNED_IOS_DEPLOYMENT_TARGET = "15.1"
 
+# The App Store Connect app a production build is submitted to, DECLARED rather than merely required
+# to look plausible. A bare "it is some digits" check would pass a different app's id, and submitting
+# this binary to the wrong record is not a mistake a size check should let through. Supplied by the
+# owner 2026-11-04. Not a secret: it is the app's public App Store Connect identifier.
+PINNED_ASC_APP_ID = "94734403"
+
 failures: list[str] = []
 checks = 0
 
@@ -262,6 +268,25 @@ check("R6.16 the one-hook promise is the test's own assertion",
       "countHooks" in plugin_tests and "toBe(1)" in plugin_tests,
       "the regression needs a test that counts hooks, not just one that checks the loop exists")
 control("R6.16", "countHooks" in "expect(out).toContain('targets.each')")
+
+# R6.17 — the build button submits unattended, or it is a button that builds and stops. The fourth
+# build SUCCEEDED and then failed at `eas submit` with "Set ascAppId in the submit profile"
+# (2026-10-31), because mobile/eas.json's submit.production carried only `android.track`. An
+# interactive submit from a Mac never writes it, so it stayed missing until a non-interactive one
+# needed it. No secret: it is the app's public App Store Connect identifier.
+import json as _json
+try:
+    eas = _json.loads((MOBILE / "eas.json").read_text(encoding="utf-8"))
+except Exception as exc:  # a malformed eas.json is itself a build failure
+    eas = {}
+    check("R6.17 eas.json parses", False, f"{exc}")
+asc = str(((eas.get("submit") or {}).get("production") or {}).get("ios", {}).get("ascAppId") or "")
+check("R6.17 the iOS submit profile names the App Store Connect app we mean",
+      asc == PINNED_ASC_APP_ID,
+      f"submit.production.ios.ascAppId is {asc!r} but this harness declares {PINNED_ASC_APP_ID!r}. "
+      "Without it a non-interactive `eas submit` cannot run; with the WRONG one the binary goes to "
+      "another app's record. If the app record really changed, move the declaration and say why.")
+control("R6.17", str({}.get("ascAppId") or "") == PINNED_ASC_APP_ID)
 
 
 if failures:
