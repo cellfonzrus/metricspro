@@ -27,6 +27,23 @@
 #
 # A RED entry is NOT a skipped test. It is a failing proof, counted, named, and on a list that may
 # only shrink. Fixing one means deleting its line and lowering PINNED_MAX.
+#
+# 2026-11-04, SECOND PASS. CI showed two defects in the first wiring, both now fixed, and both
+# changed this list:
+#   * the suite's jobs checked out at depth 1, so nine proofs that reproduce their defect against a
+#     historical commit first (a live negative control) died in their own setup. The suite now
+#     fetches full history, and FIVE of the 44 reds above were red for only that reason.
+#   * a failing step aborted the rest of its job, so one red harness hid the 128 behind it. Every
+#     harness step now carries `if: always()`.
+# So: 312 -> 46 -> 41. The 41 below are RED when run, with full history, nothing stubbed.
+#
+# harness_export_xss_upload.py is among them and its reason is now known precisely: with history it
+# RUNS, and fails ONE assertion — A3b, "the only value openpyxl cannot round-trip is a leading CR",
+# which its own text calls pre-existing on base. It had been exempt from this list because a
+# workflow `paths:` filter happened to name the file; nothing executed it, so nobody saw that.
+#
+# A RED entry is NOT a skipped test. It is a failing proof, counted, named, and on a list that may
+# only shrink. Fixing one means deleting its line and lowering PINNED_MAX.
 harness_accountability_lateness.py
 harness_area_targets.py
 harness_asset_invoice_due.py
@@ -38,7 +55,6 @@ harness_cash_pickup.py
 harness_closing_hardening.py
 harness_closing_reports_span_scope.py
 harness_closing_submissions.py
-harness_commcalc_recompute_guard.py
 harness_commission_ledger_sign.py
 harness_connector_runnable.py
 harness_control_box_board.py
@@ -47,14 +63,11 @@ harness_device_cost_recon.py
 harness_dm_accessory_attribution_router.py
 harness_eep_pl_wiring.py
 harness_eep_pl_wiring_negcontrol.py
-harness_eep_retail_ops.py
 harness_envelope_photo_required_gate.py
 harness_export_xss_upload.py
 harness_flag_review_persistence.py
 harness_inactive_store_filter.py
 harness_market_enumeration_guard.py
-harness_nav_perf.py
-harness_notify_failure_leads.py
 harness_onboarding_intake.py
 harness_owner_rulings_k1_k3.py
 harness_payout_accrual.py
@@ -65,7 +78,6 @@ harness_pos_syscat_price.py
 harness_self_keyset_home_store.py
 harness_ssrf_import_gate.py
 harness_store_code_twins.py
-harness_sweep_honesty.py
 harness_table_header_contrast.py
 harness_team_snapshot_perf.py
 harness_tenant_implementation.py

@@ -32,7 +32,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 600 gates
+## Gated — 605 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -135,7 +135,6 @@ the Runs on column is how you can tell.
 | `harness_catalog_suggest.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_chargeback_flags_span_store.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_chat.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
-| `harness_ci_gate_index.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_ci_gate_index.py` | `tests.yml` | The gate index is current (lock) (`ci-gate-index`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_ci_pipefail_lock.py` | `security.yml` | A failing harness fails CI (pipefail lock) (`ci-pipefail`) | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
 | `harness_clawback.py` | `org-scope-guard.yml` | One clawback test, one appeal state machine (`commission-withholding-locks`) | `pull_request`, `push`, `workflow_dispatch` |
@@ -166,6 +165,7 @@ the Runs on column is how you can tell.
 | `harness_column_mapping_save.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_column_render_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_commcalc_market_dropdown.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_commcalc_recompute_guard.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_commission_backoffice_recon.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_commission_from_mtd.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_commission_itemisation.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
@@ -232,6 +232,7 @@ the Runs on column is how you can tell.
 | `harness_doc_intel.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_drill_narrow_fixtures.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_drilldown_coverage.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_eep_retail_ops.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_email_sweep_dispatch.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_employee_dashboard_access.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_employee_write_proof.py` | `org-scope-guard.yml` | Employee pay writes + change-log identity (`employee-write-locks`) | `pull_request`, `push`, `workflow_dispatch` |
@@ -379,7 +380,9 @@ the Runs on column is how you can tell.
 | `harness_multisheet_ingest.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_my_tenants_allowlist.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_nav_deep_link_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_nav_perf.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_navigate_away_one_home.py` | `security.yml` | The app hands a destination to the browser in one place (navigate-away lock) (`navigate-away-one-home`) | `pull_request`, `push`, `workflow_dispatch`, `schedule` |
+| `harness_notify_failure_leads.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_notify_send_identity.py` | `carrier-vocab-guard.yml` | Notify history names the report sent (DB-free, the real module) (`notify-send-identity-proof`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_notify_send_outcome.py` | `carrier-vocab-guard.yml` | A failed send names who, why and the fix (DB-free, the real module) (`notify-send-outcome-proof`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_ny_plan_activation_accessory.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
@@ -574,6 +577,7 @@ the Runs on column is how you can tell.
 | `harness_sweep_due.py` | `module-graph-guard.yml` | The graph is complete, current and interlinked (`module-graph-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_sweep_failures_visible.py` | `carrier-vocab-guard.yml` | Sweep-failure visibility proof (DB-free, the real reaper) (`sweep-failure-visibility-proof`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_sweep_freshness.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_sweep_honesty.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_table_sort_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_target_axis_lock.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_target_declared_axis.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
@@ -646,7 +650,7 @@ the Runs on column is how you can tell.
 | `pytest:integration` | `tests.yml` | Backend integration tests (`backend-integration`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest:unit` | `tests.yml` | Backend unit tests (`backend-unit`) | `pull_request`, `push`, `workflow_dispatch` |
 
-## Declared unrun — 46 harnesses no workflow runs
+## Declared unrun — 41 harnesses no workflow runs
 
 Declared debt (`backend/harness_unrun_pending.txt`), which may only SHRINK. These
 files assert things, and nothing executes them, so they assert nothing today.
@@ -662,7 +666,6 @@ files assert things, and nothing executes them, so they assert nothing today.
 - `harness_closing_hardening.py`
 - `harness_closing_reports_span_scope.py`
 - `harness_closing_submissions.py`
-- `harness_commcalc_recompute_guard.py`
 - `harness_commission_ledger_sign.py`
 - `harness_connector_runnable.py`
 - `harness_control_box_board.py`
@@ -671,14 +674,11 @@ files assert things, and nothing executes them, so they assert nothing today.
 - `harness_dm_accessory_attribution_router.py`
 - `harness_eep_pl_wiring.py`
 - `harness_eep_pl_wiring_negcontrol.py`
-- `harness_eep_retail_ops.py`
 - `harness_envelope_photo_required_gate.py`
 - `harness_export_xss_upload.py`
 - `harness_flag_review_persistence.py`
 - `harness_inactive_store_filter.py`
 - `harness_market_enumeration_guard.py`
-- `harness_nav_perf.py`
-- `harness_notify_failure_leads.py`
 - `harness_onboarding_intake.py`
 - `harness_owner_rulings_k1_k3.py`
 - `harness_payout_accrual.py`
@@ -689,7 +689,6 @@ files assert things, and nothing executes them, so they assert nothing today.
 - `harness_self_keyset_home_store.py`
 - `harness_ssrf_import_gate.py`
 - `harness_store_code_twins.py`
-- `harness_sweep_honesty.py`
 - `harness_table_header_contrast.py`
 - `harness_team_snapshot_perf.py`
 - `harness_tenant_implementation.py`

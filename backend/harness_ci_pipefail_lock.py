@@ -272,7 +272,7 @@ def misplaced(files, read_source, wheels):
 
 # ── THE THIRD RULE — a harness no workflow runs is a file, not a gate ─────────────────────────────
 PENDING_FILE = os.path.join(HERE, "harness_unrun_pending.txt")
-PINNED_MAX = 46           # must equal the number of entries in harness_unrun_pending.txt
+PINNED_MAX = 41           # must equal the number of entries in harness_unrun_pending.txt
 #                          314 -> 312 on 2026-10-31: harness_zero_sales.py and
 #                          harness_zero_sales_lock.py are now RUN by carrier-vocab-guard.yml.
 #                          Nothing ran either, which is how the lock's `d3` sat red on main.

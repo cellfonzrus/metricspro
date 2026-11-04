@@ -44535,17 +44535,33 @@ That lock now DEREFERENCES `ci_gates` instead of keeping a second, laxer copy of
 carries negative controls for each mention shape (comment, `paths:` filter, prose).
 
 ### CORE-35.3 The debt, measured and paid down
-
-All 312 entries on `harness_unrun_pending.txt` were RUN on 2026-11-04. **267 passed and are now wired
+All 312 entries on `harness_unrun_pending.txt` were RUN on 2026-11-04. **272 passed and are now wired
 into CI** as `tests.yml` jobs `harness-suite-1..4` (split by measured duration, ~2 minutes each,
-one step per harness so a red one is named in the UI). The list went **312 → 46**, and `PINNED_MAX`
+one step per harness so a red one is named in the UI). The list went **312 → 41**, and `PINNED_MAX`
 with it.
 
-The 46 are what is left, for the honest reason: **44 are RED when run**, one reaches the network, and
-one is `harness_export_xss_upload.py` — newly VISIBLE debt rather than new debt, since it pins its
-negative control to commit `6aadb14` via `git show`, which no shallow checkout can resolve. Nothing
-was skipped, disabled or quarantined to get green: a red harness is still declared, still counted,
-and on a list that may still only shrink.
+### CORE-35.4 Two defects in the wiring, found by CI and worth keeping
+
+The first wiring was wrong twice, and both lessons are general:
+
+- **The jobs checked out at depth 1.** Nine of these proofs reproduce the defect they fix against a
+  historical commit FIRST — a live negative control, so that a proof cannot pass by asserting
+  something that was never broken. Under a shallow checkout that `git show` fails and the proof dies
+  in its own setup, before assertion one. `harness_agency_ocr_async` did exactly that in CI while
+  passing in a container whose clone happened to be deeper. The suite now checks out with
+  `fetch-depth: 0`, and **five of the 44 reds were red for only that reason**. The lesson generalises
+  past this repo: a proof's negative control is part of the proof, so whatever it needs in order to
+  START is a CI requirement, not an environment detail.
+- **A failing step aborted the rest of its job**, so one red harness hid the 128 behind it — a suite
+  that reports its first failure and nothing else, which is §19.25's defect wearing a hat. Every
+  harness step now carries `if: always()`.
+
+The 41 left are RED when run, with full history and nothing stubbed. `harness_export_xss_upload.py`
+is among them and its reason is now known precisely: with history it RUNS and fails ONE assertion,
+A3b, which its own text calls pre-existing on base. It had been exempt from the debt list because a
+workflow `paths:` filter happened to name it; nothing executed it, so nobody saw that. Nothing was
+skipped, disabled or quarantined to get green: a red harness is still declared, still counted, and on
+a list that may still only shrink.
 
 `harness_intake_fakes.py` was one of the five wrongly-exempt files and is a LIBRARY — the in-memory
 Supabase double eight proof harnesses drive the real routers over. Exempting it was wrong twice:
