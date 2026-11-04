@@ -241,7 +241,7 @@ print("\n6. the declared pages exist")
 entries = [m for grp in re.findall(r'"pages":\s*\(([^)]*)\)', RS) for m in re.findall(r'"([^"]+)"', grp)]
 entries += [m for grp in re.findall(r'"page_except":\s*\(([^)]*)\)', RS) for m in re.findall(r'"([^"]+)"', grp)]
 # Declared, not counted: a page that leaves the declaration — or arrives in it — names itself here
-# rather than sliding under a size floor. Index §CORE-32; the same rule harness_subject_set_lock.py
+# rather than sliding under a size floor. Index §CORE-33; the same rule harness_subject_set_lock.py
 # enforces across every harness.
 DECLARED_PAGES = {
     "/account/password/**",

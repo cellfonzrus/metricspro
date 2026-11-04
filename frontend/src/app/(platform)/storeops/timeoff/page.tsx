@@ -351,7 +351,7 @@ export default function TimeOffPage() {
                     <td>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {/* ANSWERING a request is the manager's act, and the API refuses it for an
-                            individual contributor (rep_surface api_except, §CORE-32). The buttons
+                            individual contributor (rep_surface api_except, §CORE-33). The buttons
                             dereference that SAME server fact rather than carrying a rule of their
                             own, so a rep is never offered a control that would 403. */}
                         {confined ? null : r.status === 'pending' ? (

@@ -1,0 +1,53 @@
+# HARNESSES THAT WALK PYTHON STRING TOKENS THEMSELVES — the debt list, and it may only SHRINK.
+#
+# Found 2026-11-04 (index §CORE-32). PEP 701 (Python 3.12) stopped making an f-string one
+# `tokenize.STRING` token: it is FSTRING_START / FSTRING_MIDDLE / FSTRING_END with the
+# interpolations tokenised between them. A harness that walks STRING tokens and knows nothing of
+# that shape therefore STOPS SEEING f-strings on 3.12+ — and the dangerous direction is not red,
+# it is QUIET: it keeps passing while reading past the thing it was written to catch.
+#
+# `harness_carrier_vocab_guard.py` went red that way and is fixed: it dereferences
+# `harnesslib.py_string_expressions` / `py_string_parts`, which are f-string aware on every
+# interpreter and proved by tests/unit/test_py_string_expressions.py.
+#
+# WHY A RATCHET AND NOT A HARD RULE. None of the 34 below changes verdict on 3.12 or 3.13 today
+# (measured: each was run on both, all green), and rewriting 34 harnesses in one change is not a
+# decision a lock should make on the owner's behalf. So the rule is the one that stops the
+# bleeding: a NEW harness must read strings through the one home, and this list may only get
+# shorter. Delete a line when that harness dereferences harnesslib; adding a line fails the build.
+#
+# Enforced by backend/harness_py_string_reader_lock.py.
+harness_batch10_drilldown.py
+harness_batch11_drilldown.py
+harness_batch12_drilldown.py
+harness_batch13_drilldown.py
+harness_batch14_drilldown.py
+harness_batch5_drilldown.py
+harness_batch6_drilldown.py
+harness_batch7_drilldown.py
+harness_batch8_drilldown.py
+harness_batch9_drilldown.py
+harness_billing_period.py
+harness_cash_recon_drilldown.py
+harness_commission_leg_store_trend.py
+harness_component_basis_evidence.py
+harness_daily_incentive.py
+harness_day_recon_drilldown.py
+harness_declared_category_honourable.py
+harness_declared_feed_recon.py
+harness_encryption_backfill_coverage.py
+harness_gp_carrier_class_dereference.py
+harness_live_frame.py
+harness_live_input_latency.py
+harness_live_login_progress.py
+harness_login_progressive.py
+harness_metric_catalog_lock.py
+harness_operator_entry_enforcement.py
+harness_operator_scope_enforcement.py
+harness_pl_drill_detail.py
+harness_portal_report_pull.py
+harness_report_declaration.py
+harness_supplier_invoice_feed.py
+harness_target_axis_lock.py
+harness_tender_recon_drilldown.py
+harness_terminal_status.py

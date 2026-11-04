@@ -353,7 +353,7 @@ jobs:
         run: node prove_hub_gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   employee-reach:
-    # §CORE-32 — WHAT AN INDIVIDUAL CONTRIBUTOR MAY REACH IS ONE DECLARATION, AND THE API ENFORCES IT.
+    # §CORE-33 — WHAT AN INDIVIDUAL CONTRIBUTOR MAY REACH IS ONE DECLARATION, AND THE API ENFORCES IT.
     # Owner 2026-11-04: a rep on one tenant reached the Hours Adjustment screen and 32 other manager
     # pages by URL, because `lib/rbac.ts` prefix-matched the `/storeops` menu row it could see, and the
     # API behind those pages asked nothing at all (`POST /storeops/manual-hours` took no authorization

@@ -219,7 +219,7 @@ SO = types.ModuleType("app.modules.storeops.router")
 SO.__dict__.update({"HTTPException": HTTPException, "Header": _fastapi.Header, "ORG_ID": ORG,
                     "_payvis": _payvis, "_log_identity": _log_identity, "payroll_salary": payroll_salary,
                     "get_supabase": lambda: DB[0], "sb": lambda: DB[0], "Any": object,
-                    # WHOSE PERSON THIS IS (owner 2026-11-04, §CORE-32): `delete_manual_hours` now
+                    # WHOSE PERSON THIS IS (owner 2026-11-04, §CORE-33): `delete_manual_hours` now
                     # dereferences `require_person_write`, which asks `schedule_emp_ids` (§14w) and
                     # `role_is_self_scoped` (§6j). Both are I/O and neither is what this proof is
                     # about, so they are stubbed at their own seams to this proof's caller — an

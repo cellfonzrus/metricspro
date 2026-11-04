@@ -175,7 +175,7 @@ export default function ShiftSwapsPage() {
                   <td style={{ ...cell, color: 'var(--text3)' }}>{s.notes || '—'}</td>
                   <td style={cell}>
                     {/* The manager's answer, refused for an individual contributor by the API
-                        (rep_surface api_except, §CORE-32) — the control dereferences that server
+                        (rep_surface api_except, §CORE-33) — the control dereferences that server
                         fact rather than holding a rule of its own. */}
                     {confined ? <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
                       : s.status === 'pending' ? (

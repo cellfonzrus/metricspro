@@ -7,7 +7,7 @@
 // THE TILES ARE NOT DECLARED HERE. They come from `/me`
 // (`permissions.rep_surface.tiles`), built by `backend/app/core/rep_surface.py` — the SAME
 // declaration the API middleware refuses on and the menu gates on. A second list in the browser is
-// exactly how a rep ended up with a menu that disagreed with the server (index §CORE-32), so this
+// exactly how a rep ended up with a menu that disagreed with the server (index §CORE-33), so this
 // page renders what it is given and decides nothing about who may reach what.
 //
 // NOR IS THE PUNCH. Clocking in is one home, the kiosk at `/portal` (selfie, GPS, the offline punch

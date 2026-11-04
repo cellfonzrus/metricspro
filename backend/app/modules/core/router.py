@@ -493,7 +493,7 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
                                              "perms": perms}, caller_is_self=_is_self)
         perms = {**perms, "payout": _pa.viewer_payload(_is_self, _carrier)}
         # WHAT AN INDIVIDUAL CONTRIBUTOR MAY REACH, AND WHERE A STORE-LEVEL VIEWER LANDS (owner
-        # 2026-11-04, index §CORE-32). The SAME `_is_self` answer computed just above — no second
+        # 2026-11-04, index §CORE-33). The SAME `_is_self` answer computed just above — no second
         # read — through the ONE declaration `app.core.rep_surface`, which is also what the API
         # middleware refuses on. `lib/rbac.ts` holds no copy of this list; it reads this payload.
         from app.core import rep_surface as _rs

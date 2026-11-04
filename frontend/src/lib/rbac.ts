@@ -28,7 +28,7 @@ export type Permissions = {
   // The client decides nothing; it hides these.
   payout?: { audience?: 'employee' | 'manager'; carrier_view?: boolean; refused_pages?: string[] }
   // WHAT AN INDIVIDUAL CONTRIBUTOR MAY REACH, AND WHERE A STORE-LEVEL VIEWER LANDS (owner
-  // 2026-11-04, index §CORE-32) — stamped by the SERVER on /me from THE one declaration
+  // 2026-11-04, index §CORE-33) — stamped by the SERVER on /me from THE one declaration
   // `backend/app/core/rep_surface.py`, which is the same list the API middleware refuses on. There
   // is deliberately NO copy of these pages in this file: the previous copy (`SELF_ALLOWED`) plus a
   // PREFIX match on a parent nav row is exactly how a rep reached /storeops/timeclock (Hours
@@ -2048,7 +2048,7 @@ export function canSeeItem(perms: Permissions, item: NavItem): boolean {
   if (isDeepLinkItem(item)) { const page = deepLinkPage(item); return !!page && canSeeItem(perms, page) }
   if (payoutRefused(perms, item.href)) return false   // the server refuses it to this viewer (index §6j)
   // A CONFINED employee sees exactly the rows the server declared and nothing else — so the menu and
-  // the route guard can never disagree, in either direction (index §CORE-32).
+  // the route guard can never disagree, in either direction (index §CORE-33).
   if (repConfined(perms)) return repPageAllowed(perms, item.href)
   if (isSuperAdmin(perms)) return true
   if (MGMT_ONLY.has(item.href)) return canManage(perms, item.href)
@@ -2150,7 +2150,7 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
   // nav item's module like anyone else, could be bounced off the page they are being landed on.
   if (path === (perms.rep_surface?.landing || REP_LANDING)) return true
   if (payoutRefused(perms, path)) return false   // the server refuses it to this viewer (index §6j)
-  // THE CONFINED EMPLOYEE (owner 2026-11-04, index §CORE-32). Asked BEFORE the super-admin bypass is
+  // THE CONFINED EMPLOYEE (owner 2026-11-04, index §CORE-33). Asked BEFORE the super-admin bypass is
   // irrelevant — a confined viewer never carries the admin module — but it is asked before the scope
   // ladder because it REPLACES it: the server has already said, in one list, every page this person
   // may open, and nothing in this file may widen that. This is the one gate here that is CLOSED.

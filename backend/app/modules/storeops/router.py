@@ -724,7 +724,7 @@ def update_time_off(request_id: int, updates: dict, authorization: str = Header(
 
     Approving, denying, voiding or editing a request is the MANAGER's answer to it, so this
     dereferences `require_person_write(manager_only=True)` against the employee the stored request
-    names — the same one home `delete_manual_hours` asks. Found by the security pass on §CORE-32,
+    names — the same one home `delete_manual_hours` asks. Found by the security pass on §CORE-33,
     2026-11-04: this route took no `authorization` at all, so any signed-in person in the org could
     approve their own leave (and `rep_surface` was offering the path). Raising a request is still a
     plain POST to the collection, which every employee may do."""
@@ -761,7 +761,7 @@ def reconcile_timeoff_duplicates(authorization: str = Header(default=""), org_id
     sibling proves the void intent — never denies a standalone approval (e.g. genuine approved PTO).
 
     An org-wide cleanup, so it is a manager action — gated on `_require_manager` since the security
-    pass on §CORE-32 (2026-11-04) found it ungated and inside a prefix the employee surface grants."""
+    pass on §CORE-33 (2026-11-04) found it ungated and inside a prefix the employee surface grants."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
     client = sb()
@@ -4416,7 +4416,7 @@ def update_shift_swap(swap_id: int, updates: dict, authorization: str = Header(d
 
     Answering a swap is the MANAGER's act — it moves another person's shift — so it dereferences
     `require_person_write(manager_only=True)` against the requester the stored row names. Before the
-    security pass on §CORE-32 (2026-11-04) `authorization` was read only to stamp the log, so the
+    security pass on §CORE-33 (2026-11-04) `authorization` was read only to stamp the log, so the
     approval itself was unchecked while `rep_surface` offered the path."""
     status = updates.get("status")
     if status not in ("approved", "denied", "pending", "cancelled"):

@@ -163,7 +163,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # fixes are done + isolation test passes). Derives org_id from the verified token. Default = no-op.
 app.add_middleware(TenantScopeMiddleware)
 
-# THE INDIVIDUAL CONTRIBUTOR'S REACH (owner 2026-11-04, index §CORE-32). ALWAYS ON — deliberately
+# THE INDIVIDUAL CONTRIBUTOR'S REACH (owner 2026-11-04, index §CORE-33). ALWAYS ON — deliberately
 # NOT a branch of TenantScopeMiddleware above, which is gated behind MULTI_TENANT_ENFORCE: a
 # permission fix that needs an unrelated env flag is the browser-only gate wearing a disguise.
 # Added AFTER TenantScope ⇒ OUTER of it, so a manager's API path is refused before the identity
