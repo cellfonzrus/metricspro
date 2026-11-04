@@ -179,7 +179,27 @@ check("5c nothing else in the backend builds that payload",
 print("\n6. the declared pages exist")
 entries = [m for grp in re.findall(r'"pages":\s*\(([^)]*)\)', RS) for m in re.findall(r'"([^"]+)"', grp)]
 entries += [m for grp in re.findall(r'"page_except":\s*\(([^)]*)\)', RS) for m in re.findall(r'"([^"]+)"', grp)]
-check("6a the declaration was parsed", len(entries) >= 10, str(len(entries)))
+# Declared, not counted: a page that leaves the declaration — or arrives in it — names itself here
+# rather than sliding under a size floor. Index §CORE-32; the same rule harness_subject_set_lock.py
+# enforces across every harness.
+DECLARED_PAGES = {
+    "/account/password/**",
+    "/chat/**",
+    "/commcalc/targets/action-plan",
+    "/employee/**",
+    "/helpdesk/**",
+    "/helpdesk/dashboard",
+    "/helpdesk/settings",
+    "/my/**",
+    "/portal/**",
+    "/storeops/swaps",
+    "/storeops/timeoff",
+    "/training/**",
+}
+check("6a the declared pages are exactly the declared set",
+      set(entries) == DECLARED_PAGES,
+      "only in the code: %s / only in this lock: %s"
+      % (sorted(set(entries) - DECLARED_PAGES), sorted(DECLARED_PAGES - set(entries))))
 APP = os.path.join(ROOT, "frontend", "src", "app")
 for e in sorted(set(entries)):
     route = e[:-3] if e.endswith("/**") else e
