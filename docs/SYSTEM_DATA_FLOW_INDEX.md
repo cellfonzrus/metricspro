@@ -43021,7 +43021,7 @@ plate frames, merchandising, gaming, cleaning kits) is deliberately NOT in the h
 - **Endpoints:** `GET /commcalc/accessory-order-plan` (now returning `grid_columns`, `model_orders`,
   `consolidated`, `standalone`, `catalog`, `option_mix`, `colour_tokens`), `PUT …/config` (+`catalog`,
   `option_mix`, `device_classes`, `colour_tokens`), `PUT …/model-spec`, `POST …/lifecycle`.
-- **Locked:** `harness_accessory_order_grid.py` (63 checks) — the colour vocabulary cannot become
+- **Locked:** `harness_accessory_order_grid.py` (65 checks) — the colour vocabulary cannot become
   optional, no colour or brand word may be a VALUE in either home, an undeclared org gets no
   fallback, a caller may not stop asking the declaration, the grid and the consolidated sheet must
   foot, and an absence may not become a zero. Tests:
