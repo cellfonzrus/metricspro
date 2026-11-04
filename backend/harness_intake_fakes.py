@@ -439,3 +439,105 @@ def measured_fixture_rows():
     return rows
 
 
+
+# ── THE FAKE'S OWN PROOF (2026-11-04) ─────────────────────────────────────────────────────────────
+# This module is a LIBRARY, not a gate: eight proof harnesses drive the real routers over it, and
+# until today no workflow ran it — `harness_ci_pipefail_lock.py` exempted it because a `paths:`
+# filter happened to name the file. Exempting it was wrong twice over: nothing executed it, AND
+# running it would have proved nothing, because a library with no `__main__` exits 0 whatever it
+# does. A double eight harnesses trust needs its OWN proof, or every one of them is asserting
+# against behaviour nobody checked.
+#
+# So: the contract those harnesses actually rely on, asserted here. Run: python3 harness_intake_fakes.py
+def _selfcheck():
+    passed = failed = 0
+
+    def ok(name, cond, extra=""):
+        nonlocal passed, failed
+        if cond:
+            passed += 1
+            print(f"  ok   {name}")
+        else:
+            failed += 1
+            print(f"  FAIL {name}" + (f" — {extra}" if extra else ""))
+
+    db = FakeDB()
+    table = sorted(db.declared)[0]
+    cols = db.columns(table)
+    ok("a table declares its columns", bool(cols), f"{table} declares none")
+
+    # The whole point of declared columns: selecting one Postgres does not have must RAISE 42703,
+    # the way PostgREST does, instead of quietly returning rows without it.
+    try:
+        db.schema("public").table(table).select("definitely_not_a_column").execute()
+        ok("selecting an undeclared column raises 42703", False, "it returned instead")
+    except RuntimeError as e:
+        ok("selecting an undeclared column raises 42703", "42703" in str(e), str(e))
+
+    ok("selecting a DECLARED column does not raise",
+       db.schema("public").table(table).select(sorted(cols)[0]).execute() is not None)
+    ok("select('*') does not raise", db.schema("public").table(table).select("*").execute() is not None)
+
+    # insert → select round-trip, and eq() actually filters.
+    key = sorted(cols)[0]
+    before = len(db.schema("public").table(table).select("*").execute().data)
+    db.schema("public").table(table).insert([{key: "__selfcheck__"}]).execute()
+    after = db.schema("public").table(table).select("*").execute().data
+    ok("an insert is readable back", len(after) == before + 1, f"{before} -> {len(after)}")
+    hit = db.schema("public").table(table).select("*").eq(key, "__selfcheck__").execute().data
+    ok("eq() filters to the inserted row", len(hit) == 1 and hit[0][key] == "__selfcheck__", str(hit))
+    ok("eq() on a value nothing holds returns nothing",
+       db.schema("public").table(table).select("*").eq(key, "__nothing__").execute().data == [])
+
+    # A response always has the shape the routers read.
+    res = db.schema("public").table(table).select("*").execute()
+    ok("a response carries .data", hasattr(res, "data") and isinstance(res.data, list))
+    ok("a response carries .count", hasattr(res, "count"))
+    ok("count=True returns a number",
+       isinstance(db.schema("public").table(table).select("*", count="exact").execute().count, int))
+
+    # order() and limit(), which several harnesses assert page shapes with.
+    db.schema("public").table(table).insert([{key: "__selfcheck_b__"}]).execute()
+    lim = db.schema("public").table(table).select("*").limit(1).execute().data
+    ok("limit(1) returns one row", len(lim) == 1, str(len(lim)))
+    asc = [r.get(key) for r in db.schema("public").table(table).select("*").order(key).execute().data]
+    dsc = [r.get(key) for r in db.schema("public").table(table).select("*").order(key, desc=True).execute().data]
+    ok("order() sorts, and desc=True reverses it", asc == list(reversed(dsc)), f"{asc} vs {dsc}")
+
+    # Storage, in both the working and the deliberately-broken mode the harnesses use.
+    fresh = FakeDB()
+    try:
+        fresh.storage.get_bucket("never_created")
+        ok("get_bucket on a bucket nothing created raises", False, "it returned instead")
+    except RuntimeError:
+        ok("get_bucket on a bucket nothing created raises", True)
+    fresh.storage.create_bucket("selfcheck")
+    ok("...and hands the bucket back once created",
+       fresh.storage.get_bucket("selfcheck") == {"name": "selfcheck"})
+    ok("an upload is downloadable", _storage_round_trip(FakeDB()))
+    ok("storage_broken=True makes the upload fail, so a caller's error path is reachable",
+       not _storage_round_trip(FakeDB(storage_broken=True)))
+
+    ok("FakeUpload exposes a filename and bytes",
+       FakeUpload(b"x", "a.xlsx").filename == "a.xlsx")
+
+    print(f"\n{passed} passed, {failed} failed")
+    return 0 if failed == 0 else 1
+
+
+def _storage_round_trip(db):
+    """True when an upload then download returns the same bytes; False when storage refuses."""
+    try:
+        db.storage.create_bucket("selfcheck")
+    except Exception:
+        pass
+    try:
+        db.storage.from_("selfcheck").upload("a.bin", b"hello")
+        return db.storage.from_("selfcheck").download("a.bin") == b"hello"
+    except Exception:
+        return False
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(_selfcheck())
