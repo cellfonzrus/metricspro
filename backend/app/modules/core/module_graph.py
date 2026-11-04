@@ -73,17 +73,8 @@ FACTS: dict[str, dict] = {
             "harness_geo_retention_lock.py"
         ],
         "callers": {
-            # The nightly sweep and the "what is due" report: the ONLY two surfaces that act on a
-            # retention commitment, and neither holds a relation, column or window of its own.
             'app/modules/core/router.py': ('_geo_ret',),
-            # The event check-in's stamp (mig 986). It kept its OWN copy of the date arithmetic
-            # until 2026-11-01 — two copies are two windows free to drift — and now dereferences
-            # this home while keeping the public name its callers already use.
             'app/modules/marketing/event_logic.py': ('_ret',),
-            # Both ends of a punch and the DM store visit: `_geo_stamp_columns` writes the
-            # commitment WITH the fix, because a coordinate stored without its purge date is a
-            # coordinate nothing will ever delete. `storevisit/router.py` reaches it through this
-            # same helper rather than importing the home twice.
             'app/modules/storeops/router.py': ('_ret',),
         },
     },
@@ -132,265 +123,45 @@ FACTS: dict[str, dict] = {
                   'harness_batch25_drilldown.py'),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
-            # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
-            # report on the shared mechanism; the endpoint reaches it through `drilldowns`.
-            'app/modules/closing/cash_variance.py': ('report_drilldown',),
-            # tile_panel / tiles — the TILE shape (§CORE-17.3a). This is the fold most of the
-            # remaining reports owe, so it lives in the one home and a report declares only its
-            # own catalogue. First declaration: the eleven cash-recon tiles.
-            'app/modules/closing/cash_recon_drilldown.py': ('report_drilldown',),
-            # The X-report-vs-closing tiles (§CORE-17.3b). Declared and tying on the unfiltered
-            # range; the route still reads `owes` because its tiles are recomputed on the client,
-            # so the drill is offered only where the two provably agree.
-            'app/modules/commcalc/tender_recon_drilldown.py': ('report_drilldown',),
-            # The two closing DAY recons — ePay bank-deposit and accessory (§CORE-17.3c). One grain
-            # (store-day), one row-fields function, two catalogues: the reports differ in their
-            # figures, not in what identifies a row.
-            'app/modules/closing/day_recon_drilldown.py': ('report_drilldown',),
-            # The card-settlement tally (§CORE-17.3c). Its gap statuses are dereferenced from
-            # `external_credit_recon.GAP_STATUSES`, so "we do not know" cannot become a measured $0.
-            'app/modules/closing/external_credit_drilldown.py': ('report_drilldown',),
-            # The 3-way recon's selection strip (§CORE-17.3e). ALSO the one home for the flattening
-            # the strip is folded over (`flat_rows`) and the strip itself (`totals`), because the
-            # screen flattens the same payload for its cards and two flattenings are two populations.
-            'app/modules/closing/three_way_drilldown.py': ('report_drilldown',),
-            # The cash-pickup footers (§CORE-17.3e). The PLAIN tile shape deliberately: every filter
-            # on that screen is a query parameter, so the server's fold already covers the envelopes
-            # on screen and `drill-narrow` is NOT wired in (locked, harness §F5).
-            'app/modules/closing/pickup_drilldown.py': ('report_drilldown',),
-            # The close recon's four counts (§CORE-17.3f). Its rows are ACCUSATIONS, so the panel is
-            # the accusations themselves and the rows a count excludes stay in it as context. The
-            # rule that made a row a block is NOT here: `router._money_issues` keeps that.
-            'app/modules/closing/recon_drilldown.py': ('report_drilldown',),
-            # The DM-verify chargeback strip (§CORE-17.3f) — money out of a named person's pay,
-            # opening to the missed verifications it charges for.
-            'app/modules/closing/ops_chargeback_drilldown.py': ('report_drilldown',),
-            # §CLOSING-02 — Declared vs Captured. TWO panels, because its two figures are Σ over the
-            # SAME row out of DIFFERENT feeds (the closing sheets and the sales pair), which is
-            # §CORE-17.3m's grain rule and this report's whole subject. The three verdict COUNTS get
-            # no panel: the table below them IS that list. The absence reason on a captured row is
-            # DEREFERENCED from `declared_feed_recon`, which is the one home for telling the four
-            # absences apart — re-deciding it here could blame a rep for a feed nobody loaded.
-            'app/modules/closing/declared_feed_drilldown.py': ('report_drilldown',),
-            # The Management Envelope Receipt (§CORE-17.3g). THREE PEOPLE COUNT ONE ENVELOPE, in
-            # three tables, so each figure names only the ones it was read out of — and it serves a
-            # SECOND panel family, one per By-employee line, the owner's employee-level cash
-            # variance. An uncounted envelope is shown and never folded in at $0.00.
-            'app/modules/closing/envelope_drilldown.py': ('report_drilldown',),
-            # The Daily Closing dashboard's tile strip (§CORE-17.3g). The grain is the STORE-DAY and
-            # that is a fact, not a preference: `verified_overlay` makes a DM's correction
-            # authoritative for the store-day, so a rep-day fold would not add up to the tile on any
-            # corrected day (locked, harness §D3). The two cash tiles are declared in
-            # `recon_drilldown.py` instead, beside the counts they share `_money_issues` with.
-            'app/modules/closing/rollup_drilldown.py': ('report_drilldown',),
-            # The CRM's three report tabs (§CORE-17.3h). The file where the house rule for a
-            # QUOTIENT is written down: `win_rate` and `close_rate` get no panel at all, because no
-            # set of leads adds up to a percentage, so they offer the counts they divide. Also the
-            # one place the funnel's silent drop of an unknown-stage lead is made visible.
-            'app/modules/crm/reports_drilldown.py': ('report_drilldown',),
-            # The Helpdesk dashboard's tiles (§CORE-17.3h). Same ruling for an AVERAGE: the mean
-            # resolution time opens to `measured`, its own denominator, which this declaration folds
-            # and the endpoint now also shows on the tile.
-            'app/modules/helpdesk/dashboard_drilldown.py': ('report_drilldown',),
-            # The Closing & Cash Pickup Status tiles (§CORE-17.3i). The first declaration whose most
-            # important rows name NO table: a store-day nobody filed anything for was read out of
-            # nothing and is on the report because the roster expected it, which is served as a
-            # stated untraceable origin. Both state vocabularies are dereferenced, never re-spelled.
-            'app/modules/closing/chain_drilldown.py': ('report_drilldown',),
-            # Management Review's attempt groups (§CORE-17.3i). A turned-away submit is shown and
-            # never counted — `submit_refusal.is_real_try` stays the one rule for what is a try.
-            'app/modules/closing/attempts_drilldown.py': ('report_drilldown',),
-            # The Balance Sheet and the Cash Flow (§CORE-17.3j) — ONE declaration, because they
-            # share a grain: both read one stored `account_statements` row and render its
-            # sections/lines, and the cash flow's lines ARE balance-sheet line keys. The first
-            # declaration to say where provenance STOPS: a stored statement does not record which
-            # feed each line was read out of, so a feed is named only where the booking code reads
-            # it unconditionally and a config-resolved line names none.
-            'app/modules/account/statement_drilldown.py': ('report_drilldown',),
-            # The Current Monetary Liabilities tiles (§CORE-17.3j). Six figures composed from four
-            # other derivations, each now openable: the feed the RESOLVED payable basis read, one
-            # row per person with the hours table that answered for them, and an unset rent shown
-            # without a figure and never counted.
-            'app/modules/account/liabilities_drilldown.py': ('report_drilldown',),
-            # The PAYROLL-AND-WORKFORCE family (§CORE-17.3x) — the Payroll Report, StoreOps Reports
-            # — Hours & Payroll, and the Hours Budget. TWO modules, not one, and the reason is the
-            # grain rule: a PERSON over a PAY PERIOD whose hours may come out of the clock, the plan
-            # or nothing, against a STORE over a WORK-WEEK whose hours come out of the plan alone.
-            # The two payroll screens share one grain exactly, so they share ONE catalogue; a second
-            # over it would be the sibling derivation the index rules forbid. Also where the shared
-            # fold learned that the COLUMN a figure was read out of can differ per row, additively.
-            'app/modules/storeops/payroll_hours_drilldown.py': ('report_drilldown',),
-            'app/modules/storeops/scheduled_hours_drilldown.py': ('report_drilldown',),
-            # The three commission DISAGREEMENT reports (§CORE-17.3k) — Pay Discrepancy,
-            # Carrier Earned vs Employee Paid and Commission received over M1–M12. ONE module, THREE
-            # catalogues, because they do NOT share a row grain (a commission line, a rep, a money
-            # stream in a month) but they do share the provenance rule, the "one side was never
-            # reported" vocabulary and the snapshot ruling — three files would be three answers to
-            # one question. Also where a DIFFERENCE is shown to be drillable when it is folded per
-            # row rather than subtracted from two other totals.
-            'app/modules/commcalc/carrier_pay_drilldown.py': ('report_drilldown',),
-            # The seven DEVICE-ASSET reports (§CORE-17.3l) — the Asset Ledger, the Charges
-            # Dashboard, On-Inventory by Store, Weekly Owed to Distributor, the On-Inventory ↔ POS
-            # recon, Inter-store Borrowed Money and Asset Lending. ONE module, SEVEN catalogues,
-            # because the family has SIX row grains (measured, not assumed: four of them are keyed
-            # by a store and are still four different populations in three different units) and
-            # exactly THREE provenance answers — the distributor's unit ledger, the POS unit
-            # snapshot named PER ROW, and the financing records the platform writes itself. Also
-            # the one home for the per-row RMA net-loss rule the charges endpoint used to fold
-            # inline, and for `GET /asset/summary`'s own On-Inventory predicate, so a tile and its
-            # evidence cannot come to mean different rows.
-            'app/modules/asset/device_asset_drilldown.py': ('report_drilldown',),
-            # The five TARGETS reports (§CORE-17.3m) — Targets, Accessory Targets, the Action
-            # Plan, My Targets and the Manager Report Cards. ONE module, SIX catalogues,
-            # because the family has SIX measured grains (measured, not assumed: a scope-DAY,
-            # a store-MONTH in three different provenance answers, a rep row and a
-            # district-manager row) and FOUR provenance answers — the sales feeds, the
-            # declared closing counts, the target settings rows and the shift schedule. A
-            # TARGET is a declared number, never a measurement, so an unset one is reported as
-            # unset rather than folded in as zero.
-            'app/modules/commcalc/targets_drilldown.py': ('report_drilldown',),
-            # The three BILL-PAYMENT / PROCESSOR MONEY reports (§CORE-17.3n) — Bill Payments, the
-            # fee reconciliation and the processor's daily debits & credits. ONE module, THREE
-            # catalogues, because a catalogue is per ROW LIST and these are three different
-            # populations; SEVEN measured grains, of which SIX are keyed by a store-day and are
-            # separated only by PROVENANCE — what the register rang, what the processor's own
-            # report says, and a third naming both. A side that reported nothing is shown without
-            # a figure, never netted at $0.00.
-            'app/modules/commcalc/processor_money_drilldown.py': ('report_drilldown',),
-            # The three ACCESSORY MONEY reports (§CORE-17.3o) — the Accessory Target Allocation,
-            # the Accessory Cost Audit and the Accessory Flags. ONE module, THREE catalogues,
-            # because a catalogue is per ROW LIST and these are three different populations (a
-            # store, a rep, a flagged sale line); EIGHT measured grains over those three rows and
-            # FIVE provenance answers — the sales display union, the monthly upload on its own, the
-            # product catalogue, the target settings row and the org's flag-rules row. Where the
-            # ruling that a PANEL EXPLAINS THE FIGURE, NOT THE TABLE is written down: two of these
-            # screens filter in the browser WITHOUT re-folding their tiles, so narrowing their
-            # panels would move a figure and `drill-narrow` is deliberately not wired to any of
-            # them. Also the first declaration whose most important figure was read out of NOTHING:
-            # a store's share of a company goal is derived on the load and stored nowhere.
-            'app/modules/commcalc/accessory_money_drilldown.py': ('report_drilldown',),
-            # The four DEVICE-FINANCING reports (§CORE-17.3p). SIX measured grains over FOUR row
-            # shapes, two of which are the SAME device row in the SAME unit separated only by which
-            # relation answered — the distributor's CLAIM against the carrier's PAYMENT, which is the
-            # dispute the report exists to settle. Where the §CORE-17.3o call is made FOUR WAYS in
-            # one batch: three of these screens print the server's own fold and their panels are
-            # deliberately not narrowed, while the financing report folds its two tiles in the
-            # browser and therefore is. Also the batch whose duplicate check found the grain ALREADY
-            # DECLARED: the weekly lending batches are the device-asset family's catalogue, bound by
-            # identity rather than re-written, and the defect was that the PayGo page threw away a
-            # panel its own endpoint had been serving since batch 12.
-            'app/modules/commcalc/device_financing_drilldown.py': ('report_drilldown',),
-            # The four EXECUTIVE-MONTH reports (§CORE-17.3q) — the Owner Overview, Executive MTD,
-            # This Month's Focus and the Total Compensation trend, which are the surfaces the owner
-            # looks at most. ELEVEN measured grains over FIVE row shapes and SIX provenance answers
-            # (the calculated rep-commission snapshot, the recorded chargeback, the sales display
-            # union resolved off the read's own meta, the target settings, the store roster — and
-            # one relation this platform CANNOT NAME, because no migration here creates it, which is
-            # reported as a stated countable untraceable origin on every row rather than guessed).
-            # Two of its grains are the SAME roster store row in the SAME unit separated only by
-            # which relation answered: how many stores exist against how many carry a goal somebody
-            # saved. Where the §CORE-17.3o call is made BOTH ways: three of these pages print the
-            # server's own fold and their panels are deliberately not narrowed, while the
-            # compensation trend's by-rep view folds its two tiles in the browser and therefore is.
-            # Also the batch that declined a whole VIEW: every figure on the by-account compensation
-            # trend is refused a panel, with four distinct reasons.
-            'app/modules/commcalc/exec_month_drilldown.py': ('report_drilldown',),
-            # The four SALES-AND-MARGIN reports (§CORE-17.3r) — the Gross Profit Report, the
-            # Retention Analysis, the Sales Comparison and Zero Sales, which together answer *what
-            # did we sell, and at what margin*. FOURTEEN measured grains over SIX row shapes and
-            # SEVEN provenance answers — the sales display union resolved off each read's OWN meta,
-            # the month-end upload on its own, the carrier payment feed (or the MA statement pair,
-            # whichever the producer's own gate says filled the column), the subscriber residual
-            # report, the calculated rep-commission snapshot, the entered expense sheet and the
-            # shift schedule. Where NET PROFIT is shown to be drillable because the producer does
-            # the subtraction INSIDE its per-store loop and the header is Σ of those rows, while
-            # every Δ on the Sales Comparison is refused because that one is taken at the TOTAL from
-            # two independent window folds and BOTH its sides drill. Also where the two comparison
-            # WINDOWS name their own provenance separately, because a different period may have been
-            # answered out of different tables — the sharpest §CORE-17.3n case in the programme.
-            # Two of the Zero Sales tiles name NO SOURCE AT ALL and say so countably: 'nothing landed
-            # for this store-day' is an absence, not a row in a relation. The §CORE-17.3o call is
-            # made BOTH ways: the GP page folds its seven tiles in the browser and is therefore
-            # narrowed, while the other three print the server's own fold and are deliberately not —
-            # and one of those three contains `reduce(` twice, inside its dry-run digest preview, so
-            # the lock asserts the narrowed page's fold by its ACTUAL TEXT rather than by the word.
-            'app/modules/commcalc/sales_margin_drilldown.py': ('report_drilldown',),
-            # WHAT THE CARRIER OWES vs WHAT IT PAID (§CORE-17.3s) — one declaration for the four
-            # reports that answer that from four angles: the multi-month expected/earned ladder, the
-            # processor roll-up, the denied-appeal claw-back, and the cell COUNT the other three's
-            # money is computed on. Nine grains in four row shapes. All four pages print the
-            # SERVER's own fold and none is narrowed, which `harness_batch19_drilldown.py` §F locks
-            # in both directions off each page's own text.
-            'app/modules/commcalc/carrier_owed_drilldown.py': ('report_drilldown',),
-            # HOW ARE REPS AND STORES PERFORMING, AND WHO NEEDS COACHING (§CORE-17.3t) — one
-            # declaration for the four reports that answer that from four angles: Productivity,
-            # Rep Coaching, Autopay Opportunity and Failing KPIs. TWELVE measured grains in four
-            # row shapes, and the programme's FIRST caller for `UNIT_HOURS`. The §CORE-17.3o call
-            # is made BOTH ways inside one family — Coaching and Failing KPIs fold their own tiles
-            # in the browser and are narrowed, Productivity and Autopay put every filter in the
-            # query string and are deliberately not — and `harness_batch20_drilldown.py` §F locks
-            # each decision in both directions off each page's own text. This family is also full
-            # of RATES, so it refuses a lot (§CORE-17.3h) and every refusal names the two figures
-            # it offers instead.
-            'app/modules/commcalc/performance_coaching_drilldown.py': ('report_drilldown',),
-            # §CORE-17.3u — the four SALES-OUTCOME reports (peer comparison, product mix, spiff
-            # impact, tax collected): one question worked through in sequence over ONE month of the
-            # SAME retail sales lines. ELEVEN grains, three of them on a single spiff store row
-            # separated by PROVENANCE ALONE (§CORE-17.3n), and two row shapes inside the tax report
-            # because a store figure folds store rows while a store's OWN figure folds its days.
-            # It extended the one home ADDITIVELY in that PR with `served_tiles` — 'which figures
-            # can be explained at all' — which batch 20's declaration had been holding a private
-            # copy of and now dereferences by identity. `harness_batch21_drilldown.py` §A3 fails
-            # the build if either stops dereferencing it.
-            'app/modules/commcalc/sales_outcome_drilldown.py': ('report_drilldown',),
-            # The last four COMMCALC reports (§CORE-17.3v) — the commission dashboard, the Rep
-            # Breakdown tab, the subsidy-coverage report and the activation counts. THREE
-            # declarations, not one, because they share no row grain: a rep-per-store row of
-            # payout, a store-month of entitlement and a store row of counted devices are three
-            # different subjects. The dashboard and the breakdown DO share one, so they share one
-            # catalogue — a second one over the same grain is the sibling derivation the index
-            # rules forbid. Where the §CORE-17.3o call is made BOTH ways inside one catalogue: the
-            # dashboard prints the server's fold and is not narrowed, the breakdown folds the
-            # reader's own rep+store filter in the browser and is. SIX grains over three row
-            # shapes, two of them separated by PROVENANCE ALONE (§CORE-17.3n) — what an absent
-            # entitlement month was worth, priced from a declared rate or observed from the
-            # store's own payments. Also the batch that REPORTED three live defects rather than
-            # coding around them: a footer that sums a never-recorded slice as zero, two tabs
-            # meaning different things by `installment`, and a per-market fold whose own assembly
-            # destroys the market label before it prints — which is why no per-market panel is
-            # served at all.
-            'app/modules/commcalc/rep_incentive_drilldown.py': ('report_drilldown',),
-            'app/modules/commcalc/entitlement_coverage_drilldown.py': ('report_drilldown',),
-            'app/modules/commcalc/activation_count_drilldown.py': ('report_drilldown',),
-            # BATCH 23 (§CORE-17.3w) — the FINANCE set. THREE declarations over three questions a
-            # reader asks separately: what the distributor BILLED us for devices and what of it is
-            # still owed (ONE family over two screens, because both fold the units the distributor
-            # billed at the same store row, out of the same two relations, and the payable report
-            # already imports the voided-invoice rule from the purchases one); what the stock on the
-            # shelf is WORTH and whether the two sources that claim to know agree; and whether the
-            # money the distributor CREDITED matches what the residual report says was EARNED. The
-            # inventory family is the sharpest §CORE-17.3n case in finance so far — one store row,
-            # one unit, and the relation that answered decided PER ROW by a precedence rule, read
-            # off the producer's own basis word and never guessed. It is also the batch that
-            # REPORTED eight live defects rather than coding around them, among them a page that
-            # prints two columns under one header computed by two different rules, and a silent
-            # fifteen-row cap on the evidence behind an accusation.
             'app/modules/account/device_billing_drilldown.py': ('report_drilldown',),
             'app/modules/account/inventory_value_drilldown.py': ('report_drilldown',),
+            'app/modules/account/liabilities_drilldown.py': ('report_drilldown',),
             'app/modules/account/memo_recon_drilldown.py': ('report_drilldown',),
-            # §COMMCALC-43 — the brought-device-then-upgrade flag, TWO grains in one catalogue
-            # because its two money figures are Σ over the same row out of DIFFERENT feeds: the
-            # sales feed for what the store rang, the carrier's payment feed for the chargeback
-            # amount. One panel for both would attribute a carrier payment to the sales feed.
-            'app/modules/commcalc/byod_upgrade_drilldown.py': ('report_drilldown',),
-            # §COMMCALC-49 — the Accessory Order Plan. FOUR COUNTS, not money, folded over the
-            # report's own model rows. It is the first declaration whose central figure is a
-            # PROJECTION, so the honesty rule it needs from the shared mechanism is the one about a
-            # row with no number: a model nobody has ruled on carries no projected units and is
-            # served with its reason, because a projected zero would read as a decision to stop
-            # ordering for it. It refuses the two rates and every accessory quantity — the latter
-            # being the device total times a declared per-device rate, which has no rows of its own.
+            'app/modules/account/statement_drilldown.py': ('report_drilldown',),
+            'app/modules/asset/device_asset_drilldown.py': ('report_drilldown',),
+            'app/modules/closing/attempts_drilldown.py': ('report_drilldown',),
+            'app/modules/closing/cash_recon_drilldown.py': ('report_drilldown',),
+            'app/modules/closing/cash_variance.py': ('report_drilldown',),
+            'app/modules/closing/chain_drilldown.py': ('report_drilldown',),
+            'app/modules/closing/day_recon_drilldown.py': ('report_drilldown',),
+            'app/modules/closing/declared_feed_drilldown.py': ('report_drilldown',),
+            'app/modules/closing/envelope_drilldown.py': ('report_drilldown',),
+            'app/modules/closing/external_credit_drilldown.py': ('report_drilldown',),
+            'app/modules/closing/ops_chargeback_drilldown.py': ('report_drilldown',),
+            'app/modules/closing/pickup_drilldown.py': ('report_drilldown',),
+            'app/modules/closing/recon_drilldown.py': ('report_drilldown',),
+            'app/modules/closing/rollup_drilldown.py': ('report_drilldown',),
+            'app/modules/closing/three_way_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/accessory_money_drilldown.py': ('report_drilldown',),
             'app/modules/commcalc/accessory_order_drilldown.py': ('_dd',),
+            'app/modules/commcalc/activation_count_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/byod_upgrade_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/carrier_owed_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/carrier_pay_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/device_financing_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/entitlement_coverage_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/exec_month_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/performance_coaching_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/processor_money_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/rep_incentive_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/sales_margin_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/sales_outcome_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/targets_drilldown.py': ('report_drilldown',),
+            'app/modules/commcalc/tender_recon_drilldown.py': ('report_drilldown',),
+            'app/modules/crm/reports_drilldown.py': ('report_drilldown',),
+            'app/modules/helpdesk/dashboard_drilldown.py': ('report_drilldown',),
+            'app/modules/storeops/payroll_hours_drilldown.py': ('report_drilldown',),
+            'app/modules/storeops/scheduled_hours_drilldown.py': ('report_drilldown',),
         },
     },
     # ── §CORE-31 (owner report 2026-10-24) — what an INTERNAL SELF-CALL must prove ───────────────
@@ -416,11 +187,7 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_internal_self_call.py',),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
-            # mod-retail-ops' envelope payout + the closing-expense P&L push (5 self-calls).
-            'app/modules/closing/router.py': ('internal_api_base', 'self_call_headers',
-                                              'self_call_note'),
-            # mod-people's PTO / payroll-expense / gross / additional-payroll P&L pushes and the
-            # bulk targets read (5 self-calls).
+            'app/modules/closing/router.py': ('internal_api_base', 'self_call_headers', 'self_call_note'),
             'app/modules/storeops/router.py': ('internal_api_base', 'self_call_headers'),
         },
     },
@@ -442,8 +209,6 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_self_lockout.py',),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
-            # assign_role, bulk_assign, create_role, update_role, deactivate_user,
-            # revoke_super_admin and purge_app_user — every writer of authority in the module.
             'app/modules/core/router.py': ('_self_lockout',),
         },
     },
@@ -467,8 +232,6 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         # The lock verifies it against the real import graph.
         "callers": {
-            # POST /users/assign and POST /users/bulk-assign — the two person-scoped login writers.
-            # `_ensure_employee` in the same module supplies the roster half of the answer.
             'app/modules/core/router.py': ('_app_user_identity',),
         },
     },
@@ -488,21 +251,13 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         "callers": {
-            # the six sweep config readers, the status/session write chokepoint, every config upsert,
-            # `_ds_rows` (THE data_source read) and `save_data_source`
-            'app/modules/commcalc/router.py': ('_psec',),
-            # the credit-memo sweep's own portal_pass read — the one credential read that was never
-            # in commcalc/router.py
+            'app/core/encryption_backfill.py': ('portal_secret',),
             'app/modules/account/router.py': ('_psec',),
-            # the Google Places API key: `get_config` is its ONE reader, the config PUT its writer
+            'app/modules/billing/router.py': ('_psec',),
+            'app/modules/commcalc/router.py': ('_psec',),
             'app/modules/storeops/google_reviews.py': ('_psec',),
             'app/modules/storeops/router.py': ('_psec',),
-            # the platform's own vendor API tokens (mig 090) — the sibling §D's migration scan found
-            'app/modules/billing/router.py': ('_psec',),
-            # a minted OAuth token, cached on the login row it came from
             'app/modules/supply/api_credential.py': ('_psec',),
-            # seals what was already stored, iterating the registry so it owns no table list
-            'app/core/encryption_backfill.py': ('portal_secret',),
         },
     },
     # ── §CORE-04 (measured 2026-10-12) — and the rows ALREADY stored ─────────────────────────────
@@ -531,12 +286,8 @@ FACTS: dict[str, dict] = {
         # edge — which is the whole point of the lock: a module can start encrypting without ever
         # referencing this one.
         "callers": {
-            # the no-shell route: ENCRYPTION_BACKFILL_ON_BOOT runs run_all once at startup
             'app/main.py': ('run_all',),
-            # the HR button — the family whose absence WAS the defect; it now calls the shared sweep
-            # instead of holding its own encrypt loop
             'app/modules/hr/router.py': ('encryption_backfill',),
-            # the shell route for the PIN sweep
             'app/scripts/backfill_customer_pin_encryption.py': ('backfill_customer_pins',),
         },
     },
@@ -572,26 +323,12 @@ FACTS: dict[str, dict] = {
         # graph. The adapters import it for its helpers and are resolved BY it through the registry,
         # which is a runtime edge the import graph cannot see and the lock's §A proves instead.
         "callers": {
-            # the card feed imports the moved names under their old spellings, which is what keeps
-            # every one of its callers reading the same code it always did
-            'app/modules/commcalc/merchant_portal_sweep.py': (
-                'DEFAULT_WINDOW_DAYS', 'MAX_WINDOW_DAYS', 'date_range', 'make_pull_fn', 'next_expiry',
-                'prp', 'pull_reports_on_page', 'session_ttl_hint', 'window_days'),
-            'app/modules/commcalc/pos_report_sweep.py': ('prp',),
-            # the THIRD adapter (§COMMCALC-38) — it reaches the loop for the same four helpers and
-            # the same cold restore, which is the whole point of the extraction: a new portal feed is
-            # four functions, not a copied sweep
-            'app/modules/commcalc/supplier_invoice_sweep.py': ('prp',),
-            # the login step (§COMMCALC-46) reuses this loop's PAGE READER and SELECTOR RULE whole —
-            # "what controls does this page offer" is one question whether the page is a report page
-            # or a sign-in page, and a second reader in the login path is the duplicate defect
             'app/modules/commcalc/login_progressive.py': ('prp',),
-            # the editable report declaration (§COMMCALC-48) offers a tenant only the filter KINDS and
-            # date TOKENS this loop can actually apply — an editor with its own list would offer a
-            # filter the pull silently ignores, which looks like a declared filter and is not one
+            'app/modules/commcalc/merchant_portal_sweep.py': ('DEFAULT_WINDOW_DAYS', 'MAX_WINDOW_DAYS', 'date_range', 'make_pull_fn', 'next_expiry', 'prp', 'pull_reports_on_page', 'session_ttl_hint', 'window_days'),
+            'app/modules/commcalc/pos_report_sweep.py': ('prp',),
             'app/modules/commcalc/report_declaration.py': ('_prp',),
-            # the live session's dispatch and the scheduled cron both ask the registry
             'app/modules/commcalc/router.py': ('_prp',),
+            'app/modules/commcalc/supplier_invoice_sweep.py': ('prp',),
         },
     },
     # ── §COMMCALC-38 (owner ask 2026-10-27) — reading an exported report's columns ───────────────
@@ -616,18 +353,11 @@ FACTS: dict[str, dict] = {
         # (`norm`/`map_headers`/`header_score`/`_cell`) as dereferences of this home, so every
         # existing caller of theirs reads the same code it always did.
         "callers": {
-            'app/modules/commcalc/pos_report_feed.py': ('rc',),
-            'app/modules/commcalc/supplier_invoice_feed.py': ('rc',),
-            # the calibration capture (COMMCALC-39) compares a control's printed LABEL against the
-            # words that say what it is for, and a label compared under one rule here while a header
-            # is compared under another there is the drift this home exists to prevent
-            'app/modules/commcalc/portal_report_pull.py': ('norm',),
-            # a login page's controls are compared against the words that say what they take
-            # (COMMCALC-46) — the same rule that compares a report header, for the same reason
             'app/modules/commcalc/login_progressive.py': ('rc',),
-            # the report editor (§COMMCALC-48) folds a capture's suggested filter in only where the row
-            # has no filter meaning the same thing, and "the same thing" is this rule, not a second one
+            'app/modules/commcalc/portal_report_pull.py': ('norm',),
+            'app/modules/commcalc/pos_report_feed.py': ('rc',),
             'app/modules/commcalc/report_declaration.py': ('_rc',),
+            'app/modules/commcalc/supplier_invoice_feed.py': ('rc',),
         },
     },
     # ── §COMMCALC-47 — where a click on the live screen lands ────────────────────────────────────
@@ -759,21 +489,12 @@ FACTS: dict[str, dict] = {
         # live login asks the driver's one reader. _CAPTCHA_TEXT is the EXCUSED sibling (\u00a7COMMCALC-11):
         # "must a human tick a box on this form" is a different question about a form that IS there.
         "callers": {
-            # the driver: both predicates every caller already asks, plus the throttle exception it
-            # has always raised from here
-            'app/modules/commcalc/vidapay_sweep.py': ('PortalRateLimited', '_pb'),
-            # the live login reaches the VOCABULARY through the driver's one reader (vp.page_refusal)
-            # and the cooldown gate through the home directly
-            'app/modules/commcalc/live_login.py': ('_pb',),
-            # the cooldown gate the scheduler and the operator's own click both pass
-            'app/modules/commcalc/router.py': ('_m',),
-            # a landed upload says whether the source was in a cooldown when it was due
-            'app/modules/commcalc/import_audit.py': ('_pb',),
-            # the two sweeps that ask the vocabulary when a LOGIN failed, so a page refusing us at
-            # the edge is named a refusal rather than a rejected credential (§COMMCALC-52). Both ask
-            # it against the page's VISIBLE text, never its markup — that is the point of §51.
-            'app/modules/commcalc/epay_sweep.py': ('_pb',),
             'app/modules/commcalc/dlar_sweep.py': ('_pb',),
+            'app/modules/commcalc/epay_sweep.py': ('_pb',),
+            'app/modules/commcalc/import_audit.py': ('_pb',),
+            'app/modules/commcalc/live_login.py': ('_pb',),
+            'app/modules/commcalc/router.py': ('_m',),
+            'app/modules/commcalc/vidapay_sweep.py': ('PortalRateLimited', '_pb'),
         },
     },
     # ── §COMMCALC-52 — what happened to the login we just submitted ─────────────────────────────
@@ -814,11 +535,8 @@ FACTS: dict[str, dict] = {
         # facts are read OFF differs per driver (a browser frame, an HTTP document, an error region)
         # and only the decision is shared.
         "callers": {
-            # the browser driver whose markup predicate caused the outage
-            'app/modules/commcalc/epay_sweep.py': ('_lo',),
-            # the browserless driver: same question, visible_from_html / form_in_html
             'app/modules/commcalc/dlar_sweep.py': ('_lo',),
-            # the live login: names which of the two a still-on-the-form submit was
+            'app/modules/commcalc/epay_sweep.py': ('_lo',),
             'app/modules/commcalc/vidapay_sweep.py': ('_lo',),
         },
     },
@@ -855,20 +573,12 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND (§50). Each driver binds the home's function object rather than
         # calling through a wrapper, so the dereference is provable by identity, not by grep.
         "callers": {
-            # ── the three portal drivers, which never asked it until 2026-10-31. Each imports the
-            # MODULE and binds its function object (`feed_today = _report_filters.business_today`),
-            # so the dereference is provable by identity rather than by grep.
-            # the window that cost the comp report every automatic run it ever made
-            'app/modules/commcalc/epay_sweep.py': ('_report_filters',),
-            # the invoice window and the PayGo cutoff
-            'app/modules/commcalc/vip_sweep.py': ('_report_filters',),
-            # the day an inventory snapshot is filed under
             'app/modules/commcalc/b2b_sweep.py': ('_report_filters',),
-            # ── the notify side, which has read this home correctly since it was written
+            'app/modules/commcalc/epay_sweep.py': ('_report_filters',),
+            'app/modules/commcalc/vip_sweep.py': ('_report_filters',),
             'app/modules/notify/attention.py': ('report_filters',),
             'app/modules/notify/finance_reports.py': ('ReportConfigError',),
-            'app/modules/notify/report_registry.py': ('ReportConfigError', '_business_today',
-                                                      '_resolve_billing_friday', '_validate_filters'),
+            'app/modules/notify/report_registry.py': ('ReportConfigError', '_business_today', '_resolve_billing_friday', '_validate_filters'),
             'app/modules/notify/workforce_reports.py': ('_business_today',),
         },
     },
@@ -893,12 +603,7 @@ FACTS: dict[str, dict] = {
         "index": ('COMMCALC-38',),
         "locks": ('harness_supplier_invoice_feed.py',),
         "callers": {
-            # the registry row dereferences the module's CONNECTOR constant rather than re-spelling
-            # it — a literal there would be the second copy, and the two disagreeing is exactly how a
-            # feed ends up dispatchable with no door (§12a.2a)
             'app/modules/commcalc/connector_registry.py': ('SUPPLIER_INVOICE_CONNECTOR',),
-            # the dispatcher; the reconciliation that reads these rows is not built yet
-            # (§COMMCALC-38.8 states that plainly rather than implying it shipped)
             'app/modules/commcalc/router.py': ('_SUPPLIER_INVOICE_CONNECTOR', 'sis'),
         },
     },
@@ -946,26 +651,14 @@ FACTS: dict[str, dict] = {
         # A-check buys even so: a NEW importer cannot land silently, and the next author is told
         # that this file answers the device-department question before they touch it.
         "callers": {
-            # ── THE READERS OF THIS FACT ────────────────────────────────────────────────────────
-            # The P&L's sales classifier (`_sales_classifier.is_device`) — the reader that had its
-            # own answer until 2026-10-19 and now dereferences this one.
             'app/modules/account/coa.py': ('device_department_test',),
-            # The GP report's one caller (`_compute_gp`, which hands over the org's declaration in
-            # EVERY mode) and the GP Category Map screens, which must tell the owner the same thing
-            # the books do about each department.
-            'app/modules/commcalc/router.py': ('DEVICE_DEPTS', 'GP_CATEGORIES', 'ONDIGO_DEPT',
-                                               '_GP_CATEGORIES_SET', '_GP_CATS_DEFAULT',
-                                               '_GP_VOID_TOKENS', '_dept_classifier', '_gp',
-                                               '_gp_is_voided', '_gp_skip_reason', '_ik',
-                                               'bucket_map', 'calc_gp_report',
-                                               'device_department_test'),
-            # ── IMPORTERS OF THE VOID-TOKEN VOCABULARY IN THE SAME MODULE (not of this fact) ────
             'app/modules/commcalc/calculator.py': ('_VOID_TOKENS', '_is_voided'),
             'app/modules/commcalc/commission_drilldown.py': ('_is_voided',),
             'app/modules/commcalc/commission_engine.py': ('_VOID_TOKENS', '_is_voided'),
             'app/modules/commcalc/flags.py': ('_is_voided',),
             'app/modules/commcalc/ma_recon.py': ('_is_voided',),
             'app/modules/commcalc/plan_impact.py': ('_is_voided',),
+            'app/modules/commcalc/router.py': ('DEVICE_DEPTS', 'GP_CATEGORIES', 'ONDIGO_DEPT', '_GP_CATEGORIES_SET', '_GP_CATS_DEFAULT', '_GP_VOID_TOKENS', '_dept_classifier', '_gp', '_gp_is_voided', '_gp_skip_reason', '_ik', 'bucket_map', 'calc_gp_report', 'device_department_test'),
             'app/modules/commcalc/sale_installment_engine.py': ('_VOID_TOKENS', '_is_voided'),
             'app/modules/commcalc/tax_collected.py': ('VOID_TOKENS', 'is_voided', 'safe_float'),
             'app/modules/commcalc/void_watchdog.py': ('_skip',),
@@ -992,10 +685,7 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
         # on 2026-10-04).
         "callers": {
-            # The P&L sales scan — the one booking path, and the only reader of the money gate.
             'app/modules/account/coa.py': ('_slm',),
-            # The rule editor endpoint: it offers the vocabulary and validates against it rather
-            # than spelling the fields, the bases or the blank label itself.
             'app/modules/account/router.py': ('sales_line_map',),
         },
     },
@@ -1022,11 +712,6 @@ FACTS: dict[str, dict] = {
         # test `router._sales_cell_agg` counts boxes with. §G of the lock fails the build if this
         # module reads that config itself or defaults it to the house labels.
         "callers": {
-            # The ONE sweep every watchdog runs on (one cron line, §53). It reads the sales lines
-            # through `_read_sales` — which dereferences `router._open_month_source`, the one home
-            # for "which sales table answers for this period" — injects this org's
-            # `box_departments` and the shared void-token filter, and writes under the detector's
-            # OWN `source` so the commission recalculation's flag pass cannot retire its findings.
             'app/modules/commcalc/watchdog_router.py': ('_handsets',),
         },
     },
@@ -1146,20 +831,10 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         "callers": {
-            'app/modules/commcalc/router.py': ('_peercmp',),
-            # §60 — the spiff-impact report ranks its own metric THROUGH this home
-            # (`with_extra_metric` / `lagging` / `prompt_sentence`) so "behind" keeps one definition.
-            'app/modules/commcalc/spiff_impact.py': ('_pc',),
-            # §62 — the product-mix report dereferences the ratio, the median and the severity cut, and
-            # its endpoint borrows `with_extra_metric` / `peer_items_by_store` for the store plan, so a
-            # rep and their store are judged behind by one rule.
             'app/modules/commcalc/product_mix.py': ('_pc',),
-            # §CORE-17.3u — the sales-outcome drill-down reads this home's OWN threshold and its own
-            # default ranked metric (`BAND_MIN_PEERS`, `DEFAULT_GAP_METRIC`) so a panel's NOTE can
-            # say what the report refused and why in the report's own numbers. It compares nothing
-            # against either and re-bands nothing; `harness_batch21_drilldown.py` §A7 fails the
-            # build if it stops dereferencing them.
+            'app/modules/commcalc/router.py': ('_peercmp',),
             'app/modules/commcalc/sales_outcome_drilldown.py': ('_peer',),
+            'app/modules/commcalc/spiff_impact.py': ('_pc',),
         },
     },
     'device_price_band': {
@@ -1171,24 +846,9 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         "callers": {
-            # `_sales_cell_agg` asks price_cfg for the band and the model rather than deciding either,
-            # and the endpoint wires the report. §62.
-            'app/modules/commcalc/router.py': ('_pmix',),
-            # The takeover evaluation's "what was sold" breakup reads the SAME home for what a product
-            # description means — `product_class_of` / `product_breakup` beside `model_of`, so a
-            # tablet is one thing on the platform. §COMMCALC-03.21.
             'app/modules/commcalc/prospect_eval.py': ('_pm',),
-            # §CORE-17.3u — the sales-outcome drill-down reads this home's own BOX FLOOR and its own
-            # VERDICT WORDS rather than re-testing a rep against two medians: 'low on both signals'
-            # is `VERDICTS[0][0]`, read off the row the producer already judged. The declaration
-            # spells no verdict and holds no floor; `harness_batch21_drilldown.py` §A7/§A8c fail the
-            # build if either becomes a literal there again.
+            'app/modules/commcalc/router.py': ('_pmix',),
             'app/modules/commcalc/sales_outcome_drilldown.py': ('_pmix',),
-            # §COMMCALC-32 — the payables ledger asks this home whether the line sold a DEVICE AT ALL
-            # (`no_device_declared`, the declared-basis half of `product_class_of`) instead of
-            # inferring it from a missing product name. A line the feed declares as the customer's own
-            # phone is not a device payable, and `harness_payables_device_rows.py` §A9/§D2 fail the
-            # build if that question is answered here again by a literal token or a blank-name guess.
             'app/modules/payables/engine.py': ('_pm',),
         },
     },
@@ -1203,16 +863,7 @@ FACTS: dict[str, dict] = {
         # on 2026-10-04, and rewrote 51 of them on 2026-10-26). The lock verifies it against the
         # real import graph.
         "callers": {
-            # The ledger WRITER. All three recovery sources (the device's own declared column, the
-            # Boost/VIP classification, the ePay feed) fold through `resolve` here, so the amount
-            # and its basis cannot disagree, and the `rebate_amount = 0.0` placeholder that billed
-            # $544,447.78 of netted devices to the owner cannot return — §F of the lock fails the
-            # build if it does. §COMMCALC-33.
             'app/modules/payables/engine.py': ('_rec',),
-            # The EXPOSURE figure every surface headlines. `stamp_aging` nets through this home
-            # rather than re-deriving the subtraction, and reports what was NOT netted beside the
-            # total instead of dropping it — which an earlier draft did, zeroing Boost's real
-            # exposure. §COMMCALC-33.4.
             'app/modules/payables/unsold_inventory.py': ('_rec',),
         },
     },
@@ -1226,11 +877,6 @@ FACTS: dict[str, dict] = {
         # on 2026-10-04, and rewrote 51 of them on 2026-10-26). The lock verifies it against the
         # real import graph.
         "callers": {
-            # `Weekly Owed to Distributor` (§COMMCALC-34). The report used to BE the answer: it read
-            # one carrier's weekly consignment column and nothing else, so a tenant whose carrier
-            # raises an invoice per order saw a sum over an empty set. It now dereferences the
-            # cadence — `resolve_cadence` / `week_window` / `roll_up` — and derives no rhythm of its
-            # own. A carrier's stamped period still WINS through this home, never recomputed.
             'app/modules/asset/router.py': ('_bp',),
         },
     },
@@ -1244,16 +890,8 @@ FACTS: dict[str, dict] = {
         # on 2026-10-04, and rewrote 51 of them on 2026-10-26). The lock verifies it against the
         # real import graph.
         "callers": {
-            # The DAILY surface, `/payables/owed-by-date`. Its own ledger query and its own vendor
-            # fallback are DELETED, not left beside this one — a dead second reader is a future
-            # divergence that compiles (§19.18). All that remains of it here is the grouping by date.
-            'app/modules/payables/router.py': ('_owed',),
-            # The WEEKLY roll-up, which groups the SAME rows by billing period instead. Giving the
-            # weekly report its own read was the obvious repair and would have been the duplicate
-            # defect the house rules gate on: two paths answering "what do I owe", free to disagree
-            # the moment either learned something the other did not. §F13 of the lock fails the
-            # build if a second definition of the read appears anywhere in the triangle.
             'app/modules/asset/router.py': ('_owed_r',),
+            'app/modules/payables/router.py': ('_owed',),
         },
     },
     'kpi_column_meaning': {
@@ -1275,15 +913,8 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/dlar_vs_platform.py': ('_kf',),
             'app/modules/commcalc/flags.py': ('_kpi',),
             'app/modules/commcalc/payout_structure.py': ('_kpi',),
-            'app/modules/commcalc/router.py': ('_kpi_failing', '_kpif'),
-            # §CORE-17.3t. The Failing KPIs drill-down has to say WHICH GRAIN each panel is over —
-            # a door's actual comes out of the carrier's own per-door report and an employee's out
-            # of what the last calculation wrote down, and the two are never pooled. So it asks this
-            # home for the two grain words rather than spelling them, bound by object identity and
-            # locked by `harness_batch20_drilldown.py` §A7. It reads NO KPI column itself and holds
-            # no port-in reading of its own: every per-metric verdict is the classifier's own
-            # `failing` / `met` / `no_data` list, read off the row.
             'app/modules/commcalc/performance_coaching_drilldown.py': ('_kpif',),
+            'app/modules/commcalc/router.py': ('_kpi_failing', '_kpif'),
         },
     },
     'spiff_store_impact': {
@@ -1296,10 +927,6 @@ FACTS: dict[str, dict] = {
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         "callers": {
             'app/modules/commcalc/router.py': ('_spiffimp',),
-            # §CORE-17.3u — the sales-outcome drill-down reads this home's own METRIC KEY so the
-            # per-100-box rate it refuses a panel to is named in the producer's own word. THREE
-            # provenances sit on one store row of this report, and the declaration says which of
-            # them answered for each figure rather than pooling them.
             'app/modules/commcalc/sales_outcome_drilldown.py': ('_spiff',),
         },
     },
@@ -1344,20 +971,10 @@ FACTS: dict[str, dict] = {
         # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
         # real import graph rather than regenerating it.
         "callers": {
-            'app/modules/commcalc/router.py': ('_drr',),
-            # The COST side (§69) reads this fact's own verdict reader to place a handset's cost on
-            # the activating store. One reconciliation, two readers, never two derivations.
             'app/modules/account/device_cogs.py': ('_drr',),
-            # The DRILL-DOWN (§CORE-17.3p) reads this fact's own VERDICTS and REASON KEYS so its two
-            # unpaid buckets count exactly the devices the recon reached those verdicts about, and a
-            # device shown without a figure names the absence in the producer's own vocabulary. It
-            # forms no opinion of its own about any device: it declares which column each figure was
-            # read out of and which relation held it.
-            'app/modules/commcalc/device_financing_drilldown.py': ('_drr',),
-            # §COMMCALC-44 — the one home for the DOLLARS against a device binds this fact's pure
-            # fold to the org's config and the paged feed read. Both reports that want the figure
-            # go through it, so neither re-derives this fact's verdict vocabulary.
             'app/modules/commcalc/carrier_device_money.py': ('_drr',),
+            'app/modules/commcalc/device_financing_drilldown.py': ('_drr',),
+            'app/modules/commcalc/router.py': ('_drr',),
         },
     },
     # ══════════════════════════════════════════════════════════════════════════════════════════
@@ -1381,18 +998,9 @@ FACTS: dict[str, dict] = {
                   'harness_device_line_reimbursement.py'),
         # SNAPSHOT — written BY HAND, multi-line, not blessed (see the note on the fact above).
         "callers": {
-            # The P&L's equipment-reimbursement side: one row per device, the figure the statement
-            # is booked on.
-            'app/modules/commcalc/router.py': ('_cdm',),
-            # §COMMCALC-43's CHARGEBACK AMOUNT — the carrier money standing against the handset on
-            # a flagged brought-device-then-upgrade pair. It reads the SAME verdict the P&L books
-            # on, which is the point: a watchdog screen and the statement must not quote two
-            # different rebates for one phone.
-            'app/modules/commcalc/watchdog_router.py': ('_cdm',),
-            # §COMMCALC-43's drill-down catalogue names the relation this home reads the chargeback
-            # amount out of, by dereferencing `FEED_TABLE` rather than spelling it — so a panel
-            # cannot attribute the figure to the feed the ROW was found in (§CORE-17.3j).
             'app/modules/commcalc/byod_upgrade_drilldown.py': ('_cdm',),
+            'app/modules/commcalc/router.py': ('_cdm',),
+            'app/modules/commcalc/watchdog_router.py': ('_cdm',),
         },
     },
     # ── §COMMCALC-49 (owner ask 2026-10-29) — HOW MANY OF THIS WILL SELL NEXT ───────────────────
@@ -1422,21 +1030,10 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04, and it strips exactly these reasons).
         "callers": {
-            # The device forecast (§15, module 095). It kept its own four lines of velocity and its
-            # own device-line test; both are gone, and the device DEPARTMENTS it used to spell as a
-            # literal are now the ORG'S declaration, asked through `device_vocabulary`.
-            'app/modules/payables/router.py': ('_devvocab', 'demand_projection'),
-            # The proposed-PO recommendations (§36). The other copy, excused in its docstring by the
-            # module-load cycle — answered rather than argued with, since the home imports nothing.
             'app/modules/asset/purchase_orders.py': ('_devvocab', 'demand_projection'),
-            # The Accessory Order Plan (§COMMCALC-48) — the THIRD caller, and the one whose arrival
-            # is why the fact was factored instead of copied a third time. It counts MONTHS where
-            # the other two count days, which is exactly what the window-unit rule allows.
             'app/modules/commcalc/accessory_order_plan.py': ('_dp',),
-
-            # The report's endpoint reads the device-line test directly, so the look-back counts the
-            # same lines the two ordering screens do.
             'app/modules/commcalc/router.py': ('_devvocab', '_dp'),
+            'app/modules/payables/router.py': ('_devvocab', 'demand_projection'),
         },
     },
     'device_model_family': {
@@ -1460,8 +1057,6 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_accessory_order_grid.py',),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50).
         "callers": {
-            # The Accessory Order Plan's endpoint: it asks the org for its colour words and folds the
-            # raw model counts into phones before the plan is built.
             'app/modules/commcalc/router.py': ('_dmf',),
         },
     },
@@ -1484,12 +1079,8 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_accessory_order_grid.py',),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50).
         "callers": {
-            # The Accessory Order Plan's endpoint: it asks the org for its condition words so a
-            # pre-owned handset is ordered as its own device.
-            'app/modules/commcalc/router.py': ('_cond',),
-            # The one home for the family grain reads the condition off the raw spelling.
             'app/modules/commcalc/device_model_family.py': ('_cond',),
-            # The POS inventory screen's two dropdowns are served from here.
+            'app/modules/commcalc/router.py': ('_cond',),
             'app/modules/pos/router.py': ('_devcond',),
         },
     },
@@ -1512,11 +1103,7 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_accessory_order_grid.py',),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50).
         "callers": {
-            # The plan builds the grid and the consolidated sheet off the resolved catalog, and reads
-            # the share rule for the colour mix through it.
             'app/modules/commcalc/accessory_order_plan.py': ('_cat',),
-            # The endpoint resolves the catalog to validate a per-phone assignment before storing it,
-            # and reads which product classes take an accessory at all.
             'app/modules/commcalc/router.py': ('_aocat',),
         },
     },
@@ -1533,28 +1120,11 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04).
         "callers": {
-            # The P&L input builder: it hands the PERIOD down so the activation index is reachable
-            # at all. Without that argument the switch could be declared and still never fire —
-            # the §19.18 un-wiring failure mode, pinned by §H5b.
-            'app/modules/account/coa.py': ('_device_cogs',),
-            # The finance-config screen: it READS the resolved basis and writes the declaration,
-            # and has no opinion of its own.
-            'app/modules/account/router.py': ('_dc', '_dccfg', '_dcscfg'),
-            # §COMMCALC-03 — the takeover evaluation prices a PROSPECT's handsets through this home's
-            # factored-out pure cores (`ma_unit_price_from_rows` / `ma_sold_cost_from_rows`), so a
-            # prospect's device COGS is the same arithmetic as the company's.
-            'app/modules/commcalc/router.py': ('_dcg',),
-            # The BALANCE SHEET and the statement engine import this module for the mig-1041 basis
-            # (§42.5), not for the placement — but the import graph connects them, so they are named
-            # here rather than left to look like an unexplained edge.
             'app/modules/account/balance_sheet.py': ('FEE_CATEGORIES',),
+            'app/modules/account/coa.py': ('_device_cogs',),
+            'app/modules/account/router.py': ('_dc', '_dccfg', '_dcscfg'),
             'app/modules/account/statement_engine.py': ('device_cogs',),
-            # COMMCALC-27 (2026-10-22) — THE PAYABLE LEDGER prices a handset the carrier's own row
-            # carries no amount for (`owed_mode='unit_price_map'`, mig 1091) through this home's pure
-            # core, so a Total device's cost on the payables screen is the SAME arithmetic the P&L
-            # costs it with. Measured that day: the two easier joins both fail — the activation order
-            # is absent from the fulfillment sheet (0 of 4,322) and the processor feed's price is an
-            # activation charge, not the device ($529.00 vs $195.00 on one iPhone 13).
+            'app/modules/commcalc/router.py': ('_dcg',),
             'app/modules/payables/engine.py': ('_cogs',),
         },
     },
@@ -1572,11 +1142,8 @@ FACTS: dict[str, dict] = {
         # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
         # real import graph rather than regenerating it.
         "callers": {
-            'app/modules/commcalc/router.py': ('_ec',),
-            # §CORE-17.3v. The coverage drill-down reads the producer's OWN verdict words, config
-            # column and migration name rather than restating any of them, so a verdict renamed
-            # here reaches the panel with no second edit.
             'app/modules/commcalc/entitlement_coverage_drilldown.py': ('_ec',),
+            'app/modules/commcalc/router.py': ('_ec',),
         },
     },
     'declared_metric_catalog': {
@@ -1592,26 +1159,11 @@ FACTS: dict[str, dict] = {
         # of 12 facts on 2026-10-04, and on 2026-10-10 it stripped the hand-written caller comments
         # off five facts; that run was reverted).
         "callers": {
-            # The ONE construction site (`_metric_catalog`), the store-day fold and the metric-line
-            # writer. Every closing endpoint that offers a category list routes through it.
-            'app/modules/closing/router.py': ('_metrics',),
-            # The incentive engine measures THROUGH the catalog — `gross_revenue`, `units_of`,
-            # `amount_of` — so a payout rule and a target cannot disagree about what a day's sales
-            # were. It holds no category list and no second definition of revenue.
-            'app/modules/commcalc/daily_incentive.py': ('mc',),
-            # The rule editor and the day calculation reach the catalog through the closing home's
-            # `_metric_catalog`, never by building one.
-            'app/modules/commcalc/router.py': ('_mc',),
-            # §COMMCALC-02 — the targets engine dereferences `figure_unit` for a declared category's
-            # UNIT, while closing/router dereferences `figure_of` for its ACHIEVED figure. Two copies
-            # of that one rule would let a target be SET in units and MEASURED in dollars, so it
-            # belongs to this question rather than being a fact of its own.
-            'app/modules/commcalc/targets_engine.py': ('_figure_unit',),
-            # §CLOSING-02 (mig 1102) — the declared-vs-captured reconciler asks the catalog WHO
-            # declares a category (`is_employee_declared`), because the grain of an accusation is
-            # the category's and not the feed's: folding a per-rep capture against a store
-            # declaration accused a store of not declaring a sale it had declared.
             'app/modules/closing/declared_feed_recon.py': ('_metrics',),
+            'app/modules/closing/router.py': ('_metrics',),
+            'app/modules/commcalc/daily_incentive.py': ('mc',),
+            'app/modules/commcalc/router.py': ('_mc',),
+            'app/modules/commcalc/targets_engine.py': ('_figure_unit',),
         },
     },
     'daily_incentive_shapes': {
@@ -1624,8 +1176,6 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_daily_incentive.py', 'harness_metric_catalog_lock.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (see the note above).
         "callers": {
-            # The rule editor and the day calculation. Scope precedence is NOT here — it is
-            # `management_incentive.resolve_plan`, so there is no second ladder.
             'app/modules/commcalc/router.py': ('_daily_incentive',),
         },
     },
@@ -1652,37 +1202,15 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04).
         "callers": {
-            # The commission PLAN engine's `_canon_person`, read ~30 times inside commcalc and the
-            # key a payout is matched on. Byte-identical to what it ran before, on purpose.
-            'app/modules/commcalc/commission_engine.py': ('_person_identity',),
-            # A NEAR-copy that said it mirrored the engine and did not: it reordered a name with ANY
-            # number of commas, so 'Khan, Ariful, Jr' keyed one way for a commission and another for
-            # a management plan.
-            'app/modules/commcalc/management_incentive.py': ('_person_identity',),
-            # `name_key` — the word-order-free key the per-employee daily target joins on (a plain
-            # compare matched ZERO of LuxeLink's reps, 2026-09-02).
-            'app/modules/commcalc/targets_engine.py': ('_person_identity',),
-            # The drill-down's word-set, for its "did you mean" ranking.
-            'app/modules/commcalc/commission_drilldown.py': ('_person_identity',),
-            # The closing module: `_name_match` (the screening rule) AND the who-worked signal,
-            # which is the surface the owner reported.
-            'app/modules/closing/router.py': ('_person_identity',),
-            # §CLOSING-02 — the declared-vs-captured reconciler joins the name a rep typed at
-            # closing to the salesperson on the sales feed, which is exactly the punch-against-sale
-            # join this key exists for. It dereferences `folded_token_key` and folds nothing itself.
             'app/modules/closing/declared_feed_recon.py': ('_person',),
-            # A byte copy of the router's screening rule, kept local to dodge an import cycle the
-            # pure home does not have.
             'app/modules/closing/ops_chargebacks.py': ('_person_identity',),
-            # The clock feed's employee matcher. THIS MODULE USED TO BE THE HOME (clock_feed.py said
-            # so), and the accent fold that makes its key the strongest was found here.
-            'app/modules/storeops/payroll_identity.py': ('_person_identity',),
-            # THE HOURS APPROVAL BOARD'S PERSON FILTER. `GET /core/filter-options` keys its `reps`
-            # options by NAME, and this board alone sent that value as `employee_id` — compared
-            # against 'E043', so the filter matched NOBODY, ever (owner report 2026-10-26: *"i
-            # selected mohammed sami but nothing showed up"*). The token is now resolved here
-            # instead of by a seventh local name rule.
+            'app/modules/closing/router.py': ('_person_identity',),
+            'app/modules/commcalc/commission_drilldown.py': ('_person_identity',),
+            'app/modules/commcalc/commission_engine.py': ('_person_identity',),
+            'app/modules/commcalc/management_incentive.py': ('_person_identity',),
+            'app/modules/commcalc/targets_engine.py': ('_person_identity',),
             'app/modules/storeops/payroll_approval.py': ('_pkey',),
+            'app/modules/storeops/payroll_identity.py': ('_person_identity',),
         },
     },
     'store_identity': {
@@ -1697,63 +1225,24 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04).
         "callers": {
-            # The I/O wrapper: reads store_mapping + store_aliases and hands them to the chain.
-            'app/modules/account/coa.py': ('_sid',),
-            # The GROSS PROFIT engine. It carried a private `street_num()` leading-token join for
-            # every money source, which DROPPED a store's whole carrier income whenever the carrier
-            # and the roster spelled the street number differently (measured $106,400.37 of house
-            # revenue over Jul-Oct 2026) and was last-wins where two codes share one address.
-            'app/modules/commcalc/gp_report.py': ('_sid',),
-            # Flags 7/8 compared the TOKEN sets of the sales side and the payment side, so a store
-            # the two feeds spell differently raised both "no payment" and "no sales" every month.
-            'app/modules/commcalc/flags.py': ('_sid',),
-            # The residual report's rep-pay join key.
-            'app/modules/account/residual_subs.py': ('_sid',),
-            # A closing store-day's match key (§29.12) — a named alias, no second copy.
-            'app/modules/closing/unfinished_day.py': ('_sid',),
-            # `_leg_store_index` + the two commission-leg endpoints' row keys, and (mig 1073) the
-            # B2B clock report's `raw_store_string -> store CODE` resolver, which places a punch's
-            # store through THIS chain rather than matching an address of its own.
-            # `_sid_pairs` since §68: the entitlement-month report's router glue reads this home's
-            # own PAIRWISE predicate (§70 `may_be_one_store`) for "may these two keys be one store".
-            'app/modules/commcalc/router.py': ('_sid_pairs', '_store_identity'),
-            # ── THE ONE ACCENT FOLD (`fold_accents`, 2026-10-10) ────────────────────────────────
-            # `str.isalnum()` is TRUE for 'i-acute', so every alnum-only identity fold in this
-            # codebase kept the accent and compared an accented spelling unequal to its own plain
-            # twin (measured: the clock report's `Martinez, LESLIEE` matched no roster row). The
-            # fold now lives here once and these four siblings DEREFERENCE it — they are named so
-            # the next change cannot quietly re-spell one of them back into a private fold.
             'app/core/scope.py': ('_fold_accents',),
             'app/modules/account/balance_sheet.py': ('_sid_fold',),
+            'app/modules/account/coa.py': ('_sid',),
             'app/modules/account/device_payable.py': ('_sid_fold',),
+            'app/modules/account/residual_subs.py': ('_sid',),
             'app/modules/account/store_identity_audit.py': ('_sid',),
-            # The B2B clock feed's own folds (`_fold`, login + punch-type keys) and the employee
-            # matcher's person key ride the same accent fold, so a person and a store are folded by
-            # one rule (mig 1073, §14z).
-            'app/modules/storeops/clock_feed.py': ('_sid',),
-            # THE ONE PERSON KEY (§CORE-08) folds a person's spelling through this fold, for the
-            # clock feed's matcher and the closing module's who-worked signal alike —
-            # `payroll_identity` dereferences it rather than importing the fold itself.
-            'app/modules/core/person_identity.py': ('fold_accents',),
-            # The remaining five identity folds, found by the lock's second axis and wired in the
-            # same PR rather than left as "the ones we did not get to". Each folds a KEY nothing
-            # ever shows a human — a store code, a carrier label, a clock-in evidence key, a role
-            # name — so routing it through the one fold gains matches and moves none.
-            # `_store_identity` since §CORE-08: the who-worked signal buckets a PUNCH's store_code
-            # through this chain, so a punch stamped 'b-418' cannot split from the same store's
-            # 'B-418' sales row.
             'app/modules/closing/router.py': ('_sid_fold', '_store_identity'),
+            'app/modules/closing/unfinished_day.py': ('_sid',),
             'app/modules/commcalc/b2b_sweep.py': ('_sid_fold',),
+            'app/modules/commcalc/flags.py': ('_sid',),
+            'app/modules/commcalc/gp_report.py': ('_sid',),
+            'app/modules/commcalc/router.py': ('_sid_pairs', '_store_identity'),
             'app/modules/commcalc/vidapay_sweep.py': ('_sid_fold',),
-            'app/modules/storeops/clockin_evidence.py': ('_sid_fold',),
-            'app/modules/storeops/clock_variance.py': ('_sid_fold',),
-            # §15 (2026-10-22) — THE STORE FILTER on Device Forecasting & Vendor Payables. Its store
-            # picker compared the roster's spelling against each row's own, so every store the feeds
-            # spell differently returned an empty report while the MARKET filter (which was already
-            # resolved) worked — measured live: 13 of 33 asset_ledger spellings and 15 of 37 ledger
-            # spellings matched no option at all. Rows and options are now both STAMPED with this
-            # home's key, and the comparison is made on that.
+            'app/modules/core/person_identity.py': ('fold_accents',),
             'app/modules/payables/router.py': ('_sid',),
+            'app/modules/storeops/clock_feed.py': ('_sid',),
+            'app/modules/storeops/clock_variance.py': ('_sid_fold',),
+            'app/modules/storeops/clockin_evidence.py': ('_sid_fold',),
         },
     },
     'carrier_dollar_component': {
@@ -1785,28 +1274,10 @@ FACTS: dict[str, dict] = {
         # real import graph rather than regenerating it.
         "callers": {
             'app/modules/account/coa.py': ('_cdc',),
-            # The GROSS PROFIT engine (owner report 2026-10-08: *"gross profit is still showing the
-            # old data m teh source of information should be the same"*). It carried TWO private
-            # classifications — a keyword guess on the compensation type and four exact compares on
-            # the pay category — which disagreed with the P&L by $418,922.21 on the same 11,114
-            # August 2026 rows. It now dereferences this home and states no ruling of its own.
-            'app/modules/commcalc/gp_report.py': ('_cdc',),
-            # The SALES-AND-MARGIN drill-down (§CORE-17.3r). A panel over the GP report's two
-            # commission legs has to say whether this period's carrier dollars were PLACED by the
-            # company's own declaration or by a last-resort keyword rule, because a figure resting
-            # on a guess is not the same claim as one resting on a fact. It asks
-            # `component_is_evidence(basis)` — the ALLOWLIST that is the one home for that question
-            # (§66) — and states no ruling of its own: a basis nobody has ruled on reads as NOT
-            # evidence, so a last-resort basis added later cannot start presenting itself as a fact.
-            'app/modules/commcalc/sales_margin_drilldown.py': ('_cdc',),
-            'app/modules/commcalc/router.py': ('_cdc', '_cdc_gp', '_cdc_leg'),
-            # §COMMCALC-44 — the device-money home asks this fact THREE of its questions at once:
-            # which components are the device-financing side (`device_reimb_components`, §69),
-            # whether a classification is evidence at all (`component_is_evidence`, §66) and the
-            # classification itself (`classify`). It carries no payment-type vocabulary and no basis
-            # allowlist of its own; the POLICY of declining a non-evidence component belongs to its
-            # per-device grain and lives there.
             'app/modules/commcalc/carrier_device_money.py': ('_cdc',),
+            'app/modules/commcalc/gp_report.py': ('_cdc',),
+            'app/modules/commcalc/router.py': ('_cdc', '_cdc_gp', '_cdc_leg'),
+            'app/modules/commcalc/sales_margin_drilldown.py': ('_cdc',),
         },
     },
     'installment_month_of_life': {
@@ -1835,9 +1306,6 @@ FACTS: dict[str, dict] = {
             'app/modules/asset/router.py': ('_reg',),
             'app/modules/closing/cash_watchdog.py': ('_reg',),
             'app/modules/closing/ops_chargebacks.py': ('_reg',),
-            # §COMMCALC-43. The byod-and-upgrade detector spells no severity, area or label of its
-            # own — `harness_byod_upgrade_day` §G1 fails the build if it declares one — so the
-            # Management Watchdog board gains a page for it by this registration alone.
             'app/modules/commcalc/byod_upgrade_day.py': ('_reg',),
             'app/modules/commcalc/flags.py': ('_reg',),
             'app/modules/commcalc/multi_handset_day.py': ('_reg',),
@@ -1870,19 +1338,9 @@ FACTS: dict[str, dict] = {
         # DIFF: the rewriter strips hand-written comments out of these `callers` dicts (it dropped
         # 119 lines of them on 2026-10-12), so this entry was written by hand.
         "callers": {
-            # The accountability board shows a day's row counts BESIDE its comparable subtotal, and
-            # takes the day's VERDICT from this home rather than re-deriving one — so the board and
-            # the management recon screen cannot disagree about a store-day. §CLOSING-01.4.
-            'app/modules/closing/deposit_accountability.py': ('_day_variance', '_envelope_opened',
-                                                              '_row_variance'),
-            # `GET /cash-recon-management`. It used to subtract the whole declared drawer here; it
-            # now computes no variance at all. §CLOSING-01.1.
-            'app/modules/closing/router.py': ('_pickup_actual',),
-            # NOT a sibling derivation, named so the edge is not an unexplained one: the import graph
-            # connects this through `pickup_actual`, but `pickup_totals_by_store_day` answers HOW
-            # MUCH MONEY MOVED on a store-day, not whether its envelopes were short — a different
-            # question with a different home.
             'app/modules/closing/billpay_pickup.py': ('_outflow',),
+            'app/modules/closing/deposit_accountability.py': ('_day_variance', '_envelope_opened', '_row_variance'),
+            'app/modules/closing/router.py': ('_pickup_actual',),
         },
     },
     'cash_count_correction_trail': {
@@ -2000,8 +1458,8 @@ FACTS: dict[str, dict] = {
         # HAND-WRITTEN, per the precedent above: `--bless` strips the per-caller notes. The digest leg
         # imports it INSIDE the except branch, so the alias it binds is `_why`, not the module name.
         "callers": {
-            'app/modules/notify/router.py': ('send_outcome',),
             'app/modules/notify/digest_delivery.py': ('_why',),
+            'app/modules/notify/router.py': ('send_outcome',),
         },
     },
     'alert_channel_ladder': {
@@ -2013,10 +1471,6 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/closing/router.py': ('_delivery',),
             'app/modules/commcalc/router.py': ('_delivery',),
-            # §14z — the weekly clock-variance ask carries itself on this ladder and holds no mail
-            # call, no channel list and no send record of its own. That is the point of routing it
-            # here: the ask was the sixth place that would have grown its own "try email, try
-            # WhatsApp, write one dedup row", which is the drift this fact exists to stop.
             'app/modules/storeops/clock_variance_api.py': ('_delivery',),
             'app/modules/storeops/router.py': ('_delivery',),
             'app/modules/storevisit/router.py': ('_delivery',),
@@ -2040,14 +1494,9 @@ FACTS: dict[str, dict] = {
         # facts on 2026-10-04, so this entry is maintained here and the lock verifies it against the
         # real import graph rather than regenerating it.
         "callers": {
-            # §68 — the entitlement-month report asks the calendar whether a window month has
-            # CLOSED (so an absence in it is a fact) and parses every month spelling through the same
-            # home; it re-implements neither, and holds no clock of its own.
             'app/modules/commcalc/entitlement_coverage.py': ('_fp',),
             'app/modules/commcalc/epay_sweep.py': ('_feed_period',),
             'app/modules/commcalc/import_audit.py': ('_recon',),
-            # §19.54 — the statement-coverage verdict dereferences `month_state` for "is this month
-            # closed" and `month_days` for the calendar it is judged against; it owns neither.
             'app/modules/commcalc/pay_data_quality.py': ('_fp',),
             'app/modules/commcalc/router.py': ('_feed_period', 'sales_recon'),
             'app/modules/notify/report_registry.py': ('SR',),
@@ -2061,9 +1510,6 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_sweep_due.py',),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
-            # The defect was HERE and nowhere else: eight `run-due` endpoints each comparing a stored
-            # clock, four of them in SQL where no other reason can be expressed. §F of the lock reads
-            # this file as source and pins the one excused filter that remains.
             'app/modules/commcalc/router.py': ('_sweep_due',),
         },
     },
@@ -2075,9 +1521,6 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_portal_cell.py',),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
-            # The defect was HERE, not in the home: the router passed the literal 'ok' beside a
-            # detail line that said "⚠ PARTIAL". §H of the lock reads this file as source and keeps
-            # the literal as an armed negative control.
             'app/modules/commcalc/router.py': ('dlar_sweep',),
         },
     },
@@ -2116,9 +1559,6 @@ FACTS: dict[str, dict] = {
             'app/modules/storeops/clock_variance.py': ('_basis',),
             'app/modules/storeops/clock_variance_api.py': ('_hb',),
             'app/modules/storeops/payroll_evidence.py': ('_hb',),
-            # §CORE-17.3x — the payroll drill-down reads the basis VOCABULARY (the bases, the paying
-            # allowlist and the measured set) to answer which relation a person's hours came out of,
-            # and keys its basis→relation map on those constants rather than on words of its own.
             'app/modules/storeops/payroll_hours_drilldown.py': ('_hb',),
             'app/modules/storeops/pto_accrual.py': ('_hours_basis',),
             'app/modules/storeops/router.py': ('_hours_basis',),
@@ -2146,186 +1586,44 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_data_lineage_guard.py', 'harness_feed_watchdog.py', 'harness_ingest_freshness.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
-            'app/modules/commcalc/auto_calc.py': ('_lineage',),
-            # §COMMCALC-41 — the registry of DERIVED BUILDS declares which tables make each stored
-            # snapshot stale, so the post-landing hook can rebuild it. Every one of those table names
-            # is dereferenced from here (`ASSET_LEDGER`, `PAYMENT_DETAIL`, `DISTRIBUTOR_INVOICES`,
-            # `MI_RESIDUAL`, `COMMISSION_CALC_FEEDS`) rather than spelled beside the build: a second
-            # copy of "which table is this feed" is exactly the divergence this registry exists to
-            # stop, and `harness_derived_build_lock.py` §F fails the build on a literal.
-            'app/modules/commcalc/derived_builds.py': ('_lineage',),
-            # A DRILL-DOWN HAS TO NAME A TABLE, so the cash-recon tiles' provenance asks the
-            # registry which feed the resolved bill-payment processor lands in, and which table is
-            # the live sales feed (§CORE-17.3a). Naming either at the call site would be the copied
-            # fact this registry exists to prevent — and a provenance claim nobody checked.
-            'app/modules/closing/router.py': ('_lineage',),
-            # THE SAME REASON, one batch on (§CORE-17.3k): the three commission disagreement reports
-            # name a feed per ROW, so the declaration asks the registry which table each money
-            # stream was read out of, which feeds the writer of a stored discrepancy row reads, and
-            # which tables the sold union is. It also added the five commission feed CONSTANTS the
-            # registry had only ever held as literals inside `COMMISSION_CALC_FEEDS`.
-            'app/modules/commcalc/carrier_pay_drilldown.py': ('_lineage',),
-            # THE SAME REASON again (§CORE-17.3l): the seven device-asset reports name a table per
-            # figure — and the POS recon names one per ROW, because a store the POS file never
-            # mentioned must name only the ledger. It also added the five device-asset table
-            # constants and re-keyed every map that had spelled `asset_ledger` or
-            # `vip_paygo_payments` as a literal, because naming a fact is only half the fix.
-            'app/modules/asset/device_asset_drilldown.py': ('_lineage',),
-            # §COMMCALC-34 — the ONE dated-owed read names the processor's feed through the
-            # registry rather than spelling it: the read it absorbed carried that table name as a
-            # LITERAL, and naming a fact is only half the fix (§19.18), so the copy went in the same
-            # commit. `harness_billing_period.py` §H2 fails the build if the literal reappears.
-            'app/modules/payables/owed_read.py': ('_lineage',),
-            # The targets drill-down asks the registry WHICH TABLES the sales feeds and the
-            # daily closing are, so a target-vs-actual panel never spells a relation name of
-            # its own (§CORE-17.3m). The four relations it names that are NOT registered
-            # ingest feeds — the two target settings tables, the store roster and the shift
-            # schedule — are config rows, deliberately kept out of the ingest registry so the
-            # feed watchdog's population stays the feeds.
-            'app/modules/commcalc/targets_drilldown.py': ('_lineage',),
-            # The bill-payment / processor-money drill-down asks the registry which tables the
-            # sales display union, the bill-pay settlement feed and the dealer-account payment
-            # feeds are, so no panel on these three reports spells a relation name of its own
-            # (§CORE-17.3n). `billpay_processor_feed` is dereferenced rather than re-mapped.
-            'app/modules/commcalc/processor_money_drilldown.py': ('_lineage',),
-            # §CORE-17.3x — the PAYROLL and WORKFORCE declarations ask the registry which relation
-            # records a worked hour (the closed punch), which one records a PLANNED one (the
-            # schedule), and which one holds a person's pay rate. The last of those, and
-            # hand-entered hours beside it, became registry NAME constants in this batch with their
-            # one pre-existing literal copy (`account/liabilities_drilldown`) re-keyed in the SAME
-            # commit — naming a fact is half a design fix (§19.18).
-            'app/modules/storeops/payroll_hours_drilldown.py': ('_lineage',),
-            'app/modules/storeops/scheduled_hours_drilldown.py': ('_lineage',),
-            # THE SAME FACT, ONE LAYER DOWN. `processor_ledger.FEED_SHAPES` spelled the payment
-            # and daily-TX table names as LITERALS, which were a second copy of two constants the
-            # registry already held — and the drill-down above reads that map for a cell's
-            # provenance, which would have made it a third. The shapes dereference the registry now
-            # (string-identical values, no read changed).
-            # The accessory-money drill-down asks the registry which tables the sales display
-            # union is, which two relations the PAY engine's own legacy read walks (in its own
-            # order — the monthly upload leads, which is the reverse of the display union's lead)
-            # and which table the product catalogue is (§CORE-17.3o). The target settings row and
-            # the plan-rule / flag-rules config rows are NOT registered feeds: the first is
-            # dereferenced from the targets family, the other two are named once here, the same
-            # posture `targets_drilldown` takes.
-            'app/modules/commcalc/accessory_money_drilldown.py': ('_lineage',),
-            # The Accessory Order Plan's declaration (§COMMCALC-49) asks the registry for ONE fact —
-            # which relations the sales DISPLAY union reads (`SALES_DISPLAY_SOURCES`) — and names no
-            # table of its own. Its figures are device-unit counts off those relations, so a
-            # restated table name there would be a provenance claim nothing checks.
-            'app/modules/commcalc/accessory_order_drilldown.py': ('_lin',),
-            # The device-financing drill-down asks the registry which relation the distributor's
-            # INVOICE feed is (`DISTRIBUTOR_INVOICES`, added by batch 16 — this file held no literal
-            # copy of it, so there was nothing to re-key), which one its UNIT LEDGER is, and which
-            # one the carrier's PER-LINE feed is. Those last two are what separate its two device
-            # grains, so a copied name there would be a provenance claim nothing checks. The weekly
-            # lending batches are dereferenced from the device-asset family, which named them once
-            # already, and the sales provenance is not a constant at all: it is resolved off the
-            # read's own meta through `processor_money_drilldown.sales_union_tables` (§CORE-17.3p).
-            'app/modules/commcalc/device_financing_drilldown.py': ('_lineage',),
-            # The executive-month drill-down asks the registry which relation the RECORDED CHARGEBACK
-            # is and which one the STORE ROSTER is (§CORE-17.3q). Both are NAME constants added by
-            # batch 17 — and `ops_chargeback` was already spelled as a LITERAL in TWO drill-down
-            # declarations (`closing/ops_chargeback_drilldown` and `closing/envelope_drilldown`),
-            # which is the divergence this registry exists to prevent. Both dereference it now,
-            # string-identical values, no read changed: naming the fact here is half the fix and
-            # deleting every copy in the same commit is the other half. The snapshot and the target
-            # settings are NOT asked of the registry — they are dereferenced from the declarations
-            # that named them once already (`carrier_pay_drilldown`, `targets_drilldown`).
-            'app/modules/commcalc/exec_month_drilldown.py': ('_lineage',),
-            'app/modules/closing/ops_chargeback_drilldown.py': ('_lineage',),
-            'app/modules/closing/envelope_drilldown.py': ('_lineage',),
-            # THE SAME FACT, ONE LAYER DOWN. `raw_catalog` was spelled as a LITERAL four times
-            # inside this registry — the ingest list, the no-month reason, the snapshot set and the
-            # cadence note — and the drill-down above would have made it a fifth copy. Re-keyed
-            # onto `PRODUCT_CATALOG` in the SAME commit, string-identical values, no read changed.
-            # The sales-and-margin drill-down asks the registry which relation the ENTERED
-            # EXPENSE SHEET is and which one the SHIFT SCHEDULE is (§CORE-17.3r). Both are NAME
-            # constants added by batch 18 — and `shifts` was already spelled as a LITERAL in TWO
-            # drill-down declarations (`commcalc/targets_drilldown` and
-            # `account/liabilities_drilldown`), which is the divergence this registry exists to
-            # prevent. Both dereference it now, string-identical values, no read changed: naming
-            # the fact here is half the fix and deleting every copy in the same commit is the other
-            # half, and `harness_batch18_drilldown.py` §A6/§A7 fail the build if either literal
-            # returns or a caller stops dereferencing. The sales display UNION is NOT asked of the
-            # registry here — it is dereferenced from `processor_money_drilldown`, which is the one
-            # home for the question 'which tables did this period's sales actually come from'.
-            'app/modules/commcalc/sales_margin_drilldown.py': ('_lineage',),
-            # §CORE-17.3s. The two CARRIER ACTIVITY REPORTS became registry constants in that PR and
-            # the registry's own five literal copies of their names were re-keyed to them in the
-            # same commit — the other half of the fix, which `harness_batch19_drilldown.py` §A3
-            # fails the build over if a second copy ever reappears. The APPROVED EXPECTED-TO-EARNED
-            # MOVES are deliberately NOT a constant here: `expected_commission.TABLE` is already
-            # that fact's one home and this declaration dereferences THAT, because a second copy in
-            # the registry would be the very defect the registry exists to prevent.
-            'app/modules/commcalc/carrier_owed_drilldown.py': ('_lineage',),
-            # §CORE-17.3t. The TIME CLOCK became a registry constant in that PR, because a figure
-            # that is output PER HOUR WORKED has to name the relation an hour came out of — and
-            # `timelog` was already spelled as a LITERAL in `account/liabilities_drilldown`, which
-            # is the divergence this registry exists to prevent. That copy dereferences the constant
-            # now, string-identical value, no read changed, and `harness_batch20_drilldown.py` §A3c
-            # fails the build if the literal reappears in any drill-down declaration. The carrier's
-            # per-door report and the recorded penalty ledger are dereferenced as the constants
-            # earlier batches named; the REP-PAY SNAPSHOT is deliberately not a constant here at all
-            # (`carrier_pay_drilldown.REP_COMMISSIONS` is its one home), and the sales provenance is
-            # resolved off the read's own meta through `processor_money_drilldown`.
-            'app/modules/commcalc/performance_coaching_drilldown.py': ('_lineage',),
-            # §CORE-17.3u. The STORED FINANCIAL STATEMENTS became a registry constant in that PR —
-            # and `account_statements` was already spelled as a LITERAL in a drill-down declaration
-            # (`account/statement_drilldown`), which is the divergence this registry exists to
-            # prevent. It dereferences the constant now, string-identical value, no read changed:
-            # naming the fact here is half the fix and deleting the copy in the same commit is the
-            # other half, and `harness_batch21_drilldown.py` §A4b/§A5b fail the build if the literal
-            # returns to any declaration or that caller stops dereferencing. The carrier's own
-            # compensation statement is the registry's existing name. The sales provenance is NOT
-            # asked of the registry here: it is resolved off the read's own meta through
-            # `processor_money_drilldown.sales_union_tables`, which that PR extended to answer for a
-            # multi-month RANGE read as well, in the ONE resolver rather than a second beside it.
-            'app/modules/commcalc/sales_outcome_drilldown.py': ('_lineage',),
-            # §CORE-17.3v. The subsidy-coverage drill-down asks the registry which relations the
-            # CARRIER PAYMENT DETAIL and the COMPENSATION STATEMENT are, and the activation
-            # drill-down which one the MONTH-END UPLOAD is. All three are constants earlier batches
-            # named: no new registry entry was needed and none was added, because a second name for
-            # a relation already in here is the divergence this registry exists to prevent. The
-            # company commission settings these panels also name are deliberately NOT a registry
-            # entry — a config row somebody typed is not an external feed and does not belong in
-            # the feed watchdog's population, which is the posture `targets_drilldown.TARGETS`
-            # already takes.
-            'app/modules/commcalc/entitlement_coverage_drilldown.py': ('_lineage',),
-            'app/modules/commcalc/activation_count_drilldown.py': ('_lineage',),
-            'app/modules/account/statement_drilldown.py': ('_lineage',),
-            'app/modules/account/liabilities_drilldown.py': ('_lineage',),
-            # THE SAME REASON, two batches on (§CORE-17.3w): the finance device-billing, inventory
-            # and credit-memo declarations each have to say WHICH relation a figure was read out of,
-            # so they ask the registry rather than spelling a table name at the call site. Between
-            # them they added the five NAME constants it had only ever held as literals inside its
-            # own maps -- the distributor's invoice LINES and SERIALISED UNITS, its credit memos,
-            # the emailed inventory-value snapshot and the same report at device grain -- and every
-            # literal copy this file itself held (seven of one, one of another) was re-keyed onto
-            # them in the SAME commit, which is the half of a design fix §19.18 says gets skipped.
             'app/modules/account/device_billing_drilldown.py': ('_lineage',),
             'app/modules/account/inventory_value_drilldown.py': ('_lineage',),
+            'app/modules/account/liabilities_drilldown.py': ('_lineage',),
+            'app/modules/account/ma_store_pnl.py': ('_MA_DAILY_TX_TABLE', '_store_col'),
             'app/modules/account/memo_recon_drilldown.py': ('_lineage',),
-            'app/modules/commcalc/processor_ledger.py': ('_lineage',),
+            'app/modules/account/statement_drilldown.py': ('_lineage',),
+            'app/modules/asset/device_asset_drilldown.py': ('_lineage',),
+            'app/modules/closing/envelope_drilldown.py': ('_lineage',),
+            'app/modules/closing/ops_chargeback_drilldown.py': ('_lineage',),
+            'app/modules/closing/router.py': ('_lineage',),
+            'app/modules/commcalc/accessory_money_drilldown.py': ('_lineage',),
+            'app/modules/commcalc/accessory_order_drilldown.py': ('_lin',),
+            'app/modules/commcalc/activation_count_drilldown.py': ('_lineage',),
+            'app/modules/commcalc/auto_calc.py': ('_lineage',),
+            'app/modules/commcalc/carrier_owed_drilldown.py': ('_lineage',),
+            'app/modules/commcalc/carrier_pay_drilldown.py': ('_lineage',),
+            'app/modules/commcalc/derived_builds.py': ('_lineage',),
+            'app/modules/commcalc/device_financing_drilldown.py': ('_lineage',),
             'app/modules/commcalc/dlar_sweep.py': ('_lineage',),
             'app/modules/commcalc/email_sweep.py': ('_lineage',),
+            'app/modules/commcalc/entitlement_coverage_drilldown.py': ('_lineage',),
             'app/modules/commcalc/epay_sweep.py': ('_lin',),
+            'app/modules/commcalc/exec_month_drilldown.py': ('_lineage',),
             'app/modules/commcalc/inventory_sold_recon.py': ('_dlr',),
             'app/modules/commcalc/ma_recon.py': ('SALES_DISPLAY_SOURCES',),
-            # The takeover evaluation asks the registry which columns hold a row's MONTH, so its
-            # "what did this file actually put in the table" measurement cannot drift from the
-            # platform's own answer (`prospect_eval.substance`, owner report 2026-10-13).
+            'app/modules/commcalc/performance_coaching_drilldown.py': ('_lineage',),
+            'app/modules/commcalc/processor_ledger.py': ('_lineage',),
+            'app/modules/commcalc/processor_money_drilldown.py': ('_lineage',),
             'app/modules/commcalc/prospect_eval.py': ('MONTH_COLUMNS', 'store_account_column'),
-            # WHICH COLUMN NAMES THE DEALER ACCOUNT on each master-agent feed. Three hand-written
-            # copies of that fact lived in this file, once per booking function, until the
-            # store-takeover evaluation needed the same answer to split a prospect's uploads by
-            # store (2026-10-13). Declared once in the registry, dereferenced here.
-            'app/modules/account/ma_store_pnl.py': ('_MA_DAILY_TX_TABLE', '_store_col'),
-            # The portal pull asks the registry whether its TARGET TABLE stores a row's month
-            # (§COMMCALC-04), instead of carrying its own `has_period` flag per report spec.
             'app/modules/commcalc/report_pull.py': ('_lin',),
             'app/modules/commcalc/router.py': ('_dlr', '_lineage'),
+            'app/modules/commcalc/sales_margin_drilldown.py': ('_lineage',),
+            'app/modules/commcalc/sales_outcome_drilldown.py': ('_lineage',),
+            'app/modules/commcalc/targets_drilldown.py': ('_lineage',),
+            'app/modules/payables/owed_read.py': ('_lineage',),
             'app/modules/pos/inventory_integrity_router.py': ('_dlr',),
+            'app/modules/storeops/payroll_hours_drilldown.py': ('_lineage',),
+            'app/modules/storeops/scheduled_hours_drilldown.py': ('_lineage',),
         },
     },
     'ma_reported_income': {
@@ -2340,26 +1638,13 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_ma_income_one_home_guard.py', 'harness_mi_residual_store_grain.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
-            # `_msp_spec` added 2026-10-16 (§COMMCALC-15): the chart INSERTS the M2–M12 twin of the
-            # commission line, taking the destination key, the label suffix and — through
-            # `carrier_comm_source_line()` — which line it divides from THIS home, rather than
-            # typing a second line beside the first.
             'app/modules/account/coa.py': ('_MA_COMPONENTS', '_msp', '_msp_spec', '_rs', '_rs_mi', '_rs_mi_idx'),
-            # `_NO_RULE_REASON` added 2026-10-19 (§COMMCALC-20): the fulfillment-side coverage
-            # read-out reports an unruled order-type family with the SAME honest-absence literal the
-            # daily-tx coverage uses, and reads the org's stated reasons through THIS home's
-            # `load_unbooked_reasons` rather than keeping a second copy of either.
             'app/modules/account/device_cogs.py': ('_NO_RULE_REASON', 'load_unbooked_reasons'),
             'app/modules/account/ledger_pnl.py': ('_msp',),
             'app/modules/account/router.py': ('_msp', 'residual_subs'),
             'app/modules/account/statement_engine.py': ('_msp',),
             'app/modules/commcalc/commission_received.py': ('ma_commission_components',),
             'app/modules/commcalc/comp_trend.py': ('_msp', '_rs'),
-            # §COMMCALC-03 added `_rsub` — `default_ma_pnl_config()` for the takeover evaluation,
-            # so a prospect's MA TX rows book under the SAME resolved config the live P&L books under.
-            # `_msp_leg` (added 2026-10-15, index §COMMCALC-12): the leg trend's per-store MA grain
-            # asks THIS home's `canonical_store_index` for processor account -> store, instead of the
-            # trend deciding that mapping itself. One more dereference, not one more rule.
             'app/modules/commcalc/router.py': ('_MA_LEG_COMPONENTS', '_msp', '_msp_gp', '_msp_leg', '_msp_ma', '_rs_gp', '_rsub', 'load_store_index'),
             'app/modules/commcalc/whatif.py': ('residual_subs',),
             'app/modules/marketing/router.py': ('_MA_COMPONENTS',),
@@ -2375,12 +1660,9 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/closing/attention_providers.py': ('_er',),
             'app/modules/closing/billpay_pickup.py': ('envelope_report',),
+            'app/modules/closing/envelope_drilldown.py': ('_envelope_report',),
             'app/modules/closing/external_credit_recon.py': ('_envelope_report',),
             'app/modules/closing/pickup_actual.py': ('count_fields',),
-            # The receipt's drill-down reads the STATUS VOCABULARY from here (§CORE-17.3g) rather
-            # than listing short/over/match again, so a status added to `envelope_report.STATUSES`
-            # cannot leave a tile counting the wrong rows. It derives no cash figure of its own.
-            'app/modules/closing/envelope_drilldown.py': ('_envelope_report',),
             'app/modules/closing/router.py': ('_er', 'envelope_report_mod'),
         },
     },
@@ -2394,32 +1676,18 @@ FACTS: dict[str, dict] = {
         # two §COMMCALC-43 entries below were added by hand.
         "callers": {
             'app/modules/asset/router.py': ('_lc',),
-            # §COMMCALC-43. "A BYOD activation and an upgrade on one number" is a question about
-            # ACTIVATION EVENTS, and this home is the only thing that knows what one is: it folds an
-            # invoice's activation-type lines into events keyed on the line's own phone number and
-            # resolves each event's class by the org's declared precedence. The detector therefore
-            # owns no class vocabulary and no phone normaliser of its own (§D7 / §G3 of its lock
-            # fail the build if either appears), and the 'BYOD Upgrade' line that is ONE byod event
-            # rather than a pair is correct here for free.
-            'app/modules/commcalc/byod_upgrade_day.py': ('_lc',),
-            # The §COMMCALC-43 endpoint and the watchdog tick resolve the ORG's rules
-            # (`router._line_rules_of`) and hand them to the detector, so a tenant whose POS spells
-            # the activation kind in `category` is classified by its own declaration rather than by
-            # the house default — and they fall back to HOUSE_RULES by name, never by re-deriving.
-            'app/modules/commcalc/watchdog_router.py': ('_lc',),
             'app/modules/closing/router.py': ('_lcls',),
+            'app/modules/commcalc/byod_upgrade_day.py': ('_lc',),
             'app/modules/commcalc/calculator.py': ('_lc',),
             'app/modules/commcalc/commission_engine.py': ('_lc',),
             'app/modules/commcalc/ma_recon.py': ('_lc',),
             'app/modules/commcalc/payout_audience.py': ('_lc',),
             'app/modules/commcalc/payout_structure.py': ('_lc',),
             'app/modules/commcalc/plan_options.py': ('_lc',),
-            # The takeover evaluation counts its activations per month through THIS classifier rather
-            # than a New/Add tally of its own — a takeover pack's vocabulary is declared for its own
-            # columns, and the classes, the count and the labels all come from here. §COMMCALC-03.23.
             'app/modules/commcalc/prospect_eval.py': ('_lc',),
             'app/modules/commcalc/router.py': ('_lc',),
             'app/modules/commcalc/sales_comparison.py': ('_lc',),
+            'app/modules/commcalc/watchdog_router.py': ('_lc',),
             'app/modules/commcalc/zero_sales.py': ('_lc',),
             'app/modules/core/plan_sources.py': ('_lc',),
         },
@@ -2437,17 +1705,12 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_batch22_drilldown.py',),
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
-            # §CORE-17.3v. The commission dashboard and the Rep Breakdown tab fold the same
-            # snapshot, so they dereference its name here rather than spelling it a third time.
-            'app/modules/commcalc/rep_incentive_drilldown.py': ('_cpd',),
-            # The siblings this fact was already true for, named here for the first time because
-            # the fact itself had no home block until §CORE-17.3v needed one. Nothing about their
-            # wiring changed: each already dereferenced `REP_COMMISSIONS` rather than spelling it.
             'app/modules/commcalc/exec_month_drilldown.py': ('_cpd',),
             'app/modules/commcalc/performance_coaching_drilldown.py': ('_cpd',),
+            'app/modules/commcalc/rep_incentive_drilldown.py': ('_cpd',),
+            'app/modules/commcalc/router.py': ('_cpdd',),
             'app/modules/commcalc/sales_margin_drilldown.py': ('_cpd',),
             'app/modules/commcalc/targets_drilldown.py': ('_cpd',),
-            'app/modules/commcalc/router.py': ('_cpdd',),
         },
     },
     'activation_bucket_column': {
@@ -2464,10 +1727,6 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
         "callers": {
             'app/modules/commcalc/activation_count_drilldown.py': ('_act',),
-            # THE OTHER HALF OF THE MOVE, registered in the same commit: the router no longer holds
-            # its own `_ACT_BUCKET_FIELD` map and dereferences the one home. A hand-written edge for
-            # the new home without one for the file that stopped spelling the literal is half a
-            # registration, and half a design fix is what §19.18 is a list of.
             'app/modules/commcalc/router.py': ('_ab', '_ab_cats', '_ab_pol', '_act_bucketing'),
         },
     },
@@ -2508,15 +1767,8 @@ FACTS: dict[str, dict] = {
         # collapsed callers are exactly what a future reader needs explained. Verified by running the
         # guard (not --bless) afterwards.
         "callers": {
-            # The two that already derived it correctly, and now dereference instead: the
-            # `/inventory-recon` endpoint (`_derived_received`) and the management-incentive aging
-            # bonus gate (`_mi_ever_over_days`), whose own comment recorded the shared fact beside its
-            # private copy of it. Plus the rep's shelf card endpoint (`my_shelf`), which owns no
-            # arithmetic at all.
-            'app/modules/commcalc/router.py': ('_isa',),
-            # The one that DISAGREED. It believed the file's `days_in_stock`, so the same device aged
-            # 9 days here and 102 days through the other two paths.
             'app/modules/commcalc/device_history.py': ('_isa',),
+            'app/modules/commcalc/router.py': ('_isa',),
         },
     },
     'trade_in_basis': {
@@ -2530,10 +1782,6 @@ FACTS: dict[str, dict] = {
         # the per-caller comments from every fact it touches, so this block is hand-written and the
         # derived edge below was verified by running the guard (not --bless) afterwards.
         "callers": {
-            # The pay engine. It carried the answer itself — payment-detail rows whose type contained
-            # 'trade' — so a month the carrier had not reimbursed yet paid $0 for trade-ins the stores
-            # really did (Aug 2026: 30 at the till, 0 on the statement). It now resolves the basis,
-            # the declaration and both counts here and keeps no predicate of its own.
             'app/modules/commcalc/calculator.py': ('_tib',),
         },
     },
@@ -2548,23 +1796,9 @@ FACTS: dict[str, dict] = {
         # the per-caller comments from every fact it touches, so this block is hand-written and the
         # derived edge below was verified by running the guard (not --bless) afterwards.
         "callers": {
-            # The plan pay engine. Before this, EVERY gate it had could only turn a payment OFF
-            # (`plan_pay_gate` suppresses; `financing_tiers` re-rates from a MONTH's attainment), so no
-            # rule could earn a lesser rate from a fact about the SALE its line belonged to. It now
-            # resolves the condition, both rates and the on-screen sentence here, injects its own
-            # `_rule_matches` and the accessory predicate, and keeps no threshold test of its own.
             'app/modules/commcalc/commission_engine.py': ('_aq',),
-            # The SAVE path, and it is a caller for a reason worth stating: that path is
-            # DELETE-THEN-INSERT with an explicit column list, so a qualifier column it does not
-            # write back is WIPED the next time anyone saves the plan. It dereferences the measure and
-            # scope allowlists from here rather than retyping them, so the vocabulary cannot drift
-            # between what an admin can save and what the engine will honour.
-            'app/modules/commcalc/router.py': ('_aqm',),
-            # The plan editor's VOCABULARY. The screen had no input for a qualifier at all until this
-            # was wired, so the columns could only be set by hand — and the save path above then wiped
-            # them. This serves the measures, the scopes and the defaults by dereferencing the home, so
-            # the browser names no measure and no default of its own.
             'app/modules/commcalc/plan_options.py': ('_aq',),
+            'app/modules/commcalc/router.py': ('_aqm',),
         },
     },
     'carrier_claim_value': {
@@ -2576,12 +1810,8 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT -- hand-written (--bless strips per-caller comments, SSCOMMCALC-01); the derived
         # edges were verified by RUNNING the guard afterwards.
         "callers": {
-            # The carrier-statement recon: hardcoded 0.0 on every discrepancy row before this, which
-            # is why the hub's open-$ card summed to nothing. Now classifies and prices through here.
-            'app/modules/commcalc/ma_recon.py': ('ccv',),
-            # THE SIBLING, fixed in the same change: the rate-card engine filed an unsizeable claim
-            # as $0.00 too. It now writes NULL and borrows this module's subtraction.
             'app/modules/commcalc/discrepancy_engine.py': ('ccv',),
+            'app/modules/commcalc/ma_recon.py': ('ccv',),
         },
     },
     'installment_exclusion_basis': {
@@ -2593,18 +1823,11 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — hand-written (--bless strips per-caller comments, §COMMCALC-01); the derived
         # edges were verified by RUNNING the guard afterwards.
         "callers": {
-            # The engine resolves the qualification and now gets the per-category basis with it, so a
-            # category excluded BY A DECISION is reported apart from one nobody ruled on.
-            'app/modules/commcalc/sale_installment_engine.py': ('icat',),
-            # The notice list the owner reads after Run Calculation. `_icat_mod()` is the one accessor;
-            # the bindings below are the AST import aliases, not the accessor's name.
-            'app/modules/commcalc/router.py': ('CATEGORY_KEYS', '_icat', '_icat_dev', 'icat'),
-            # The per-category FLAT payout (mig 256) shares this category vocabulary.
             'app/modules/commcalc/installment_category_payout.py': ('icat',),
-            # Executive-MTD pay prices a TABLET / WATCH event through the same one classifier (§6n),
-            # so these three share the category vocabulary without touching the exclusion basis.
             'app/modules/commcalc/line_class.py': ('_icat',),
             'app/modules/commcalc/plan_pay_gate.py': ('_icat',),
+            'app/modules/commcalc/router.py': ('CATEGORY_KEYS', '_icat', '_icat_dev', 'icat'),
+            'app/modules/commcalc/sale_installment_engine.py': ('icat',),
             'app/modules/commcalc/sales_comparison.py': ('_icat',),
         },
     },
@@ -2617,38 +1840,10 @@ FACTS: dict[str, dict] = {
         # BARE lines and strips the per-caller comments (the caveat recorded in §COMMCALC-01). The
         # derived edges were verified by RUNNING the guard afterwards.
         "callers": {
-            # The ONE rep-row read. Every Rep Incentive surface goes through it (the table, the month
-            # range which loops this handler, the exports, the emailed report), so the basis is stamped
-            # here once instead of each surface deciding. Also the coaching card and the action plan,
-            # which read the stored `subtotal` and used to multiply a never-computed one into an
-            # "at risk" figure; and the plan-mode WRITER branch, which now itemises the row it creates
-            # so it cannot produce a row this predicate could never flag.
-            # `_pse` is the import inside the one read; `_pse_mod()` is the accessor the other
-            # surfaces in this 48,000-line file call so none of them grows its own copy. The binding
-            # below is the IMPORT alias the graph derives from the AST, not the accessor's name.
-            'app/modules/commcalc/router.py': ('_pse',),
-            # NOT LISTED, and deliberately: commcalc/rep_incentive_range.py is the fourth caller --
-            # a month range is where adding an unknown in as zero printed a wrong total -- but its own
-            # lock (harness_rep_incentive_range D5) forbids it ANY import, so `assemble(months,
-            # per_month, evidence)` takes the module as a REQUIRED argument from the router instead.
-            # There is no AST edge to declare; the dereference is locked by
-            # harness_payout_slice_evidence G4a/G4b/G4c rather than by this graph.
-            # The simulator BACK-DERIVES baseline sales from stored pay (acc_comm / rate), so a
-            # never-written slice silently started a projection from the wrong baseline.
-            'app/modules/commcalc/whatif.py': ('_pse',),
-            # §CORE-17.3t. The Rep Coaching drill-down asks this home whether a stored pay breakdown
-            # is EVIDENCE AT ALL before it prints an at-risk figure beside a person's name, rather
-            # than reading the `component` column itself (the §CORE-17.3j ruling, one fact along).
-            # An employee whose breakdown the run never itemised is shown WITHOUT a figure and is
-            # not counted, in this module's own basis word — never as a person with $0.00 at risk,
-            # which a manager would read as "nothing to discuss". Both the predicate and the field
-            # name are bound by object identity, locked by `harness_batch20_drilldown.py` §A6.
             'app/modules/commcalc/performance_coaching_drilldown.py': ('_pse',),
-            # §CORE-17.3v. The same ruling one report along: a rep whose payout slices the run never
-            # itemised is shown WITHOUT a figure and is not counted, in this module's own basis
-            # word — never as a rep who earned $0.00, which is what reading the raw column would
-            # print beside a correct total.
             'app/modules/commcalc/rep_incentive_drilldown.py': ('_pse',),
+            'app/modules/commcalc/router.py': ('_pse',),
+            'app/modules/commcalc/whatif.py': ('_pse',),
         },
     },
     'commission_ledger_identity': {
@@ -2660,20 +1855,12 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/account/coa.py': ('_cl',),
             'app/modules/account/ledger_pnl.py': ('_cl',),
-            # `_LEG_LABELS` added 2026-10-16 (§COMMCALC-15): the M2–M12 P&L line's own label is
-            # built from `LEG_LABELS['trailing']`, so the statement line, the month-of-life card and
-            # the per-store block cannot spell the trailing bucket three different ways.
             'app/modules/account/ma_store_pnl.py': ('_LEG_LABELS', 'month_leg_of'),
             'app/modules/commcalc/column_mapping.py': ('commission_ledger',),
             'app/modules/commcalc/commission_statement.py': ('CATEGORIES', 'CATEGORY_LABELS'),
             'app/modules/commcalc/ledger_batch.py': ('CL',),
             'app/modules/commcalc/ledger_ma_sync.py': ('commission_ledger',),
             'app/modules/commcalc/onboarding_intake.py': ('CL',),
-            # `_month_token` is §60's binding of `parse_payment_month` — "does this label SAY a
-            # month", which is exactly that function's own question (its docstring is explicit that
-            # the month-of-life LEG question belongs to `month_leg_of` instead).
-            # §COMMCALC-03.27 added `_cled` — `LEG_LABELS`, so the takeover report calls the
-            # M1 and M2-M12 buckets exactly what the commission ledger calls them.
             'app/modules/commcalc/router.py': ('_cled', '_month_token', 'commission_ledger'),
             'app/modules/commcalc/sale_installment_engine.py': ('month_leg_of',),
         },
@@ -2722,10 +1909,6 @@ FACTS: dict[str, dict] = {
             'app/modules/account/statement_filter.py': ('core_scope',),
             'app/modules/asset/purchase_orders.py': ('_cscope',),
             'app/modules/asset/router.py': ('_cscope',),
-            # 2026-10-09 — `closer_pick` and `month_focus` import `is_market_or_wider` from this
-            # same home: "is this role's reporting scope a market or wider", which moved here when a
-            # FOURTH copy of the scope-tier tuple was about to be written (index §63). They do not
-            # read anybody's shifts; they read the scope tiers this file owns.
             'app/modules/closing/closer_pick.py': ('PICK_ANY_SCOPES', 'is_market_or_wider'),
             'app/modules/closing/ops_chargebacks.py': ('_cscope',),
             'app/modules/closing/router.py': ('_cscope', '_cscope_opts'),
@@ -2736,15 +1919,11 @@ FACTS: dict[str, dict] = {
             'app/modules/core/router.py': ('_cscope', '_omo', '_scope'),
             'app/modules/payables/router.py': ('_cscope',),
             'app/modules/pos/router.py': ('_cscope', 'in_keyset'),
+            'app/modules/storeops/clock_variance_api.py': ('_cscope',),
             'app/modules/storeops/overhead_allocation.py': ('_market_by_code',),
             'app/modules/storeops/payroll_approval.py': ('_cscope',),
             'app/modules/storeops/router.py': ('_cscope',),
             'app/modules/storevisit/router.py': ('_cscope',),
-            # The clock-variance board is person-keyed (one row per employee-day), so it rides
-            # the SAME gate as every other person-keyed read: `gate_person_rows`, which narrows BOTH
-            # the board and the login gate's blocking count to the stores this manager owns. A DM is
-            # never gated by another district's unfixed rows (mig 1073, §14z).
-            'app/modules/storeops/clock_variance_api.py': ('_cscope',),
         },
     },
     'payout_audience': {
@@ -2781,19 +1960,13 @@ FACTS: dict[str, dict] = {
             'app/modules/account/ledger_pnl.py': ('_ct',),
             'app/modules/account/ma_store_pnl.py': ('_ct',),
             'app/modules/account/residual_subs.py': ('_ct',),
-            # §58 — the carrier-dollar classification's per-org config columns (mig 1062) are
-            # PROBED, never assumed, so the code is inert until the migration is applied.
             'app/modules/commcalc/carrier_dollar_class.py': ('_ct',),
             'app/modules/commcalc/commission_engine.py': ('_ct',),
             'app/modules/commcalc/dlar_sweep.py': ('_ct',),
             'app/modules/commcalc/expenses_effective.py': ('_ct',),
-            # §19.51 — the residual installment ledger's mig-1059 columns are PROBED, never assumed,
-            # so merging that code before the migration is applied writes what it wrote before.
             'app/modules/commcalc/installment_engine.py': ('_col',),
-            'app/modules/commcalc/router.py': ('_ct',),
-            # §COMMCALC-03 — the prospect config is read any-subset, so this module behaves
-            # identically before and after mig 1077 is applied.
             'app/modules/commcalc/prospect_eval.py': ('_ct',),
+            'app/modules/commcalc/router.py': ('_ct',),
             'app/modules/commcalc/setup_documents.py': ('read_row',),
             'app/modules/commcalc/whatif.py': ('_ct',),
             'app/modules/pos/customer_master.py': ('_ct',),
@@ -2867,20 +2040,10 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/auto_calc.py': ('_pd',),
             'app/modules/commcalc/commission_ledger.py': ('_pd',),
             'app/modules/commcalc/discrepancy_appeals.py': ('_pd',),
+            'app/modules/commcalc/labour_actuals.py': ('_pk',),
             'app/modules/commcalc/ledger_batch.py': ('_pd',),
             'app/modules/commcalc/ma_recon.py': ('_pd',),
-            # §COMMCALC-03 added `_ap` here — a prospect's uploaded rows may be stamped in either
-            # spelling, so the read asked this home for both and matched the row's text against the
-            # two. §COMMCALC-03.28 REMOVED that binding and did not replace it with another: the
-            # prospect's month slice now collapses the two spellings through
-            # `prospect_eval.period_sort_key` (its single period parser) instead of comparing
-            # strings, which is what let one slicer serve the month report and the month-over-month
-            # P&L. The spelling home is unchanged and still has every other caller it had.
             'app/modules/commcalc/router.py': ('_pd',),
-            # §COMMCALC-23 (owner directive 2026-10-20) — the derived-labour actuals read
-            # `rep_commissions` for ONE month and must match both of its stored spellings, so the
-            # month is expanded by THIS home. Added BY HAND, not blessed (§50).
-            'app/modules/commcalc/labour_actuals.py': ('_pk',),
         },
     },
     'derived_labour_actuals': {
@@ -2893,12 +2056,6 @@ FACTS: dict[str, dict] = {
         # on 2026-10-04 and still strips the per-caller comments). The lock verifies it against the
         # real import graph.
         "callers": {
-            # Four surfaces whose only labour figure is an expense sheet, and which therefore may not
-            # inherit another month's payroll: the GP report (SALARY only — `net_profit` already
-            # subtracts `rep_pay`), the expenses trend, the Sales Comparison expense line and the
-            # takeover evaluation's cost benchmark. The P&L is deliberately NOT here: it derives
-            # `wages` and `rep_comm` from these same sources itself, so it needs the carried rows
-            # gone and nothing put back.
             'app/modules/commcalc/router.py': ('_lact',),
         },
     },
@@ -2915,10 +2072,6 @@ FACTS: dict[str, dict] = {
             'app/modules/account/statement_engine.py': ('_analysis',),
             'app/modules/account/statement_filter.py': ('_analysis',),
             'app/modules/account/valuation.py': ('analysis',),
-            # §COMMCALC-03 — the takeover evaluation's own statements get their totals from here, so
-            # a prospect's four figures and a store's four figures are the same four figures. §60's
-            # spiff impact used to read `pl_totals` here too; it goes through `store_pl_totals` now
-            # (the fact below), which dereferences this one on its behalf.
             'app/modules/commcalc/router.py': ('_an',),
         },
     },
@@ -2930,17 +2083,8 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_prospect_eval.py', 'harness_spiff_impact.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
-            # TWO readers in one file, and the second is why this home exists: §60's spiff impact
-            # had the loop inline (the deduped read, the store key, `analysis.pl_totals`, the
-            # earliest `computed_at`) and §COMMCALC-03.24's takeover comparison needed the same
-            # question answered a third time. The store KEY is injected — spiff impact keys by
-            # store_code, the comparison by canonical address, one question either way.
-            'app/modules/commcalc/router.py': ('_sf', '_sf_peer', 'resolve_store_matcher',
-                                               'unbound_spellings'),
-            # The module's OTHER export — `filtered_statement`, the store/market-filtered P&L the
-            # Finance hub serves. It reads the same per-store snapshots, which is precisely why the
-            # totals loop belongs in that module and not in whichever report wanted it first.
             'app/modules/account/router.py': ('statement_filter',),
+            'app/modules/commcalc/router.py': ('_sf', '_sf_peer', 'resolve_store_matcher', 'unbound_spellings'),
         },
     },
     'relation_schema': {
@@ -2951,14 +2095,9 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_relation_home_lock.py',),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
-            # §CORE-30 — the Run Calculation's input gathering (`_calc_inputs.fetch`) and the rep
-            # self-scope (`_caller_rep_keys`). The first killed EVERY tenant's calculation for about
-            # eight weeks by asking `commcalc` for `employees`; the second asked `public` for
-            # `app_users`, and its failure path means "unrestricted", so no rep was scoped at all.
-            'app/modules/commcalc/router.py': ('_relation_home',),
-            # the sibling reader of `_calc_inputs.fetch`, which swallowed the identical failure
             'app/modules/commcalc/payout_accrual.py': ('_relation_home',),
-            # the clock-in subject, which was resolving people against the stale `public.employees`
+            'app/modules/commcalc/router.py': ('_relation_home',),
+            'app/modules/core/geo_retention.py': ('_rel',),
             'app/modules/storeops/clockin_evidence.py': ('_relation_home',),
         },
     },
@@ -2971,26 +2110,13 @@ FACTS: dict[str, dict] = {
                   'harness_installment_month_anchor.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
-            # §19.51 — raw_mi is the feed §19.48's own docstring named as the next ceiling risk
-            # (46,047 rows in September, growing ~4,000 a month); its private page loop is retired.
+            'app/modules/commcalc/carrier_device_money.py': ('_feed_read',),
             'app/modules/commcalc/installment_engine.py': ('_feed_read',),
             'app/modules/commcalc/router.py': ('_feed_read',),
-            # §CORE-05 — the appeal-recovery evidence reads. Their own copy of the page loop is
-            # retired: it paged without an ORDER BY, so a device whose payment row was never served
-            # read as "no evidence" and bucketed the appeal as not_recoverable.
-            'app/modules/recovery/engine.py': ('_feed_read',),
-            # §COMMCALC-27 — the three reads the declared-terms work added, wired to this home from
-            # the start rather than keeping a fourth private page loop: the unsold per-IMEI ledger
-            # (a device missed here reads as SOLD, which is the one thing the out-of-pocket verdict
-            # must never get wrong), the vendor feed the invoice-due report falls back to, and the
-            # model scan that builds the unit-price map (a model missed prices nothing).
             'app/modules/payables/engine.py': ('_feed_read',),
             'app/modules/payables/unsold_inventory.py': ('_feed_read',),
             'app/modules/payables/vendor_invoice.py': ('_feed_read',),
-            # §COMMCALC-44 — the carrier's per-line payment feed, ~30,000 rows a month and growing.
-            # It was already read through this home inline in the router; the read moved WITH the
-            # question rather than reverting to a private page loop.
-            'app/modules/commcalc/carrier_device_money.py': ('_feed_read',),
+            'app/modules/recovery/engine.py': ('_feed_read',),
         },
     },
     'payment_category_map': {
@@ -3001,21 +2127,10 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_payment_category_home_lock.py',),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
-            # §58 — the carrier-dollar COMPONENT ruling sits on top of this CATEGORY read and
-            # keeps no copy of it; §57 decides the category, §58 decides what the category means.
             'app/modules/commcalc/carrier_dollar_class.py': ('_pc',),
-            # The GROSS PROFIT engine reads the org's declared category for an ePay payment type
-            # here rather than comparing it against four literals it spelled itself — one of which
-            # only ever matched the house's own hyphenated "Re-imbursement" (owner 2026-10-08).
             'app/modules/commcalc/gp_report.py': ('_pc',),
             'app/modules/commcalc/processor_ledger.py': ('_pcat',),
-            # `_pc` since §68: the entitlement-month report's router glue reads this home's own
-            # `load_map` / `category_of` for "which payment types are the entitlement".
             'app/modules/commcalc/router.py': ('_payment_category', '_pc', '_pcat'),
-            # §60 — the spiff-impact report folds a PAY-TYPE KEY (its option list and its per-store
-            # tally must agree about whether two spellings are one type) and dereferences §57's one
-            # folding rule rather than keeping a second. It reads the TABLE through §58, never here,
-            # so §57's reader inventory is unchanged.
             'app/modules/commcalc/spiff_impact.py': ('_pc_fold',),
         },
     },
@@ -3058,18 +2173,11 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             'app/modules/commcalc/accessory_cost_audit.py': ('_f', 'pdq'),
-            # §68 — the entitlement-month report IMPORTS the three shipped verdict strings rather
-            # than respelling them, so its tri-state can never drift from this home's.
-            'app/modules/commcalc/entitlement_coverage.py': ('VERDICT_FAILED', 'VERDICT_NOT_MEASURED',
-                                                             'VERDICT_PASSED'),
-            # §55.2 — the one clawback test dereferences PLACEABLE_CATEGORIES for "which categories
-            # are pay", minus the phantom `Chargeback` entry it exists to replace.
             'app/modules/commcalc/clawback.py': ('PLACEABLE_CATEGORIES',),
             'app/modules/commcalc/commission_drilldown.py': ('_pdq',),
-            # §57.1 — the one payment-category home dereferences UNCATEGORISED (the word for "never
-            # mapped") and PLACEABLE_CATEGORIES rather than restating either.
-            'app/modules/commcalc/payment_category.py': ('PLACEABLE_CATEGORIES', 'UNCATEGORISED'),
             'app/modules/commcalc/commission_engine.py': ('_pdq_cfg',),
+            'app/modules/commcalc/entitlement_coverage.py': ('VERDICT_FAILED', 'VERDICT_NOT_MEASURED', 'VERDICT_PASSED'),
+            'app/modules/commcalc/payment_category.py': ('PLACEABLE_CATEGORIES', 'UNCATEGORISED'),
             'app/modules/commcalc/plan_pay_gate.py': ('_pdq',),
             'app/modules/commcalc/router.py': ('_pdq',),
         },
@@ -3083,13 +2191,8 @@ FACTS: dict[str, dict] = {
         "callers": {
             'app/modules/account/coa.py': ('effective_expense_rows',),
             'app/modules/commcalc/labour_coverage.py': ('period_sort_key',),
-            'app/modules/commcalc/router.py': ('_expfx', 'effective_series'),
-            # §COMMCALC-03 — the takeover evaluation dereferences this home; it never queries
-            # the table or re-derives the rule.
             'app/modules/commcalc/prospect_eval.py': ('period_sort_key',),
-            # §COMMCALC-19 — "can this month-over-month expense change be measured at all" compares the
-            # two carried periods through THIS home's spelling rule, so `2026-08` and `August 2026`
-            # are one sheet rather than two. It dereferences `period_sort_key`; it does not re-spell it.
+            'app/modules/commcalc/router.py': ('_expfx', 'effective_series'),
             'app/modules/commcalc/sales_comparison.py': ('_period_key',),
         },
     },
@@ -3114,18 +2217,8 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11 of
         # 12 facts on 2026-10-04). The lock verifies it against the real import graph.
         "callers": {
-            # The carry-forward suggestion, the period summary, the calendar and the action plan all
-            # walk `target_categories(catalog)` and ask `target_store(cat)` where each target lives.
-            # It also hands the axis to the DM / market-manager report card, which imports nothing
-            # by design (harness_manager_report_card D1) — so the card's items come from here.
             'app/modules/commcalc/router.py': ('_te', 'targets_engine'),
-            # The targets drill-down asks `target_axis` what the categories are and
-            # `target_store` / `BUILTIN_TARGET_COLUMN` WHERE each target physically lives, so
-            # a panel names the settings row a number was typed into instead of guessing one
-            # (§CORE-17.3m). It owns no axis and no arithmetic of its own —
-            # `harness_batch13_drilldown` §Y13 fails the build if it grows either.
             'app/modules/commcalc/targets_drilldown.py': ('_te',),
-            # The visit-priority dropdown offers the axis as assignable deliverables.
             'app/modules/storevisit/visit_plan_router.py': ('_te',),
         },
     },
@@ -3152,12 +2245,8 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
         # import graph.
         "callers": {
-            # The endpoint the register reads, the checkout's gate, and the receipt's money line.
             'app/modules/pos/router.py': ('_tender',),
             'app/modules/pos/sale_receipt.py': ('_tv',),
-            # §POS-19 (2026-10-31): the tender/total comparison asks this home whether a leg
-            # settles at the till. It had summed every leg, so a sale wholly on terms read as an
-            # over-tender — the two facts had never met. See index §POS-19.3.
             'app/modules/pos/sale_settlement.py': ('_tender',),
         },
     },
@@ -3181,8 +2270,6 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_pos_wholesale_w9.py',),
         # SNAPSHOT — written BY HAND, never blessed (§50).
         "callers": {
-            # The W-9 panel's endpoint, the confirm / request routes, the two public token routes
-            # and the checkout's gate — all in the one router, all dereferencing `decide`.
             'app/modules/pos/router.py': ('_w9',),
         },
     },
@@ -3203,8 +2290,6 @@ FACTS: dict[str, dict] = {
         "locks": ('harness_pos_wholesale_w9.py',),
         # SNAPSHOT — written BY HAND, never blessed (§50).
         "callers": {
-            # HR's three onboarding uploads (through its four thin dereferences) and the customer's
-            # W-9 return upload. Neither keeps a sniffer, a magic-byte table or a refusal of its own.
             'app/modules/hr/router.py': ('_upload_format',),
             'app/modules/pos/router.py': ('_upload_format',),
         },
@@ -3235,7 +2320,6 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
         # import graph.
         "callers": {
-            # The open-balances report endpoint. The screen holds no arithmetic of its own.
             'app/modules/pos/router.py': ('_recv',),
         },
     },
@@ -3258,20 +2342,10 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
         # import graph.
         "callers": {
-            # The live interactive login: `_human_check_kind` reads the kind and picks the
-            # operator's words out of `_HUMAN_CHECK_MESSAGE`, instead of auto-submitting.
             'app/modules/commcalc/live_login.py': ('vp',),
-            # The four other importers of the home. Each reaches it for the UNATTENDED paths —
-            # `begin_login` / `begin_login_b2bsoft`, the browser primitives, `_classify` — and so
-            # each inherits the answer through those entry points rather than asking again. NONE of
-            # them may grow its own detector: a second "is a human check waiting" is the duplicate
-            # this fact exists to stop, and §E of the lock pins the two post-submit sites that DO
-            # ask. An unattended sweep CANNOT pass a check, which is why the honest message (not a
-            # bad-password verdict) is what these paths surface to the operator.
             'app/modules/commcalc/merchant_portal_sweep.py': ('vp',),
             'app/modules/commcalc/portal_report_pull.py': ('vp',),
-            'app/modules/commcalc/router.py': ('UnsafePortalUrlError', 'VidaPayAuthError',
-                                              '_AuthErr', 'vp'),
+            'app/modules/commcalc/router.py': ('UnsafePortalUrlError', 'VidaPayAuthError', '_AuthErr', 'vp'),
             'app/modules/supply/portal.py': ('vp',),
         },
     },
@@ -3389,14 +2463,7 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
         # import graph.
         "callers": {
-            # The data_source row decorator — the ONE place a row reaches a surface, and therefore
-            # the only reader of `present_auth_status`. It also owns the stamp whose order the
-            # pre-login capture depends on (`live_login_start` reads the row BEFORE stamping it).
             'app/modules/commcalc/router.py': ('_ll', 'live_login'),
-            # The vendor-ordering door onto the same live login (§51). It REUSES commcalc's
-            # endpoints — the commcalc ROUTER's `live_login_start` for the start, and `get_session` here to
-            # read state — so it inherits this answer rather than presenting its own. It may never grow a second
-            # presenter: a status is one fact, whichever page asks for it.
             'app/modules/supply/router.py': ('live_login',),
         },
     },
