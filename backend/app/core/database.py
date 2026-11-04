@@ -50,8 +50,11 @@ disconnect mid-write may have committed) — an unrecoverable request raises a c
 `app/core/db_resilience.py`; proofs in `backend/harness_db_resilience.py`.
 
 Because the injected client must reach EVERY pool, `.schema()` builds its `SyncPostgrestClient`
-directly here (postgrest's own `.schema()` does not forward `http_client=`), and the default/public
-pool (`client.postgrest`, `client.table()`, `client.rpc()`) is routed through the same memo.
+directly here, and the default/public pool (`client.postgrest`, `client.table()`, `client.rpc()`) is
+routed through the same memo. Until postgrest 2.33.0 that was the ONLY way to reach a derived
+schema's pool, because upstream's own `.schema()` did not forward `http_client=`; from 2.34.0 it
+does forward it. Building here is kept regardless — it is what makes the memo above the one home
+for "which pool does this schema use", rather than a fact borrowed from a floored dependency.
 """
 import threading
 from typing import Dict, Optional

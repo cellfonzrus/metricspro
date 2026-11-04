@@ -9,7 +9,12 @@ gunicorn>=22.0.0
 # which our own layer deliberately does not. The tripwire caught it; the floor let it in. Advancing
 # these is a reviewed step (re-read the sources, re-point A2/A4/A12/G1/G2, then move A1's pin and
 # these lines together), never an install-time surprise.
-supabase==2.33.0
+#
+# 2.33.0 -> 2.34.0 IS that reviewed step, and this line is the half that makes it real: the sources
+# were re-read, A2/A4/A12 re-pointed and the ConnectError claim split by verb (G2a-G2d), so the pin
+# below and `PINNED_STACK` move together. Moving only the harness would have left the float as the
+# structural cause and let 2.35.0 do this again.
+supabase==2.34.0
 python-multipart>=0.0.12
 pandas>=2.2.0
 openpyxl>=3.1.2
