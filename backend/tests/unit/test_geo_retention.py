@@ -16,7 +16,7 @@ from app.modules.core import store_geofence as _sgeo
 NOW = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
 PUNCH = R.RELATIONS_BY_NAME["storeops.timelog"]
 VISIT = R.RELATIONS_BY_NAME["storeops.store_visits"]
-CHECKIN = R.RELATIONS_BY_NAME["marketing.marketing_event_checkin"]
+CHECKIN = R.RELATIONS_BY_NAME["core.marketing_event_checkin"]
 ALL = pytest.mark.parametrize("entry", R.LOCATION_RELATIONS, ids=lambda e: e["relation"])
 
 
@@ -47,7 +47,7 @@ def test_A5_a_tenants_own_longer_window_is_obeyed_not_capped_to_the_house_number
 # ── B. the registry covers every relation that stores where somebody was ─────────────────────────
 def test_B1_the_three_known_location_relations_are_all_registered():
     assert {e["relation"] for e in R.LOCATION_RELATIONS} == {
-        "storeops.timelog", "storeops.store_visits", "marketing.marketing_event_checkin"}
+        "storeops.timelog", "storeops.store_visits", "core.marketing_event_checkin"}
 
 
 @ALL
@@ -223,3 +223,29 @@ def test_Z2_marketings_date_arithmetic_delegates_here_rather_than_keeping_a_copy
     assert "timedelta" not in body, (
         "event_logic.purge_after_date still computes its own date — it must dereference "
         "geo_retention.purge_after")
+
+
+# ── H. THE 2026-11-04 REGRESSION: which schema a relation lives in is READ, never copied ─────────
+# The registry carried `"schema": "marketing"` for `marketing_event_checkin`, and migration 1113
+# carried the same wrong word. `marketing` is a backend MODULE, not a schema; the table lives in
+# `core` (mig 986). The owner's run died on `3F000: schema "marketing" does not exist` with the
+# whole migration rolled back, and the nightly sweep would have failed on that relation for ever
+# while the other two looked healthy — a half-honoured deletion promise that reports `ok`.
+def test_H1_the_checkin_relation_is_in_core_not_a_module_named_schema():
+    assert CHECKIN["schema"] == "core"
+    assert CHECKIN["relation"] == "core.marketing_event_checkin"
+
+
+@ALL
+def test_H2_every_entry_agrees_with_the_one_home_for_that_fact(entry):
+    from app.modules.core import relation_home as _rel
+    truth = _rel.schema_of(entry["table"])
+    assert entry["schema"] == truth
+    assert entry["relation"] == f"{truth}.{entry['table']}"
+
+
+def test_H3_a_relation_no_migration_creates_cannot_enter_the_registry():
+    """`schema_of` RAISES rather than guessing, so a typo stops the import instead of reading air."""
+    from app.modules.core import relation_home as _rel
+    with pytest.raises(_rel.UnknownRelation):
+        _rel.schema_of("marketing_event_checkins")

@@ -13,7 +13,7 @@
 --
 --   1. storeops.timelog      — a shift's two ends.             NEW stamp column.
 --   2. storeops.store_visits — a manager's store visit.         NEW stamp column.
---   3. marketing.marketing_event_checkin — a rep at an event.  ALREADY stamped (mig 986's
+--   3. core.marketing_event_checkin — a rep at an event.  ALREADY stamped (mig 986's
 --      `purge_after_date`); this file adds only its index, so the sweep reads it the same way.
 --
 -- WHAT A PURGE REMOVES, AND WHAT IT KEEPS. It clears the COORDINATES (latitude, longitude,
@@ -47,7 +47,7 @@
 --   ALTER TABLE storeops.store_visits DROP COLUMN IF EXISTS geo_purge_after_date;
 --   DROP INDEX IF EXISTS storeops.timelog_geo_purge_due_idx;
 --   DROP INDEX IF EXISTS storeops.store_visits_geo_purge_due_idx;
---   DROP INDEX IF EXISTS marketing.marketing_event_checkin_purge_due_idx;
+--   DROP INDEX IF EXISTS core.marketing_event_checkin_purge_due_idx;
 --   -- (the marketing stamp column itself belongs to migration 986 and is NOT dropped here)
 
 -- ═══ 1. storeops.timelog — the stamp for a shift's two ends ═══════════════════════════════════
@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS store_visits_geo_purge_due_idx
   WHERE geo_purge_after_date IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS marketing_event_checkin_purge_due_idx
-  ON marketing.marketing_event_checkin (purge_after_date)
+  ON core.marketing_event_checkin (purge_after_date)
   WHERE purge_after_date IS NOT NULL;
 
 -- ═══ GRANTS ═══════════════════════════════════════════════════════════════════════════════════
@@ -92,7 +92,7 @@ CREATE INDEX IF NOT EXISTS marketing_event_checkin_purge_due_idx
 -- these tables, and an employee's coordinates are the last thing that should become anon-readable.
 GRANT SELECT, INSERT, UPDATE, DELETE ON storeops.timelog                   TO service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON storeops.store_visits              TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON marketing.marketing_event_checkin  TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON core.marketing_event_checkin  TO service_role;
 
 NOTIFY pgrst, 'reload schema';
 SELECT 'Migration 1113 complete — a retention stamp on storeops.timelog and storeops.store_visits, '
