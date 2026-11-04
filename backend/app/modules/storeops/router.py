@@ -717,10 +717,23 @@ def create_time_off(request: dict, authorization: str = Header(default=""), org_
     return r.data[0]
 
 @router.patch("/time-off/{request_id}")
-def update_time_off(request_id: int, updates: dict, org_id: str = ORG_ID):
+def update_time_off(request_id: int, updates: dict, authorization: str = Header(default=""),
+                    org_id: str = ORG_ID):
     """org_id-scoped so a foreign request_id is a no-op. The org_id query param was already present
-    but wasn't actually applied to this UPDATE — a cross-tenant write hole."""
+    but wasn't actually applied to this UPDATE — a cross-tenant write hole.
+
+    Approving, denying, voiding or editing a request is the MANAGER's answer to it, so this
+    dereferences `require_person_write(manager_only=True)` against the employee the stored request
+    names — the same one home `delete_manual_hours` asks. Found by the security pass on §CORE-32,
+    2026-11-04: this route took no `authorization` at all, so any signed-in person in the org could
+    approve their own leave (and `rep_surface` was offering the path). Raising a request is still a
+    plain POST to the collection, which every employee may do."""
     client = sb()
+    before = (client.table("time_off_requests").select("employee_id")
+              .eq("id", request_id).eq("org_id", org_id).limit(1).execute().data or [None])[0]
+    if before:
+        require_person_write(authorization, org_id, before.get("employee_id"),
+                             "Answering a time-off request", manager_only=True)
     updates = {k: v for k, v in updates.items() if k not in ("org_id", "id")}
     r = client.table("time_off_requests").update(updates).eq("id", request_id).eq("org_id", org_id).execute()
     row = (r.data or [None])[0]
@@ -741,11 +754,16 @@ def update_time_off(request_id: int, updates: dict, org_id: str = ORG_ID):
 
 
 @router.post("/time-off/reconcile-duplicates")
-def reconcile_timeoff_duplicates(org_id: str = ORG_ID):
+def reconcile_timeoff_duplicates(authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Idempotent cleanup for the "voided but still can't be scheduled" backlog: when a time-off was
     voided (a 'denied' row exists) but a duplicate 'approved'/'pending' copy for the SAME employee +
     dates survived and keeps blocking scheduling, deny the surviving copy too. Acts ONLY where a denied
-    sibling proves the void intent — never denies a standalone approval (e.g. genuine approved PTO)."""
+    sibling proves the void intent — never denies a standalone approval (e.g. genuine approved PTO).
+
+    An org-wide cleanup, so it is a manager action — gated on `_require_manager` since the security
+    pass on §CORE-32 (2026-11-04) found it ungated and inside a prefix the employee surface grants."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
     client = sb()
     rows = (client.table("time_off_requests")
             .select("id,employee_id,start_date,end_date,status")
@@ -4394,13 +4412,20 @@ def _apply_swap(swap, org_id: str = ORG_ID, who=None):
 
 @router.patch("/shift-swaps/{swap_id}")
 def update_shift_swap(swap_id: int, updates: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Approve/deny/cancel a swap. Approving reassigns the shift(s)."""
+    """Approve/deny/cancel a swap. Approving reassigns the shift(s).
+
+    Answering a swap is the MANAGER's act — it moves another person's shift — so it dereferences
+    `require_person_write(manager_only=True)` against the requester the stored row names. Before the
+    security pass on §CORE-32 (2026-11-04) `authorization` was read only to stamp the log, so the
+    approval itself was unchecked while `rep_surface` offered the path."""
     status = updates.get("status")
     if status not in ("approved", "denied", "pending", "cancelled"):
         raise HTTPException(400, "invalid status")
     cur = sb().table("shift_swap_requests").select("*").eq("org_id", org_id).eq("id", swap_id).limit(1).execute().data or []
     if not cur:
         raise HTTPException(404, "swap not found")
+    require_person_write(authorization, org_id, cur[0].get("requester_id"),
+                         "Answering a shift swap", manager_only=True)
     if status == "approved":
         _apply_swap(cur[0], org_id, who=_who_for_log(authorization, org_id))
     r = sb().table("shift_swap_requests").update({"status": status}).eq("id", swap_id).eq("org_id", org_id).execute()

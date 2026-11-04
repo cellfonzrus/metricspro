@@ -113,6 +113,56 @@ check("B22 the shift WRITES are not an employee's",
 check("B23 a path that merely STARTS LIKE a declared one is refused",
       not RS.api_allowed("/api/v1/storeops/timeclock-permissions/9/decision", "POST")
       and not RS.api_allowed("/api/v1/storeops/time-off-balances", "GET"))
+# ── §B2. THE ASK IS NOT THE ANSWER (the security pass on this change, 2026-11-04) ────────────────
+# The first draft granted whole prefixes for every method, so the POST that ASKS for time off also
+# carried the PATCH that APPROVES it, and those handlers had no authority of their own: a rep could
+# approve their own leave. Each pair below REPRODUCES the hole (the ask stays allowed, which is what
+# made the grant look reasonable) and then shows the answer refused.
+print("\n§B2 a grant on a collection is not a grant on its members")
+PAIRS = [
+    # (the ask — must stay ALLOWED, or an employee cannot ask),  (the answer — must be REFUSED)
+    (("/api/v1/storeops/time-off", "POST"), ("/api/v1/storeops/time-off/41", "PATCH")),
+    (("/api/v1/storeops/shift-swaps", "POST"), ("/api/v1/storeops/shift-swaps/7", "PATCH")),
+    (("/api/v1/storeops/shift-extensions", "POST"),
+     ("/api/v1/storeops/shift-extensions/9/decision", "POST")),
+    (("/api/v1/closing/row", "POST"), ("/api/v1/closing/row/9", "DELETE")),
+    (("/api/v1/helpdesk/tickets", "POST"), ("/api/v1/helpdesk/config/teams", "POST")),
+    (("/api/v1/chat/channels/1/messages", "POST"), ("/api/v1/chat/admin/retention", "POST")),
+]
+for (ap, am), (rp, rm) in PAIRS:
+    check(f"B2+ the ask {am} {ap} is still allowed", RS.api_allowed(ap, am), "an employee cannot ask")
+    check(f"B2- the answer {rm} {rp} is refused", not RS.api_allowed(rp, rm), RS.surface_for_api(rp, rm))
+check("B2a the org-wide time-off cleanup is not an employee's",
+      not RS.api_allowed("/api/v1/storeops/time-off/reconcile-duplicates", "POST"))
+check("B2b the help desk's agent console is refused, not just its page",
+      not RS.api_allowed("/api/v1/helpdesk/support/sla-policy", "PUT")
+      and not RS.api_allowed("/api/v1/helpdesk/support/cases/3/assign", "POST"))
+check("B2c the closing CONFIG writes are refused while their reads stay (the kiosk form reads them)",
+      not RS.api_allowed("/api/v1/closing/tender-config", "PUT")
+      and not RS.api_allowed("/api/v1/closing/cash-config", "PUT")
+      and not RS.api_allowed("/api/v1/closing/sweep/run-now", "POST")
+      and RS.api_allowed("/api/v1/closing/tender-config", "GET")
+      and RS.api_allowed("/api/v1/closing/count-config", "GET"))
+check("B2d the timeclock ADMIN writes are refused while the punch and the manager override stay",
+      not RS.api_allowed("/api/v1/storeops/timeclock/geo-config", "PUT")
+      and not RS.api_allowed("/api/v1/storeops/timeclock/attendance-config", "PUT")
+      and not RS.api_allowed("/api/v1/storeops/timeclock/permissions/3/decision", "POST")
+      and RS.api_allowed("/api/v1/storeops/timeclock/clock-in", "POST")
+      and RS.api_allowed("/api/v1/storeops/timeclock/clock-out", "POST")
+      and RS.api_allowed("/api/v1/storeops/timeclock/override", "POST"))
+check("B2e a carve-out refuses every method, a READ included — it is not a method narrowing",
+      not RS.api_allowed("/api/v1/storeops/time-off/41", "GET"))
+check("B2f …and a trace names no surface for a carved route, so nothing can report it as granted",
+      RS.surface_for_api("/api/v1/storeops/time-off/41", "PATCH") is None)
+check("B2g every carved entry really is below a granted prefix — a carve-out of something never "
+      "granted is a comment pretending to be a gate",
+      all(any(_g == e.split("/**")[0].rstrip("/") or e.startswith(_g.rstrip("/") + "/")
+              for s in RS.SURFACES for _g in s["api"])
+          for e in RS.api_exceptions()),
+      [e for e in RS.api_exceptions()
+       if not any(_g == e.split("/**")[0].rstrip("/") or e.startswith(_g.rstrip("/") + "/")
+                  for s in RS.SURFACES for _g in s["api"])])
+
 check("B24 every declared API prefix resolves to a surface (its own, or the universal set it is "
       "also in — the own-password path is deliberately both)",
       all(RS.surface_for_api(a, "POST") in (s["key"], "universal")

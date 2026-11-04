@@ -4,6 +4,7 @@ import DateField from '@/components/DateField'
 import { api, parseLocalDate } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
+import { repConfined } from '@/lib/rbac'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
@@ -20,7 +21,8 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 export default function TimeOffPage() {
-  const { user } = useAuth()
+  const { user, permissions } = useAuth()
+  const confined = repConfined(permissions)
   const [requests, setRequests] = useState<Request[]>([])
   const [employees, setEmployees] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -348,7 +350,11 @@ export default function TimeOffPage() {
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {r.status === 'pending' ? (
+                        {/* ANSWERING a request is the manager's act, and the API refuses it for an
+                            individual contributor (rep_surface api_except, §CORE-32). The buttons
+                            dereference that SAME server fact rather than carrying a rule of their
+                            own, so a rep is never offered a control that would 403. */}
+                        {confined ? null : r.status === 'pending' ? (
                           <>
                             <button className="btn btn-primary" style={{ fontSize: 11, padding: '4px 10px' }}
                               onClick={() => updateStatus(r.id, 'approved')}>Approve</button>
@@ -359,8 +365,9 @@ export default function TimeOffPage() {
                           <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px', color: 'var(--red)' }}
                             onClick={() => updateStatus(r.id, 'denied')}>Revoke</button>
                         ) : null}
-                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px' }}
-                          onClick={() => openEdit(r)}>Edit</button>
+                        {confined ? null : (
+                          <button className="btn btn-secondary" style={{ fontSize: 11, padding: '4px 10px' }}
+                            onClick={() => openEdit(r)}>Edit</button>)}
                       </div>
                     </td>
                   </tr>

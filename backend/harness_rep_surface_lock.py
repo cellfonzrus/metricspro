@@ -154,6 +154,11 @@ WIRED = {
     "delete_manual_hours": (SO, '"Removing an hours adjustment", manager_only=True'),
     "create_time_off": (SO, '"Filing time off"'),
     "create_shift_swap": (SO, '"Raising a shift swap"'),
+    # The ANSWER to each ask, gated by the security pass on this change (2026-11-04). The grant was
+    # on the collection; these live below it and had no authority of their own.
+    "update_time_off": (SO, '"Answering a time-off request", manager_only=True'),
+    "update_shift_swap": (SO, '"Answering a shift swap", manager_only=True'),
+    "reconcile_timeoff_duplicates": (SO, "mgr = _require_manager(authorization, org_id)"),
     "onboarding_for_employee": (HR, '"Opening onboarding paperwork"'),
     "onboarding_set_profile": (HR, '"Changing onboarding paperwork"'),
 }
@@ -161,11 +166,65 @@ for fn, (src, needle) in WIRED.items():
     check(f"4- {fn} still dereferences the gate", needle in src, "it stopped asking")
     check(f"4- {fn} takes an authorization header to ask with",
           bool(re.search(rf"def {fn}\(.*?authorization", src, re.S | re.M)))
-check("4d the two hours writes are MANAGER-only; the ask-for-yourself writes are not",
-      SO.count("manager_only=True") == 2)
+# DECLARED, not counted: a route that stops being manager-only — or a new one that quietly becomes
+# manager-only — names itself here. (A bare count went blind to exactly that; same lesson as
+# harness_subject_set_lock.py.)
+MANAGER_ONLY = {"Adjusting hours", "Removing an hours adjustment",
+                "Answering a time-off request", "Answering a shift swap"}
+_mo = set(re.findall(r'"([^"]+)", manager_only=True', SO))
+check("4d the manager-only writes are exactly the declared set — the ask-for-yourself writes are "
+      "NOT manager-only, or an employee could not ask",
+      _mo == MANAGER_ONLY,
+      "only in code: %s / only in this lock: %s" % (sorted(_mo - MANAGER_ONLY),
+                                                    sorted(MANAGER_ONLY - _mo)))
 ctl("4d can go red", "manager_only=True" in SO)
+check("4f the ASK is never manager-only — a confined employee must be able to raise one",
+      "'\"Filing time off\", manager_only" not in SO
+      and '"Filing time off", manager_only' not in SO
+      and '"Raising a shift swap", manager_only' not in SO)
 check("4e the import reaches HR from the one home, not a copy",
       "require_person_write" in HR and "def require_person_write" not in HR)
+
+# ── 4g. A GRANT ON A COLLECTION IS NOT A GRANT ON ITS MEMBERS ────────────────────────────────────
+# The security pass on this very change found the first draft granting whole API prefixes for every
+# method, so the POST that ASKS for time off also carried the PATCH that APPROVES it. The carve-out
+# is the fix; these pin that it cannot quietly stop being asked, and that its grammar stays the one
+# that makes sense for a member (strictly BELOW the collection, unlike a page subtree).
+print("\n4g the API carve-out")
+check("4g1 the declaration carves manager routes out of its granted prefixes",
+      '"api_except"' in RS and "def api_exceptions" in RS)
+check("4g2 the carve-out is asked FIRST in api_allowed, before any grant can answer",
+      re.search(r"def api_allowed.*?api_except_matches.*?UNIVERSAL_API", RS, re.S) is not None)
+check("4g3 …and in surface_for_api too, so a trace never names a surface the gate refuses",
+      re.search(r"def surface_for_api.*?api_except_matches", RS, re.S) is not None)
+check("4g4 a member carve-out is STRICTLY below its collection — carving the approve must not "
+      "refuse the ask",
+      "def _api_except_matches" in RS
+      and 'return p.startswith(_norm(e[: -len(SUBTREE)]) + "/")' in RS)
+API_EXCEPT = {
+    "/api/v1/storeops/timeclock/attendance-config", "/api/v1/storeops/timeclock/geo-config",
+    "/api/v1/storeops/timeclock/face-config", "/api/v1/storeops/timeclock/face-retention/**",
+    "/api/v1/storeops/timeclock/lunch-config", "/api/v1/storeops/timeclock/permissions/**",
+    "/api/v1/storeops/timeclock/force-clockout/**",
+    "/api/v1/storeops/time-off/**", "/api/v1/storeops/shift-swaps/**",
+    "/api/v1/storeops/shift-extensions/**",
+    "/api/v1/helpdesk/config/**", "/api/v1/helpdesk/support/**",
+    "/api/v1/closing/row/**", "/api/v1/chat/admin/**",
+}
+_ae = {m for grp in re.findall(r'"api_except":\s*\(([^)]*)\)', RS)
+       for m in re.findall(r'"([^"]+)"', grp)}
+check("4g5 the carved routes are exactly the declared set",
+      _ae == API_EXCEPT,
+      "only in code: %s / only in this lock: %s" % (sorted(_ae - API_EXCEPT),
+                                                    sorted(API_EXCEPT - _ae)))
+check("4g6 the closing grant is NAMED routes, not the whole /closing prefix (which carried every "
+      "tender, cash, deposit and sweep config write)",
+      '"api": ("/api/v1/closing/row", "/api/v1/closing/envelope-photo",' in RS
+      and '"api": ("/api/v1/closing",)' not in RS)
+check("4g7 the helpdesk settings screen is carved on BOTH sides — carving the page and granting "
+      "its whole API is the browser-only gate this module exists to kill",
+      "/helpdesk/settings" in RS and "/api/v1/helpdesk/config/**" in RS)
+
 
 # ── 5. /me SERVES THE SAME DECLARATION ───────────────────────────────────────────────────────────
 print("\n5. /me")

@@ -44295,6 +44295,37 @@ in one pass, because they are one fact wearing four hats.
 | Whether a caller may WRITE a row ABOUT a person | **`storeops.router.require_person_write` / `person_write_allowed`** — dereferences `schedule_emp_ids` (§14w) and adds no second span derivation. `manager_only=True` on the two hours writes additionally refuses an individual contributor writing about themselves |
 | What the browser knows | `/me` → `permissions.rep_surface` (built by `rep_surface.viewer_payload`, reusing the `_is_self` answer `_me_payload` already computed). `lib/rbac.ts` holds NO page list: `repConfined` / `repPages` / `repPageAllowed` read the payload, and `canAccessPath` + `canSeeItem` both ask it FIRST. The confined gate is the one CLOSED gate in that file — a per-function grant and the admin module cannot reopen it |
 | The page grammar | `"/storeops/timeoff"` is EXACT (a page's neighbours are never implied); `"/helpdesk/**"` is that page and everything below; `page_except` carves the two manager screens out of the helpdesk subtree. There is no prefix match on a page's PARENT — that prefix is the defect |
+| The API grammar | `api` is a granted prefix for every method, `api_read` for GET/HEAD only, and **`api_except` carves a manager route out of a grant and is asked FIRST**, exactly as `page_except` is. Its `/**` form means STRICTLY BELOW the entry (`_api_except_matches`), unlike a page subtree which includes its base — because the grant being carved IS the collection, so carving the answer must not refuse the ask |
+
+### A GRANT ON A COLLECTION IS NOT A GRANT ON ITS MEMBERS (the security pass on this change, 2026-11-04)
+
+The house requires a security pass before a tenant-scoped feature goes live (owner directive
+2026-10-30). It found this change's own first draft granting whole API prefixes for every method, and
+that is a second instance of the very class §CORE-32 exists to fix — **a surface whose authority lived
+only in the caller, not in the route**:
+
+| the grant, and why it looked reasonable | what it also carried | the handler behind it |
+|---|---|---|
+| `/api/v1/storeops/time-off` — an employee ASKS for leave with a POST | `PATCH /time-off/{id}`, the manager's APPROVE, and `POST /time-off/reconcile-duplicates`, an org-wide cleanup | `update_time_off` took **no `authorization` parameter at all** — so a rep could approve their own leave, which `rep_surface` was offering the path for; `reconcile_timeoff_duplicates` was ungated |
+| `/api/v1/storeops/shift-swaps` — an employee ASKS for a swap | `PATCH /shift-swaps/{id}`, whose approval REASSIGNS another person's shift | `update_shift_swap` read `authorization` only to stamp the log |
+| `/api/v1/helpdesk` — raising and following one's own ticket | `/helpdesk/config/**` (categories, priorities, teams, SLA) and `/helpdesk/support/**` (the agent console) | the settings **page** was carved out and its whole **API** was not — the browser-only gate again, inside the fix for it |
+| `/api/v1/closing` — reps submit the daily closing from the kiosk | every tender / cash / deposit / sweep CONFIG write and the chargeback decisions | — |
+
+Both halves are fixed, because either alone would be a patch. The DECLARATION no longer offers those
+routes (`api_except`, plus the closing grant narrowed from the `/api/v1/closing` prefix to the three
+routes `ClosingSubmitForm.tsx` actually writes), AND the three handlers now dereference an authority
+check — `require_person_write(..., manager_only=True)` against the employee the STORED row names for
+the two answers, `_require_manager` for the org-wide cleanup. So the refusal never depends on
+`rep_surface` being the only gate. The two granted pages (`/storeops/timeoff`, `/storeops/swaps`) hide
+their Approve / Deny / Revoke / Edit controls for a confined viewer by dereferencing the same
+`repConfined` server fact, so nobody is offered a button that would 403.
+
+What generalises: **ask what METHOD the grant was made for.** A collection granted for the POST that
+asks is not granted for the PATCH that answers, and a carve-out on the page side without the matching
+one on the API side is not a carve-out at all. Pinned by `harness_rep_surface_lock.py` §4g (the carved
+set is DECLARED, not counted) and reproduced-then-closed in `harness_rep_surface.py` §B2 and
+`tests/integration/test_rep_surface_gate.py` (the rep's own approval lands with the gate removed and
+is refused with it).
 
 ### The landing
 
