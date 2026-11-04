@@ -50,6 +50,7 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)   # so `import ci_gates` works whatever the cwd
 WORKFLOWS = os.path.join(HERE, "..", ".github", "workflows")
 # A GATE, not just a harness: `scripts/check_*.py` is the same shape and the same defect — a gate
 # script piped to tee reports tee's status. 2026-10-14: the branch-base guard was the first gate
@@ -271,7 +272,7 @@ def misplaced(files, read_source, wheels):
 
 # ── THE THIRD RULE — a harness no workflow runs is a file, not a gate ─────────────────────────────
 PENDING_FILE = os.path.join(HERE, "harness_unrun_pending.txt")
-PINNED_MAX = 312          # must equal the number of entries in harness_unrun_pending.txt
+PINNED_MAX = 46           # must equal the number of entries in harness_unrun_pending.txt
 #                          314 -> 312 on 2026-10-31: harness_zero_sales.py and
 #                          harness_zero_sales_lock.py are now RUN by carrier-vocab-guard.yml.
 #                          Nothing ran either, which is how the lock's `d3` sat red on main.
@@ -292,11 +293,22 @@ def read_pending(text):
 
 
 def harnesses_run_by(files):
-    """{workflow: yaml} → every harness_*.py filename any workflow mentions."""
-    out = set()
-    for text in files.values():
-        out |= set(re.findall(r"\b(harness_\w+\.py)", text))
-    return out
+    """{workflow: yaml} → every harness_*.py filename a workflow actually INVOKES.
+
+    2026-11-04 — THIS USED TO BE A TEXT SEARCH, and that was a hole in an enforcing gate. It read
+    every `harness_\w+\.py` ANYWHERE in a workflow, so a filename named in a COMMENT or in a
+    `paths:` trigger filter counted as "run by a workflow" and the harness fell out of the debt
+    list below. Five harnesses were exempt that way with nothing executing them, and one of the
+    five (`harness_export_xss_upload.py`) was RED the whole time — the exact failure mode the debt
+    list exists to prevent (`harness_activation_bucketing`, red on main for three weeks).
+
+    The question "which workflow job runs this gate" now has ONE home, `backend/ci_gates.py`, and
+    this lock DEREFERENCES it rather than keeping a second, laxer copy of the answer. The same home
+    renders `docs/CI_GATES.md`, so what this lock counts and what that page shows cannot disagree
+    (`harness_ci_gate_index.py` asserts they do not).
+    """
+    import ci_gates
+    return {g for g in ci_gates.gate_index(files) if g.startswith("harness_")}
 
 
 def unrun(on_disk, files, pending):
@@ -548,7 +560,25 @@ def main():
           bool(unrun(["harness_a.py"], wf, {"harness_gone.py"})))
     check("a harness run by ANY workflow, not just this one, counts → green",
           unrun(["harness_a.py", "harness_b.py"],
-                dict(wf, **{"y.yml": "  - run: python3 harness_b.py\n"}), set()) == [])
+                dict(wf, **{"y.yml": "jobs:\n  g:\n    steps:\n      - run: python3 harness_b.py\n"}),
+                set()) == [])
+    # ── THE MENTION HOLE, closed 2026-11-04 and locked here in both directions ────────────────────
+    # These three fixtures all say the WORD. Only the first one runs anything, and only the first
+    # one may count as run. This is the defect that exempted five harnesses, one of them red.
+    mention_comment = {"x.yml": "jobs:\n  g:\n    steps:\n      # harness_a.py is next\n"
+                                "      - run: echo hi\n"}
+    check("a harness named only in a COMMENT is NOT run → RED",
+          bool(unrun(["harness_a.py"], mention_comment, set())))
+    mention_paths = {"x.yml": "on:\n  pull_request:\n    paths:\n      - backend/harness_a.py\n"
+                              "jobs:\n  g:\n    steps:\n      - run: echo hi\n"}
+    check("a harness named only in a `paths:` trigger filter is NOT run → RED",
+          bool(unrun(["harness_a.py"], mention_paths, set())))
+    check("...and a harness named only in prose is not excused by being on no list either",
+          bool(unrun(["harness_a.py"], {"x.yml": "jobs:\n  g:\n    steps:\n"
+                                                 "      - run: echo \"see harness_a.py for why\"\n"},
+                     set())))
+    check("the real harness this hole hid is now DECLARED, not silently exempt",
+          "harness_export_xss_upload.py" in pending)
     check("comment lines in the debt file are not entries",
           read_pending("# why this file exists\nharness_a.py\n") == {"harness_a.py"})
 

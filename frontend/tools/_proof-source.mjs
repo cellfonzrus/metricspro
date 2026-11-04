@@ -1,5 +1,5 @@
 // THE ONE HOME for "read a construct out of a Python source, from a frontend proof"
-// (found 2026-11-04, index §CORE-33).
+// (found 2026-11-04, index §CORE-34).
 //
 // WHY THIS FILE EXISTS. `asset-borrowed-registry-proof.mjs` was red with:
 //

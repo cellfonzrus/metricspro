@@ -7,7 +7,7 @@
 #   · commission-export / google-ratings / people-export — `tsc` leaves `@/…` path aliases and
 #     extensionless relative imports in the JS it emits, so the transpile-and-import pattern breaks
 #     whenever a module it never names gains an import. Fixed in ONE home,
-#     `tools/_proof-transpile.mjs` (index §CORE-33), which every such proof now dereferences.
+#     `tools/_proof-transpile.mjs` (index §CORE-34), which every such proof now dereferences.
 #   · asset-borrowed-registry — pinned an invariant on the SPELLING of a value
 #     (`return {"markets": sorted(markets)`) and cried wolf when the value moved into a variable.
 #     Fixed in ONE home, `tools/_proof-source.mjs`, which locates a construct by what it is.

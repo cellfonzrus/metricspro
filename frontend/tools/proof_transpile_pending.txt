@@ -3,7 +3,7 @@
 # WHY THIS LIST EXISTS. On 2026-11-04 three proofs were red because `tsc` leaves `@/…` path aliases
 # and extensionless relative imports in the JavaScript it emits, so a proof that transpiles app code
 # and imports it under bare Node breaks the moment a module it never names gains an import. That was
-# fixed in ONE home, `tools/_proof-transpile.mjs` (index §CORE-33).
+# fixed in ONE home, `tools/_proof-transpile.mjs` (index §CORE-34).
 #
 # THE SIBLINGS, found and declared rather than left to be discovered one red build at a time. Seven
 # more proofs carry their own copy of the pattern. **All six are GREEN today — and they are green

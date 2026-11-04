@@ -1,5 +1,5 @@
 // THE ONE HOME for "turn a frontend TypeScript module into something a bare-Node proof can import"
-// (found 2026-11-04, index §CORE-33).
+// (found 2026-11-04, index §CORE-34).
 //
 // WHY THIS FILE EXISTS — the defect it replaces, stated so nobody re-derives it.
 //

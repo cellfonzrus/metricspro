@@ -58,8 +58,8 @@ let failed = 0
   for (const proof of proofs) {
     const src = readFileSync(join(HERE, proof), 'utf8')
     // Strip line comments so the google-ratings header, which NAMES the hack it removed, is not
-    // read as still carrying it. A guard must read code, not prose — the §CORE-33 lesson applied
-    // to the guard that enforces §CORE-33.
+    // read as still carrying it. A guard must read code, not prose — the §CORE-34 lesson applied
+    // to the guard that enforces §CORE-34.
     const code = src.split('\n').filter(l => !l.trim().startsWith('//')).join('\n')
     const handRolled = /\btsc\b/.test(code) && !code.includes(HOME)
     const viaHome = code.includes(HOME)
@@ -68,7 +68,7 @@ let failed = 0
       console.error(`FAIL  ${proof} transpiles app code with its own tsc call.`)
       console.error(`      Use tools/${HOME} — tsc leaves '@/…' aliases and extensionless relative`)
       console.error(`      imports in the JS it emits, so a hand-rolled copy breaks the day the`)
-      console.error(`      module it transpiles gains an import. See index §CORE-33.`)
+      console.error(`      module it transpiles gains an import. See index §CORE-34.`)
       failed++
     }
   }
