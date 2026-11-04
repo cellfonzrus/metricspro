@@ -352,6 +352,43 @@ jobs:
         working-directory: frontend/scratchpad
         run: node prove_hub_gate.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
+  employee-reach:
+    # §CORE-32 — WHAT AN INDIVIDUAL CONTRIBUTOR MAY REACH IS ONE DECLARATION, AND THE API ENFORCES IT.
+    # Owner 2026-11-04: a rep on one tenant reached the Hours Adjustment screen and 32 other manager
+    # pages by URL, because `lib/rbac.ts` prefix-matched the `/storeops` menu row it could see, and the
+    # API behind those pages asked nothing at all (`POST /storeops/manual-hours` took no authorization
+    # parameter, so any signed-in person could write payroll hours for any employee). The LOCK is
+    # static on purpose: an ABSENT gate compiles, renders and ships — a route that stops dereferencing
+    # `require_person_write`, or a browser that goes back to holding its own page list, is invisible to
+    # tsc, to a build and to a test that does not exist yet. The PROOFS run the real declaration, the
+    # real middleware verdict, the real handlers and the real compiled rbac.ts, each reproducing the
+    # defect on the pre-fix path before showing it closed.
+    name: The employee's reach
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run the employee-reach lock (stdlib only, no deps)
+        working-directory: backend
+        run: python3 harness_rep_surface_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Install backend deps for the proof
+        working-directory: backend
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run the employee-reach proof (the real handlers, both tenants, the defect first)
+        working-directory: backend
+        run: python3 harness_rep_surface.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the employee-reach integration tests (the real app, every tenant)
+        working-directory: backend
+        run: python3 -m pytest tests/integration/test_rep_surface_gate.py -q | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Install frontend deps for the nav proof
+        working-directory: frontend
+        run: npm ci
+      - name: Run the nav proof (compiled rbac.ts; the prefix hole reproduced, then closed)
+        run: node frontend/tools/rep-surface-nav-proof.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
   assign-password-one-home:
     # §CORE-09 — "assign this employee a password I type" is ONE home
     # (frontend/src/components/AssignPasswordCard.tsx) that all three surfaces offering it render:

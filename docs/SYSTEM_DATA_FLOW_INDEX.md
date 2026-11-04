@@ -44201,3 +44201,96 @@ Files: `mobile/app/(app)/hr/index.tsx` (**new**), `mobile/src/lib/hr-intake.ts` 
 `mobile/src/api/client.ts` (`apiUpload`), `mobile/src/modules/registry.ts`,
 `docs/SYSTEM_DATA_FLOW_INDEX.md`.
 
+
+## §CORE-32. WHAT AN EMPLOYEE MAY REACH IS ONE DECLARATION, AND THE API IS WHAT ENFORCES IT (owner directive 2026-11-04)
+
+Owner: *"All sales reps should log in to the clock in screen, on ny logistics Manan was able to go past
+it and also see the adjustment hours, this should not be allowed for any sales reps, fix the
+permissions accordingly. Sales reps should have Clock in clock out / Their own commissions / Their own
+schedule / Their own action plan / Help desk. Create a tiled front end for their clock in specifically
+so when the sales reps or the store manager logs in they land on that landing page … this is universal
+across the board."*
+
+### The defect, measured by RUNNING the real permission code (not reading it)
+
+`lib/rbac.ts::canAccessPath`, in its `scope === 'self'` branch, admitted any page whose URL began with
+a menu row the viewer could see:
+
+```ts
+for (const g of NAV) for (const it of g.items)
+  if ((path === it.href || path.startsWith(it.href + '/')) && canSeeItem(perms, it)) return true
+```
+
+A rep whose role carries the `storeops` module sees the `/storeops` "Workforce Dashboard" row, so the
+**whole `/storeops/**` subtree opened by typing the URL — 33 pages**, among them `/storeops/timeclock`
+(Hours Adjustment: add and delete manual hours for any employee) and `/storeops/payroll/approvals`
+(Hours Approval). The child page's own `scopes: ['all','market']` was never consulted because the
+parent matched first. A rep with NO workforce module got `/helpdesk/settings` and `/reports` the same
+way. The branch was added to cure "the tab is there but clicking it does nothing" and was written as
+widening-only on purpose; the PREFIX is the defect, not the intent. The sibling of the same shape lived
+in the non-self branch, which checked a page's scope only on an EXACT href — so `/storeops/payroll`
+being market-and-above did not restrict `/storeops/payroll/approvals`.
+
+### The class, and the half that actually matters
+
+**Whether a viewer may use a surface was decided in the browser, and the API had no audience of its
+own.** `POST /storeops/manual-hours` and its DELETE took no `authorization` parameter at all: any
+signed-in person in the org could write or delete payroll hours for any employee id. Three siblings had
+the same shape and were already REPORTED unfixed on 2026-11-01 — `POST /storeops/time-off`, `POST
+/storeops/shift-swaps`, `GET/PATCH /hr/onboarding/employee/{id}` (the last being the owner's *"I
+moneyed can see anybody else's onboarding paperwork that is a big problem"*). All four are fixed here,
+in one pass, because they are one fact wearing four hats.
+
+### The one home
+
+| fact | home |
+|---|---|
+| What an individual contributor may reach — pages AND the API paths those pages call | **`backend/app/core/rep_surface.py`** (`SURFACES`, `UNIVERSAL_API`, `page_allowed`, `api_allowed`, `tiles`, `viewer_payload`, `LANDING_PAGE`, `landing_applies`). PURE, takes no `org_id` anywhere, so it is one answer for every tenant by construction |
+| WHO is confined | `storeops.router.role_is_self_scoped` (§6j / §14w) — the same answer the payout surfaces and `/me` already ask. A store manager is NOT an individual contributor, so a store manager is not confined and keeps every manager feature |
+| WHERE a viewer lands | `rep_surface.landing_applies(confined, scope)` — confined, or any role whose scope is a single store. Derived from role CONFIG, never a role NAME, because a role name is a tenant's word |
+| The API refusal | **`app.core.tenant_middleware.RepSurfaceMiddleware`**, installed unconditionally in `main.py` OUTER of `TenantScopeMiddleware`. Deliberately NOT a branch of that middleware, which is gated behind `MULTI_TENANT_ENFORCE` (off by default): a permission fix behind an unrelated flag is the browser-only gate with an env variable in front of it. Break-glass `REP_CONFINE=0` |
+| Whether a caller may WRITE a row ABOUT a person | **`storeops.router.require_person_write` / `person_write_allowed`** — dereferences `schedule_emp_ids` (§14w) and adds no second span derivation. `manager_only=True` on the two hours writes additionally refuses an individual contributor writing about themselves |
+| What the browser knows | `/me` → `permissions.rep_surface` (built by `rep_surface.viewer_payload`, reusing the `_is_self` answer `_me_payload` already computed). `lib/rbac.ts` holds NO page list: `repConfined` / `repPages` / `repPageAllowed` read the payload, and `canAccessPath` + `canSeeItem` both ask it FIRST. The confined gate is the one CLOSED gate in that file — a per-function grant and the admin module cannot reopen it |
+| The page grammar | `"/storeops/timeoff"` is EXACT (a page's neighbours are never implied); `"/helpdesk/**"` is that page and everything below; `page_except` carves the two manager screens out of the helpdesk subtree. There is no prefix match on a page's PARENT — that prefix is the defect |
+
+### The landing
+
+`/my` ("My Day") — `frontend/src/app/(platform)/my/page.tsx`, registered in NAV so it carries a page
+title like every other page, and admitted by `canAccessPath` unconditionally (the same posture as the
+password page) because it shows a person only their own things. It renders the live clock status from
+`GET /storeops/timeclock/status` and **the tiles the SERVER declared, in the server's order** — the
+punch itself stays one home, the kiosk at `/portal`, which the clock tile opens. The five tiles are the
+owner's five: clock in/out, own commissions (`/employee`), own schedule (the person's own next shifts,
+inline, because a rep has no business on the manager's schedule editor), own action plan
+(`/commcalc/targets/action-plan`, already self-scoped by `scope_keyset`, §59.7) and help desk.
+
+### Kept on the record rather than omitted
+
+`SURFACES` also declares four surfaces the owner did not list and that an employee already has: their
+OWN onboarding paperwork (the `/hr/onboarding/me*` family, which resolves the person from the token),
+the daily closing submission reps already make from the kiosk, chat, and training. Each is named with
+its reason; removing one is a one-line edit of that tuple and nothing else. `/reports` and
+`/commcalc/kpi`, which the deleted `SELF_ALLOWED` literal used to admit, are NOT declared.
+
+### Proofs and the lock
+
+- `backend/harness_rep_surface.py` (92) — the grammar, default-deny on the API, the REAL middleware
+  verdict over each role shape, the REAL four handlers over the in-memory double, two tenants, and
+  ★ NO LOCKOUT ★.
+- `frontend/tools/rep-surface-nav-proof.mjs` (48) — the compiled `rbac.ts`; §A **reproduces the prefix
+  hole for real** on the legacy path before §B shows it closed. Reads the declared pages out of the
+  backend source, so it cannot pass against a list it made up.
+- `backend/tests/integration/test_rep_surface_gate.py` (40) — the real FastAPI app, the real scope code
+  deciding whose people are whose, two tenants with the same role NAMES and different configuration.
+- `backend/harness_rep_surface_lock.py` (66, stdlib, CI job **The employee's reach**) — fails the build
+  if a second page list appears, if the prefix widening escapes the legacy branch, if the API gate is
+  un-installed or becomes conditional, if any of the four writes stops dereferencing the gate, or if the
+  landing route drifts between the two sides. Verified it goes red by un-wiring `create_time_off`.
+
+### Reported, not fixed
+
+`MULTI_TENANT_ENFORCE` is OFF by default (`docs/SECURITY_CONTROLS_SPEC.md` already files that as its own
+P0), which is why the API gate above does not live inside that middleware. One consequence was found
+while proving this: a login presenting a token for a tenant it has no `app_users` row in resolved to
+`schedule_emp_ids() is None`, i.e. UNRESTRICTED. `person_write_allowed` now refuses that case
+(platform admins excepted); the general tenant-isolation question is the owner's.

@@ -27,6 +27,45 @@ export type Permissions = {
   // (`carrier_view`) and the carrier pages it refuses them (THE registry `payout_audience.MANAGER_ONLY_SURFACES`).
   // The client decides nothing; it hides these.
   payout?: { audience?: 'employee' | 'manager'; carrier_view?: boolean; refused_pages?: string[] }
+  // WHAT AN INDIVIDUAL CONTRIBUTOR MAY REACH, AND WHERE A STORE-LEVEL VIEWER LANDS (owner
+  // 2026-11-04, index §CORE-32) — stamped by the SERVER on /me from THE one declaration
+  // `backend/app/core/rep_surface.py`, which is the same list the API middleware refuses on. There
+  // is deliberately NO copy of these pages in this file: the previous copy (`SELF_ALLOWED`) plus a
+  // PREFIX match on a parent nav row is exactly how a rep reached /storeops/timeclock (Hours
+  // Adjustment) and 32 other manager pages by URL. Absent for a market/company role and for an
+  // older backend ⇒ every gate below behaves exactly as it did before this payload existed.
+  rep_surface?: { confined?: boolean; landing?: string; pages?: string[]; page_except?: string[]
+                  tiles?: { key: string; label: string; icon: string; page?: string | null; what?: string }[] }
+}
+/** Is this viewer's reach the server's declared employee list? (Never derived here — the SERVER says.) */
+export function repConfined(perms: Permissions | undefined): boolean {
+  return !!perms?.rep_surface?.confined
+}
+/** The pages the server declared for a confined viewer. Empty ⇒ not confined. */
+export function repPages(perms: Permissions | undefined): string[] {
+  return (perms?.rep_surface?.confined && perms.rep_surface.pages) ? perms.rep_surface.pages : []
+}
+// The subtree marker of the server's page grammar, assembled from parts ON PURPOSE: the literal
+// sequence it spells out opens a block comment to a plain text scan, and two source-text locks read
+// this file that way — one of them silently swallowed everything after it (caught 2026-11-04).
+export const REP_SUBTREE = '/' + '**'
+/** The server's page grammar, mirrored exactly (`backend/app/core/rep_surface.py` — SUBTREE):
+ *  `"/storeops/timeoff"` is that page and NO other; an entry suffixed with REP_SUBTREE is that page
+ *  and everything below it; a `page_except` entry carves a manager screen out of a subtree. There is
+ *  no prefix match on a page's PARENT — that prefix is the defect this replaces, where the
+ *  `/storeops` menu row admitted `/storeops/timeclock`. The lock pins both sides against each other. */
+function repEntryMatches(path: string, entry: string): boolean {
+  const p = (path || '').split('?')[0].replace(/\/+$/, '') || '/'
+  if (entry.endsWith(REP_SUBTREE)) {
+    const b = entry.slice(0, -REP_SUBTREE.length).replace(/\/+$/, '')
+    return p === b || p.startsWith(b + '/')
+  }
+  return p === entry.replace(/\/+$/, '')
+}
+export function repPageAllowed(perms: Permissions | undefined, path: string): boolean {
+  const ex = (perms?.rep_surface?.confined && perms.rep_surface.page_except) || []
+  if (ex.some(e => repEntryMatches(path, e))) return false
+  return repPages(perms).some(e => repEntryMatches(path, e))
 }
 // Is this path a carrier page the SERVER refuses this viewer (index §6j, §6m)? The pages come from /me — the same
 // registry the server's 403 reads, refused to every viewer without the carrier permission (reps and store managers
@@ -832,6 +871,11 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/targets/settings', label: 'Target Settings', icon: '🎚️', module: 'targets', scopes: ['all'], tileOnly: true },
     { href: '/commcalc/targets/my', label: 'My Targets', icon: '🙋', module: 'targets', tileOnly: true },
     { href: '/employee', label: 'Employee Dashboard', icon: '🧑‍💼', module: 'targets', tileOnly: true },
+    // THE TILED LANDING (owner 2026-11-04, REP_LANDING) — where a rep and a store manager land when
+    // they sign in. Registered here so it carries a page title and a hub tile like every other page;
+    // reachability is NOT the module gate's to decide (canAccessPath admits it unconditionally, the
+    // same as the password page), because it only ever shows a person their own things.
+    { href: '/my', label: 'My Day', icon: '🙋‍♂️', module: 'targets', tileOnly: true },
   ]},
   { group: 'Finance', icon: '💰', module: 'accounts', items: [
     // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
@@ -2000,6 +2044,9 @@ export function canSeeItem(perms: Permissions, item: NavItem): boolean {
   // (index §19.40). No page entry → refused rather than guessed.
   if (isDeepLinkItem(item)) { const page = deepLinkPage(item); return !!page && canSeeItem(perms, page) }
   if (payoutRefused(perms, item.href)) return false   // the server refuses it to this viewer (index §6j)
+  // A CONFINED employee sees exactly the rows the server declared and nothing else — so the menu and
+  // the route guard can never disagree, in either direction (index §CORE-32).
+  if (repConfined(perms)) return repPageAllowed(perms, item.href)
   if (isSuperAdmin(perms)) return true
   if (MGMT_ONLY.has(item.href)) return canManage(perms, item.href)
   // Per-function override wins (either direction) — lets an admin grant/deny each function per role.
@@ -2062,6 +2109,18 @@ export function navBlockReason(perms: Permissions, item: NavItem): NavBlockReaso
 }
 
 // The per-function override for a path (exact href, else the longest matching nav-href prefix).
+/** The NAV item that governs a path: the longest href that is the path or a parent of it. One home
+ *  for "which declared page am I inside", shared by the scope gate and the override resolution. */
+export function governingNavItem(path: string): NavItem | undefined {
+  const p = (path || '').split('?')[0].replace(/\/+$/, '') || '/'
+  let best: NavItem | undefined, bestLen = -1
+  for (const g of NAV) for (const it of g.items) {
+    const h = it.href.replace(/\/+$/, '')
+    if ((p === h || p.startsWith(h + '/')) && h.length > bestLen) { best = it; bestLen = h.length }
+  }
+  return best
+}
+
 function pageOverrideForPath(perms: Permissions, path: string): boolean | undefined {
   const pages = perms.pages
   if (!pages) return undefined
@@ -2075,19 +2134,37 @@ function pageOverrideForPath(perms: Permissions, path: string): boolean | undefi
   return best
 }
 
-// Pages a self-scoped (rep) user may always reach, on top of their home.
-const SELF_ALLOWED = ['/commcalc/targets/my', '/commcalc/kpi', '/account/password', '/reports', '/helpdesk', '/chat']
+// THE TILED LANDING (owner 2026-11-04). The route a confined employee and a store manager land on.
+// It is a route, so the frontend must name it once; `harness_rep_surface_lock.py` fails the build if
+// this string and `backend/app/core/rep_surface.LANDING_PAGE` ever differ. Everything ABOUT the
+// landing (who lands there, which tiles it carries) comes from the server, never from here.
+export const REP_LANDING = '/my'
 
 export function canAccessPath(perms: Permissions, path: string): boolean {
   if (path === '/' || path.startsWith('/account/password')) return true
+  // The landing shows a person their own things only, so it is never refusable — the same posture as
+  // the password page. Without this a store manager, who is NOT confined and therefore gated on a
+  // nav item's module like anyone else, could be bounced off the page they are being landed on.
+  if (path === (perms.rep_surface?.landing || REP_LANDING)) return true
   if (payoutRefused(perms, path)) return false   // the server refuses it to this viewer (index §6j)
+  // THE CONFINED EMPLOYEE (owner 2026-11-04, index §CORE-32). Asked BEFORE the super-admin bypass is
+  // irrelevant — a confined viewer never carries the admin module — but it is asked before the scope
+  // ladder because it REPLACES it: the server has already said, in one list, every page this person
+  // may open, and nothing in this file may widen that. This is the one gate here that is CLOSED.
+  if (repConfined(perms)) return repPageAllowed(perms, path)
   // Super-admin bypass FIRST — mirrors canSeeItem's own precedence (isSuperAdmin checked before scope).
   // Keeping it ahead of the per-item scope loop guarantees the operator/super-admin (who sees every tab)
   // can never be bounced by a scope-restricted nav item → the sidebar and the guard stay consistent.
   if (isSuperAdmin(perms)) return true
   const scope = perms.scope || 'all'
   if (scope === 'self') {
+    // LEGACY SELF BRANCH — reached only when the server sent no `rep_surface` payload, i.e. an older
+    // backend. With RBAC on (the only state in which this guard runs at all) a scope-'self' role IS
+    // an individual contributor, so the server always declares its reach and the branch above
+    // returns first. Kept so a browser ahead of its backend degrades to the old behaviour rather
+    // than to a lockout; `harness_rep_surface_lock.py` pins that nothing new may rely on it.
     const home = perms.home || '/commcalc/targets/my'
+    const SELF_ALLOWED = ['/commcalc/targets/my', '/commcalc/kpi', '/account/password', '/reports', '/helpdesk', '/chat']
     // An EXPLICIT per-function grant reaches a self-scoped rep too. Without this the sidebar shows a
     // page the admin granted (canSeeItem honors `pages[href] === true` for every scope) and the guard
     // then bounces it — the "the tab is there but clicking it does nothing" class. WIDENING ONLY:
@@ -2113,6 +2190,15 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
   // by the guard (sidebar and guard MUST agree; that disagreement is the "clicking it does nothing"
   // class). Byte-identical whenever pages[path] is not exactly `true`.
   const exactOv = perms.pages?.[path]
+  // THE GOVERNING item, not an exact href (owner 2026-11-04). This loop used to compare `path ===
+  // it.href`, so a page's own scope restriction stopped applying one segment deeper: `/storeops/
+  // payroll` is declared `['all','market']`, and `/storeops/payroll/approvals` — Hours Approval —
+  // matched nothing and fell through to the module gate. Same class as the prefix hole in the self
+  // branch: a path below a restricted page escaped its restriction. The LONGEST-prefix item governs,
+  // exactly as `pageOverrideForPath` already resolves an override, so an exact entry still wins over
+  // a shorter parent and an EXACT per-function grant still lifts it.
+  const gov = governingNavItem(path)
+  if (gov?.scopes && !gov.scopes.includes(scope) && exactOv !== true) return false
   for (const g of NAV) {
     for (const it of g.items) {
       if (path === it.href && it.scopes && !it.scopes.includes(scope) && exactOv !== true) return false
@@ -2129,7 +2215,10 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
 }
 
 export function homeFor(perms: Permissions): string {
-  return perms.home || '/commcalc'
+  // The SERVER decides whether this viewer is landed on the tiled page (owner 2026-11-04: "when the
+  // sales reps or the store manager logs in they land on that landing page"). It sends `landing`
+  // only for a viewer that applies to, so a market/company role keeps its configured home exactly.
+  return perms.rep_surface?.landing || perms.home || '/commcalc'
 }
 
 // A landing the user can actually open. The configured home may be gated off — e.g. it

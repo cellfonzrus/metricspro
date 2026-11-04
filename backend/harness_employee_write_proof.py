@@ -218,14 +218,26 @@ SO_SRC, _ = _src("storeops", "router.py")
 SO = types.ModuleType("app.modules.storeops.router")
 SO.__dict__.update({"HTTPException": HTTPException, "Header": _fastapi.Header, "ORG_ID": ORG,
                     "_payvis": _payvis, "_log_identity": _log_identity, "payroll_salary": payroll_salary,
-                    "get_supabase": lambda: DB[0], "sb": lambda: DB[0], "Any": object})
+                    "get_supabase": lambda: DB[0], "sb": lambda: DB[0], "Any": object,
+                    # WHOSE PERSON THIS IS (owner 2026-11-04, §CORE-32): `delete_manual_hours` now
+                    # dereferences `require_person_write`, which asks `schedule_emp_ids` (§14w) and
+                    # `role_is_self_scoped` (§6j). Both are I/O and neither is what this proof is
+                    # about, so they are stubbed at their own seams to this proof's caller — an
+                    # ADMIN, i.e. unrestricted — leaving its assertions byte-identical. The gate
+                    # itself is proved in `harness_rep_surface.py` D7-D9 and
+                    # `tests/integration/test_rep_surface_gate.py`.
+                    "schedule_emp_ids": lambda *a, **k: None,
+                    "_caller_app_user": lambda *a, **k: {"role": "admin"},
+                    "role_is_self_scoped": lambda *a, **k: False,
+                    "_caller_is_platform_admin": lambda *a, **k: True})
 SO.__dict__.update(_consts(SO_SRC, {"EMP_FIELDS", "_PAY_GATED_FIELDS", "_PAY_LOGGED_FIELDS",
                                     "PAY_WRITE_REFUSED", "_SHIFT_LOGGED_FIELDS"}))
 SO.BulkCreateEmployeesIn = SO.BulkPayscaleIn = types.SimpleNamespace
 _load_into(SO.__dict__, ("storeops", "router.py"),
            ["gate_pay_write", "_require_manager", "create_employee", "bulk_create_employees",
             "update_employee", "bulk_payscale", "_ensure_employee_id", "_log_payroll_change",
-            "_who_for_log", "set_employee_lunch_config", "_log_shift_edit", "delete_manual_hours"])
+            "_who_for_log", "set_employee_lunch_config", "_log_shift_edit", "delete_manual_hours",
+            "require_person_write", "person_write_allowed"])
 sys.modules["app.modules.storeops.router"] = SO
 
 HR = {"HTTPException": HTTPException, "Header": _fastapi.Header, "ORG_ID": ORG, "_payvis": _payvis,
