@@ -459,6 +459,36 @@ check("D16 the plan hands the condition through to the row the buyer reads, and 
       and "device_condition" not in str(_imports(PLAN_HOME)))
 
 
+# ── A GENERATION IS NOT A VARIANT (owner 2026-11-04) ─────────────────────────────────────────────
+# Owner, verbatim: *"Cpo handset is its own but iPhone 13 will remain iPhone 13 it cannot become
+# iPhone 14 -"*. A6 already pins the Pro case; this pins the GENERATION, which is the stronger
+# statement and the one he made: nothing this module drops — a capacity, a declared colour, a
+# declared condition marker — may take a model's own number with it. Measured first: over both
+# tenants' Aug–Oct 2026 device lines, zero families fold two spellings whose model numbers differ.
+_gen_tokens = devcond.resolve_feed_tokens(["CPO", "CERTIFIED_PREOWNED"])
+_gen_colours = ("black", "midnight", "pink")
+_gen_rows = {
+    "Apple iPhone 13 128GB Pink CPO TO": {"Sep": 20},
+    "Apple iPhone 14 128GB Pink CPO TO": {"Sep": 19},
+    "Apple iPhone 13 256GB Midnight TO": {"Sep": 7},
+    "Apple iPhone 14 1TB Black TO": {"Sep": 3},
+}
+_gu, _gv, _gf = dmf.group_units(_gen_rows, colour_tokens=_gen_colours,
+                                condition_tokens=_gen_tokens[0], condition_markers=_gen_tokens[2])
+check("D18 A GENERATION IS NOT A VARIANT: four rows over two generations stay four rows, and no "
+      "family folds a 13 into a 14 — the capacity, the colour and the condition marker all come "
+      "out, and the model's own number never goes with them",
+      len(_gu) == 4 and all(len(v) == 1 for v in _gv.values())
+      and sum(sum(d.values()) for d in _gu.values()) == 49, f"{sorted(_gu)}")
+
+check("D19 and the two things that DO fold still fold within one generation, so D18 is not passing "
+      "by refusing to group at all",
+      len(dmf.group_units({"Apple iPhone 13 128GB Pink CPO TO": {"Sep": 1},
+                           "Apple iPhone 13 256GB Black CPO TO": {"Sep": 1}},
+                          colour_tokens=_gen_colours, condition_tokens=_gen_tokens[0],
+                          condition_markers=_gen_tokens[2])[0]) == 1)
+
+
 def _group_units_alias_args():
     """How every caller hands the curated alias to the one home (AST)."""
     out = []
