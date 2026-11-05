@@ -133,6 +133,24 @@ export function rewriteAliasSpecifiers(code, fromFileRel) {
 export function stubBrowserEnv() {
   process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://proof.invalid'
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'proof-anon-key'
+  // A WEBSOCKET THAT EXISTS AND DOES NOTHING. `src/lib/client.ts` calls `createClient()` AT MODULE
+  // LOAD, and @supabase/realtime-js REFUSES to construct on Node < 22 without a global WebSocket
+  // ("Node.js 20 detected without native WebSocket support"). Node 22 has one natively, so three
+  // proofs passed on every machine available here and failed in CI, which pins Node 20 — the same
+  // shape as §CORE-32: a capability that depends on the runtime, proved on one runtime only.
+  //
+  // A proof reading a pure export must not be stopped by a transport it never uses, and must not be
+  // given a REAL one either: nothing here may open a socket. So: inert, and only when absent, so a
+  // runtime that has its own keeps it.
+  if (typeof globalThis.WebSocket === 'undefined') {
+    globalThis.WebSocket = class ProofWebSocket {
+      constructor(url) { this.url = url; this.readyState = 3 /* CLOSED */ }
+      send() {}
+      close() {}
+      addEventListener() {}
+      removeEventListener() {}
+    }
+  }
 }
 
 /** Every emitted `.js` under `dir`, as paths relative to `dir`, POSIX-separated. */

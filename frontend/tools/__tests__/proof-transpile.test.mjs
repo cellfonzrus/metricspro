@@ -110,3 +110,43 @@ describe('rewriteAliasSpecifiers — every shape the emitter can produce', () =>
     expect(rewriteAliasSpecifiers(once, 'lib/export.js')).toBe(once)
   })
 })
+
+// ── THE NODE-20 WEBSOCKET STUB (2026-11-05) ──────────────────────────────────────────────────────
+// Three proofs passed on Node 22 and failed in CI on Node 20. `src/lib/client.ts` calls
+// `createClient()` AT MODULE LOAD, and @supabase/realtime-js throws outright on Node < 22 unless a
+// WebSocket constructor exists globally ("Node.js 20 detected without native WebSocket support").
+// Node 22 has one natively, which is why no local run could see it. A proof reading a pure export
+// must not be stopped by a transport it never uses, so the shared stub provides an inert one.
+describe('stubBrowserEnv: the WebSocket a Supabase client insists on existing', () => {
+  it('defines a global WebSocket when the runtime has none', async () => {
+    const { stubBrowserEnv } = await import('../_proof-transpile.mjs')
+    const had = Object.prototype.hasOwnProperty.call(globalThis, 'WebSocket')
+    const original = globalThis.WebSocket
+    try {
+      delete globalThis.WebSocket
+      expect(globalThis.WebSocket).toBeUndefined()
+      stubBrowserEnv()
+      expect(typeof globalThis.WebSocket).toBe('function')
+      // Inert: constructing it must not reach the network or throw.
+      expect(() => new globalThis.WebSocket('wss://proof.invalid')).not.toThrow()
+    } finally {
+      if (had) globalThis.WebSocket = original
+      else delete globalThis.WebSocket
+    }
+  })
+
+  it('leaves a real WebSocket alone — never replaces the runtime"s own', async () => {
+    const { stubBrowserEnv } = await import('../_proof-transpile.mjs')
+    const sentinel = function RealWebSocket() {}
+    const had = Object.prototype.hasOwnProperty.call(globalThis, 'WebSocket')
+    const original = globalThis.WebSocket
+    try {
+      globalThis.WebSocket = sentinel
+      stubBrowserEnv()
+      expect(globalThis.WebSocket).toBe(sentinel)
+    } finally {
+      if (had) globalThis.WebSocket = original
+      else delete globalThis.WebSocket
+    }
+  })
+})
