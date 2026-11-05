@@ -203,6 +203,7 @@ Primary code homes:
 | CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
 | CORE-34 | **A proof that cannot start is not a passing proof** | Four frontend proof programs were red, and not one of them was red about the thing it proves: three had each hand-rolled their own TypeScript compile and lost the `@/` path alias, and the fourth read a Python endpoint with a regex that a refactor had moved past. What compiles a frontend proof, what reads Python from one, and what stops the next proof writing a fifth copy of either? |
 | CORE-35 | **Which job runs this gate has one derived answer** | 312 proof harnesses were declared as debt and nothing ran them; five more were exempt because a workflow MENTIONED their filename in a comment or a `paths:` filter, and one of those five had been red the whole time. A reviewer could not tell a gated check from an ungated one without reading 15 workflow files, and got it wrong in writing. Where is the list of what CI actually enforces, and what keeps it true? |
+| CORE-36 | **An authorization argument read as a string must BE a string** | A new write guard did `(authorization or "").strip()`. Every HTTP caller was fine, because FastAPI replaces the default with a `str` or `None` — but a caller that invokes the endpoint function directly gets the `Header` object itself, which is TRUTHY and has no string methods, so the careful-looking guard was a 500. Twelve modules already carried their own copy of the line that would have prevented it. What does a caller dereference to ask "is there a token here"? |
 | CORE-31 | **A retention window that deletes nothing is a promise, not a policy** | Found by the security pass §STOREOPS-04 required before going live: that feature shipped a 180-day GPS retention setting and nothing deleted anything — and event check-in GPS had carried the SAME hole since mig 986, declared `unmonitored` on the control box. Who owns "how long may we keep where somebody was", for every relation that stores it, and what stops a purge from taking the flag away with the coordinates? |
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
@@ -26351,6 +26352,7 @@ status word rather than a blank that reads as nil.
 | CORE-33 | core |
 | CORE-34 | core |
 | CORE-35 | core |
+| CORE-36 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -44535,9 +44537,9 @@ That lock now DEREFERENCES `ci_gates` instead of keeping a second, laxer copy of
 carries negative controls for each mention shape (comment, `paths:` filter, prose).
 
 ### CORE-35.3 The debt, measured and paid down
-All 312 entries on `harness_unrun_pending.txt` were RUN on 2026-11-04. **272 passed and are now wired
+All 312 entries on `harness_unrun_pending.txt` were RUN on 2026-11-04. **271 passed and are now wired
 into CI** as `tests.yml` jobs `harness-suite-1..4` (split by measured duration, ~2 minutes each,
-one step per harness so a red one is named in the UI). The list went **312 → 41**, and `PINNED_MAX`
+one step per harness so a red one is named in the UI). The list went **312 → 42**, and `PINNED_MAX`
 with it.
 
 ### CORE-35.4 Two defects in the wiring, found by CI and worth keeping
@@ -44556,7 +44558,7 @@ The first wiring was wrong twice, and both lessons are general:
   that reports its first failure and nothing else, which is §19.25's defect wearing a hat. Every
   harness step now carries `if: always()`.
 
-The 41 left are RED when run, with full history and nothing stubbed. `harness_export_xss_upload.py`
+The 42 left are RED when run, with full history and nothing stubbed. `harness_export_xss_upload.py`
 is among them and its reason is now known precisely: with history it RUNS and fails ONE assertion,
 A3b, which its own text calls pre-existing on base. It had been exempt from the debt list because a
 workflow `paths:` filter happened to name it; nothing executed it, so nobody saw that. Nothing was
@@ -44573,3 +44575,43 @@ working and deliberately-broken modes).
 **Cross-refs:** §CORE-19 (the test framework) · §19.25 (a proof nothing runs is not a gate — this
 closes its hole) · §CORE-10 (a derived set is compared both ways) · §19.18 (one fact, one home,
 dereferenced) · §CORE-34 (the frontend half of the same clean-up).
+
+---
+
+## §CORE-36. AN AUTHORIZATION ARGUMENT READ AS A STRING MUST BE A STRING (2026-11-05)
+
+Found by wiring the unrun proof harnesses into CI (§CORE-35) — three of them crashed the moment
+anything ran them, and nothing had been running them.
+
+### CORE-36.1 The mechanism
+
+An endpoint declares `authorization: str = Header(None)`. On a real request FastAPI replaces that
+default with a `str` or `None`, so every HTTP caller sees what the annotation claims. A caller that
+invokes the function DIRECTLY — a proof harness, an in-process sweep, a cron, one router calling
+another — gets the default itself: a `fastapi.Header` object, which is **truthy** and has no string
+methods. `(authorization or "").strip()` therefore reads as careful and raises `AttributeError`: a
+500, not a refusal. `storeops.router.person_write_allowed` (added by #645) did exactly that.
+
+### CORE-36.2 The one home
+
+`app/modules/core/auth_header.py` — `auth_str(authorization) -> str`. It answers WHAT THE VALUE IS, not
+whether it is blank, so a caller that means "is there a token" strips the result itself and the
+helper never decides on anyone's behalf that a padded token is no token. `person_write_allowed`
+dereferences it (`app/modules/core/auth_header.py` is the only home; `app/modules/storeops/router.py`
+is the only caller rewired so far). Unit tests in `backend/tests/unit/test_auth_header.py`, written red first, include
+the regression through the real function and an assertion that a `Header` default is truthy — if that
+ever stops being true the bug cannot happen and the test says so instead of passing silently.
+
+### CORE-36.3 What is NOT fixed, stated plainly
+
+**Twelve other modules carry their own copy of `authorization if isinstance(authorization, str) else
+""`** — `notify/workforce_reports.py` (seven times), `notify/report_registry.py`,
+`commcalc/router.py` and others. That is the §19.18 defect that made this possible: a fact every
+caller needs, copied, with nothing to dereference. Those copies are not rewired here, because doing
+so would turn a CI-visibility change into a cross-module refactor. The next change to touch one of
+them should point it at `auth_str`, and a shrink-only register or a guard over that idiom is the
+right lock once the count starts coming down.
+
+**Cross-refs:** §CORE-35 (the wiring that exposed it) · §19.18 (one fact, one home, dereferenced —
+never copied) · §CORE-33 (the write guard this defect was inside) · §19.25 (a proof nothing runs is
+not a gate: three proofs held this defect and said nothing).

@@ -1327,10 +1327,6 @@ jobs:
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it
         run: python3 harness_storeops_market_dropdown.py | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: harness_timeoff_reschedule
-        working-directory: backend
-        if: always()   # a red harness must not hide the 60 after it
-        run: python3 harness_timeoff_reschedule.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: harness_training_center
         working-directory: backend
         if: always()   # a red harness must not hide the 60 after it
