@@ -32,7 +32,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 604 gates
+## Gated — 605 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -598,6 +598,7 @@ the Runs on column is how you can tell.
 | `harness_timeclock_idempotency.py` | `tests.yml` | Proof harnesses, group 2 of 4 (`harness-suite-2`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_timeclock_multisession.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_timeclock_permissions.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_timeoff_reschedule.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_trade_in_basis.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_training_center.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_trends_chart_notes.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
@@ -649,7 +650,7 @@ the Runs on column is how you can tell.
 | `pytest:integration` | `tests.yml` | Backend integration tests (`backend-integration`) | `pull_request`, `push`, `workflow_dispatch` |
 | `pytest:unit` | `tests.yml` | Backend unit tests (`backend-unit`) | `pull_request`, `push`, `workflow_dispatch` |
 
-## Declared unrun — 42 harnesses no workflow runs
+## Declared unrun — 41 harnesses no workflow runs
 
 Declared debt (`backend/harness_unrun_pending.txt`), which may only SHRINK. These
 files assert things, and nothing executes them, so they assert nothing today.
@@ -691,7 +692,6 @@ files assert things, and nothing executes them, so they assert nothing today.
 - `harness_table_header_contrast.py`
 - `harness_team_snapshot_perf.py`
 - `harness_tenant_implementation.py`
-- `harness_timeoff_reschedule.py`
 - `harness_training_flowcharts.py`
 - `harness_upload_last.py`
 - `harness_workflow_stacking.py`
