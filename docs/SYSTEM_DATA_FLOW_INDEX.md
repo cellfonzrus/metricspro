@@ -201,6 +201,9 @@ Primary code homes:
 | STOREOPS-05 | **The phone shows the week the TENANT declared, and whose shifts it shows is the server's answer** | "Make scheduling and hr with store vista and closing live in the app also" — the rota, time off and cover requests existed only on the web, and the phone had no schedule at all. The gates were already right (`gate_person_rows`, §14w) and the week start was already declared per tenant; what was missing was a surface. Who decides which seven days a week IS on a phone, and what stops a client-side filter from being mistaken for a permission? |
 | CORE-33 | **What an employee may reach is one declaration, and the API is what enforces it** | "on ny logistics Manan was able to go past [the clock-in screen] and also see the adjustment hours, this should not be allowed for any sales reps — this is universal across the board". The browser was the only gate: a menu row the viewer could see opened its whole subtree by URL, and the payroll writes behind those pages asked for no authority at all. Who decides what a surface's audience is, and what makes the API refuse a caller the menu would not offer it to? |
 | CORE-32 | **A guard that reads source code must be told f-strings exist** | Found by running the suite on a newer interpreter than CI's: the guard that stops our own setup internals reaching a customer was RED on Python 3.13 and GREEN on 3.11. PEP 701 stopped making an f-string one string token, so it had stopped seeing f-strings — and the same file held a SECOND reader of the same fact that had been taught the new shape. What proves a capability that depends on the interpreter, when CI pins one? |
+| CORE-34 | **A proof that cannot start is not a passing proof** | Four frontend proof programs were red, and not one of them was red about the thing it proves: three had each hand-rolled their own TypeScript compile and lost the `@/` path alias, and the fourth read a Python endpoint with a regex that a refactor had moved past. What compiles a frontend proof, what reads Python from one, and what stops the next proof writing a fifth copy of either? |
+| CORE-35 | **Which job runs this gate has one derived answer** | 312 proof harnesses were declared as debt and nothing ran them; five more were exempt because a workflow MENTIONED their filename in a comment or a `paths:` filter, and one of those five had been red the whole time. A reviewer could not tell a gated check from an ungated one without reading 15 workflow files, and got it wrong in writing. Where is the list of what CI actually enforces, and what keeps it true? |
+| CORE-36 | **An authorization argument read as a string must BE a string** | A new write guard did `(authorization or "").strip()`. Every HTTP caller was fine, because FastAPI replaces the default with a `str` or `None` — but a caller that invokes the endpoint function directly gets the `Header` object itself, which is TRUTHY and has no string methods, so the careful-looking guard was a 500. Twelve modules already carried their own copy of the line that would have prevented it. What does a caller dereference to ask "is there a token here"? |
 | CORE-31 | **A retention window that deletes nothing is a promise, not a policy** | Found by the security pass §STOREOPS-04 required before going live: that feature shipped a 180-day GPS retention setting and nothing deleted anything — and event check-in GPS had carried the SAME hole since mig 986, declared `unmonitored` on the control box. Who owns "how long may we keep where somebody was", for every relation that stores it, and what stops a purge from taking the flag away with the coordinates? |
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
@@ -26347,6 +26350,9 @@ status word rather than a blank that reads as nil.
 | CORE-31 | core |
 | CORE-32 | core |
 | CORE-33 | core |
+| CORE-34 | core |
+| CORE-35 | core |
+| CORE-36 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -44560,3 +44566,163 @@ while proving this: a login presenting a token for a tenant it has no `app_users
 `schedule_emp_ids() is None`, i.e. UNRESTRICTED. `person_write_allowed` now refuses that case
 (platform admins excepted); the general tenant-isolation question is the owner's.
 
+---
+
+## §CORE-34. A PROOF THAT CANNOT START IS NOT A PASSING PROOF — one compiler and one source reader for the frontend proofs (2026-11-04)
+
+Four of the twelve `frontend/tools/*-proof.mjs` programs were red on the shrink-only register
+`frontend/tools/proof_red_pending.txt` (§CORE-19.7). Only ONE was red about the thing it proves.
+
+### CORE-34.1 The class, not the instance
+
+Three of the four (`commission-export-proof`, `people-export-proof`, `google-ratings-proof`) had each
+hand-rolled its own `tsc` invocation — its own temp `tsconfig`, its own flags, its own output
+directory. None of them extended `frontend/tsconfig.json`, so none of them had the `@/` path alias,
+so each died on the first `import … from '@/lib/…'` in the module it was compiling. **Three copies of
+one job, each wrong in the same way.** `google-ratings-proof` had papered over its copy with a
+`Module._resolveFilename` monkey-patch, which is the patchwork the house rules forbid.
+
+The fourth (`asset-borrowed-registry-proof`) was red for a different reason in the same family: it
+located a Python endpoint's return dictionary with a regex pinned to the shape of the source, and a
+refactor had moved it. A reader that matches how a value is SPELLED rather than what it IS, which is
+the §CORE-32 class in a different language.
+
+### CORE-34.2 The one homes
+
+- **`frontend/tools/_proof-transpile.mjs`** — THE one home for "compile app TypeScript so a proof can
+  import it". It extends the real `tsconfig.json` (so the alias is the app's alias, not a guess),
+  rewrites `@/x` and extensionless relative specifiers in the EMITTED JavaScript (`tsc` rewrites
+  neither), stubs the browser env vars that app modules read at import time, and **throws naming the
+  file** if a rewritten target does not exist on disk — so a silent miss cannot read as a pass.
+- **`frontend/tools/_proof-source.mjs`** — THE one home for "read a fact out of a Python module from a
+  frontend proof": `pyFunctionBody` (found by `def` + indentation, not by regex over the body),
+  `pyReturnDict`, `pyDictKeys`, `pyStripStrings`.
+
+Both ship with Vitest unit tests (`frontend/tools/__tests__/`, 36 tests, written red first), and
+`frontend/vitest.config.ts` collects `tools/**/*.test.mjs` so they run in the `frontend-tests` job.
+
+### CORE-34.3 The lock
+
+`proof_red_pending.txt` is now EMPTY and `PINNED_MAX = 0` in `run-proofs.mjs`: no frontend proof is
+red. Six MORE proofs still compile TypeScript their own way, and rather than leave that to be
+rediscovered they are declared on a second shrink-only register, `proof_transpile_pending.txt`
+(`PINNED_TRANSPILE_MAX = 6`), compared **in three directions** per §CORE-10: an unlisted proof that
+rolls its own `tsc` fails the build, a listed proof that has been migrated fails until its line is
+deleted, and a listed proof that does not transpile at all fails too. The third direction caught a
+wrong pin of mine on its first run.
+
+**Cross-refs:** §CORE-19 (the test framework this sits inside) · §CORE-19.7 (the red-proof register) ·
+§CORE-10 (a derived set is compared both ways) · §CORE-32 (a reader must match what a thing IS) ·
+§19.18 (one fact, one home, dereferenced).
+
+---
+
+## §CORE-35. WHICH JOB RUNS THIS GATE HAS ONE DERIVED ANSWER — the gate index (2026-11-04)
+
+On 2026-10-28 this repo's own testing audit reported, in writing, that the frontend had no CI at all.
+It was wrong: `npm run typecheck` and `npm run lint:gate` run on every frontend change — from
+`carrier-vocab-guard.yml`, an omnibus workflow whose name mentions neither. **A gate's existence was
+not readable from anywhere except 15 workflow files**, so it got guessed, and the guess was wrong.
+
+### CORE-35.1 The one home, and the page it renders
+
+`backend/ci_gates.py` is THE one home for "which workflow job runs this gate". It parses the workflow
+files and requires an actual INVOCATION shape — `python3 harness_x.py`, `npm run typecheck`,
+`python -m pytest tests -m unit` — so prose that happens to name a file is not a run.
+
+`docs/CI_GATES.md` is GENERATED from it (`python3 backend/harness_ci_gate_index.py --bless`) and lists
+every workflow with its triggers, every gate with the job that runs it, every harness declared unrun,
+and anything unaccounted for. `harness_ci_gate_index.py` fails the build if the page drifts by one
+byte, if it was hand-edited, if a gate names a job that does not exist, or if it disagrees with
+`harness_ci_pipefail_lock.py`. Wired as the `ci-gate-index` job in `tests.yml`.
+
+### CORE-35.2 The hole it found in an enforcing gate
+
+`harness_ci_pipefail_lock.harnesses_run_by` was a TEXT SEARCH for `harness_\w+\.py` anywhere in a
+workflow. A filename in a comment, or in a `paths:` trigger filter, therefore counted as "run by a
+workflow" and dropped out of the debt list. Five harnesses were exempt that way with nothing
+executing them, and `harness_export_xss_upload.py` was **RED the whole time** — precisely the failure
+the debt list exists to catch (`harness_activation_bucketing`, red on `main` for three weeks).
+
+That lock now DEREFERENCES `ci_gates` instead of keeping a second, laxer copy of the answer, and
+carries negative controls for each mention shape (comment, `paths:` filter, prose).
+
+### CORE-35.3 The debt, measured and paid down
+All 312 entries on `harness_unrun_pending.txt` were RUN on 2026-11-04. **271 passed and are now wired
+into CI** as `tests.yml` jobs `harness-suite-1..4` (split by measured duration, ~2 minutes each,
+one step per harness so a red one is named in the UI). The list went **312 → 42**, and `PINNED_MAX`
+with it.
+
+### CORE-35.4 Two defects in the wiring, found by CI and worth keeping
+
+The first wiring was wrong twice, and both lessons are general:
+
+- **The jobs checked out at depth 1.** Nine of these proofs reproduce the defect they fix against a
+  historical commit FIRST — a live negative control, so that a proof cannot pass by asserting
+  something that was never broken. Under a shallow checkout that `git show` fails and the proof dies
+  in its own setup, before assertion one. `harness_agency_ocr_async` did exactly that in CI while
+  passing in a container whose clone happened to be deeper. The suite now checks out with
+  `fetch-depth: 0`, and **five of the 44 reds were red for only that reason**. The lesson generalises
+  past this repo: a proof's negative control is part of the proof, so whatever it needs in order to
+  START is a CI requirement, not an environment detail.
+- **A failing step aborted the rest of its job**, so one red harness hid the 128 behind it — a suite
+  that reports its first failure and nothing else, which is §19.25's defect wearing a hat. Every
+  harness step now carries `if: always()`.
+
+The 42 left are RED when run, with full history and nothing stubbed. `harness_export_xss_upload.py`
+is among them and its reason is now known precisely: with history it RUNS and fails ONE assertion,
+A3b, which its own text calls pre-existing on base. It had been exempt from the debt list because a
+workflow `paths:` filter happened to name it; nothing executed it, so nobody saw that. Nothing was
+skipped, disabled or quarantined to get green: a red harness is still declared, still counted, and on
+a list that may still only shrink.
+
+`harness_intake_fakes.py` was one of the five wrongly-exempt files and is a LIBRARY — the in-memory
+Supabase double eight proof harnesses drive the real routers over. Exempting it was wrong twice:
+nothing ran it, and running it would have proved nothing, because a module with no `__main__` exits 0
+whatever it does. It now carries its own 17-assertion proof of the contract those eight harnesses
+rely on (declared columns raising `42703`, filters filtering, response shape, storage in both its
+working and deliberately-broken modes).
+
+**Cross-refs:** §CORE-19 (the test framework) · §19.25 (a proof nothing runs is not a gate — this
+closes its hole) · §CORE-10 (a derived set is compared both ways) · §19.18 (one fact, one home,
+dereferenced) · §CORE-34 (the frontend half of the same clean-up).
+
+---
+
+## §CORE-36. AN AUTHORIZATION ARGUMENT READ AS A STRING MUST BE A STRING (2026-11-05)
+
+Found by wiring the unrun proof harnesses into CI (§CORE-35) — three of them crashed the moment
+anything ran them, and nothing had been running them.
+
+### CORE-36.1 The mechanism
+
+An endpoint declares `authorization: str = Header(None)`. On a real request FastAPI replaces that
+default with a `str` or `None`, so every HTTP caller sees what the annotation claims. A caller that
+invokes the function DIRECTLY — a proof harness, an in-process sweep, a cron, one router calling
+another — gets the default itself: a `fastapi.Header` object, which is **truthy** and has no string
+methods. `(authorization or "").strip()` therefore reads as careful and raises `AttributeError`: a
+500, not a refusal. `storeops.router.person_write_allowed` (added by #645) did exactly that.
+
+### CORE-36.2 The one home
+
+`app/modules/core/auth_header.py` — `auth_str(authorization) -> str`. It answers WHAT THE VALUE IS, not
+whether it is blank, so a caller that means "is there a token" strips the result itself and the
+helper never decides on anyone's behalf that a padded token is no token. `person_write_allowed`
+dereferences it (`app/modules/core/auth_header.py` is the only home; `app/modules/storeops/router.py`
+is the only caller rewired so far). Unit tests in `backend/tests/unit/test_auth_header.py`, written red first, include
+the regression through the real function and an assertion that a `Header` default is truthy — if that
+ever stops being true the bug cannot happen and the test says so instead of passing silently.
+
+### CORE-36.3 What is NOT fixed, stated plainly
+
+**Twelve other modules carry their own copy of `authorization if isinstance(authorization, str) else
+""`** — `notify/workforce_reports.py` (seven times), `notify/report_registry.py`,
+`commcalc/router.py` and others. That is the §19.18 defect that made this possible: a fact every
+caller needs, copied, with nothing to dereference. Those copies are not rewired here, because doing
+so would turn a CI-visibility change into a cross-module refactor. The next change to touch one of
+them should point it at `auth_str`, and a shrink-only register or a guard over that idiom is the
+right lock once the count starts coming down.
+
+**Cross-refs:** §CORE-35 (the wiring that exposed it) · §19.18 (one fact, one home, dereferenced —
+never copied) · §CORE-33 (the write guard this defect was inside) · §19.25 (a proof nothing runs is
+not a gate: three proofs held this defect and said nothing).

@@ -19,6 +19,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { pyFunctionBody, pyReturnDict, pyDictKeys, pyStripStrings } from './_proof-source.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(__dirname, '..', '..')
@@ -32,24 +33,45 @@ console.log('[0] backend: additive-only, org_id query-param scoped')
 {
   const routerSrc = fs.readFileSync(path.join(REPO, 'backend/app/modules/asset/router.py'), 'utf8')
 
-  // The existing response keys are still returned, unchanged in spelling/shape.
-  const returnBlock = routerSrc.match(/return \{"markets": sorted\(markets\)[\s\S]{0,400}?\}/)
-  assert.ok(returnBlock, 'filter-options return statement found')
-  const rb = returnBlock[0]
-  for (const key of ['"markets"', '"stores"', '"store_groups"', '"no_market_count"', '"no_market_value"']) {
-    assert.ok(rb.includes(key), `existing key ${key} still present (byte-identical for old consumers)`)
+  // The existing response KEYS are still returned. Read through tools/_proof-source.mjs, which
+  // finds the endpoint's return dict by what it IS. This check used to match
+  // `/return \{"markets": sorted\(markets\)…/` and went red when the §13c canonical market
+  // vocabulary union moved that `sorted()` into a variable — a false alarm about a value's
+  // spelling, reported as "return statement found". The invariant was never "the first value is
+  // written sorted(markets)"; it is "these keys are all still there". So that is what is asserted.
+  const endpoint = pyFunctionBody(routerSrc, 'get_filter_options')
+  assert.ok(endpoint, 'asset router defines the get_filter_options endpoint')
+  const rb = pyReturnDict(endpoint)
+  assert.ok(rb, `get_filter_options returns a dict literal (got: ${String(rb)})`)
+  const keys = pyDictKeys(rb)
+  for (const key of ['markets', 'stores', 'store_groups', 'no_market_count', 'no_market_value']) {
+    assert.ok(keys.includes(key),
+      `existing key "${key}" still returned for old consumers — returns [${keys.join(', ')}]`)
   }
-  assert.ok(rb.includes('"registry_stores"'), 'new additive key "registry_stores" present')
-  ok('GET /filter-options: existing keys untouched, registry_stores is a pure addition')
+  assert.ok(keys.includes('registry_stores'),
+    `additive key "registry_stores" present — returns [${keys.join(', ')}]`)
+  ok(`GET /filter-options: existing keys untouched, registry_stores is a pure addition (${keys.length} keys)`)
 
   // _registry_stores itself: org_id scoped read, is_active filtered, never raises into the caller.
-  const fnMatch = routerSrc.match(/def _registry_stores\(client, org_id: str\):[\s\S]*?\n\n\n/)
-  assert.ok(fnMatch, '_registry_stores function found')
-  const fn = fnMatch[0]
+  // Body read by INDENTATION, not by a `\n\n\n` terminator — the second instance of the same
+  // brittleness, which would have broken on a change to the blank lines after the function.
+  const fn = pyFunctionBody(routerSrc, '_registry_stores')
+  assert.ok(fn, '_registry_stores function found')
   assert.ok(/\.eq\("org_id", org_id\)/.test(fn), 'store_mapping read is .eq("org_id", org_id)-scoped')
   assert.ok(/is_active.*is False/.test(fn) || /is_active.*False/.test(fn), 'inactive store_mapping rows excluded')
-  assert.ok(/except Exception:\s*\n\s*return \[\]/.test(fn), 'best-effort: a lookup failure degrades to [] rather than 500ing the whole endpoint')
-  ok('_registry_stores is org-scoped, excludes inactive rows, degrades gracefully on failure')
+
+  // THE INVARIANT, not its spelling: nothing may escape this function, because the caller does NOT
+  // wrap it — `registry_stores = _registry_stores(client, org_id)` is a bare call, so a raise here
+  // would 500 the whole ledger-derived response every existing report filter depends on.
+  // This was asserted as `/except Exception:\s*\n\s*return \[\]/` and went red when the function
+  // was rewritten to degrade with `rows = []` and carry on into the storeops overlay — the SAME
+  // promise, kept better. A spelling is not an invariant.
+  const fnCode = pyStripStrings(fn)   // so the docstring's prose is not read as code
+  assert.ok(/except\s+Exception/.test(fnCode), '_registry_stores catches its lookup failures')
+  assert.ok(!/\braise\b/.test(fnCode),
+    '_registry_stores never raises into its caller — the caller does not wrap it, so a raise here ' +
+    '500s the whole /filter-options response')
+  ok('_registry_stores is org-scoped, excludes inactive rows, and no exception escapes it')
 }
 console.log()
 

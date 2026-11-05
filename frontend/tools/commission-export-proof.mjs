@@ -15,17 +15,11 @@
 //      same server-path defect is gone from the other commcalc report pages that had it.
 //
 // Run:  node frontend/tools/commission-export-proof.mjs      (from the repo root, or anywhere)
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
+import { FRONTEND, transpileForProof } from './_proof-transpile.mjs'
 
-const FRONTEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const SRC = path.join(FRONTEND, 'src')
-const OUT = mkdtempSync(path.join(FRONTEND, '.proof-'))   // inside frontend/ so bare imports resolve
-const CFG = path.join(FRONTEND, `tsconfig${path.basename(OUT)}.json`)   // -> tsconfig.proof-XXXX.json
-const cleanup = () => { rmSync(OUT, { recursive: true, force: true }); rmSync(CFG, { force: true }) }
-process.on('exit', cleanup)
 
 let pass = 0, fail = 0
 const ok = (name, cond, detail = '') => {
@@ -34,19 +28,20 @@ const ok = (name, cond, detail = '') => {
 }
 const section = t => console.log(`\n${t}`)
 
-// ── transpile the two modules under test, reusing the app tsconfig (so the `@/*` paths resolve).
-// commissionExport.ts's imports are ALL `import type`, so its emitted JS is import-free; export.tsx
-// only imports react + dynamic-imports xlsx/jspdf, all resolvable from frontend/node_modules.
-writeFileSync(CFG, JSON.stringify({
-  extends: './tsconfig.json',
-  compilerOptions: { noEmit: false, incremental: false, outDir: path.basename(OUT), module: 'es2020', target: 'es2020', declaration: false },
-  files: ['src/app/(platform)/commcalc/_lib/commissionExport.ts', 'src/lib/export.tsx'],
-  include: [],
-}, null, 2))
-execFileSync('npx', ['tsc', '-p', CFG], { cwd: FRONTEND, stdio: ['ignore', 'ignore', 'inherit'] })
+// ── transpile the two modules under test, through the ONE home (tools/_proof-transpile.mjs).
+// This proof used to carry its own tsconfig + tsc call and asserted, in a comment, that these
+// modules import nothing but `import type` and react. That assertion went stale: `export.tsx`
+// gained `@/lib/cell-safety`, `@/lib/safe-url` and `@/lib/client`, and `commissionExport.ts` gained
+// `@/lib/sourceLabels` — and `tsc` does not rewrite path aliases in the JS it emits, so the proof
+// died on "Cannot find package '@/lib'". The home resolves aliases instead of assuming there are
+// none, so there is nothing left for these modules to gain that can break this.
+const T = transpileForProof([
+  'src/app/(platform)/commcalc/_lib/commissionExport.ts',
+  'src/lib/export.tsx',
+])
 
-const CE = await import(path.join(OUT, 'app', '(platform)', 'commcalc', '_lib', 'commissionExport.js'))
-const EX = await import(path.join(OUT, 'lib', 'export.js'))
+const CE = await import(T.moduleUrl('src/app/(platform)/commcalc/_lib/commissionExport.ts'))
+const EX = await import(T.moduleUrl('src/lib/export.tsx'))
 const { buildCommissionExport, payloadToCsv } = CE
 
 // ── fixture: 4 reps, 2 stores, 2 markets, distinct payouts so a leak is unmistakable ─────────────

@@ -30,9 +30,13 @@ export default defineConfig({
     },
     globals: false,
     setupFiles: ['./tests/setup.ts'],
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
-    // `tools/*-proof.mjs` are standalone Node proofs with their own npm script (`test:proofs`) and
-    // their own CI step. Collecting them here would run them twice and in the wrong environment.
-    exclude: ['node_modules/**', '.next/**', 'tools/**'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'tools/**/*.test.mjs'],
+    // `tools/**/*.test.mjs` are unit tests for the BUILD TOOLING (the proof transpiler), and they
+    // belong under the shared runner like any other unit test. The `tools/*-proof.mjs` programs are
+    // a different thing: standalone Node proofs with their own npm script (`test:proofs`) and their
+    // own CI step. They match no `include` pattern here, so they are not collected twice — and the
+    // `.proof-*` scratch directories those programs create mid-run are excluded explicitly, since a
+    // watch run would otherwise try to collect a half-written transpile.
+    exclude: ['node_modules/**', '.next/**', '.proof-*/**', '.grproof-*/**'],
   },
 })

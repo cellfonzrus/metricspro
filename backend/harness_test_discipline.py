@@ -64,6 +64,11 @@ REQUIRED_CI_COMMANDS = {
     "npm run test",
     "npm run test:proofs",
     "python harness_test_discipline.py",
+    # 2026-11-04 — the gate index. docs/CI_GATES.md is DERIVED from the workflows and this lock
+    # fails the build when it drifts, so "which job runs this gate" cannot go stale or be guessed
+    # from a workflow's name again (which is exactly how the 2026-10-28 report missed that the
+    # frontend typecheck and lint ratchet were already gated, inside `carrier-vocab-guard.yml`).
+    "python3 harness_ci_gate_index.py",
 }
 
 # npm scripts the frontend must expose, so a developer runs locally what CI runs.

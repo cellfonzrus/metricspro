@@ -157,3 +157,1204 @@ jobs:
       - name: harness_test_discipline
         working-directory: backend
         run: python harness_test_discipline.py
+
+  # ── THE UNRUN HARNESS SUITE (2026-11-04) ───────────────────────────────────────────────────────
+  # 312 `backend/harness_*.py` proof programs were declared on `harness_unrun_pending.txt` — the
+  # house debt list for "a harness no workflow runs". Every one of them was MEASURED on 2026-11-04
+  # by running it; 267 passed. Those 267, plus the five that `harness_ci_pipefail_lock.py` had
+  # wrongly exempted because a workflow MENTIONED their filename in a comment or a `paths:` filter
+  # without ever invoking them, run here. Split four ways purely to keep wall time near 2 minutes;
+  # the split is by measured duration, so moving a harness between groups changes nothing but time.
+  #
+  # 45 stay on the debt list because they are genuinely RED (44) or reach the network (1). None was
+  # skipped, disabled or quarantined to get here: a red harness is still declared, still counted,
+  # and the list may still only shrink.
+
+  harness-suite-1:
+    name: Proof harnesses, group 1 of 4
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        # FULL HISTORY, not the default depth-1. Nine of these proofs reproduce the defect they fix
+        # against a historical commit first — a live negative control, so that a proof cannot pass by
+        # asserting something that was never broken. Under a shallow checkout that `git show` fails
+        # and the proof dies in its own setup: `harness_agency_ocr_async` did exactly that here on
+        # 2026-11-04 while passing locally, which is why the suite fetches history rather than
+        # declaring nine working proofs dead (index §CORE-35).
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements.txt }
+      - name: install
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: harness_activation_basis_policy
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_activation_basis_policy.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_activation_details_payment
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_activation_details_payment.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_ai_usage
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ai_usage.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_approvals_engine
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_approvals_engine.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_asset_market_filter
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_asset_market_filter.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_asset_settings_audit
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_asset_settings_audit.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_backfill_idempotent
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_backfill_idempotent.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_billpay_threeway
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_billpay_threeway.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_cash_on_hand_pickup
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_cash_on_hand_pickup.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_chargeback_flags_span_store
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_chargeback_flags_span_store.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_chat
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_chat.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_clockin_evidence
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_clockin_evidence.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_closer_chargebacks
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_closer_chargebacks.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_commcalc_market_dropdown
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_commcalc_market_dropdown.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_crm_pipeline
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_crm_pipeline.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_cron_registrar_schema
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_cron_registrar_schema.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_device_forecast_store_filter
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_device_forecast_store_filter.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_email_sweep_dispatch
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_email_sweep_dispatch.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_gp_luxelink_columns
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_gp_luxelink_columns.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_helpdesk_export
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_helpdesk_export.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_hr_compliance_doc_filters
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_hr_compliance_doc_filters.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_hr_employee_database
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_hr_employee_database.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_hr_letters
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_hr_letters.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_intake_fakes
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_intake_fakes.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_intake_partial_save
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_intake_partial_save.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_luxelink_name_bridge
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_luxelink_name_bridge.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_ma_handset_cogs
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ma_handset_cogs.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_merchant_portals
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_merchant_portals.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pay_simulator
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pay_simulator.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_payroll_lunch_adjustment
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_payroll_lunch_adjustment.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_payroll_salary
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_payroll_salary.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_payroll_salary_router_integration
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_payroll_salary_router_integration.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_people_async_await_drop
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_people_async_await_drop.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pto_router_integration
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pto_router_integration.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_report_links
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_report_links.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_scan_truncation
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_scan_truncation.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_service_role
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_service_role.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_settings_audit
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_settings_audit.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_setup_fee_market_scope
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_setup_fee_market_scope.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_statement_engine
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_statement_engine.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_statement_type_mapping
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_statement_type_mapping.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_store_cash_on_hand_range
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_store_cash_on_hand_range.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_store_lease
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_store_lease.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_store_mapping_upsert
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_store_mapping_upsert.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_storeops_scope_wiring
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_storeops_scope_wiring.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_counting
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_counting.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_workforce_report_registry
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_workforce_report_registry.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_xreport_tender_vocab
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_xreport_tender_vocab.py | tee -a "$GITHUB_STEP_SUMMARY"
+      # Five more, re-measured 2026-11-04 once the suite fetched full history: each was RED only
+      # because its negative control could not reach the historical commit it reproduces against.
+      - name: harness_commcalc_recompute_guard
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_commcalc_recompute_guard.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_eep_retail_ops
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_eep_retail_ops.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_nav_perf
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_nav_perf.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_notify_failure_leads
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_notify_failure_leads.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_sweep_honesty
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_sweep_honesty.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  harness-suite-2:
+    name: Proof harnesses, group 2 of 4
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        # FULL HISTORY, not the default depth-1. Nine of these proofs reproduce the defect they fix
+        # against a historical commit first — a live negative control, so that a proof cannot pass by
+        # asserting something that was never broken. Under a shallow checkout that `git show` fails
+        # and the proof dies in its own setup: `harness_agency_ocr_async` did exactly that here on
+        # 2026-11-04 while passing locally, which is why the suite fetches history rather than
+        # declaring nine working proofs dead (index §CORE-35).
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements.txt }
+      - name: install
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: harness_ai_assist_async
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ai_assist_async.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_any_columns
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_any_columns.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_approvals_gate
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_approvals_gate.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_approved_hours
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_approved_hours.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_attendance_exceptions
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_attendance_exceptions.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_billpay_netting
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_billpay_netting.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_column_mapping_save
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_column_mapping_save.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_commission_from_mtd
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_commission_from_mtd.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_commission_statement
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_commission_statement.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_comp_upload_safety
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_comp_upload_safety.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_connector_dispatch
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_connector_dispatch.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_db_singleton
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_db_singleton.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_device_payable
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_device_payable.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_envelope_outstanding
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_envelope_outstanding.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_epay_pl_fee
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_epay_pl_fee.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_epay_sweep_dtd
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_epay_sweep_dtd.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_finance_entity_enumeration
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_finance_entity_enumeration.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_finance_sync_in_async
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_finance_sync_in_async.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_gp_item_category
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_gp_item_category.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_ledger_ma_sync
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ledger_ma_sync.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_m1_bucket_recon
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_m1_bucket_recon.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_ma_recon
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ma_recon.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_marketing_event
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_marketing_event.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_mpc_confirm_creates
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_mpc_confirm_creates.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_onboarding_intake_b
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_onboarding_intake_b.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_onboarding_intake_c
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_onboarding_intake_c.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_overhead_allocation
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_overhead_allocation.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pa_roster_names
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pa_roster_names.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pay_visibility
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pay_visibility.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_payables_market_filter
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_payables_market_filter.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_payroll_expenses_router_integration
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_payroll_expenses_router_integration.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pending_clockin
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pending_clockin.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_people_failure_leads
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_people_failure_leads.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_plan_scoped_activation_source
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_plan_scoped_activation_source.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pos_onboarding
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pos_onboarding.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pos_special_order
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pos_special_order.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_salary_owed_router_integration
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_salary_owed_router_integration.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_store_mapping_dedupe
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_store_mapping_dedupe.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_store_mapping_sync
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_store_mapping_sync.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_sweep_backlog_collapse
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_sweep_backlog_collapse.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_tax_collected
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_tax_collected.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_tech_support
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_tech_support.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_tender_config_validation
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_tender_config_validation.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_timeclock_idempotency
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_timeclock_idempotency.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_verified_cash_bs
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_verified_cash_bs.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_events
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_events.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_whatsapp_delivery_truth
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_whatsapp_delivery_truth.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  harness-suite-3:
+    name: Proof harnesses, group 3 of 4
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        # FULL HISTORY, not the default depth-1. Nine of these proofs reproduce the defect they fix
+        # against a historical commit first — a live negative control, so that a proof cannot pass by
+        # asserting something that was never broken. Under a shallow checkout that `git show` fails
+        # and the proof dies in its own setup: `harness_agency_ocr_async` did exactly that here on
+        # 2026-11-04 while passing locally, which is why the suite fetches history rather than
+        # declaring nine working proofs dead (index §CORE-35).
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements.txt }
+      - name: install
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: harness_activation_cross_bucket
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_activation_cross_bucket.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_agency_ocr_async
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_agency_ocr_async.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_ai_guard_purposes
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ai_guard_purposes.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_asset_b2b_inventory_value
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_asset_b2b_inventory_value.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_asset_no_market_dedupe_byteid
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_asset_no_market_dedupe_byteid.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_atu_opportunity
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_atu_opportunity.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_balance_sheet_truths
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_balance_sheet_truths.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_carrier_engine_mode
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_carrier_engine_mode.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_carrier_vs_pay
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_carrier_vs_pay.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_catalog_suggest
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_catalog_suggest.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_closer_resolution
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_closer_resolution.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_closing_entry_quality
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_closing_entry_quality.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_closing_ocr_async
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_closing_ocr_async.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_commission_backoffice_recon
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_commission_backoffice_recon.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_commission_sales_source
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_commission_sales_source.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_comp_daily_sweep
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_comp_daily_sweep.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_compliance_summary
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_compliance_summary.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_connector_registry
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_connector_registry.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_connector_route_policy
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_connector_route_policy.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_control_box
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_control_box.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_core_scope
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_core_scope.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_data_sources_dispatch
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_data_sources_dispatch.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_device_margin_block
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_device_margin_block.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_device_purchases
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_device_purchases.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_dm_checklist_carrier_review
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_dm_checklist_carrier_review.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_dm_target_attribution
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_dm_target_attribution.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_dm_verification_audit
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_dm_verification_audit.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_doc_intel
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_doc_intel.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_employee_dashboard_access
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_employee_dashboard_access.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_envelope_algorithm
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_envelope_algorithm.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_epay_alerts
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_epay_alerts.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_epay_fee_recon
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_epay_fee_recon.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_epay_ingest
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_epay_ingest.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_exec_metric_defs
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_exec_metric_defs.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_expenses_carry_forward
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_expenses_carry_forward.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_external_credit_recon
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_external_credit_recon.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_face_consent_gate
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_face_consent_gate.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_face_recognition
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_face_recognition.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_face_retention
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_face_retention.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_fakedb
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_fakedb.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_field_encryption
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_field_encryption.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_flag_store_resolver
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_flag_store_resolver.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_gp_acc_basis
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_gp_acc_basis.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_gp_totals_reconcile
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_gp_totals_reconcile.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_grant_model
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_grant_model.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_hr_compensation_span_worked_store
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_hr_compensation_span_worked_store.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_hr_letters_logic
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_hr_letters_logic.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_hub_cross_module_tiles
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_hub_cross_module_tiles.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_identity_resolver
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_identity_resolver.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_imei_rebates
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_imei_rebates.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_impersonation
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_impersonation.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_import_health
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_import_health.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_ingest_partition_replace
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ingest_partition_replace.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_inventory_sold_recon
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_inventory_sold_recon.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_kpi_failing
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_kpi_failing.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_labour_coverage
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_labour_coverage.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_landing_identity
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_landing_identity.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_ledger_statement_identity
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ledger_statement_identity.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_liabilities_due
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_liabilities_due.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_lunch_deduction
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_lunch_deduction.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_luxelink_recompute_rep
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_luxelink_recompute_rep.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_ma_slice_replace
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ma_slice_replace.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_management_incentive
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_management_incentive.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_management_incentive_chicago
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_management_incentive_chicago.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_market_vocabulary_truth
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_market_vocabulary_truth.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_merchant_ids
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_merchant_ids.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_mi_resolve_fail_closed
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_mi_resolve_fail_closed.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_multifile_docs
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_multifile_docs.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_multisheet_ingest
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_multisheet_ingest.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_ny_plan_activation_accessory
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ny_plan_activation_accessory.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_oob_code
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_oob_code.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_operator_console
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_operator_console.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_operator_entry_enforcement
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_operator_entry_enforcement.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pay_sim_actuals_basis
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pay_sim_actuals_basis.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_payroll_data_flow
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_payroll_data_flow.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_payroll_expenses
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_payroll_expenses.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pickup_entered_work
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pickup_entered_work.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pickup_market_span
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pickup_market_span.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pivot
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pivot.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_portal_session_health
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_portal_session_health.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_portal_totp
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_portal_totp.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pos_receipt_parse
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pos_receipt_parse.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pos_sales_from_reports
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pos_sales_from_reports.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_privesc_rbac_gates
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_privesc_rbac_gates.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_processor_ledger
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_processor_ledger.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_projection_engine
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_projection_engine.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pto_accrual
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pto_accrual.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_rbac_superadmin_any_membership
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_rbac_superadmin_any_membership.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_receipt_formats
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_receipt_formats.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_referral
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_referral.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_report_labels
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_report_labels.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_residual_per_sub
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_residual_per_sub.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_roster_reach
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_roster_reach.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_rule4_pii_export
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_rule4_pii_export.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_salary_expense
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_salary_expense.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_sales_by_invoice
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_sales_by_invoice.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_sales_comparison_periods
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_sales_comparison_periods.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_sales_leak_placement
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_sales_leak_placement.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_schedule_hours
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_schedule_hours.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_store_cash_on_hand
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_store_cash_on_hand.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_store_market_resolution
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_store_market_resolution.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_store_timezone
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_store_timezone.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_sweep_freshness
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_sweep_freshness.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_target_state
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_target_state.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_targets_rep_name_join
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_targets_rep_name_join.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_tender_recon_3way
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_tender_recon_3way.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_tile_layout
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_tile_layout.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_timeclock_multisession
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_timeclock_multisession.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_timeclock_permissions
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_timeclock_permissions.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_valuation
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_valuation.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vendor_rebate_landing
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vendor_rebate_landing.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vendor_rebate_report
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vendor_rebate_report.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_verified_overlay
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_verified_overlay.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_activity
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_activity.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_behavior
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_behavior.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_busy
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_busy.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_enroll
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_enroll.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_gate
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_gate.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_geometry
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_geometry.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_heatmap
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_heatmap.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_ingest
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_ingest.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_onboarding
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_onboarding.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_webrtc
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_webrtc.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_wages_salary_basis
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_wages_salary_basis.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_wizard_feedback_guard
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_wizard_feedback_guard.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_xlsx_tolerant
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_xlsx_tolerant.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  harness-suite-4:
+    name: Proof harnesses, group 4 of 4
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        # FULL HISTORY, not the default depth-1. Nine of these proofs reproduce the defect they fix
+        # against a historical commit first — a live negative control, so that a proof cannot pass by
+        # asserting something that was never broken. Under a shallow checkout that `git show` fails
+        # and the proof dies in its own setup: `harness_agency_ocr_async` did exactly that here on
+        # 2026-11-04 while passing locally, which is why the suite fetches history rather than
+        # declaring nine working proofs dead (index §CORE-35).
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements.txt }
+      - name: install
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: harness_ai_meter_offloop
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ai_meter_offloop.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_approval_pay_cycle
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_approval_pay_cycle.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_approvals_adapters
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_approvals_adapters.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_asset_filter_options_aggregate
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_asset_filter_options_aggregate.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_asset_oninv_3way_recon
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_asset_oninv_3way_recon.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_attention_clears
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_attention_clears.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_boost_neutralization
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_boost_neutralization.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_closing_store_resolver
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_closing_store_resolver.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_closing_summary_keyerror
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_closing_summary_keyerror.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_commission_itemisation
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_commission_itemisation.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_commission_leg_split
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_commission_leg_split.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_commission_received_breakout
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_commission_received_breakout.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_core_grant_universe
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_core_grant_universe.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_cross_tenant_isolation
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_cross_tenant_isolation.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_dashboard_shortover_fields
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_dashboard_shortover_fields.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_distributor_chargebacks
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_distributor_chargebacks.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_exec_mtd_date_range
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_exec_mtd_date_range.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_exec_mtd_name_join
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_exec_mtd_name_join.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_failure_triage
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_failure_triage.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_financial_analysis
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_financial_analysis.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_fix_pipeline
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_fix_pipeline.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_identity_backend_503
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_identity_backend_503.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_import_batches
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_import_batches.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_ma_income_heads
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ma_income_heads.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_marketing_event_sales
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_marketing_event_sales.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_module_billing
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_module_billing.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_my_tenants_allowlist
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_my_tenants_allowlist.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_onboarding_intake_d
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_onboarding_intake_d.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_operator_scope_enforcement
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_operator_scope_enforcement.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_ops_chargebacks_perf
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_ops_chargebacks_perf.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_path_redact
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_path_redact.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pay_period_range_default
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pay_period_range_default.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_payroll_row_merge
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_payroll_row_merge.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_people_attention
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_people_attention.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_people_google_reviews
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_people_google_reviews.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_pl_commission_source
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_pl_commission_source.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_plan_save_activation_source
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_plan_save_activation_source.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_punch_driven_pay
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_punch_driven_pay.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_remediation_ai_async
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_remediation_ai_async.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_report_kinds
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_report_kinds.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_rollup_keyset_scope
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_rollup_keyset_scope.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_rq_ingest
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_rq_ingest.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_salary_owed
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_salary_owed.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_sim_accessory_multimonth
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_sim_accessory_multimonth.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_storeops_market_dropdown
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_storeops_market_dropdown.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_training_center
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_training_center.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_vision_sdm
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_vision_sdm.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_whats_new
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_whats_new.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: harness_zero_diagnosis
+        working-directory: backend
+        if: always()   # a red harness must not hide the 60 after it
+        run: python3 harness_zero_diagnosis.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+  ci-gate-index:
+    # The lock on gate VISIBILITY. `docs/CI_GATES.md` is generated from the workflow files by
+    # `backend/ci_gates.py` — the one home for "which workflow job runs this gate" — and this job
+    # fails the build when the page and the workflows disagree. Regenerate with
+    # `python3 backend/harness_ci_gate_index.py --bless`; never edit the page by hand.
+    name: The gate index is current (lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: harness_ci_gate_index
+        working-directory: backend
+        run: python3 harness_ci_gate_index.py | tee -a "$GITHUB_STEP_SUMMARY"

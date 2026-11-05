@@ -9117,7 +9117,10 @@ def person_write_allowed(authorization: str, org_id: str = ORG_ID, employee_id=N
         # reaching into a tenant it does not belong to, and `schedule_emp_ids` returns None for it
         # (`if not au: return None`). Tenant isolation otherwise rests entirely on
         # MULTI_TENANT_ENFORCE, which is OFF by default. Refused here, platform admins excepted.
-        if (authorization or "").strip() and not _caller_app_user(authorization, org_id):
+        # DEREFERENCED, not re-derived: a direct caller is handed the `Header` default, which is
+        # truthy and has no `.strip()`, so `(authorization or "")` was a 500 (index §CORE-36).
+        from app.modules.core.auth_header import auth_str
+        if auth_str(authorization).strip() and not _caller_app_user(authorization, org_id):
             return _caller_is_platform_admin(authorization)
         return True
     return str(employee_id or "") in {str(e) for e in eids}
