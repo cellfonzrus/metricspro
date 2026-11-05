@@ -36,6 +36,10 @@ on:
         description: "After building, send it to TestFlight / Play internal testing (CANNOT be recalled)"
         type: boolean
         default: true
+      skip_build:
+        description: "Skip building and submit the LATEST existing build instead (no build minutes)"
+        type: boolean
+        default: false
       issue:
         description: "Issue or PR number to post the result to (optional — the job summary always has it)"
         type: string
@@ -130,7 +134,11 @@ jobs:
           RN="$(node -p "require('./package.json').dependencies['react-native']" 2>/dev/null || echo '?')"
           RESOLVED="$(node -p "require('./node_modules/expo/package.json').version" 2>/dev/null || echo '?')"
           {
+            if [ "${{ inputs.skip_build }}" = "true" ]; then
+            echo "### Submitting the build that already exists (no new build)"
+          else
             echo "### Building"
+          fi
             echo
             echo "| | |"
             echo "| --- | --- |"
@@ -144,7 +152,7 @@ jobs:
 
       - name: build it
         id: build
-        if: steps.gate.outputs.ready == 'true'
+        if: steps.gate.outputs.ready == 'true' && !inputs.skip_build
         working-directory: mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -192,13 +200,19 @@ jobs:
             echo "- submit step: \`${{ steps.submit.outcome }}\`"
             echo
             echo '```'
-            tail -n 40 /tmp/build.log 2>/dev/null || echo "(no build output — the build step did not run)"
+            if [ -s /tmp/build.log ]; then
+              tail -n 40 /tmp/build.log
+            elif [ "${{ inputs.skip_build }}" = "true" ]; then
+              echo "(no build — skip_build was requested, so the latest existing build was submitted)"
+            else
+              echo "(no build output — the build step did not run)"
+            fi
             echo '```'
           } > "$report"
           if [ -s /tmp/submit.log ]; then
             { echo; echo "### Submission"; echo '```'; tail -n 25 /tmp/submit.log; echo '```'; } >> "$report"
           fi
-          if [ "${{ steps.build.outcome }}" = "success" ] && [ "${{ inputs.submit }}" = "true" ]; then
+          if [ "${{ steps.submit.outcome }}" = "success" ]; then
             {
               echo
               echo "On the phone: open **TestFlight**, and the new build appears once Apple has"

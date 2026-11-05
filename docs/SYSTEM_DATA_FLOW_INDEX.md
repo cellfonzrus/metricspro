@@ -43706,6 +43706,22 @@ submitting a binary to the wrong App Store Connect record is not a mistake a siz
 through. The sibling guard caught a weak assertion in a new lock within minutes of it being written,
 which is the §CORE-10 mechanism working exactly as intended.
 
+**The pinned id was wrong on its first value, and APPLE named the right one (2026-11-01).** The
+fifth build succeeded (build number 14, EAS `3fff71fc-e3e0-4a7a-a18c-7e11af1df759`) and the submit
+failed with *"App Store Connect app for application identifier 94734403 was not found… Example
+applications visible to this API key: - Metricspro (com.metricspro.app) (ID: 6804841051)"*. The
+first number is a different identifier from the same App Store Connect page, not the app's. The pin
+is now `6804841051`, which Apple's own error matched to the right bundle id, and R6.17 compares
+against it by equality — so a wrong id is a one-line correction, not a thing that can drift.
+
+**A submission fault no longer costs a build.** `mobile-build-and-submit.yml` takes a `skip_build`
+input: with it, the job runs the tests, skips `eas build` and submits `--latest`, so the binary that
+is already built reaches TestFlight in a minute rather than in another twenty. The build step is
+gated on `steps.gate.outputs.ready == 'true' && !inputs.skip_build` and the report says plainly that
+no build was made. This matters because the two failure modes are independent: three of the five
+builds so far were spent on build-side faults and the fourth and fifth on a submit-side one, and
+re-running a forty-minute build to retry a one-line `eas.json` value is pure waste.
+
 **Delete the plugin, the `expo-build-properties` entry and these pins together with the SDK upgrade.**
 They exist only because this app is pinned to an Expo whose own Podfile template predates the fix.
 
