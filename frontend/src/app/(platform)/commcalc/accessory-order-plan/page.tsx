@@ -50,9 +50,16 @@ type GridColumn = {
   dimension: string; dimension_label: string
   per_device: number | null; options: Option[]
 }
+type Breakdown = { dimension: string; label: string; options: OptionQty[] }
 type Cell = {
   qty: number | null; per_device: number | null; reason: string | null
   options: OptionQty[]; colours?: OptionQty[]
+  breakdowns?: Record<string, Breakdown>
+}
+// A kind that is bought for the STORE rather than for a phone or for a connector (the third grain).
+type StandaloneRow = {
+  category: string; category_label: string; per_device: number | null
+  qty: number | null; dimensions: Breakdown[]; reason: string | null
 }
 type ModelOrder = {
   model: string; rank: number; units_total: number
@@ -90,6 +97,7 @@ type Plan = {
   grid_columns: GridColumn[]
   model_orders: ModelOrder[]
   consolidated: Consolidated[]
+  standalone: StandaloneRow[]
   catalog: Category[]; catalog_basis: string
   option_mix: Record<string, OptionQty[]>; option_mix_bases: Record<string, string>
   colour_tokens: string[]; colour_tokens_basis: string
@@ -160,6 +168,10 @@ export default function AccessoryOrderPlanPage() {
   const [styleDraft, setStyleDraft] = useState<Record<string, OptionQty[]> | null>(null)
   const [newOpt, setNewOpt] = useState<Record<string, { label: string; image: string }>>({})
   const [specDraft, setSpecDraft] = useState<Record<string, string>>({})
+  // How many of a kind per device, keyed by category. A kind with no rate is not ordered and the
+  // sheet says so — until this was here there was no way to give one a rate at all, which is why
+  // earphones shipped un-orderable, and every standalone kind would have too.
+  const [rateDraft, setRateDraft] = useState<Record<string, string>>({})
   const [showSetup, setShowSetup] = useState(false)
 
   // THE FETCH LIVES IN THE EFFECT AND SETS STATE ONLY IN ITS CALLBACKS. Flipping `loading` from
@@ -281,6 +293,19 @@ export default function AccessoryOrderPlanPage() {
     void saveConfig({ catalog: next })
   }, [newOpt, data, saveConfig])
 
+  // THE RATE IS A CONFIG ROW. An empty box CLEARS the rate rather than writing a zero: "none
+  // declared" and "we decided to stock none" are different facts, and the sheet keeps them apart.
+  const saveRates = useCallback(() => {
+    if (!data) return
+    const next = data.catalog.map(c => {
+      if (!(c.key in rateDraft)) return c
+      const raw = rateDraft[c.key].trim()
+      return { ...c, per_device: raw === '' ? null : Math.max(0, Number(raw) || 0) }
+    })
+    setRateDraft({})
+    void saveConfig({ catalog: next })
+  }, [data, rateDraft, saveConfig])
+
   function buildPayload(): ExportPayload {
     const ms = data?.months || []
     return {
@@ -321,6 +346,17 @@ export default function AccessoryOrderPlanPage() {
             header: `Case ${g.label}`,
             get: (r: ModelOrder) => r.cells.case?.colours?.find(c => c.key === g.key)?.qty ?? '',
           })),
+          // The other axes a column is chosen on, so the exported sheet carries the same reads the
+          // screen shows rather than only the primary style split.
+          ...(data?.grid_columns || []).flatMap(c =>
+            (data?.catalog || []).filter(k => k.key === c.category)
+              .flatMap(k => k.dimensions.slice(1))
+              .flatMap(d => d.options.map(o => ({
+                header: `${c.category_label} ${d.label.toLowerCase()}: ${o.label}`,
+                get: (r: ModelOrder) =>
+                  r.cells[c.category]?.breakdowns?.[d.key]?.options
+                    .find(x => x.key === o.key)?.qty ?? '',
+              })))),
         ] },
         { name: 'Consolidated', rows: (data?.consolidated || []).flatMap(c =>
             c.lines.map(l => ({ category: c.category_label, label: l.label, qty: l.qty,
@@ -331,6 +367,14 @@ export default function AccessoryOrderPlanPage() {
             { header: 'Quantity', get: (r: { qty: number }) => r.qty },
             { header: 'Phones it covers', get: (r: { models: string }) => r.models },
           ] },
+        { name: 'Stocked for the store', rows: data?.standalone || [], columns: [
+          { header: 'Accessory', get: (r: StandaloneRow) => r.category_label },
+          { header: 'Per device', get: (r: StandaloneRow) => r.per_device ?? '' },
+          { header: 'Quantity', get: (r: StandaloneRow) => r.qty ?? '' },
+          { header: 'Why not ordered', get: (r: StandaloneRow) => r.reason ?? '' },
+          { header: 'How it splits', get: (r: StandaloneRow) => r.dimensions.map(b =>
+              `${b.label}: ${b.options.map(o => `${o.label} ${o.qty ?? ''}`).join(', ')}`).join(' | ') },
+        ] },
         { name: 'Totals', rows: accRows, columns: [
           { header: 'Accessory', get: (r: AccessoryRow) => r.label },
           { header: 'Per device', get: (r: AccessoryRow) => r.per_device },
@@ -478,35 +522,45 @@ export default function AccessoryOrderPlanPage() {
                   {mixDraft && <button className="btn" style={{ fontSize: 11 }} onClick={() => setMixDraft(null)}>Cancel</button>}
                 </div>
 
-                {(data?.grid_columns || []).map(c => (
-                  <div key={c.category} style={{ marginTop: 14 }}>
+                {/* ONE EDITOR FOR EVERY MIX THE SHEET READS, derived from the catalog rather than
+                    listed here: the grid's style split, each FURTHER axis a kind is chosen on
+                    (`case|design`), and each store-stocked kind. Keyed exactly as the reader keys
+                    them, so an axis added to the catalog becomes editable with no change here. */}
+                {(data?.catalog || [])
+                  .filter(c => c.grain !== 'assigned')
+                  .flatMap(c => c.dimensions.map((d, i) => ({
+                    mixKey: i === 0 ? c.key : `${c.key}|${d.key}`,
+                    title: i === 0 ? `${c.label} mix` : `${c.label} by ${d.label.toLowerCase()}`,
+                  })))
+                  .map(({ mixKey, title }) => (
+                  <div key={mixKey} style={{ marginTop: 14 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>
-                      {c.category_label} mix
+                      {title}
                       <span style={{ fontWeight: 400, color: 'var(--text3)', marginLeft: 6 }}>
-                        {data?.option_mix_bases?.[c.category] === 'even_split'
+                        {data?.option_mix_bases?.[mixKey] === 'even_split'
                           ? 'split evenly — nothing declared yet'
                           : 'your declared mix'}
                       </span>
                     </div>
-                    {(styleDraft?.[c.category] ?? data?.option_mix?.[c.category] ?? []).map((o, i) => (
+                    {(styleDraft?.[mixKey] ?? data?.option_mix?.[mixKey] ?? []).map((o, i) => (
                       <div key={o.key} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
                         <span style={{ fontSize: 12, width: 220 }}>{o.label}</span>
                         <input style={{ ...sel, width: 90 }} type="number" min={0} max={100}
                           value={Math.round((o.share || 0) * 1000) / 10}
                           onChange={e => setStyleDraft(d => ({
                             ...(d || {}),
-                            [c.category]: (d?.[c.category] ?? data?.option_mix?.[c.category] ?? [])
+                            [mixKey]: (d?.[mixKey] ?? data?.option_mix?.[mixKey] ?? [])
                               .map((x, j) => j === i ? { ...x, share: Number(e.target.value) / 100 } : x),
                           }))} />
                         <span style={{ fontSize: 12, color: 'var(--text3)' }}>%</span>
                       </div>
                     ))}
                     <button className="btn" style={{ fontSize: 11, marginTop: 4 }}
-                      disabled={saving || !styleDraft?.[c.category]}
+                      disabled={saving || !styleDraft?.[mixKey]}
                       onClick={() => void saveConfig({
                         option_mix: { ...(data?.option_mix || {}), ...(styleDraft || {}) },
                       })}>
-                      {saving ? 'Saving…' : `Save ${c.category_label.toLowerCase()} mix`}
+                      {saving ? 'Saving…' : `Save ${title.toLowerCase()}`}
                     </button>
                   </div>
                 ))}
@@ -522,8 +576,19 @@ export default function AccessoryOrderPlanPage() {
                       {c.label}
                       <span style={{ fontWeight: 400, color: 'var(--text3)', marginLeft: 6 }}>
                         {c.grain === 'split' ? 'per phone, split across the styles'
-                          : 'one per phone, consolidated across phones'}
+                          : c.grain === 'assigned' ? 'one per phone, consolidated across phones'
+                          : 'stocked for the store — it belongs to no phone'}
                         {c.per_device === null ? ' · no rate declared, so it is not ordered' : ` · ${c.per_device} per device`}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '4px 0 0 12px' }}>
+                      <span style={{ fontSize: 11, color: 'var(--text2)' }}>How many per device</span>
+                      <input style={{ ...sel, width: 90 }} type="number" min={0} step="0.05"
+                        placeholder="none"
+                        value={rateDraft[c.key] ?? (c.per_device === null ? '' : String(c.per_device))}
+                        onChange={e => setRateDraft(r => ({ ...r, [c.key]: e.target.value }))} />
+                      <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+                        blank = no rate, so none is ordered
                       </span>
                     </div>
                     {c.dimensions.map(d => (
@@ -545,6 +610,11 @@ export default function AccessoryOrderPlanPage() {
                     ))}
                   </div>
                 ))}
+                <button className="btn" style={{ fontSize: 11 }}
+                  disabled={saving || !Object.keys(rateDraft).length}
+                  onClick={() => saveRates()}>
+                  {saving ? 'Saving…' : `Save ${Object.keys(rateDraft).length} rate(s)`}
+                </button>
 
                 <div style={{ fontSize: 12, fontWeight: 700, margin: '16px 0 6px' }}>Colour words in your product descriptions</div>
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>
@@ -662,6 +732,18 @@ export default function AccessoryOrderPlanPage() {
                               <div style={{ marginTop: 6, color: 'var(--text2)' }}>
                                 Cases by colour: {r.cells.case.colours.map(c => `${c.label} ${num(c.qty)}`).join('  ·  ')}
                               </div>}
+                            {/* THE OTHER AXES. A case is chosen on how it is BUILT and on how it
+                                LOOKS as well as on its style, and each axis is another way to read
+                                the SAME order — so each one adds up to the column total, and none
+                                of them is an extra order. */}
+                            {(data?.grid_columns || []).flatMap(col =>
+                              Object.values(r.cells[col.category]?.breakdowns || {}).map(b => (
+                                <div key={`${col.category}|${b.dimension}`}
+                                  style={{ marginTop: 6, color: 'var(--text2)' }}>
+                                  {col.category_label} by {b.label.toLowerCase()}:{' '}
+                                  {b.options.map(o => `${o.label} ${num(o.qty)}`).join('  ·  ')}
+                                </div>
+                              )))}
                           </td>
                         </tr>
                       )}
@@ -760,6 +842,59 @@ export default function AccessoryOrderPlanPage() {
                 </div>}
             </div>
           ))}
+
+          {/* ── STANDALONE: the shelf that belongs to no phone ────────────────────────────────
+              Read off the distributor on 2026-11-04: most of what a phone store orders is bought
+              for the STORE, not for one phone (power banks, mounts, speakers, watch bands). It is
+              neither a grid column nor a consolidated connector line, so it gets its own sheet.
+              Every house rate here is undeclared on purpose — the sheet says so and orders nothing
+              rather than inventing an attach rate. */}
+          {(data?.standalone || []).length > 0 && (
+            <div className="card" style={{ padding: '14px 16px', marginBottom: 18 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>🏬 Stocked for the store — not per phone</div>
+                <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                  {(data?.standalone || []).filter(r => r.qty !== null).length} of{' '}
+                  {(data?.standalone || []).length} kinds have a rate declared
+                </div>
+              </div>
+              <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>
+                    <th style={{ padding: '4px 6px' }}>Accessory</th>
+                    <th style={{ padding: '4px 6px', textAlign: 'right' }}>Per device</th>
+                    <th style={{ padding: '4px 6px', textAlign: 'right' }}>Quantity to order</th>
+                    <th style={{ padding: '4px 6px' }}>How it splits</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data?.standalone || []).map(r => (
+                    <tr key={r.category} style={{ borderTop: '1px solid var(--border)' }}>
+                      <td style={{ padding: '6px' }}>{r.category_label}</td>
+                      <td style={{ padding: '6px', textAlign: 'right' }}>
+                        {r.per_device === null ? '—' : r.per_device}
+                      </td>
+                      <td style={{ padding: '6px', textAlign: 'right', fontWeight: 700 }}>
+                        {r.reason === 'no_rate' ? '—' : num(r.qty)}
+                      </td>
+                      <td style={{ padding: '6px', color: 'var(--text2)', fontSize: 12 }}>
+                        {r.reason === 'no_rate'
+                          ? 'No rate declared, so none is being ordered'
+                          : r.dimensions.map(b =>
+                              `${b.label}: ${b.options.map(o => `${o.label} ${num(o.qty)}`).join(', ')}`
+                            ).join('  ·  ') || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+                ℹ︎ These are ordered against the whole window&rsquo;s projected devices, not per phone.
+                A dash is an undeclared rate, never a decision to stock none — set how many per
+                device under Mix &amp; catalog and the quantity appears here.
+              </div>
+            </div>
+          )}
 
           {/* ── THE TOTALS, now at the bottom (owner 2026-10-30: *"it should be not be on top as
               displayed"*) — one number per kind, for the buyer who wants the summary beside the

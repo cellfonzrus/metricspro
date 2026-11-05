@@ -53,12 +53,18 @@ class _Query:
     """One request builder. Filters accumulate; `.execute()` applies them to the seeded rows."""
 
     def __init__(self, store: Dict[str, List[dict]], key: str, verb: str, payload: Any = None,
-                 reads: Optional[List[tuple]] = None):
+                 reads: Optional[List[tuple]] = None, on_conflict: Optional[str] = None):
         self._store = store
         self._key = key
         self._verb = verb
         self._reads = reads
         self._payload = payload
+        # THE COLUMNS AN UPSERT CONFLICTS ON, as PostgREST is told them. Honouring this is what makes
+        # a write-then-read test real: a route that upserts a per-org config row `on_conflict=org_id`
+        # updates that row in production, and a double that matched on `id` alone APPENDED a second
+        # row instead — so the later read answered from the stale one and the test passed on a
+        # behaviour production does not have.
+        self._on_conflict = [c.strip() for c in (on_conflict or "").split(",") if c.strip()]
         self._filters: List[tuple] = []
         self._order: Optional[tuple] = None
         self._limit: Optional[int] = None
@@ -228,7 +234,11 @@ class _Query:
             for rec in payload:
                 rec = copy.deepcopy(rec)
                 if self._verb == "upsert":
-                    existing = next((r for r in rows if "id" in rec and r.get("id") == rec.get("id")), None)
+                    cols = self._on_conflict or ["id"]
+                    existing = next(
+                        (r for r in rows
+                         if all(c in rec for c in cols)
+                         and all(r.get(c) == rec.get(c) for c in cols)), None)
                     if existing is not None:
                         existing.update(rec)
                         written.append(copy.deepcopy(existing))
@@ -331,8 +341,9 @@ class _Table:
     def insert(self, payload: Any, **_kw) -> _Query:
         return _Query(self._store, self._key, "insert", payload, reads=self._reads)
 
-    def upsert(self, payload: Any, **_kw) -> _Query:
-        return _Query(self._store, self._key, "upsert", payload, reads=self._reads)
+    def upsert(self, payload: Any, **kw) -> _Query:
+        return _Query(self._store, self._key, "upsert", payload, reads=self._reads,
+                      on_conflict=kw.get("on_conflict"))
 
     def update(self, payload: dict, **_kw) -> _Query:
         return _Query(self._store, self._key, "update", payload, reads=self._reads)

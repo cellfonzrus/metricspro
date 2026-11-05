@@ -56,7 +56,8 @@ CONDITION_WORDS = ("cpo", "certified preowned", "certified_preowned", "certified
                    "pre-owned", "preowned", "refurb", "renewed", "open box", "openbox")
 #: Words that would mean a carrier, a tenant or a brand had been written into code (RULE TWO).
 BRAND_WORDS = ("boost", "verizon", "iphone", "samsung", "galaxy", "motorola", "moto", "apple",
-               "luxelink", "cellfonz", "vzone", "tcl", "celero", "nxtpaper", "ppd-usa")
+               "luxelink", "cellfonz", "vzone", "tcl", "celero", "nxtpaper", "ppd-usa",
+               "magsafe", "airpods")
 
 
 def _string_values(path):
@@ -183,16 +184,37 @@ check("B2 RULE TWO — no carrier, tenant or brand name is a value in the catalo
 
 _cats, _basis = cat.resolve_catalog(None)
 _keys = [c["key"] for c in _cats]
-check("B3 the house catalog carries the five kinds the owner named",
-      set(_keys) == {"case", "screen_protector", "cable", "charger", "earphones"}, str(_keys))
+OWNER_NAMED = {"case", "screen_protector", "cable", "charger", "earphones"}
+check("B3 the house catalog STILL carries every kind the owner named — the set may grow as the "
+      "shelf does, and may never shrink, because dropping one of his five silently stops an order",
+      OWNER_NAMED <= set(_keys), str(sorted(OWNER_NAMED - set(_keys))))
+
+check("B3a every kind carries exactly one of the three grains, and nothing else",
+      all(c["grain"] in cat.GRAINS for c in _cats),
+      str([(c["key"], c["grain"]) for c in _cats if c["grain"] not in cat.GRAINS]))
 
 _split = {c["key"] for c in _cats if c["grain"] == cat.GRAIN_SPLIT}
 _assigned = {c["key"] for c in _cats if c["grain"] == cat.GRAIN_ASSIGNED}
 check("B4 THE LOAD-BEARING DISTINCTION: a case and a protector are bought FOR a phone and split "
       "across styles; a cable, a cube and earphones are bought BY CONNECTOR and consolidated across "
       "phones — *\"the cables are common to a lot of phones\"*",
-      _split == {"case", "screen_protector"}
-      and _assigned == {"cable", "charger", "earphones"}, f"{_split} / {_assigned}")
+      {"case", "screen_protector"} <= _split
+      and {"cable", "charger", "earphones"} <= _assigned
+      and not (_split & _assigned), f"{_split} / {_assigned}")
+
+_standalone = {c["key"] for c in _cats if c["grain"] == cat.GRAIN_STANDALONE}
+check("B4a THE THIRD GRAIN (distributor read 2026-11-04): most of a phone store's shelf is bought "
+      "for NEITHER one phone nor one connector — a power bank, a mount, a speaker, a watch band is "
+      "stocked for the store, so it is neither a column nor a consolidated line",
+      _standalone and not (_standalone & (_split | _assigned))
+      and _standalone | _split | _assigned == set(_keys), str(sorted(_standalone)))
+
+check("B4b a STANDALONE kind arrives with NO rate rather than an invented one — nothing per device "
+      "is measurable for a thing that is not bought per device, and a made-up attach rate would "
+      "read as a measurement on the sheet",
+      all(c["per_device"] is None for c in _cats if c["grain"] == cat.GRAIN_STANDALONE),
+      str([(c["key"], c["per_device"]) for c in _cats
+           if c["grain"] == cat.GRAIN_STANDALONE and c["per_device"] is not None]))
 
 _case = next(c for c in _cats if c["key"] == "case")
 _shares, _sbasis = cat.resolve_option_mix(_case, None)
@@ -251,9 +273,11 @@ PLAN = aop.plan(
     variants={"Phone A": [{"model": "Phone A Black", "units_total": 200,
                            "units_by_month": {"M1": 100, "M2": 100}}]})
 
+_cols = [c["category"] for c in PLAN["grid_columns"]]
 check("C1 the grid's columns are the SPLIT categories only — a cable never becomes a column, "
-      "because it is not bought per phone",
-      [c["category"] for c in PLAN["grid_columns"]] == ["case", "screen_protector"])
+      "because it is not bought per phone, and neither does a power bank, because it is not bought "
+      "for a phone at all",
+      set(_cols) == _split and not (set(_cols) & (_assigned | _standalone)), str(_cols))
 
 _a = next(r for r in PLAN["model_orders"] if r["model"] == "Phone A")
 check("C2 every style column foots to its category total, so a buyer can add the row up by eye",
@@ -302,6 +326,53 @@ check("C10 the flat totals the first version shipped with still agree with the g
 check("C11 the variants ride on the model row, so the screen can open a phone without a second "
       "query against the feed",
       _a["variants"] and _a["variants"][0]["model"] == "Phone A Black")
+
+_case_cell = _a["cells"]["case"]
+check("C12 A CASE IS CHOSEN ON MORE THAN ONE AXIS (distributor read 2026-11-04: how it is BUILT and "
+      "how it LOOKS are separate shelves), and EVERY axis foots to the SAME category total — a "
+      "second axis is another way to read one order, never a second order",
+      _case_cell["breakdowns"]
+      and all(sum(o["qty"] for o in b["options"]) == _case_cell["qty"]
+              for b in _case_cell["breakdowns"].values()),
+      str({k: sum(o["qty"] for o in b["options"])
+           for k, b in _case_cell["breakdowns"].items()} | {"cell": _case_cell["qty"]}))
+
+check("C12a the axes are the catalog's, in the catalog's order, and the FIRST one stays the primary "
+      "`options` the sheet already had — an added axis cannot silently become the column's split",
+      [d["key"] for d in _case["dimensions"]][1:] == list(_case_cell["breakdowns"].keys())
+      and [o["key"] for o in _case_cell["options"]]
+          == [o["key"] for o in _case["dimensions"][0]["options"]],
+      str(list(_case_cell["breakdowns"].keys())))
+
+_sa = {r["category"]: r for r in PLAN["standalone"]}
+check("C13 the STANDALONE kinds are on the sheet as their own rows, keyed by nothing but the "
+      "category — they have no phone, so they cannot ride on a model row, and leaving them off "
+      "would mean the order sheet is not the order",
+      set(_sa) == _standalone and all(r.get("model") is None for r in PLAN["standalone"]),
+      str(sorted(_sa)))
+
+check("C14 a standalone kind with NO DECLARED RATE orders nothing and SAYS `no_rate` — it does not "
+      "invent an attach rate for a power bank, and a buyer can tell an un-rated kind from a kind "
+      "ruled out, which C5 keeps apart for phones",
+      all(r["qty"] is None and r["reason"] == "no_rate" for r in PLAN["standalone"]),
+      str([(k, r["qty"], r["reason"]) for k, r in _sa.items() if r["qty"] is not None]))
+
+_rated = aop.plan(
+    units_by_model={"Phone A": {"M1": 100, "M2": 100}},
+    months=["M1", "M2"], horizon_months=2, lifecycle={"Phone A": "current"},
+    catalog=[{"key": "power_bank", "per_device": 0.1}])
+_pb = next(r for r in _rated["standalone"] if r["category"] == "power_bank")
+check("C15 a DECLARED standalone rate is honoured against the window's total devices, and each of "
+      "its axes foots to that one quantity — the rate is a config row, never a code change",
+      _pb["qty"] == 20 and _pb["dimensions"]
+      and all(sum(o["qty"] for o in b["options"]) == _pb["qty"] for b in _pb["dimensions"]),
+      str(_pb["qty"]))
+
+check("C16 a standalone kind never reaches the per-phone grid NOR the consolidated lines — three "
+      "grains, three places, and a kind that appeared in two would be ordered twice",
+      not (set(_sa) & {c["category"] for c in PLAN["consolidated"]})
+      and not any(k in _a["cells"] for k in _sa),
+      str(sorted(set(_sa) & {c["category"] for c in PLAN["consolidated"]})))
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -507,6 +578,36 @@ check("D17 the curated alias is HANDED TO the one home, not applied before it �
       "canonicalises first and asks second has already thrown the condition marker away, which is "
       "exactly what the router did until the integration test for this ruling caught it",
       _alias_args and all(ok for _c, ok in _alias_args), f"{_alias_args}")
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n== E. THE SHEET IS ON THE SCREEN, AND A RATE CAN BE DECLARED ==")
+
+ORDER_PAGE = os.path.join(HERE, os.pardir, "frontend", "src", "app", "(platform)", "commcalc",
+                          "accessory-order-plan", "page.tsx")
+_order_page = open(ORDER_PAGE, encoding="utf-8").read()
+
+check("E1 the screen RENDERS the third grain — a kind computed into the payload and shown nowhere "
+      "is not on the buyer's sheet, and the sheet is the deliverable",
+      "data?.standalone" in _order_page and "standalone: StandaloneRow[]" in _order_page)
+
+check("E2 the screen renders the FURTHER axes a kind is chosen on, so the second read of one order "
+      "reaches the human the first read already reaches",
+      "breakdowns" in _order_page)
+
+check("E3 A RATE CAN BE DECLARED FROM THE SCREEN. Every un-rated kind says it is not being ordered "
+      "and tells the reader to set a rate; until this field existed there was nowhere to set one, "
+      "so the instruction pointed at nothing and earphones had been un-orderable since it shipped",
+      "How many per device" in _order_page and "saveRates" in _order_page)
+
+check("E4 the mix editors are DERIVED FROM THE CATALOG, not listed in the browser — an axis or a "
+      "kind added to the one home becomes editable with no change to the screen, which is what "
+      "stops the page becoming the second copy of the catalog",
+      "(data?.catalog || [])" in _order_page and ".flatMap(c => c.dimensions.map((d, i) =>" in _order_page)
+
+_pagewords = [w for w in BRAND_WORDS if w in _order_page.lower()]
+check("E5 RULE TWO reaches the browser too — no carrier, tenant or brand word is in the screen "
+      "that reads the catalog",
+      not _pagewords, f"found: {_pagewords}")
 
 print("\n" + "=" * 70)
 print(f"  {len(PASS)} passed, {len(FAIL)} failed")

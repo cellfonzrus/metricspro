@@ -535,18 +535,76 @@ def test_the_grid_is_one_row_per_phone_with_the_styles_as_columns_and_it_foots(w
     _rule_current(wired, "HANDSET A CPO", "HANDSET A PRO CPO")
     body = api_client.get(PATH, params={"period": PERIOD, "months": 1, "horizon": 2}).json()
 
-    assert [c["category"] for c in body["grid_columns"]] == ["case", "screen_protector"]
+    # The columns are the SPLIT kinds, in catalog order. Asserted as a subset plus the grain rather
+    # than a frozen list, because the shelf grows: what may never happen is a cable or a power bank
+    # becoming a column, and that is what the next two lines pin.
+    cols = [c["category"] for c in body["grid_columns"]]
+    assert cols[:2] == ["case", "screen_protector"]
+    assert {c["key"] for c in body["catalog"] if c["grain"] == "split"} == set(cols)
+    assert not ({c["key"] for c in body["catalog"] if c["grain"] != "split"} & set(cols))
+    # A case is chosen on how it is BUILT and how it LOOKS as well as on its style; the column is
+    # the style, and the further axes ride on the cell.
     assert [o["key"] for o in body["grid_columns"][0]["options"]] == [
-        "silicone", "kickstand", "heavy_duty", "floral", "diamond"]
+        "silicone", "kickstand", "heavy_duty", "wallet_folio", "clear_hard"]
+    _case_cell = body["model_orders"][0]["cells"]["case"]
+    assert set(_case_cell["breakdowns"]) == {"attach", "design"}
+    for _b in _case_cell["breakdowns"].values():
+        assert sum(o["qty"] for o in _b["options"]) == _case_cell["qty"], \
+            "every axis is another way to read ONE order, so each foots to the same total"
 
     rows = body["model_orders"]
     assert [r["model"] for r in rows] == ["HANDSET A CPO", "HANDSET A PRO CPO"]
     for r in rows:
         for cell in r["cells"].values():
+            if cell["qty"] is None:
+                assert cell["reason"] == "no_rate", "a dash is an un-rated kind, never an order of 0"
+                assert all(o["qty"] is None for o in cell["options"])
+                continue
             assert sum(o["qty"] for o in cell["options"]) == cell["qty"]
     case = rows[0]["cells"]["case"]
     assert sum(c["qty"] for c in case["colours"]) == case["qty"]
     assert [c["label"] for c in case["colours"]] == ["Blacks and blues", "Pinks and reds"]
+
+
+def test_the_store_stocked_kinds_are_their_own_sheet_and_arrive_un_rated(wired, api_client):
+    """THE THIRD GRAIN (distributor read 2026-11-04). A power bank, a mount, a watch band or a
+    speaker belongs to no phone and to no connector, so it is neither a grid column nor a
+    consolidated line. It arrives with NO rate, because nothing per device is measurable for a thing
+    that is not bought per device — and an invented attach rate would read as a measurement."""
+    _declare(wired, box_departments=HOUSE_DEPTS, device_colour_tokens=COLOUR_WORDS)
+    wired.seed("commcalc.daily_sales_feed", COLOUR_MONTH)
+    _rule_current(wired, "HANDSET A CPO", "HANDSET A PRO CPO")
+    body = api_client.get(PATH, params={"period": PERIOD, "months": 1, "horizon": 2}).json()
+
+    standalone = {r["category"]: r for r in body["standalone"]}
+    assert {c["key"] for c in body["catalog"] if c["grain"] == "standalone"} == set(standalone)
+    assert standalone, "the shelf a phone store actually orders is mostly this grain"
+    for r in standalone.values():
+        assert r["qty"] is None and r["reason"] == "no_rate" and r["per_device"] is None
+
+    # It is on NEITHER of the other two sheets, because a kind on two sheets is ordered twice.
+    assert not (set(standalone) & {c["category"] for c in body["consolidated"]})
+    assert not (set(standalone) & set(body["model_orders"][0]["cells"]))
+
+
+def test_a_declared_rate_puts_a_store_stocked_kind_on_the_order(wired, api_client):
+    """The rate is a CONFIG ROW, not a code change — and once declared the kind is ordered against
+    the window's total projected devices, with every axis footing to that one quantity."""
+    _declare(wired, box_departments=HOUSE_DEPTS, device_colour_tokens=COLOUR_WORDS)
+    wired.seed("commcalc.daily_sales_feed", COLOUR_MONTH)
+    _rule_current(wired, "HANDSET A CPO", "HANDSET A PRO CPO")
+    # SAVED FROM THE SCREEN AND READ BACK BY THE SHEET — the whole round trip, because a rate that
+    # stores and does not reach the order is the same to a buyer as a rate that never stored.
+    assert api_client.put(
+        CONFIG_PATH, json={"catalog": [{"key": "power_bank", "per_device": 0.25}]}
+    ).json()["catalog_basis"] == "declared"
+
+    body = api_client.get(PATH, params={"period": PERIOD, "months": 1, "horizon": 2}).json()
+    bank = next(x for x in body["standalone"] if x["category"] == "power_bank")
+    assert bank["per_device"] == 0.25 and bank["reason"] is None
+    assert bank["qty"] == round(body["projected_devices"] * 0.25)
+    for b in bank["dimensions"]:
+        assert sum(o["qty"] for o in b["options"]) == bank["qty"]
 
 
 def test_cables_and_cubes_consolidate_across_phones_rather_than_per_phone(wired, api_client):
@@ -586,10 +644,13 @@ def test_a_phone_awaiting_a_ruling_has_dashes_in_the_grid_not_zeros(wired, api_c
     _declare(wired, box_departments=HOUSE_DEPTS, device_colour_tokens=COLOUR_WORDS)
     wired.seed("commcalc.daily_sales_feed", COLOUR_MONTH)
     body = api_client.get(PATH, params={"period": PERIOD, "months": 1, "horizon": 2}).json()
+    _rated = {c["key"] for c in body["catalog"] if c["per_device"] is not None}
     for r in body["model_orders"]:
-        for cell in r["cells"].values():
+        for key, cell in r["cells"].items():
             assert cell["qty"] is None
-            assert cell["reason"] == "awaiting_declaration"
+            # An un-rated kind is not ordered for ANY phone, ruled or not, so it says so; a rated
+            # kind on an unruled phone is waiting on the human. Two different absences, kept apart.
+            assert cell["reason"] == ("awaiting_declaration" if key in _rated else "no_rate")
 
 
 def test_the_catalog_and_the_colour_words_can_be_declared_through_the_config_route(wired, api_client):
@@ -601,7 +662,9 @@ def test_the_catalog_and_the_colour_words_can_be_declared_through_the_config_rou
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["colour_tokens"] == ["black", "pink"], "lower-cased, trimmed and de-duplicated"
-    assert set(body["catalog"]) == {"case", "screen_protector", "cable", "charger", "earphones"}
+    # Declaring one style may never DELETE a kind: the owner's five are still all there, and so is
+    # everything the shelf has gained since.
+    assert {"case", "screen_protector", "cable", "charger", "earphones"} <= set(body["catalog"])
 
 
 def test_a_connector_the_catalog_does_not_offer_is_refused_rather_than_stored(wired, api_client):

@@ -42740,7 +42740,7 @@ so it can be dereferenced from any load order.
 | which month's sale lines to read | `router._sales_rows_union` (§3) — the DISPLAY union, so the report is never blind on the open month (§19.55 / §4a.3) |
 | the raw → canonical model map AND the lifecycle ruling | `commcalc.device_model_alias` (mig `096`, lifecycle column mig `1104`) — the ruling is keyed on the PHONE (COMMCALC-49.11) |
 | which sold lines are the SAME PHONE | `commcalc/device_model_family.family_of` / `group_units` — colour words are a REQUIRED argument (COMMCALC-49.11) |
-| what kinds of accessory can be BOUGHT, and how each is chosen | `commcalc/accessory_order_catalog.py` — SPLIT per phone vs ASSIGNED by connector (COMMCALC-49.12). NOT `accessory_catalog`, which classifies what was SOLD (§19.55) |
+| what kinds of accessory can be BOUGHT, and how each is chosen | `commcalc/accessory_order_catalog.py` — SPLIT per phone vs ASSIGNED by connector vs STANDALONE for the store (COMMCALC-49.12). NOT `accessory_catalog`, which classifies what was SOLD (§19.55) |
 | how a declared set of shares is read (percentages or fractions) | `commcalc/accessory_order_catalog.normalise_shares` — the colour mix dereferences it |
 | which cable / charger / earphone ONE phone takes | `commcalc.model_accessory_spec` (mig `1109`); absent = the declared current standard |
 
@@ -42941,7 +42941,7 @@ One case SKU fits every one of them, and none of them fits an iPhone 13 Pro. **O
 - **Live result, both tenants, Aug–Oct 2026:** 46 spellings → 40 phones (house org), 60 → 52 (the
   other tenant), every unit preserved.
 
-### COMMCALC-49.12 THE ORDER IS BOUGHT AT TWO GRAINS (owner ask 2026-10-30)
+### COMMCALC-49.12 THE ORDER IS BOUGHT AT THREE GRAINS (owner ask 2026-10-30, extended 2026-11-04)
 
 Owner: *"the order is per phone, so it should be not be on top as displayed, the accessory order
 should be per phone model and on one column and the cases type on the other columns , the screen
@@ -42957,17 +42957,44 @@ distinction it holds:
 |---|---|---|
 | **SPLIT** | bought FOR a phone; that phone's quantity divides across the styles on offer | a column per style, one row per phone, footing to the row total by largest remainder |
 | **ASSIGNED** | bought BY CONNECTOR; each phone is assigned one option and the order sums across phones | one line per connector, naming the phones it covers |
+| **STANDALONE** | bought for the STORE — it belongs to no phone and to no connector | its own sheet, ordered against the window's TOTAL projected devices |
 
 House catalog (the owner's own list, in generic words — a house default is right here because these
 are the names of a kind of product, read against no tenant's feed):
 
-| kind | grain | options |
+| kind | grain | axes (the FIRST is the grid's style split) |
 |---|---|---|
-| Case | split, colour-split | silicone · kickstand · drop proof/heavy duty · floral · diamond |
-| Screen protector | split | clear · privacy |
+| Case | split, colour-split | style (silicone · kickstand · heavy duty · wallet/folio · clear hard) · **magnetic attach** · **design** (9 themes) |
+| Screen protector | split | type (clear · privacy) |
+| Camera lens protector | split | finish (clear · tinted) — no rate declared |
 | Cable | assigned | USB-C↔USB-C (standard) · USB-C↔Lightning · USB-A↔USB-C · USB-A↔Lightning |
 | Charging cube | assigned, TWO dimensions | ports: single/dual USB-A, USB-C, or one of each · wattage: 5 / 18 / 20 / 45 / 60 / 100 W |
-| Earphones | assigned | USB-C · Lightning · 3.5 mm jack — **no rate declared, so none is ordered and it says so** |
+| Earphones | assigned, TWO dimensions | fit: USB-C · Lightning · 3.5 mm jack · Bluetooth · form: earbuds · open-ear · over-ear — **no rate declared, so none is ordered and it says so** |
+| Power bank | standalone | capacity (5 000 / 10 000 / 20 000 mAh) · magnetic attach |
+| Wireless charger | standalone | form (pad · magnetic · car vent · stand) |
+| Car charger | standalone | ports · wattage |
+| Mount / stand | standalone | kind (car vent · bike · desk stand · grip · wallet · tripod) |
+| Watch band | standalone | fit (proprietary lug · standard pin 20/22 mm) · material |
+| Pouch / holster | standalone | kind (pouch · holster · belt clip) |
+| Speaker | standalone | size (mini · portable · party) |
+
+**EVERY STANDALONE KIND SHIPS UN-RATED (`per_device: None`)** and therefore orders nothing and says
+`no_rate`. Nothing per device is measurable for a thing that is not bought per device, and an
+invented attach rate would read as a measurement on a buyer's sheet. A rate is a config row.
+
+**WHY THE THIRD GRAIN EXISTS (distributor read 2026-11-04).** The owner asked for the distributor's
+categories to be checked and the catalog built accordingly (`valorcomm.com`, allowed through the
+container network policy on 2026-11-04). Their published taxonomy splits a case on two axes the
+report had folded into one — how it is BUILT (930 magnetic products) against how it LOOKS (24 theme
+families) — and most of their shelf (power banks 1,190 products, wireless chargers 895, stands 579,
+earbuds 731, speakers 194) fits NEITHER existing grain. Full comparison:
+`/mnt/project-files/accessory-order-plan/VALOR_CATEGORIES_2026-11-04.md`. Their long tail (licence
+plate frames, merchandising, gaming, cleaning kits) is deliberately NOT in the house catalog.
+
+- **A SECOND AXIS IS ANOTHER WAY TO READ ONE ORDER, NEVER A SECOND ORDER.** A split cell carries
+  `breakdowns` — one entry per axis after the first, each footing to the SAME category total by the
+  same largest-remainder rule. `secondary_dimensions()` is the one reader of "which axes beyond the
+  style split", and an axis mix is declared under the key `<category>|<dimension>`.
 
 - **`accessory_catalog.py` IS A DIFFERENT MODULE AND A DIFFERENT QUESTION.** That one (migs 230/231,
   §19.55) classifies a SOLD line from an uploaded product catalog; this one is what can be BOUGHT,
@@ -42992,14 +43019,14 @@ are the names of a kind of product, read against no tenant's feed):
   ruled end of life orders a real 0; an un-rated kind of accessory reports `no_rate`. Three different
   facts, kept apart.
 - **Endpoints:** `GET /commcalc/accessory-order-plan` (now returning `grid_columns`, `model_orders`,
-  `consolidated`, `catalog`, `option_mix`, `colour_tokens`), `PUT …/config` (+`catalog`,
+  `consolidated`, `standalone`, `catalog`, `option_mix`, `colour_tokens`), `PUT …/config` (+`catalog`,
   `option_mix`, `device_classes`, `colour_tokens`), `PUT …/model-spec`, `POST …/lifecycle`.
-- **Locked:** `harness_accessory_order_grid.py` (32 checks) — the colour vocabulary cannot become
+- **Locked:** `harness_accessory_order_grid.py` (65 checks) — the colour vocabulary cannot become
   optional, no colour or brand word may be a VALUE in either home, an undeclared org gets no
   fallback, a caller may not stop asking the declaration, the grid and the consolidated sheet must
   foot, and an absence may not become a zero. Tests:
   `backend/tests/unit/test_device_model_family.py` (13),
-  `backend/tests/unit/test_accessory_order_catalog.py` (23), and the cross-tenant endpoint tests in
+  `backend/tests/unit/test_accessory_order_catalog.py` (25), and the cross-tenant endpoint tests in
   `backend/tests/integration/test_accessory_order_plan_endpoint.py`.
 
 

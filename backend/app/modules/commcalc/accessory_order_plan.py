@@ -397,6 +397,24 @@ def model_order_rows(models, *, catalog, option_mixes, case_mix):
             # THE COLOUR SPLIT STAYS ON THE CATEGORY TOTAL, not inside every style column. Style x
             # colour would be twenty-five columns of two-unit cells; the buyer needs the style
             # columns and the colour totals, and the row carries both.
+            # THE EXTRA AXES OF THE SAME TOTAL (owner ask 2026-10-31, distributor read 2026-11-04).
+            # A case is built MagSafe or not and carries a design; both split the SAME quantity, the
+            # way the colour split already does. Never a cross-tab: style x attach x design would be
+            # ninety columns of two-unit cells, and this module made that trade once already.
+            breakdowns = {}
+            for d in _cat.secondary_dimensions(c):
+                shares = list(option_mixes.get(f"{key}|{d.get('key')}") or ())
+                if total is None:
+                    vals = [{"key": s2.get("key"), "label": s2.get("label"),
+                             "share": s2.get("share"), "qty": None} for s2 in shares]
+                else:
+                    sparts = _largest_remainder(total, [_num(s2.get("share"), 0.0) for s2 in shares])
+                    vals = [{"key": s2.get("key"), "label": s2.get("label"),
+                             "share": s2.get("share"), "qty": q}
+                            for s2, q in zip(shares, sparts)]
+                breakdowns[d.get("key")] = {"dimension": d.get("key"), "label": d.get("label"),
+                                            "options": vals}
+            cell["breakdowns"] = breakdowns
             if c.get("colour_split"):
                 groups = list(case_mix or ())
                 if total is None:
@@ -465,6 +483,42 @@ def consolidated_rows(models, *, catalog, specs=None):
     return out
 
 
+def standalone_rows(total_projected, *, catalog, option_mixes):
+    """The STANDALONE categories: a power bank has no phone model, so it is ordered once against the
+    window's TOTAL projected devices at its declared attach rate. PURE.
+
+    This is the third grain, and the distributor's shelf is mostly made of it (read 2026-11-04:
+    power banks 1,190 products, wireless chargers 895, stands 579). Ordering them per phone would be
+    nonsense; leaving them out would mean the order sheet is not the order.
+
+    EVERY HOUSE RATE HERE IS `None` ON PURPOSE. The owner has declared none of them, so each block
+    says it is awaiting a rate and orders nothing — the same treatment earphones got when he named
+    them without a rate. A plausible-looking invented rate is the one thing this report must not
+    put on a buyer's sheet."""
+    out = []
+    for c in (catalog or ()):
+        if c.get("grain") != _cat.GRAIN_STANDALONE:
+            continue
+        total = _qty(total_projected, c.get("per_device"))
+        blocks = []
+        for i, d in enumerate(c.get("dimensions") or ()):
+            mix_key = c.get("key") if i == 0 else f"{c.get('key')}|{d.get('key')}"
+            shares = list(option_mixes.get(mix_key) or ())
+            if total is None:
+                vals = [{"key": s.get("key"), "label": s.get("label"),
+                         "share": s.get("share"), "qty": None} for s in shares]
+            else:
+                parts = _largest_remainder(total, [_num(s.get("share"), 0.0) for s in shares])
+                vals = [{"key": s.get("key"), "label": s.get("label"),
+                         "share": s.get("share"), "qty": q} for s, q in zip(shares, parts)]
+            blocks.append({"dimension": d.get("key"), "label": d.get("label"), "options": vals})
+        out.append({"category": c.get("key"), "category_label": c.get("label"),
+                    "per_device": c.get("per_device"), "qty": total,
+                    "dimensions": blocks,
+                    "reason": None if total is not None else "no_rate"})
+    return out
+
+
 # ── THE WHOLE PLAN ───────────────────────────────────────────────────────────────────────────────
 def plan(*, units_by_model, months, lifecycle=None, horizon_months=DEFAULT_HORIZON_MONTHS,
          case_mix=None, attach_plan=None, catalog=None, option_mix=None, model_specs=None,
@@ -504,10 +558,16 @@ def plan(*, units_by_model, months, lifecycle=None, horizon_months=DEFAULT_HORIZ
     declared_mix = {str(k).strip().lower(): v for k, v in dict(option_mix or {}).items()}
     option_mixes, option_mix_bases = {}, {}
     for c in cats:
-        if c.get("grain") != _cat.GRAIN_SPLIT:
+        if c.get("grain") == _cat.GRAIN_ASSIGNED:
+            # an assigned category takes ONE option per phone (`spec_for`), not a mix
             continue
         shares, basis = _cat.resolve_option_mix(c, declared_mix.get(c["key"]))
         option_mixes[c["key"]], option_mix_bases[c["key"]] = shares, basis
+        # and one mix per EXTRA axis, each declared under `<category>|<dimension>`
+        for d in _cat.secondary_dimensions(c):
+            k = f"{c['key']}|{d.get('key')}"
+            shares, basis = _cat.resolve_option_mix(c, declared_mix.get(k), d.get("key"))
+            option_mixes[k], option_mix_bases[k] = shares, basis
     specs = _cat.resolve_model_specs(model_specs)
 
     window_units = sum(r["units_total"] for r in rows)
@@ -540,11 +600,12 @@ def plan(*, units_by_model, months, lifecycle=None, horizon_months=DEFAULT_HORIZ
         # DERIVED FROM THE TOTAL so the headline rate and the order can never disagree.
         "projected_devices_per_month": (None if devices is None or horizon <= 0
                                         else round(devices / horizon, 2)),
-        # ── THE ORDER, AT THE TWO GRAINS IT IS ACTUALLY BOUGHT AT ────────────────────────────────
+        # ── THE ORDER, AT THE THREE GRAINS IT IS ACTUALLY BOUGHT AT ──────────────────────────────
         "grid_columns": grid_columns(cats),
         "model_orders": model_order_rows(rows, catalog=cats, option_mixes=option_mixes,
                                          case_mix=mix),
         "consolidated": consolidated_rows(rows, catalog=cats, specs=specs),
+        "standalone": standalone_rows(devices, catalog=cats, option_mixes=option_mixes),
         "catalog": [dict(c, dimensions=[dict(d, options=[dict(o) for o in d["options"]])
                                         for d in c["dimensions"]]) for c in cats],
         "catalog_basis": cat_basis,
