@@ -45,12 +45,13 @@
 # A RED entry is NOT a skipped test. It is a failing proof, counted, named, and on a list that may
 # only shrink. Fixing one means deleting its line and lowering PINNED_MAX.
 #
-# harness_timeoff_reschedule.py is the one entry here that is red for a reason OUTSIDE this list's
-# usual kind, and it is recorded rather than papered over: PR #645 added `_require_manager` to
-# `reconcile_timeoff_duplicates`, deliberately, on an owner directive. The harness calls that
-# endpoint function directly with no token, so it now gets the 401 the directive asked for. The
-# proof encodes pre-#645 expectations and needs a manager fixture; updating a workforce proof's
-# expectations belongs to the workforce domain, not to the change that merely started running it.
+# 2026-11-05 — harness_timeoff_reschedule.py is OFF this list, 42 -> 41. It was red for a reason
+# outside the list's usual kind: PR #645 made `reconcile_timeoff_duplicates` manager-gated on an
+# owner directive (index §CORE-33) and the proof called it with no token, so it got the 401 the
+# directive asked for. Fixed where it belonged — in the workforce proof — and fixed as a proof
+# rather than as a silencing: check 10 now gives the manager the fixture the harness already had
+# and ADDS 10b/10c, a rep refused 403 and a tokenless caller refused 401, so the new rule is
+# proved from the outside instead of merely tolerated. 28 checks, all green.
 harness_accountability_lateness.py
 harness_area_targets.py
 harness_asset_invoice_due.py
@@ -88,7 +89,6 @@ harness_store_code_twins.py
 harness_table_header_contrast.py
 harness_team_snapshot_perf.py
 harness_tenant_implementation.py
-harness_timeoff_reschedule.py
 harness_training_flowcharts.py
 harness_upload_last.py
 harness_workflow_stacking.py

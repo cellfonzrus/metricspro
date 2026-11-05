@@ -330,11 +330,28 @@ check("9a bulk apply-templates still SKIPS the time-off day (unchanged, safe-def
       r9.get("skipped_timeoff") == 1 and r9.get("added") == 0, r9)
 check("9b no phantom shift was created for the skipped day", len(shifts_for(ORG)) == 0, shifts_for(ORG))
 
-# ══ 10: reconcile_timeoff_duplicates — still returns cleanly (stray dead-code line removed) ═══════
+# ══ 10: reconcile_timeoff_duplicates — MANAGER-GATED, and still returns cleanly ═══════════════════
+#
+# This endpoint sweeps duplicate rows ACROSS THE WHOLE ORG, for every employee in it, so it is a
+# manager's act and not a self-service one. PR #645 made that explicit (`_require_manager`, index
+# §CORE-33) on the owner directive that stopped a sales rep reaching past their own screens. Before
+# that it took no token at all, and this proof called it with none — so the three checks below
+# encode the NEW rule rather than merely satisfying it: the manager's call still returns the shape
+# check 10a always asserted, and the two refusals are the gate, proved from the outside.
 reset()
-r10 = router_mod.reconcile_timeoff_duplicates(org_id=ORG)
+r10 = router_mod.reconcile_timeoff_duplicates(authorization="Bearer manager", org_id=ORG)
 check("10a reconcile endpoint still returns the expected shape after the dead-line cleanup",
       set(r10.keys()) == {"ok", "reconciled", "ids"} and r10["ok"] is True, r10)
+try:
+    router_mod.reconcile_timeoff_duplicates(authorization="Bearer rep", org_id=ORG)
+    check("10b a sales rep cannot run the org-wide reconcile", False, "no exception raised")
+except HTTPException as e:
+    check("10b a sales rep cannot run the org-wide reconcile", e.status_code == 403, e.detail)
+try:
+    router_mod.reconcile_timeoff_duplicates(authorization="", org_id=ORG)
+    check("10c a tokenless caller cannot run the org-wide reconcile", False, "no exception raised")
+except HTTPException as e:
+    check("10c a tokenless caller cannot run the org-wide reconcile", e.status_code == 401, e.detail)
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
