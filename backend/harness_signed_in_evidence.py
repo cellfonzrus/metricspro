@@ -204,9 +204,17 @@ check("D3 the login function carries the declaration through, rather than droppi
 RES = function_source(EPAY, "run_epay_sweep")
 check("D4 the sweep READS the declaration once for the run",
       "_declared_signed_in_markers(client, org_id)" in RES)
+#: EVERY login the sweep makes, declared rather than counted — a HUMAN WROTE THIS. Two: the first
+#: sign-in, and the re-login after a mid-run reload bounced back to the form. A bare "at least two"
+#: would let a third appear unexamined, which is the one thing this check exists to catch.
+EXPECTED_SWEEP_LOGINS = {"_login(page, user, pw, signed_in_markers=_sim)"}
+EXPECTED_SWEEP_LOGIN_SITES = 2
+
 _logins = re.findall(r"_login\(page, user, pw[^)]*\)", RES)
 check("D5 EVERY login on that run passes it — the re-login after a reload included",
-      len(_logins) >= 2 and all("signed_in_markers=" in c for c in _logins),
+      set(_logins) == EXPECTED_SWEEP_LOGINS
+      and len(_logins) == EXPECTED_SWEEP_LOGIN_SITES
+      and all("signed_in_markers=" in c for c in _logins),
       repr(_logins))
 # The sibling that is EXCUSED, with its reason in the file rather than in a reviewer's memory.
 _dlar = re.sub(r"\s+", " ", open(DLAR).read())
