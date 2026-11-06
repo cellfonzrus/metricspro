@@ -194,6 +194,7 @@ Primary code homes:
 | COMMCALC-52 | **A login outcome is read off what the page is doing, never off how it is built** | "all these reports should have been updated automatically with the portal access via chron jobs why is this not happeneing neds to be found first and then fixed" — three carrier feeds dark since 9 October while the scheduler fired 1,665 times and 1,056 consecutive runs reported "credentials rejected". That sentence was a substring search over `page.content()`, so a portal that merely BUNDLES the word "invalid" read as having said it, and a human check, an edge refusal and a changed sign-in flow were all reported as a wrong password. |
 | COMMCALC-53 | **A feed window's day comes from the tenant's zone, never the server's** | "if we access to one behind that door then all should be downloaded automatically" — two of the three feeds would, once the login was honest (§COMMCALC-51). The third never had an access problem: the comprehensive comp report has not arrived automatically ONCE since the leg was built, because the window was built on `datetime.now(timezone.utc).date()` while its slot is 23:30 in the tenant's zone — 03:30 UTC the NEXT day. Every run asked the portal for a day that had not begun where the portal lives, and the resulting zero was read as "no compensation posted". The rule already had a home, written 2026-07-30, whose docstring states this exact defect; nothing in commcalc read it. |
 | COMMCALC-54 | **"Which plan am I on?" is a question with one answer and three steps** | "the plan which is active in incentive payout when you click on it it takes you to the page which has all kinds of Incentive structure listed which becomes confusing even to me ... all of this should be a work flow than random data seen on the screen" — the confusing page is the symptom. Nothing in the platform ANSWERED "which plan am I on": three surfaces showed the operator the raw plan table and left the question to them, and one of them owned the live/belongs predicate privately. An unassigned plan pays nobody, so calling it active is the plausible-looking answer that hides the class. |
+| COMMCALC-55 | **A successful login is recognised by evidence, never by a guessed vocabulary** | The owner signed in to the carrier owners portal himself and sent the screenshot: the signed-in shell, greeting him by his e-mail address, offering "Multi-Door Owner Portal", "Commissions" and "Boost Activations" — and the sweep still reported "The sign-in page went away and we did not recognise what replaced it", with three carrier feeds frozen on a login that worked. §COMMCALC-52 was right to delete the old test (the vendor's name in the document title — a carrier name in code) and wrong to replace it with six house words: that is the platform guessing at a vocabulary it does not own, the same shape as a report defaulting to one tenant's POS labels. |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
@@ -26322,6 +26323,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-52 | commcalc |
 | COMMCALC-53 | commcalc |
 | COMMCALC-54 | commcalc |
+| COMMCALC-55 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -44385,6 +44387,134 @@ Files: `mobile/app/(app)/hr/index.tsx` (**new**), `mobile/src/lib/hr-intake.ts` 
 `mobile/src/lib/hr-intake.test.ts` (**new**), `mobile/src/api/hr.ts` (**new**),
 `mobile/src/api/client.ts` (`apiUpload`), `mobile/src/modules/registry.ts`,
 `docs/SYSTEM_DATA_FLOW_INDEX.md`.
+
+## §COMMCALC-55. A SUCCESSFUL LOGIN IS RECOGNISED BY EVIDENCE, NEVER BY A GUESSED VOCABULARY (owner report 2026-11-05)
+
+The owner signed in to the carrier owners portal by hand, from his phone, and sent the screenshot.
+The sign-in **worked**: the page greets him by his e-mail address and offers "Multi-Door Owner
+Portal", "Commissions" and "Boost Activations". The sweep, on the same credential, reported:
+
+    The sign-in page went away and we did not recognise what replaced it.
+
+Three carrier feeds — the comprehensive comp report, the processor's commission payment detail and
+the monthly-incentive report — stayed frozen on a login that was working.
+
+### COMMCALC-55.1 THE DEFECT, and it is mine
+
+This is a false negative introduced by **§COMMCALC-52**, four days earlier. That change was right to
+delete the previous test for success — *the vendor's name is in the document title* — which was a
+carrier name in code (RULE TWO) and a false negative waiting for the next rebrand. But it replaced
+one guess with another:
+
+    DEFAULT_SIGNED_IN_MARKERS = ("logout", "log out", "sign out", "signout",
+                                 "my account", "dashboard")
+
+The owner's portal carries **not one of those six words**. It says "Home", it says "Hello
+<his address>", it names itself and it lists two menus. So `signed_in_said` found nothing, the form
+was gone, and the one home answered honestly: UNKNOWN.
+
+### COMMCALC-55.2 THE CLASS, not the instance
+
+**A default that is really somebody's vocabulary is per-tenant code with the branch hidden.** It is
+the owner directive of 2026-10-30, in a different subsystem: the device-line report's departments
+defaulted to the first tenant's POS labels, so 1,034 handsets read as zero. The word list above is
+the same shape — six phrases that are nobody's declaration, standing in for every portal every
+tenant of ours logs in to, with a plausible-looking answer (UNKNOWN, or worse, a cooldown) behind
+them.
+
+The question underneath is sharper than the word list: **what would prove we are inside?**
+
+### COMMCALC-55.3 THE ANSWER: evidence, which needs no vocabulary
+
+An anonymous page cannot greet you by your own account name. It is a general fact about
+authenticated pages, it names no brand, and it belongs to no tenant — so it recognises any portal
+that says who you are, which is most of them, with nothing declared by anybody.
+
+`backend/app/modules/commcalc/login_outcome.py` — the one home from §COMMCALC-52, unchanged in
+character and still PURE — gains:
+
+  * `greeted_by_name(visible_text, user)` — the user name we signed in WITH, if the page is showing
+    it back to us. Visible text only, as everything in that module is.
+  * `MIN_GREETING_NAME = 6` — the shortest name this may be believed from. A four-letter login is a
+    substring of ordinary prose (`nova` sits inside "Innovation"), and a false positive on this
+    signal is the worst available: it would read a refusal page as a success.
+  * `verdict(..., signed_in_user=...)` — OPTIONAL, unlike the two evidence arguments, because a
+    driver signing in with a token genuinely has no user name to hand over.
+
+**The ranking is the fix, not the signal.** The first draft placed the greeting beside the word list
+and the tests written for it caught two false positives immediately: a bot wall can address you by
+name, and a sign-in form that refused re-renders with the name still typed into it. So the greeting
+is read at step 3b — **only when the form is gone, and only after the challenge and refusal checks**.
+An application shell still beats it, because a shell cannot be faked that way.
+
+### COMMCALC-55.4 And for the portal that greets nobody: config, never code
+
+`commcalc.portal_block_marker` is already the one home for "a phrase on a portal page that a tenant
+may redeclare", with one inheritance rule (this org's rows, else the house rows, else the seeds) and
+one reader (`portal_backoff.load_markers`). Migration 1105 gave it `kind` for the three answers a
+portal can give instead of a form. **Migration 1114 adds a fourth kind, `signed_in`** — so a tenant
+whose portal neither greets you nor uses the house words adds a ROW, and never needs me again.
+
+It is deliberately **not** a verdict: the other three each carry an operator sentence and this is not
+a failure, so it is in `MARKER_KINDS` and absent from `VERDICT_KINDS`.
+
+**Nothing is seeded.** The house signed-in words have one home in `login_outcome`, and
+`portal_backoff._signed_in_seeds()` **dereferences** it. Seeding the same six phrases as rows would
+be the second copy that diverges the next time either is edited — the defect the house rule names.
+
+### COMMCALC-55.5 Every caller wired, and the sibling excused by name
+
+| path | what it got | why |
+|---|---|---|
+| `epay_sweep._login_verdict` / `_login` | `signed_in_user=user` **and** `signed_in_markers` | the driver that surfaced it |
+| `epay_sweep.run_epay_sweep` | `_declared_signed_in_markers(client, org_id)`, read once, passed to **every** login on the run including the re-login after a reload | a portal does not change its wording between reports |
+| `epay_sweep.discover_reports` | the user name only | it is handed a URL and a credential and never an org, so there is nobody to ask |
+| `dlar_sweep._login_outcome_of` | **nothing, on purpose** | it asks a PROTECTED PAGE for its status, which is stronger evidence of "are we inside" than any words on a page, and it runs only once that probe has said no. Handing it a greeting could only overturn the better evidence with the worse one. The excuse is written in the file. |
+| `vidapay_sweep` | nothing | its one verdict is taken with the form still on screen, where signed-in evidence does not apply |
+
+### COMMCALC-55.6 A cross-tenant leak the lock found on its way in
+
+Writing §G of the lock — *one tenant's words never leak into another tenant's read* — failed, and it
+was not a test artifact. `load_markers` buckets rows as `mine if the org id matches else house`, and
+the only thing keeping a third tenant's row out was the `in_("org_id", [...])` on the query. Any day
+somebody widens that query, one tenant's declared vocabulary becomes another tenant's house default.
+A one-comparison filter in the loop removes the class, and the check now holds it there.
+
+### COMMCALC-55.7 Every tenant
+
+The evidence half needs no declaration, so it serves every tenant identically — pinned for three
+distinct user names. The config half is pinned both ways: a tenant with no rows of its own inherits
+the house rows, its own row wins over them, and one tenant's row is never served to another. A
+per-processor row applies to that processor only, so a tenant with two portals can declare them
+separately.
+
+An **empty** declaration is converted to `None` before it reaches the one home, and that is not
+tidying: `verdict` reads an empty list as "no words count" and `None` as "use the house policy", so
+returning `[]` for a tenant that has declared nothing would silently switch the word list off for
+every portal it owns.
+
+### COMMCALC-55.8 Locked
+
+  * `backend/harness_signed_in_evidence.py` — 63 DB-free checks, run by the
+    `carrier-vocab-guard` workflow. §A replays the owner's own page. §B holds the greeting to the
+    places it proves something. §C asserts the ORDER in the executable text, not the docstring. §D
+    fails the build if a driver stops handing over the user name or the declaration. §E fails it if
+    the kind disappears, becomes a verdict, grows a sibling reader, or if the house words are COPIED
+    into the marker module instead of dereferenced. §F pins the `or None` rule. §G is every tenant.
+    §H makes the migration and the code agree on which kinds exist. §I stops the old guess returning.
+  * `backend/tests/unit/test_signed_in_is_the_user_greeted.py` — 24 unit tests, including the two
+    false positives the ranking fixes.
+
+### COMMCALC-55.9 What this does NOT fix
+
+Migration 1114 is **surfaced for owner approval**, not applied. Until it runs, the fourth kind cannot
+be stored, and `load_markers` reads the absent kind as "nothing declared" and falls back to the house
+words — so the evidence half, which is what recognises the owner's portal, works with no migration at
+all.
+
+The October gap is older than the comp report's 14-day refresh window, so once the login is reported
+correctly the window still has to be widened once, by hand, to sweep the earlier days back in.
+
 
 ## §CORE-32. A GUARD THAT READS SOURCE CODE MUST BE TOLD F-STRINGS EXIST — one home for "the strings of a Python source" (found 2026-11-04)
 

@@ -32,7 +32,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 605 gates
+## Gated — 606 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -544,6 +544,7 @@ the Runs on column is how you can tell.
 | `harness_settings_audit.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_setup_documents.py` | `carrier-vocab-guard.yml` | Setup documents proof (DB-free, the real functions) (`setup-documents-proof`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_setup_fee_market_scope.py` | `tests.yml` | Proof harnesses, group 1 of 4 (`harness-suite-1`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_signed_in_evidence.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_sim_accessory_multimonth.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_spiff_impact.py` | `carrier-vocab-guard.yml` | Customer master proof (DB-free, the real functions) (`customer-master-proof`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_statement_crosscheck_earned.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
