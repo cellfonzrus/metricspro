@@ -204,6 +204,7 @@ Primary code homes:
 | CORE-34 | **A proof that cannot start is not a passing proof** | Four frontend proof programs were red, and not one of them was red about the thing it proves: three had each hand-rolled their own TypeScript compile and lost the `@/` path alias, and the fourth read a Python endpoint with a regex that a refactor had moved past. What compiles a frontend proof, what reads Python from one, and what stops the next proof writing a fifth copy of either? |
 | CORE-35 | **Which job runs this gate has one derived answer** | 312 proof harnesses were declared as debt and nothing ran them; five more were exempt because a workflow MENTIONED their filename in a comment or a `paths:` filter, and one of those five had been red the whole time. A reviewer could not tell a gated check from an ungated one without reading 15 workflow files, and got it wrong in writing. Where is the list of what CI actually enforces, and what keeps it true? |
 | CORE-36 | **An authorization argument read as a string must BE a string** | A new write guard did `(authorization or "").strip()`. Every HTTP caller was fine, because FastAPI replaces the default with a `str` or `None` — but a caller that invokes the endpoint function directly gets the `Header` object itself, which is TRUTHY and has no string methods, so the careful-looking guard was a 500. Twelve modules already carried their own copy of the line that would have prevented it. What does a caller dereference to ask "is there a token here"? |
+| CORE-37 | **The phone's Face ID lock asks once, and never traps the handset** | "The touch login from the phone is not working." There is no biometric SIGN-IN in this product at all; the only Face ID surface is the mobile app LOCK, and it could not be dismissed — the auto-prompt effect depended on the unlock callback, whose identity changed when an attempt finished, so a cancelled Face ID came straight back over an overlay with no way out. What decides whether to raise the prompt, what decides whether this handset can authenticate at all, and what stops a screen deciding either from a React identity again? |
 | CORE-31 | **A retention window that deletes nothing is a promise, not a policy** | Found by the security pass §STOREOPS-04 required before going live: that feature shipped a 180-day GPS retention setting and nothing deleted anything — and event check-in GPS had carried the SAME hole since mig 986, declared `unmonitored` on the control box. Who owns "how long may we keep where somebody was", for every relation that stores it, and what stops a purge from taking the flag away with the coordinates? |
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
@@ -26353,6 +26354,7 @@ status word rather than a blank that reads as nil.
 | CORE-34 | core |
 | CORE-35 | core |
 | CORE-36 | core |
+| CORE-37 | core |
 <!-- SECTION-REGISTER:END -->
 
 ### CORE-01.6 Modules no section documents yet
@@ -44726,3 +44728,86 @@ right lock once the count starts coming down.
 **Cross-refs:** §CORE-35 (the wiring that exposed it) · §19.18 (one fact, one home, dereferenced —
 never copied) · §CORE-33 (the write guard this defect was inside) · §19.25 (a proof nothing runs is
 not a gate: three proofs held this defect and said nothing).
+
+---
+
+## §CORE-37. THE PHONE'S FACE ID LOCK ASKS ONCE, AND NEVER TRAPS THE HANDSET (2026-11-06)
+
+Owner, 2026-11-05: *"The touch login from the phone is not working."*
+
+### CORE-37.1 Duplicate check (the build gate)
+
+| Question asked of the index | Answer | What was done |
+| --- | --- | --- |
+| Is there already a biometric SIGN-IN to extend? | **NO.** Nothing in `frontend/src` or `mobile/` does WebAuthn, a passkey or a biometric credential exchange. The phone stays signed in because the Supabase refresh token lives in the Keychain/Keystore (§CORE-26 area, `mobile/src/auth/AuthContext.tsx`), so no second sign-in factor was ever needed | Nothing built. Face ID on this app is the app LOCK and only the app lock, and the report is about that surface |
+| Is there already a home for "is the app locked, may we prompt"? | **NO** — it was inline state in `mobile/src/auth/AppLockGate.tsx`: three independently-settable booleans and a `useCallback` identity | Moved to `mobile/src/lib/app-lock.ts` and the screen rewired to read it. No sibling derivation created |
+| Is there already a home for "can this handset authenticate at all"? | **PARTLY** — `getBiometricSupport()` in `mobile/src/auth/biometric.ts` answered it from `hasHardwareAsync()`, and the Settings hint and the gate each read that flag their own way | Extended, not duplicated: the mapping moved into `describeDeviceFactor` in the same one home, and `biometric.ts`, the gate and Settings all dereference it |
+| Is there already a face-recognition surface this could collide with? | **YES, and it is a different fact** — the BIPA face-template retention schedule behind face CLOCK-IN (§CORE-31). That is a server-side identification of a person; the app lock is a device-local gate that never reaches the server | Left alone, deliberately. Nothing shared |
+
+### CORE-37.2 The class, not the instance
+
+The instance is "a cancelled Face ID prompt comes straight back". The class is **a decision derived
+from a React identity instead of from the state it is about.** The auto-prompt was a `useEffect`
+whose dependency list named the unlock callback, and that callback was a `useCallback` over the
+in-flight flag — so finishing an attempt changed its identity, which re-ran the effect, which
+prompted again. The overlay had one button and no way out, so on a handset whose factor cannot
+succeed the app was escapable only by deleting it.
+
+### CORE-37.3 The one home, dereferenced
+
+`mobile/src/lib/app-lock.ts` — a reducer plus four selectors, the ONE home for:
+
+- **is the app locked** (`shouldShowAppLockUi`) — a signed-in app only; the sign-in screen is never covered
+- **may we raise the native prompt** (`shouldAutoPromptAppLock`) — once per lock EPISODE, expressed as
+  `promptedFor !== episode`, which no React identity can reset, and never on a handset with no factor
+- **may the owner retry** (`canAttemptAppLock`)
+- **have we trapped them** (`shouldOfferAppLockSignOut`) — the overlay grows a Sign out button after
+  `APP_LOCK_SIGN_OUT_AFTER_FAILURES` (3) refusals, or immediately when the device has no usable factor
+- **the grace period** (`APP_LOCK_GRACE_MS`, 60s) — one copy, previously a literal in the screen
+- **what factor this handset has** (`describeDeviceFactor`) — from `getEnrolledLevelAsync()`, which
+  counts the device passcode. `hasHardwareAsync()` was wrong in BOTH directions: a sensor with nothing
+  enrolled reported a factor it did not have, and a passcode-only Android with no sensor reported none
+  while `authenticateAsync` would have succeeded
+
+Callers, all rewired in the same PR: `mobile/src/auth/AppLockGate.tsx` (holds no `useState` at all now),
+`mobile/src/auth/biometric.ts`, `mobile/app/(app)/(tabs)/settings.tsx` (the switch is disabled when the
+handset has no factor, so the lock cannot be turned on unopenably).
+
+### CORE-37.4 The lock
+
+`mobile/src/lib/app-lock-gate-lock.test.ts` reads the callers' SOURCE and fails the build when:
+
+- the gate stops importing any of the six selectors, or grows a `useState`
+- **any dependency array in the gate names a local declared with `useCallback`** — the defect itself,
+  checked as a class rather than as one bad line
+- a second copy of the grace period or the failure ladder appears in the gate
+- `biometric.ts` carries a factor-label literal instead of dereferencing `describeDeviceFactor`
+- the gate reads `hasHardware`, or the Settings switch stops gating on `hasFactor`
+
+Verified to bite: reintroducing `}, [autoPrompt, attempt])` turns it red with the callback named.
+
+### CORE-37.5 Tests, and every tenant
+
+`mobile/src/lib/app-lock.test.ts` — 24 unit tests, written red first (the module did not exist), driving
+the reducer through the whole sequence with no device, no renderer and no timers. They include the
+reported regression (twenty consecutive cancels never re-prompt), the grace period on both sides, an
+`attemptFinished` nobody started, and the no-factor handset. Both files run in the existing
+**Mobile unit tests** CI job (`.github/workflows/tests.yml`), so no new gate and no change to
+`docs/CI_GATES.md`.
+
+The all-tenants directive is satisfied in its strongest form: the lock is a property of the HANDSET,
+has no org, tenant or carrier input, and a test pins that its state cannot grow one. There is no
+tenant vocabulary to declare and none to default wrongly.
+
+### CORE-37.6 Not money, no migration — and what the owner still has to do
+
+No migration, no schema, no money. The setting is a device-local `AsyncStorage` key.
+
+**This fix cannot reach the installed phone by itself.** Build 9 is recorded by EAS as Expo SDK 57
+against this repo's SDK 52, so `expo-updates` discards every published bundle and relaunches the
+embedded one (§CORE-26.7). A NEW BINARY from `.github/workflows/mobile-build-and-submit.yml`
+(§CORE-26.8) is the only way this lands, and that press is the owner's.
+
+**Cross-refs:** §CORE-26 (the mobile app and its label one-home) · §CORE-26.7 / §CORE-26.8 (why an
+update does not reach the phone, and the build button) · §19.18 (one fact, one home, dereferenced —
+never copied) · §CORE-31 (the device-local vs server-held distinction, for the face-clock-in neighbour).
