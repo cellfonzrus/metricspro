@@ -507,14 +507,43 @@ def _page_verdict(page):
         return None
 
 
-def _login_verdict(page):
-    """What happened to the submit we just made — the one home's answer, for this page."""
+def _declared_signed_in_markers(client, org_id, processor=None):
+    """This org's DECLARED "we are inside" wording, or None for the house policy (§COMMCALC-55).
+
+    Config, never code (RULE TWO). The rows live in `commcalc.portal_block_marker` — the same table,
+    the same per-org-over-house inheritance and the same reader as the three refusal/challenge/
+    throttle vocabularies, because "a phrase on a portal page a tenant may redeclare" is ONE
+    question and already has a home (mig 1105 gave it `kind`; mig 1114 added this kind).
+
+    `or None` is not tidying. `login_outcome.verdict` reads an EMPTY list as "no words count" and
+    None as "use the house policy", so returning [] for a tenant that has declared nothing would
+    silently switch the word list off for every portal it owns. Never raises; a tenant that has
+    declared nothing, and a database that cannot be reached, both read as None.
+    """
+    try:
+        from app.modules.commcalc import portal_backoff as _pb
+    except Exception:
+        return None
+    try:
+        return _pb.load_markers(client, org_id, processor, kind=_pb.SIGNED_IN_KIND) or None
+    except Exception:
+        return None
+
+
+def _login_verdict(page, user=None, signed_in_markers=None):
+    """What happened to the submit we just made — the one home's answer, for this page.
+
+    `user` is the name we TYPED, handed over as evidence: a page showing it back to us is a page we
+    are inside, whatever words it uses (§COMMCALC-55). `signed_in_markers` is the org's own
+    declaration for a portal that greets nobody; None means the house words."""
     return _lo.verdict(form_present=login_form_present(page),
                        visible_text=visible_text(page),
-                       page_verdict=_page_verdict(page))
+                       page_verdict=_page_verdict(page),
+                       signed_in_user=user,
+                       signed_in_markers=signed_in_markers)
 
 
-def _login(page, user, pw):
+def _login(page, user, pw, signed_in_markers=None):
     """Fill the portal's sign-in window and submit. Returns the login verdict dict on success;
     raises EpayLoginError, carrying the outcome's own remedy, on anything else.
 
@@ -551,7 +580,7 @@ def _login(page, user, pw):
     except Exception:
         pass
     page.wait_for_timeout(4000)
-    v = _login_verdict(page)
+    v = _login_verdict(page, user=user, signed_in_markers=signed_in_markers)
     if _lo.signed_in(v["outcome"]):
         return v
     raise EpayLoginError(_lo.message(v["outcome"], marker=v.get("marker")))
@@ -926,6 +955,10 @@ def discover_reports(url, user, pw):
         page = ctx.new_page()
         try:
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
+            # No org's declared wording here, and that is the honest answer rather than an oversight:
+            # this helper is handed a URL and a credential and never an org, so there is nobody to
+            # ask. It still gets the evidence that needs no declaration — `user` — so the portal in
+            # the owner's 2026-11-05 report is recognised here too (§COMMCALC-55).
             _login(page, user, pw)
             items = _enumerate_commissions_menu(page)
         finally:
@@ -1401,6 +1434,9 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None,
     # each one vouching for itself (index §19.41).
     ledger = _verdict.ControlLedger()
     _rc = report_cfg or {}
+    # ONE read for the whole run: a portal does not change its wording between reports, and the
+    # re-login below needs the same answer the first login got.
+    _sim = _declared_signed_in_markers(client, org_id)
 
     assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
@@ -1410,7 +1446,7 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None,
         page = ctx.new_page()
         try:
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
-            _login(page, user, pw)
+            _login(page, user, pw, signed_in_markers=_sim)
             # Resolve any report whose menu id is NOT hardcoded (Daily Transaction Detail carries
             # report_id=None). Order: a commcalc.report_definitions override
             # (registry_key.portal_report_id, surfaced via report_cfg) so the operator can pin the
@@ -1451,7 +1487,7 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None,
                         page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
                         page.wait_for_timeout(2500)
                         if login_form_present(page):   # the one structural reader, not a second spelling
-                            _login(page, user, pw)
+                            _login(page, user, pw, signed_in_markers=_sim)
                     except Exception:
                         pass
                 tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)

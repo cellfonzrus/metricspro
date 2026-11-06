@@ -1092,6 +1092,11 @@ on:
       - "backend/app/modules/commcalc/epay_sweep.py"
       - "backend/app/modules/commcalc/dlar_sweep.py"
       - "backend/app/modules/commcalc/vidapay_sweep.py"
+      # index §COMMCALC-55 — A SUCCESSFUL LOGIN IS RECOGNISED BY EVIDENCE, NOT A GUESSED VOCABULARY.
+      # The lock names itself, both homes it spans (the pure verdict and the one marker table) and
+      # the two drivers that ask "are we in": a second guess at a signed-in vocabulary, or a driver
+      # that stops handing over the user name or the org's declaration, is what this catches.
+      - "backend/harness_signed_in_evidence.py"
       # index §COMMCALC-53 — WHAT DAY IS IT WHERE THIS PORTAL LIVES. The lock names itself, the one
       # home (written 2026-07-30 and never dereferenced from commcalc), and all three portal
       # drivers: a window or an "as of" stamp built on the CONTAINER's clock, in any of them, is
@@ -2063,6 +2068,9 @@ jobs:
       - name: Run the login-outcome lock (a login outcome is read off what the page is DOING - is the form still on screen, what does it SAY - never off page.content(); six outcomes each carrying the one remedy that applies, and only a real rejection sends anybody to re-type a password - index COMMCALC-52)
         working-directory: backend
         run: python3 harness_login_outcome.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the signed-in-evidence lock (a page showing back the account name we signed in WITH is a page we are inside - evidence that needs no word list and belongs to no tenant; a portal that greets nobody gets a declared ROW on the one marker table, never a sixth house word, and one tenant's wording can never be reached from another tenant's read - index COMMCALC-55)
+        working-directory: backend
+        run: python3 harness_signed_in_evidence.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the live-frame lock (a click on the streamed live screen is translated through THAT frame's own size, scale and top offset, never through an assumed window; it reduces exactly to the old formula on a plain desktop frame - index COMMCALC-47)
         working-directory: backend
         run: python3 harness_live_frame.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"

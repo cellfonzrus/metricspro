@@ -226,3 +226,137 @@ def test_no_portal_or_tenant_name_decides_the_outcome():
     Nothing about WHICH portal it is may enter the decision."""
     page = FakePage(visible="Painel - Sair? no: Logout", password_visible=False)
     assert lo.signed_in(epay_sweep._login(page, "u", "p")["outcome"])
+
+
+# ── THE PAGE SHOWING US OUR OWN NAME (index §COMMCALC-55) ────────────────────────────────────────
+#
+# Everything above still only recognises a portal that uses one of six house words — which is the
+# platform guessing at a vocabulary it does not own, and the owner's own portal uses none of them.
+# These drive the REAL driver against that page, and against the config route for a portal that
+# greets nobody at all.
+
+OWNER_PAGE = ("Home Hello rajiv.jaggi@cellularservices.net\n"
+              "Multi-Door Owner Portal\n"
+              "Commissions Boost Activations\n"
+              "© 2015 Privacy Security")
+OWNER_USER = "rajiv.jaggi@cellularservices.net"
+
+
+def test_the_owners_own_signed_in_page_reads_as_signed_in():
+    """THE REGRESSION, from the owner's screenshot of 2026-11-05. He signed in by hand and the sweep
+    on the same credential reported "the sign-in page went away and we did not recognise what
+    replaced it", with three carrier feeds frozen on a login that worked."""
+    page = FakePage(visible=OWNER_PAGE, password_visible=False, has_password_node=False)
+    v = epay_sweep._login(page, OWNER_USER, "p")
+    assert lo.signed_in(v["outcome"])
+    assert OWNER_USER in str(v.get("marker") or "")
+
+
+def test_that_page_carries_none_of_the_house_words_which_is_why_it_broke():
+    """Guards the premise of the test above: if somebody adds "home" to the house list, the test
+    would still pass while proving nothing about the greeting."""
+    assert lo.signed_in_said(OWNER_PAGE) is None
+
+
+def test_a_portal_that_greets_nobody_is_recognised_from_a_DECLARED_row():
+    """CONFIG, NEVER CODE. A page with no house word and no greeting is honestly unrecognised — and
+    becomes recognised when the tenant declares its own wording, with no code change."""
+    bare = "Multi-Door Owner Portal\nCommissions"
+    page = FakePage(visible=bare, password_visible=False, has_password_node=False)
+    with pytest.raises(epay_sweep.EpayLoginError):
+        epay_sweep._login(page, "tok", "p")          # a token login: no user name to greet
+    page2 = FakePage(visible=bare, password_visible=False, has_password_node=False)
+    v = epay_sweep._login(page2, "tok", "p", signed_in_markers=("multi-door owner portal",))
+    assert lo.signed_in(v["outcome"])
+
+
+def test_a_greeting_never_overturns_the_portals_own_refusal():
+    """The worst failure available to this signal: reading a refusal as a success. A refused form
+    re-renders with the user name still typed into it."""
+    page = FakePage(visible="Sign in\n%s\nInvalid user name or password." % OWNER_USER,
+                    password_visible=True)
+    with pytest.raises(epay_sweep.EpayLoginError) as e:
+        epay_sweep._login(page, OWNER_USER, "p")
+    assert "re-enter" in str(e.value)
+
+
+def test_a_human_check_that_knows_our_name_is_still_a_human_check():
+    page = FakePage(never_appears=True,
+                    visible="Attention Required! %s, please verify you are human." % OWNER_USER)
+    with pytest.raises(epay_sweep.EpayLoginError) as e:
+        epay_sweep._login(page, OWNER_USER, "p")
+    assert "live screen" in str(e.value)
+
+
+# ── THE CONFIG READ, THROUGH THE REAL LOADER ─────────────────────────────────────────────────────
+
+class _Rows:
+    """The handful of calls `portal_backoff.load_markers` makes on a Supabase client. No network —
+    `tests/conftest.py` blocks every outbound socket, so this could not reach one anyway."""
+
+    def __init__(self, rows, boom=False):
+        self._rows, self._boom = rows, boom
+
+    def schema(self, *_a):
+        return self
+
+    def table(self, *_a):
+        return self
+
+    def select(self, *_a):
+        return self
+
+    def in_(self, *_a):
+        return self
+
+    def limit(self, *_a):
+        return self
+
+    def execute(self):
+        if self._boom:
+            raise RuntimeError("the table is not there yet")
+        return type("R", (), {"data": list(self._rows)})()
+
+
+HOUSE = "00000000-0000-0000-0000-000000000001"
+ORG_A = "11111111-1111-1111-1111-111111111111"
+ORG_B = "22222222-2222-2222-2222-222222222222"
+
+
+def _row(org, marker, kind="signed_in"):
+    return {"org_id": org, "processor": None, "marker": marker, "kind": kind, "enabled": True}
+
+
+def test_a_tenants_declared_wording_reaches_the_driver():
+    assert epay_sweep._declared_signed_in_markers(
+        _Rows([_row(ORG_A, "multi-door owner portal")]), ORG_A) == ["multi-door owner portal"]
+
+
+def test_one_tenants_wording_is_never_served_to_another():
+    """A tenant-scoped read is where cross-tenant leakage lives (owner directive 2026-10-30)."""
+    cl = _Rows([_row(HOUSE, "owner portal"), _row(ORG_A, "cellfonz words")])
+    assert epay_sweep._declared_signed_in_markers(cl, ORG_B) == ["owner portal"]
+    assert epay_sweep._declared_signed_in_markers(cl, ORG_A) == ["cellfonz words"]
+
+
+def test_nothing_declared_is_None_and_not_an_empty_list():
+    """`verdict` reads an empty list as "no words count" and None as "use the house policy", so an
+    empty declaration must never reach it — it would switch the word list off for every portal the
+    tenant owns."""
+    for cl in (_Rows([]), _Rows([_row(ORG_A, "x", kind="refusal")])):
+        got = epay_sweep._declared_signed_in_markers(cl, ORG_A)
+        assert got == list(lo.DEFAULT_SIGNED_IN_MARKERS)
+        assert got, "an empty list would switch the house word list off"
+
+
+def test_a_database_that_cannot_be_reached_never_stops_the_login():
+    """The migration is surfaced for approval, not applied, so this is the LIVE shape today: the
+    kind cannot be stored yet and the driver must sign in regardless. An unreachable table reads as
+    "nothing declared" — the house policy, never silence — and never raises."""
+    assert epay_sweep._declared_signed_in_markers(_Rows([], boom=True), ORG_A) \
+        == list(lo.DEFAULT_SIGNED_IN_MARKERS)
+    page = FakePage(visible=OWNER_PAGE, password_visible=False, has_password_node=False)
+    v = epay_sweep._login(page, OWNER_USER, "p",
+                          signed_in_markers=epay_sweep._declared_signed_in_markers(
+                              _Rows([], boom=True), ORG_A))
+    assert lo.signed_in(v["outcome"])

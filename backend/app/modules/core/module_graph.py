@@ -814,10 +814,26 @@ FACTS: dict[str, dict] = {
                     'believed only when the form is ABSENT — §COMMCALC-50.8\'s rule applied '
                     'here, not copied here. EXCUSED SIBLING, pinned shrink-only: router.py\'s '
                     'MAILBOX sweep says "login rejected" for an IMAP [AUTHENTICATIONFAILED], which '
-                    'is a protocol answer with no page to misread.',
+                    'is a protocol answer with no page to misread. '
+                    '§COMMCALC-55 then fixed a defect in THIS home, which was the half of '
+                    'the above that replaced one guess with another: deleting "the vendor\'s name '
+                    'is in the title" was right, and replacing it with six house words was the same '
+                    'shape — a DEFAULT that is really somebody\'s vocabulary. The owner signed '
+                    'in by hand on 2026-11-05 and the page greeted him by his e-mail address, named '
+                    'itself and listed two menus, carrying none of the six, so a working login read '
+                    'as unknown and three feeds stayed frozen. The answer is EVIDENCE rather than '
+                    'vocabulary: an anonymous page cannot greet you by your own account name, so '
+                    'greeted_by_name recognises any portal that says who you are, naming no brand '
+                    'and belonging to no tenant. It is believed only where the form is GONE and '
+                    'only after the challenge and refusal checks — a bot wall can address you '
+                    'by name and a refused form re-renders with the name still typed into it, both '
+                    'caught by the tests written for it. For the portal that greets nobody, the '
+                    'words are CONFIG: a fourth kind on the one marker table (mig 1114), read '
+                    'through the loader the other three kinds already use, with the house words '
+                    'DEREFERENCED from here rather than copied there.',
         "homes": ('app/modules/commcalc/login_outcome.py',),
-        "index": ('COMMCALC-52',),
-        "locks": ('harness_login_outcome.py',),
+        "index": ('COMMCALC-52', 'COMMCALC-55'),
+        "locks": ('harness_login_outcome.py', 'harness_signed_in_evidence.py'),
         # SNAPSHOT — written BY HAND (§50). All three portal drivers dereference it for the NAME and
         # for the operator sentence; each still reads its own page its own way, because what the
         # facts are read OFF differs per driver (a browser frame, an HTTP document, an error region)
@@ -825,6 +841,10 @@ FACTS: dict[str, dict] = {
         "callers": {
             # the browser driver whose markup predicate caused the outage
             'app/modules/commcalc/epay_sweep.py': ('_lo',),
+            # the one marker table's module, for ONE fact only: the house signed-in words, which it
+            # DEREFERENCES as the seeds behind the signed_in kind rather than keeping a copy of them
+            # (§COMMCALC-55.4). It takes no verdict and reads no page.
+            'app/modules/commcalc/portal_backoff.py': ('_lo',),
             # the browserless driver: same question, visible_from_html / form_in_html
             'app/modules/commcalc/dlar_sweep.py': ('_lo',),
             # the live login: names which of the two a still-on-the-form submit was

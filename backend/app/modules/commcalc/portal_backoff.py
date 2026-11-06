@@ -88,6 +88,23 @@ REFUSAL_KIND = "refusal"        # you may not do that — no cooldown; it will s
 CHALLENGE_KIND = "challenge"    # prove you are human — a wait or a human may clear it
 VERDICT_KINDS = (THROTTLE_KIND, REFUSAL_KIND, CHALLENGE_KIND)
 
+# A FOURTH KIND, and NOT a verdict (index §COMMCALC-55). The three above all answer one question —
+# "what did the portal serve us INSTEAD of a form" — and each carries an operator sentence. This one
+# answers the opposite question, "which words on this page mean we are INSIDE the application", so it
+# has no operator note and is deliberately absent from VERDICT_KINDS: a caller enumerating verdicts
+# must not find it and try to report it as a failure.
+#
+# It lives in THIS table because the table is already the one home for "a phrase on a portal page
+# that a tenant may redeclare", with one inheritance rule and one reader. The owner's portal greets
+# him by name and shows "Multi-Door Owner Portal" and not one house word (screenshot 2026-11-05);
+# `login_outcome.greeted_by_name` recognises that portal with no declaration at all, and this kind is
+# for the next portal that neither greets you nor uses the house words — so it needs a ROW, never a
+# code change (RULE TWO).
+SIGNED_IN_KIND = "signed_in"
+
+#: Every kind this table carries. VERDICT_KINDS is the subset that is a verdict.
+MARKER_KINDS = VERDICT_KINDS + (SIGNED_IN_KIND,)
+
 # Seeds, used verbatim only where the table is absent (pre-mig-1105) or empty — same rule as
 # DEFAULT_MARKERS above. NARROW on purpose: these decide that a page is not worth a login attempt,
 # and a false positive turns a working portal into "refused".
@@ -450,6 +467,14 @@ def load_markers(client, org_id, processor=None, kind=None):
     for r in rows:
         if r.get("enabled") is False:
             continue
+        # CROSS-TENANT GUARD, and a belt as well as braces on purpose. The query above already asks
+        # for two org ids, so in normal service a third tenant's row never arrives. But the bucketing
+        # below is `mine if the id matches else house`, which would read ANY unexpected row as a
+        # house default and serve one tenant's declared words to another — the exact leakage the
+        # owner's 2026-10-30 directive says a tenant-scoped read must be checked for. A filter that
+        # costs one comparison removes the whole class, including the day somebody widens the query.
+        if str(r.get("org_id")) not in (str(org_id), HOUSE_ORG):
+            continue
         # A row with no kind is a THROTTLE row: that is what every row seeded by mig 244 meant, and
         # reading it as anything else would silently re-point an operator's existing configuration.
         if (str(r.get("kind") or THROTTLE_KIND).strip().lower()) != want:
@@ -467,9 +492,35 @@ def load_markers(client, org_id, processor=None, kind=None):
     return list(dict.fromkeys(out)) or seeds
 
 
+def _signed_in_seeds():
+    """The house signed-in words, DEREFERENCED from their one home rather than copied.
+
+    `login_outcome.DEFAULT_SIGNED_IN_MARKERS` is where "what any signed-in application shell shows"
+    is declared, and it is what `login_outcome.verdict` uses when a caller declares nothing. A second
+    copy here is exactly the divergence the house rule forbids: the table's fallback would answer the
+    question one way and the pure home another. Returns () if that home cannot be imported, which
+    reads as "nothing seeded" and leaves `verdict`'s own default in charge — never a stale copy.
+    """
+    try:
+        try:
+            from app.modules.commcalc import login_outcome as _lo
+        except ImportError:                     # loaded by path, not as app.modules.commcalc.*
+            import importlib.util as _ilu
+            import os as _os
+            _spec = _ilu.spec_from_file_location(
+                "commcalc_login_outcome",
+                _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "login_outcome.py"))
+            _lo = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_lo)
+        return tuple(_lo.DEFAULT_SIGNED_IN_MARKERS)
+    except Exception:
+        return ()
+
+
 _KIND_SEEDS.update({THROTTLE_KIND: DEFAULT_MARKERS,
                     REFUSAL_KIND: DEFAULT_REFUSAL_MARKERS,
-                    CHALLENGE_KIND: DEFAULT_CHALLENGE_MARKERS})
+                    CHALLENGE_KIND: DEFAULT_CHALLENGE_MARKERS,
+                    SIGNED_IN_KIND: _signed_in_seeds()})
 
 
 def _org_cfg(client, org_id):

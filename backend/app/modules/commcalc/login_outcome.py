@@ -179,6 +179,38 @@ def rejection_said(visible_text, markers=None):
     return None
 
 
+#: The shortest user name a GREETING may be recognised from. A two- or four-letter login is a
+#: substring of ordinary prose — `nova` is a real user name here and sits inside "Innovation" — and
+#: a false positive on this signal is the worst kind available: it would read a REFUSAL page as a
+#: successful sign-in. Below this length the word list and the structure answer alone.
+MIN_GREETING_NAME = 6
+
+
+def greeted_by_name(visible_text, user):
+    """The user name we signed in WITH, if the page is showing it back to us. PURE.
+
+    THE GENERAL FACT, and the reason this is evidence rather than vocabulary: an anonymous page
+    cannot greet you by your own account name. It needs no word list, carries no brand and belongs
+    to no tenant, so it recognises any portal that says who you are — which is most of them.
+
+    It is the answer to §COMMCALC-52's own defect. That change was right to delete "the vendor's
+    name is in the document title" (a carrier name in code, RULE TWO), but it replaced it with a
+    list of house words, which is a second guess at a vocabulary the platform does not own. The
+    owner's portal greets him by his e-mail address, shows "Multi-Door Owner Portal" and lists its
+    menus, and carries not one of those words — so a correct sign-in reported as unrecognised
+    (owner screenshot 2026-11-05, index §COMMCALC-55).
+
+    Caller beware, and the tests pin both: this says only that the NAME IS ON THE PAGE. A sign-in
+    form that refused usually re-renders with the name still typed into it, so the structural
+    question — is the form still there — has to be asked FIRST. `verdict` does that.
+    """
+    body = str(visible_text or "").lower()
+    name = str(user or "").strip().lower()
+    if not body or len(name) < MIN_GREETING_NAME:
+        return None
+    return name if name in body else None
+
+
 def signed_in_said(visible_text, markers=None):
     """The application's own evidence that we are INSIDE it, or None. PURE. Visible text only.
 
@@ -195,7 +227,7 @@ def signed_in_said(visible_text, markers=None):
     return None
 
 
-def verdict(*, form_present, visible_text, page_verdict=None,
+def verdict(*, form_present, visible_text, page_verdict=None, signed_in_user=None,
             signed_in_markers=None, rejection_markers=None):
     """What happened to this login attempt - {"outcome", "marker", "note"}. PURE. Never raises.
 
@@ -211,6 +243,11 @@ def verdict(*, form_present, visible_text, page_verdict=None,
       page_verdict         - `portal_backoff.page_verdict(...)` for this page, or None. Read for its
                              "kind" only, so this module needs no marker vocabulary of its own for
                              refusals and challenges - that question already has one home.
+      signed_in_user str    - the user name the driver SUBMITTED, when it has one. OPTIONAL, unlike
+                             the two above, because it is evidence a caller may genuinely not hold
+                             (a driver signing in with a token has no user name). Supplying it adds
+                             the vocabulary-free signal: a page showing this name back to us is a
+                             page we are inside. See `greeted_by_name`.
 
     ORDER, and why each step is where it is:
 
@@ -227,7 +264,11 @@ def verdict(*, form_present, visible_text, page_verdict=None,
          rather than copied here.
       4. THE FORM IS STILL THERE AND THE PAGE SAYS NOTHING -> the submit did not take us anywhere
          and nothing was explained. The flow changed; that is not a password.
-      5. THE FORM IS GONE AND THE APPLICATION IS NOT THERE EITHER -> say we do not know.
+      5. THE FORM IS GONE AND THE PAGE IS SHOWING US OUR OWN NAME -> we are inside. Below the
+         challenge and refusal checks, because a bot wall can greet you by name and an application
+         shell cannot be faked that way; and unreachable while the form is up, because a refused
+         form re-renders with the name still in it.
+      6. THE FORM IS GONE AND THE APPLICATION IS NOT THERE EITHER -> say we do not know.
     """
     vis = str(visible_text or "")
     kind = ""
@@ -252,6 +293,18 @@ def verdict(*, form_present, visible_text, page_verdict=None,
         if "refus" in kind:
             return {"outcome": REFUSED, "marker": (page_verdict or {}).get("marker"),
                     "note": note(REFUSED)}
+
+    # 3b. THE PAGE IS SHOWING US OUR OWN NAME, and nothing above has claimed the page. Ranked
+    #     HERE, below both of them, and deliberately not beside the word list: a greeting is
+    #     weaker evidence than an application shell. A bot wall can address you by name; it cannot
+    #     carry "Log out". And a sign-in form that refused re-renders with the name still typed
+    #     into it, which is why this is reached only when the form is GONE. Both traps are pinned
+    #     in tests/unit/test_signed_in_is_the_user_greeted.py — and both were caught by those
+    #     tests after this signal was first written one step too high.
+    if not form_present:
+        named = greeted_by_name(vis, signed_in_user)
+        if named:
+            return {"outcome": SIGNED_IN, "marker": named, "note": note(SIGNED_IN)}
 
     if form_present:
         return {"outcome": CHANGED, "marker": None, "note": note(CHANGED)}

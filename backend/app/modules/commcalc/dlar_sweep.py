@@ -184,6 +184,13 @@ def _login_outcome_of(session, refused):
     served we follow it ONCE — read-only, GET, no form posted — to see what the portal is actually
     showing. The probe above is untouched: this runs only after it has already failed, so nothing
     about the signed-in path changes shape.
+
+    DELIBERATELY NOT GIVEN THE SIGNED-IN EVIDENCE the browser drivers hand over (`signed_in_user`
+    and an org's declared wording, §COMMCALC-55), and this is the excuse rather than an oversight.
+    Those exist because a browser driver has only the page to go on. This driver asks a PROTECTED
+    PAGE for its status, which is a stronger answer to "are we inside" than any words on a page, and
+    this function runs only once that probe has said no. Handing it a greeting could only overturn
+    the better evidence with the worse one.
     """
     body = ""
     try:
