@@ -828,7 +828,7 @@ FACTS: dict[str, dict] = {
                     'only after the challenge and refusal checks — a bot wall can address you '
                     'by name and a refused form re-renders with the name still typed into it, both '
                     'caught by the tests written for it. For the portal that greets nobody, the '
-                    'words are CONFIG: a fourth kind on the one marker table (mig 1114), read '
+                    'words are CONFIG: a fourth kind on the one marker table, read '
                     'through the loader the other three kinds already use, with the house words '
                     'DEREFERENCED from here rather than copied there.',
         "homes": ('app/modules/commcalc/login_outcome.py',),
