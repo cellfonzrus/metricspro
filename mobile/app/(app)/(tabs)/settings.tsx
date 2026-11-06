@@ -76,12 +76,17 @@ export default function Settings() {
             <View style={{ flex: 1 }}>
               <Text style={styles.rowLabel}>App lock</Text>
               <Text style={styles.hint}>
-                {biometric?.hasHardware
-                  ? `Require ${biometric.label} to open the app`
-                  : 'No biometric hardware detected — device passcode will be used'}
+                {biometric === null
+                  ? 'Checking this device…'
+                  : biometric.hasFactor
+                    ? `Require ${biometric.label} to open the app`
+                    : 'This phone has no Face ID, fingerprint or passcode set up, so the app lock cannot be turned on. Add a passcode in your phone settings first.'}
               </Text>
             </View>
-            <Switch value={lockOn} onValueChange={toggleLock} />
+            {/* A phone with no usable factor must not be able to turn the lock on: every unlock
+                attempt would fail and the app would be unopenable. "Can this handset unlock at all"
+                is read from the app lock's one home, not guessed from the hardware flag. */}
+            <Switch value={lockOn} onValueChange={toggleLock} disabled={!biometric?.hasFactor} />
           </View>
           <Body dim>Your session is stored encrypted in the device Keychain / Keystore.</Body>
         </Card>

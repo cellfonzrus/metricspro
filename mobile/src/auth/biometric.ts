@@ -1,6 +1,11 @@
 import * as LocalAuthentication from 'expo-local-authentication'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
+// "Can this handset unlock at all, and what is the factor called" is DEREFERENCED from the app
+// lock's one home (src/lib/app-lock.ts), which is where it is tested. This file only asks the
+// native APIs.
+import { describeDeviceFactor, type DeviceFactor } from '@/lib/app-lock'
+
 // ── Biometric app lock ───────────────────────────────────────────────────────────────────────────
 // The app holds a long-lived refresh token in the Keychain/Keystore, so a lost/stolen unlocked
 // phone would otherwise walk straight into POS, payroll and customer PII. The app-lock requires
@@ -9,24 +14,26 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 // stops shoulder-surfing and casual device theft.
 const ENABLED_KEY = 'mp_applock_enabled'
 
-export type BiometricSupport = {
+export type BiometricSupport = DeviceFactor & {
   hasHardware: boolean
   enrolled: boolean
-  // The strongest available factor label, for UI copy.
-  label: 'Face ID' | 'Touch ID' | 'Biometrics' | 'Passcode' | 'None'
 }
 
 export async function getBiometricSupport(): Promise<BiometricSupport> {
-  const hasHardware = await LocalAuthentication.hasHardwareAsync()
-  const enrolled = await LocalAuthentication.isEnrolledAsync()
-  let label: BiometricSupport['label'] = hasHardware ? 'Biometrics' : 'None'
-  if (hasHardware) {
-    const types = await LocalAuthentication.supportedAuthenticationTypesAsync()
-    if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) label = 'Face ID'
-    else if (types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)) label = 'Touch ID'
-    if (!enrolled) label = 'Passcode'
-  }
-  return { hasHardware, enrolled, label }
+  const [hasHardware, enrolled, enrolledLevel, types] = await Promise.all([
+    LocalAuthentication.hasHardwareAsync(),
+    LocalAuthentication.isEnrolledAsync(),
+    // The signal that answers "can an attempt ever succeed": it counts the device passcode, which
+    // `authenticateAsync` falls back to, and it is 0 on a phone that has neither.
+    LocalAuthentication.getEnrolledLevelAsync(),
+    LocalAuthentication.supportedAuthenticationTypesAsync(),
+  ])
+  const factor = describeDeviceFactor({
+    enrolledLevel,
+    faceId: types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION),
+    fingerprint: types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT),
+  })
+  return { hasHardware, enrolled, ...factor }
 }
 
 export async function isAppLockEnabled(): Promise<boolean> {
