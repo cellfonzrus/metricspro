@@ -114,6 +114,18 @@ jobs:
         working-directory: mobile
         run: npm run test
 
+      # The same gate the over-the-air publish runs. `eas build` does apply `build.<profile>.env`
+      # by itself, so this is not what was broken — but it costs seconds and it is the one check
+      # that would catch an eas.json whose profile lost its `env`, which would otherwise produce a
+      # BINARY that crashes on launch rather than merely an update that does. Declared set:
+      # mobile/config/required-extra.json. See index CORE-38.
+      - name: refuse to build a bundle that carries no configuration
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: mobile
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: node scripts/with-profile-env.mjs "$PROFILE" node scripts/check-extra.mjs
+
       - name: install the EAS CLI
         if: steps.gate.outputs.ready == 'true'
         run: |

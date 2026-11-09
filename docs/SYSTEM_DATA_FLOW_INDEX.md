@@ -195,6 +195,7 @@ Primary code homes:
 | COMMCALC-53 | **A feed window's day comes from the tenant's zone, never the server's** | "if we access to one behind that door then all should be downloaded automatically" — two of the three feeds would, once the login was honest (§COMMCALC-51). The third never had an access problem: the comprehensive comp report has not arrived automatically ONCE since the leg was built, because the window was built on `datetime.now(timezone.utc).date()` while its slot is 23:30 in the tenant's zone — 03:30 UTC the NEXT day. Every run asked the portal for a day that had not begun where the portal lives, and the resulting zero was read as "no compensation posted". The rule already had a home, written 2026-07-30, whose docstring states this exact defect; nothing in commcalc read it. |
 | COMMCALC-54 | **"Which plan am I on?" is a question with one answer and three steps** | "the plan which is active in incentive payout when you click on it it takes you to the page which has all kinds of Incentive structure listed which becomes confusing even to me ... all of this should be a work flow than random data seen on the screen" — the confusing page is the symptom. Nothing in the platform ANSWERED "which plan am I on": three surfaces showed the operator the raw plan table and left the question to them, and one of them owned the live/belongs predicate privately. An unassigned plan pays nobody, so calling it active is the plausible-looking answer that hides the class. |
 | COMMCALC-55 | **A successful login is recognised by evidence, never by a guessed vocabulary** | The owner signed in to the carrier owners portal himself and sent the screenshot: the signed-in shell, greeting him by his e-mail address, offering "Multi-Door Owner Portal", "Commissions" and "Boost Activations" — and the sweep still reported "The sign-in page went away and we did not recognise what replaced it", with three carrier feeds frozen on a login that worked. §COMMCALC-52 was right to delete the old test (the vendor's name in the document title — a carrier name in code) and wrong to replace it with six house words: that is the platform guessing at a vocabulary it does not own, the same shape as a report defaulting to one tenant's POS labels. |
+| COMMCALC-56 | **A control is verified from the control, not from a field beside it** | With the login fixed (§COMMCALC-55), two of the three carrier feeds came back by themselves — MI/ATU daily, and the payment detail back-filled October to the 31st unaided. The comprehensive comp report stayed empty for a different reason: the sweep SET the "Summarize by" dropdown and then proved it by reading `input[name="DateIntervalOption"]`, the portal's own form plumbing under a name this platform does not own. That input is no longer on the page, so a settable filter read as unsettable on every tick, and one sentence ("hidden field = None") covered three different states an operator needed told apart. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -209,6 +210,7 @@ Primary code homes:
 | CORE-37 | **The phone's Face ID lock asks once, and never traps the handset** | "The touch login from the phone is not working." There is no biometric SIGN-IN in this product at all; the only Face ID surface is the mobile app LOCK, and it could not be dismissed — the auto-prompt effect depended on the unlock callback, whose identity changed when an attempt finished, so a cancelled Face ID came straight back over an overlay with no way out. What decides whether to raise the prompt, what decides whether this handset can authenticate at all, and what stops a screen deciding either from a React identity again? |
 | CORE-31 | **A retention window that deletes nothing is a promise, not a policy** | Found by the security pass §STOREOPS-04 required before going live: that feature shipped a 180-day GPS retention setting and nothing deleted anything — and event check-in GPS had carried the SAME hole since mig 986, declared `unmonitored` on the control box. Who owns "how long may we keep where somebody was", for every relation that stores it, and what stops a purge from taking the flag away with the coordinates? |
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
+| CORE-38 | **Every path that ships this app carries its configuration** | "when i open it it crashed" — TestFlight build 14, on open, every time. The binary was fine; an auto-published over-the-air update had been bundled with NO configuration, because `eas build` reads `build.<profile>.env` out of eas.json and `eas update` does not. Which delivery paths exist, what does each of them carry, and what refuses to ship a bundle that carries nothing? |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
@@ -26331,6 +26333,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-53 | commcalc |
 | COMMCALC-54 | commcalc |
 | COMMCALC-55 | commcalc |
+| COMMCALC-56 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -26359,6 +26362,7 @@ status word rather than a blank that reads as nil.
 | CORE-29 | core |
 | CORE-30 | core |
 | CORE-31 | core |
+| CORE-38 | core |
 | CORE-32 | core |
 | CORE-33 | core |
 | CORE-34 | core |
@@ -44524,6 +44528,129 @@ The October gap is older than the comp report's 14-day refresh window, so once t
 correctly the window still has to be widened once, by hand, to sweep the earlier days back in.
 
 
+## §COMMCALC-56. A CONTROL IS VERIFIED FROM THE CONTROL, NEVER FROM A FIELD BESIDE IT (measured 2026-11-09)
+
+### COMMCALC-56.1 WHAT THE LOGIN FIX ACTUALLY RECOVERED (production, read-only, 2026-11-09)
+
+§COMMCALC-55 merged on 6 November. Measured three days later:
+
+    commcalc.epay_sweep_config   last_attempt_at 2026-11-09T19:00Z
+                                 last_detail     "Login OK · Daily Transaction Detail [2026-11-09]: …"
+
+    upload_log  mi_report       45,558 rows  2026-11-09T11:05Z  "epay auto-sweep"   ← daily again
+    raw_payment_detail          newest payment_date 2026-11-06, written 2026-11-09T11:07Z
+                                October: 25,044 rows, of which 19,377 WRITTEN SINCE 6 NOVEMBER,
+                                complete through 2026-10-31                          ← back-filled itself
+    raw_comp_report             newest end_date 2026-10-06, last written 2026-10-08  ← still dark
+
+Every run now says **Login OK**. Two of the three feeds the owner reported are pulling automatically,
+and the October gap in the payment detail closed with nobody touching it. The third has a different
+cause, and it is not the password.
+
+### COMMCALC-56.2 THE DEFECT
+
+`epay_sweep._set_daily_range` drives the comp report's **Summarize by** control (Daily / Weekly /
+Monthly), which that report requires — left unset it returns a header-only workbook for every date.
+It set a jqWidgets dropdown and then proved the set like this:
+
+    const h = document.querySelector('input[name="DateIntervalOption"]');
+    …
+    if not iv.get("ok") or (iv.get("hidden") or "") != "Daily":
+        return False, f"'Summarize by' could not be set to Daily (hidden field = {…})"
+
+**It verified the set by reading a DIFFERENT element from the one it set** — the portal's own form
+field, under a name this platform does not own. That field is no longer on the page (`hidden` reads
+`None`, i.e. `querySelector` found nothing), so the function returned failure on every tick whether
+or not the dropdown took.
+
+And one sentence covered **three** states an operator needs told apart:
+
+| what actually happened | what they were told |
+|---|---|
+| no dropdown on the panel offers "Daily" | hidden field = None |
+| the dropdown reads "Weekly" | hidden field = None |
+| the dropdown reads "Daily", the form field is gone | hidden field = None |
+
+### COMMCALC-56.3 THE CLASS, not the instance
+
+**A control is verified from the thing we set.** A second element that happens to move with it is
+CORROBORATION: its disagreement is evidence, its absence is not. Verifying off the neighbour couples
+this platform to an implementation detail of somebody else's page, and the coupling fails silently —
+as a *refusal to act*, which is the hardest failure to notice, because nothing looks broken except a
+feed that is quietly empty.
+
+The right pattern was already in the same file. `_set_report_month` reads the widget's own
+`getSelectedItem()` and has done since 2026-08-09.
+
+### COMMCALC-56.4 THE FIX
+
+`_set_daily_range` now returns **(ok, detail, confirmed)**:
+
+  * the **widget's own selected item** decides. It is what we set, and it is what the page's own
+    handlers read.
+  * the form field is read too. `DAILY_INTERVAL` and `_INTERVAL_FIELD` are declared once each, the
+    second marked in the source as a name we do not own.
+  * three failures, three sentences: no dropdown offering the value; the control reads something
+    else; the control reads Daily and the form field **contradicts** it. All three stay fatal.
+  * the field being **absent or empty** is absence. The pull goes ahead on the control's own answer,
+    `confirmed` is False, and the detail says exactly which half could not be read.
+
+**The fail-loud path is untouched.** An unfiltered comp run returns a header-only workbook
+indistinguishable from a quiet day, and reporting "no data posted" when the filter never took is how
+this leg stayed broken for eight weeks (§19.41).
+
+### COMMCALC-56.5 AND THE ZERO STAYS HONEST — a third rung in the one home
+
+Proceeding on one reading is weaker evidence than proceeding on two, so the difference is carried
+rather than discarded. `empty_pull_verdict` — the one home for *"is this zero a statement about the
+source, or about us?"* — gains a rung between "a control was PROVEN broken" and everything else:
+
+    CONTROL_NOT_CONFIRMED = "control_not_confirmed"      # SUSPECT, never trusted
+
+  * `classify_empty_pull(unconfirmed_controls=…)` ranks **below** `broken_controls` (the stronger
+    claim is the true one, and a control listed in both prints one sentence, not two) and **above**
+    the source's own "no records" — for the same reason rule (1) is: if we cannot say the filter
+    took, we cannot say which question the source answered.
+  * `ControlLedger.control_unconfirmed(control, detail)` is run-scoped like `control_failed`, so a
+    later leg's discovery settles an earlier leg's zero — the 2026-10-03 ordering argument, applied
+    to the weaker rung too.
+  * It **defers nothing by itself**: real rows stay real. Only a zero is in question.
+
+So the comp report can now run, and a day that genuinely posts nothing still reads
+`unverified_no_data` until the confirmation is available again — never `$0 of compensation`.
+
+### COMMCALC-56.6 Every tenant
+
+Neither the setter nor the rung takes an org, and neither can: pinned as source, because an org
+argument appearing in either is how a per-tenant divergence would start. The control's required
+value is a property of the report, not of a tenant, and the verdict rung is policy.
+
+### COMMCALC-56.7 Locked
+
+`backend/harness_empty_pull_verdict.py` §G — 19 checks added to the existing lock rather than a
+sibling harness. It fails the build if the setter gates on the form field alone, if it stops reading
+the widget's own selected item, if either name is spelled at its use instead of declared, if the
+caller drops the third return value, if an unconfirmed set stops reaching the run's ledger, if the
+fail-loud path goes away, if the new rung loses its own machine key or sentence, if the precedence
+against proven-broken or against the source's own answer inverts, or if either home learns which
+tenant it is acting for.
+
+`backend/tests/unit/test_summarize_by_is_verified_from_the_widget.py` — 16 unit tests, written
+before the fix, including the live shape and every failure that must stay a failure.
+
+### COMMCALC-56.8 What this does NOT fix, stated plainly
+
+**This container cannot reach the portal** — its edge serves an F5 rejection page here
+(§COMMCALC-50.9) — so the hypothesis that the dropdown itself still takes "Daily" is read off the
+live log's `hidden field = None` plus the code, not off the page. If the next comp run still returns
+nothing, the remaining possibility is that no dropdown on that panel offers "Daily" any more, and
+the new wording will say so in those words instead of blaming the missing field. That needs one
+screenshot of the report's filter panel, which is the owner's to take.
+
+The comp report's own 14-day refresh window still does not reach 7 October, so the earlier days need
+one widening by hand once the leg is pulling.
+
+
 ## §CORE-32. A GUARD THAT READS SOURCE CODE MUST BE TOLD F-STRINGS EXIST — one home for "the strings of a Python source" (found 2026-11-04)
 
 Found while clearing a red harness the owner asked about: `harness_carrier_vocab_guard.py` — the
@@ -44950,6 +45077,107 @@ embedded one (§CORE-26.7). A NEW BINARY from `.github/workflows/mobile-build-an
 update does not reach the phone, and the build button) · §19.18 (one fact, one home, dereferenced —
 never copied) · §CORE-31 (the device-local vs server-held distinction, for the face-clock-in neighbour).
 
+## §CORE-38. EVERY PATH THAT SHIPS THIS APP CARRIES ITS CONFIGURATION (2026-11-09)
+
+Owner, 2026-11-09 19:46 UTC: *"when i open it it crashed"* — TestFlight build 14, on open, every
+time.
+
+### §CORE-38.1 Duplicate check (the build gate)
+
+Searched the index for an existing mechanism owning "what configuration does this bundle carry".
+There is none: §CORE-26.8 owns the build button, §CORE-29 owns *which code* an app is running and
+pins the over-the-air compatibility policy, and §CORE-29.3b owns the iOS deployment floor. None of
+them touches the bundle's build-time environment. `mobile/eas.json` `build.<profile>.env` was already
+the single declaration and is REUSED unchanged as the one home; nothing was created beside it. The
+new files are the dereference (`mobile/scripts/`), the declaration of what the app cannot run
+without (`mobile/config/required-extra.json`), and the lock.
+
+### §CORE-38.2 The class, not the instance
+
+The binary was never at fault. Three days earlier an unrelated merge (#655) auto-published an
+over-the-air update, and that update was bundled with **no configuration at all**:
+`extra.supabaseUrl` was `''`, so `createClient('')` threw `supabaseUrl is required.` at module
+scope and the app died in its first second, on every launch, with no way to recover from inside it.
+
+The cause, stated once so nobody re-derives it. This app reaches a phone two ways and only one of
+them was carrying the app's build-time environment:
+
+* **`eas build`** reads `build.<profile>.env` out of `mobile/eas.json` by itself. Correct.
+* **`eas update`** does **not**, and no flag makes it. `--environment` selects *server-side* EAS
+  environment variables, which this project does not use. Confirmed against `eas update --help`
+  (eas-cli, 2026-11-09), not assumed.
+
+So **every over-the-air update ever published from this repository had a blank configuration.** It
+went unseen for weeks for the §CORE-29 reason: the installed binary was on a different Expo runtime
+and `expo-updates` was silently rejecting all of them. Build 14 was the first binary whose runtime
+matched, so it accepted the first one that reached a phone — and crashed.
+
+The class is not "an update was published wrong". It is **a fact two delivery paths need, declared
+inside one of them.** The fix is NOT to paste the values into the publish workflow as well: that is
+the second copy §19.18 forbids, and a second copy is precisely what diverged.
+
+### §CORE-38.3 What shipped
+
+* `mobile/eas.json` stays the ONE home of the app's build-time configuration.
+* `mobile/scripts/delivery-env.js` is the rule: `profileEnv(easJson, profile)` resolves a profile's
+  declared environment and **throws** rather than returning `{}` — an empty environment is the
+  failure itself, and a delivery path that silently gets nothing is how it shipped.
+  `missingRequiredExtra(extra)` names the environment *variables* whose values came out blank,
+  because the variable is what a person can act on. Pure string and object work: no network, no
+  Expo, no EAS, no Mac, proved by 14 unit tests.
+* `mobile/scripts/with-profile-env.mjs` **spawns** a command with that environment applied. Spawning
+  rather than printing shell exports on purpose: nothing is quoted, escaped or `eval`'d, so a value
+  containing a space, a quote or a `$` cannot change the command that runs.
+* `mobile/scripts/check-extra.mjs` is the gate: it evaluates `app.config.ts` exactly as the bundler
+  will, in whatever environment it is given, and exits non-zero naming every required value that
+  came out blank. Both delivery workflows run it *before* they ship anything.
+* `mobile/config/required-extra.json` is the ONE declaration of what this app cannot run without,
+  mapping each `extra` key to the variable that supplies it. Dereferenced by the app at launch AND
+  by every delivery path. Never list those keys anywhere else.
+* `mobile/src/config/env.ts` now **throws**, naming every missing variable at once. What it used to
+  do was the other half of the defect: a missing value was `console.warn`ed and read as `''`, so
+  nothing stopped the app until Supabase threw three imports later with a message that named
+  Supabase rather than the variable. A warning nobody can see on a phone is not a check.
+
+### §CORE-38.4 What the lock refuses
+
+`backend/harness_ota_config_parity.py` — 59 checks, each with a negative control, wired into CI as
+*"Run the delivery-config parity lock"*:
+
+* the required set growing a second home, or the app naming an `EXPO_PUBLIC_*` variable in its own
+  code (D1, D2);
+* the app going back to warn-and-continue instead of throwing where the name is known (D2.3, D2.4);
+* the rule losing its purity, its dereference or its tests, or the runner collecting `scripts/`
+  stopping (D3);
+* the gate reading `eas.json` instead of the real evaluated config, or not failing the job (D4);
+* **a new delivery workflow appearing un-gated.** The set is DERIVED from the workflows that
+  actually invoke `eas build` / `eas update` and compared for EQUALITY with a declared set, so a
+  guard that goes blind fails the build (§CORE-10). Read-only `:list` forms and prose in comments
+  deliberately do not count as a delivery (D5.2);
+* any workflow carrying an `EXPO_PUBLIC_*` value of its own — the second-copy ban as code (D5.5);
+* the shipping profile losing a required variable, or declaring one blank (D6).
+
+Mutation-tested rather than merely written: removing the wrapper from the publish command reddens
+D5.4, and restoring the old `console.warn` reddens D2.3 and D2.4.
+
+### §CORE-38.5 Every tenant
+
+Nothing here is per-tenant: it is one app, one configuration, every tenant's users on the same
+bundle. The relevance to the every-tenant rule is the reverse direction — a blank configuration is
+not one tenant reading another's vocabulary, it is *no* tenant being able to open the app, which is
+why it had to fail the build rather than degrade.
+
+### §CORE-38.6 Not money, no migration — and how the phone recovers
+
+No migration, no schema, no money. Recovery needs **no new build**: `expo-updates` fetches natively,
+so a crashing JS bundle does not stop the next update downloading. Merging this publishes a correct
+bundle to the `production` channel; the phone then takes two launches — one that downloads, one that
+runs it.
+
+**Cross-refs:** §CORE-26.8 (the build button) · §CORE-29 (which code an app is running; why the
+updates were being discarded, which is why this hid) · §CORE-29.3b (the iOS floor, and the five
+builds) · §CORE-10 (a guard that goes blind fails CI) · §19.18 (one fact, one home, dereferenced —
+never copied).
 
 ---
 

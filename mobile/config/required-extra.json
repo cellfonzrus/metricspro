@@ -1,0 +1,8 @@
+{
+  "_why": "The ONE declaration of what this app cannot run without, and the environment variable that supplies each. Read by src/config/env.ts (the app, at launch) and by scripts/delivery-env.js (every delivery path, before anything reaches a phone). A second copy is how a bundle shipped with a blank Supabase address on 2026-11-06 — see docs/SYSTEM_DATA_FLOW_INDEX.md CORE-38.",
+  "required": {
+    "supabaseUrl": "EXPO_PUBLIC_SUPABASE_URL",
+    "supabaseAnonKey": "EXPO_PUBLIC_SUPABASE_ANON_KEY",
+    "apiUrl": "EXPO_PUBLIC_API_URL"
+  }
+}

@@ -666,6 +666,20 @@ on:
       - "mobile/src/lib/useRunningBundle.ts"
       - "mobile/src/lib/running-bundle.test.ts"
       - "mobile/app.config.ts"
+      # index §CORE-38 — the DELIVERY-CONFIG PARITY lock: every path that ships the app carries its
+      # configuration, and a bundle with none of it cannot be published (owner report 2026-11-09).
+      - "backend/harness_ota_config_parity.py"
+      - "mobile/config/required-extra.json"
+      - "mobile/scripts/delivery-env.js"
+      - "mobile/scripts/delivery-env.test.ts"
+      - "mobile/scripts/with-profile-env.mjs"
+      - "mobile/scripts/check-extra.mjs"
+      - "mobile/src/config/env.ts"
+      - "mobile/src/api/supabase.ts"
+      - "mobile/eas.json"
+      - "mobile/vitest.config.ts"
+      - ".github/workflows/mobile-ota-update.yml"
+      - ".github/workflows/mobile-build-and-submit.yml"
       # index §13b.1 — the scope DISPLAY-NAME lock + proofs (owner report 2026-10-03)
       - "backend/harness_scope_label.py"
       - "backend/harness_scope_label_lock.py"
@@ -1714,6 +1728,9 @@ jobs:
       - name: Run the running-bundle lock (the app can say which code it is running; the OTA compatibility policy is pinned — index §CORE-29)
         working-directory: backend
         run: python3 harness_running_bundle_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the delivery-config parity lock (every path that ships the app carries its configuration; a blank bundle is unpublishable — index §CORE-38)
+        working-directory: backend
+        run: python3 harness_ota_config_parity.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the scope display-name lock (one home for a scope's name; no `scope_label || scope_key`; every finance surface wired — index §13b.1)
         working-directory: backend
         run: python3 harness_scope_label_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
