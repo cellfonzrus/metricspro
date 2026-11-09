@@ -10,13 +10,17 @@
 // Cells render via each column's optional `render` (for report-specific number formatting) and fall back to
 // a money/number/text default otherwise — DISPLAY ONLY; the numbers still come from the column's `get`.
 import { useMemo, useState, useEffect, type CSSProperties } from 'react'
+import { moneyText } from '@/lib/report-totals'
 import {
   useReactTable, getCoreRowModel, getSortedRowModel,
   type ColumnDef, type SortingState, type ColumnPinningState, type VisibilityState, type Column,
 } from '@tanstack/react-table'
 import type { ExportColumn } from '@/lib/export'
 
-const money = (n: any) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(n) || 0)
+// WHAT A MONEY CELL SHOWS is `report-totals.moneyText` (owner report 2026-11-09): this read
+// `Number(n) || 0`, so a column saying the WORD "not measured" printed $0.00. ReportShell's twin
+// copy of this line is the reason that home exists — see it for the class.
+const money = (n: any) => moneyText(n)
 const isRight = (c: ExportColumn) => !!c.money || c.type === 'money' || c.type === 'number' || c.align === 'right'
 const colId = (c: ExportColumn) => c.field || c.header
 

@@ -22,13 +22,18 @@
 //   G. negative controls — each rule above is shown going RED
 //
 // Run:  node frontend/prove_tile_snapshot.mjs      (no network, no DB, no React, no npm install)
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { readFileSync } from 'node:fs'
+import { loadLibs } from './prove_load_ts.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const MOD = 'src/lib/tile-snapshot.ts'
-const T = await import(pathToFileURL(join(HERE, MOD)).href)
+// Loaded through the shared loader because this module now DEREFERENCES the one money home
+// (`@/lib/report-totals`, §CORE-40) instead of carrying its own `Number(v) || 0`. Bare Node cannot
+// resolve Next's `@/lib/...` alias; the loader rewrites it and stubs nothing, so the file under
+// test is still the file that ships.
+const [T] = await loadLibs(HERE, ['tile-snapshot'])
 
 let pass = 0, fail = 0
 const ck = (label, cond, extra) => {

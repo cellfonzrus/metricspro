@@ -4,6 +4,7 @@
 // report exports identically. Libs are dynamically imported on click to keep them
 // out of the initial bundle and the SSR path.
 import { useState, type ReactNode } from 'react'
+import { moneyText, moneyRaw } from '@/lib/report-totals'
 import { pinSheetCellTypes, csvRow } from '@/lib/cell-safety'
 import { isSafeMediaSrc } from '@/lib/safe-url'
 import { api } from '@/lib/client'
@@ -101,10 +102,12 @@ function imgSize(dataUrl: string): Promise<{ w: number; h: number }> {
 // prevent, and an export is the worst place to tell it: the spreadsheet outlives the screen and
 // carries no note. Absent now renders blank; a REAL zero still renders $0.00, and a non-numeric
 // value renders $0.00 as before rather than silently vanishing.
-const money = (n: any) => {
-  if (n == null || n === '') return ''
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(n) || 0)
-}
+// 2026-11-09 — THE OTHER HALF OF THE SAME RULE. The note above fixed ABSENT and then said a
+// non-numeric value "renders $0.00 as before rather than silently vanishing". The right answer was
+// never vanishing: it was printing the word. A money column whose value is "not measured" now
+// exports that, because an export is still the worst place to tell the lie. One home now:
+// `report-totals.moneyText`, with absent staying BLANK here exactly as it has since 2026-09-10.
+const money = (n: any) => moneyText(n, { absent: '' })
 
 function displayCell(col: ExportColumn, row: any): string {
   const v = col.get(row)
@@ -117,7 +120,10 @@ function displayCell(col: ExportColumn, row: any): string {
 // (or a numeric string) is still a number.
 function rawCell(col: ExportColumn, row: any): string | number {
   const v = col.get(row)
-  if (col.money) return v == null || v === '' ? '' : (Number(v) || 0)
+  // 2026-11-09: `Number(v) || 0` also made a WORD a real numeric 0 in the .xlsx — worse than on the
+  // screen, because the next reader sums the column. `moneyRaw` keeps a number a number, a word a
+  // word, and absent an empty cell.
+  if (col.money) return moneyRaw(v)
   return v == null ? '' : (v as any)
 }
 function hasRows(p: ExportPayload) {

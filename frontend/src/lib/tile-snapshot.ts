@@ -31,6 +31,7 @@
 // converter exists, and the honesty flag travels from the backend predicate into the mailed cell) is
 // locked by `backend/harness_tile_snapshot.py`. Both run in CI — index §COMMCALC-19.
 import type { ExportColumn, ExportSheet } from '@/lib/export'
+import { moneyText } from '@/lib/report-totals'
 
 export type SnapshotTile = {
   label: string                     // what the tile is called on screen, verbatim
@@ -59,9 +60,11 @@ export function snapshotChangeLabel(t: SnapshotTile): string {
  *  `money` is honoured per ROW rather than per column, because a tile row legitimately mixes units
  *  and dollars — so the figures are pre-formatted as text and the sheet declares no money column. */
 export function tileSnapshotSheet(tiles: SnapshotTile[], name: string = SNAPSHOT_SHEET_NAME): ExportSheet {
-  const fmtMoney = (v: string | number | null | undefined) =>
-    v == null || v === '' ? '' :
-      new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(v) || 0)
+  // THE ONE MONEY FORMATTER (owner report 2026-11-09). This was a sixth copy of
+  // `Number(v) || 0`; the `typeof v !== 'string'` guard below happened to shield it from the
+  // defect, which is luck rather than design — the next edit to that guard would have reopened it.
+  // `moneyText` keeps absent blank here exactly as this did.
+  const fmtMoney = (v: string | number | null | undefined) => moneyText(v, { absent: '' })
   const cell = (t: SnapshotTile, v: string | number | null | undefined) => {
     // An ABSENT figure is blank, never 0 — the same rule `lib/export.money` already applies to a
     // withheld money cell. A snapshot outlives the screen and carries no note, so a fabricated zero

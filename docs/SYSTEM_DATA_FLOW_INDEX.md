@@ -212,6 +212,7 @@ Primary code homes:
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
 | CORE-38 | **Every path that ships this app carries its configuration** | "when i open it it crashed" — TestFlight build 14, on open, every time. The binary was fine; an auto-published over-the-air update had been bundled with NO configuration, because `eas build` reads `build.<profile>.env` out of eas.json and `eas update` does not. Which delivery paths exist, what does each of them carry, and what refuses to ship a bundle that carries nothing? |
 | CORE-39 | **A setup gap carries the steps that close it, the page that closes it, and whoever may** | A financing row read "⚠️ Detection not configured" with nothing to press, and 29 files say a setup gap is open the same dead-end way. What closes this gap, where, may I — and when I may not, who in MY company can, and how do they get the same steps and a link to the exact screen? |
+| CORE-40 | **A money column that says a word is not saying zero** | Reported on the Cash Calendar: the day grid read "in: not measured" while the table directly beneath it read Expected in \$0.00, Net \$0.00 and TOTAL \$0.00. The report exists to never print a figure for money nobody measured, and its own table printed four. Nothing was wrong with the report: "how is a money value rendered" had SIX implementations, every one of them `Number(v) || 0`. How many states does a money cell have, and which of them is a claim about measurement rather than about money? |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
@@ -26365,6 +26366,7 @@ status word rather than a blank that reads as nil.
 | CORE-31 | core |
 | CORE-38 | core |
 | CORE-39 | core |
+| CORE-40 | core |
 | CORE-32 | core |
 | CORE-33 | core |
 | CORE-34 | core |
@@ -45448,3 +45450,100 @@ dereferences) · §CORE-12 (`can_edit_setting` — the authority answer this ask
 dereferenced — never copied; the duplicated targets sentence is its latest instance) ·
 §COMMCALC-49.10 (every feature for every tenant) · §19.37 (a 2xx is not proof — why a failed ask says
 so) · §CORE-17.3p (the financing report, the surface the reported instance was on).
+---
+
+## §CORE-40. A MONEY COLUMN THAT SAYS A WORD IS NOT SAYING ZERO (reported 2026-11-09)
+
+Reported minutes after §PAYABLES-02 shipped, on §PAYABLES-02's own screen. The day grid read
+`in: not measured`; the table directly beneath it read **Expected in $0.00**, **Net $0.00** and
+**TOTAL $0.00**. A report built so that money nobody measured can never appear as a figure printed
+four such figures, one row apart from the words refusing them — and the Excel and PDF buttons would
+have carried them out of the building, where a spreadsheet outlives the screen and carries no note.
+
+### §CORE-40.1 The class — one question, six answers
+
+Nothing was wrong with the report. `payables/cash_calendar.build` returned `None` for every
+unmeasured figure exactly as §PAYABLES-02 requires, the page's own column accessors turned each
+`None` into the words `not measured`, and the shared table then formatted those words as money.
+
+**"How is a money value rendered" had SIX implementations, and every one of them read
+`Number(v) || 0`:**
+
+| Copy | What it fed |
+|---|---|
+| `components/ReportShell.tsx` `money` | every report's body cell |
+| `components/ReportShell.tsx` `subtotal` | every group subtotal |
+| `components/DataGrid.tsx` `money` | the other shared table's body cell |
+| `lib/export.tsx` `money` | the PDF cell |
+| `lib/export.tsx` `rawCell` | the `.xlsx` cell — as a real numeric `0` |
+| `lib/report-totals.ts` `moneyFmt` | the pinned TOTAL row |
+| `lib/tile-snapshot.ts` `fmtMoney` | the sent snapshot (shielded by luck — see §CORE-40.4) |
+
+`Number('not measured')` is `NaN`, and `NaN || 0` is `0`. So a deliberate claim about measurement
+became a confident claim about money, in seven places, silently.
+
+**This is §19.18's shape for the fifth time, and the near-miss is the instructive part.**
+`lib/export.tsx` found this class on **2026-09-10** — the pay-visibility gate deletes a withheld
+money key rather than zeroing it, and the export was printing `$0.00`, i.e. *"this person earns
+nothing"*. It was fixed, and the note written above the fix says so. Then it fixed **only the
+ABSENT half** and stated the other half as a decision: *"a non-numeric value renders $0.00 as before
+rather than silently vanishing."* The right answer was never vanishing — it was **printing the
+word**. And the other five copies never received even the absent-half fix. A fact with six homes
+drifts, and this one drifted for two months in the one place a wrong number is permanent.
+
+### §CORE-40.2 Three states, not two
+
+The home is `lib/report-totals.ts`, which already owned `toNumber` — the regex-validated, one and
+only test of numeric-ness, returning `null` rather than `0` for a word. The three money functions
+dereference it rather than re-deciding:
+
+- a **NUMBER**, including a real `0` → currency. *A measured nothing is a figure.*
+- a **WORD** — non-empty and not numeric → **itself**. `not measured`, `—`, `not set` are claims
+  about measurement; `$0.00` is a claim about money, and substituting one for the other is the
+  defect. `isUnmeasured(v)` is the predicate, and it is deliberately FALSE for absent.
+- **ABSENT** (`null` / `''`) → whatever the calling surface already ruled, passed in as `absent`.
+  **That half is NOT reopened here**: blank in an export (2026-09-10), `$0.00` on screen. 665 of the
+  app's 681 money columns rely on it, and widening this fix to touch them would be a migration
+  wearing a bug fix's clothes.
+
+### §CORE-40.3 A total over an unmeasured cell is not a total
+
+`resolveAgg` returned `'sum'` for a money column unconditionally, and the sum read each unmeasured
+cell as `0`. It now refuses — `'none'` — where **any** cell in the column is unmeasured, which is
+the rule the numeric-count branch beside it already applied; money was the exception. A **partial**
+measurement refuses too: a total over the days that answered is not a total over the days, and
+labelling it one is §CORE-17.3h's defect, a figure no set of rows adds up to. `ReportShell`'s group
+subtotals reach the same verdict and render it in words through one `subtotalText` home, because
+`moneyText(null)` is `$0.00` by design and that is precisely the figure a refusal must not become.
+
+### §CORE-40.4 What the lock holds, and what it does not
+
+Clause **(f)** of `backend/harness_column_render_lock.py` — extended rather than given a sibling,
+because *one question, six answers* is that lock's own class and it already owns how a shared table
+draws a cell. It holds: the set of **shared** files building a currency formatter is exactly the
+declared set (DERIVED, so a seventh copy fails rather than going unnoticed); every one of them
+dereferences the home; the coercion is gone from each caller; and a money column with an unmeasured
+cell refuses both its subtotal and its grand total. Its scan reads `code_only()` — comments blanked,
+strings intact — because every note in this change describes the defect in the form it shipped, and a
+raw scan reports the documentation as the bug. Five negative controls, and both mutations
+(restoring the coercion; restoring the unconditional `'sum'`) redden the lock **and** the unit tests.
+
+`lib/tile-snapshot.ts` was the sixth copy and was **shielded by luck**, not design: a
+`typeof v !== 'string'` guard upstream happened to keep words away from it. It dereferences the home
+now, because the next edit to that guard would have reopened the hole.
+
+**NOT claimed:** roughly fifteen **pages** build a money formatter for their own bespoke markup.
+They are outside clause (f)'s scope, stated there as a limit rather than left as an oversight: they
+are not reached by a column's `get`, they long predate this, and folding them in would make the
+clause a fifteen-file migration instead of a lock on the shared path. A page that renders through
+`ReportShell` or `DataGrid` is already covered, because the formatter it uses is theirs.
+`lib/client.ts` and `components/LedgerBatchUpload.tsx` are excused **by name** with their reason —
+both take a typed `n: number`, so TypeScript refuses to hand them a word — and the lock asserts that
+reason still holds, so one of them widening its parameter fails the build rather than quietly
+joining the exempt set.
+
+Lock: `harness_column_render_lock.py` (f). Tests: `frontend/src/lib/money-cell.test.ts`, 18 units,
+RED before the home existed. Cross-references: §19.18 (one fact, one home, dereferenced — never
+copied) · §PAYABLES-02 (the report that surfaced it) · §CORE-17.3h (a figure no rows add up to) ·
+§4c (the 2026-09-26 Excel half of the 2026-09-10 fix) · §CORE-10 gate B (a derived subject set is
+asserted by name, never by a lower bound).
