@@ -1,5 +1,5 @@
 """PROOF + BUILD LOCK — an EXPECTED RECEIPT is declared, and the cash calendar nets ONE in against
-ONE out (§COMMCALC-56).
+ONE out (§PAYABLES-02).
 
 OWNER ASK, verbatim: *"i need a report for the expected payments for teh next payout cycle by the day
 as acalender display for all tenants, also the foloowing report will be how much is owed, which we
@@ -610,7 +610,7 @@ check("I4 and NOTHING is seeded: a house default on the inbound side would be on
 
 IDX = read("docs/SYSTEM_DATA_FLOW_INDEX.md")
 check("I5 registered in the index, in its own section",
-      "COMMCALC-56" in IDX)
+      "PAYABLES-02" in IDX)
 check("I6 and the three new homes, the new table and the new endpoint are all named there",
       all(s in IDX for s in ("receipt_schedule", "expected_receipts", "cash_calendar",
                              "receipt_source_map", "/payables/cash-calendar")))

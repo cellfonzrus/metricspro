@@ -1,7 +1,7 @@
 """ONE read for "what money is expected to COME IN, and on which day" — the inbound mirror of
 `payables/owed_read.py`.
 
-Index §COMMCALC-56. Lock: `backend/harness_cash_calendar.py`.
+Index §PAYABLES-02. Lock: `backend/harness_cash_calendar.py`.
 
 WHY THIS EXISTS, and it is not tidiness. The outbound half of the owner's question already has one
 home: `owed_read.dated_owed` is read by the Daily Owed surface and by the weekly roll-up alike, so the

@@ -1,6 +1,6 @@
 """ONE home for "on what DAY does this earned money reach us, and what says so".
 
-Index §COMMCALC-56. Lock: `backend/harness_cash_calendar.py`.
+Index §PAYABLES-02. Lock: `backend/harness_cash_calendar.py`.
 
 OWNER ASK, verbatim: *"i need a report for the expected payments for teh next payout cycle by the day
 as acalender display for all tenants"*.

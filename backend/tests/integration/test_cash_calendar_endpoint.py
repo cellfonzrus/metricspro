@@ -1,4 +1,4 @@
-"""Integration: the cash calendar through the real endpoint, for every tenant (§COMMCALC-56).
+"""Integration: the cash calendar through the real endpoint, for every tenant (§PAYABLES-02).
 
 Real routing, the real router body, the real one homes — over the in-memory database double, with
 conftest blocking every outbound socket. There is no staging Supabase, so "integration" here means
@@ -168,7 +168,7 @@ def test_an_undeclared_tenant_is_not_measured_and_never_zero(wired, api_client, 
 
 def test_a_tenant_with_neither_side_measured_says_so_on_both(wired, api_client):
     """NY Logistics has no declaration and no payable rows. BOTH sides read not measured — and an
-    empty owed read is not \$0.00 owed either, which is `owed_read`'s own contract."""
+    empty owed read is not $0.00 owed either, which is `owed_read`'s own contract."""
     out = api_client.get(_q(ORG_NYL)).json()
     assert out["expected_declared"] is False and out["in_measured"] is False
     assert out["owed_source"] is None and out["out_measured"] is False
@@ -189,7 +189,7 @@ def test_the_store_filter_narrows_both_sides_server_side(wired, api_client):
     # row, deliberately, so that an empty read is never "$0.00 is owed". Under a filter that matches
     # nothing that reads as not measured — the same answer the Daily Owed screen gives — and
     # overriding it here would be a SECOND opinion about whether we owe anything, which is worse
-    # than the asymmetry. Stated in the module docstring and index §COMMCALC-56.6, not papered over.
+    # than the asymmetry. Stated in the module docstring and index §PAYABLES-02.6, not papered over.
     assert none["out_measured"] is False and none["total_out"] is None
     assert none["total_net"] is None
 

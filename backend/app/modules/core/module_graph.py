@@ -135,7 +135,7 @@ FACTS: dict[str, dict] = {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
             # report on the shared mechanism; the endpoint reaches it through `drilldowns`.
             'app/modules/closing/cash_variance.py': ('report_drilldown',),
-            # The CASH CALENDAR's three figures (§COMMCALC-56). Declares only its own catalogue and
+            # The CASH CALENDAR's three figures (§PAYABLES-02). Declares only its own catalogue and
             # recomputes nothing: the panels are built over the endpoint's OWN day rows and totals,
             # and every table they name is handed in from this tenant's declarations rather than
             # spelled here, because a guessed provenance is a claim nothing checked (RULE TWO).
@@ -1266,7 +1266,7 @@ FACTS: dict[str, dict] = {
             # cadence — `resolve_cadence` / `week_window` / `roll_up` — and derives no rhythm of its
             # own. A carrier's stamped period still WINS through this home, never recomputed.
             'app/modules/asset/router.py': ('_bp',),
-            # THE INBOUND MIRROR (§COMMCALC-56). `receipt_schedule` answers the same shape of
+            # THE INBOUND MIRROR (§PAYABLES-02). `receipt_schedule` answers the same shape of
             # question for money coming IN, and dereferences `next_weekday_on_or_after` rather than
             # keeping a second copy of "the first such weekday on or after this date" — two copies
             # of that arithmetic are two rules free to disagree (§19.18). It deliberately has NO
@@ -1280,7 +1280,7 @@ FACTS: dict[str, dict] = {
                     'says when this carrier pays us at all?',
         "homes": ('app/modules/payables/receipt_schedule.py',
                   'app/modules/payables/expected_receipts.py'),
-        "index": ('COMMCALC-56',),
+        "index": ('PAYABLES-02',),
         "locks": ('harness_cash_calendar.py',),
         # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
         # on 2026-10-04, and rewrote 51 of them on 2026-10-26; it stripped 1,071 lines of these
@@ -1314,7 +1314,7 @@ FACTS: dict[str, dict] = {
             # the moment either learned something the other did not. §F13 of the lock fails the
             # build if a second definition of the read appears anywhere in the triangle.
             'app/modules/asset/router.py': ('_owed_r',),
-            # THE CASH CALENDAR (§COMMCALC-56) reads the SAME rows a third time rather than
+            # THE CASH CALENDAR (§PAYABLES-02) reads the SAME rows a third time rather than
             # deriving a third answer — its endpoint hands them to the pure netting module, which
             # imports nothing at all. The owner said the owed report already exists and he is right;
             # a third path to "what do I owe" is the duplicate defect the house rules gate on, so
@@ -2223,7 +2223,7 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             'app/modules/commcalc/auto_calc.py': ('_lineage',),
-            # §COMMCALC-56 — the EXPECTED-RECEIPTS read dereferences DATA_DATE_COLUMN_BY_TABLE for
+            # §PAYABLES-02 — the EXPECTED-RECEIPTS read dereferences DATA_DATE_COLUMN_BY_TABLE for
             # "which column dates a row of this feed" instead of declaring a second map of its own.
             # That map's `None` entries are DECLARATIONS, so a period-keyed snapshot is REFUSED as a
             # receipt source rather than guessed around.

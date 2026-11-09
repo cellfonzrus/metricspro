@@ -1532,7 +1532,23 @@ _all_routes = _flatten_routes(real_app.routes)
 # F2/F3 — so no stored total, statement, GP, commission, payable or tax figure can move. It is
 # secret-guarded with a constant-time compare and reachable by no tenant request. The GET is
 # super-admin, counts only, and returns no coordinate.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1836"))
+# Re-pinned 1836 -> 1839 on 2026-11-09 (§PAYABLES-02, the Cash Calendar). Verified the house way,
+# NOT by arithmetic: `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` printed exactly
+# THREE added decorators and NONE removed —
+#     + /payables/cash-calendar      GET   (the day-by-day calendar; a pure fold over two existing
+#                                           reads, org-scoped, writes nothing)
+#     + /payables/receipt-sources    GET   (which payout cycles a tenant has declared; reads the
+#                                           declaration table only)
+#     + /payables/receipt-sources    PUT   (declare one carrier's payout cadence; a CONFIG row)
+# The two READS compute and store nothing: the calendar folds `payables/owed_read.dated_owed` (the
+# read the Daily Owed surface already shares) against `payables/expected_receipts`, and returns the
+# day rows. The PUT writes ONE row of `commcalc.receipt_source_map` — a per-tenant declaration of
+# when a carrier pays, nothing more — so no stored total, statement, GP, commission, payable or tax
+# figure can move through any of the three. All three are org-scoped (another tenant's declaration
+# and another tenant's days are unreachable, locked by the cross-tenant negative in
+# backend/tests/integration/test_cash_calendar_endpoint.py), and the PUT is stamped with its author
+# (`updated_by`/`updated_at`) because changing a cadence changes every day the calendar draws.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1839"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { CASH_CAL_BASIS_WORD, cashCalWeeks, mondayIndex } from './cash-calendar-view'
 
-// PROOF for the two pure display facts of the Cash Calendar (§COMMCALC-56). Both exist because they
+// PROOF for the two pure display facts of the Cash Calendar (§PAYABLES-02). Both exist because they
 // are rules that must not drift from the backend home that owns them, and neither is provable from a
 // screenshot.
 

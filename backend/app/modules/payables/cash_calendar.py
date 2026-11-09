@@ -1,6 +1,6 @@
 """ONE home for the netting: expected money IN against money OWED out, day by day.
 
-Index §COMMCALC-56. Lock: `backend/harness_cash_calendar.py`.
+Index §PAYABLES-02. Lock: `backend/harness_cash_calendar.py`.
 
 OWNER ASK, verbatim: *"the foloowing report will be how much is owed, which we already ahave and the
 thent eh irs will be after offseting the payments what isteh cash flow"*.
@@ -41,7 +41,7 @@ under a filter that matches nothing the owed half reads NOT MEASURED, which is e
 Owed screen shows for the same filter. Overriding it here would be a SECOND opinion about whether the
 business owes anything — the duplicate defect the house rules gate on — and it is worse than the
 asymmetry. Fixing the class properly means changing that shared contract for all three of its
-callers, which is a PR of its own. Index §COMMCALC-56.6.
+callers, which is a PR of its own. Index §PAYABLES-02.6.
 
 PURE: no I/O, no framework, no clock of its own, no carrier/tenant/product name (RULE TWO).
 """

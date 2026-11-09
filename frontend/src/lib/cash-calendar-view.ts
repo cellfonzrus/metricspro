@@ -1,4 +1,4 @@
-// CASH CALENDAR — the two pure display facts the page dereferences (§COMMCALC-56).
+// CASH CALENDAR — the two pure display facts the page dereferences (§PAYABLES-02).
 //
 // WHY THESE ARE NOT IN THE PAGE. Both are rules that must not drift from the backend home that owns
 // them, and both are arithmetic a screenshot cannot prove:

@@ -958,7 +958,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/device-line-reimbursement?view=transferred', label: 'Activated at Another Store', icon: '⇄', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/asset/on-inventory', label: 'On-Inventory by Store', icon: '🏬', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/payables', label: 'Forecasting & Vendor Payables', icon: '📱', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
-    // CASH CALENDAR (owner ask 2026-11-09, index §COMMCALC-56) — expected money IN, money OWED out,
+    // CASH CALENDAR (owner ask 2026-11-09, index §PAYABLES-02) — expected money IN, money OWED out,
     // and the net position, day by day. Beside Vendor Payables deliberately: the OUT side IS that
     // report's figure, read through the one shared `owed_read.dated_owed`, so the two cannot
     // disagree. A tile rather than a sidebar row (owner's "cleaner look" ruling): a management

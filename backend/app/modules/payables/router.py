@@ -893,7 +893,7 @@ def delete_phone_map(map_id: str, org_id: str = ORG_ID):
     return {"deleted": True}
 
 
-# ── Part G — THE CASH CALENDAR: expected in, owed out, net per day (§COMMCALC-56) ─────────────
+# ── Part G — THE CASH CALENDAR: expected in, owed out, net per day (§PAYABLES-02) ─────────────
 #
 # OWNER ASK, verbatim: "i need a report for the expected payments for teh next payout cycle by the day
 # as acalender display for all tenants, also the foloowing report will be how much is owed, which we
@@ -940,7 +940,7 @@ def cash_calendar(start: str = "", end: str = "", store: str = "", market: str =
       · the OUT side  — `owed_read.dated_owed` (§COMMCALC-34), the SAME read the Daily Owed surface
         uses, so this calendar cannot total something that screen disagrees with;
       · the IN side   — `expected_receipts.dated_receipts`, over THIS tenant's declared inbound
-        source and its declared payout cycle (§COMMCALC-56);
+        source and its declared payout cycle (§PAYABLES-02);
       · the NETTING   — `cash_calendar.build`, pure and proven DB-free.
 
     AN UNMEASURED SIDE REFUSES TO NET. A tenant with no declared payout cycle has an UNKNOWN inbound,

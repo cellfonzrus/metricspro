@@ -11,7 +11,7 @@ import { CASH_CAL_BASIS_WORD, cashCalWeeks } from '@/lib/cash-calendar-view'
 import { sourceLabel } from '@/lib/sourceLabels'
 import { PlatformDetail, SetupNotice } from '@/lib/setupNotice'
 
-// CASH CALENDAR — expected money IN, money OWED out, and the net position, day by day (§COMMCALC-56).
+// CASH CALENDAR — expected money IN, money OWED out, and the net position, day by day (§PAYABLES-02).
 //
 // OWNER ASK, verbatim: *"i need a report for the expected payments for teh next payout cycle by the
 // day as acalender display for all tenants, also the foloowing report will be how much is owed,
@@ -250,7 +250,7 @@ export default function CashCalendarPage() {
                     background: !d ? 'transparent'
                       : d.net == null ? 'var(--surface2)'
                         : d.quiet ? 'var(--surface)'
-                          : d.net < 0 ? 'color-mix(in srgb, var(--amber, #f59e0b) 10%, var(--surface))'
+                          : d.net < 0 ? 'color-mix(in srgb, var(--amber) 10%, var(--surface))'
                             : 'color-mix(in srgb, var(--green) 10%, var(--surface))',
                     opacity: d ? 1 : 0,
                   }}>
@@ -264,7 +264,7 @@ export default function CashCalendarPage() {
                         : d.expected_in > 0 ? <div style={{ color: 'var(--green)' }}>+{money(d.expected_in)}</div> : null}
                       {d.owed_out == null
                         ? <div style={{ color: 'var(--text3)', fontStyle: 'italic' }}>owed: not measured</div>
-                        : d.owed_out > 0 ? <div style={{ color: 'var(--amber, #f59e0b)' }}>-{money(d.owed_out)}</div> : null}
+                        : d.owed_out > 0 ? <div style={{ color: 'var(--amber)' }}>-{money(d.owed_out)}</div> : null}
                       {d.net != null && !d.quiet && (
                         <div style={{ marginTop: 3, borderTop: '1px solid var(--border)', paddingTop: 3, fontWeight: 600 }}>
                           {money(d.net)}
@@ -311,7 +311,7 @@ export default function CashCalendarPage() {
               declaration must carry the fix, not send the reader to a support ticket. */}
           <div>
             <button type="button" onClick={() => setShowSources(v => !v)}
-              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent, #2563eb)', font: 'inherit' }}>
+              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent)', font: 'inherit' }}>
               {showSources ? 'Hide' : 'Declare'} this tenant&rsquo;s payout cycles
             </button>{' '}
             — one row per inbound money source. Nothing is assumed: an undeclared carrier reads as
@@ -325,7 +325,7 @@ export default function CashCalendarPage() {
 }
 
 
-// ── THE DECLARATION PANEL — one row per inbound money source (§COMMCALC-56) ──────────────────────
+// ── THE DECLARATION PANEL — one row per inbound money source (§PAYABLES-02) ──────────────────────
 // The CADENCES and the CANDIDATE FEEDS are both fetched from the backend, never listed here: the
 // cadence vocabulary is `payables/receipt_schedule.CADENCES`' to rule on, and only a relation the
 // lineage registry declares a day-grain column for can be placed on a calendar at all. A list typed

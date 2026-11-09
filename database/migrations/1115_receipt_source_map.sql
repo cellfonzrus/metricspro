@@ -1,6 +1,6 @@
 -- 1115_receipt_source_map.sql
 --
--- §COMMCALC-56 — WHEN DOES THE CARRIER PAY US, AND OUT OF WHICH FEED. The inbound mirror of
+-- §PAYABLES-02 — WHEN DOES THE CARRIER PAY US, AND OUT OF WHICH FEED. The inbound mirror of
 -- commcalc.payable_source_map (mig 095 + 1095), which already declares the OUTBOUND billing rhythm.
 --
 -- OWNER ASK, verbatim: "i need a report for the expected payments for teh next payout cycle by the
@@ -89,7 +89,7 @@ END $$;
 COMMENT ON TABLE commcalc.receipt_source_map IS
   'Per-tenant declaration of inbound money: which feed states what a carrier/processor will pay us, '
   'which column is the money, and on what rhythm it pays. Read by payables/expected_receipts.py '
-  'through payables/receipt_schedule.py (§COMMCALC-56). Deliberately unseeded: a house default here '
+  'through payables/receipt_schedule.py (§PAYABLES-02). Deliberately unseeded: a house default here '
   'would be one tenant''s payout arrangement answering for every tenant.';
 COMMENT ON COLUMN commcalc.receipt_source_map.payout_cadence IS
   'How this carrier pays: statement_date (its own feed stamps the day), weekly (payout_weekday), '
