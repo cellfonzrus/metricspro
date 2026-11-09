@@ -450,6 +450,31 @@ FACTS: dict[str, dict] = {
             # assign_role, bulk_assign, create_role, update_role, deactivate_user,
             # revoke_super_admin and purge_app_user — every writer of authority in the module.
             'app/modules/core/router.py': ('_self_lockout',),
+            # §CORE-39: the setup-gap registry asks this same answer for "may this viewer close the
+            # gap", so the button offered and the save accepted cannot disagree.
+            'app/modules/core/setup_fix.py': ('self_lockout',),
+        },
+    },
+    # ── §CORE-39 (owner directive 2026-11-09) — a setup gap carries its own remedy ───────────────
+    'setup_gap_remedy': {
+        "question": 'This is not set up — HOW does the person in front of the screen fix it, and who '
+                    'do they ask when their role may not? The instance was a financing row reading '
+                    '"Detection not configured" with nothing to press; the class is that dozens of '
+                    'surfaces state a setup gap correctly and give the reader nothing to act on. '
+                    'The remedy — the steps, the page that closes the gap, and which settings area '
+                    'says who may — lives in ONE registry and every surface reads it. WHO MAY is '
+                    'not part of the registry: it is asked of `self_lockout.can_edit_setting`, the '
+                    'same answer the write endpoint refuses on, so the button offered and the save '
+                    'accepted cannot disagree. WHO TO ASK is derived from the tenant\'s own roles '
+                    'and people, never declared, and a tenant whose roles satisfy nobody is told so '
+                    'rather than shown a button that would be refused.',
+        "homes": ('app/modules/core/setup_fix.py', 'frontend/src/lib/fix-it.tsx'),
+        "index": ('CORE-39',),
+        "locks": ('harness_setup_fix.py',),
+        # SNAPSHOT — written BY HAND (§50: `--bless` silently deleted 11 of 12 facts on 2026-10-04).
+        "callers": {
+            # GET /core/fix-guide: the permission answer and the recipients, per live request.
+            'app/modules/core/router.py': ('_setup_fix',),
         },
     },
     'app_user_employee_link': {

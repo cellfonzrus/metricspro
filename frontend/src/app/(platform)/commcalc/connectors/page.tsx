@@ -5,6 +5,7 @@ import { isRunning, nextPollDelay } from '@/lib/job-run'
 import { WorkflowNext } from '@/components/WorkflowNext'
 import { useConnectors } from '@/lib/connectors'
 import { SetupNotice, PlatformDetail } from '@/lib/setupNotice'
+import { FixItNotice, useFixGuide } from '@/lib/fix-it'
 import { sourceLabel } from '@/lib/sourceLabels'
 
 // Unified connector registry (SaaS framework Phase 2): every vendor portal + the reports it provides
@@ -105,6 +106,15 @@ export default function ConnectorsPage() {
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
 
+  // How many connectors could run by themselves but have no sign-in saved — the gap the shared
+  // notice above explains and routes. Counted here because only this page holds the rows.
+  type CredShape = { automatable?: boolean; creds?: { has_user?: boolean; has_pass?: boolean }
+                     connector_scope?: { applies?: boolean } }
+  const needsCreds = (conns as CredShape[]).filter(c => c?.automatable
+    && !(c?.creds?.has_user && c?.creds?.has_pass)
+    && !(c?.connector_scope && c.connector_scope.applies === false)).length
+  const credFix = useFixGuide(needsCreds ? 'connector_credentials' : null, 'Connectors')
+
   return (
     <div>
       <div style={{ marginBottom: 14 }}>
@@ -118,6 +128,17 @@ export default function ConnectorsPage() {
         </p>
       </div>
       {msg && <div style={{ fontSize: 13, marginBottom: 10 }}>{msg}</div>}
+
+      {/* THE SETUP GAP, WITH ITS FIX (owner directive 2026-11-09, index §CORE-39). The per-row chip
+          below says "needs setup: credentials" and stops there — correct, and nothing a reader can
+          act on. The SHARED notice carries the steps, checks whether this viewer may close it, and
+          offers whoever can when they may not. One home: `lib/fix-it.tsx` over `core/setup_fix.py`. */}
+      {needsCreds > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <FixItNotice fix={credFix}
+            lead={`${needsCreds} automatic report pull${needsCreds > 1 ? 's cannot' : ' cannot'} run on its own yet.`} />
+        </div>
+      )}
 
       <div style={{ marginBottom: 14 }}>
         <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={() => setShowAdd(s => !s)}>{showAdd ? '✕ Cancel' : '＋ Add connector'}</button>

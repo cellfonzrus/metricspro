@@ -234,7 +234,7 @@ check("(regression) …and the page's only table is one that now honours them",
       "ReportShell" in tk and not any(r == TAKEOVER for r in IGNORE))
 
 # ── (f) A MONEY CELL HAS ONE FORMATTER, AND A WORD IS NOT ZERO ───────────────────────────────────
-# OWNER REPORT 2026-11-09 (index §CORE-39): the Cash Calendar's grid read "in: not measured" while
+# OWNER REPORT 2026-11-09 (index §CORE-40): the Cash Calendar's grid read "in: not measured" while
 # the table directly under it read Expected in $0.00, Net $0.00 and TOTAL $0.00. Four figures for
 # money nobody had measured, on the one report built to never print such a figure, and the .xlsx
 # would have carried them out of the building.

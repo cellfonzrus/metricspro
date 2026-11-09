@@ -4,6 +4,7 @@
 // reconcile). Store items = per-category catch-up + conversion; rep items = conversion.
 import { useState, useEffect } from 'react'
 import { api, ORG_ID, localToday } from '@/lib/client'
+import { FixItNotice, useFixGuide } from '@/lib/fix-it'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -105,6 +106,7 @@ export default function ActionPlanPage() {
   const [data, setData] = useState<Resp | null>(null)
   const [loading, setLoading] = useState(true)
   const [hideOnTrack, setHideOnTrack] = useState(true)
+  const targetFix = useFixGuide('store_targets', 'Action plan')
   const [storeFilter, setStoreFilter] = useState('')
   const [repFilter, setRepFilter] = useState('')
   const drill = useDrillTile((data?.drilldown as Record<string, DrillPanel>) || {})
@@ -313,7 +315,14 @@ export default function ActionPlanPage() {
         <div style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>Loading…</div>
       ) : !data || stores.length === 0 ? (
         <div style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>
-          {hideOnTrack ? 'Nothing flagged — every store with targets is on track. 🎉' : 'No targets set. Add monthly targets in Target Settings.'}
+          {hideOnTrack
+            ? 'Nothing flagged — every store with targets is on track. 🎉'
+            /* The SECOND copy of "No targets set. Add monthly targets in Target Settings." — the
+               duplicate the house rules forbid, and the one that would have been fixed on one page
+               and not the other. Both now render the shared notice (owner 2026-11-09, §CORE-39). */
+            : <div style={{ display: 'inline-block', textAlign: 'left', maxWidth: 560 }}>
+                <FixItNotice fix={targetFix} />
+              </div>}
         </div>
       ) : (
         stores.map(s => (

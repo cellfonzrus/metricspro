@@ -211,7 +211,8 @@ Primary code homes:
 | CORE-31 | **A retention window that deletes nothing is a promise, not a policy** | Found by the security pass §STOREOPS-04 required before going live: that feature shipped a 180-day GPS retention setting and nothing deleted anything — and event check-in GPS had carried the SAME hole since mig 986, declared `unmonitored` on the control box. Who owns "how long may we keep where somebody was", for every relation that stores it, and what stops a purge from taking the flag away with the coordinates? |
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
 | CORE-38 | **Every path that ships this app carries its configuration** | "when i open it it crashed" — TestFlight build 14, on open, every time. The binary was fine; an auto-published over-the-air update had been bundled with NO configuration, because `eas build` reads `build.<profile>.env` out of eas.json and `eas update` does not. Which delivery paths exist, what does each of them carry, and what refuses to ship a bundle that carries nothing? |
-| CORE-39 | **A money column that says a word is not saying zero** | Reported on the Cash Calendar: the day grid read "in: not measured" while the table directly beneath it read Expected in \$0.00, Net \$0.00 and TOTAL \$0.00. The report exists to never print a figure for money nobody measured, and its own table printed four. Nothing was wrong with the report: "how is a money value rendered" had SIX implementations, every one of them `Number(v) || 0`. How many states does a money cell have, and which of them is a claim about measurement rather than about money? |
+| CORE-39 | **A setup gap carries the steps that close it, the page that closes it, and whoever may** | A financing row read "⚠️ Detection not configured" with nothing to press, and 29 files say a setup gap is open the same dead-end way. What closes this gap, where, may I — and when I may not, who in MY company can, and how do they get the same steps and a link to the exact screen? |
+| CORE-40 | **A money column that says a word is not saying zero** | Reported on the Cash Calendar: the day grid read "in: not measured" while the table directly beneath it read Expected in \$0.00, Net \$0.00 and TOTAL \$0.00. The report exists to never print a figure for money nobody measured, and its own table printed four. Nothing was wrong with the report: "how is a money value rendered" had SIX implementations, every one of them `Number(v) || 0`. How many states does a money cell have, and which of them is a claim about measurement rather than about money? |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
@@ -26365,6 +26366,7 @@ status word rather than a blank that reads as nil.
 | CORE-31 | core |
 | CORE-38 | core |
 | CORE-39 | core |
+| CORE-40 | core |
 | CORE-32 | core |
 | CORE-33 | core |
 | CORE-34 | core |
@@ -45181,6 +45183,54 @@ updates were being discarded, which is why this hid) · §CORE-29.3b (the iOS fl
 builds) · §CORE-10 (a guard that goes blind fails CI) · §19.18 (one fact, one home, dereferenced —
 never copied).
 
+### §CORE-38.7 A bundle that cannot start SAYS SO, and stays running (corrected 2026-11-09, same day)
+
+The owner reported the crash a **second** time, 100 minutes after being told the corrected update
+would arrive on the next launch. It could not, and the reason is the part §CORE-38.3 got wrong.
+
+**The fatal part was never the blank value. It was the THROW.** `expo-updates` downloads the next
+bundle in the BACKGROUND *after* launch, so a process that dies in its first second kills its own
+download — every time, on every launch. The app can never replace the bundle that is breaking it,
+and the only way out is deleting and reinstalling. Making `src/config/env.ts` throw, as §CORE-38.3
+describes, was the same mistake one import earlier than `createClient('')`: it crashed just as hard
+and left the phone just as stuck. It was recorded as an improvement and was not one.
+
+**So the rule for the startup path is: nothing on it may throw.** A fault is a VALUE the UI renders.
+
+* `mobile/src/lib/startup-fault.ts` — `describeStartupFault(extra)` returns the missing variable
+  names plus a title and a detail a person can read, or `null`. Pure; dereferences the same one home
+  (`config/required-extra.json`, through `scripts/delivery-env.js`) that the delivery gate reads, so
+  the app and the gate can never disagree about what "configured" means. 9 unit tests.
+* `mobile/src/config/env.ts` reports `STARTUP_FAULT` and throws nothing.
+* `mobile/src/api/supabase.ts` constructs the client only when the bundle is configured; faulted, the
+  export is a Proxy that names the real fault if anything reaches for it. It never points at a fake
+  server — a client silently talking to nowhere is worse than one that says why it cannot — and the
+  `AppState` auto-refresh listener is not wired either, since a listener that throws on every
+  foreground is the crash again by another route.
+* `mobile/src/components/StartupFault.tsx` — the screen, plus `StartupErrorBoundary` for a throw
+  raised *during* rendering. A boundary cannot catch a throw raised while the bundle is being
+  evaluated, which is exactly why the no-module-scope-throw rule comes first.
+* `mobile/app/_layout.tsx` renders the screen and **lifts the splash**. That is part of the fix, not
+  a detail: a fault screen behind a splash that never lifts is the same blank screen that hid the
+  first fault for three days.
+
+**What the lock refuses** (section S, same harness, taking it to 84 checks): a module-scope `throw`
+in any of the three startup-path modules, the reader not reporting a fault, the client being
+constructed unconditionally, the screen or the boundary going missing, the splash not being lifted,
+and a blank title, detail or boundary message. Mutation-tested: re-adding a module-scope throw
+reddens S2.1, removing the splash lift reddens S3.4, constructing the client unconditionally reddens
+S2.3.
+
+S2.3 is worth keeping as its own lesson. Its first version searched the whole file for
+`STARTUP_FAULT`, and the module's own explanatory comment contains that word — so the mutation that
+constructed the client unconditionally **passed**. It now reads code with comments stripped. A check
+a comment can satisfy is not a check, and only the mutation test found it.
+
+**Still open, and not claimed as done:** nothing in CI launches this app. Every mobile gate here is
+a pure unit test or a source-text lock, so a bundle that cannot start still passes all of them. The
+configuration half is now gated and a startup fault is now survivable; an actual launch smoke check
+is not written.
+
 ---
 
 ## §PAYABLES-02. A PAYMENT DATE NOBODY DECLARED IS NOT A PAYMENT DATE (owner ask 2026-11-09)
@@ -45277,9 +45327,132 @@ vocabulary is never a default) · §19.18 (one fact, one home, dereferenced — 
 (the standard filters and the send bar) · §CORE-17.3h (a net is folded per row, never as a difference
 of two totals) · §64 (store identity) · §15 (module 095, the payable ledger the out side reads).
 
+## §CORE-39. A SETUP GAP CARRIES THE STEPS THAT CLOSE IT, THE PAGE THAT CLOSES IT, AND WHOEVER MAY (owner directive 2026-11-09)
+
+Owner, verbatim: *"to fix any such problem going forward shpow it on the screen hpow the user can fix
+teh problem so it is taken care of right away and if it is not under tehoer role permissionsm, have
+them send a link ot thier manager from the chat menu so it can be fixed"*.
+
+**Module:** `backend/app/modules/core/setup_fix.py` (the registry + the pure resolvers) ·
+`backend/app/modules/core/router.py` (`GET /core/fix-guide` — the live permission answer and the
+recipients) · `frontend/src/lib/fix-it.tsx` (`FixItNotice` / `useFixGuide` / `askTheFixer`)
+**Lock:** `backend/harness_setup_fix.py` — §A–§L incl. ten armed controls, run by
+`carrier-vocab-guard.yml`
+**Tests:** `backend/tests/unit/test_setup_fix.py` (43) · `backend/tests/integration/test_fix_guide_endpoint.py`
+(18, three tenant shapes) · `frontend/src/lib/__tests__/fix-it.test.tsx` (13)
+**Migration:** none. Every fact this needs is already stored, and no money is touched.
+
+### §CORE-39.1 Duplicate check (the build gate)
+
+Searched the index for an existing mechanism owning *"how does this person close this setup gap"*.
+Four neighbours were found and all four are REUSED rather than duplicated:
+
+| Existing mechanism | What it owns | How this reuses it |
+|---|---|---|
+| §19.36 / §19.38 `core/setup_notice.py` + `lib/setupNotice.tsx` | the ONE customer sentence for "not switched on", and the detectors for an internal setup fact | the detectors are DEREFERENCED by the lock (§D), so a step naming a migration fails the build. `SetupNotice` stays the sentence for a gap with no remedy to offer |
+| `core/router.py::SETTING_AREAS` + §CORE-12 `self_lockout.can_edit_setting` | which settings areas exist, and who may edit one | `can_fix` IS that answer. The registry declares only WHICH area to ask about; §G fails the build if the endpoint stops asking |
+| §NOTIFY-01 `notify/send_outcome.py` | why a SEND failed and the remedy for it | the same shape, a different subject (a send attempt, not a setting). Nothing is shared but the lesson: the remedy is the server's words and is never re-spelled in the browser |
+| `chat/router.py` `POST /dm` + `POST /channels/{id}/messages` | the app's one message path | "ask whoever can fix it" calls exactly those two routes. No second send route exists to drift from them |
+| §54 `lib/route-index.ts` | every page this app has | every destination is checked against it (§C), so a gap cannot point at a page that is gone |
+
+### §CORE-39.2 The class, not the instance
+
+The instance was one financing row: **"⚠️ Detection not configured"**, correct, and with nothing on
+the screen to press. The class is bigger and is what is fixed here: **the platform knows a check
+could not run, and tells the person in front of it nothing they can act on.** Measured on
+2026-11-09, **29 files** render display copy saying a setup gap is open; before this change *none* of
+them carried steps, and the few that carried a link offered it to readers whose role would be refused
+at the other end.
+
+Two further facts make it a class rather than a list:
+
+1. **The reader is usually not the fixer.** A rep sees the warning; an administrator holds the
+   permission. Nothing on any of those screens named a person — so the gap survived every reader.
+2. **The remedy was already duplicating.** *"No targets set. Add monthly targets in Target
+   Settings."* existed VERBATIM on two pages (`commcalc/targets` and `commcalc/targets/action-plan`).
+   Two copies of one remedy is the §19.18 defect, and one of them would have been improved while the
+   other was not.
+
+### §CORE-39.3 What shipped
+
+- **ONE REGISTRY, `core/setup_fix.py`.** Per gap: `title`, `consequence` (what the surface therefore
+  cannot say — never "zero"), `steps` in plain words, `page` (the screen that closes it) and `gate`.
+  Eleven gaps are declared. RULE TWO holds throughout: every word is the app's own vocabulary — a
+  screen, a field, a button — and the lock fails on a carrier, tenant or product name (§E).
+- **THREE GATE KINDS AND NO FOURTH.** A registered settings area; `ADMIN` (no grantable area — a
+  full-scope administrator, spelled as an UNREGISTERED area key so `can_edit_setting`'s own default
+  branch answers it rather than a second rule); and `PLATFORM`, which is ours to close, offers no
+  page and no person to anybody, **including an administrator**, and says so.
+- **`GET /core/fix-guide`** serves one gap's guide for the live caller, or (with no key) the index of
+  every gap with whether this caller may close it. `can_fix` is `can_edit_setting`. The recipients are
+  DERIVED: the roles of **this tenant** whose own permissions satisfy that same check, the people
+  holding them, the asker's own manager first. Every read is `.eq("org_id", <acting membership's org>)`
+  — never the request's `org_id` parameter — so a recipient from another tenant is not filtered out,
+  it is never fetched.
+- **`lib/fix-it.tsx`** renders it: the steps **either way** (a refused reader can still say what is
+  needed), a link to the page when `can_fix`, and otherwise a button naming the person — *"Ask Dana
+  Admin to fix this"*, never the word "manager". Pressing it opens the DM through the existing chat
+  routes and posts the guide's own message, which carries the same steps and the deep link. The
+  confirmation names the conversation it landed in and links to it; **a failed send says it failed**
+  (§19.37 — a 2xx is not proof).
+- **`/chat?channel=<id>`** now opens on that conversation, and only when the server listed it for this
+  viewer: an id in a URL is a hint, never an admission to somebody else's thread.
+- **Migrated in this change:** the financing report (its own banner and link deleted), Connectors, and
+  BOTH copies of the targets sentence.
+
+### §CORE-39.4 What the lock refuses
+
+`harness_setup_fix.py`, DB-free, in `carrier-vocab-guard.yml`:
+
+- **§A–§C** a gap with no steps, no gate or no destination; a `gate` that is not a grantable settings
+  area (read out of `SETTING_AREAS` by AST); a `page` that is not a real route.
+- **§D/§E** a customer-facing word that names a migration, a schema object, the SQL editor, a database
+  error, a carrier or a tenant.
+- **§F** a registry step copied into `frontend/src` — the second spelling of a remedy.
+- **§G/§H** the route gone; the guide served without the house permission check; `setup_fix` reading a
+  permission itself; `fix-it.tsx` reading a role instead of deferring to `can_fix`.
+- **§I THE RATCHET.** A file whose display copy says a setup gap is open must render the shared notice
+  or be registered in `frontend/setup_fix_pending.txt` **with a reason**. A stale line, a dead line, a
+  reasonless line, or more lines than the pin (27) → RED. So a NEW dead-end warning cannot ship.
+- **§J** the ask not going through the app's one chat path.
+- **§K** ten armed controls, including the owner's own sentence matching the detector, and
+  **"not measured" NOT matching it**.
+- **§L** this program being run by no workflow.
+
+**Not covered, stated rather than hidden.** *"Not measured"* is a different class and is deliberately
+out of scope: it means the platform holds no figure, which is usually a feed that did not arrive, not
+a setting anybody can change. Routing a reader to a settings page that cannot help them would be
+worse than the dead end. A "not measured" surface whose cause IS a missing declaration names a
+registry key explicitly, and §I then sees it wired.
+
+### §CORE-39.5 Every tenant
+
+Per the 2026-10-30 rule (§COMMCALC-49.10): the gate is resolved against **each tenant's own roles**,
+the recipients against **its own people**, and the three tenant shapes are asserted in both suites —
+a full role ladder, a tenant that granted one area to a store manager and denied it to its owner, and
+a tenant where nobody can edit anything, which is what every tenant looks like on day one. That last
+shape is the one a "house default" would have got wrong: it is told plainly that nobody here can close
+the gap, instead of being shown a button that would be refused.
+
+**Security.** The permission answer is the server's and is the same function the write endpoint
+refuses on, so the surface can only ever be MORE restrictive than the save. The browser holds no copy
+of a permission (§H). Recipient resolution is handed one tenant's rows, which is what makes a
+cross-tenant leak impossible by construction rather than by a filter somebody can forget (§D of the
+integration suite asserts it for all three tenants). The chat deep link is honoured only for a
+conversation the server already listed for that viewer.
+
+### §CORE-39.6 Cross-references
+
+§19.36 / §19.38 (the one customer sentence for "not switched on", and the detectors this
+dereferences) · §CORE-12 (`can_edit_setting` — the authority answer this asks and never copies) ·
+§NOTIFY-01 (why a send failed, and its remedy — the same shape, a different subject) · §54
+(`route-index.ts`, against which every destination is checked) · §19.18 (one fact, one home,
+dereferenced — never copied; the duplicated targets sentence is its latest instance) ·
+§COMMCALC-49.10 (every feature for every tenant) · §19.37 (a 2xx is not proof — why a failed ask says
+so) · §CORE-17.3p (the financing report, the surface the reported instance was on).
 ---
 
-## §CORE-39. A MONEY COLUMN THAT SAYS A WORD IS NOT SAYING ZERO (reported 2026-11-09)
+## §CORE-40. A MONEY COLUMN THAT SAYS A WORD IS NOT SAYING ZERO (reported 2026-11-09)
 
 Reported minutes after §PAYABLES-02 shipped, on §PAYABLES-02's own screen. The day grid read
 `in: not measured`; the table directly beneath it read **Expected in $0.00**, **Net $0.00** and
@@ -45287,7 +45460,7 @@ Reported minutes after §PAYABLES-02 shipped, on §PAYABLES-02's own screen. The
 four such figures, one row apart from the words refusing them — and the Excel and PDF buttons would
 have carried them out of the building, where a spreadsheet outlives the screen and carries no note.
 
-### §CORE-39.1 The class — one question, six answers
+### §CORE-40.1 The class — one question, six answers
 
 Nothing was wrong with the report. `payables/cash_calendar.build` returned `None` for every
 unmeasured figure exactly as §PAYABLES-02 requires, the page's own column accessors turned each
@@ -45304,7 +45477,7 @@ unmeasured figure exactly as §PAYABLES-02 requires, the page's own column acces
 | `lib/export.tsx` `money` | the PDF cell |
 | `lib/export.tsx` `rawCell` | the `.xlsx` cell — as a real numeric `0` |
 | `lib/report-totals.ts` `moneyFmt` | the pinned TOTAL row |
-| `lib/tile-snapshot.ts` `fmtMoney` | the sent snapshot (shielded by luck — see §CORE-39.4) |
+| `lib/tile-snapshot.ts` `fmtMoney` | the sent snapshot (shielded by luck — see §CORE-40.4) |
 
 `Number('not measured')` is `NaN`, and `NaN || 0` is `0`. So a deliberate claim about measurement
 became a confident claim about money, in seven places, silently.
@@ -45318,7 +45491,7 @@ rather than silently vanishing."* The right answer was never vanishing — it wa
 word**. And the other five copies never received even the absent-half fix. A fact with six homes
 drifts, and this one drifted for two months in the one place a wrong number is permanent.
 
-### §CORE-39.2 Three states, not two
+### §CORE-40.2 Three states, not two
 
 The home is `lib/report-totals.ts`, which already owned `toNumber` — the regex-validated, one and
 only test of numeric-ness, returning `null` rather than `0` for a word. The three money functions
@@ -45333,7 +45506,7 @@ dereference it rather than re-deciding:
   app's 681 money columns rely on it, and widening this fix to touch them would be a migration
   wearing a bug fix's clothes.
 
-### §CORE-39.3 A total over an unmeasured cell is not a total
+### §CORE-40.3 A total over an unmeasured cell is not a total
 
 `resolveAgg` returned `'sum'` for a money column unconditionally, and the sum read each unmeasured
 cell as `0`. It now refuses — `'none'` — where **any** cell in the column is unmeasured, which is
@@ -45343,7 +45516,7 @@ labelling it one is §CORE-17.3h's defect, a figure no set of rows adds up to. `
 subtotals reach the same verdict and render it in words through one `subtotalText` home, because
 `moneyText(null)` is `$0.00` by design and that is precisely the figure a refusal must not become.
 
-### §CORE-39.4 What the lock holds, and what it does not
+### §CORE-40.4 What the lock holds, and what it does not
 
 Clause **(f)** of `backend/harness_column_render_lock.py` — extended rather than given a sibling,
 because *one question, six answers* is that lock's own class and it already owns how a shared table

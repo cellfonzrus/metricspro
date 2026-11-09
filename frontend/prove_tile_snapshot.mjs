@@ -30,7 +30,7 @@ import { loadLibs } from './prove_load_ts.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const MOD = 'src/lib/tile-snapshot.ts'
 // Loaded through the shared loader because this module now DEREFERENCES the one money home
-// (`@/lib/report-totals`, §CORE-39) instead of carrying its own `Number(v) || 0`. Bare Node cannot
+// (`@/lib/report-totals`, §CORE-40) instead of carrying its own `Number(v) || 0`. Bare Node cannot
 // resolve Next's `@/lib/...` alias; the loader rewrites it and stubs nothing, so the file under
 // test is still the file that ships.
 const [T] = await loadLibs(HERE, ['tile-snapshot'])

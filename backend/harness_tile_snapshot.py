@@ -190,7 +190,7 @@ print("\n§E THE BEHAVIOUR IS PROVED, AND THE PROOF IS RUN")
 # "import a pure src/lib TypeScript module under bare Node"), which rewrites Next's `@/lib/...`
 # alias and stubs nothing. The loader became the only possible route on 2026-11-09, when this
 # module stopped carrying its own `Number(v) || 0` and began dereferencing the money home
-# (§CORE-39): bare Node cannot resolve that alias, so a direct import now dies at resolve time.
+# (§CORE-40): bare Node cannot resolve that alias, so a direct import now dies at resolve time.
 # What both routes have in common is the point of the check — the file under test is the file
 # that ships, which is why E2 still refuses any local definition of the functions.
 LOADER = "frontend/prove_load_ts.mjs"

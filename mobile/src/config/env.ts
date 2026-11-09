@@ -1,6 +1,6 @@
 import Constants from 'expo-constants'
 
-import REQUIRED from '../../config/required-extra.json'
+import { describeStartupFault, type StartupFault } from '@/lib/startup-fault'
 
 // ── Runtime configuration ──────────────────────────────────────────────────────────────────────
 // Resolved from app.config.ts `extra` (populated at build time from EXPO_PUBLIC_* env vars). Reading
@@ -12,8 +12,12 @@ import REQUIRED from '../../config/required-extra.json'
 // imports later, which throws `supabaseUrl is required.` at module scope. A bundle published with
 // no environment therefore crashed every phone it reached in the first second, with a message that
 // named Supabase rather than the missing variable (TestFlight build 14, owner report 2026-11-09).
-// A warning nobody can see on a phone is not a check. It now throws here, naming every missing
-// variable at once, so a crash log says what to set.
+//
+// CORRECTED the same day, after the owner reported it crashing a SECOND time. Throwing here was
+// still wrong — it crashed just as hard, one import earlier. A process that dies in its first
+// second kills expo-updates' background download, so the app can never replace the bundle that is
+// breaking it and the only way out is deleting and reinstalling. The fault is now a VALUE the UI
+// renders (STARTUP_FAULT), and the app stays alive to repair itself.
 //
 // The authority on "what this app cannot run without" is config/required-extra.json — ONE
 // declaration, dereferenced here and by scripts/delivery-env.js, which is what every delivery path
@@ -27,20 +31,11 @@ type Extra = {
 
 const extra = (Constants.expoConfig?.extra ?? {}) as Extra
 
-const missing = Object.entries(REQUIRED.required)
-  .filter(([key]) => {
-    const value = (extra as Record<string, unknown>)[key]
-    return typeof value !== 'string' || value.trim() === ''
-  })
-  .map(([, envVar]) => envVar)
-
-if (missing.length > 0) {
-  throw new Error(
-    `[config] This build carries no ${missing.join(', ')}. ` +
-      'They are set in mobile/eas.json under `build.<profile>.env` for a build, and reach an ' +
-      'over-the-air publish through scripts/with-profile-env.mjs. Locally, set them in .env.',
-  )
-}
+// NOTHING ON THE STARTUP PATH MAY THROW. A fault is a value the UI renders, so the process stays
+// alive and expo-updates can finish downloading the bundle that fixes it — see the account in
+// src/lib/startup-fault.ts. The first version of this check threw here, which is the same mistake
+// one import further up the chain: it made a bad bundle permanent.
+export const STARTUP_FAULT: StartupFault | null = describeStartupFault(extra)
 
 export const ENV = {
   supabaseUrl: extra.supabaseUrl as string,
