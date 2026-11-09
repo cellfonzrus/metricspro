@@ -185,10 +185,24 @@ check("D13 an absent figure is blank in the sent sheet, never a fabricated 0",
       "if (v == null || v === '') return ''" in conv_code)
 
 print("\n§E THE BEHAVIOUR IS PROVED, AND THE PROOF IS RUN")
+# TWO routes reach the real file on disk, and no third. Either the proof imports the `.ts`
+# directly, or it goes through the SHARED loader (`frontend/prove_load_ts.mjs`, the one home for
+# "import a pure src/lib TypeScript module under bare Node"), which rewrites Next's `@/lib/...`
+# alias and stubs nothing. The loader became the only possible route on 2026-11-09, when this
+# module stopped carrying its own `Number(v) || 0` and began dereferencing the money home
+# (§CORE-39): bare Node cannot resolve that alias, so a direct import now dies at resolve time.
+# What both routes have in common is the point of the check — the file under test is the file
+# that ships, which is why E2 still refuses any local definition of the functions.
+LOADER = "frontend/prove_load_ts.mjs"
+drives_direct = "await import(" in proof and "pathToFileURL" in proof
+drives_loader = ("from './prove_load_ts.mjs'" in proof
+                 and "loadLibs(HERE, ['tile-snapshot'])" in proof
+                 and os.path.exists(os.path.join(ROOT, LOADER))
+                 and "readFileSync(join(root, 'src/lib'" in read(LOADER))
 check("E1 the node proof exists and drives the REAL module",
-      "src/lib/tile-snapshot.ts" in proof and "await import(" in proof)
+      "src/lib/tile-snapshot.ts" in proof and (drives_direct or drives_loader))
 check("E2 it calls through the imported module rather than copying it — no stub, no re-implementation",
-      "pathToFileURL" in proof and "T.tileSnapshotSheet(" in proof
+      (drives_direct or drives_loader) and "T.tileSnapshotSheet(" in proof
       and not re.search(r"(?m)^\s*(export\s+)?(function|const)\s+(tileSnapshotSheet|snapshotChangeLabel)\b",
                         proof))
 check("E3 it proves all three states of the change label",
