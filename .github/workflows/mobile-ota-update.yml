@@ -105,6 +105,25 @@ jobs:
           npm install -g eas-cli@latest
           eas --version
 
+      # THE GATE. A publish reaches every installed phone at once with no store review in front of
+      # it, and on 2026-11-06 one reached the owner's handset with no configuration at all: the
+      # publish below used to run `eas update` directly, and `eas update` does NOT read
+      # `build.<profile>.env` out of eas.json the way `eas build` does — there is no flag that makes
+      # it (`--environment` selects server-side EAS variables, which this project does not use).
+      # So `extra.supabaseUrl` bundled as '', `createClient('')` threw at module scope, and the app
+      # died in its first second on every launch. Every check in CI was green: they are all DB-free
+      # unit tests and source-text locks, and none of them evaluates the app config.
+      #
+      # This step evaluates app.config.ts in the environment the publish will actually use and
+      # refuses if any required value is blank. The required set is declared once, in
+      # mobile/config/required-extra.json, and is the same set the app itself dereferences at launch.
+      - name: refuse to publish a bundle that carries no configuration
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: mobile
+        env:
+          CHANNEL: ${{ inputs.channel || 'production' }}
+        run: node scripts/with-profile-env.mjs "$CHANNEL" node scripts/check-extra.mjs
+
       - name: publish the update
         if: steps.gate.outputs.ready == 'true'
         working-directory: mobile
@@ -116,7 +135,11 @@ jobs:
           HEAD_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           SUBJECT="$(printf '%s' "$HEAD_MESSAGE" | head -n 1)"
-          eas update --branch "$CHANNEL" \
+          # Through the wrapper, which DEREFERENCES mobile/eas.json `build.<CHANNEL>.env` — the one
+          # home for this app's build-time configuration, and the same values `eas build` applies.
+          # Restating them here instead would be the second copy that diverged in the first place.
+          node scripts/with-profile-env.mjs "$CHANNEL" \
+            eas update --branch "$CHANNEL" \
             --message "${GITHUB_SHA::7} ${SUBJECT:-manual publish}" --non-interactive
           {
             echo "### The app was updated"
