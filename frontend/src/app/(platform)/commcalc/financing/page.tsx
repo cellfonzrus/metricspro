@@ -14,6 +14,7 @@ import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
 } from '@/components/DrillDownPanel'
 import { narrowPanel, screenKey, agreesToTheCent } from '@/lib/drill-narrow'
+import { FixItNotice, useFixGuide } from '@/lib/fix-it'
 
 // FINANCING REPORT — owner directive 2026-08-04: "need another report for tracking the financing, edge in
 // case of total and acima in case of boost … should have assignable target for each store in target area".
@@ -223,6 +224,8 @@ export default function FinancingReportPage() {
   const withTarget = shownStores.filter(s => (s.target_units || 0) > 0)
   const hitting = withTarget.filter(s => (s.attainment_pct || 0) >= 100).length
   const unconfigured = shownVendors.filter(v => v.enabled && v.detection_status !== 'configured')
+  // The shared guide for this gap (steps + whether THIS viewer may close it + who to ask).
+  const vendorFix = useFixGuide(unconfigured.length ? 'financing_vendor_detection' : null, 'Financing report')
 
   return (
     <div style={{ maxWidth: 1320 }}>
@@ -258,13 +261,19 @@ export default function FinancingReportPage() {
 
       {err && <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 13, color: 'var(--red)' }}>{err}</div>}
 
+      {/* THE SETUP GAP, WITH ITS FIX (owner directive 2026-11-09, index §CORE-39). This banner used
+          to carry its own "Map it now" link and its own wording: no steps, and the link was offered
+          to a viewer whose role would be refused at the other end. It now renders the SHARED notice,
+          so the steps, the permission check and the "ask whoever can" fall out of one home —
+          `lib/fix-it.tsx` over `core/setup_fix.py`. The page keeps only what is its own to say:
+          WHICH vendors. */}
       {unconfigured.length > 0 && (
-        <div className="card" style={{ padding: '11px 15px', marginBottom: 14, fontSize: 13,
-          background: 'var(--c-bg-fffbeb)', border: '1px solid var(--c-bg-fde68a)', color: 'var(--c-fg-92400e)' }}>
-          <b>⚠️ {unconfigured.length} vendor{unconfigured.length > 1 ? 's are' : ' is'} not mapped yet.</b>{' '}
-          {unconfigured.map(v => (multi ? vlabel(v.vendor_key, v.label) : `${v.label}: ${v.detection_note}`)).join(' · ')}{' '}
-          <Link href="/commcalc/financing/vendors" style={{ textDecoration: 'underline' }}>Map it now</Link>
-          {' '}— until then it counts nothing, and a zero below is “not configured”, not “no financing”.
+        <div style={{ marginBottom: 14 }}>
+          <FixItNotice
+            fix={vendorFix}
+            lead={`${unconfigured.length} vendor${unconfigured.length > 1 ? 's are' : ' is'} not mapped yet `
+                  + `(${unconfigured.map(v => (multi ? vlabel(v.vendor_key, v.label) : v.label)).join(' · ')}).`}
+          />
         </div>
       )}
 

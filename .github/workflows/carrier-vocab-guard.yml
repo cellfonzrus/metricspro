@@ -1392,6 +1392,10 @@ on:
       - "frontend/src/components/EmployeeWidgets.impl.tsx"
       - "backend/harness_table_sort_lock.py"
       - "frontend/table_sort_pending.txt"
+      - "backend/harness_setup_fix.py"
+      - "frontend/setup_fix_pending.txt"
+      - "backend/app/modules/core/setup_fix.py"
+      - "frontend/src/lib/fix-it.tsx"
       - "backend/harness_column_render_lock.py"
       - "frontend/src/components/ReportShell.tsx"
       - "frontend/src/components/DataGrid.tsx"
@@ -2167,6 +2171,9 @@ jobs:
       - name: Run the table-sort ratchet (a new data table cannot ship unsorted; the unsorted list only shrinks — owner 2026-08-10, index §19.29)
         working-directory: backend
         run: python3 harness_table_sort_lock.py | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the setup-fix lock (a "not configured" warning carries the steps that close it, the page that closes it and whoever may; a NEW dead-end warning cannot ship and the unwired list only shrinks — owner 2026-11-09, index §CORE-39)
+        working-directory: backend
+        run: python3 harness_setup_fix.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the column-render lock (a column that draws its own cell is DRAWN — every table taking an ExportColumn honours `render`, and an export still carries the figure — owner 2026-10-15, index §CORE-11)
         working-directory: backend
         run: python3 harness_column_render_lock.py | tee -a "$GITHUB_STEP_SUMMARY"

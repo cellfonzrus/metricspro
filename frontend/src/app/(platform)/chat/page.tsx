@@ -208,8 +208,23 @@ export default function ChatPage() {
     return names.length ? names.join(', ') : 'Direct message'
   }, [nameOf, me])
 
+  // DEEP LINK `?channel=<id>` (owner directive 2026-11-09, index §CORE-39). A setup warning the
+  // reader may not fix themselves sends the steps to whoever can, and then links them to the
+  // conversation it went to — which is worth nothing if the link cannot open ON that conversation.
+  // Applied in the LOAD CALLBACK rather than an effect, so it happens the moment the list arrives
+  // and once only. The id is honoured ONLY when the server listed that conversation for this
+  // viewer: an id in a URL is a hint, never an admission to somebody else's thread.
+  const deepLinked = useRef(false)
   const loadChannels = useCallback(() => {
-    api('/api/v1/chat/channels').then((r: any) => setChannels(r.channels || [])).catch(() => {})
+    api('/api/v1/chat/channels').then((r: any) => {
+      const list: Channel[] = r.channels || []
+      setChannels(list)
+      if (!deepLinked.current && typeof window !== 'undefined') {
+        deepLinked.current = true
+        const want = new URLSearchParams(window.location.search).get('channel') || ''
+        if (want && list.some(c => c.id === want)) setActiveId(want)
+      }
+    }).catch(() => {})
   }, [])
   const loadMessages = useCallback((cid: string) => {
     if (!cid) return
@@ -226,6 +241,7 @@ export default function ChatPage() {
   }, [])
   useEffect(() => { loadChannels() }, [loadChannels])
   useEffect(() => { api('/api/v1/chat/me').then((r: any) => setMe(r)).catch(() => {}) }, [])
+
 
   // Web-push registration MOVED OUT (owner directive 2026-09-10) to lib/chat-push.ts, called once
   // from the header envelope, which is mounted on every platform page. Registering here meant a

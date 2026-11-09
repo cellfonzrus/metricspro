@@ -1548,7 +1548,22 @@ _all_routes = _flatten_routes(real_app.routes)
 # and another tenant's days are unreachable, locked by the cross-tenant negative in
 # backend/tests/integration/test_cash_calendar_endpoint.py), and the PUT is stamped with its author
 # (`updated_by`/`updated_at`) because changing a cadence changes every day the calendar draws.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1839"))
+# Re-pinned 1839 -> 1840 on 2026-11-09 (§CORE-39, setup-gap guidance). Verified the house way, NOT
+# by arithmetic: `git diff origin/main -- backend/ | grep -E '^[+-].*@router\.'` printed exactly ONE
+# added decorator and NONE removed (the only other hit is that decorator quoted inside
+# harness_setup_fix.py, which asserts the route has not been un-wired) —
+#     + /core/fix-guide              GET   (how to close a setup gap, for this caller: the declared
+#                                           steps, the page that closes it, and — when their role may
+#                                           not — who in their own tenant can, with the message to
+#                                           send them)
+# It is READ-ONLY and computes nothing: it folds the static registry in `core/setup_fix.py` against
+# `can_edit_setting` (the house permission answer, unchanged) and, only for a caller the gate
+# refuses, the tenant's own roles / people / org units. It writes no row, so no stored total,
+# statement, GP, commission, payable or tax figure can move. Every read is
+# `.eq("org_id", <the acting membership's org>)` — never the request's `org_id` parameter — so
+# another tenant's roles, people or recipients are unreachable, pinned by the three-tenant cross-org
+# negative in backend/tests/integration/test_fix_guide_endpoint.py (§D).
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1840"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

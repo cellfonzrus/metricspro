@@ -1,0 +1,47 @@
+# SETUP-GAP WARNINGS NOT YET WIRED TO THE SHARED NOTICE — a shrink-only register
+# (owner directive 2026-11-09, index §CORE-39; lock backend/harness_setup_fix.py §I).
+#
+# Every file here renders display copy that tells a reader a SETUP GAP is open without giving them
+# anything to act on — the exact dead end the owner asked to remove. They are written down rather
+# than silently tolerated, each WITH ITS REASON, and the list may only ever get shorter: a file
+# wired to <FixItNotice> deletes its line, and a file added tomorrow cannot add one.
+#
+# WHY A RATCHET AND NOT ONE CHANGE. 28 bespoke warnings across 28 pages cannot be migrated in one
+# reviewable diff, and a diff nobody can review is how a lock ends up switched off. The mechanism,
+# the registry, the permission answer, the ask and the lock all land here; the remaining pages
+# migrate behind the build gate that now refuses a NEW one.
+#
+# format:  <path under frontend/src>   # why it is still here
+#
+# ── owed a registry entry (a tenant CAN close these; the steps simply are not written yet) ──────
+app/(platform)/accounts/liabilities-due/page.tsx          # owed a gap for the distributor-payable basis declaration
+app/(platform)/admin/business-types/page.tsx              # the gap is a platform build state, not a tenant setting
+app/(platform)/admin/impersonation/page.tsx               # owed a gap for the impersonation policy area
+app/(platform)/admin/import-health/page.tsx               # owed a gap for the feed-schedule declaration
+app/(platform)/commcalc/daily-commission/page.tsx         # owed a gap for the daily commission basis
+app/(platform)/commcalc/expected-commission/page.tsx      # owed a gap for the multi-month payout schedule
+app/(platform)/commcalc/financing/vendors/page.tsx        # this page IS the destination of the financing gap
+app/(platform)/commcalc/integrations/page.tsx             # owed a gap per integration, once each has a settings area
+app/(platform)/commcalc/payout-plans/page.tsx             # this page IS the destination of the commission-plan gap
+app/(platform)/commcalc/store-takeover/page.tsx           # owed a gap for the device-category declaration
+app/(platform)/commcalc/upload/page.tsx                   # owed a gap for the per-connector credential state
+app/(platform)/franchise/page.tsx                         # owed a gap for the royalty source declaration
+app/(platform)/storeops/payroll-tax/page.tsx              # owed a gap for the per-state rate declaration
+#
+# ── platform credentials: no tenant can close them, so each is owed a PLATFORM gap ──────────────
+app/(platform)/closing/billpay-pickup/page.tsx            # a server capability; owed a PLATFORM gap
+app/(platform)/closing/epay-recon/page.tsx                # a server capability; owed a PLATFORM gap
+app/(platform)/closing/pickup/page.tsx                    # a server capability; owed a PLATFORM gap
+app/(platform)/commcalc/manager-followup/page.tsx         # the email/WhatsApp sender gaps are declared; wiring owed
+app/(platform)/hr/people/page.tsx                         # the email sender gap is declared; wiring owed
+app/(platform)/notify/page.tsx                            # the WhatsApp sender gap is declared; wiring owed
+app/(platform)/referral/new/page.tsx                      # a server signing key; owed a PLATFORM gap
+app/(platform)/supply/orders/page.tsx                     # a server capability (the browser worker); owed a PLATFORM gap
+app/(platform)/supply/vendors/page.tsx                    # a server capability (the browser worker); owed a PLATFORM gap
+app/(platform)/vision/onboarding/page.tsx                 # a server push endpoint; owed a PLATFORM gap
+lib/send-report.tsx                                       # names the sender gaps inside a send result; wiring owed
+#
+# ── a DIFFERENT class: no role is assigned to a login, which the Roles screen already walks ─────
+app/(platform)/admin/roles/page.tsx                       # explains the "Account not set up" wall it already fixes
+app/(platform)/layout.tsx                                 # IS the "Account not set up" wall; its own remedy is on it
+app/(platform)/pos/layout.tsx                             # the onboarding wizard's own progress copy

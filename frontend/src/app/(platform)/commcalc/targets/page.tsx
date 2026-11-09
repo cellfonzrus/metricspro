@@ -1,11 +1,12 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, ORG_ID, fmt, fmtN, localToday } from '@/lib/client'
+import { FixItNotice, useFixGuide } from '@/lib/fix-it'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
-import ScreenLink, { LinkedText } from '@/components/ScreenLink'
+import { LinkedText } from '@/components/ScreenLink'
 import { useTargetAxis } from '@/lib/target-axis'
 import DrillDownPanel, {
   DrillTileLinks, useDrillTile, type DrillExtraColumn, type DrillPanel, type DrillRow,
@@ -93,6 +94,9 @@ export default function DailyTargetsPage() {
   // Explicit "configure X" hints from the server (e.g. no roster/targets, or sales not matched to a target
   // store) so the page never shows a silent blank when a setup step is missing.
   const [setupHint, setSetupHint] = useState<string[]>([])
+  // The shared guide for "no target is set" — the steps, whether this viewer may set one, and who to
+  // ask when they may not (owner 2026-11-09, §CORE-39).
+  const targetFix = useFixGuide('store_targets', 'Targets')
   // §CORE-17.3m — the server's own panels for the scope on screen; one open at a time.
   const drill = useDrillTile(detail?.drilldown || {})
 
@@ -257,7 +261,13 @@ export default function DailyTargetsPage() {
                 {setupHint.map((h, i) => <div key={i} style={{ marginBottom: 6 }}>⚙️ <LinkedText text={h} /></div>)}
               </div>
             ) : (
-              <>No targets set. Add monthly targets in <ScreenLink to="target_settings" />.</>
+              /* THE SETUP GAP, WITH ITS FIX (owner 2026-11-09, §CORE-39). This used to be a sentence
+                 pointing at a page half the people who read it may not open. The shared notice
+                 carries the steps, asks the server whether THIS viewer may close it, and offers
+                 whoever can when they may not — one home, `lib/fix-it.tsx` / `core/setup_fix.py`. */
+              <div style={{ display: 'inline-block', textAlign: 'left', maxWidth: 560 }}>
+                <FixItNotice fix={targetFix} />
+              </div>
             )}
           </div>
         ) : (

@@ -31,6 +31,7 @@ from app.modules.core.entitlements import (
 # delivery bridge that reuses notify's Resend/WhatsApp creds logic (no duplication).
 from app.modules.core import auth_security as _sec
 from app.modules.core.safe_href import is_safe_href
+from app.modules.core import setup_fix as _setup_fix
 from app.modules.core import auth_notify as _anotify
 # Canonical tenant-membership primitives — the ONE rule for "which tenant is this login acting as",
 # shared so every module (e.g. storeops._caller_identity) resolves it identically (no drift).
@@ -1633,6 +1634,156 @@ def list_setting_areas(authorization: str = Header(default=""), x_active_org: st
     caller = _resolve_caller(sb(), uid, x_active_org) if uid else None
     return {"areas": SETTING_AREAS,
             "can_edit": {a["key"]: _can_edit_setting(caller, a["key"]) for a in SETTING_AREAS}}
+
+
+# ── "It isn't set up — here is how to fix it" (owner directive 2026-11-09, index §CORE-39) ───
+#
+# Owner: *"to fix any such problem going forward shpow it on the screen hpow the user can fix teh
+# problem so it is taken care of right away and if it is not under tehoer role permissionsm, have
+# them send a link ot thier manager from the chat menu so it can be fixed"*.
+#
+# The remedy itself is NOT written here: it lives once in `core/setup_fix.py`, which every surface
+# reads. What belongs here is the only part that needs the live request — WHO MAY, answered by the
+# same `_can_edit_setting` the write endpoint refuses on, and WHO TO ASK, derived from this tenant's
+# own roles and people. Nothing in this block decides a remedy, and nothing in `setup_fix` decides a
+# permission.
+#
+# ORG SCOPE: every read is `.eq("org_id", caller_org)` where `caller_org` is the ACTING MEMBERSHIP's
+# org, never the request's own `org_id` parameter. A recipient from another tenant is therefore not
+# filtered out — it is never fetched.
+def _fix_members(client, org_id):
+    """This tenant's sign-in-able people as [{employee_id, name, role}] — the only set a chat message
+    can reach. Degrades to [] (→ "ask support"), never raises: a gap is a warning, and a warning that
+    500s is worse than the gap."""
+    try:
+        rows = (client.schema("storeops").table("app_users")
+                .select("employee_id,role,full_name,is_active")
+                .eq("org_id", org_id).limit(500).execute().data) or []
+    except Exception:
+        return []
+    # A LOGIN EMAIL IS NOT A NAME (security review 2026-11-09). `app_users.full_name` is nullable, so
+    # falling back to `email` would put an administrator's login address into display copy — "Ask
+    # admin@… to fix this" — and into a chat message. The roster's own `name` is the name a person is
+    # known by here; a person with neither is shown their employee id, which names no address.
+    roster = {}
+    try:
+        for e in ((client.schema("storeops").table("employees").select("employee_id,name")
+                   .eq("org_id", org_id).limit(1000).execute().data) or []):
+            key = str((e or {}).get("employee_id") or "").strip()
+            if key and (e.get("name") or "").strip():
+                roster[key] = e["name"].strip()
+    except Exception:
+        roster = {}
+    out = []
+    for r in rows:
+        eid = str((r or {}).get("employee_id") or "").strip()
+        if not eid or r.get("is_active") is False:
+            continue
+        out.append({"employee_id": eid, "role": r.get("role"),
+                    "name": ((r.get("full_name") or "").strip() or roster.get(eid) or eid)})
+    return out
+
+
+def _fix_manager_ids(client, org_id, employee_id):
+    """The managers above this person's own store in the company structure, NEAREST FIRST.
+
+    Returns [] whenever the structure does not place them — which is most stores in this estate today
+    (project memory `org-tree-dm-coverage-gap`). That is why "my manager" is an ORDERING of the people
+    who can close the gap and never the whole answer: a tenant with no org chart still gets somebody
+    who can actually fix it, rather than nobody."""
+    if not employee_id:
+        return []
+    try:
+        emp = (client.schema("storeops").table("employees").select("home_store")
+               .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data) or []
+        store_code = (emp[0].get("home_store") if emp else None)
+        if not store_code:
+            return []
+        st = (client.schema("storeops").table("stores").select("org_unit_id")
+              .eq("org_id", org_id).eq("store_code", store_code).limit(1).execute().data) or []
+        unit = (st[0].get("org_unit_id") if st else None)
+        if not unit:
+            return []
+        units = {u["id"]: u for u in ((client.schema("storeops").table("org_units")
+                                       .select("id,parent_id").eq("org_id", org_id)
+                                       .execute().data) or []) if u.get("id")}
+        mgr_by = {}
+        for m in ((client.schema("storeops").table("org_managers").select("unit_id,employee_id")
+                   .eq("org_id", org_id).execute().data) or []):
+            mgr_by.setdefault(m.get("unit_id"), []).append(m.get("employee_id"))
+        out, seen, cur = [], set(), unit
+        while cur and cur not in seen:
+            seen.add(cur)
+            for eid in mgr_by.get(cur, []):
+                if eid and eid != employee_id and eid not in out:
+                    out.append(eid)
+            cur = (units.get(cur) or {}).get("parent_id")
+        return out
+    except Exception:
+        return []
+
+
+def _fix_guide_payload(client, caller, key, origin, asker_row=None):
+    """One gap's guide for this caller. `caller` may be None (no token) — then nobody may fix
+    anything and the steps are served alone.
+
+    `asker_row` is the caller's OWN acting membership row, so the asker is identified by their login
+    and not by their role's name: several people share a role, and "who asked" must be a person."""
+    entry = _setup_fix.fix(key)
+    if entry is None:
+        return None
+    area = _setup_fix.gate_area(entry)
+    can_fix = bool(area) and bool(_can_edit_setting(caller, area))
+    fixers, asker_name = [], None
+    if caller and area and not can_fix:
+        org = caller.get("org_id") or ORG_ID
+        row = asker_row or {}
+        asker_eid = str(row.get("employee_id") or "").strip() or None
+        # Never the login email — see `_fix_members`. The asker's own name is resolved the same way
+        # every recipient's is, so one person is not named two ways in one message.
+        asker_name = (row.get("full_name") or "").strip() or None
+        try:
+            roles = _setup_fix.fixer_roles(_role_perms_map(client, org), area)
+        except Exception:
+            roles = []
+        if roles:
+            members = _fix_members(client, org)
+            if not asker_name and asker_eid:
+                asker_name = next((m["name"] for m in members if m["employee_id"] == asker_eid), None)
+            fixers = _setup_fix.ask_recipients(
+                roles, members,
+                manager_ids=_fix_manager_ids(client, org, asker_eid), asker_id=asker_eid)
+    return _setup_fix.guide(key, can_fix=can_fix, fixers=fixers,
+                            asker_name=asker_name, origin=origin)
+
+
+@router.get("/fix-guide")
+def fix_guide(key: str = "", origin: str = "", org_id: str = ORG_ID,
+              authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """How to close a setup gap, for THIS caller: the steps, the page when their role permits it, and
+    the people to ask (with the message to send them) when it does not.
+
+    With no `key`, the index: every declared gap and whether this caller may close it, so a page that
+    shows several warnings asks once."""
+    client = sb()
+    uid = _uid_from_token(authorization)
+    caller, asker_row = None, None
+    try:
+        if uid:
+            caller = _resolve_caller(client, uid, x_active_org)
+            asker_row = _pick_membership(_memberships(client, uid), (x_active_org or "").strip() or None)
+    except Exception:
+        caller, asker_row = caller, None
+    k = (key or "").strip()
+    if not k:
+        return {"keys": list(_setup_fix.FIX_KEYS),
+                "can_fix": {fk: bool(_setup_fix.gate_area(_setup_fix.fix(fk)))
+                            and bool(_can_edit_setting(caller, _setup_fix.gate_area(_setup_fix.fix(fk))))
+                            for fk in _setup_fix.FIX_KEYS}}
+    out = _fix_guide_payload(client, caller, k, origin, asker_row)
+    if out is None:
+        raise HTTPException(404, "There is no setup guide for that yet.")
+    return out
 
 
 # ── Failure Logs ─────────────────────────────────────────────────────────────────────────────
