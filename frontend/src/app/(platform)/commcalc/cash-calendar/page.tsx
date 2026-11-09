@@ -8,6 +8,8 @@ import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-fi
 import type { StoreOpt } from '@/lib/market-store-cascade'
 import DrillDownPanel, { DrillTileLinks, type DrillPanel } from '@/components/DrillDownPanel'
 import { CASH_CAL_BASIS_WORD, cashCalWeeks } from '@/lib/cash-calendar-view'
+import { sourceLabel } from '@/lib/sourceLabels'
+import { PlatformDetail, SetupNotice } from '@/lib/setupNotice'
 
 // CASH CALENDAR — expected money IN, money OWED out, and the net position, day by day (§COMMCALC-56).
 //
@@ -287,10 +289,13 @@ export default function CashCalendarPage() {
             Expected in:{' '}
             {report?.expected_declared
               ? (report.expected_sources || []).map(s =>
-                  `${s.label} (${s.source_table}, ${s.cadence || 'no payout cycle declared'}) ${money(s.total)}`).join(' · ') || 'nothing placed'
+                  `${s.label} (${sourceLabel(s.source_table)}, ${s.cadence?.replace(/_/g, ' ') || 'no payout cycle declared'}) ${money(s.total)}`).join(' · ') || 'nothing placed'
               : 'nothing declared'}
           </div>
-          <div>Owed out: {report?.owed_source || 'not measured'}{report?.owed_grain ? ` (per ${report.owed_grain.replace('_', ' ')})` : ''}</div>
+          <div>
+            Owed out: {report?.owed_source ? sourceLabel(report.owed_source) : 'not measured'}
+            {report?.owed_grain ? ` (per ${report.owed_grain.replace('_', ' ')})` : ''}
+          </div>
           {/* OUT-OF-SPAN IS A GUARD, NOT A FEATURE, and it is structurally zero here: both sides
               are read THROUGH the same window, so nothing dated outside it ever reaches the fold.
               It renders only if it is ever non-zero, which would mean a caller handed the netting
@@ -362,22 +367,27 @@ function ReceiptSourcePanel({ onSaved }: { onSaved: () => void }) {
   const fld: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }
   return (
     <div style={{ marginTop: 8, padding: 10, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface2)', display: 'grid', gap: 8 }}>
+      {/* THE MIGRATION NAME IS AN INTERNAL DETAIL (§19.36): `SetupNotice` shows the customer one
+          sentence and reveals the file to the platform super admin alone. */}
       {state?.table_missing && (
         <div style={{ fontSize: 12 }}>
-          The declaration table does not exist yet. Apply <code>1115_receipt_source_map.sql</code>, then
-          declare each tenant&rsquo;s payout cycle here.
+          <SetupNotice lead="Payout cycles cannot be declared yet." detail="1115_receipt_source_map.sql" />
         </div>
       )}
       {!!state?.rows?.length && (
         <div style={{ fontSize: 12, display: 'grid', gap: 2 }}>
           {state.rows.map((r, i) => (
             <div key={i}>
-              {r.label} — {r.source_table}.{r.amount_field} — {r.payout_cadence || 'no payout cycle declared'}
+              {r.label} — {sourceLabel(r.source_table)} — {r.payout_cadence?.replace(/_/g, ' ') || 'no payout cycle declared'}
               {r.payout_weekday != null ? ` (weekday ${r.payout_weekday})` : ''}
               {r.payout_days ? ` (days ${String(r.payout_days)})` : ''}
               {r.payout_day_of_month != null ? ` (day ${r.payout_day_of_month})` : ''}
               {r.payout_net_days != null ? ` (+${r.payout_net_days} days)` : ''}
               {r.is_active === false ? ' — off' : ''}
+              {/* The relation and the money column are internals, so they ride PlatformDetail (the
+                  platform super admin only) as BOUND values rather than composed into copy. */}
+              <PlatformDetail detail={r.source_table} style={{ marginLeft: 6 }} />
+              <PlatformDetail detail={r.amount_field} style={{ marginLeft: 4 }} />
             </div>
           ))}
         </div>
@@ -386,7 +396,7 @@ function ReceiptSourcePanel({ onSaved }: { onSaved: () => void }) {
         <input placeholder="label" style={fld} value={form.label || ''} onChange={e => setForm({ ...form, label: e.target.value })} />
         <select style={fld} value={form.source_table || ''} onChange={e => setForm({ ...form, source_table: e.target.value })}>
           <option value="">which feed states what they will pay us…</option>
-          {(state?.candidate_tables || []).map(t => <option key={t} value={t}>{t}</option>)}
+          {(state?.candidate_tables || []).map(t => <option key={t} value={t}>{sourceLabel(t)}</option>)}
         </select>
         <input placeholder="amount column" style={fld} value={form.amount_field || ''} onChange={e => setForm({ ...form, amount_field: e.target.value })} />
         <select style={fld} value={form.payout_cadence || ''} onChange={e => setForm({ ...form, payout_cadence: e.target.value })}>
