@@ -678,6 +678,11 @@ on:
       - "mobile/src/api/supabase.ts"
       - "mobile/eas.json"
       - "mobile/vitest.config.ts"
+      - "mobile/src/lib/startup-fault.ts"
+      - "mobile/src/lib/startup-fault.test.ts"
+      - "mobile/src/components/StartupFault.tsx"
+      - "mobile/app/_layout.tsx"
+      - "mobile/scripts/delivery-env.d.ts"
       - ".github/workflows/mobile-ota-update.yml"
       - ".github/workflows/mobile-build-and-submit.yml"
       # index §13b.1 — the scope DISPLAY-NAME lock + proofs (owner report 2026-10-03)
