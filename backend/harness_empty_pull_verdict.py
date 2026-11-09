@@ -35,7 +35,9 @@ index rules forbid. §F pins that they now all read one home and that no second 
 Run:  cd backend && python3 harness_empty_pull_verdict.py
 """
 import ast
+import inspect
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -67,6 +69,34 @@ def check(label, cond, detail=""):
 
 def src(mod):
     return open(mod.__file__).read()
+
+
+def fsrc(fn):
+    """One function's own source. Separate from `src`, which reads a MODULE's file."""
+    return inspect.getsource(fn)
+
+
+def fexec(fn):
+    """One function's EXECUTABLE source — comments and docstrings stripped.
+
+    A docstring that explains a neighbouring per-org setting otherwise reads as that function taking
+    an org, which is the opposite of what the check means. House precedent 2026-10-30: a scan of
+    prose is not a scan.
+    """
+    import io
+    import textwrap
+    import tokenize
+    seg = textwrap.dedent(inspect.getsource(fn))
+    kept = [t[:2] for t in tokenize.generate_tokens(io.StringIO(seg).readline)
+            if t.type != tokenize.COMMENT]
+    tree = ast.parse(tokenize.untokenize(kept))
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(body, list) and body and isinstance(body[0], ast.Expr) \
+                and isinstance(body[0].value, ast.Constant) \
+                and isinstance(body[0].value.value, str):
+            body.pop(0)
+    return ast.unparse(tree)
 
 
 # ── §A — THE 2026-10-03 RUN, REPLAYED BOTH WAYS ROUND ─────────────────────────────────────────────
@@ -285,6 +315,87 @@ check("F10 DLAR's own empty guard is gone and the shared sentence is used",
       "aborting before wiping the period" not in SWEEPS["dlar_sweep"]
       and "_empty_verdict.classify_empty_pull" in SWEEPS["dlar_sweep"])
 
+
+# ── §G — A CONTROL IS VERIFIED FROM THE CONTROL (index §COMMCALC-56) ──────────────────────────────
+print("\n§G  the control is verified from the thing we set, and an unproven set keeps a zero quiet")
+
+EPAY = SWEEPS["epay_sweep"]
+
+# The defect, as source. The old predicate read the form field INSTEAD of the widget, so the only
+# way to be told the filter took was a name the portal owns — and when that name left the page, a
+# settable filter read as unsettable on every tick from 2026-10-08 to 2026-11-09.
+check("G1 the setter no longer gates on the form field alone",
+      "or (iv.get(\"hidden\") or \"\") != \"Daily\"" not in EPAY
+      and "(iv.get('hidden') or '') != 'Daily'" not in EPAY,
+      "the field beside the control is corroboration, never the verification")
+check("G2 it reads the WIDGET'S own selected item",
+      "getSelectedItem" in EPAY and "selected" in ES._SET_INTERVAL_JS)
+check("G3 the value it must take is declared once, not spelled at each use",
+      ES.DAILY_INTERVAL == "Daily" and EPAY.count('DAILY_INTERVAL = "') == 1)
+check("G4 …and the corroborating field's name is declared too, marked as not ours",
+      ES._INTERVAL_FIELD == "DateIntervalOption"
+      and EPAY.count('_INTERVAL_FIELD = "') == 1)
+check("G5 the setter returns the third fact — whether the set was CONFIRMED",
+      len(inspect.signature(ES._set_daily_range).parameters) == 3
+      and "confirmed" in fsrc(ES._set_daily_range))
+check("G6 the only caller unpacks all three, so the fact cannot be dropped silently",
+      EPAY.count("_set_daily_range(page, target") == 1
+      and "ok, detail, confirmed = _set_daily_range(" in EPAY)
+check("G7 an unconfirmed set reaches the RUN's ledger, not just this leg",
+      "ledger.control_unconfirmed(DAILY_RANGE_CONTROL" in EPAY)
+check("G8 a real failure is still fatal — the fail-loud path is untouched",
+      "ledger.control_failed(DAILY_RANGE_CONTROL" in EPAY
+      and "raise EpayPortalError(f\"could not set {DAILY_RANGE_CONTROL}" in EPAY)
+
+# The rung itself, in the one home.
+check("G9 the one home carries the weaker rung, with its own machine key",
+      V.CONTROL_NOT_CONFIRMED == "control_not_confirmed"
+      and V.CONTROL_NOT_CONFIRMED != V.CONTROL_PROVEN_BROKEN)
+_unc = V.classify_empty_pull(empty_allowed=True, label="X", ever_landed=True,
+                             unconfirmed_controls=["the filter"])
+check("G10 an unconfirmed control makes a zero UNTRUSTED", _unc["trusted"] is False, repr(_unc))
+check("G11 …and says so in words an operator can act on, without claiming it is broken",
+      "being confirmed" in _unc["sentence"] and "unsettable" not in _unc["sentence"],
+      _unc["sentence"])
+check("G12 it outranks the source's own 'no records' — same reason proven-broken does",
+      V.classify_empty_pull(empty_allowed=True, label="X", ever_landed=True,
+                            corroboration=V.SOURCE_REPORTED_EMPTY,
+                            unconfirmed_controls=["the filter"])["trusted"] is False)
+check("G13 …and is OUTRANKED by a control proven broken, so one fact prints one sentence",
+      V.classify_empty_pull(empty_allowed=True, label="X", ever_landed=True,
+                            broken_controls=["the filter"],
+                            unconfirmed_controls=["the filter"])["reason"]
+      == V.CONTROL_PROVEN_BROKEN)
+check("G14 the evidence dict carries it, so the stored journal shows what was weighed",
+      "unconfirmed_controls" in _unc["evidence"])
+check("G15 a zero with nothing unconfirmed is unaffected — the rung cannot fire on its own",
+      V.classify_empty_pull(empty_allowed=True, label="X", ever_landed=True,
+                            days_since_last_row=1, window=("2026-11-08", "2026-11-08"),
+                            unconfirmed_controls=[])["reason"] != V.CONTROL_NOT_CONFIRMED)
+
+# The ledger: run-scoped, and a later leg's discovery must reach an earlier leg's zero.
+_led = V.ControlLedger()
+_res = {"rows": 0}
+_led.defer(_res, controls=("c",), empty_allowed=True, label="X", ever_landed=True)
+_led.control_unconfirmed("c", "field absent")
+check("G16 a later leg's unconfirmed control settles an EARLIER leg's zero",
+      _led.settle()[0][1]["reason"] == V.CONTROL_NOT_CONFIRMED
+      and _res["mode"] == "unverified_no_data")
+check("G17 an unconfirmed control defers nothing by itself — real rows stay real",
+      V.ControlLedger().control_unconfirmed("c", "x").deferred == [])
+check("G18 a control nobody declared a dependency on does not touch a zero",
+      V.ControlLedger().control_unconfirmed("other", "x") is not None
+      and (lambda led, r: (led.defer(r, controls=("c",), empty_allowed=True, label="X",
+                                    ever_landed=True, days_since_last_row=1),
+                           led.control_unconfirmed("other", "x"),
+                           led.settle()[0][1]["reason"] != V.CONTROL_NOT_CONFIRMED)[-1])(
+          V.ControlLedger(), {"rows": 0}))
+
+# EVERY TENANT (owner directive 2026-10-30): none of this reads an org, so it cannot differ per
+# tenant — pinned as source, because an org argument appearing here is how that would start.
+check("G19 neither the setter nor the rung knows which tenant it is acting for",
+      not re.search(r"\borg\w*", fexec(ES._set_daily_range))
+      and not re.search(r"\borg\w*", fexec(V.classify_empty_pull)))
 
 print(f"\n{PASS} passed, {FAIL} failed")
 if FAIL:
