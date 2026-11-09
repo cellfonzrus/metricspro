@@ -233,6 +233,123 @@ check("(regression) the two declared cells are the others",
 check("(regression) …and the page's only table is one that now honours them",
       "ReportShell" in tk and not any(r == TAKEOVER for r in IGNORE))
 
+# ── (f) A MONEY CELL HAS ONE FORMATTER, AND A WORD IS NOT ZERO ───────────────────────────────────
+# OWNER REPORT 2026-11-09 (index §CORE-39): the Cash Calendar's grid read "in: not measured" while
+# the table directly under it read Expected in $0.00, Net $0.00 and TOTAL $0.00. Four figures for
+# money nobody had measured, on the one report built to never print such a figure, and the .xlsx
+# would have carried them out of the building.
+#
+# THE CLASS is this lock's own class — ONE QUESTION, SIX ANSWERS — which is why the clause lives
+# here rather than in a sibling harness. "How is a money value rendered" was re-implemented as
+# `Number(v) || 0` in SIX places: ReportShell's cell and its subtotal, DataGrid's cell, lib/export's
+# text and its raw .xlsx cell, and report-totals' own formatter. Every copy turned a NON-NUMERIC
+# value into a confident zero. lib/export fixed the ABSENT half on 2026-09-10, wrote the note, and
+# deliberately left a non-numeric value rendering "$0.00 as before"; the other five never got even
+# that. A fact with six homes drifts, and this one drifted for two months.
+#
+# WHAT THIS HOLDS: `report-totals` is the only module that may build a currency formatter, every
+# other money surface dereferences it, and the three-state distinction (number / word / absent) is
+# asserted rather than described.
+MONEY_HOME = "lib/report-totals.ts"
+
+
+def code_only(src):
+    """The source with COMMENTS blanked and nothing else. Every note above describes the defect in
+    the exact form it shipped, so a scan over raw text matches the documentation and reports the
+    fix as the bug. Strings are deliberately LEFT INTACT: a formatter is code, and blanking strings
+    would hide a literal nobody wants hidden."""
+    out, i, n = [], 0, len(src)
+    while i < n:
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+        elif src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+        else:
+            out.append(src[i])
+            i += 1
+    return "".join(out)
+CURRENCY = re.compile(r"style:\s*'currency'")
+COERCE = re.compile(r"Number\(\s*(?:n|v|value)\s*\)\s*\|\|\s*0")
+
+# Every SHARED file that formats currency, DERIVED — not a named list, so a seventh copy appearing
+# in the shared layer is a failure rather than something nobody looked for.
+#
+# SCOPE, stated because it is a real limit and not an oversight: `components/` and `lib/` only — the
+# code every report draws through. Roughly fifteen PAGES also build a formatter for their own
+# bespoke markup; those are not reached by a column's `get`, predate this by a long way, and folding
+# them in would make this clause a 15-file migration rather than a lock on the shared path. The
+# clause that catches a page is (f)'s sibling in spirit: a page rendering a report THROUGH
+# ReportShell or DataGrid is already covered, because the formatter it uses is theirs.
+SHARED = {rel for rel in FILES if rel.startswith(("components/", "lib/"))}
+FORMATTERS = {rel for rel in SHARED if CURRENCY.search(code_only(FILES[rel]))}
+MONEY_CALLERS = {
+    "components/ReportShell.tsx": "the shared report table: body cells, group subtotals, TOTAL row",
+    "components/DataGrid.tsx": "the other shared table",
+    "lib/export.tsx": "the PDF text cell and the raw .xlsx cell — a file outlives the screen",
+    "lib/tile-snapshot.ts": "the tile snapshot sheet, which already guarded a string by hand",
+    MONEY_HOME: "THE HOME",
+    # EXCUSED BY NAME, each with the reason it cannot carry this defect: both take a typed
+    # `n: number`, so a column's word can never reach them — TypeScript refuses the call. They are
+    # named rather than filtered out by a pattern, so one of them widening its parameter to
+    # `string | number` fails this check instead of silently joining the exempt set.
+    "lib/client.ts": "`fmt(n: number)` — a typed number, never a column value",
+    "components/LedgerBatchUpload.tsx": "`money(n: number)` — its own upload summary, typed number",
+}
+TYPED_NUMBER_ONLY = ("lib/client.ts", "components/LedgerBatchUpload.tsx")
+for rel in TYPED_NUMBER_ONLY:
+    src = code_only(FILES.get(rel, ""))
+    check("(f) %s still takes a typed number, which is WHY it is excused" % rel,
+          "(n: number)" in src, src[:0])
+strays = sorted(FORMATTERS - set(MONEY_CALLERS))
+check("(f) the set of files building a currency formatter is exactly the declared set",
+      not strays, strays)
+
+home = FILES.get(MONEY_HOME, "")
+check("(f) the home declares the three-state money cell", "export function moneyText(" in home)
+check("(f) …and the spreadsheet half of it", "export function moneyRaw(" in home)
+check("(f) …and the test that separates a WORD from an ABSENCE",
+      "export function isUnmeasured(" in home)
+check("(f) the home decides numeric-ness through `toNumber`, not a second regex",
+      home.count("style: 'currency'") == 1 and "toNumber(v) == null" in home)
+
+# The coercion itself must be gone from every CALLER. It may survive inside the home's own
+# `moneyFmt`, which is only ever reached with a value `toNumber` already accepted.
+# The DEREFERENCING set: every shared money surface except the home itself and the two excused
+# typed-number formatters, which have nothing to dereference — they cannot be handed a word.
+for rel in sorted(set(MONEY_CALLERS) - {MONEY_HOME} - set(TYPED_NUMBER_ONLY)):
+    src = FILES.get(rel, "")
+    code = code_only(src)
+    check("(f) %s no longer coerces a money value with `Number(v) || 0`" % rel,
+          not COERCE.search(code), [l for l in code.splitlines() if COERCE.search(l)][:2])
+    check("(f) %s dereferences the home instead" % rel,
+          "report-totals" in src and ("moneyText" in src or "moneyRaw" in src))
+
+shell_money = [l for l in code_only(FILES.get("components/ReportShell.tsx", "")).splitlines()
+               if "const money =" in l]
+check("(f) ReportShell's money formatter is one line that defers to the home",
+      len(shell_money) == 1 and "moneyText(" in shell_money[0], shell_money)
+check("(f) a money column with an unmeasured cell REFUSES to subtotal",
+      "isUnmeasured(c.get(r))" in FILES.get("components/ReportShell.tsx", ""))
+check("(f) …and the grand TOTAL reaches the same verdict in the home",
+      "isUnmeasured(col.get(r))" in home)
+check("(f) a refused subtotal is drawn in words, never handed back to the formatter",
+      "const subtotalText =" in FILES.get("components/ReportShell.tsx", ""))
+
+# (f) NEGATIVE CONTROLS — each of the above must be able to go red.
+check("(f) control: the coercion is detectable in the form that shipped",
+      bool(COERCE.search("const money = (n: any) => fmt.format(Number(n) || 0)")))
+check("(f) control: …and in lib/export's raw-cell form",
+      bool(COERCE.search("if (col.money) return v == null ? '' : (Number(v) || 0)")))
+check("(f) control: the fixed form is NOT flagged",
+      not COERCE.search("const money = (n: CellValue) => moneyText(n)"))
+check("(f) control: a new file building its own currency formatter is seen",
+      "x/y.tsx" in {rel for rel, src in {"x/y.tsx": "new Intl.NumberFormat('en-US', { style: 'currency' })"}.items()
+                    if CURRENCY.search(src)})
+check("(f) control: a file that merely mentions money is not",
+      not CURRENCY.search("const total = money(row.amount) // style: currency-ish"))
+
 # ── wired, or it is not a lock ────────────────────────────────────────────────────────────────────
 wf = read(WORKFLOW) if os.path.exists(WORKFLOW) else ""
 check("(wired) this lock runs in carrier-vocab-guard.yml", "harness_column_render_lock.py" in wf)

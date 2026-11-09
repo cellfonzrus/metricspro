@@ -12,7 +12,7 @@ import DateField from '@/components/DateField'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
-import { computeTotalRow, computeTotalScope } from '@/lib/report-totals'
+import { computeTotalRow, computeTotalScope, moneyText, isUnmeasured } from '@/lib/report-totals'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 type Col = ExportColumn
@@ -50,7 +50,11 @@ const NOTICE = {
 } as const
 const str = (v: any) => (v == null ? '' : String(v))
 const num = (v: any) => { const n = Number(String(v).replace(/[^0-9.-]/g, '')); return isNaN(n) ? null : n }
-const money = (n: any) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(n) || 0)
+// WHAT A MONEY CELL SHOWS is `report-totals.moneyText` and nothing else (owner report 2026-11-09).
+// This read `Number(n) || 0`, so a column whose value was the WORD "not measured" printed $0.00 —
+// see that home for the class. On screen an ABSENT value keeps its long-standing $0.00, which is
+// moneyText's default, so the 665 money columns that never say a word are unchanged.
+const money = (n: any) => moneyText(n)
 
 // ── WHAT A BODY CELL SHOWS — ONE HOME, dereferenced by both row paths ─────────────────────────────
 // `ExportColumn.render` is the declared way a column draws its own cell (lib/export.tsx: "custom
@@ -239,7 +243,22 @@ export function ReportShell({ title, subtitle, notice, noticeTone, filename, col
   }, [groupCol, view])
 
   const moneyCols = cols.filter(isMoney)
-  const subtotal = (rs: any[], c: Col) => rs.reduce((s, r) => s + (Number(String(c.get(r)).replace(/[^0-9.-]/g, '')) || 0), 0)
+  // A SUBTOTAL OVER AN UNMEASURED CELL IS NOT A SUBTOTAL. Same coercion, same defect as the cell
+  // above: a group whose money column says "not measured" summed to 0 and printed as a figure.
+  // null where any contributing cell refused to be measured, so the renderer prints no number —
+  // the grand TOTAL row reaches the same verdict through `resolveAgg`.
+  const subtotal = (rs: any[], c: Col): number | null =>
+    rs.some(r => isUnmeasured(c.get(r)))
+      ? null
+      : rs.reduce((s, r) => s + (Number(String(c.get(r)).replace(/[^0-9.-]/g, '')) || 0), 0)
+
+  // A REFUSED subtotal is rendered in WORDS, never handed to the money formatter — `moneyText(null)`
+  // is $0.00 by design (an absent cell keeps the screen's long-standing zero), and that is exactly
+  // the figure a refusal must not become. One home for the three places that draw a subtotal.
+  const subtotalText = (rs: Row[], c: Col): string => {
+    const v = subtotal(rs, c)
+    return v == null ? 'not measured' : money(v)
+  }
 
   // Opt-in pinned TOTAL row. On-screen shows the GRAND total over every filtered row (across all
   // groups); each EXPORT sheet ends with a TOTAL row summing that sheet (= the same grand total when
@@ -476,7 +495,7 @@ export function ReportShell({ title, subtitle, notice, noticeTone, filename, col
                       const numeric = isMoney(c) || c.align === 'right'
                       return (
                         <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: numeric ? 'right' : 'left', whiteSpace: 'nowrap', ...(i === 0 ? pinFor('group') : {}) }}>
-                          {i === 0 ? `${collapsed ? '▸' : '▾'} ${g} · ${rs.length}` : (numeric ? (isMoney(c) ? money(subtotal(rs, c)) : String(subtotal(rs, c))) : '')}
+                          {i === 0 ? `${collapsed ? '▸' : '▾'} ${g} · ${rs.length}` : (numeric ? (isMoney(c) ? subtotalText(rs, c) : String(subtotal(rs, c) ?? 'not measured')) : '')}
                         </td>
                       )
                     })}
@@ -484,7 +503,7 @@ export function ReportShell({ title, subtitle, notice, noticeTone, filename, col
                 ) : (
                   <tr style={{ background: 'var(--surface2)' }}>
                     <td style={{ ...cell, fontWeight: 700, ...pinFor('group') }} colSpan={cols.length - moneyCols.length || 1}>{g} · {rs.length}</td>
-                    {cols.filter(isMoney).map(c => <td key={'gs' + key(c)} style={{ ...cell, textAlign: 'right', fontWeight: 700 }}>{money(subtotal(rs, c))}</td>)}
+                    {cols.filter(isMoney).map(c => <td key={'gs' + key(c)} style={{ ...cell, textAlign: 'right', fontWeight: 700 }}>{subtotalText(rs, c)}</td>)}
                   </tr>
                 )}
                 {(!collapsibleGroups || !collapsed) && rs.map((r, i) => (
@@ -519,7 +538,7 @@ export function ReportShell({ title, subtitle, notice, noticeTone, filename, col
           )}
           {!totals && moneyCols.length > 0 && filtered.length > 0 && (
             <tfoot><tr style={{ borderTop: '2px solid var(--border)' }}>
-              {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: isMoney(c) ? 'right' : 'left', ...(i === 0 ? pinFor('total') : {}) }}>{isMoney(c) ? money(subtotal(filtered, c)) : (i === 0 ? 'Total' : '')}</td>)}
+              {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: isMoney(c) ? 'right' : 'left', ...(i === 0 ? pinFor('total') : {}) }}>{isMoney(c) ? subtotalText(filtered, c) : (i === 0 ? 'Total' : '')}</td>)}
             </tr></tfoot>
           )}
         </table>
