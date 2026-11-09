@@ -68,6 +68,11 @@ TRUSTED_VERDICTS = (CONFIRMED,)
 SOURCE_REPORTED_EMPTY = "portal_reported_empty"
 EXPORT_PRODUCED_EMPTY = "export_produced_empty"
 CONTROL_PROVEN_BROKEN = "control_proven_broken"
+#   control_not_confirmed  a control this pull depends on was SET, and the set could not be
+#                          confirmed. Weaker than proven-broken and stronger than nothing: we may
+#                          have asked the right question and cannot say that we did, so a zero is
+#                          still not the source's answer (index §COMMCALC-56).
+CONTROL_NOT_CONFIRMED = "control_not_confirmed"
 
 _POSITIVE_CORROBORATION = (SOURCE_REPORTED_EMPTY,)
 
@@ -110,6 +115,7 @@ def required_window_days(arrears_days=None):
 
 
 def classify_empty_pull(*, empty_allowed, corroboration=None, broken_controls=None,
+                        unconfirmed_controls=None,
                         window=None, window_span_days=None, arrears_days=None,
                         ever_landed=None, days_since_last_row=None, stale_after_days=None,
                         label=None):
@@ -122,6 +128,12 @@ def classify_empty_pull(*, empty_allowed, corroboration=None, broken_controls=No
     `corroboration`        what the source itself said, if anything — one of the module constants
     `broken_controls`      names of controls PROVEN unsettable in this same run that this pull
                            depends on (a non-empty sequence is positive evidence against the zero)
+    `unconfirmed_controls` names of controls this pull depends on that WERE set and whose set could
+                           not be confirmed — the widget accepted the value and the second reading
+                           that would corroborate it was unavailable (§COMMCALC-56). Weaker than
+                           `broken_controls`, which is why it is a rung of its own: the pull went
+                           ahead, so rows may well have landed, and a ZERO still may not be
+                           published as the source's answer.
     `window` / `window_span_days`
                            the slice asked for: ('YYYY-MM-DD','YYYY-MM-DD') and/or its day count
     `arrears_days`         how many days late this source posts (per-org config; house default 1)
@@ -141,8 +153,12 @@ def classify_empty_pull(*, empty_allowed, corroboration=None, broken_controls=No
             span = None
     need = required_window_days(arrears_days)
     broken = [str(c) for c in (broken_controls or []) if c]
+    # A control that is BOTH proven broken and merely unconfirmed is proven broken: the stronger
+    # claim is the true one, and listing it twice would print two sentences for one fact.
+    unconfirmed = [str(c) for c in (unconfirmed_controls or []) if c and str(c) not in broken]
     evidence = {"empty_allowed": bool(empty_allowed), "corroboration": corroboration,
-                "broken_controls": broken, "window": list(window) if window else None,
+                "broken_controls": broken, "unconfirmed_controls": unconfirmed,
+                "window": list(window) if window else None,
                 "window_span_days": span, "required_window_days": need,
                 "ever_landed": ever_landed, "days_since_last_row": days_since_last_row,
                 "stale_after_days": stale_after_days}
@@ -159,6 +175,19 @@ def classify_empty_pull(*, empty_allowed, corroboration=None, broken_controls=No
                    f"{what}: 0 rows, and {', '.join(broken)} was proven unsettable in this same "
                    f"run — the source answered a question we did not ask. NOT reported as 'nothing "
                    f"posted'.")
+
+    # (1b) A control this pull depends on WAS SET and the set could not be confirmed. Below
+    #      proven-broken, because the pull may well have asked the right question — and above the
+    #      source's own "no records", for the same reason rule (1) is: if we cannot say the filter
+    #      took, we cannot say which question the source answered. This rung exists because the
+    #      alternative shipped for eight weeks: the confirmation was read off a field beside the
+    #      control rather than the control itself, that field vanished, and a settable filter was
+    #      reported as unsettable on every tick (§COMMCALC-56).
+    if unconfirmed:
+        return out(SUSPECT, CONTROL_NOT_CONFIRMED,
+                   f"{what}: 0 rows, and {', '.join(unconfirmed)} was set without the set being "
+                   f"confirmed in this run — the question we asked cannot be proven to be the one "
+                   f"the source answered. NOT reported as 'nothing posted'.")
 
     # (2) This report may never legitimately come back empty (the DLAR shape: an empty pull is an
     #     expired session or a layout change, never a real empty month).
@@ -234,13 +263,26 @@ class ControlLedger:
     """
 
     def __init__(self):
-        self.broken = {}          # control name -> why
+        self.broken = {}          # control name -> why it could not be set
+        self.unconfirmed = {}     # control name -> why the set could not be confirmed
         self._provisional = []    # [(result_dict, kwargs_for_classify, controls_this_leg_depends_on)]
 
     def control_failed(self, control, detail=None):
         """Record that `control` could not be set in this run (a leg may call this and still raise)."""
         if control:
             self.broken.setdefault(str(control), str(detail or "could not be set"))
+        return self
+
+    def control_unconfirmed(self, control, detail=None):
+        """Record that `control` WAS set and the set could not be confirmed (§COMMCALC-56).
+
+        The leg goes on and may land rows — this is not a failure. It is the run remembering that
+        one of its verifications was unavailable, so that any ZERO deferred by ANY leg settles as
+        unverified rather than as the source's own answer. Run-scoped for the same reason
+        `control_failed` is: the leg that discovers it need not be the leg whose zero it bears on.
+        """
+        if control:
+            self.unconfirmed.setdefault(str(control), str(detail or "the set could not be confirmed"))
         return self
 
     def defer(self, result, controls=(), **evidence):
@@ -257,7 +299,9 @@ class ControlLedger:
         out = []
         for result, evidence, controls in self._provisional:
             broken = [c for c in controls if c in self.broken]
-            v = classify_empty_pull(broken_controls=broken, **evidence)
+            unconfirmed = [c for c in controls if c in self.unconfirmed]
+            v = classify_empty_pull(broken_controls=broken, unconfirmed_controls=unconfirmed,
+                                    **evidence)
             if isinstance(result, dict):
                 result["empty_verdict"] = v
                 if not v["trusted"]:

@@ -195,6 +195,7 @@ Primary code homes:
 | COMMCALC-53 | **A feed window's day comes from the tenant's zone, never the server's** | "if we access to one behind that door then all should be downloaded automatically" — two of the three feeds would, once the login was honest (§COMMCALC-51). The third never had an access problem: the comprehensive comp report has not arrived automatically ONCE since the leg was built, because the window was built on `datetime.now(timezone.utc).date()` while its slot is 23:30 in the tenant's zone — 03:30 UTC the NEXT day. Every run asked the portal for a day that had not begun where the portal lives, and the resulting zero was read as "no compensation posted". The rule already had a home, written 2026-07-30, whose docstring states this exact defect; nothing in commcalc read it. |
 | COMMCALC-54 | **"Which plan am I on?" is a question with one answer and three steps** | "the plan which is active in incentive payout when you click on it it takes you to the page which has all kinds of Incentive structure listed which becomes confusing even to me ... all of this should be a work flow than random data seen on the screen" — the confusing page is the symptom. Nothing in the platform ANSWERED "which plan am I on": three surfaces showed the operator the raw plan table and left the question to them, and one of them owned the live/belongs predicate privately. An unassigned plan pays nobody, so calling it active is the plausible-looking answer that hides the class. |
 | COMMCALC-55 | **A successful login is recognised by evidence, never by a guessed vocabulary** | The owner signed in to the carrier owners portal himself and sent the screenshot: the signed-in shell, greeting him by his e-mail address, offering "Multi-Door Owner Portal", "Commissions" and "Boost Activations" — and the sweep still reported "The sign-in page went away and we did not recognise what replaced it", with three carrier feeds frozen on a login that worked. §COMMCALC-52 was right to delete the old test (the vendor's name in the document title — a carrier name in code) and wrong to replace it with six house words: that is the platform guessing at a vocabulary it does not own, the same shape as a report defaulting to one tenant's POS labels. |
+| COMMCALC-56 | **A control is verified from the control, not from a field beside it** | With the login fixed (§COMMCALC-55), two of the three carrier feeds came back by themselves — MI/ATU daily, and the payment detail back-filled October to the 31st unaided. The comprehensive comp report stayed empty for a different reason: the sweep SET the "Summarize by" dropdown and then proved it by reading `input[name="DateIntervalOption"]`, the portal's own form plumbing under a name this platform does not own. That input is no longer on the page, so a settable filter read as unsettable on every tick, and one sentence ("hidden field = None") covered three different states an operator needed told apart. |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
@@ -26324,6 +26325,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-53 | commcalc |
 | COMMCALC-54 | commcalc |
 | COMMCALC-55 | commcalc |
+| COMMCALC-56 | commcalc |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -44514,6 +44516,129 @@ all.
 
 The October gap is older than the comp report's 14-day refresh window, so once the login is reported
 correctly the window still has to be widened once, by hand, to sweep the earlier days back in.
+
+
+## §COMMCALC-56. A CONTROL IS VERIFIED FROM THE CONTROL, NEVER FROM A FIELD BESIDE IT (measured 2026-11-09)
+
+### COMMCALC-56.1 WHAT THE LOGIN FIX ACTUALLY RECOVERED (production, read-only, 2026-11-09)
+
+§COMMCALC-55 merged on 6 November. Measured three days later:
+
+    commcalc.epay_sweep_config   last_attempt_at 2026-11-09T19:00Z
+                                 last_detail     "Login OK · Daily Transaction Detail [2026-11-09]: …"
+
+    upload_log  mi_report       45,558 rows  2026-11-09T11:05Z  "epay auto-sweep"   ← daily again
+    raw_payment_detail          newest payment_date 2026-11-06, written 2026-11-09T11:07Z
+                                October: 25,044 rows, of which 19,377 WRITTEN SINCE 6 NOVEMBER,
+                                complete through 2026-10-31                          ← back-filled itself
+    raw_comp_report             newest end_date 2026-10-06, last written 2026-10-08  ← still dark
+
+Every run now says **Login OK**. Two of the three feeds the owner reported are pulling automatically,
+and the October gap in the payment detail closed with nobody touching it. The third has a different
+cause, and it is not the password.
+
+### COMMCALC-56.2 THE DEFECT
+
+`epay_sweep._set_daily_range` drives the comp report's **Summarize by** control (Daily / Weekly /
+Monthly), which that report requires — left unset it returns a header-only workbook for every date.
+It set a jqWidgets dropdown and then proved the set like this:
+
+    const h = document.querySelector('input[name="DateIntervalOption"]');
+    …
+    if not iv.get("ok") or (iv.get("hidden") or "") != "Daily":
+        return False, f"'Summarize by' could not be set to Daily (hidden field = {…})"
+
+**It verified the set by reading a DIFFERENT element from the one it set** — the portal's own form
+field, under a name this platform does not own. That field is no longer on the page (`hidden` reads
+`None`, i.e. `querySelector` found nothing), so the function returned failure on every tick whether
+or not the dropdown took.
+
+And one sentence covered **three** states an operator needs told apart:
+
+| what actually happened | what they were told |
+|---|---|
+| no dropdown on the panel offers "Daily" | hidden field = None |
+| the dropdown reads "Weekly" | hidden field = None |
+| the dropdown reads "Daily", the form field is gone | hidden field = None |
+
+### COMMCALC-56.3 THE CLASS, not the instance
+
+**A control is verified from the thing we set.** A second element that happens to move with it is
+CORROBORATION: its disagreement is evidence, its absence is not. Verifying off the neighbour couples
+this platform to an implementation detail of somebody else's page, and the coupling fails silently —
+as a *refusal to act*, which is the hardest failure to notice, because nothing looks broken except a
+feed that is quietly empty.
+
+The right pattern was already in the same file. `_set_report_month` reads the widget's own
+`getSelectedItem()` and has done since 2026-08-09.
+
+### COMMCALC-56.4 THE FIX
+
+`_set_daily_range` now returns **(ok, detail, confirmed)**:
+
+  * the **widget's own selected item** decides. It is what we set, and it is what the page's own
+    handlers read.
+  * the form field is read too. `DAILY_INTERVAL` and `_INTERVAL_FIELD` are declared once each, the
+    second marked in the source as a name we do not own.
+  * three failures, three sentences: no dropdown offering the value; the control reads something
+    else; the control reads Daily and the form field **contradicts** it. All three stay fatal.
+  * the field being **absent or empty** is absence. The pull goes ahead on the control's own answer,
+    `confirmed` is False, and the detail says exactly which half could not be read.
+
+**The fail-loud path is untouched.** An unfiltered comp run returns a header-only workbook
+indistinguishable from a quiet day, and reporting "no data posted" when the filter never took is how
+this leg stayed broken for eight weeks (§19.41).
+
+### COMMCALC-56.5 AND THE ZERO STAYS HONEST — a third rung in the one home
+
+Proceeding on one reading is weaker evidence than proceeding on two, so the difference is carried
+rather than discarded. `empty_pull_verdict` — the one home for *"is this zero a statement about the
+source, or about us?"* — gains a rung between "a control was PROVEN broken" and everything else:
+
+    CONTROL_NOT_CONFIRMED = "control_not_confirmed"      # SUSPECT, never trusted
+
+  * `classify_empty_pull(unconfirmed_controls=…)` ranks **below** `broken_controls` (the stronger
+    claim is the true one, and a control listed in both prints one sentence, not two) and **above**
+    the source's own "no records" — for the same reason rule (1) is: if we cannot say the filter
+    took, we cannot say which question the source answered.
+  * `ControlLedger.control_unconfirmed(control, detail)` is run-scoped like `control_failed`, so a
+    later leg's discovery settles an earlier leg's zero — the 2026-10-03 ordering argument, applied
+    to the weaker rung too.
+  * It **defers nothing by itself**: real rows stay real. Only a zero is in question.
+
+So the comp report can now run, and a day that genuinely posts nothing still reads
+`unverified_no_data` until the confirmation is available again — never `$0 of compensation`.
+
+### COMMCALC-56.6 Every tenant
+
+Neither the setter nor the rung takes an org, and neither can: pinned as source, because an org
+argument appearing in either is how a per-tenant divergence would start. The control's required
+value is a property of the report, not of a tenant, and the verdict rung is policy.
+
+### COMMCALC-56.7 Locked
+
+`backend/harness_empty_pull_verdict.py` §G — 19 checks added to the existing lock rather than a
+sibling harness. It fails the build if the setter gates on the form field alone, if it stops reading
+the widget's own selected item, if either name is spelled at its use instead of declared, if the
+caller drops the third return value, if an unconfirmed set stops reaching the run's ledger, if the
+fail-loud path goes away, if the new rung loses its own machine key or sentence, if the precedence
+against proven-broken or against the source's own answer inverts, or if either home learns which
+tenant it is acting for.
+
+`backend/tests/unit/test_summarize_by_is_verified_from_the_widget.py` — 16 unit tests, written
+before the fix, including the live shape and every failure that must stay a failure.
+
+### COMMCALC-56.8 What this does NOT fix, stated plainly
+
+**This container cannot reach the portal** — its edge serves an F5 rejection page here
+(§COMMCALC-50.9) — so the hypothesis that the dropdown itself still takes "Daily" is read off the
+live log's `hidden field = None` plus the code, not off the page. If the next comp run still returns
+nothing, the remaining possibility is that no dropdown on that panel offers "Daily" any more, and
+the new wording will say so in those words instead of blaming the missing field. That needs one
+screenshot of the report's filter panel, which is the owner's to take.
+
+The comp report's own 14-day refresh window still does not reach 7 October, so the earlier days need
+one widening by hand once the leg is pulling.
 
 
 ## §CORE-32. A GUARD THAT READS SOURCE CODE MUST BE TOLD F-STRINGS EXIST — one home for "the strings of a Python source" (found 2026-11-04)

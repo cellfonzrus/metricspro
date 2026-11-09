@@ -759,6 +759,13 @@ def _set_report_month(page, month_name, year):
 # egress. jQuery 2.1.3 + jqWidgets are on the page, so the widgets are driven through their own API
 # rather than by typing into a masked input (typing '04/15/2026' into a widget whose formatString is
 # 'M/d/yyyy' produced 12/15/2026 — the mask reinterpreted it).
+#
+# WHAT IT RETURNS, and the distinction that matters (§COMMCALC-56): `hit.selected` is THE WIDGET'S
+# OWN ANSWER — what the thing we set says it is set to — and that is the verification. `hidden` is a
+# SECOND reading, off `input[name="DateIntervalOption"]`, which is the portal's own form plumbing
+# under a name this platform does not own. `hidden: null` means that input is not on the page; the
+# empty string means it is there and carries no value yet. The caller treats those as absence, not
+# as disagreement — see `_set_daily_range`.
 _SET_INTERVAL_JS = """
 (want) => {
   const $ = window.jQuery || window.$;
@@ -803,13 +810,39 @@ _SET_DATES_JS = """
 """
 
 
+#: What the "Summarize by" control must be set to for this report to return rows at all.
+DAILY_INTERVAL = "Daily"
+#: The form field that CORROBORATES that set, when the portal still renders it. A name this
+#: platform does not own, which is exactly why it is corroboration and not the verification.
+_INTERVAL_FIELD = "DateIntervalOption"
+
+
 def _set_daily_range(page, begin_iso, end_iso):
     """Drive the comp report to Summarize by = Daily over [begin_iso, end_iso].
 
-    Returns (ok, detail). Unlike _set_report_month this is VERIFIED and its caller treats failure
-    as fatal, because an unfiltered comp run returns an empty workbook that is indistinguishable
-    from a legitimately quiet day — silently reporting "no data posted" when in truth we never set
-    the filter is exactly how this leg stayed broken for eight weeks.
+    Returns **(ok, detail, confirmed)**:
+
+      ok         the filter is set as far as this function can tell — the caller may run the report
+      confirmed  both readings agreed. When False and `ok` is True the set rests on the widget
+                 alone, and the caller records the control as unconfirmed on the run's ledger so a
+                 ZERO-row pull is still never published as "nothing posted".
+
+    A CONTROL IS VERIFIED FROM THE THING WE SET (index §COMMCALC-56). Until 2026-11-09 this set a
+    jqWidgets dropdown and then proved it by reading `input[name="DateIntervalOption"]` — a
+    different element, under a name belonging to the portal's own form. That input is no longer on
+    the page, so the function returned failure on every tick, with one sentence
+    ("hidden field = None") covering three different states: no dropdown offering Daily, a dropdown
+    reading something else, and a dropdown reading Daily beside a missing field. The comp leg has
+    produced nothing since 2026-10-08 because of the third. The sibling in this file,
+    `_set_report_month`, already asks the widget itself; this now does the same.
+
+    So: the widget's own `getSelectedItem()` decides. The field beside it is read too, and its
+    DISAGREEMENT is fatal — if the form still carries it and it says Monthly, the page has not
+    taken what we set — while its ABSENCE is only absence.
+
+    This is still fail-loud for a real failure, and that has not been relaxed: an unfiltered comp
+    run returns a header-only workbook indistinguishable from a quiet day, and silently reporting
+    "no data posted" when the filter never took is how this leg stayed broken for eight weeks.
 
     `end_iso` is ALREADY the boundary to put in the widget, resolved once in
     `feed_period.request_window` from the source's configured end-boundary semantics. This function
@@ -817,22 +850,47 @@ def _set_daily_range(page, begin_iso, end_iso):
     off-by-one applied twice.
     """
     try:
-        iv = page.evaluate(_SET_INTERVAL_JS, "Daily")
+        iv = page.evaluate(_SET_INTERVAL_JS, DAILY_INTERVAL)
     except Exception as e:
-        return False, f"could not set 'Summarize by' ({type(e).__name__}: {e})"
-    if not iv.get("ok") or (iv.get("hidden") or "") != "Daily":
-        return False, (f"'Summarize by' could not be set to Daily (hidden field = "
-                       f"{iv.get('hidden')!r}); the report returns an empty workbook without it")
+        return False, f"could not set 'Summarize by' ({type(e).__name__}: {e})", False
+    iv = iv if isinstance(iv, dict) else {}
+    selected = ((iv.get("hit") or {}) if isinstance(iv.get("hit"), dict) else {}).get("selected")
+    hidden = iv.get("hidden")
+
+    # (a) nothing on the page offers the value — the panel is not the one we think it is.
+    if not iv.get("ok") or selected is None:
+        return False, (f"no 'Summarize by' dropdown offering {DAILY_INTERVAL} was found on the "
+                       f"report's filter panel ({iv.get('why') or 'no matching control'}); the "
+                       f"report returns an empty workbook without it"), False
+    # (b) the thing we set says it is set to something else. The widget's own answer, so fatal.
+    if str(selected).strip() != DAILY_INTERVAL:
+        return False, (f"'Summarize by' would not take {DAILY_INTERVAL} — the control reads "
+                       f"{str(selected).strip()!r}; the report returns an empty workbook "
+                       f"without it"), False
+    # (c) the form field contradicts the widget. Also fatal: two readings that disagree mean the
+    #     page has not accepted the value, whichever of them is right.
+    if hidden not in (None, "") and str(hidden).strip() != DAILY_INTERVAL:
+        return False, (f"'Summarize by' reads {DAILY_INTERVAL} on the control but the form's "
+                       f"{_INTERVAL_FIELD} field says {str(hidden).strip()!r} — the page has not "
+                       f"taken the value"), False
+
+    confirmed = str(hidden or "").strip() == DAILY_INTERVAL
     page.wait_for_timeout(600)
     try:
         dr = page.evaluate(_SET_DATES_JS, [begin_iso, end_iso])
     except Exception as e:
-        return False, f"could not set Start/End Date ({type(e).__name__}: {e})"
+        return False, f"could not set Start/End Date ({type(e).__name__}: {e})", False
+    dr = dr if isinstance(dr, dict) else {}
     if not dr.get("ok"):
         return False, (f"Start/End Date did not take: wanted {begin_iso}..{end_iso}, "
-                       f"widget reads {dr.get('begin')}..{dr.get('end')}")
+                       f"widget reads {dr.get('begin')}..{dr.get('end')}"), False
     page.wait_for_timeout(400)
-    return True, f"Daily {begin_iso}..{end_iso}"
+    if confirmed:
+        return True, f"{DAILY_INTERVAL} {begin_iso}..{end_iso}", True
+    return True, (f"{DAILY_INTERVAL} {begin_iso}..{end_iso} — set on the control, but the set "
+                  f"could not be confirmed: the form's {_INTERVAL_FIELD} field is not on the page "
+                  f"(hidden field = {hidden!r}). Proceeding on the control's own answer; a "
+                  f"zero-row result from this run will not be reported as 'nothing posted'"), False
 
 
 def _open_and_download(page, report_id, dest_path, target=None, ledger=None):
@@ -851,13 +909,19 @@ def _open_and_download(page, report_id, dest_path, target=None, ledger=None):
     if target and target.get("kind") == "day_range":
         # FATAL on failure, deliberately: without the filter this report returns a header-only
         # workbook, which the caller would otherwise record as "nothing posted that day".
-        ok, detail = _set_daily_range(page, target["begin"], target["end"])
+        ok, detail, confirmed = _set_daily_range(page, target["begin"], target["end"])
         if not ok:
             # Record it on the RUN, not just in this leg's exception: the leg that proves the control
             # broken is often not the leg whose zero it invalidates (on 2026-10-03 it ran second).
             if ledger is not None:
                 ledger.control_failed(DAILY_RANGE_CONTROL, detail)
             raise EpayPortalError(f"could not set {DAILY_RANGE_CONTROL} — {detail}")
+        if not confirmed and ledger is not None:
+            # SET, BUT NOT PROVEN SET (§COMMCALC-56). The report runs — refusing to run it is what
+            # kept this leg empty — and the run remembers that one of its verifications was
+            # unavailable, so any zero from any leg settles as unverified rather than as the
+            # carrier's own answer. Run-scoped for the same reason the failure above is.
+            ledger.control_unconfirmed(DAILY_RANGE_CONTROL, detail)
     elif target:
         try:
             _set_report_month(page, target["month_name"], target["year"])
