@@ -41,8 +41,12 @@ export function loadLibs(root, names, mutate = {}) {
     if (done.has(name)) return
     done.add(name)
     let src = readFileSync(join(root, 'src/lib', `${name}.ts`), 'utf8')
-    for (const m of src.matchAll(/'@\/lib\/([a-z0-9-]+)'/g)) emit(m[1])
-    src = src.replace(/'@\/lib\/([a-z0-9-]+)'/g, "'./$1.mts'")
+    // Scan the RUNTIME graph only. A type-only import is erased by Node before any specifier is
+    // resolved, so it is not an edge — and emitting it would look for a `.ts` that may not exist
+    // (`@/lib/export` is a `.tsx`). Its specifier is therefore left exactly as written.
+    const runtime = src.replace(/\bimport\s+type\s[^;\n]*?from\s*'[^']*'/g, '')
+    for (const m of runtime.matchAll(/'@\/lib\/([a-z0-9-]+)'/g)) emit(m[1])
+    src = src.replace(/'@\/lib\/([a-z0-9-]+)'/g, (whole, n) => done.has(n) ? `'./${n}.mts'` : whole)
     if (mutate[name]) src = mutate[name](src)
     writeFileSync(join(dir, `${name}.mts`), src, 'utf8')
   }

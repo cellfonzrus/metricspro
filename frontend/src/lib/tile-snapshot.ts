@@ -31,7 +31,7 @@
 // converter exists, and the honesty flag travels from the backend predicate into the mailed cell) is
 // locked by `backend/harness_tile_snapshot.py`. Both run in CI — index §COMMCALC-19.
 import type { ExportColumn, ExportSheet } from '@/lib/export'
-import { moneyText } from './report-totals'
+import { moneyText } from '@/lib/report-totals'
 
 export type SnapshotTile = {
   label: string                     // what the tile is called on screen, verbatim
