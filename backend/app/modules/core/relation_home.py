@@ -241,6 +241,7 @@ SCHEMA_OF = {
     "raw_sales_invoice_tender": "commcalc",
     "raw_sales_product": "commcalc",
     "raw_vendor_rebate": "commcalc",
+    "receipt_source_map": "commcalc",
     "remediation_playbook": "commcalc",
     "remediation_request": "commcalc",
     "rep_aliases": "commcalc",

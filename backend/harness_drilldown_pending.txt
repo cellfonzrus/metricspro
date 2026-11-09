@@ -37,6 +37,7 @@
 /commcalc/commission-ledger	own	category tile to ledger rows; provenance panel names each source_table
 /commcalc/daily-commission	own	accrual modal states 'Read from <source> ... recomputed at'
 /commcalc/ma-overview-recon	own	generic tile-to-rows drill over 12 tables, names source_table
+/commcalc/cash-calendar	shared	owner ask 2026-11-09 (§PAYABLES-02); THREE panels over report_drilldown — expected in, owed out and the net, each folded PER DAY on the row so Σ(rows) against the headline is a comparison that can really disagree (§CORE-17.3e). The closing balance gets none: the opening balance is not a row, so no set of records adds up to it (§CORE-17.3h). A day whose side was NOT MEASURED contributes None and says why, never a 0.00 the panel would total
 /commcalc/payables	own	per-IMEI 'what offsets what' modal names owed_source + primary_rebate.source
 /commcalc/sales-recon	own	transaction modal states the monthly-file-vs-feed side per transaction
 /commcalc/sales-report	own	cell to transactions to line items, names the primary feed via sourceLabel

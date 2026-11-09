@@ -196,6 +196,7 @@ Primary code homes:
 | COMMCALC-54 | **"Which plan am I on?" is a question with one answer and three steps** | "the plan which is active in incentive payout when you click on it it takes you to the page which has all kinds of Incentive structure listed which becomes confusing even to me ... all of this should be a work flow than random data seen on the screen" — the confusing page is the symptom. Nothing in the platform ANSWERED "which plan am I on": three surfaces showed the operator the raw plan table and left the question to them, and one of them owned the live/belongs predicate privately. An unassigned plan pays nobody, so calling it active is the plausible-looking answer that hides the class. |
 | COMMCALC-55 | **A successful login is recognised by evidence, never by a guessed vocabulary** | The owner signed in to the carrier owners portal himself and sent the screenshot: the signed-in shell, greeting him by his e-mail address, offering "Multi-Door Owner Portal", "Commissions" and "Boost Activations" — and the sweep still reported "The sign-in page went away and we did not recognise what replaced it", with three carrier feeds frozen on a login that worked. §COMMCALC-52 was right to delete the old test (the vendor's name in the document title — a carrier name in code) and wrong to replace it with six house words: that is the platform guessing at a vocabulary it does not own, the same shape as a report defaulting to one tenant's POS labels. |
 | COMMCALC-56 | **A control is verified from the control, not from a field beside it** | With the login fixed (§COMMCALC-55), two of the three carrier feeds came back by themselves — MI/ATU daily, and the payment detail back-filled October to the 31st unaided. The comprehensive comp report stayed empty for a different reason: the sweep SET the "Summarize by" dropdown and then proved it by reading `input[name="DateIntervalOption"]`, the portal's own form plumbing under a name this platform does not own. That input is no longer on the page, so a settable filter read as unsettable on every tick, and one sentence ("hidden field = None") covered three different states an operator needed told apart. |
+| PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
 | STOREOPS-03 | **An early clock-in is paid from the schedule, or the row says why it is not** | "also need to address those people who show u earlu at work , we need to calculate their time from their schedules time not when they clock in , this is already addressed some where nbut making sure" — it was not addressed anywhere: no rule, no config, no column. Measured first and built second, switched OFF, because a strict clamp on a store opener is a wage claim and the exposure is almost entirely a fifteen-minute opening-up window. What turns a wall-clock roster time into an instant you may compare a UTC punch against, and what stops the rule going silently inert? |
@@ -7188,6 +7189,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 ## 16. Cross-reference: by TABLE
 
+- `commcalc.receipt_source_map` (mig `1115`) — THE per-tenant declaration of INBOUND money: which feed states what a carrier/processor will pay us (`source_table`), which column is the money (`amount_field`), and on what rhythm it pays (`payout_cadence` + its one day/lag column). **The column that DATES a row is deliberately NOT here**: it is dereferenced from `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE`, that fact's one home since the feed watchdog shipped, and that map's `None` entries are DECLARATIONS — a period-keyed snapshot is refused as a receipt source rather than guessed around. **Seeded with NOTHING, on purpose**: a house default here would be one tenant's commercial arrangement answering for every tenant (owner 2026-10-30), so an undeclared carrier reads NOT MEASURED and the calendar says so. Read in ONE place, `payables/expected_receipts.declared_sources`, through `payables/receipt_schedule.resolve_schedule`; written only by `PUT /payables/receipt-sources`, which validates the cadence against the home's vocabulary before it can be stored (§PAYABLES-02).
 - `storeops.stores.geo_lat` / `geo_lng` / `geofence_radius_m` / `geo_pin_source` / `geo_pinned_at` / `geo_pinned_by` (mig `1112`) — WHERE THE STORE IS, as the tenant has DECLARED it. **No default and no geocoding**: a coordinate guessed from the `address` string would be a fence nobody declared and would flag honest reps, so an unpinned store resolves to `None` and every punch at it reads `unverified_no_target`. A CHECK makes a pin both coordinates or neither. `geofence_radius_m` is NULL by design — the store inherits its tenant's radius until somebody declares that THIS store needs a tighter one. Read in ONE place, `core/store_geofence.store_pin`; written only by `PUT /storeops/stores/{store_code}/geo-pin`, which stamps who and when because moving a pin changes who gets flagged (§STOREOPS-04).
 - `storeops.tenants.punch_geo_enabled` / `punch_geofence_radius_m` / `punch_geo_max_accuracy_m` / `punch_geo_retention_days` (mig `1112`) — the punch-geofence POLICY, house defaults ON / 150 m / 200 m / 180 days. POLICY is exactly what a house default is right for (owner 2026-10-30); the PIN above is the tenant's own words and has none. ON for every tenant from day one and safely inert, because an unpinned store cannot produce a verdict. Resolved in ONE place, `core/store_geofence.resolve_config`, which both the punch path and `GET|PUT /storeops/timeclock/geo-config` read through (§STOREOPS-04).
 - `storeops.timelog.clock_out_gps_lat` / `clock_out_gps_lng` / `clock_out_gps_accuracy_m` / `clock_in_geo_decision` / `clock_in_geo_distance_m` / `clock_out_geo_decision` / `clock_out_geo_distance_m` (mig `1112`) — the clock-OUT's own fix and a STORED verdict for each end of the punch. The clock-in keeps mig `045`'s three columns, so no stored punch moves; the clock-out gets its own, because overwriting the clock-in's fix would destroy the only evidence of where the shift BEGAN and *"arrived at the store, left from home"* is the pattern being looked for. A CHECK pins the vocabulary to `core/geo.DECISIONS`; NULL means **never measured**, which is a different and honest thing from any of the five words. Which column holds which fact is declared once, `core/store_geofence.PUNCH_COLUMNS`, read by the writer AND the review board. Two partial indexes on `= 'outside'` so the board never scans the whole clock history (§STOREOPS-04).
@@ -7678,6 +7680,8 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | `GET /payables/forecast` | `payables/router.py` `forecast` (sales window via `commcalc/date_window.resolve_window`; `store_key` stamped) | §15 (module 095), §COMMCALC-25 |
 | `GET /payables/payables` | `payables/router.py` `list_payables` (`start`/`end` window `due_date`, defaulting to today→+3 via `commcalc/date_window.ahead_window` unless `all_dates`; `undated_excluded` and `no_device_excluded` reported; non-payable statuses excluded through `payables/ledger_status.exclude_non_payable`) | §15 (module 095), §COMMCALC-25, §COMMCALC-32 |
 | `GET /payables/owed-by-date` | `payables/router.py` `owed_by_date` — net owed per `due_date`, each date row carrying its own per-store split (`by_store`, keyed on the §64 store identity) so the right account is debited; `market` accepts a comma-separated list through `_market_by_store`/`_market_of` (RULE FIVE); unresolved money reported as `unassigned_owed`; source named `device_ledger` or `vendor_feed` | §15 (module 095), §COMMCALC-25, §COMMCALC-32 |
+| `GET /payables/cash-calendar` | `payables/router.py` `cash_calendar` — the day-by-day calendar of EXPECTED money in against money OWED out, with each day's own net and a running position carried forward. **Neither side is derived here**: the OUT side is `payables/owed_read.dated_owed` (the SAME read `/payables/owed-by-date` and `/asset/owed-weekly` share, §COMMCALC-34) and the IN side is `payables/expected_receipts.dated_receipts` over this tenant's OWN declared source and payout cycle; the netting is the pure `payables/cash_calendar.build`. An unmeasured side REFUSES to net — `expected_in` / `net` / `running` go to None and the measured side is still shown in full | §PAYABLES-02, §COMMCALC-34, §COMMCALC-29 |
+| `GET /payables/receipt-sources`, `PUT /payables/receipt-sources` | `payables/router.py` `get_receipt_sources` / `put_receipt_source` — this tenant's declared inbound money sources (`commcalc.receipt_source_map`, mig `1115`). The cadence vocabulary is `receipt_schedule.CADENCES` and the candidate feeds are the lineage registry's day-grain tables, both DEREFERENCED so the form cannot offer a choice the reader could not honour. Writes no money | §PAYABLES-02 |
 | `GET /payables/due` | `payables/router.py` `due_payables` (same window home; non-payable statuses excluded) | §15 (module 095), §COMMCALC-32 |
 | `POST /payables/rebuild` (the ledger it writes) | `payables/engine.py` → `device_payable_ledger`: `rebate_amount` + `rebate_basis` through `payables/recovered_amount.py` (the one home for what the carrier already recovered, under the sign declared on `payable_source_map.reimbursement_sign`); an unwired source stores NULL and is FLAGGED, never 0.00 | §15 (module 095), §COMMCALC-33 |
 | `GET /payables/filter-options` | `payables/router.py` `payables_filter_options` (canonical §13c; every option carries `store_key`) | §15 (module 095), §COMMCALC-25 |
@@ -7836,6 +7840,9 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 
 | metric | basis | where it is decided |
 | --- | --- | --- |
+| **On what day will this earned money reach us?** | the carrier's DECLARED payout cycle — its own statement date, a declared weekday, declared days of the month, a declared day of the month, or a declared net-days lag | `payables/receipt_schedule.receipt_date` / `receipt_date_of_row` — THE one home, returning the date WITH the basis so no caller can show one without the other. **No house default**, unlike the outbound `billing_period`: inbound there is only an EARNING date, so a default would invent a payment date out of a sale date. Nothing declared → `cadence_undeclared`, no date, NOT measured. `is_measured` is an ALLOWLIST (§66). Lock: `harness_cash_calendar.py` (§PAYABLES-02) |
+| **What money is expected to come IN, and out of which feed?** | each tenant's OWN declared source (`commcalc.receipt_source_map`, mig `1115`), dated through the lineage registry's day column | `payables/expected_receipts.dated_receipts` — org-scoped on every read including the declaration itself, because two tenants' rows sit in the same physical tables. A declaration that cannot be READ is `declared: True` with the failure in words (§COMMCALC-29); a declaration TABLE that does not exist is `declared: False` with the migration named. An empty result is **never** \$0.00 (§PAYABLES-02) |
+| **What is left after offsetting — the net cash position, by day?** | this day's expected in minus this day's owed out, folded PER DAY and then added up (§CORE-17.3h), with the opening balance carried forward | `payables/cash_calendar.build` — pure, and it reads nothing: the OUT side is `owed_read.dated_owed`, the SAME read the Daily Owed surface and the weekly roll-up share (§COMMCALC-34), so the calendar cannot total what those screens disagree with. **An unmeasured side REFUSES to net**: `expected_in` / `net` / `running` go to None and the measured side is still shown in full (§PAYABLES-02) |
 | **Was this punch made at the store it is for?** | ONE reported position vs the store's DECLARED pin, judged over the interval [distance − accuracy, distance + accuracy] against the tenant's (or the store's own) radius | `core/store_geofence.evaluate_presence` → `core/geo.evaluate_checkin` — THE one decision, for the clock-in, the clock-out and the DM store visit alike. No pin / no fix / a fix too coarse → an `unverified_*` with `within_geofence = NULL`, which is never "they were not there". Lock: `harness_store_geofence_lock.py` (§STOREOPS-04) |
 | **Is this stored verdict a violation?** | an **ALLOWLIST** of decisions (`OFF_SITE_DECISIONS` = `outside`) | `core/store_geofence.is_off_site` — the §66 posture: a decision this version has never heard of reads as NOT a violation. A denylist would one day accuse somebody over a word meaning "unknown" (§STOREOPS-04) |
 | **How long may we keep where somebody was?** | each relation's own tenant-declared window (`punch_geo_retention_days` / `checkin_geo_retention_days`), stamped onto the ROW at write time | `core/geo_retention.purge_after` — the platform's ONE date arithmetic; `marketing/event_logic.purge_after_date` dereferences it rather than keeping the copy it had until 2026-11-01. Junk or blank → the house default, never "delete everything"; zero or negative → clamped up, never obeyed. Lock: `harness_geo_retention_lock.py` (§CORE-31) |
@@ -26327,6 +26334,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-54 | commcalc |
 | COMMCALC-55 | commcalc |
 | COMMCALC-56 | commcalc |
+| PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
 | POS-03 | pos |
@@ -45170,3 +45178,99 @@ runs it.
 updates were being discarded, which is why this hid) · §CORE-29.3b (the iOS floor, and the five
 builds) · §CORE-10 (a guard that goes blind fails CI) · §19.18 (one fact, one home, dereferenced —
 never copied).
+
+---
+
+## §PAYABLES-02. A PAYMENT DATE NOBODY DECLARED IS NOT A PAYMENT DATE (owner ask 2026-11-09)
+
+**Owner, verbatim:** *"i need a report for the expected payments for teh next payout cycle by the day
+as acalender display for all tenants, also the foloowing report will be how much is owed, which we
+already ahave and the thent eh irs will be after offseting the payments what isteh cash flow"*.
+
+Three reports in one sentence, and he is right about the middle one: the owed half already exists and
+already has ONE home. What did not exist anywhere is the inbound half.
+
+### PAYABLES-02.1 THE CLASS, not the instance
+
+**"When does the carrier pay us" has never been a fact anywhere in this platform.** No table, no
+config column, no function. The obvious build puts it in the report — a day-of-month literal, or a
+weekday inferred from the last few statements — and that is §COMMCALC-26.1's class arriving on a
+sixth surface: *a carrier's commercial arrangement written into code instead of declared*. It is also
+the §COMMCALC-49.10 class, because one tenant's arrangement would then answer for all four.
+
+**And a defaulted payment date is worse than a missing one.** Measured 2026-11-09 against production:
+`raw_payment_detail` holds rows for the house org ONLY, `raw_ma_commission` for the processor-fed
+tenant only, and two tenants have neither. A reader that named either table, or defaulted either
+rhythm, would have drawn a confident cash calendar for one tenant and told the other three they are
+expecting nothing — while printing a net position wrong by exactly the amount nobody measured.
+
+### PAYABLES-02.2 THE ANSWER: three homes, and the OUT side is not rebuilt
+
+| The question | Its one home | What it refuses to do |
+|---|---|---|
+| **On what day does this earned money reach us, and what says so?** | `backend/app/modules/payables/receipt_schedule.py` — cadences `statement_date` / `weekly` / `semi_monthly` / `monthly` / `net_days_after_period_end`; bases allowlisted by `is_measured` (§66 shape) | **There is NO house default**, unlike its outbound twin `billing_period.py`. On the outbound side the row already carries the date money is owed, so "owed on the date it is owed" asserts nothing; inbound there is only an EARNING date, so a default would invent a payment date out of a sale date. Nothing declared → `cadence_undeclared`, no date, NOT measured. The forward roll for `weekly` is **dereferenced** from `billing_period.next_weekday_on_or_after`, never re-derived |
+| **What money is expected to come in, out of which feed?** | `backend/app/modules/payables/expected_receipts.py` over `commcalc.receipt_source_map` (mig `1115`) | Declares no feed name and no date column of its own: **which column dates a row is dereferenced from `data_lineage_registry.DATA_DATE_COLUMN_BY_TABLE`**, that fact's one home since the feed watchdog shipped — and that map's `None` entries are DECLARATIONS, so a period-keyed snapshot is REFUSED as a receipt source rather than guessed around. A declaration that cannot be READ is `declared: True` with the failure in words (§COMMCALC-29); a declaration TABLE that does not exist is `declared: False` with the migration named. The two never collapse into one answer |
+| **What is left after offsetting?** | `backend/app/modules/payables/cash_calendar.py` | Reads nothing. Both inputs come from homes that already answer: the OUT side is `owed_read.dated_owed` — the SAME read the Daily Owed surface and the weekly roll-up share (§COMMCALC-34) — so **the calendar cannot total something those screens disagree with, by construction**. A third path to "what do I owe" is the duplicate defect `CLAUDE.md` makes a build gate |
+
+### PAYABLES-02.3 AN UNMEASURED SIDE REFUSES TO NET
+
+A tenant with no declared payout cycle has an UNKNOWN inbound, and **$0.00 is not unknown**: netting
+against it prints a cash position wrong by exactly the amount nobody measured, and the owner plans
+against it. So `expected_in`, `net` and `running` all go to `None`, the measured side is still shown
+in full, and the surface says which half is missing. §COMMCALC-29 and §66 applied to a BALANCE rather
+than to a feed.
+
+A day cell therefore has **three** states and never two: measured with money · measured and genuinely
+quiet (`quiet: True`) · NOT MEASURED. Money dated outside the span is reported as out-of-span — never
+dropped, and never clamped onto the edge day, which would put a receipt on a date no cadence named.
+A net is folded **per day** and the headline totals are Σ of the day rows (§CORE-17.3h), so the header
+cannot disagree with the grid.
+
+### PAYABLES-02.4 THE SURFACE
+
+`/commcalc/cash-calendar` — a Monday-first month grid of day cells, with the standard filters and the
+send bar by default (§CORE-27, both the shared components, neither re-implemented). Store, market and
+date narrowing is **server-side**, through the same `_due_window` / `_store_key_resolver` (§64) /
+`_market_by_store` (RULE FIVE) the rest of the payables module reads, so "North" and "today through
+three days ahead" mean one thing on every payment screen. A dashboard TILE rather than a sidebar row
+(owner's "cleaner look" ruling). The page dereferences the basis words through
+`frontend/src/lib/cash-calendar-view.ts` (`CASH_CAL_BASIS_WORD`, `cashCalWeeks` — 11 vitest units),
+and the declaration panel is ON the report, so an empty calendar carries its own next step.
+
+### PAYABLES-02.5 Every tenant
+
+Migration `1115` seeds **nothing**, deliberately: a house default here would be one tenant's payout
+arrangement answering for every tenant. House defaults stay right for a POLICY (a rate, a window, a
+switch) and wrong for a tenant's own commercial arrangement. `harness_cash_calendar.py` asserts both
+directions across all four tenants' real shapes — each tenant's own declaration answers, and the
+NEGATIVE, that one tenant's declaration never answers another's read even when both tenants' rows sit
+in the same physical table.
+
+### PAYABLES-02.6 What is NOT claimed
+
+The amounts are each tenant's own feed rows inside the window; this ships no new money derivation and
+moves no money. Whether a given feed states *money still to come* rather than *money already received*
+is the tenant's declaration to make, and a feed holding settled rows will place them on the day its
+cycle says — which is a true statement about that feed, not a forecast. Narrowing to the unsettled
+part is the obvious next step and is deliberately NOT guessed at here.
+
+**ONE ASYMMETRY BETWEEN THE TWO HALVES, and it is the shared home's contract rather than this
+report's choice.** The IN side reports a MEASURED \$0.00 when a complete declaration found no rows
+(the declaration answered and nothing was there), which this feature's own integration tests forced:
+reading ROW COUNT as measurement printed "not measured" over an honest \$0.00 the moment a store
+filter matched nothing, so a quiet store would have looked like a setup fault forever
+(`receipt_schedule.can_date`, locked at §D6/§D7 and §E6b). The OUT side does **not** behave that way:
+`owed_read` returns `source: None` whenever neither of its sources produced a row, deliberately, so
+that an empty read is never "\$0.00 is owed" — so under a filter matching nothing the owed half reads
+NOT MEASURED, exactly as the Daily Owed screen does for the same filter. **This is not fixed here and
+the reason is stated rather than worked around:** overriding it in the calendar would be a second
+opinion about whether the business owes anything, which is the duplicate defect the index rules gate
+on. Fixing the CLASS means changing that contract for all three of `dated_owed`'s callers, which is a
+PR of its own.
+
+**Cross-refs:** §COMMCALC-34 (the one owed read and the declared billing cadence — this is its
+inbound mirror) · §COMMCALC-29 (a declared source that cannot be read is reported) · §66 (a basis is
+evidence only on an allowlist) · §COMMCALC-49.10 (every feature for every tenant; a tenant's
+vocabulary is never a default) · §19.18 (one fact, one home, dereferenced — never copied) · §CORE-27
+(the standard filters and the send bar) · §CORE-17.3h (a net is folded per row, never as a difference
+of two totals) · §64 (store identity) · §15 (module 095, the payable ledger the out side reads).

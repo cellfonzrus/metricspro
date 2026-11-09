@@ -174,8 +174,15 @@ ck("D10 the count of what was left out is REPORTED, never silently dropped",
    '"no_device_excluded"' in RTR, True)
 ck("D11 the drill-down still answers for such a line, saying which it is (an audit view)",
    '"is_payable": _ls.is_payable(' in RTR, True)
-ck("D12 the default window is applied by ONE helper, so two endpoints cannot differ",
-   RTR.count("_due_window(start, end, all_dates)"), 2)
+# Re-taken 2 -> 3 on 2026-11-09 (PAYABLES-02, the Cash Calendar) on a COUNTED, NAMED addition, the
+# way the route-count tripwire is re-taken and never by relaxing the compare to `>=`. The three
+# callers are `GET /payables`, `GET /payables/owed-by-date` and `GET /payables/cash-calendar`, and
+# the third is the reason this check exists rather than an exception to it: the calendar's owed half
+# is the SAME `owed_read.dated_owed` the other two share (COMMCALC-34), so a window of its own would
+# have been a second opinion about which days are in scope. An exact count is kept because a fourth
+# caller appearing unannounced is the drift this is watching for.
+ck("D12 the default window is applied by ONE helper, so three endpoints cannot differ",
+   RTR.count("_due_window(start, end, all_dates)"), 3)
 ck("D13 ...which dereferences the window home rather than computing dates itself",
    "date_window.ahead_window(" in RTR, True)
 ck("D14 'all dates' remains reachable, or the full list would be unreachable",
