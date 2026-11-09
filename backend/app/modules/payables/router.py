@@ -17,7 +17,12 @@ from app.modules.commcalc import demand_projection
 from app.modules.commcalc import device_vocabulary as _devvocab
 from app.modules.payables import engine
 from app.modules.payables import ledger_status as _ls
+from app.modules.commcalc import data_lineage_registry as _lineage
+from app.modules.payables import cash_calendar as _cal
+from app.modules.payables import cash_calendar_drilldown as _caldrill
+from app.modules.payables import expected_receipts as _receipts
 from app.modules.payables import owed_read as _owed
+from app.modules.payables import receipt_schedule as _rsched
 
 router = APIRouter()
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -886,3 +891,171 @@ def delete_phone_map(map_id: str, org_id: str = ORG_ID):
     client.schema("commcalc").table("device_model_alias").delete() \
         .eq("org_id", org_id).eq("id", map_id).execute()
     return {"deleted": True}
+
+
+# ── Part G — THE CASH CALENDAR: expected in, owed out, net per day (§COMMCALC-56) ─────────────
+#
+# OWNER ASK, verbatim: "i need a report for the expected payments for teh next payout cycle by the day
+# as acalender display for all tenants, also the foloowing report will be how much is owed, which we
+# already ahave and the thent eh irs will be after offseting the payments what isteh cash flow".
+#
+# THREE THINGS, AND ONLY THE FIRST IS NEW DATA. The owed half already has ONE home and he is right
+# that it exists: `owed_read.dated_owed`, the same read `/owed-by-date` and `/asset/owed-weekly`
+# share. This endpoint calls it and does NOT query the ledger — a third path to "what do I owe" is the
+# duplicate defect `CLAUDE.md` makes a build gate. The expected-in half had no home at all, so it got
+# one (`expected_receipts`, over the tenant's OWN declared source). The netting is `cash_calendar`,
+# pure, so the arithmetic the harness proves is the arithmetic that runs here.
+class PutReceiptSourceIn(LaxModel):
+    label: Any = None
+    source_table: Any = None
+    amount_field: Any = None
+    payout_cadence: Any = None
+    payout_weekday: Any = None
+    payout_days: Any = None
+    payout_day_of_month: Any = None
+    payout_net_days: Any = None
+    is_active: Any = None
+
+
+def _owed_relation(source):
+    """The RELATION behind an owed-read source name, DEREFERENCED from `owed_read`'s own constants.
+
+    `dated_owed` returns a source NAME ("which of my two sources answered"), not a table. A panel
+    must name the table, and spelling either one here would be the §19.18 copy — so the mapping is
+    built from the home's own pair of constants and an unknown name names nothing rather than
+    guessing a relation."""
+    return {_owed.SOURCE_DEVICE_LEDGER: (_owed.DEVICE_LEDGER,),
+            _owed.SOURCE_VENDOR_FEED: (_owed.VENDOR_FEED,)}.get(str(source or ""), ())
+
+
+@router.get("/cash-calendar")
+def cash_calendar(start: str = "", end: str = "", store: str = "", market: str = "",
+                  all_dates: bool = False, opening_balance: float = 0.0,
+                  org_id: str = ORG_ID):
+    """The day-by-day cash calendar: expected money IN, money OWED out, and the net position.
+
+    Every figure here is read through a home that already answers its question, and nothing is
+    re-derived:
+
+      · the OUT side  — `owed_read.dated_owed` (§COMMCALC-34), the SAME read the Daily Owed surface
+        uses, so this calendar cannot total something that screen disagrees with;
+      · the IN side   — `expected_receipts.dated_receipts`, over THIS tenant's declared inbound
+        source and its declared payout cycle (§COMMCALC-56);
+      · the NETTING   — `cash_calendar.build`, pure and proven DB-free.
+
+    AN UNMEASURED SIDE REFUSES TO NET. A tenant with no declared payout cycle has an UNKNOWN inbound,
+    and 0.00 is not unknown: netting against it would print a confident cash position wrong by exactly
+    the amount nobody measured. The measured side is still shown in full and the response says which
+    half is missing.
+    """
+    client = sb()
+    # The SAME window home, the SAME store identity (§64) and the SAME market resolver (RULE FIVE)
+    # the rest of this module reads — so "North" and "today through three days ahead" mean one thing
+    # on every payment screen rather than two.
+    win = _due_window(start, end, all_dates)
+    skey = _store_key_resolver(client, org_id)
+    want_store = _store_selected(skey, store)
+    mmap = _market_by_store(client, org_id)
+    want_markets = {m.strip().lower() for m in str(market or "").split(",") if m.strip()} or None
+    market_of = (lambda st: _market_of(mmap, st))
+
+    out_got = _owed.dated_owed(client, org_id, win, want_store=want_store,
+                               want_markets=want_markets, market_of=market_of,
+                               store_filtered=bool(store))
+    in_got = _receipts.dated_receipts(client, org_id, win, want_store=want_store,
+                                      want_markets=want_markets, market_of=market_of)
+
+    # "Was the OUT side measured?" is the shared read's own answer, dereferenced rather than
+    # re-decided here: `source: None` from both of its sources means no owed read answered at all,
+    # which is not the same as owing nothing (§COMMCALC-29).
+    out_measured = out_got.get("source") is not None
+    in_measured = bool(in_got.get("measured"))
+
+    span = win or {}
+    cal = _cal.build(in_got.get("days") or [], out_got.get("rows") or [],
+                     start=span.get("start") or (in_got.get("days") or [{}])[0].get("date") or "",
+                     end=span.get("end") or "",
+                     opening_balance=opening_balance,
+                     in_measured=in_measured, out_measured=out_measured)
+    # EVERY FIGURE NAMES ITS ROWS (§CORE-17). The panels are built over the payload's OWN day rows
+    # and totals — never a fresh read — and every table they name is this tenant's own declaration,
+    # handed in rather than spelled in the declaration file (RULE TWO).
+    exp_tables = tuple(s.get("source_table") for s in (in_got.get("sources") or []))
+    cal["drilldowns"] = _caldrill.drilldowns(
+        cal, expected_tables=exp_tables,
+        expected_date_columns=tuple(_receipts.earning_date_field(t) for t in exp_tables if t),
+        owed_tables=_owed_relation(out_got.get("source")))
+    return dict(cal,
+                window=win,
+                # WHAT ANSWERED, on both sides, named rather than implied — a reader must be able to
+                # tell a quiet month from an unconfigured tenant without opening the setup screen.
+                expected_source=in_got.get("source"), expected_sources=in_got.get("sources"),
+                expected_declared=in_got.get("declared"),
+                expected_table_missing=in_got.get("table_missing"),
+                expected_error=in_got.get("error"), expected_note=in_got.get("note"),
+                expected_bases=in_got.get("bases"),
+                expected_unplaced_amount=in_got.get("unplaced_amount"),
+                expected_unplaced_rows=in_got.get("unplaced_rows"),
+                owed_source=out_got.get("source"), owed_grain=out_got.get("grain"),
+                owed_note=out_got.get("note"))
+
+
+@router.get("/receipt-sources")
+def get_receipt_sources(org_id: str = ORG_ID):
+    """This tenant's declared inbound money sources, plus the vocabulary a form must offer.
+
+    The cadences and the candidate feeds are DEREFERENCED from their homes rather than listed again
+    in the UI — `receipt_schedule.CADENCES` rules on the rhythm, and only a relation the lineage
+    registry declares a day-grain column for can be dated at all, so those are the only ones offered.
+    """
+    client = sb()
+    dec = _receipts.declared_sources(client, org_id)
+    return {"rows": dec["rows"], "error": dec["error"],
+            "table_missing": dec.get("table_missing", False),
+            "cadences": list(_rsched.CADENCES),
+            "cadence_words": dict(_rsched.BASIS_WORDS),
+            # A feed with no column naming its own day cannot be placed on a calendar, so it is not
+            # offered as a choice. The registry's None is a declaration and is honoured here.
+            "candidate_tables": sorted(t for t, c in _lineage.DATA_DATE_COLUMN_BY_TABLE.items() if c)}
+
+
+@router.put("/receipt-sources")
+def put_receipt_source(body: PutReceiptSourceIn, org_id: str = ORG_ID):
+    """Declare (or update) one inbound money source and its payout cycle.
+
+    THIS WRITES NO MONEY. It records what a tenant says about when it is paid; every amount on the
+    calendar comes from the tenant's own feed. The cadence is validated against the home's vocabulary
+    before it is stored, so an unruled value cannot be saved and then read as a rhythm.
+    """
+    table = str(body.source_table or "").strip()
+    amount_field = str(body.amount_field or "").strip()
+    if not table or not amount_field:
+        raise HTTPException(400, "source_table and amount_field are required")
+    if not _receipts.earning_date_field(table):
+        raise HTTPException(400, "%s carries no column naming the day its rows are about, so its "
+                                 "money cannot be placed on a calendar" % table)
+    cadence = str(body.payout_cadence or "").strip().lower() or None
+    if cadence is not None and cadence not in _rsched.CADENCES:
+        raise HTTPException(400, "payout_cadence must be one of %s" % ", ".join(_rsched.CADENCES))
+    days = body.payout_days
+    if isinstance(days, str):
+        days = [int(x) for x in days.split(",") if x.strip().isdigit()] or None
+    row = {"org_id": org_id, "label": (str(body.label or "").strip() or table),
+           "source_table": table, "amount_field": amount_field,
+           "payout_cadence": cadence,
+           "payout_weekday": body.payout_weekday, "payout_days": days,
+           "payout_day_of_month": body.payout_day_of_month,
+           "payout_net_days": body.payout_net_days,
+           "is_active": (True if body.is_active is None else bool(body.is_active))}
+    r = (client_upsert_receipt_source(row))
+    return {"saved": True, "row": r}
+
+
+def client_upsert_receipt_source(row):
+    """The one write site for a receipt declaration, keyed exactly as the migration's unique index
+    is — so a re-declaration updates the row rather than growing a second one that would double the
+    tenant's expected money."""
+    client = sb()
+    r = (client.schema("commcalc").table(_receipts.SOURCE_MAP)
+         .upsert(row, on_conflict="org_id,source_table,amount_field").execute())
+    return (r.data or [None])[0]

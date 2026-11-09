@@ -135,6 +135,11 @@ FACTS: dict[str, dict] = {
             # day_drill_row / group_drilldown / drilldowns — the cash-variance producer, the first
             # report on the shared mechanism; the endpoint reaches it through `drilldowns`.
             'app/modules/closing/cash_variance.py': ('report_drilldown',),
+            # The CASH CALENDAR's three figures (§COMMCALC-56). Declares only its own catalogue and
+            # recomputes nothing: the panels are built over the endpoint's OWN day rows and totals,
+            # and every table they name is handed in from this tenant's declarations rather than
+            # spelled here, because a guessed provenance is a claim nothing checked (RULE TWO).
+            'app/modules/payables/cash_calendar_drilldown.py': ('report_drilldown',),
             # tile_panel / tiles — the TILE shape (§CORE-17.3a). This is the fold most of the
             # remaining reports owe, so it lives in the one home and a report declares only its
             # own catalogue. First declaration: the eleven cash-recon tiles.
@@ -1261,6 +1266,32 @@ FACTS: dict[str, dict] = {
             # cadence — `resolve_cadence` / `week_window` / `roll_up` — and derives no rhythm of its
             # own. A carrier's stamped period still WINS through this home, never recomputed.
             'app/modules/asset/router.py': ('_bp',),
+            # THE INBOUND MIRROR (§COMMCALC-56). `receipt_schedule` answers the same shape of
+            # question for money coming IN, and dereferences `next_weekday_on_or_after` rather than
+            # keeping a second copy of "the first such weekday on or after this date" — two copies
+            # of that arithmetic are two rules free to disagree (§19.18). It deliberately has NO
+            # house default of its own: inbound there is only an EARNING date, so a default would
+            # invent a payment date out of a sale date.
+            'app/modules/payables/receipt_schedule.py': ('_bp',),
+        },
+    },
+    'payable_expected_receipts': {
+        "question": 'What money is EXPECTED to come IN, on which day, out of which feed - and what '
+                    'says when this carrier pays us at all?',
+        "homes": ('app/modules/payables/receipt_schedule.py',
+                  'app/modules/payables/expected_receipts.py'),
+        "index": ('COMMCALC-56',),
+        "locks": ('harness_cash_calendar.py',),
+        # SNAPSHOT — written BY HAND, never blessed (§50: `--bless` silently deleted 11 of 12 facts
+        # on 2026-10-04, and rewrote 51 of them on 2026-10-26; it stripped 1,071 lines of these
+        # notes again on 2026-11-09). The lock verifies it against the real import graph.
+        "callers": {
+            # The CASH CALENDAR endpoint, `/payables/cash-calendar`, and the declaration endpoints
+            # beside it. Nothing else may read an inbound feed for this purpose: a second reader
+            # would be a second answer to "when does the carrier pay us", and the first one is a
+            # per-tenant DECLARATION rather than anything derivable, so the two could not be
+            # reconciled afterwards.
+            'app/modules/payables/router.py': ('_receipts', '_rsched'),
         },
     },
     'payable_dated_owed': {
@@ -1283,6 +1314,12 @@ FACTS: dict[str, dict] = {
             # the moment either learned something the other did not. §F13 of the lock fails the
             # build if a second definition of the read appears anywhere in the triangle.
             'app/modules/asset/router.py': ('_owed_r',),
+            # THE CASH CALENDAR (§COMMCALC-56) reads the SAME rows a third time rather than
+            # deriving a third answer — its endpoint hands them to the pure netting module, which
+            # imports nothing at all. The owner said the owed report already exists and he is right;
+            # a third path to "what do I owe" is the duplicate defect the house rules gate on, so
+            # the calendar cannot total what the Daily Owed surface disagrees with. The router
+            # already appears above as the daily surface's caller and is the same import.
         },
     },
     'kpi_column_meaning': {
@@ -2186,6 +2223,12 @@ FACTS: dict[str, dict] = {
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             'app/modules/commcalc/auto_calc.py': ('_lineage',),
+            # §COMMCALC-56 — the EXPECTED-RECEIPTS read dereferences DATA_DATE_COLUMN_BY_TABLE for
+            # "which column dates a row of this feed" instead of declaring a second map of its own.
+            # That map's `None` entries are DECLARATIONS, so a period-keyed snapshot is REFUSED as a
+            # receipt source rather than guessed around.
+            'app/modules/payables/expected_receipts.py': ('_lineage',),
+            'app/modules/payables/router.py': ('_lineage',),
             # §COMMCALC-41 — the registry of DERIVED BUILDS declares which tables make each stored
             # snapshot stale, so the post-landing hook can rebuild it. Every one of those table names
             # is dereferenced from here (`ASSET_LEDGER`, `PAYMENT_DETAIL`, `DISTRIBUTOR_INVOICES`,

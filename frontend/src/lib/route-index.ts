@@ -225,6 +225,7 @@ export const ROUTES: RouteEntry[] = [
   { path: '/commcalc/onboarding' },
   { path: '/commcalc/pay-simulator' },
   { path: '/commcalc/payables' },
+  { path: '/commcalc/cash-calendar', aliases: ['cash calendar', 'cash flow', 'cash flow calendar', 'expected payments', 'expected payment', 'next payout cycle', 'when do we get paid', 'money coming in', 'incoming payments', 'net cash position', 'running balance', 'payout cycle'] },
   { path: '/commcalc/payout-plans' },
   { path: '/commcalc/payout-schedules' },
   { path: '/commcalc/peer-comparison', aliases: ['peer comparison', 'similar stores', 'bill payment band', 'traffic band', 'boxes per bill payment'] },

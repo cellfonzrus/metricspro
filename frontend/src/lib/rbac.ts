@@ -958,6 +958,12 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/device-line-reimbursement?view=transferred', label: 'Activated at Another Store', icon: '⇄', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/asset/on-inventory', label: 'On-Inventory by Store', icon: '🏬', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/payables', label: 'Forecasting & Vendor Payables', icon: '📱', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    // CASH CALENDAR (owner ask 2026-11-09, index §COMMCALC-56) — expected money IN, money OWED out,
+    // and the net position, day by day. Beside Vendor Payables deliberately: the OUT side IS that
+    // report's figure, read through the one shared `owed_read.dated_owed`, so the two cannot
+    // disagree. A tile rather than a sidebar row (owner's "cleaner look" ruling): a management
+    // report nobody can find on the dashboard is a report nobody reads.
+    { href: '/commcalc/cash-calendar', label: 'Cash Calendar', icon: '🗓️', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     // Processor Debits & Credits (owner directive 2026-09-04): the day × transaction-type ledger of
     // what the org's payment processor debited and credited on its account. Carrier-NEUTRAL by design
     // (every tenant has a processor; the NAME renders from the mig-953 report_term vocabulary) →
@@ -1491,6 +1497,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/asset/charges/rma', 'assets'], ['/commcalc/asset/inventory-recon', 'assets'],
   ['/commcalc/asset/hotsheet-recon', 'assets'], ['/commcalc/asset/marketplace-purchases', 'assets'],
   ['/commcalc/payables', 'assets'], ['/commcalc/processor-ledger', 'assets'],
+  ['/commcalc/cash-calendar', 'assets'],
   ['/commcalc/distributors', 'assets'], ['/commcalc/vip', 'assets'], ['/commcalc/vip/paygo', 'assets'],
   // Finance & Accounting
   ['/accounts', 'finance'], ['/accounts/trends', 'finance'], ['/accounts/pl', 'finance'],
