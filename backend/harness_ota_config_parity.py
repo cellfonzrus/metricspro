@@ -53,6 +53,10 @@ TESTS = MOBILE / "scripts/delivery-env.test.ts"
 WRAPPER = MOBILE / "scripts/with-profile-env.mjs"
 GATE = MOBILE / "scripts/check-extra.mjs"
 VITEST = MOBILE / "vitest.config.ts"
+FAULT_RULE = MOBILE / "src/lib/startup-fault.ts"
+FAULT_TESTS = MOBILE / "src/lib/startup-fault.test.ts"
+FAULT_SCREEN = MOBILE / "src/components/StartupFault.tsx"
+ROOT_LAYOUT = MOBILE / "app/_layout.tsx"
 EAS_JSON = MOBILE / "eas.json"
 
 # What this app cannot run without, DECLARED here as well so the declaration cannot quietly shrink.
@@ -130,11 +134,13 @@ control("D1.4", all(re.fullmatch(r"EXPO_PUBLIC_[A-Z0-9_]+", v) for v in ["supaba
 app_src = read(APP_READER)
 app_code = code_only(app_src)
 
-DEREF_JSON = re.compile(r"from\s+'(\.\./)+config/required-extra\.json'")
-check("D2.1 the app READS the declaration rather than restating it",
-      bool(DEREF_JSON.search(app_src)),
-      "src/config/env.ts must import config/required-extra.json")
-control("D2.1", bool(DEREF_JSON.search("const REQUIRED = { supabaseUrl: 'EXPO_PUBLIC_SUPABASE_URL' }")))
+# Dereferenced INDIRECTLY, through the pure rule in src/lib/startup-fault.ts, which reads the
+# declaration itself (S1.3). One home, two readers, no copy.
+DEREF_RULE = re.compile(r"from\s+'@/lib/startup-fault'")
+check("D2.1 the app READS the declaration through the shared rule rather than restating it",
+      bool(DEREF_RULE.search(app_src)),
+      "src/config/env.ts must import describeStartupFault from @/lib/startup-fault")
+control("D2.1", bool(DEREF_RULE.search("const REQUIRED = { supabaseUrl: 'EXPO_PUBLIC_SUPABASE_URL' }")))
 
 check("D2.2 the app names no environment variable of its own",
       not any(v in app_code for v in PINNED_REQUIRED.values()),
@@ -145,10 +151,12 @@ control("D2.2", not any(v in "const u = process.env.EXPO_PUBLIC_SUPABASE_URL"
 
 # The defect, precisely: a missing value was warned about and read as ''. A warning on a phone is
 # seen by nobody, and the crash then surfaced three imports away naming Supabase instead of the
-# variable. It must THROW here, where the name is known.
-check("D2.3 a missing value throws where it is read", "throw new Error(" in app_code,
-      "src/config/env.ts must throw when a required value is blank")
-control("D2.3", "throw new Error(" in code_only("console.warn('missing'); return ''"))
+# variable.
+#
+# CORRECTED the same day, after the owner reported the crash a SECOND time. The first version of
+# this check demanded a THROW here, which was the same mistake one import earlier: it crashed just
+# as hard and still killed expo-updates' own download. What the reader owes is a REPORTED fault
+# (S2.2) and no throw at all (S2.1) — asserted in section S rather than restated here.
 
 check("D2.4 the app does not warn-and-continue on a missing value",
       "console.warn" not in app_code,
@@ -311,6 +319,99 @@ check(f"D6.3 no required variable in {PINNED_PROFILE} is blank",
       "a declared-but-empty value ships exactly the bundle this harness exists to refuse")
 control("D6.3", all(str({"EXPO_PUBLIC_API_URL": ""}.get(v, "")).strip() != ""
                     for v in ["EXPO_PUBLIC_API_URL"]))
+
+
+# ── S · a bundle that cannot start SAYS SO, and stays running ─────────────────────────────────────
+#
+# The second half of the same defect, and the reason the owner reported the crash TWICE. The fatal
+# part was never the blank value — it was the THROW. expo-updates downloads the next bundle in the
+# BACKGROUND after launch, so a process that dies in its first second kills its own download: the
+# app can never replace the bundle that is breaking it, and the only way out is deleting and
+# reinstalling. "The corrected update will arrive on the next launch" was wrong, and it was wrong
+# because of this. Nothing on the startup path may throw.
+fault_rule = read(FAULT_RULE)
+fault_tests = read(FAULT_TESTS)
+fault_screen = read(FAULT_SCREEN)
+layout_src = read(ROOT_LAYOUT)
+
+
+def module_scope_throws(src: str) -> list[str]:
+    """`throw` statements at zero indentation — i.e. raised while the bundle is being evaluated."""
+    return [line for line in code_only(src).splitlines() if line.startswith("throw ")]
+
+
+check("S1.1 the startup-fault rule has a home", FAULT_RULE.exists(), f"{FAULT_RULE} is missing")
+check("S1.2 the rule DESCRIBES a fault rather than raising one",
+      "export function describeStartupFault(" in fault_rule)
+control("S1.2", "export function describeStartupFault(" in "if (missing) throw new Error(m)")
+
+# Pure, and reading the SAME one home the delivery gate reads — not a list of its own.
+fault_imports = re.findall(r"^\s*import\s[^\n]*?from\s+'([^']+)'", fault_rule, re.M)
+check("S1.3 the rule reaches nothing but the shared declaration",
+      fault_imports == ["../../scripts/delivery-env.js"],
+      f"src/lib/startup-fault.ts must stay pure and dereference the one home; it imports "
+      f"{fault_imports}")
+control("S1.3", re.findall(r"^\s*import\s[^\n]*?from\s+'([^']+)'",
+                           "import Constants from 'expo-constants'", re.M)
+        == ["../../scripts/delivery-env.js"])
+
+check("S1.4 the rule is tested", FAULT_TESTS.exists(), f"{FAULT_TESTS} is missing")
+check("S1.5 the tests pin that neither the title nor the detail can be blank",
+      "title.trim().length" in fault_tests and "detail.trim().length" in fault_tests,
+      "a blank screen is what hid the first fault for three days; the test must refuse one")
+control("S1.5", "detail.trim().length" in "expect(fault?.detail).toBeTruthy()")
+
+# The three modules on the startup path, named. Each is imported while the bundle is being
+# evaluated, so a throw at module scope in ANY of them is unrecoverable on a phone.
+for path, src in (("src/lib/startup-fault.ts", fault_rule),
+                  ("src/config/env.ts", app_src),
+                  ("src/api/supabase.ts", read(SUPABASE))):
+    offenders = module_scope_throws(src)
+    check(f"S2.1 {path} raises nothing while the bundle is being evaluated", offenders == [],
+          f"module-scope throw in {path}: {offenders}. It kills expo-updates' own download, so the "
+          "app can never replace the bundle that is breaking it.")
+control("S2.1", module_scope_throws("throw new Error('[config] This build carries no X.')") == [])
+
+check("S2.2 the app reports the fault as a value", "export const STARTUP_FAULT" in app_code,
+      "src/config/env.ts must export STARTUP_FAULT for a surface to render")
+control("S2.2", "export const STARTUP_FAULT" in code_only("const missing = []"))
+
+# CODE only, never the prose: the first version of this check read the whole file, and the module's
+# own comment contains the word STARTUP_FAULT — so a mutation that constructed the client
+# unconditionally passed it. A check a comment can satisfy is not a check.
+supabase_code = code_only(read(SUPABASE))
+check("S2.3 the Supabase client is not constructed when the bundle is faulted",
+      "STARTUP_FAULT" in supabase_code
+      and bool(re.search(r"supabase\s*=\s*STARTUP_FAULT", supabase_code)),
+      "src/api/supabase.ts must branch on STARTUP_FAULT: createClient('') is the throw itself")
+control("S2.3", "STARTUP_FAULT" in code_only(
+    "// guarded by STARTUP_FAULT\nexport const supabase = createClient(ENV.supabaseUrl, k, {})"))
+
+# The surface. A fault screen behind a splash that never lifts is the same blank screen.
+check("S3.1 the fault screen exists", FAULT_SCREEN.exists(), f"{FAULT_SCREEN} is missing")
+check("S3.2 the root layout renders it", "StartupFaultScreen" in layout_src)
+control("S3.2", "StartupFaultScreen" in "if (STARTUP_FAULT) return null")
+
+check("S3.3 the root layout dereferences the reported fault",
+      bool(re.search(r"import\s*\{[^}]*\bSTARTUP_FAULT\b[^}]*\}\s*from\s*'@/config/env'",
+                     layout_src)))
+control("S3.3", bool(re.search(r"import\s*\{[^}]*\bSTARTUP_FAULT\b[^}]*\}\s*from\s*'@/config/env'",
+                               "const extra = Constants.expoConfig?.extra")))
+
+check("S3.4 the splash is lifted when the app is showing a fault",
+      "STARTUP_FAULT" in layout_src and "hideAsync" in layout_src,
+      "the fault screen behind an un-lifted splash is the blank screen that hid this for three days")
+control("S3.4", "hideAsync" in "if (STARTUP_FAULT) return <StartupFaultScreen fault={f} />")
+
+check("S3.5 a throw during rendering is caught rather than fatal",
+      "StartupErrorBoundary" in layout_src and "StartupErrorBoundary" in fault_screen)
+control("S3.5", "StartupErrorBoundary" in "<GestureHandlerRootView style={{ flex: 1 }}>")
+
+check("S3.6 the boundary never renders an empty message",
+      "An unexpected error with no message." in fault_screen,
+      "getDerivedStateFromError must substitute something readable for a blank message")
+control("S3.6", "An unexpected error with no message." in
+        "return { message: error instanceof Error ? error.message : String(error) }")
 
 
 # ── report ────────────────────────────────────────────────────────────────────────────────────────

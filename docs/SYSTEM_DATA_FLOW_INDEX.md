@@ -45179,6 +45179,54 @@ updates were being discarded, which is why this hid) · §CORE-29.3b (the iOS fl
 builds) · §CORE-10 (a guard that goes blind fails CI) · §19.18 (one fact, one home, dereferenced —
 never copied).
 
+### §CORE-38.7 A bundle that cannot start SAYS SO, and stays running (corrected 2026-11-09, same day)
+
+The owner reported the crash a **second** time, 100 minutes after being told the corrected update
+would arrive on the next launch. It could not, and the reason is the part §CORE-38.3 got wrong.
+
+**The fatal part was never the blank value. It was the THROW.** `expo-updates` downloads the next
+bundle in the BACKGROUND *after* launch, so a process that dies in its first second kills its own
+download — every time, on every launch. The app can never replace the bundle that is breaking it,
+and the only way out is deleting and reinstalling. Making `src/config/env.ts` throw, as §CORE-38.3
+describes, was the same mistake one import earlier than `createClient('')`: it crashed just as hard
+and left the phone just as stuck. It was recorded as an improvement and was not one.
+
+**So the rule for the startup path is: nothing on it may throw.** A fault is a VALUE the UI renders.
+
+* `mobile/src/lib/startup-fault.ts` — `describeStartupFault(extra)` returns the missing variable
+  names plus a title and a detail a person can read, or `null`. Pure; dereferences the same one home
+  (`config/required-extra.json`, through `scripts/delivery-env.js`) that the delivery gate reads, so
+  the app and the gate can never disagree about what "configured" means. 9 unit tests.
+* `mobile/src/config/env.ts` reports `STARTUP_FAULT` and throws nothing.
+* `mobile/src/api/supabase.ts` constructs the client only when the bundle is configured; faulted, the
+  export is a Proxy that names the real fault if anything reaches for it. It never points at a fake
+  server — a client silently talking to nowhere is worse than one that says why it cannot — and the
+  `AppState` auto-refresh listener is not wired either, since a listener that throws on every
+  foreground is the crash again by another route.
+* `mobile/src/components/StartupFault.tsx` — the screen, plus `StartupErrorBoundary` for a throw
+  raised *during* rendering. A boundary cannot catch a throw raised while the bundle is being
+  evaluated, which is exactly why the no-module-scope-throw rule comes first.
+* `mobile/app/_layout.tsx` renders the screen and **lifts the splash**. That is part of the fix, not
+  a detail: a fault screen behind a splash that never lifts is the same blank screen that hid the
+  first fault for three days.
+
+**What the lock refuses** (section S, same harness, taking it to 84 checks): a module-scope `throw`
+in any of the three startup-path modules, the reader not reporting a fault, the client being
+constructed unconditionally, the screen or the boundary going missing, the splash not being lifted,
+and a blank title, detail or boundary message. Mutation-tested: re-adding a module-scope throw
+reddens S2.1, removing the splash lift reddens S3.4, constructing the client unconditionally reddens
+S2.3.
+
+S2.3 is worth keeping as its own lesson. Its first version searched the whole file for
+`STARTUP_FAULT`, and the module's own explanatory comment contains that word — so the mutation that
+constructed the client unconditionally **passed**. It now reads code with comments stripped. A check
+a comment can satisfy is not a check, and only the mutation test found it.
+
+**Still open, and not claimed as done:** nothing in CI launches this app. Every mobile gate here is
+a pure unit test or a source-text lock, so a bundle that cannot start still passes all of them. The
+configuration half is now gated and a startup fault is now survivable; an actual launch smoke check
+is not written.
+
 ---
 
 ## §PAYABLES-02. A PAYMENT DATE NOBODY DECLARED IS NOT A PAYMENT DATE (owner ask 2026-11-09)

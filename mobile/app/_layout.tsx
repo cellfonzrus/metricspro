@@ -8,6 +8,8 @@ import * as SplashScreen from 'expo-splash-screen'
 import { QueryClientProvider } from '@tanstack/react-query'
 
 import { AuthProvider, useAuth } from '@/auth/AuthContext'
+import { StartupErrorBoundary, StartupFaultScreen } from '@/components/StartupFault'
+import { STARTUP_FAULT } from '@/config/env'
 import { AppLockGate } from '@/auth/AppLockGate'
 import { queryClient } from '@/api/query'
 import { colors } from '@/theme'
@@ -32,7 +34,16 @@ function RootNavigator() {
 }
 
 export default function RootLayout() {
+  // A BUNDLE THAT CANNOT START SAYS SO, AND STAYS RUNNING (index §CORE-38.7). Hiding the splash is
+  // part of the fix, not a detail: the fault screen behind a splash that never lifts is the same
+  // blank screen that hid the first fault for three days.
+  useEffect(() => {
+    if (STARTUP_FAULT) SplashScreen.hideAsync().catch(() => {})
+  }, [])
+  if (STARTUP_FAULT) return <StartupFaultScreen fault={STARTUP_FAULT} />
+
   return (
+    <StartupErrorBoundary>
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <QueryClientProvider client={queryClient}>
@@ -45,5 +56,6 @@ export default function RootLayout() {
         </QueryClientProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
+    </StartupErrorBoundary>
   )
 }
