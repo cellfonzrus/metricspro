@@ -208,6 +208,7 @@ Primary code homes:
 | CORE-37 | **The phone's Face ID lock asks once, and never traps the handset** | "The touch login from the phone is not working." There is no biometric SIGN-IN in this product at all; the only Face ID surface is the mobile app LOCK, and it could not be dismissed — the auto-prompt effect depended on the unlock callback, whose identity changed when an attempt finished, so a cancelled Face ID came straight back over an overlay with no way out. What decides whether to raise the prompt, what decides whether this handset can authenticate at all, and what stops a screen deciding either from a React identity again? |
 | CORE-31 | **A retention window that deletes nothing is a promise, not a policy** | Found by the security pass §STOREOPS-04 required before going live: that feature shipped a 180-day GPS retention setting and nothing deleted anything — and event check-in GPS had carried the SAME hole since mig 986, declared `unmonitored` on the control box. Who owns "how long may we keep where somebody was", for every relation that stores it, and what stops a purge from taking the flag away with the coordinates? |
 | CORE-26 | **A label a person reads is never an id** | "How do I know which company is which — it should show the company name on the app instead of company id" (with a screenshot of four raw UUIDs on the mobile "Choose a company" screen). The name was in the payload; the label was derived in three places with three different last resorts, and the one at the end of the chain was the org_id. Who owns "what a human picks this company by", and what fails the build when a fourth derivation appears? |
+| CORE-38 | **Every path that ships this app carries its configuration** | "when i open it it crashed" — TestFlight build 14, on open, every time. The binary was fine; an auto-published over-the-air update had been bundled with NO configuration, because `eas build` reads `build.<profile>.env` out of eas.json and `eas update` does not. Which delivery paths exist, what does each of them carry, and what refuses to ship a bundle that carries nothing? |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
@@ -26351,6 +26352,7 @@ status word rather than a blank that reads as nil.
 | CORE-29 | core |
 | CORE-30 | core |
 | CORE-31 | core |
+| CORE-38 | core |
 | CORE-32 | core |
 | CORE-33 | core |
 | CORE-34 | core |
@@ -44941,3 +44943,105 @@ embedded one (§CORE-26.7). A NEW BINARY from `.github/workflows/mobile-build-an
 **Cross-refs:** §CORE-26 (the mobile app and its label one-home) · §CORE-26.7 / §CORE-26.8 (why an
 update does not reach the phone, and the build button) · §19.18 (one fact, one home, dereferenced —
 never copied) · §CORE-31 (the device-local vs server-held distinction, for the face-clock-in neighbour).
+
+## §CORE-38. EVERY PATH THAT SHIPS THIS APP CARRIES ITS CONFIGURATION (2026-11-09)
+
+Owner, 2026-11-09 19:46 UTC: *"when i open it it crashed"* — TestFlight build 14, on open, every
+time.
+
+### §CORE-38.1 Duplicate check (the build gate)
+
+Searched the index for an existing mechanism owning "what configuration does this bundle carry".
+There is none: §CORE-26.8 owns the build button, §CORE-29 owns *which code* an app is running and
+pins the over-the-air compatibility policy, and §CORE-29.3b owns the iOS deployment floor. None of
+them touches the bundle's build-time environment. `mobile/eas.json` `build.<profile>.env` was already
+the single declaration and is REUSED unchanged as the one home; nothing was created beside it. The
+new files are the dereference (`mobile/scripts/`), the declaration of what the app cannot run
+without (`mobile/config/required-extra.json`), and the lock.
+
+### §CORE-38.2 The class, not the instance
+
+The binary was never at fault. Three days earlier an unrelated merge (#655) auto-published an
+over-the-air update, and that update was bundled with **no configuration at all**:
+`extra.supabaseUrl` was `''`, so `createClient('')` threw `supabaseUrl is required.` at module
+scope and the app died in its first second, on every launch, with no way to recover from inside it.
+
+The cause, stated once so nobody re-derives it. This app reaches a phone two ways and only one of
+them was carrying the app's build-time environment:
+
+* **`eas build`** reads `build.<profile>.env` out of `mobile/eas.json` by itself. Correct.
+* **`eas update`** does **not**, and no flag makes it. `--environment` selects *server-side* EAS
+  environment variables, which this project does not use. Confirmed against `eas update --help`
+  (eas-cli, 2026-11-09), not assumed.
+
+So **every over-the-air update ever published from this repository had a blank configuration.** It
+went unseen for weeks for the §CORE-29 reason: the installed binary was on a different Expo runtime
+and `expo-updates` was silently rejecting all of them. Build 14 was the first binary whose runtime
+matched, so it accepted the first one that reached a phone — and crashed.
+
+The class is not "an update was published wrong". It is **a fact two delivery paths need, declared
+inside one of them.** The fix is NOT to paste the values into the publish workflow as well: that is
+the second copy §19.18 forbids, and a second copy is precisely what diverged.
+
+### §CORE-38.3 What shipped
+
+* `mobile/eas.json` stays the ONE home of the app's build-time configuration.
+* `mobile/scripts/delivery-env.js` is the rule: `profileEnv(easJson, profile)` resolves a profile's
+  declared environment and **throws** rather than returning `{}` — an empty environment is the
+  failure itself, and a delivery path that silently gets nothing is how it shipped.
+  `missingRequiredExtra(extra)` names the environment *variables* whose values came out blank,
+  because the variable is what a person can act on. Pure string and object work: no network, no
+  Expo, no EAS, no Mac, proved by 14 unit tests.
+* `mobile/scripts/with-profile-env.mjs` **spawns** a command with that environment applied. Spawning
+  rather than printing shell exports on purpose: nothing is quoted, escaped or `eval`'d, so a value
+  containing a space, a quote or a `$` cannot change the command that runs.
+* `mobile/scripts/check-extra.mjs` is the gate: it evaluates `app.config.ts` exactly as the bundler
+  will, in whatever environment it is given, and exits non-zero naming every required value that
+  came out blank. Both delivery workflows run it *before* they ship anything.
+* `mobile/config/required-extra.json` is the ONE declaration of what this app cannot run without,
+  mapping each `extra` key to the variable that supplies it. Dereferenced by the app at launch AND
+  by every delivery path. Never list those keys anywhere else.
+* `mobile/src/config/env.ts` now **throws**, naming every missing variable at once. What it used to
+  do was the other half of the defect: a missing value was `console.warn`ed and read as `''`, so
+  nothing stopped the app until Supabase threw three imports later with a message that named
+  Supabase rather than the variable. A warning nobody can see on a phone is not a check.
+
+### §CORE-38.4 What the lock refuses
+
+`backend/harness_ota_config_parity.py` — 59 checks, each with a negative control, wired into CI as
+*"Run the delivery-config parity lock"*:
+
+* the required set growing a second home, or the app naming an `EXPO_PUBLIC_*` variable in its own
+  code (D1, D2);
+* the app going back to warn-and-continue instead of throwing where the name is known (D2.3, D2.4);
+* the rule losing its purity, its dereference or its tests, or the runner collecting `scripts/`
+  stopping (D3);
+* the gate reading `eas.json` instead of the real evaluated config, or not failing the job (D4);
+* **a new delivery workflow appearing un-gated.** The set is DERIVED from the workflows that
+  actually invoke `eas build` / `eas update` and compared for EQUALITY with a declared set, so a
+  guard that goes blind fails the build (§CORE-10). Read-only `:list` forms and prose in comments
+  deliberately do not count as a delivery (D5.2);
+* any workflow carrying an `EXPO_PUBLIC_*` value of its own — the second-copy ban as code (D5.5);
+* the shipping profile losing a required variable, or declaring one blank (D6).
+
+Mutation-tested rather than merely written: removing the wrapper from the publish command reddens
+D5.4, and restoring the old `console.warn` reddens D2.3 and D2.4.
+
+### §CORE-38.5 Every tenant
+
+Nothing here is per-tenant: it is one app, one configuration, every tenant's users on the same
+bundle. The relevance to the every-tenant rule is the reverse direction — a blank configuration is
+not one tenant reading another's vocabulary, it is *no* tenant being able to open the app, which is
+why it had to fail the build rather than degrade.
+
+### §CORE-38.6 Not money, no migration — and how the phone recovers
+
+No migration, no schema, no money. Recovery needs **no new build**: `expo-updates` fetches natively,
+so a crashing JS bundle does not stop the next update downloading. Merging this publishes a correct
+bundle to the `production` channel; the phone then takes two launches — one that downloads, one that
+runs it.
+
+**Cross-refs:** §CORE-26.8 (the build button) · §CORE-29 (which code an app is running; why the
+updates were being discarded, which is why this hid) · §CORE-29.3b (the iOS floor, and the five
+builds) · §CORE-10 (a guard that goes blind fails CI) · §19.18 (one fact, one home, dereferenced —
+never copied).
