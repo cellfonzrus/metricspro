@@ -1657,17 +1657,30 @@ def _fix_members(client, org_id):
     500s is worse than the gap."""
     try:
         rows = (client.schema("storeops").table("app_users")
-                .select("employee_id,role,full_name,email,is_active")
+                .select("employee_id,role,full_name,is_active")
                 .eq("org_id", org_id).limit(500).execute().data) or []
     except Exception:
         return []
+    # A LOGIN EMAIL IS NOT A NAME (security review 2026-11-09). `app_users.full_name` is nullable, so
+    # falling back to `email` would put an administrator's login address into display copy — "Ask
+    # admin@… to fix this" — and into a chat message. The roster's own `name` is the name a person is
+    # known by here; a person with neither is shown their employee id, which names no address.
+    roster = {}
+    try:
+        for e in ((client.schema("storeops").table("employees").select("employee_id,name")
+                   .eq("org_id", org_id).limit(1000).execute().data) or []):
+            key = str((e or {}).get("employee_id") or "").strip()
+            if key and (e.get("name") or "").strip():
+                roster[key] = e["name"].strip()
+    except Exception:
+        roster = {}
     out = []
     for r in rows:
         eid = str((r or {}).get("employee_id") or "").strip()
         if not eid or r.get("is_active") is False:
             continue
         out.append({"employee_id": eid, "role": r.get("role"),
-                    "name": (r.get("full_name") or r.get("email") or eid)})
+                    "name": ((r.get("full_name") or "").strip() or roster.get(eid) or eid)})
     return out
 
 
@@ -1726,14 +1739,19 @@ def _fix_guide_payload(client, caller, key, origin, asker_row=None):
         org = caller.get("org_id") or ORG_ID
         row = asker_row or {}
         asker_eid = str(row.get("employee_id") or "").strip() or None
-        asker_name = row.get("full_name") or row.get("email") or None
+        # Never the login email — see `_fix_members`. The asker's own name is resolved the same way
+        # every recipient's is, so one person is not named two ways in one message.
+        asker_name = (row.get("full_name") or "").strip() or None
         try:
             roles = _setup_fix.fixer_roles(_role_perms_map(client, org), area)
         except Exception:
             roles = []
         if roles:
+            members = _fix_members(client, org)
+            if not asker_name and asker_eid:
+                asker_name = next((m["name"] for m in members if m["employee_id"] == asker_eid), None)
             fixers = _setup_fix.ask_recipients(
-                roles, _fix_members(client, org),
+                roles, members,
                 manager_ids=_fix_manager_ids(client, org, asker_eid), asker_id=asker_eid)
     return _setup_fix.guide(key, can_fix=can_fix, fixers=fixers,
                             asker_name=asker_name, origin=origin)

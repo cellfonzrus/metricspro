@@ -150,6 +150,36 @@ def test_D1_every_recipient_belongs_to_the_calling_tenant(wired, api_client, org
         assert r["employee_id"] in mine
 
 
+def test_D1b_a_login_email_is_never_shown_as_a_persons_name(wired, api_client):
+    """Security review 2026-11-09. `app_users.full_name` is nullable, so a fallback to `email` would
+    put an administrator's login address into display copy — "Ask admin@example.com to fix this" —
+    and into the chat message that goes with it. The roster's own name answers it; a person with
+    neither is named by their employee id, which is not an address."""
+    users = [dict(u) for u in APP_USERS]
+    for u in users:
+        if u["employee_id"] == "E100":
+            u["full_name"] = None
+    wired.seed("storeops.app_users", users)
+    wired.seed("storeops.employees", [{"id": 1, "org_id": HOUSE, "employee_id": "E100",
+                                       "name": "Dana From The Roster", "is_active": True}])
+    g = _get(api_client, wired, auth="a-rep", org=HOUSE, key=AREA_KEY).json()
+    names = [r["name"] for r in g["ask"]["recipients"]]
+    assert names == ["Dana From The Roster"]
+    assert "@" not in g["ask"]["message"], "no login address may reach the message either"
+
+
+def test_D1c_with_no_name_anywhere_the_employee_id_is_used_not_the_email(wired, api_client):
+    users = [dict(u) for u in APP_USERS]
+    for u in users:
+        if u["employee_id"] == "E100":
+            u["full_name"] = None
+    wired.seed("storeops.app_users", users)
+    wired.seed("storeops.employees", [])
+    g = _get(api_client, wired, auth="a-rep", org=HOUSE, key=AREA_KEY).json()
+    assert [r["name"] for r in g["ask"]["recipients"]] == ["E100"]
+    assert "@" not in g["ask"]["message"]
+
+
 def test_D2_the_asker_is_never_offered_as_their_own_fixer(wired, api_client):
     """An administrator who somehow reaches the refused branch must not be told to ask themselves."""
     g = _get(api_client, wired, auth="s-owner", org=SOLO, key=AREA_KEY).json()
