@@ -16,7 +16,7 @@ import { SendReportButton } from '@/lib/send-report'
 // THE STORE-GRAIN COLUMN MAP USED TO BE HERE TOO, as a `storeKey` on each row, and it was the FOURTH
 // copy of "which raw_dlar_store column carries which metric" (backend: dlar_sweep.STORE_FIELDS,
 // kpi_failing.STORE_KPI_COLUMNS, two select literals in commcalc/router.py). It is deleted: the store
-// view is built from `GET /dlar-store-catalog`, the one home (index §COMMCALC-57). That is why the 21
+// view is built from `GET /dlar-store-catalog`, the one home (index §COMMCALC-58). That is why the 21
 // columns the carrier portal was already sending could sit unread for weeks — a column could be
 // declared, landed, and still invisible, because this array decided what a person could see.
 // `backend/harness_dlar_metric_catalog.py` fails the build if `storeKey` comes back.
@@ -79,7 +79,7 @@ export default function KPIPage() {
       api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => []),
       api(`/api/v1/commcalc/config/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => ({})),
       api(`/api/v1/commcalc/dlar-store/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => []),
-      // WHICH FIGURES EXIST — the backend's own declaration (index §COMMCALC-57). Fetched rather
+      // WHICH FIGURES EXIST — the backend's own declaration (index §COMMCALC-58). Fetched rather
       // than hardcoded so a column the feed starts landing appears here without a frontend change.
       api(`/api/v1/commcalc/dlar-store-catalog?org_id=${ORG_ID}`).catch(() => null),
     ]).then(([comms, config, stores, cat]) => {

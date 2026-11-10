@@ -196,7 +196,7 @@ Primary code homes:
 | COMMCALC-54 | **"Which plan am I on?" is a question with one answer and three steps** | "the plan which is active in incentive payout when you click on it it takes you to the page which has all kinds of Incentive structure listed which becomes confusing even to me ... all of this should be a work flow than random data seen on the screen" — the confusing page is the symptom. Nothing in the platform ANSWERED "which plan am I on": three surfaces showed the operator the raw plan table and left the question to them, and one of them owned the live/belongs predicate privately. An unassigned plan pays nobody, so calling it active is the plausible-looking answer that hides the class. |
 | COMMCALC-55 | **A successful login is recognised by evidence, never by a guessed vocabulary** | The owner signed in to the carrier owners portal himself and sent the screenshot: the signed-in shell, greeting him by his e-mail address, offering "Multi-Door Owner Portal", "Commissions" and "Boost Activations" — and the sweep still reported "The sign-in page went away and we did not recognise what replaced it", with three carrier feeds frozen on a login that worked. §COMMCALC-52 was right to delete the old test (the vendor's name in the document title — a carrier name in code) and wrong to replace it with six house words: that is the platform guessing at a vocabulary it does not own, the same shape as a report defaulting to one tenant's POS labels. |
 | COMMCALC-56 | **A control is verified from the control, not from a field beside it** | With the login fixed (§COMMCALC-55), two of the three carrier feeds came back by themselves — MI/ATU daily, and the payment detail back-filled October to the 31st unaided. The comprehensive comp report stayed empty for a different reason: the sweep SET the "Summarize by" dropdown and then proved it by reading `input[name="DateIntervalOption"]`, the portal's own form plumbing under a name this platform does not own. That input is no longer on the page, so a settable filter read as unsettable on every tick, and one sentence ("hidden field = None") covered three different states an operator needed told apart. |
-| COMMCALC-57 | **A figure the feed sends that nothing reads is not a figure this platform has** | "Use those other 21 columns and make them a part of the kpi reporting also filtered by the kpi and out regular filters and send option". The sweep's own diagnostic had been naming 21 arriving-but-unread store columns every day for weeks, and one of them was the new spelling of a column that had been landing empty since the source renamed it. Reading one meant editing FOUR lists, and the last of them — a hand-typed array in the page — decided what a person could see, so a column could be declared, landed and invisible. |
+| COMMCALC-58 | **A figure the feed sends that nothing reads is not a figure this platform has** | "Use those other 21 columns and make them a part of the kpi reporting also filtered by the kpi and out regular filters and send option". The sweep's own diagnostic had been naming 21 arriving-but-unread store columns every day for weeks, and one of them was the new spelling of a column that had been landing empty since the source renamed it. Reading one meant editing FOUR lists, and the last of them — a hand-typed array in the page — decided what a person could see, so a column could be declared, landed and invisible. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26337,7 +26337,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-54 | commcalc |
 | COMMCALC-55 | commcalc |
 | COMMCALC-56 | commcalc |
-| COMMCALC-57 | commcalc |
+| COMMCALC-58 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -45551,12 +45551,12 @@ copied) · §PAYABLES-02 (the report that surfaced it) · §CORE-17.3h (a figure
 asserted by name, never by a lower bound).
 
 
-## §COMMCALC-57. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
+## §COMMCALC-58. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
 
 Owner, verbatim: *"Use those other 21 columns and make them a part of the kpi reporting also filtered
 by the kpi and out regular filters and send option"*.
 
-### COMMCALC-57.1 WHAT WAS ACTUALLY WRONG
+### COMMCALC-58.1 WHAT WAS ACTUALLY WRONG
 
 Not the columns. Measured on the live 2026-11-10 12:00 UTC DLAR sweep (28 stores, house org, read
 from `core.job_run.detail.evidence.fields.dlar.unconsumed`): the carrier portal was sending **21
@@ -45586,7 +45586,7 @@ Five places, one fact — and the LAST of them decided what a person could actua
 could be declared, landed in the table, and invisible. That is why 21 figures sat unread for weeks
 while the feed itself named them nightly.
 
-### COMMCALC-57.2 THE CLASS, not the instance
+### COMMCALC-58.2 THE CLASS, not the instance
 
 The instance is "trade-in counts are not on the KPI page". The class is **a fact with one meaning and
 five homes, the furthest of which gates what a person can see.** It has cost this platform a month of
@@ -45597,7 +45597,7 @@ So the fix is not 21 columns. It is ONE home for *which store-DLAR column is whi
 from the two declarations that already exist and copying neither, with every reader dereferencing it
 and a lock that fails the build if one stops.
 
-### COMMCALC-57.3 THE ONE HOME
+### COMMCALC-58.3 THE ONE HOME
 
 `backend/app/modules/commcalc/dlar_metric_catalog.py` — PURE, stdlib only, no DB.
 
@@ -45622,7 +45622,7 @@ kpi_failing.STORE_KPI_COLUMNS ─┘
 It names no carrier, tenant or product (RULE TWO): the only proper nouns are the SOURCE's own field
 spellings, which is what a feed mapping is made of.
 
-### COMMCALC-57.4 WHAT WAS NOT GUESSED
+### COMMCALC-58.4 WHAT WAS NOT GUESSED
 
 `activations_total` appeared in the same run in which `gross_activation_quantity` stopped arriving,
 so it is the likely successor to `gross_adds`. It is landed **under its own name** and is NOT declared
@@ -45634,7 +45634,7 @@ visible side by side and the answer is one declared spelling away.
 SPELLING on the existing column and not a second column. A second column for one fact is the
 divergence §19.18 forbids.
 
-### COMMCALC-57.5 Surfaces
+### COMMCALC-58.5 Surfaces
 
 - `GET /api/v1/commcalc/dlar-store/{period}` — unchanged shape, now returning every catalogued
   column plus `market` (stamped through the canonical union resolver, §13a — CANONICAL).
@@ -45645,7 +45645,7 @@ divergence §19.18 forbids.
 - `commcalc.raw_dlar_store` gains 20 columns by **migration 1116** (additive, nullable, no default,
   no backfill, no money column; the table's `service_role` grant restated).
 
-### COMMCALC-57.6 EVERY TENANT (project rule 2026-10-30)
+### COMMCALC-58.6 EVERY TENANT (project rule 2026-10-30)
 
 The catalog is a statement about the feed's SHAPE and is byte-identical for every org — it is not a
 tenant vocabulary and carries no tenant's words, so the §COMMCALC-49.10 trap (a house default that is
@@ -45655,7 +45655,7 @@ carrier KPI rows. Nothing is being measured at store grain here — these figure
 zero."* Proved by `test_one_tenants_rows_never_reach_another_tenants_read` and
 `test_a_tenant_with_no_store_dlar_is_told_so_rather_than_shown_zeros`.
 
-### COMMCALC-57.7 Locked
+### COMMCALC-58.7 Locked
 
 `backend/harness_dlar_metric_catalog.py` — 35 checks, DB-free, run by the lock-harness job of
 `.github/workflows/carrier-vocab-guard.yml`. It fails the build on: a declared column the catalog
@@ -45675,7 +45675,7 @@ checks went red for the right reason. The fixture now carries the newly declared
 values the 2026-11-10 run shows the portal sending; the pin's subject is "a complete record is quiet",
 not the September bytes.
 
-### COMMCALC-57.8 NOT done here
+### COMMCALC-58.8 NOT done here
 
 - Migration 1116 is written and **surfaced for owner approval, not applied**. Until it runs, the 20
   figures read as unavailable-with-a-reason; nothing shows a zero.
@@ -45687,7 +45687,7 @@ not the September bytes.
   (`prepaid_activations`, `postpaid_activations`, `upgrades` at store grain) remain absent. They are
   REPORTED by the feed's own diagnostic, never filled in by code.
 
-### COMMCALC-57.9 Cross-references
+### COMMCALC-58.9 Cross-references
 
 §COMMCALC-16 (a portal field that stopped arriving names itself — the diagnostic that found these
 21) · §COMMCALC-40 (a computed verdict must be the stored one) · §19.28 (which column carries which

@@ -1,4 +1,4 @@
-"""WHICH STORE-DLAR COLUMN IS WHICH METRIC — the one home, proved (index §COMMCALC-57).
+"""WHICH STORE-DLAR COLUMN IS WHICH METRIC — the one home, proved (index §COMMCALC-58).
 
 WHY THESE TESTS EXIST. On 2026-11-10 the owner asked for the 21 columns Elevate Go sends at store
 grain that nothing reads to become part of KPI reporting. The obstacle was not the columns: it was
