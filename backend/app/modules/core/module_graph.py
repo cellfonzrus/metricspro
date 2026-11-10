@@ -686,10 +686,17 @@ FACTS: dict[str, dict] = {
                     'viewport — it is an image that knows what it shows, so the geometry travels WITH '
                     'the frame and the click dereferences it. The arithmetic reduces exactly to the '
                     'old formula at scale 1 / offset 0 / device size = window, which is every portal '
-                    'that works today.',
+                    'that works today. '
+                    'AND, from 2026-11-10 (COMMCALC-63): this is WHY the streamed picture may be made '
+                    'smaller to fix the lag. The stream budget (quality and the pixel caps) lives with '
+                    'the stream in live_login, NEVER here, and the image\'s pixel size is not an input '
+                    'to the translation at all — so shrinking the stream moves no click. The TRAP is '
+                    'FALLBACK_VIEWPORT: it is the CONTEXT\'s window, used only when a frame carries no '
+                    'metadata, and aligning it with the screencast cap would move every no-metadata '
+                    'click.',
         "homes": ('app/modules/commcalc/live_frame.py',),
-        "index": ('COMMCALC-47',),
-        "locks": ('harness_live_frame.py',),
+        "index": ('COMMCALC-47', 'COMMCALC-63'),
+        "locks": ('harness_live_frame.py', 'harness_live_input_latency.py'),
         # SNAPSHOT — written BY HAND (§50). Both live screens (the portal login and supply's vendor
         # window) drive the SAME live_login session, so this one translation serves both and there was
         # no sibling to fix.
@@ -3543,7 +3550,7 @@ FACTS: dict[str, dict] = {
                     'read THROUGH that session and sending the operator elsewhere meant closing it.',
         "homes": ('app/modules/commcalc/live_login.py',),
         "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28', 'COMMCALC-30',
-                  'COMMCALC-31'),
+                  'COMMCALC-31', 'COMMCALC-63'),
         "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py',
                   'harness_live_session_host.py', 'harness_live_input_latency.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real
