@@ -60,7 +60,10 @@ def test_the_run_s_target_carries_the_declared_routine_and_resolving_it_has_one_
 def test_the_undeclared_report_is_not_driven_through_the_comp_report_s_routine():
     src = inspect.getsource(es._open_and_download)
     assert "resolve_date_filter(" in src, "the dispatch must dereference the one home"
-    assert "SUMMARIZE_BY_DAILY" in src, "_set_daily_range is reached only through its own routine"
+    # §COMMCALC-67: the routine is PASSED to the one shared setter rather than branched on here,
+    # so adding a report's routine never means adding a branch to this function.
+    assert "DATE_FILTER_UNDECLARED" in src, "an undeclared report is refused here"
+    assert "_set_date_window(page, target[\"begin\"], target[\"end\"], routine)" in src
 
 
 def test_the_two_reports_no_longer_share_one_ledger_control_name():

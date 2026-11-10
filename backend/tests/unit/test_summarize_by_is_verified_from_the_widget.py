@@ -85,23 +85,23 @@ BEGIN, END = "2026-11-01", "2026-11-08"
 def test_the_widget_says_daily_and_the_field_beside_it_is_gone():
     """THE LIVE SHAPE. The dropdown took; the hidden input is simply not on the page any more. The
     pull must go ahead — refusing it is how this report has stayed empty."""
-    ok, detail, confirmed = es._set_daily_range(
-        FakePage(interval=_iv(selected="Daily"), field=None), BEGIN, END)
+    ok, detail, confirmed = es._set_date_window(
+        FakePage(interval=_iv(selected="Daily"), field=None), BEGIN, END, es.SUMMARIZE_BY_DAILY)
     assert ok is True
     assert confirmed is False
     assert "could not be confirmed" in detail
 
 
 def test_and_the_operator_is_told_which_half_is_missing():
-    _, detail, _ = es._set_daily_range(
-        FakePage(interval=_iv(selected="Daily"), field=None), BEGIN, END)
+    _, detail, _ = es._set_date_window(
+        FakePage(interval=_iv(selected="Daily"), field=None), BEGIN, END, es.SUMMARIZE_BY_DAILY)
     assert "Daily" in detail
     assert "DateIntervalOption" in detail or "hidden" in detail
 
 
 def test_both_halves_agreeing_is_a_fully_confirmed_set():
-    ok, detail, confirmed = es._set_daily_range(
-        FakePage(interval=_iv(selected="Daily"), field="Daily"), BEGIN, END)
+    ok, detail, confirmed = es._set_date_window(
+        FakePage(interval=_iv(selected="Daily"), field="Daily"), BEGIN, END, es.SUMMARIZE_BY_DAILY)
     assert (ok, confirmed) == (True, True)
     assert BEGIN in detail and END in detail
 
@@ -109,16 +109,16 @@ def test_both_halves_agreeing_is_a_fully_confirmed_set():
 # ── the failures that must stay failures ─────────────────────────────────────────────────────────
 
 def test_no_dropdown_offering_daily_is_a_failure_and_says_so():
-    ok, detail, confirmed = es._set_daily_range(
-        FakePage(interval=_iv(selected=None), field=None), BEGIN, END)
+    ok, detail, confirmed = es._set_date_window(
+        FakePage(interval=_iv(selected=None), field=None), BEGIN, END, es.SUMMARIZE_BY_DAILY)
     assert ok is False and confirmed is False
     assert "no" in detail.lower() and "Daily" in detail
 
 
 def test_a_widget_that_selected_something_else_is_a_failure():
     """Weaker than a missing field, not stronger: the thing we set says it is on Weekly."""
-    ok, detail, confirmed = es._set_daily_range(
-        FakePage(interval=_iv(selected="Weekly"), field=None), BEGIN, END)
+    ok, detail, confirmed = es._set_date_window(
+        FakePage(interval=_iv(selected="Weekly"), field=None), BEGIN, END, es.SUMMARIZE_BY_DAILY)
     assert ok is False and confirmed is False
     assert "Weekly" in detail
 
@@ -126,32 +126,32 @@ def test_a_widget_that_selected_something_else_is_a_failure():
 def test_a_field_that_CONTRADICTS_the_widget_is_fatal():
     """Absence is not disagreement; disagreement is. If the form still carries the field and it
     says Monthly, the page has not accepted what we set."""
-    ok, detail, confirmed = es._set_daily_range(
-        FakePage(interval=_iv(selected="Daily"), field="Monthly"), BEGIN, END)
+    ok, detail, confirmed = es._set_date_window(
+        FakePage(interval=_iv(selected="Daily"), field="Monthly"), BEGIN, END, es.SUMMARIZE_BY_DAILY)
     assert ok is False and confirmed is False
     assert "Monthly" in detail
 
 
 def test_an_empty_field_is_absence_not_disagreement():
     """A jqWidgets form often renders the input with no value until its own handler writes one."""
-    ok, _d, confirmed = es._set_daily_range(
-        FakePage(interval=_iv(selected="Daily"), field=""), BEGIN, END)
+    ok, _d, confirmed = es._set_date_window(
+        FakePage(interval=_iv(selected="Daily"), field=""), BEGIN, END, es.SUMMARIZE_BY_DAILY)
     assert ok is True and confirmed is False
 
 
 def test_the_dates_must_still_take_exactly():
-    ok, detail, confirmed = es._set_daily_range(
+    ok, detail, confirmed = es._set_date_window(
         FakePage(interval=_iv(selected="Daily"), field="Daily",
-                 dates={"ok": False, "begin": "2026-12-01", "end": END}), BEGIN, END)
+                 dates={"ok": False, "begin": "2026-12-01", "end": END}), BEGIN, END, es.SUMMARIZE_BY_DAILY)
     assert ok is False and confirmed is False
     assert "2026-12-01" in detail
 
 
 def test_a_dead_page_is_reported_as_itself_never_as_a_quiet_day():
-    ok, detail, _c = es._set_daily_range(FakePage(interval_raises=True), BEGIN, END)
+    ok, detail, _c = es._set_date_window(FakePage(interval_raises=True), BEGIN, END, es.SUMMARIZE_BY_DAILY)
     assert ok is False and "RuntimeError" in detail
-    ok2, detail2, _c2 = es._set_daily_range(
-        FakePage(interval=_iv(selected="Daily"), field="Daily", dates_raises=True), BEGIN, END)
+    ok2, detail2, _c2 = es._set_date_window(
+        FakePage(interval=_iv(selected="Daily"), field="Daily", dates_raises=True), BEGIN, END, es.SUMMARIZE_BY_DAILY)
     assert ok2 is False and "RuntimeError" in detail2
 
 
@@ -160,11 +160,13 @@ def test_nothing_is_set_without_being_asked_for_daily():
     beside it, then the dates. (Since §COMMCALC-58 the pick goes through the shared routine, so
     what is asserted is that Daily is what we asked for — not how the argument is packed.)"""
     p = FakePage(interval=_iv(selected="Daily"), field="Daily")
-    es._set_daily_range(p, BEGIN, END)
+    es._set_date_window(p, BEGIN, END, es.SUMMARIZE_BY_DAILY)
     assert [k for k, _a in p.calls] == ["pick", "field", "dates"]
     assert es.DAILY_INTERVAL in p.calls[0][1][0]
     assert p.calls[1][1] == es._INTERVAL_FIELD
-    assert p.calls[2][1] == [BEGIN, END]
+    # The field NAMES travel with the dates now (§COMMCALC-67): they are the report's
+    # declaration, so nothing in the page JavaScript knows what they are called.
+    assert p.calls[2][1] == [BEGIN, END, "BeginDate", "EndDate"]
 
 
 # ── the zero stays honest (the whole reason this may be relaxed at all) ──────────────────────────

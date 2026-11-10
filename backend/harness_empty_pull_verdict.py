@@ -385,11 +385,12 @@ check("G4 …and the corroborating field's name is declared too, marked as not o
       ES._INTERVAL_FIELD == "DateIntervalOption"
       and EPAY.count('_INTERVAL_FIELD = "') == 1)
 check("G5 the setter returns the third fact — whether the set was CONFIRMED",
-      len(inspect.signature(ES._set_daily_range).parameters) == 3
-      and "confirmed" in fsrc(ES._set_daily_range))
+      len(inspect.signature(ES._set_date_window).parameters) == 4
+      and "confirmed" in fsrc(ES._set_date_window))
 check("G6 the only caller unpacks all three, so the fact cannot be dropped silently",
-      EPAY.count("_set_daily_range(page, target") == 1
-      and "ok, detail, confirmed = _set_daily_range(" in EPAY)
+      EPAY.count("_set_date_window(page, target") == 1
+      and "ok, detail, confirmed = _set_date_window(" in EPAY
+      and EPAY.count("def _set_daily_range(") == 0)
 check("G7 an unconfirmed set reaches the RUN's ledger, not just this leg",
       "ledger.control_unconfirmed(DAILY_RANGE_CONTROL" in EPAY)
 check("G8 a real failure is still fatal — the fail-loud path is untouched",
@@ -443,7 +444,7 @@ check("G18 a control nobody declared a dependency on does not touch a zero",
 # EVERY TENANT (owner directive 2026-10-30): none of this reads an org, so it cannot differ per
 # tenant — pinned as source, because an org argument appearing here is how that would start.
 check("G19 neither the setter nor the rung knows which tenant it is acting for",
-      not re.search(r"\borg\w*", fexec(ES._set_daily_range))
+      not re.search(r"\borg\w*", fexec(ES._set_date_window))
       and not re.search(r"\borg\w*", fexec(V.classify_empty_pull)))
 
 
@@ -646,8 +647,13 @@ check("H46 every day-grain report declares one, and an undeclared routine is REF
       "a routine nobody wrote is not guessed at on a live portal")
 check("H47 the dispatch dereferences the declaration rather than the word 'daily'",
       "resolve_date_filter(" in fexec(ES._open_and_download)
-      and "SUMMARIZE_BY_DAILY" in fexec(ES._open_and_download)
-      and "describe_date_controls(page)" in fexec(ES._open_and_download),
+      and "DATE_FILTER_UNDECLARED" in fexec(ES._open_and_download)
+      and "describe_date_controls(page)" in fexec(ES._open_and_download)
+      # COMMCALC-67: the routine is PASSED to the one shared setter, not branched on here, so a
+      # new report's routine never means a new branch in the dispatch.
+      # (`fexec` unparses the AST, so the subscripts come back single-quoted.)
+      and "_set_date_window(page, target['begin'], target['end'], routine)" in fexec(
+          ES._open_and_download),
       "this is the wiring; a registry nobody reads is not a fix (19.18)")
 check("H48 an undeclared report is not run unfiltered, and says so",
       "was not run" in fexec(ES.describe_date_controls)
@@ -666,6 +672,47 @@ check("H51 the captions in that verdict come from the ONE naming home, not a sec
       and "pick_jqx_item(page" in fexec(ES.describe_date_controls),
       "a second scan of the same panel is the duplicate the house forbids")
 
+# ── COMMCALC-67 — THE FIELDS A WINDOW IS TYPED INTO ARE DECLARED TOO ────────────────────────────
+# Measured 2026-11-10 22:00, on COMMCALC-66's wording: "the page's date fields are StartDate,
+# EndDate" — while this module's date step had always typed into BeginDate/EndDate. Two facts per
+# report, neither of them a word in the code: whether an interval is set first, and which two
+# fields carry the dates. The comp report's own page has STILL not been measured, so correcting it
+# must be a row in the declaration rather than an edit to a string of JavaScript.
+check("H52 every declared routine names the two fields it types into",
+      all(len(set(ES.date_window_fields(n))) == 2
+          for n in ES.DATE_FILTERS if n != ES.DATE_FILTER_UNDECLARED)
+      and ES.date_window_fields(ES.SUMMARIZE_BY_DAILY) == ("BeginDate", "EndDate")
+      and ES.date_window_fields(ES.START_END_DATES) == ("StartDate", "EndDate"),
+      "a field name nothing declares is a field no report can correct")
+check("H53 the field names are PASSED INTO the page, never written into it",
+      "BeginDate" not in ES._SET_DATES_JS and "StartDate" not in ES._SET_DATES_JS
+      and "beginName" in ES._SET_DATES_JS and "endName" in ES._SET_DATES_JS,
+      "a name baked into the JavaScript is the per-report code the house forbids")
+check("H54 only a report that SUMMARISES is asked for an interval",
+      ES.date_window_interval(ES.SUMMARIZE_BY_DAILY) == ES.DAILY_INTERVAL
+      and ES.date_window_interval(ES.START_END_DATES) is None
+      and "if interval is None:" in fexec(ES._set_date_window),
+      "asking a page for a control it has not got is the whole COMMCALC-66 defect")
+check("H55 the plan has ONE home and an undeclared routine is still refused",
+      EPAY.count("def date_window_plan(") == 1
+      and EPAY.count("def date_window_fields(") == 1
+      and EPAY.count("def date_window_interval(") == 1
+      and _raises(ES.date_window_fields, ES.DATE_FILTER_UNDECLARED)
+      and _raises(ES.date_window_fields, "whatever_the_next_page_wants"),
+      "a routine nobody wrote is not guessed at on a live portal")
+check("H56 there is ONE date step, shared by the report that summarises and the one that does not",
+      EPAY.count("def _put_date_fields(") == 1
+      and EPAY.count("page.evaluate(_SET_DATES_JS") == 1
+      and "_put_date_fields(" in fexec(ES._set_date_window),
+      "two date steps is how one page's controls came to be driven against another's")
+check("H57 the fields that did not take are named back with the REPORT'S names",
+      "{begin_field}/{end_field} did not take" in fsrc(ES._put_date_fields),
+      "'Start/End Date did not take' named a control the operator could not find on the page")
+check("H58 the two day-grain legs keep separate ledger keys",
+      len({ES.REPORTS["comp_report"]["controls"], ES.REPORTS["epay_daily_tx"]["controls"]}) == 2
+      and ES.START_END_DATES_CONTROL != ES.DAILY_RANGE_CONTROL,
+      "a shared key made each leg's failure condemn the other leg's honest zero")
+
 check("H9 ok is never true without the widget's own answer (§COMMCALC-56 holds here too)",
       ES.pick_jqx_item(_FixedPage({"ok": True, "hit": {"id": "a", "selected": None}}),
                        ["x"])["ok"] is False)
@@ -678,11 +725,12 @@ check("H10 the shared routine is the ONLY picker scan in the module",
       and EPAY.count('jqxDropDownList("getItems")') == 0,
       "a second scan is a future divergence")
 check("H11 'Summarize by' dereferences it",
-      "pick_jqx_item(page, [DAILY_INTERVAL])" in fexec(ES._set_daily_range))
+      "pick_jqx_item(page, [interval])" in fexec(ES._set_date_window)
+      and ES.date_window_interval(ES.SUMMARIZE_BY_DAILY) == ES.DAILY_INTERVAL)
 check("H12 the month picker dereferences it too",
       "pick_jqx_item(page," in fexec(ES._set_report_month))
 check("H13 the failure the operator reads names the panel's real options",
-      "describe_panel(iv)" in fexec(ES._set_daily_range)
+      "describe_panel(iv)" in fexec(ES._set_date_window)
       and "panel's controls are" in fexec(ES.describe_panel))
 
 # MATCHING ON MEANING. The portal writes "June- 26" and re-spells its own labels; a comparison on
@@ -695,7 +743,7 @@ check("H14 labels are compared on meaning, in one place, through THE spelling fo
       and ES._same_label("Caf\u00e9", "Cafe"),
       "a private alnum fold does NOT fold accents - str.isalnum() is true for them (2026-10-10)")
 check("H15 the setter compares the control's answer that way, not by ==",
-      "_same_label(selected, DAILY_INTERVAL)" in fexec(ES._set_daily_range)
+      "_same_label(selected, DAILY_INTERVAL)" in fexec(ES._set_date_window)
       and 'str(selected).strip() != DAILY_INTERVAL' not in EPAY)
 
 # THE REGRESSION IS EXECUTED, because the defect was in JavaScript no python test runs.

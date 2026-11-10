@@ -128,7 +128,7 @@ def test_a_failure_names_what_the_panel_ACTUALLY_offers():
     One that lists what it does have answers the question without a photograph."""
     p = FakePicker(_scan(ok=False, selected=None, offered=("Hourly", "Weekly"), pickers=1,
                          why="the panel has 1 picker(s), none offering it"))
-    ok, detail, confirmed = es._set_daily_range(p, "2026-11-01", "2026-11-08")
+    ok, detail, confirmed = es._set_date_window(p, "2026-11-01", "2026-11-08", es.SUMMARIZE_BY_DAILY)
     assert (ok, confirmed) == (False, False)
     assert "Hourly" in detail and "Weekly" in detail
 
@@ -150,13 +150,15 @@ def test_a_panel_with_no_picker_at_all_reads_differently_from_one_with_the_wrong
 @pytest.mark.parametrize("portal_spelling", ["Daily", "daily", " Daily ", "Daily:", "DAILY"])
 def test_the_portals_own_spelling_is_not_ours_to_predict(portal_spelling):
     """A control reading 'daily ' must not be failed as if it read 'Weekly'."""
-    ok, _d, _c = es._set_daily_range(
-        _PageFor(selected=portal_spelling), "2026-11-01", "2026-11-08")
+    ok, _d, _c = es._set_date_window(
+        _PageFor(selected=portal_spelling), "2026-11-01", "2026-11-08",
+        es.SUMMARIZE_BY_DAILY)
     assert ok is True
 
 
 def test_a_control_reading_something_ELSE_is_still_fatal():
-    ok, detail, _c = es._set_daily_range(_PageFor(selected="Weekly"), "2026-11-01", "2026-11-08")
+    ok, detail, _c = es._set_date_window(_PageFor(selected="Weekly"), "2026-11-01", "2026-11-08",
+                                     es.SUMMARIZE_BY_DAILY)
     assert ok is False and "Weekly" in detail
 
 
@@ -203,7 +205,7 @@ def test_neither_home_learns_which_tenant_it_is_acting_for():
     """Owner directive 2026-10-30. A control's required value is a property of the REPORT; an org
     argument appearing here is how a per-tenant divergence would start."""
     import inspect
-    for fn in (es.pick_jqx_item, es._set_daily_range, es._set_report_month):
+    for fn in (es.pick_jqx_item, es._set_date_window, es._set_report_month):
         assert "org" not in inspect.signature(fn).parameters
 
 
@@ -416,7 +418,7 @@ def test_the_failure_sentence_names_every_control_and_stays_readable():
          "sample": ["All", "Commission"]},
         {"id": "SummarizeBy", "widget": "jqxComboBox", "options": 0, "sample": []},
     ]))
-    ok, detail, confirmed = es._set_daily_range(page, "2026-11-01", "2026-11-08")
+    ok, detail, confirmed = es._set_date_window(page, "2026-11-01", "2026-11-08", es.SUMMARIZE_BY_DAILY)
     assert (ok, confirmed) == (False, False)
     for name in ("DealerList", "PaymentCategory", "SummarizeBy"):
         assert name in detail, f"{name} is not named in the failure"

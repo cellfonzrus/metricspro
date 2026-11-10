@@ -276,6 +276,10 @@ DAILY_RANGE_CONTROL = "the report's daily date filter"
 # page condemned the other page's honest zero too (index §19.41 runs the other way as well).
 UNDECLARED_DATE_CONTROL = "this report's own date filter"
 
+# Daily Transaction Detail's own, so its verdict never condemns comp's zero and comp's never
+# condemns its own (the sharing that §COMMCALC-66 separated).
+START_END_DATES_CONTROL = "the report's Start/End Date fields"
+
 # ── WHICH CONTROLS SET A REPORT'S WINDOW IS A PROPERTY OF THAT REPORT'S PAGE ────────────────────
 # ...not of the word "daily" (index §COMMCALC-66). Measured 2026-11-10 21:00, on the first tick
 # after §COMMCALC-64 made the sweep name a control by the caption printed beside it:
@@ -290,12 +294,52 @@ UNDECLARED_DATE_CONTROL = "this report's own date filter"
 # `filter: "daily_range"`, and that one word drove the comp report's Summarize-by routine against a
 # page that has never carried the control, so three rounds of "the control is missing" were about
 # the wrong page.
-#: Comp's routine: Summarize by = Daily, then Start Date / End Date.
+#: Comp's routine: Summarize by = Daily, then its two date fields.
 SUMMARIZE_BY_DAILY = "summarize_by_daily"
+#: Daily Transaction Detail's routine: its two date fields and nothing else. It does not summarise.
+START_END_DATES = "start_end_dates"
 #: Measured but not yet declared. NOT another report's routine, and NOT an unfiltered run — an
 #: unfiltered day-grain pull lands somebody else's window and says nothing about it.
 DATE_FILTER_UNDECLARED = "undeclared"
-DATE_FILTERS = (SUMMARIZE_BY_DAILY, DATE_FILTER_UNDECLARED)
+
+# THE FIELDS A WINDOW IS TYPED INTO ARE DECLARED TOO (index §COMMCALC-67). Measured 2026-11-10
+# 22:00, on §COMMCALC-66's wording: "the page's date fields are StartDate, EndDate" — while this
+# module's date step had always typed into BeginDate/EndDate. Two facts per report, neither of them
+# a word in the code: whether an interval is set first, and which two fields carry the dates.
+#
+# The comp report keeps BeginDate/EndDate because that is what it has always used, and ITS OWN PAGE
+# HAS STILL NEVER BEEN MEASURED (its leg runs at 23:30). When it reports, correcting it is a row
+# here, not an edit to a string of JavaScript.
+DATE_FILTERS = {
+    SUMMARIZE_BY_DAILY: {"interval": "Daily", "fields": ("BeginDate", "EndDate")},
+    START_END_DATES: {"interval": None, "fields": ("StartDate", "EndDate")},
+    DATE_FILTER_UNDECLARED: None,
+}
+
+
+def date_window_plan(name):
+    """THE ONE HOME for a routine's declaration. An undeclared routine is refused, never guessed."""
+    if name not in DATE_FILTERS:
+        raise EpayPortalError(
+            f"unknown date filter {name!r} — declare it in DATE_FILTERS and give it a routine "
+            f"rather than letting a report fall through to another report's controls")
+    plan = DATE_FILTERS[name]
+    if not plan:
+        raise EpayPortalError(
+            f"the date filter {name!r} has no routine declared, so there is nothing to drive — "
+            f"the page's own controls are reported instead and the report is not run")
+    return plan
+
+
+def date_window_fields(name):
+    """Which two fields THIS report types its window into."""
+    begin, end = date_window_plan(name)["fields"]
+    return (begin, end)
+
+
+def date_window_interval(name):
+    """The interval this report must be set to first, or None when it does not summarise."""
+    return date_window_plan(name)["interval"]
 
 
 def date_filter_of(spec):
@@ -430,11 +474,10 @@ REPORTS = {
     "epay_daily_tx": {"report_id": None, "label_match": "daily transaction detail",
                       "table": "commcalc.raw_epay_daily_tx", "file_type": "epay_daily_tx",
                       "registry_key": "epay_daily_tx", "grain": "day", "filter": "daily_range",
-                      "empty_ok": True, "controls": (UNDECLARED_DATE_CONTROL,),
-                      # Its panel has no "Summarize by" (measured 2026-11-10 21:00, see
-                      # DATE_FILTERS above). Until its own date control is declared this leg
-                      # reports the panel and runs nothing.
-                      "date_filter": DATE_FILTER_UNDECLARED,
+                      "empty_ok": True, "controls": (START_END_DATES_CONTROL,),
+                      # Its panel has no "Summarize by" and types its window into
+                      # StartDate/EndDate (both measured 2026-11-10, see DATE_FILTERS above).
+                      "date_filter": START_END_DATES,
                       "label": "Daily Transaction Detail",
                       "ingest": ingest_daily_tx},
 }
@@ -724,7 +767,7 @@ def _set_report_month(page, month_name, year):
     Still NON-FATAL by design: if the month cannot be set, the report runs on its default month and
     the caller stores the result under the period implied by the DOWNLOADED DATA — a failed
     month-set wastes a pull but can never mislabel one. (The comp report takes the opposite,
-    fail-loud path — see _set_daily_range — because an unfiltered comp run returns nothing at all.)
+    fail-loud path — see _set_date_window — because an unfiltered comp run returns nothing at all.)
     Returns True if it believes it changed the filter.
 
     Verified live 2026-08-09: on #102817 this drives the dropdown to 'June- 26'."""
@@ -733,7 +776,7 @@ def _set_report_month(page, month_name, year):
     variants = [label, f"{month_name}-{year}", f"{month_name} - {year}",
                 f"{month_name}- {yy}", f"{month_name}-{yy}", f"{month_name} {yy}", month_name]
     # 0) THE ONE HOME for driving a jqWidgets picker (§COMMCALC-58). This had its own scan until
-    #    2026-11-10 — near-identical to the one in `_set_daily_range`, and the two drifted: this one
+    #    2026-11-10 — near-identical to the one in `_set_date_window`, and the two drifted: this one
     #    had a click-the-control fallback behind it and that one did not, so when the portal
     #    re-skinned "Summarize by" only the comp leg went blind. Two scans answering one question is
     #    the duplicate the house forbids; there is now one, and both callers read it.
@@ -951,7 +994,7 @@ _READ_FORM_FIELD_JS = """
 
 
 _SET_DATES_JS = """
-([beginIso, endIso]) => {
+([beginIso, endIso, beginName, endName]) => {
   const $ = window.jQuery || window.$;
   if (!$) return {ok:false, why:'no jQuery'};
   const put = (name, iso) => {
@@ -967,7 +1010,7 @@ _SET_DATES_JS = """
                   String(got.getMonth()+1).padStart(2,'0') + '-' +
                   String(got.getDate()).padStart(2,'0')) : null;
   };
-  const b = put('BeginDate', beginIso), e = put('EndDate', endIso);
+  const b = put(beginName, beginIso), e = put(endName, endIso);
   return {ok: b === beginIso && e === endIso, begin: b, end: e};
 }
 """
@@ -1026,7 +1069,7 @@ def pick_jqx_item(page, wants, *, settle_ms=PICKER_SETTLE_MS):
       looked      how many times the page was asked, so a slow panel is visible in the log
       why         the sentence for a failure, None on success.
 
-    Both callers in this file dereference THIS — `_set_daily_range` for "Summarize by" and
+    Both callers in this file dereference THIS — `_set_date_window` for "Summarize by" and
     `_set_report_month` for the month list. They had their own near-identical scans until
     2026-11-10, one of which had been widened and the other not, which is why one of them went
     blind when the portal re-skinned a control. Locked in `harness_empty_pull_verdict.py` §H.
@@ -1165,8 +1208,14 @@ DAILY_INTERVAL = "Daily"
 _INTERVAL_FIELD = "DateIntervalOption"
 
 
-def _set_daily_range(page, begin_iso, end_iso):
-    """Drive the comp report to Summarize by = Daily over [begin_iso, end_iso].
+def _set_date_window(page, begin_iso, end_iso, routine):
+    """Drive THIS REPORT'S declared date filter to [begin_iso, end_iso].
+
+    `routine` is the report's own declaration (§COMMCALC-66) and this reads its plan from
+    `DATE_FILTERS` (§COMMCALC-67): the interval to set first, if the report summarises at all, and
+    the two fields its window is typed into. One routine for both reports, because two near-identical
+    date steps is the duplicate that let the comp report's controls be driven against a page that
+    does not have them.
 
     Returns **(ok, detail, confirmed)**:
 
@@ -1197,7 +1246,13 @@ def _set_daily_range(page, begin_iso, end_iso):
     types what it is given and adds no day of its own — an off-by-one corrected in two places is an
     off-by-one applied twice.
     """
-    iv = pick_jqx_item(page, [DAILY_INTERVAL])
+    interval = date_window_interval(routine)
+    begin_field, end_field = date_window_fields(routine)
+    if interval is None:
+        # THIS REPORT DOES NOT SUMMARISE, so it is never asked for a control it has not got — the
+        # whole §COMMCALC-66 defect in one branch. Straight to its own two fields.
+        return _put_date_fields(page, begin_iso, end_iso, begin_field, end_field, confirmed=True)
+    iv = pick_jqx_item(page, [interval])
     selected = iv.get("selected")
 
     # (a) nothing on the page offers the value. SAY WHAT THE PANEL DOES OFFER (§COMMCALC-58): on
@@ -1231,21 +1286,38 @@ def _set_daily_range(page, begin_iso, end_iso):
 
     confirmed = _same_label(hidden, DAILY_INTERVAL) if hidden not in (None, "") else False
     page.wait_for_timeout(600)
+    ok, detail, _ = _put_date_fields(page, begin_iso, end_iso, begin_field, end_field,
+                                     confirmed=confirmed, interval=interval)
+    if not ok:
+        return False, detail, False
+    if confirmed:
+        return True, detail, True
+    return True, (f"{detail} — set on the control, but the set could not be confirmed: the form's "
+                  f"{_INTERVAL_FIELD} field is not on the page (hidden field = {hidden!r}). "
+                  f"Proceeding on the control's own answer; a zero-row result from this run will "
+                  f"not be reported as 'nothing posted'"), False
+
+
+def _put_date_fields(page, begin_iso, end_iso, begin_field, end_field, *,
+                     confirmed, interval=None):
+    """Type the window into the two fields THIS report declared, and read them back.
+
+    One home for the date step itself, so a report that summarises and one that does not share it
+    rather than growing a second copy. The field NAMES come from the declaration and are passed
+    into the page; nothing here knows what they are called.
+    """
+    said = f"{interval + ' ' if interval else ''}{begin_iso}..{end_iso}"
     try:
-        dr = page.evaluate(_SET_DATES_JS, [begin_iso, end_iso])
+        dr = page.evaluate(_SET_DATES_JS, [begin_iso, end_iso, begin_field, end_field])
     except Exception as e:
-        return False, f"could not set Start/End Date ({type(e).__name__}: {e})", False
+        return False, (f"could not set {begin_field}/{end_field} "
+                       f"({type(e).__name__}: {e})"), False
     dr = dr if isinstance(dr, dict) else {}
     if not dr.get("ok"):
-        return False, (f"Start/End Date did not take: wanted {begin_iso}..{end_iso}, "
-                       f"widget reads {dr.get('begin')}..{dr.get('end')}"), False
+        return False, (f"{begin_field}/{end_field} did not take: wanted {begin_iso}..{end_iso}, "
+                       f"the widgets read {dr.get('begin')}..{dr.get('end')}"), False
     page.wait_for_timeout(400)
-    if confirmed:
-        return True, f"{DAILY_INTERVAL} {begin_iso}..{end_iso}", True
-    return True, (f"{DAILY_INTERVAL} {begin_iso}..{end_iso} — set on the control, but the set "
-                  f"could not be confirmed: the form's {_INTERVAL_FIELD} field is not on the page "
-                  f"(hidden field = {hidden!r}). Proceeding on the control's own answer; a "
-                  f"zero-row result from this run will not be reported as 'nothing posted'"), False
+    return True, said, bool(confirmed)
 
 
 def describe_date_controls(page):
@@ -1291,14 +1363,15 @@ def _open_and_download(page, report_id, dest_path, target=None, ledger=None):
     if target and target.get("kind") == "day_range":
         # WHICH ROUTINE, FROM THE REPORT'S OWN DECLARATION (§COMMCALC-66). Never from the word
         # "daily": the two day-grain reports do not share a filter panel.
-        if resolve_date_filter(target) != SUMMARIZE_BY_DAILY:
+        routine = resolve_date_filter(target)
+        if routine == DATE_FILTER_UNDECLARED:
             detail = describe_date_controls(page)
             if ledger is not None:
                 ledger.control_failed(UNDECLARED_DATE_CONTROL, detail)
             raise EpayPortalError(f"could not set {UNDECLARED_DATE_CONTROL} — {detail}")
         # FATAL on failure, deliberately: without the filter this report returns a header-only
         # workbook, which the caller would otherwise record as "nothing posted that day".
-        ok, detail, confirmed = _set_daily_range(page, target["begin"], target["end"])
+        ok, detail, confirmed = _set_date_window(page, target["begin"], target["end"], routine)
         if not ok:
             # Record it on the RUN, not just in this leg's exception: the leg that proves the control
             # broken is often not the leg whose zero it invalidates (on 2026-10-03 it ran second).
