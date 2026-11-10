@@ -487,7 +487,7 @@ check("H7 …and 'no picker at all' is a different sentence from 'none offering 
       "opposite fixes: rebuild the leg, or widen the scan")
 check("H8 the wrapper always returns every key its callers unpack",
       (lambda r: set(r) == {"ok", "selected", "widget", "offered", "candidates", "pickers",
-                            "ready", "empty", "looked", "why"})(
+                            "ready", "empty", "looked", "waited_ms", "panel", "why"})(
           ES.pick_jqx_item(_DeadPage(), ["x"])))
 
 # ── COMMCALC-61 — PRESENT BUT NOT READY IS NOT ABSENT ────────────────────────────────────────────
@@ -500,13 +500,15 @@ check("H22 'read too early' is its OWN sentence, not folded into 'none offering 
       "finished filling" in ES._PICK_JQX_ITEM_JS
       and "none offering it" in ES._PICK_JQX_ITEM_JS
       and "no picker was found" in ES._PICK_JQX_ITEM_JS)
-check("H23 the wait is BOUNDED and declared once each",
-      isinstance(ES.PICKER_LOOKS, int) and 2 <= ES.PICKER_LOOKS <= 10
+check("H23 the wait is BOUNDED and each bound is declared once",
+      isinstance(ES.PICKER_PATIENCE, int) and 1 <= ES.PICKER_PATIENCE <= 10
       and isinstance(ES.PICKER_SETTLE_MS, int) and 0 < ES.PICKER_SETTLE_MS <= 5000
-      and EPAY.count("PICKER_LOOKS = ") == 1 and EPAY.count("PICKER_SETTLE_MS = ") == 1,
+      and isinstance(ES.PICKER_DEADLINE_MS, int) and 0 < ES.PICKER_DEADLINE_MS <= 60_000
+      and EPAY.count("PICKER_PATIENCE = ") == 1 and EPAY.count("PICKER_SETTLE_MS = ") == 1
+      and EPAY.count("PICKER_DEADLINE_MS = ") == 1,
       "a wait with no ceiling is a sweep that never reports")
 check("H24 …and a look that cannot help is not taken",
-      "still_building" in PICK and "out[\"empty\"] > 0" in PICK,
+      'out["empty"] > 0' in PICK and 'out["candidates"] == 0' in PICK,
       "a READY picker will not start offering a value it does not have")
 check("H25 a success never waits",
       (lambda p: (ES.pick_jqx_item(p, ["Daily"]), p.waited == [])[-1])(_StagedPage(
@@ -521,6 +523,59 @@ check("H26 …and a panel that fills in on the second look IS found",
 check("H27 the operator is told how many looks it took",
       "looked" in PICK and "while the panel settled" in PICK,
       "a slow panel and an absent control read identically without it")
+# ── COMMCALC-62 — THE WAIT FOLLOWS PROGRESS, AND NO ONE CONTROL MAY DROWN THE REPORT ────────────
+# Measured 2026-11-10 18:30 on COMMCALC-61's code: "3 picker(s) with options, none offering it
+# (and 10 still empty) (looked 4 times over 4.5s)". THIRTEEN controls, ten unfilled when the fixed
+# budget expired — the budget decided the answer, not the portal. And the sentence was almost
+# entirely the dealer list: `offered` merged every label, the recorder truncated at 600 chars, and
+# the two other loaded controls were unreadable. That is why the panel's shape took three rounds.
+check("H28 the wait is spent on PROGRESS, not on a fixed count",
+      "stalled" in PICK and "PICKER_PATIENCE" in PICK and "PICKER_DEADLINE_MS" in PICK
+      and "PICKER_LOOKS" not in EPAY,
+      "a guessed number cannot know how slow the portal is today")
+check("H29 a panel that STOPPED filling says so, with the count still empty",
+      "stopped filling" in PICK,
+      "the controls are there and the page gave up on them - its own, actionable fact")
+check("H30 a stalled panel is not waited on for ever",
+      (lambda p: (ES.pick_jqx_item(p, ["Daily"], settle_ms=1),
+                  p.asked <= ES.PICKER_PATIENCE + 2)[-1])(_StagedPage(
+          [{"ok": False, "hit": None, "offered": [], "panel": [], "candidates": 7, "pickers": 7,
+            "ready": 1, "empty": 6, "why": "none offering it"}])),
+      "waiting on a page that has stopped changing has become guessing")
+check("H31 …and a panel that keeps filling IS waited on past the old four looks",
+      (lambda p: (ES.pick_jqx_item(p, ["Daily"], settle_ms=1), p.asked >= 6)[-1])(_StagedPage(
+          [{"ok": False, "hit": None, "offered": [], "panel": [], "candidates": 10, "pickers": 10,
+            "ready": r, "empty": 10 - r, "why": "none offering it"} for r in range(1, 9)])),
+      "ten controls still empty at the deadline is the measurement that forced this")
+check("H32 the per-control sample size is DECLARED, not inlined in the JavaScript",
+      isinstance(ES.PICKER_SAMPLE, int) and 0 < ES.PICKER_SAMPLE <= 20
+      and EPAY.count("PICKER_SAMPLE = ") == 1
+      and "int(PICKER_SAMPLE)" in PICK and "slice(0, sample)" in ES._PICK_JQX_ITEM_JS,
+      "a sample size buried in a string is one nobody can find or lock")
+check("H33 each control reports its own size and its own sample",
+      "panel.push({" in ES._PICK_JQX_ITEM_JS
+      and "options: labels.length" in ES._PICK_JQX_ITEM_JS
+      and "options: 0" in ES._PICK_JQX_ITEM_JS,
+      "the empty control must appear in the report too, not only in the counts")
+check("H34 the panel description has ONE home and both the size and the sample reach it",
+      EPAY.count("def describe_panel(") == 1
+      and "option(s)" in fexec(ES.describe_panel) and "more" in fexec(ES.describe_panel)
+      and "empty" in fexec(ES.describe_panel),
+      "a second copy of this sentence is a future divergence")
+check("H35 one huge control cannot fill the sentence",
+      (lambda d: len(d) < 1200 and "PaymentCategory" in d and "480" in d
+                 and "474517 - Wireless LLC" in d)(
+          ES.describe_panel({"panel": [
+              {"id": "DealerList", "widget": "jqxComboBox", "options": 480,
+               "sample": [f"4745{n} - Wireless LLC" for n in range(17, 17 + ES.PICKER_SAMPLE)]},
+              {"id": "PaymentCategory", "widget": "jqxDropDownList", "options": 2,
+               "sample": ["All", "Commission"]},
+              {"id": "SummarizeBy", "widget": "jqxComboBox", "options": 0, "sample": []}]})),
+      "the recorder truncates at 600 chars, so a long sentence loses the control we are hunting")
+check("H36 …and the control we are hunting is named even while it is empty",
+      "SummarizeBy: empty" in ES.describe_panel({"panel": [
+          {"id": "SummarizeBy", "widget": "jqxComboBox", "options": 0, "sample": []}]}))
+
 check("H9 ok is never true without the widget's own answer (§COMMCALC-56 holds here too)",
       ES.pick_jqx_item(_FixedPage({"ok": True, "hit": {"id": "a", "selected": None}}),
                        ["x"])["ok"] is False)
@@ -537,7 +592,8 @@ check("H11 'Summarize by' dereferences it",
 check("H12 the month picker dereferences it too",
       "pick_jqx_item(page," in fexec(ES._set_report_month))
 check("H13 the failure the operator reads names the panel's real options",
-      "panel's pickers offer" in fexec(ES._set_daily_range))
+      "describe_panel(iv)" in fexec(ES._set_daily_range)
+      and "panel's controls are" in fexec(ES.describe_panel))
 
 # MATCHING ON MEANING. The portal writes "June- 26" and re-spells its own labels; a comparison on
 # punctuation fails a control that took the value.

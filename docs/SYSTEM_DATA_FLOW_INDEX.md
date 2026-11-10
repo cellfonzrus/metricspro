@@ -201,6 +201,7 @@ Primary code homes:
 | COMMCALC-59 | **A pull can owe history, and a login can belong to a store** | A processor back office that issues ONE LOGIN PER STORE, asked for every report from the first of the year and daily after that. The pull loop could not be asked for history at all — its only window is "the last N days, clamped" — so the span a login still owes is now its own fact (`portal_backfill`) rather than a second pull loop, and a login can carry the store every row pulled through it belongs to. Universal, on for nobody until a tenant declares its logins. |
 | COMMCALC-60 | **A figure the feed sends that nothing reads is not a figure this platform has** | "Use those other 21 columns and make them a part of the kpi reporting also filtered by the kpi and out regular filters and send option". The sweep's own diagnostic had been naming 21 arriving-but-unread store columns every day for weeks, and one of them was the new spelling of a column that had been landing empty since the source renamed it. Reading one meant editing FOUR lists, and the last of them — a hand-typed array in the page — decided what a person could see, so a column could be declared, landed and invisible. |
 | COMMCALC-61 | **A control that is present but not filled in is not absent** | The first run on §COMMCALC-58's new wording (2026-11-10 16:30) reported that the panel had ONE picker, none offering Daily — and listed the dealer/account names. The filter controls had not populated yet, and the scan shipped that morning SKIPPED a picker whose `getItems` came back empty, so a control the page had already built was neither counted nor mentioned: present-but-not-ready was folded into absent. Absent, not-yet-ready and present-but-not-offering are three facts needing three opposite fixes; the scan now counts `candidates`/`pickers`/`ready`/`empty` and says which of the three it saw, and waits up to 4 looks × 1.5s while the panel is still building (never on a ready picker, never on a success), reporting how long it waited. The honest-zero ladder is untouched. |
+| COMMCALC-62 | **The wait follows progress, and no one control may drown the report** | §COMMCALC-61's first tick (2026-11-10 18:30) reported "3 picker(s) with options, none offering it (and 10 still empty) (looked 4 times over 4.5s)" — so the panel carries THIRTEEN controls, not the one reported at 16:30, and ten were still unfilled when the guessed 4-look budget expired: the budget decided the answer rather than measuring it. Worse, `offered` merged every label on the panel and one control is the ~480-account dealer selector, so it filled the sentence and the 600-char recorder elided the two other loaded controls — which is why the panel's real shape took three rounds to see. The wait now follows PROGRESS (`PICKER_PATIENCE` stalls, `PICKER_DEADLINE_MS` ceiling; `PICKER_LOOKS` deleted) and says when a panel stopped filling; each control reports its own identity, real size and a bounded sample through the new one home `describe_panel`. Honest zero untouched. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26348,6 +26349,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-59 | commcalc |
 | COMMCALC-60 | commcalc |
 | COMMCALC-61 | commcalc |
+| COMMCALC-62 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -45865,7 +45867,9 @@ than proving the same thing four times.
     finished filling`
   * `the panel has N picker(s) with options, none offering it (and M still empty)`
 * `PICKER_LOOKS = 4` looks at `PICKER_SETTLE_MS = 1500` apart — at most 4.5s of waiting, spent only
-  while `candidates == 0 or empty > 0`;
+  while `candidates == 0 or empty > 0`. **SUPERSEDED by §COMMCALC-62**, which measured ten controls
+  still unfilled at that ceiling and replaced the guessed look count with progress + a deadline;
+  `PICKER_LOOKS` no longer exists.
 * `looked` in the returned dict, and the failure says so: *"(looked 3 times over 3s while the panel
   settled)"*. A slow panel is then visible in the log instead of being inferred.
 
@@ -46035,6 +46039,103 @@ reported.
 The DLAR gross adds / activations / upgrades columns are still empty, so the KPIs over them read
 **not measured** here rather than zero — that is this change reporting the defect, not repairing it.
 The feed itself is the portal-download thread's work.
+
+## §COMMCALC-62. THE WAIT FOLLOWS PROGRESS, AND NO ONE CONTROL MAY DROWN THE REPORT (measured 2026-11-10)
+
+### COMMCALC-62.1 HOW IT WAS FOUND
+
+§COMMCALC-61 deployed at 17:57 on 2026-11-10 and the 18:30 tick said:
+
+    the panel has 3 picker(s) with options, none offering it (and 10 still empty)
+    (looked 4 times over 4.5s while the panel settled)
+
+Two facts in one sentence and **both were new**, after three rounds of looking at this panel:
+
+* the panel carries **THIRTEEN** controls. The 16:30 run, on the code shipped that morning,
+  reported **one**; and
+* **ten of them were still unfilled when the 4.5s budget expired.**
+
+### COMMCALC-62.2 THE TWO DEFECTS
+
+**(a) A fixed budget decides the answer instead of measuring it.** Ten controls still empty at the
+end of the wait does not say the panel is slow — it says *we stopped watching while it was still
+working*. §COMMCALC-61 guessed `PICKER_LOOKS = 4` because it had no measurement; keeping a guessed
+number once a measurement exists is the patchwork the house forbids. And raising it to another
+guessed number repeats the mistake at a bigger value.
+
+**(b) ONE CONTROL WAS THE WHOLE REPORT, and that is why this took three rounds.** `offered` was a
+single merged list of every label on the panel. One of those controls is the portal's **dealer
+selector, carrying ~480 accounts**, so it filled the sentence; `_epay_set_status` truncates at 600
+characters, and everything after the dealer names was elided. The two other loaded controls were in
+that message and **neither could be read** — including, potentially, the one we are hunting for. For
+three rounds the operator (and the author) were reading one picker's contents and inferring the
+page from them.
+
+A report in which the biggest control wins is a report that hides the panel.
+
+### COMMCALC-62.3 THE RULES
+
+**Progress is the licence to wait.** A control appearing, or one filling in, means the page is still
+working — keep looking. `PICKER_PATIENCE` consecutive looks with nothing new means it has **stopped**,
+and that is its own actionable fact: the controls are there and the page gave up on them.
+`PICKER_DEADLINE_MS` caps the whole wait regardless, because a sweep that never returns is worse
+than one that reports what it saw.
+
+**No single control may dominate the report.** Each control states its own identity, its own real
+size, and at most `PICKER_SAMPLE` of its options. The size is reported; the contents are not,
+beyond the sample.
+
+### COMMCALC-62.4 WHAT CHANGED
+
+* `PICKER_LOOKS` is **deleted**, and `pick_jqx_item`'s `looks=` parameter with it — a parameter that
+  bounds nothing misleads the next reader. The bound is now `PICKER_PATIENCE = 2` and
+  `PICKER_DEADLINE_MS = 20_000`, with `PICKER_SETTLE_MS = 1500` between looks.
+* The loop compares `(candidates, ready, empty)` against the previous look. Unchanged ⇒ stalled;
+  `PICKER_PATIENCE` stalls ⇒ stop and append *"the panel stopped filling with N control(s) still
+  empty"*. `waited_ms` is returned, so the sentence reports real elapsed time rather than an
+  arithmetic product.
+* The scan returns `panel`: one entry per control, `{id, widget, options, sample}` — the empty ones
+  included, with `options: 0`. `PICKER_SAMPLE = 8` is declared in Python and **passed into the
+  JavaScript**, never inlined in the string.
+* `offered` survives, but is now built from the samples, so it is bounded by the number of controls
+  rather than by the largest one.
+* **New one home** `describe_panel(scan)` — the panel, control by control, as an operator reads it:
+  `DealerList: 480 option(s) — 474517 - …, +472 more; PaymentCategory: 3 option(s) — All, …;
+  SummarizeBy: empty`. `_set_daily_range` dereferences it; nothing restates it.
+
+### COMMCALC-62.5 WHAT STAYED
+
+The honest zero, untouched again. Waiting longer and reporting better make the control more likely
+to be **found**; neither makes an unconfirmed control more likely to be **believed**, so the
+§COMMCALC-56 ladder still refuses to publish a zero-row pull as "nothing posted".
+
+### COMMCALC-62.6 TESTS AND THE LOCK
+
+* `backend/tests/unit/test_jqx_picker_is_found_by_what_it_answers_to.py` — **7 new units** (31 in
+  the file), all RED first: the wait continues past the old cap while controls keep filling; a
+  stalled panel is not waited on; it says it stopped filling; the deadline caps the whole wait; each
+  control is described separately; a 480-option control contributes only a sample; and the failure
+  sentence names every control and stays under the recorder's limit.
+* `backend/prove_jqx_picker.mjs` **§I — 11 checks**, running the REAL scan against the measured
+  18:30 shape (480-name `DealerList`, a 3-option `PaymentCategory`, an empty `SummarizeBy`). It now
+  reads `PICKER_SAMPLE` out of the module rather than retyping it.
+* `backend/harness_empty_pull_verdict.py` **§I — H28–H36** (112 checks in the file). Fails the build
+  if the wait goes back to a fixed count, if `PICKER_LOOKS` reappears, if a stall stops being
+  reported, if a stalled panel is waited on or a filling one is abandoned, if the sample size is
+  inlined or unbounded, if a control stops reporting its own size, if `describe_panel` gains a
+  second copy, or if one control's contents can fill the sentence again.
+
+### COMMCALC-62.7 WHAT THIS DOES NOT FIX
+
+Whether "Summarize by" is on that panel at all is still **not settled** — it is one of the ten that
+had not filled in. What changes is that the next tick's sentence names each control, so the answer
+arrives as a measurement instead of another round of inference. If the control is named and still
+empty after the deadline, the next question is about the portal, not about the scan.
+
+Cross-references: §COMMCALC-61 (counting the empty control, which produced this measurement) ·
+§COMMCALC-58 (the one home `pick_jqx_item`) · §COMMCALC-56 (verified from the control; the
+honest-zero ladder) · §19.18 (one fact, one home, dereferenced — never copied).
+
 
 ## §COMMCALC-60. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
 

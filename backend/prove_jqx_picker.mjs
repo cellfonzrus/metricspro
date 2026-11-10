@@ -35,9 +35,18 @@ function pyTuple(name) {
   return [...m[1].matchAll(/'([^']*)'|"([^"]*)"/g)].map((x) => (x[1] !== undefined ? x[1] : x[2]));
 }
 
+function pyInt(name) {
+  const m = py.match(new RegExp("^" + name + "\\s*=\\s*([0-9_]+)\\s*$", "m"));
+  if (!m) throw new Error(`${name} is not a module-level int in ${SRC}`);
+  return parseInt(m[1].replace(/_/g, ""), 10);
+}
+
 const PICK_JS = pyString("_PICK_JQX_ITEM_JS");
 const SELECTORS = pyTuple("JQX_PICKER_SELECTORS");
 const WIDGETS = pyTuple("JQX_PICKER_WIDGETS");
+// Read from the module, never retyped: a proof carrying its own copy of the sample size would
+// keep passing after the real one changed (§COMMCALC-62).
+const SAMPLE = pyInt("PICKER_SAMPLE");
 
 // ── a fake page ──────────────────────────────────────────────────────────────────────────────────
 class FakeHost {
@@ -97,7 +106,7 @@ function run(hosts, wants) {
   const fn = eval(`(${PICK_JS.trim()})`);
   global.document = makeDocument(hosts);
   global.window = { jQuery: makeJQuery() };
-  return fn([wants, SELECTORS, WIDGETS]);
+  return fn([wants, SELECTORS, WIDGETS, SAMPLE]);
 }
 
 // ── the panel in the photograph ──────────────────────────────────────────────────────────────────
@@ -260,6 +269,74 @@ console.log("§H  a picker that exists but has not filled in is NOT absent (COMM
   const r = run(hosts, ["Daily"]);
   ok("H8 a ready picker is still driven with an empty one beside it",
      r.ok === true && hosts[1].selected === "Daily");
+}
+
+console.log("§I  no one control may drown the report (COMMCALC-62)");
+{
+  // THE LIVE SHAPE, 2026-11-10 18:30, read off production on the §COMMCALC-61 code:
+  //
+  //     the panel has 3 picker(s) with options, none offering it (and 10 still empty)
+  //     (looked 4 times over 4.5s while the panel settled)
+  //
+  // THIRTEEN controls, and the sentence the operator got was almost entirely ONE of them: the
+  // dealer selector carries hundreds of accounts, `offered` merged every label on the panel, and
+  // the recorder truncated at 600 characters. The two other loaded controls were in that message
+  // and neither could be read - which is why it took three rounds to learn the panel's real shape.
+  const dealers = [];
+  for (let i = 0; i < 480; i++) dealers.push(`${474517 + i} - Wireless 2024 LLC`);
+  const hosts = [
+    new FakeHost({
+      id: "DealerList", cls: "jqx-combobox jqx-combobox-state-normal", widget: "jqxComboBox",
+      items: dealers, selected: null,
+    }),
+    new FakeHost({
+      id: "PaymentCategory", cls: "jqx-dropdownlist jqx-dropdownlist-state-normal",
+      widget: "jqxDropDownList", items: ["All", "Commission", "Residual"], selected: null,
+    }),
+    new FakeHost({
+      id: "SummarizeBy", cls: "jqx-combobox jqx-combobox-state-normal", widget: "jqxComboBox",
+      items: [], selected: null,                   // still filling in, as it was at 18:30
+    }),
+  ];
+  const r = run(hosts, ["Daily"]);
+
+  ok("I1 every control is described, not merged into one list",
+     Array.isArray(r.panel) && r.panel.length === 3, JSON.stringify(r.panel));
+  ok("I2 each control is named",
+     r.panel.map((e) => e.id).join(",") === "DealerList,PaymentCategory,SummarizeBy");
+  ok("I3 the huge control reports its REAL size", r.panel[0].options === 480);
+  ok("I4 …but contributes only a bounded sample", r.panel[0].sample.length === SAMPLE);
+  ok("I5 the small control's options are NOT crowded out",
+     r.offered.includes("All") && r.offered.includes("Commission"), JSON.stringify(r.offered));
+  ok("I6 so the whole list stays bounded by the controls, not by one of them",
+     r.offered.length <= 3 * SAMPLE, `offered=${r.offered.length}`);
+  ok("I7 the unfilled control is reported as present with no options",
+     r.panel[2].options === 0 && r.panel[2].sample.length === 0);
+  ok("I8 and the count still separates ready from empty",
+     r.pickers === 3 && r.ready === 2 && r.empty === 1, r.why);
+}
+{
+  // A sample size of zero would silently empty the report. It is read from the module, so this
+  // check is about the VALUE the module declares, not about this file's own copy.
+  ok("I9 the declared sample is a usable size", SAMPLE > 0 && SAMPLE <= 20, `SAMPLE=${SAMPLE}`);
+}
+{
+  // The value is still DRIVEN when a late control finally carries it - the per-control report
+  // must not have turned the scan into a read-only describer.
+  const hosts = [
+    new FakeHost({
+      id: "DealerList", cls: "jqx-combobox", widget: "jqxComboBox",
+      items: ["474517 - Passaic wireless 2022 LLC(230)"], selected: null,
+    }),
+    new FakeHost({
+      id: "SummarizeBy", cls: "jqx-combobox", widget: "jqxComboBox",
+      items: ["Daily", "Weekly", "Monthly"], selected: null,
+    }),
+  ];
+  const r = run(hosts, ["Daily"]);
+  ok("I10 the control is still SET, not merely described",
+     r.ok === true && hosts[1].selected === "Daily", JSON.stringify(r));
+  ok("I11 …and the panel report comes back alongside the hit", r.panel.length === 2);
 }
 
 console.log("");

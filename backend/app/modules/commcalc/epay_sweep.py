@@ -771,9 +771,9 @@ JQX_PICKER_SELECTORS = (
 JQX_PICKER_WIDGETS = ("jqxDropDownList", "jqxComboBox")
 
 _PICK_JQX_ITEM_JS = """
-([wants, selectors, widgets]) => {
+([wants, selectors, widgets, sample]) => {
   const $ = window.jQuery || window.$;
-  if (!$) return {ok:false, why:'no jQuery on the page', offered:[], candidates:0,
+  if (!$) return {ok:false, why:'no jQuery on the page', offered:[], panel:[], candidates:0,
                   pickers:0, ready:0, empty:0, hit:null};
   const norm = s => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
   const want = wants.map(norm).filter(w => w.length > 0);
@@ -781,7 +781,7 @@ _PICK_JQX_ITEM_JS = """
   document.querySelectorAll(selectors.join(',')).forEach(h => {
     if (hosts.indexOf(h) < 0) hosts.push(h);
   });
-  const offered = [];
+  const offered = [], panel = [];
   let hit = null, pickers = 0, ready = 0, empty = 0;
   hosts.forEach(host => {
     // Ask through each family's own API. A control that is not of this family throws, and that
@@ -797,11 +797,22 @@ _PICK_JQX_ITEM_JS = """
     // These panels build in stages - the account list arrives first and the filter controls fill
     // in after - so a scan that skips an empty control reports a control it is looking straight
     // at as missing. Counted separately, and the caller waits on it.
-    if (!items.length) { empty += 1; return; }
+    if (!items.length) {
+      empty += 1;
+      panel.push({id: host.id || null, widget: family, options: 0, sample: []});
+      return;
+    }
     ready += 1;
-    if (hit) return;
     const labels = items.map(i => (i && i.label != null) ? String(i.label) : '');
-    labels.forEach(l => { if (l && offered.indexOf(l) < 0) offered.push(l); });
+    // NO ONE CONTROL MAY DROWN THE REPORT (COMMCALC-62). One picker on this panel is the DEALER
+    // list and carries hundreds of accounts; merged into a single `offered` it filled the whole
+    // failure sentence and the recorder truncated everything after it, so the two other loaded
+    // controls were in the message and neither could be read. Each control reports its own SIZE
+    // and a bounded SAMPLE, and the sentence is built per control.
+    const few = labels.filter(l => l).slice(0, sample);
+    panel.push({id: host.id || null, widget: family, options: labels.length, sample: few});
+    few.forEach(l => { if (offered.indexOf(l) < 0) offered.push(l); });
+    if (hit) return;
     const m = labels.find(l => want.indexOf(norm(l)) >= 0);
     if (!m) return;
     try { $(host)[family]('selectItem', m); } catch (e) { return; }
@@ -822,7 +833,7 @@ _PICK_JQX_ITEM_JS = """
             (empty ? ' (and ' + empty + ' still empty)' : '');
     }
   }
-  return {ok: !!hit, hit, offered, candidates: hosts.length, pickers, ready, empty, why};
+  return {ok: !!hit, hit, offered, panel, candidates: hosts.length, pickers, ready, empty, why};
 }
 """
 
@@ -868,10 +879,24 @@ _SET_DATES_JS = """
 #: Bounded on purpose: waiting cannot turn a control that is absent into one that is present, so
 #: after this budget the scan reports what it saw, and says that it waited.
 PICKER_SETTLE_MS = 1500
-PICKER_LOOKS = 4
+
+#: THE WAIT FOLLOWS PROGRESS, NOT A GUESSED NUMBER (index §COMMCALC-62). Measured live at
+#: 2026-11-10 18:30: the panel carries THIRTEEN controls and TEN were still unfilled when the
+#: fixed 4-look budget expired — so the budget, not the portal, decided the answer. A control
+#: arriving is licence to keep looking; `PICKER_PATIENCE` consecutive looks with nothing new
+#: filled in means the panel has stopped, and waiting longer has become guessing.
+#: `PICKER_DEADLINE_MS` caps the whole wait however much progress there is, because a sweep that
+#: never returns is worse than one that reports what it saw.
+PICKER_PATIENCE = 2
+PICKER_DEADLINE_MS = 20_000
+
+#: How many of ONE control's options may reach the report. The panel's dealer list carries
+#: hundreds; merged into one list it filled the entire failure sentence and the other controls
+#: were truncated away (§COMMCALC-62). Each control reports its own size and this many labels.
+PICKER_SAMPLE = 8
 
 
-def pick_jqx_item(page, wants, *, looks=PICKER_LOOKS, settle_ms=PICKER_SETTLE_MS):
+def pick_jqx_item(page, wants, *, settle_ms=PICKER_SETTLE_MS):
     """THE ONE HOME for "drive this page's jqWidgets picker to one of these labels" (§COMMCALC-58).
 
     `wants` is every acceptable spelling of the one value we want. Matching is on MEANING — case,
@@ -906,17 +931,19 @@ def pick_jqx_item(page, wants, *, looks=PICKER_LOOKS, settle_ms=PICKER_SETTLE_MS
     2026-11-10, one of which had been widened and the other not, which is why one of them went
     blind when the portal re-skinned a control. Locked in `harness_empty_pull_verdict.py` §H.
     """
-    looks = max(1, int(looks))
-    out, n = None, 0
-    for attempt in range(looks):
-        n = attempt + 1
+    settle_ms = max(1, int(settle_ms))
+    out, n, waited, stalled, stopped = None, 0, 0, 0, None
+    seen = None                     # (candidates, ready, empty) at the previous look
+    while True:
+        n += 1
         try:
             raw = page.evaluate(_PICK_JQX_ITEM_JS,
                                 [list(wants), list(JQX_PICKER_SELECTORS),
-                                 list(JQX_PICKER_WIDGETS)])
+                                 list(JQX_PICKER_WIDGETS), int(PICKER_SAMPLE)])
         except Exception as e:
-            return {"ok": False, "selected": None, "widget": None, "offered": [],
+            return {"ok": False, "selected": None, "widget": None, "offered": [], "panel": [],
                     "candidates": 0, "pickers": 0, "ready": 0, "empty": 0, "looked": n,
+                    "waited_ms": waited,
                     "why": f"the page could not be asked ({type(e).__name__}: {e})"}
         raw = raw if isinstance(raw, dict) else {}
         hit = raw.get("hit") if isinstance(raw.get("hit"), dict) else {}
@@ -924,25 +951,74 @@ def pick_jqx_item(page, wants, *, looks=PICKER_LOOKS, settle_ms=PICKER_SETTLE_MS
                "selected": (hit or {}).get("selected"),
                "widget": (hit or {}).get("widget"),
                "offered": list(raw.get("offered") or []),
+               "panel": [dict(e) for e in (raw.get("panel") or []) if isinstance(e, dict)],
                "candidates": int(raw.get("candidates") or 0),
                "pickers": int(raw.get("pickers") or 0),
                "ready": int(raw.get("ready") or 0),
                "empty": int(raw.get("empty") or 0),
                "looked": n,
+               "waited_ms": waited,
                "why": raw.get("why")}
         if out["ok"]:
             break
         # Another look only helps while the panel might still be BUILDING: nothing matched the
         # selectors yet, or something did and has not filled in. A picker that is ready and does
         # not offer the value will not start offering it, so do not spend the budget on it.
-        still_building = out["candidates"] == 0 or out["empty"] > 0
-        if not still_building or attempt == looks - 1:
+        if not (out["candidates"] == 0 or out["empty"] > 0):
+            break
+        # PROGRESS IS THE LICENCE TO WAIT (§COMMCALC-62). A control appearing, or one filling in,
+        # says the page is still working. Nothing new for PICKER_PATIENCE looks says it has
+        # stopped, and that is its own fact — the controls are there and the page gave up on them.
+        now = (out["candidates"], out["ready"], out["empty"])
+        stalled = 0 if (seen is None or now != seen) else stalled + 1
+        seen = now
+        if stalled >= max(1, int(PICKER_PATIENCE)):
+            stopped = out["empty"]
+            break
+        if waited + settle_ms > max(1, int(PICKER_DEADLINE_MS)):
             break
         page.wait_for_timeout(settle_ms)
+        waited += settle_ms
+        out["waited_ms"] = waited
     if out and not out["ok"] and n > 1:
-        out["why"] = f"{out['why']} (looked {n} times over "
-        out["why"] += f"{(n - 1) * settle_ms / 1000:g}s while the panel settled)"
+        out["why"] = (f"{out['why']} (looked {n} times over {waited / 1000:g}s "
+                      f"while the panel settled)")
+        if stopped:
+            out["why"] += (f"; the panel stopped filling with {stopped} control(s) "
+                           f"still empty")
     return out
+
+
+def describe_panel(scan):
+    """THE PANEL, CONTROL BY CONTROL — the sentence an operator reads on a failure.
+
+    One home, because the same description belongs on every picker failure and a second copy would
+    drift from this one. Each control gets its own clause: what it is, how many options it really
+    carries, and up to `PICKER_SAMPLE` of them.
+
+    This replaced one merged list of every label on the panel (§COMMCALC-62). The portal's dealer
+    selector carries hundreds of accounts, so merged it WAS the whole sentence: the recorder
+    truncated at 600 characters and the two other loaded controls — one of which is what we are
+    hunting for — were in the message and could not be read. A report the biggest control wins is
+    a report that hides the panel.
+    """
+    entries = scan.get("panel") if isinstance(scan, dict) else None
+    if not entries:
+        # No per-control report (an older scan, or a page that answered nothing): fall back to the
+        # flat list, which is already bounded to a sample per control.
+        flat = ", ".join((scan or {}).get("offered") or []) if isinstance(scan, dict) else ""
+        return f"the panel's pickers offer: {flat or 'nothing'}"
+    parts = []
+    for e in entries:
+        name = e.get("id") or e.get("widget") or "an unnamed control"
+        n = int(e.get("options") or 0)
+        if not n:
+            parts.append(f"{name}: empty")
+            continue
+        few = [str(x) for x in (e.get("sample") or [])]
+        more = f", +{n - len(few)} more" if n > len(few) else ""
+        parts.append(f"{name}: {n} option(s) — {', '.join(few)}{more}")
+    return "the panel's controls are " + "; ".join(parts)
 
 
 def _same_label(a, b):
@@ -1003,10 +1079,9 @@ def _set_daily_range(page, begin_iso, end_iso):
     #     control all along, under a skin the scan did not know. A failure that lists the real
     #     options answers that question without him.
     if not iv.get("ok") or selected is None:
-        offered = ", ".join(iv["offered"]) if iv.get("offered") else "nothing"
         return False, (f"no 'Summarize by' picker offering {DAILY_INTERVAL} was found on the "
-                       f"report's filter panel ({iv.get('why') or 'no matching control'}; the "
-                       f"panel's pickers offer: {offered}); the report returns an empty workbook "
+                       f"report's filter panel ({iv.get('why') or 'no matching control'}; "
+                       f"{describe_panel(iv)}); the report returns an empty workbook "
                        f"without it"), False
     # (b) the thing we set says it is set to something else. The widget's own answer, so fatal.
     #     Compared on meaning, not spelling: the portal's own label is not ours to predict, and a
