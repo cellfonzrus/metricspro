@@ -55,7 +55,12 @@ def wired(monkeypatch, fake_supabase):
         {"id": "c2", "org_id": ORG_B, "name": "Carrier Two", "code": "total", "is_default": True}])
     fake_supabase.seed("commcalc.pos_profile", [])
     fake_supabase.seed("commcalc.ui_label_override", [])
-    fake_supabase.seed("commcalc.connector_registry", [])
+    # The registry AS PRODUCTION HAS IT (mig 1014 applied): seeded from its own house mirror, so
+    # `load_registry` reports ready. An EMPTY table is the unreadable case, and a registry that could
+    # not be read must withhold nothing — pinned separately below.
+    from app.modules.commcalc import connector_registry as _CR
+    fake_supabase.seed("commcalc.connector_registry",
+                       [{**r, "org_id": _CR.HOUSE_ORG, "is_active": True} for r in _CR.house_mirror()])
     fake_supabase.seed("commcalc.report_kind", [])
     fake_supabase.seed("storeops.billing_plan", [])
     fake_supabase.seed("storeops.tenant_modules", [])
@@ -234,3 +239,23 @@ def test_the_report_pull_map_is_connector_scoped_per_tenant(api_client, monkeypa
     assert vendor_key not in shown, f"the other carrier's connector leaked: {shown}"
     assert any(w.get("processor") == vendor_key for w in body.get("withheld") or []), \
         "a withheld row must be reported, never silently dropped"
+
+
+def test_a_registry_that_could_not_be_read_withholds_nothing(api_client, monkeypatch, wired):
+    """THE DEGRADE DIRECTION, pinned. `connector_registry.load_registry` reports ready=False when the
+    table is absent or unreadable and its own house mirror answered instead. A verdict derived from a
+    mirror is not a decision a super admin made, so it must never hide a tenant's own configuration —
+    the same direction the posture takes (an unknown posture resolves to `inherit`).
+
+    This is not a hypothetical: it is how the MA cost-mapping panel and the manual-upload catalog
+    broke when the gate first shipped, on a database where mig 1014 had not run.
+    """
+    monkeypatch.setattr("app.modules.commcalc.router.sb", lambda: wired, raising=False)
+    wired.seed("commcalc.connector_registry", [])          # nothing readable → the mirror answers
+
+    r = api_client.get(f"/api/v1/commcalc/report-pull-map?org_id={ORG_A}",
+                       headers={"Authorization": SUPER})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["withheld"] == [], "an unreadable registry said nothing; it must withhold nothing"
+    assert body["reports"], "and the tenant still sees its own configuration"

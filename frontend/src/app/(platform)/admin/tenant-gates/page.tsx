@@ -33,6 +33,8 @@ type Board = {
   org?: string; posture?: string; rows?: Row[]; summary?: Summary
 }
 
+const emsg = (e: unknown) => (e as Error)?.message || String(e)
+
 const KIND_LABEL: Record<string, string> = {
   module: 'Modules', connector: 'Connectors', report_kind: 'Report kinds',
 }
@@ -44,14 +46,20 @@ export default function TenantGatesPage() {
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const loadBoard = useCallback(async () => {
-    try { setBoard(await api('/api/v1/core/tenant-gates')) }
-    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  // Not `async`: a load that CAN setState synchronously is a cascading render, and the lint gate
+  // refuses it. The same .then/.catch shape lib/report-kinds.ts already uses for its fetch-once hook.
+  const loadBoard = useCallback(() => {
+    api('/api/v1/core/tenant-gates')
+      .then((b: Board) => setBoard(b))
+      .catch((e: unknown) => setMsg('❌ ' + emsg(e)))
   }, [])
-  const loadDetail = useCallback(async (o: string) => {
-    if (!o) { setDetail(null); return }
-    try { setDetail(await api(`/api/v1/core/tenant-gates?org=${encodeURIComponent(o)}`)) }
-    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  // No synchronous clear on an empty org, for the same reason: the render below asks whether the
+  // payload in hand is THIS company's (`detail.org === org`), so a stale grid is never shown.
+  const loadDetail = useCallback((o: string) => {
+    if (!o) return
+    api(`/api/v1/core/tenant-gates?org=${encodeURIComponent(o)}`)
+      .then((d: Board) => setDetail(d))
+      .catch((e: unknown) => setMsg('❌ ' + emsg(e)))
   }, [])
 
   useEffect(() => { loadBoard() }, [loadBoard])
@@ -63,7 +71,7 @@ export default function TenantGatesPage() {
       await api('/api/v1/core/tenant-gates/posture', { method: 'PUT', body: JSON.stringify({ org: o, posture }) })
       setMsg('✅ Saved')
       await loadBoard(); await loadDetail(org)
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+    } catch (e: unknown) { setMsg('❌ ' + emsg(e)) } finally { setBusy(false) }
   }
 
   async function setGrant(o: string, kind: string, key: string, grant: boolean | null) {
@@ -72,11 +80,12 @@ export default function TenantGatesPage() {
       await api('/api/v1/core/tenant-gates/grant', { method: 'PUT', body: JSON.stringify({ org: o, kind, key, grant }) })
       setMsg('✅ Saved')
       await loadDetail(o); await loadBoard()
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+    } catch (e: unknown) { setMsg('❌ ' + emsg(e)) } finally { setBusy(false) }
   }
 
-  const rows = detail?.rows || []
-  const posture = detail?.posture
+  const shown = detail && detail.org === org ? detail : null
+  const rows = shown?.rows || []
+  const posture = shown?.posture
 
   return (
     <div style={{ maxWidth: 1180 }}>
@@ -138,7 +147,7 @@ export default function TenantGatesPage() {
       </div>
 
       {/* ── one company's grid ───────────────────────────────────────────────────────────────── */}
-      {org && detail && (
+      {org && shown && (
         <div>
           <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 4px' }}>
             {(board?.tenants || []).find(t => t.org_id === org)?.name || org}
@@ -148,7 +157,7 @@ export default function TenantGatesPage() {
             This company is offered only what is granted below. Everything not granted is off, and every
             surface says so in those words rather than reporting that nothing was declared.
           </p>}
-          {(detail.kinds || []).map(kind => {
+          {(shown.kinds || []).map(kind => {
             const kr = rows.filter(r => r.kind === kind)
             if (!kr.length) return null
             return (

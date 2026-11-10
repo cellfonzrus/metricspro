@@ -308,19 +308,30 @@ def withheld_processors(client, org_id, rows):
     try:
         from app.modules.commcalc import connector_registry as _cr
         ctx = _cr.scope_context(client, org_id)
+        # A registry that could not be READ is not a registry that said no. `ready` is false when the
+        # table is absent or unreadable and the mirror answered instead, and a mirror-derived verdict
+        # must never hide a tenant's own configuration from it — the same degrade direction the
+        # posture takes (feature_gate: unknown resolves to `inherit`, never to a refusal).
+        if not ctx.get("ready"):
+            return set()
         return {s for s in slugs if not _cr.scope_for(ctx, s).get("applies", True)}
     except Exception:
         return set()
 
 
-def resolve_report_specs(client, org_id, processor="vidapay", only_enabled=True, scoped=True):
+def resolve_report_specs(client, org_id, processor="vidapay", only_enabled=True, *, scoped):
     """Effective specs for this org: the org's own override row for a report_key wins, else the house
     default row, else (table/seed absent) the Python DEFAULT_REPORT_SPECS. Filtered to the processor
     family, to the connectors the registry OFFERS THIS TENANT (`scoped`, owner 2026-11-10) and
     (optionally) enabled rows.
 
-    `scoped=False` is for a caller that must see the rows a tenant is NOT offered — the super-admin
-    gating dashboard, which exists to show exactly that. No ingest path passes it."""
+    `scoped` is REQUIRED, with no default, because the two questions this home answers are different
+    ones and a caller that has not asked must not be able to answer (CLAUDE.md: the vocabulary rule,
+    applied to a verdict). `scoped=True` asks "what may this tenant PULL" — the pull driver and the
+    admin surface. `scoped=False` asks "what is this report's SHAPE", which is the question a column
+    map or an upload catalog is asking, and it is also how the super-admin dashboard sees the rows a
+    tenant is NOT offered. Making it a keyword with no default means a new pull caller that forgets
+    the gate fails at import of its own test, never leaks quietly."""
     rows = []
     try:
         rows = (client.schema("commcalc").table("report_pull_map").select("*")

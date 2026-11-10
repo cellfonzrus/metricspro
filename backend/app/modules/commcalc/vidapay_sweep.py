@@ -3565,7 +3565,8 @@ def _pull_all_reports_on_page(page, client, org_id, source_id=None, carrier_id=N
     Returns a per-report summary dict."""
     from app.modules.commcalc import report_pull as rp
     from datetime import datetime as _dt, timedelta as _td
-    specs = rp.resolve_report_specs(client, org_id, processor="vidapay", only_enabled=True)
+    specs = rp.resolve_report_specs(client, org_id, processor="vidapay", only_enabled=True,
+                                    scoped=True)   # the PULL question: only what this tenant is offered
     end_dt = _dt.now()
     start_dt = end_dt - _td(days=31 * max(1, int(months_back or 1)))
     src = dict(source_row or {})

@@ -184,8 +184,40 @@ check("F1 the report-pull resolution asks the connector registry at its ONE home
       "scope_for(ctx, s)" in RP)
 check("F2 the vendor slug family is DEREFERENCED from the registry, not a literal pair in code",
       "def connector_family(" in RP and 'row.get("aliases")' in RP)
-check("F3 the resolution is scoped BY DEFAULT — a caller has to ask to see what is withheld",
-      "only_enabled=True, scoped=True" in RP)
+# `scoped` is a REQUIRED keyword, not a default, because this home answers two different questions:
+# "what may this tenant PULL" (the gate applies) and "what is this report's SHAPE" (a column map, an
+# upload catalog — the gate is not that question). A default would let a new pull caller inherit the
+# wrong one silently, which is the whole class §CORE-41 exists to close. So: the signature must carry
+# the bare `*, scoped` marker, and EVERY call site in the tree must name it.
+_rp_sig = re.search(r"def resolve_report_specs\(([^)]*)\)", RP).group(1)
+check("F3 `scoped` is a REQUIRED keyword — no default, so no caller can answer without asking",
+      "*, scoped" in _rp_sig and "scoped=True)" not in _rp_sig and "scoped=False)" not in _rp_sig)
+def _arglist(src, at):
+    """The text between the call's own parentheses, counted — `sb()` inside an argument list means a
+    lazy regex would stop at the wrong bracket and read every call as argument-free."""
+    depth, i = 0, at
+    while i < len(src):
+        if src[i] == "(":
+            depth += 1
+        elif src[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return src[at + 1:i]
+        i += 1
+    return ""
+
+
+_rp_calls = []
+for _f in ("router.py", "vidapay_sweep.py", "report_pull.py"):
+    _src = read("backend", "app", "modules", "commcalc", _f)
+    for _m in re.finditer(r"\brp\.resolve_report_specs(?=\()", _src):
+        _rp_calls.append((_f, _arglist(_src, _m.end())))
+check("F3b every caller NAMES the question it is asking (a bare call cannot reach this home)",
+      len(_rp_calls) >= 5 and all("scoped=" in _a for _f, _a in _rp_calls),
+      "an omitted `scoped` is a pull path that forgot the gate, or a shape read that gained it")
+check("F3c an unREADABLE registry withholds NOTHING (a mirror verdict never hides a tenant's config)",
+      'if not ctx.get("ready"):' in RP and re.search(
+          r'if not ctx\.get\("ready"\):\s*\n\s*return set\(\)', RP))
 check("F4 what was withheld is REPORTED, never dropped silently",
       '"withheld": withheld' in read("backend", "app", "modules", "commcalc", "router.py"))
 check("F5 the admin page prints the registry's own words for it",
@@ -196,7 +228,7 @@ ctl("F1 can go red", "def withheld_processors(" in RP)
 print("\nG. the dashboard decides nothing")
 check("G1 the page keeps no list of modules / connectors / report kinds",
       not re.search(r"(MODULE_CATALOG|HOUSE_CONNECTORS|HOUSE_KINDS)", PAGE) and
-      "rows = detail?.rows" in PAGE)
+      "rows = shown?.rows" in PAGE)
 check("G2 the page does not re-implement the truth table — it renders `allowed` and `basis`",
       "r.allowed" in PAGE and "r.basis" in PAGE and
       not re.search(r"by_rule\s*&&|grant\s*===\s*true\s*\?", PAGE))

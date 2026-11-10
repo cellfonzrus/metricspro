@@ -15,6 +15,10 @@ const th: React.CSSProperties = { textAlign: 'left', padding: '6px 8px', fontSiz
 const inp: React.CSSProperties = { width: '100%', padding: '5px 7px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)' }
 
 type MapRow = { src: string; col: string; type: string }
+/** One mapping the connector registry withholds from this company — the shape GET /report-pull-map
+ *  attaches as `withheld[]` (router._report_pull_map, from report_pull.withheld_processors). */
+type Withheld = { report_key: string; display_name?: string | null; processor?: string | null
+  connector?: string | null; why?: string | null; miss?: string | null }
 
 function toRows(column_map: any): MapRow[] {
   return Object.entries(column_map || {}).map(([src, v]: any) =>
@@ -37,7 +41,7 @@ export default function ReportMappingsPage() {
   // What the CONNECTOR REGISTRY withholds from this company, named rather than silently dropped
   // (owner 2026-11-10): an admin must be able to see that the platform holds rows it is not offering
   // here, and why. The verdict and the words are the backend's; this page only renders them.
-  const [withheld, setWithheld] = useState<any[]>([])
+  const [withheld, setWithheld] = useState<Withheld[]>([])
 
   async function load() {
     setMsg('')
@@ -207,7 +211,7 @@ export default function ReportMappingsPage() {
             what a company is offered under <b>Admin → Tenant Gates</b>.
           </p>
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }}>
-            {withheld.map((w: any) => (
+            {withheld.map((w: Withheld) => (
               <li key={w.report_key} style={{ marginBottom: 3 }}>
                 <b>{w.display_name || w.report_key}</b>
                 {w.connector ? <> — {w.connector}</> : null}

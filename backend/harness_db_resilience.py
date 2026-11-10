@@ -1579,7 +1579,24 @@ _all_routes = _flatten_routes(real_app.routes)
 # a boolean and market NAMES), and the market option list is additionally narrowed to the caller's
 # own `scope_keyset` — pinned by the cross-tenant and scope negatives in
 # backend/tests/integration/test_dlar_store_metrics_endpoint.py.
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1841"))
+# Re-pinned 1841 -> 1844 on 2026-11-10 (§CORE-41, the per-tenant feature gate). Verified the house
+# way, NOT by arithmetic: `git diff origin/main..HEAD -- backend/ | grep -E '^[+-].*@router\.'`
+# printed exactly FOUR added decorators and NONE removed — one of them the §COMMCALC-59 catalog route
+# the 1841 pin above already accounts for, and these THREE:
+#     + /core/tenant-gates          GET   (the super-admin board: every tenant and its gating
+#                                          posture, or one tenant's full grid of modules, connectors
+#                                          and report kinds with the basis for each verdict)
+#     + /core/tenant-gates/posture  PUT   (put ONE tenant on `inherit` or `gated`)
+#     + /core/tenant-gates/grant    PUT   (grant / gate off / CLEAR one thing for one tenant)
+# All three are behind THE one super-admin gate (`core.router._require_super_admin`, called as the
+# first statement of each) and take an EXPLICIT `org` that must match a registered `storeops.tenants`
+# row — never the middleware-rewritten `org_id`, because they are cross-tenant by design and a tenant
+# admin switching their active org must not reach another tenant's gates. The two writes touch
+# `storeops.tenants.feature_gate_posture` and `commcalc.ui_label_override` scope 'cap' only, so no
+# stored total, statement, GP, commission, payable or tax figure can move. Cross-tenant and
+# authority negatives: backend/tests/integration/test_tenant_gates_endpoint.py (23 cases, two
+# tenants with different declared carriers).
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1844"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",

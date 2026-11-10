@@ -42009,7 +42009,7 @@ def list_report_pull_map(processor: str = "", org_id: str = ORG_ID):
     proc = (processor or None)
     client = sb()
     try:
-        specs = rp.resolve_report_specs(client, org_id, processor=proc, only_enabled=False)
+        specs = rp.resolve_report_specs(client, org_id, processor=proc, only_enabled=False, scoped=True)
         ready = True
     except Exception:
         specs = [{**s, "org_id": org_id} for s in rp.default_specs(proc)]
@@ -42132,7 +42132,9 @@ def _ma_effective_spec(org_id, report_key):
     default, else the Python default). Returns the spec dict or None if the report_key is unknown."""
     from app.modules.commcalc import report_pull as rp
     try:
-        specs = rp.resolve_report_specs(sb(), org_id, processor=None, only_enabled=False)
+        # scoped=False: a column map is the report's SHAPE, not an offer. Whether the tenant may
+        # PULL it is the sweep driver's question and is asked there.
+        specs = rp.resolve_report_specs(sb(), org_id, processor=None, only_enabled=False, scoped=False)
     except Exception:
         specs = [{**s, "org_id": org_id} for s in rp.default_specs(None)]
     for s in specs:
@@ -42144,7 +42146,10 @@ def _ma_effective_spec(org_id, report_key):
 def _ma_all_specs(org_id):
     from app.modules.commcalc import report_pull as rp
     try:
-        return [dict(s) for s in rp.resolve_report_specs(sb(), org_id, processor=None, only_enabled=True)]
+        # scoped=False: this is the MANUAL upload catalog. The connector registry answers which
+        # AUTOMATED connector a tenant is offered; a hand-uploaded file is not that question.
+        return [dict(s) for s in rp.resolve_report_specs(sb(), org_id, processor=None,
+                                                         only_enabled=True, scoped=False)]
     except Exception:
         return [{**s, "org_id": org_id} for s in rp.default_specs(None)]
 
