@@ -205,6 +205,7 @@ Primary code homes:
 | COMMCALC-63 | **One frame's cost is a declared, measured budget** | "the browser imn browser is not smooth it still very laggy" — the third cause of the same complaint and the only one that is arithmetic rather than scheduling (§COMMCALC-27 input, §COMMCALC-28 poll cadence both still hold). The live view pays one round trip per frame and the frame was 1366x900 at JPEG quality 55 = 154 KB, ~90 KB gzipped, so at a 250ms round trip plus a 300ms gap it delivered 1.8 frames a second. Measured, not guessed: 1024x674 at quality 40 is 72 KB (~40 KB on the wire), 2.8x the frames for the same bandwidth, and the gap came down to 150ms with it. Shrinking the stream provably moves no click because `live_frame.frame_geometry` reads the frame's METADATA (§COMMCALC-47), never the image's pixel size. A measurement also DISPROVED the announced plan: gzip erases the base64 tax, so serving the JPEG as bytes is 99-103% of today's wire bytes — that code was reverted rather than shipped. Still owed: one long-lived connection instead of a round trip per frame. |
 | COMMCALC-64 | **A thing inside a thing is not a second control, and a generated id is not a name** | §COMMCALC-62's first tick (2026-11-10 19:30) named the panel's controls and the names were jqWidgets' own internal pieces with the hashes REPEATING (`listBoxContent…0206f1e1` beside `innerListBox…0206f1e1` beside `jqxWidget0206f1e1`) — one control counted three or four times through its own scaffolding, because those nested divs carry the same `jqx-*` classes and ARIA roles as their host. So the panel never had thirteen controls, and worse, an inner piece can never carry items, so `empty > 0` was permanently true and every tick burnt its whole `PICKER_DEADLINE_MS` budget waiting on scaffolding before reporting a stall. Only the OUTERMOST match is now a control, and each one is named by the caption printed beside it (new one homes `control_name` + `GENERATED_ID_RE`, new `labelOf` in the scan) rather than by a per-page-load id that is comparable across no ticks. The browser proof's fake DOM became a real tree, without which it could not express this defect at all. |
 | COMMCALC-65 | **A period is never emptied by a column the schema does not have yet** | The store-DLAR sweep was taught 20 columns the portal had been sending for weeks (§COMMCALC-60); the hand-applied migration that creates them had not run; PostgREST refused the whole insert — and the sweep deletes the period before it inserts, so November's 28 store rows were gone. Both halves already had an answer somewhere in this repo and neither was wired to this caller: `core.column_tolerant` had governed READS since 2026-09-22, and `safe_replace` was written in August 2026 for this exact delete-then-insert failure. A registry nobody reads is not a fix (§19.18), and the file that worked around the ordering privately for one column said so in its own docstring. |
+| COMMCALC-66 | **Which controls set a report's window is a property of that report's page** | §COMMCALC-64's first tick (2026-11-10 21:00) named the panel's controls by their printed captions — account selector, `Username`, `Retailer Account ID`, `Terminal ID`, `Date of most recent transaction to include (mandatory)` — and that is the DAILY TRANSACTION DETAIL panel, which has no "Summarize by" on it and never did. Three rounds of "the control is missing" were measurements of the wrong page; the owner's photograph is of the comp report, where it exists. Cause: both day-grain reports declared `filter: "daily_range"`, one word meaning both "covers a range of days" and "driven by Summarize by + Start/End Date", so comp's routine ran against a page that never carried its control — and both legs wrote one ledger key, so each condemned the other's honest zero. The routine is now DECLARED per report through the one homes `date_filter_of` / `resolve_date_filter`; silence resolves to undeclared, never to another report's page, and undeclared is not a licence to run unfiltered — the leg reports the panel's date field NAMES (never values) through `describe_date_controls` and runs nothing. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26356,6 +26357,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-63 | commcalc |
 | COMMCALC-64 | commcalc |
 | COMMCALC-65 | commcalc |
+| COMMCALC-66 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -46517,6 +46519,105 @@ half) · §19.18 (one fact, one home, dereferenced — the shape of this whole d
 sweep's status is not a record of what it did) · §COMMCALC-60 (the change that declared the columns)
 · §COMMCALC-49.10 (a plausible-looking zero is the class that hides) · §6l (`auto_calc`, which now
 fires on what `safe_replace` reports saved).
+
+
+
+## §COMMCALC-66. WHICH CONTROLS SET A REPORT'S WINDOW IS A PROPERTY OF THAT REPORT'S PAGE (measured 2026-11-10)
+
+### COMMCALC-66.1 HOW IT WAS FOUND
+
+§COMMCALC-64 deployed (`ebc1933`) and the first tick named the panel's controls by the captions
+printed beside them instead of by generated ids:
+
+    Login OK · Daily Transaction Detail [2026-11-10]: no 'Summarize by' picker offering Daily was
+    found on the report's filter panel … the panel's controls are … 644078 - PA Phone Traders
+    LLC(6507), +22 more; Username: empty; Date of most recent transaction to include (mandatory):
+    empty; Retailer Account ID: empty; Terminal ID: empty
+
+**That is the Daily Transaction Detail panel, and it has no "Summarize by" on it.** It never did.
+That report does not summarise; it takes a date. The owner's photograph of 2026-11-10 is of the
+**Comprehensive Compensation** report, where the control is exactly where he showed it.
+
+So three rounds of *"the 'Summarize by' control is missing"* — §COMMCALC-58, §COMMCALC-61,
+§COMMCALC-64 — were measurements of the **wrong page**. Every one of them improved the scan, and
+none of them could have found this, because the report naming the failure was never the report the
+sentence was about.
+
+### COMMCALC-66.2 THE DEFECT
+
+In `REPORTS`, **both** `comp_report` and `epay_daily_tx` declared `"filter": "daily_range"`. That
+one word carried two different meanings at once:
+
+* *this report covers a range of days* — true of both; and
+* *this report's window is set through Summarize by = Daily, then Start Date / End Date* — true of
+  the comp report only.
+
+`_open_and_download` dispatched on the first meaning and ran the second, so the comp report's
+routine was driven against a page that has never carried its control. Both legs also wrote the
+**same ledger key** (`DAILY_RANGE_CONTROL`), so a control proven unsettable on one page condemned
+the other page's honest zero as well — §19.41's rule running in a direction it was not meant to.
+
+### COMMCALC-66.3 THE RULE
+
+**A report's date filter is declared by that report, or it has none.** Silence resolves to
+*undeclared*, never to the house's first day-grain report. A default that is really one report's
+page is the same defect as a default that is really one tenant's vocabulary (owner directive
+2026-10-30), and it hides the same way: by producing a plausible-looking answer.
+
+**Undeclared is not a licence to run unfiltered.** A day-grain pull with no filter returns somebody
+else's window and is indistinguishable from a quiet day. The leg reports what the page HAS and runs
+nothing.
+
+### COMMCALC-66.4 WHAT CHANGED
+
+* **New one home** `date_filter_of(spec)` — *"how is this report's date window set"*, from the
+  report's own declaration. `DATE_FILTERS = (SUMMARIZE_BY_DAILY, DATE_FILTER_UNDECLARED)`; a name
+  nobody declared raises rather than falling through.
+* **New one home** `resolve_date_filter(target)` — which routine a RUN's target asks for.
+  `_expand_jobs` stamps the declaration onto the day-range target; `_open_and_download`
+  dereferences it and reaches `_set_daily_range` only under `SUMMARIZE_BY_DAILY`.
+* `comp_report` declares `SUMMARIZE_BY_DAILY` — its behaviour is unchanged.
+* `epay_daily_tx` declares `DATE_FILTER_UNDECLARED` and carries its own ledger key,
+  `UNDECLARED_DATE_CONTROL`, so the two legs' verdicts no longer condemn each other.
+* **New one home** `describe_date_controls(page)` — the verdict for an undeclared day-grain report:
+  the panel, control by control, through `describe_panel` (§COMMCALC-64, not a second scan), plus
+  the page's date field **names**. Names only — a value on these panels can be an account id.
+
+### COMMCALC-66.5 WHAT STAYED
+
+The comp report's routine, the progress-aware wait, the caption naming, and the honest zero. This
+change moves no money and touches no schema. What it changes is which page is asked for which
+control, and what the operator is told when the answer is "this page is not that page".
+
+### COMMCALC-66.6 TESTS AND THE LOCK
+
+* `backend/tests/unit/test_report_date_filter_is_declared_per_report.py` — **10 units, all RED
+  first**: comp declares its own routine; Daily Transaction Detail does not borrow it; every
+  day-grain report declares one; silence does not inherit; an undeclared name is refused; the
+  target carries the declaration; the dispatch dereferences it; the two legs' ledger keys differ;
+  the date fields are reported by name and never by value; and the verdict names the controls the
+  page actually has and does **not** mention "Summarize by".
+* `backend/harness_empty_pull_verdict.py` **H44–H51** (127 checks in the file). Fails the build if
+  either one home gains a second copy, if silence resolves to another report's routine, if a
+  day-grain report ships without a declaration, if an unknown routine stops being refused, if the
+  dispatch stops dereferencing the declaration, if an undeclared report could be run unfiltered, if
+  the two legs' ledger keys collide again, if a field's value could be reported, or if the verdict
+  grows its own second scan of the panel.
+
+### COMMCALC-66.7 WHAT THIS DOES NOT FIX
+
+Daily Transaction Detail still pulls **nothing**, and that is now stated accurately rather than
+blamed on a missing control. Declaring its routine needs one more measurement — the next tick names
+its date field, and `Date of most recent transaction to include (mandatory)` is the caption to look
+for. The **comp report's own panel has still never been measured**: its leg runs at 23:30, and every
+failing sentence read on 2026-11-10 was the half-hourly Daily Transaction Detail job. `comp_report`
+has never landed a row via the sweep (`commcalc.upload_log`, `filename = 'epay auto-sweep'` — only
+`mi_report`, 3×/day, 45,602 rows that day).
+
+Cross-references: §COMMCALC-64 (naming a control by its caption — the measurement that produced
+this) · §COMMCALC-62 (the per-control report) · §COMMCALC-61 · §COMMCALC-58 · §COMMCALC-56 (the
+honest-zero ladder) · §19.41 (a broken control invalidates a zero) · §19.18 (one fact, one home,
+dereferenced — never copied).
 
 ## §COMMCALC-60. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
 

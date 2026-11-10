@@ -68,6 +68,15 @@ def check(label, cond, detail=""):
         print(f"  FAIL  {label}" + (f"\n          {detail}" if detail else ""))
 
 
+def _raises(fn, *a, **kw):
+    """True when `fn` refuses rather than guesses."""
+    try:
+        fn(*a, **kw)
+    except Exception:
+        return True
+    return False
+
+
 def src(mod):
     return open(mod.__file__).read()
 
@@ -615,6 +624,48 @@ check("H42 the caption is read FROM THE PAGE, by all three of the ways a panel l
       and "previousElementSibling" in ES._PICK_JQX_ITEM_JS
       and "label: labelOf(host)" in ES._PICK_JQX_ITEM_JS,
       "only the browser can see what is printed beside a control")
+# ── COMMCALC-66 — WHICH CONTROLS SET A REPORT'S WINDOW IS THAT REPORT'S PAGE'S PROPERTY ─────────
+# Measured 2026-11-10 21:00, the first tick after COMMCALC-64 named controls by their captions:
+# the Daily Transaction Detail panel carries an account selector, Username, Retailer Account ID,
+# Terminal ID and "Date of most recent transaction to include (mandatory)" — and NO "Summarize by".
+# Both day-grain reports declared `filter: "daily_range"`, so comp's Summarize-by routine was being
+# driven against a page that has never had the control.
+check("H44 how a report's window is set has ONE home and is DECLARED per report",
+      EPAY.count("def date_filter_of(") == 1 and EPAY.count("def resolve_date_filter(") == 1
+      and ES.date_filter_of(ES.REPORTS["comp_report"]) == ES.SUMMARIZE_BY_DAILY
+      and ES.date_filter_of(ES.REPORTS["epay_daily_tx"]) != ES.SUMMARIZE_BY_DAILY,
+      "one word meaning 'day-grain' AND 'driven by Summarize by' is what crossed the two pages")
+check("H45 silence is never another report's routine",
+      ES.date_filter_of({}) == ES.DATE_FILTER_UNDECLARED
+      and ES.date_filter_of(None) == ES.DATE_FILTER_UNDECLARED,
+      "a default that is really one report's page is the per-tenant-vocabulary defect again")
+check("H46 every day-grain report declares one, and an undeclared routine is REFUSED",
+      all(ES.date_filter_of(sp) in ES.DATE_FILTERS
+          for sp in ES.REPORTS.values() if sp.get("grain") == "day")
+      and _raises(ES.date_filter_of, {"date_filter": "whatever_the_next_page_wants"}),
+      "a routine nobody wrote is not guessed at on a live portal")
+check("H47 the dispatch dereferences the declaration rather than the word 'daily'",
+      "resolve_date_filter(" in fexec(ES._open_and_download)
+      and "SUMMARIZE_BY_DAILY" in fexec(ES._open_and_download)
+      and "describe_date_controls(page)" in fexec(ES._open_and_download),
+      "this is the wiring; a registry nobody reads is not a fix (19.18)")
+check("H48 an undeclared report is not run unfiltered, and says so",
+      "was not run" in fexec(ES.describe_date_controls)
+      and "raise EpayPortalError" in fexec(ES._open_and_download),
+      "a day-grain pull with no filter lands somebody else's window and looks like a quiet day")
+check("H49 the two legs no longer share one ledger control key",
+      ES.REPORTS["epay_daily_tx"]["controls"] != ES.REPORTS["comp_report"]["controls"]
+      and ES.UNDECLARED_DATE_CONTROL != ES.DAILY_RANGE_CONTROL,
+      "one shared key let a control broken on one page condemn the other page's honest zero")
+check("H50 the page's date fields are reported by NAME and never by value",
+      "getAttribute('name')" in ES._DATE_FIELD_NAMES_JS
+      and ".value" not in ES._DATE_FIELD_NAMES_JS,
+      "a value on these panels can be an account id")
+check("H51 the captions in that verdict come from the ONE naming home, not a second scan",
+      "describe_panel(scan)" in fexec(ES.describe_date_controls)
+      and "pick_jqx_item(page" in fexec(ES.describe_date_controls),
+      "a second scan of the same panel is the duplicate the house forbids")
+
 check("H9 ok is never true without the widget's own answer (§COMMCALC-56 holds here too)",
       ES.pick_jqx_item(_FixedPage({"ok": True, "hit": {"id": "a", "selected": None}}),
                        ["x"])["ok"] is False)

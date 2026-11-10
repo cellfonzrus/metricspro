@@ -271,6 +271,52 @@ DEFAULT_REFRESH_DAYS = 1
 # day-grain leg's zero untrustworthy, whichever leg ran first (index §19.41).
 DAILY_RANGE_CONTROL = "the report's daily date filter"
 
+# The same, for a day-grain report whose OWN date filter has not been declared yet. A DISTINCT
+# ledger key on purpose: while both legs wrote `DAILY_RANGE_CONTROL`, a control broken on one
+# page condemned the other page's honest zero too (index §19.41 runs the other way as well).
+UNDECLARED_DATE_CONTROL = "this report's own date filter"
+
+# ── WHICH CONTROLS SET A REPORT'S WINDOW IS A PROPERTY OF THAT REPORT'S PAGE ────────────────────
+# ...not of the word "daily" (index §COMMCALC-66). Measured 2026-11-10 21:00, on the first tick
+# after §COMMCALC-64 made the sweep name a control by the caption printed beside it:
+#
+#     Daily Transaction Detail [2026-11-10]: no 'Summarize by' picker offering Daily was found …
+#     the panel's controls are … 644078 - PA Phone Traders LLC(6507), +22 more; Username: empty;
+#     Date of most recent transaction to include (mandatory): empty; Retailer Account ID: empty;
+#     Terminal ID: empty
+#
+# That is the DAILY TRANSACTION DETAIL panel and it has no "Summarize by" on it. It never did — it
+# does not summarise, it takes a date. Both `comp_report` and `epay_daily_tx` declared
+# `filter: "daily_range"`, and that one word drove the comp report's Summarize-by routine against a
+# page that has never carried the control, so three rounds of "the control is missing" were about
+# the wrong page.
+#: Comp's routine: Summarize by = Daily, then Start Date / End Date.
+SUMMARIZE_BY_DAILY = "summarize_by_daily"
+#: Measured but not yet declared. NOT another report's routine, and NOT an unfiltered run — an
+#: unfiltered day-grain pull lands somebody else's window and says nothing about it.
+DATE_FILTER_UNDECLARED = "undeclared"
+DATE_FILTERS = (SUMMARIZE_BY_DAILY, DATE_FILTER_UNDECLARED)
+
+
+def date_filter_of(spec):
+    """THE ONE HOME for "how is this report's date window set".
+
+    Declared per report in `REPORTS`. Silence resolves to `DATE_FILTER_UNDECLARED` and never to
+    the house's first day-grain report — a default that is really one report's page is the same
+    defect as a default that is really one tenant's vocabulary (owner directive 2026-10-30).
+    """
+    name = (spec or {}).get("date_filter") or DATE_FILTER_UNDECLARED
+    if name not in DATE_FILTERS:
+        raise EpayPortalError(
+            f"unknown date filter {name!r} — declare it in DATE_FILTERS and give it a routine "
+            f"rather than letting a report fall through to another report's controls")
+    return name
+
+
+def resolve_date_filter(target):
+    """THE ONE HOME for which routine a RUN's target asks for. Dereferenced by _open_and_download."""
+    return date_filter_of({"date_filter": (target or {}).get("date_filter")})
+
 # Partial-collapse guard: a REPLACE never overwrites a period that already holds >= REPLACE_MIN_ROWS
 # rows with a pull smaller than REPLACE_MIN_RETAIN of that count. A glitched/partial pull (e.g. the
 # portal returning a single stray row) is non-empty, so the empty-download guard misses it — this is
@@ -342,6 +388,8 @@ def _defer_empty(ledger, result, spec, target, evidence=None):
 #   grain         "month" (refetch N months, one run each) | "day" (refetch a date RANGE in ONE
 #                 run and store per day) | "none" (single default pull)
 #   filter        which portal control the sweep drives: "month" dropdown | "daily_range"
+#   date_filter   for a day-grain report, WHICH routine sets its window — one of
+#                 DATE_FILTERS, declared per report because the panels differ
 #                 (Summarize by = Daily + Start/End Date) | None
 #   ingest        optional hook (client, org_id, xlsx_path, source_batch) -> result dict, used
 #                 INSTEAD of _process_report/_store_day_grain to route the workbook through a
@@ -372,15 +420,21 @@ REPORTS = {
                     # `empty_ok` says a zero CAN be legitimate. It never says this zero IS — the
                     # verdict is settled by empty_pull_verdict against `controls` + the window.
                     "empty_ok": True, "controls": (DAILY_RANGE_CONTROL,),
+                    "date_filter": SUMMARIZE_BY_DAILY,
                     "period": "data", "label": "Comprehensive Comp",
                     "map": lambda recs, base: _map_filtered(recs, base, map_comp_report_row)},
     # Daily Transaction Detail (P1). report_id is RESOLVED at run time from the Commissions menu by
-    # label (or a report_definitions override) — see run_epay_sweep. Same day_range Start/End flow as
-    # comp, but stored via the `ingest` hook (epay_ingest) instead of the map/REPLACE path.
+    # label (or a report_definitions override) — see run_epay_sweep. Day-grain like comp, but its
+    # FILTER PANEL IS NOT comp's (see DATE_FILTERS), and it is stored via the `ingest` hook
+    # (epay_ingest) instead of the map/REPLACE path.
     "epay_daily_tx": {"report_id": None, "label_match": "daily transaction detail",
                       "table": "commcalc.raw_epay_daily_tx", "file_type": "epay_daily_tx",
                       "registry_key": "epay_daily_tx", "grain": "day", "filter": "daily_range",
-                      "empty_ok": True, "controls": (DAILY_RANGE_CONTROL,),
+                      "empty_ok": True, "controls": (UNDECLARED_DATE_CONTROL,),
+                      # Its panel has no "Summarize by" (measured 2026-11-10 21:00, see
+                      # DATE_FILTERS above). Until its own date control is declared this leg
+                      # reports the panel and runs nothing.
+                      "date_filter": DATE_FILTER_UNDECLARED,
                       "label": "Daily Transaction Detail",
                       "ingest": ingest_daily_tx},
 }
@@ -868,6 +922,22 @@ _PICK_JQX_ITEM_JS = """
 """
 
 
+#: WHAT THIS PAGE OFFERS TO SET A DATE WITH — field NAMES only, never their contents. A value on
+#: these panels can be an account id, and the question is what to drive, not what is in it.
+_DATE_FIELD_NAMES_JS = """
+() => {
+  const out = [];
+  document.querySelectorAll('[class*="jqx-datetimeinput"]').forEach(host => {
+    host.querySelectorAll('input[name]').forEach(i => {
+      const n = i.getAttribute('name');
+      if (n && out.indexOf(n) < 0) out.push(n);
+    });
+  });
+  return out;
+}
+"""
+
+
 #: The form field that CORROBORATES the "Summarize by" set, when the portal still renders it. A name
 #: this platform does not own, which is exactly why it is corroboration and not the verification
 #: (§COMMCALC-56). Read on its own, because a reading we rely on and a reading we merely consult
@@ -1178,13 +1248,40 @@ def _set_daily_range(page, begin_iso, end_iso):
                   f"zero-row result from this run will not be reported as 'nothing posted'"), False
 
 
+def describe_date_controls(page):
+    """THE ONE HOME for the verdict on a day-grain report whose date filter is not yet declared.
+
+    It says what the page HAS, so the next tick is the measurement that lets the control be
+    declared — and it says plainly that nothing was run, because a day-grain report run without its
+    filter returns somebody else's window and looks exactly like a quiet day.
+
+    The captions come from `pick_jqx_item` / `describe_panel` (§COMMCALC-64), not from a second
+    scan: one home for "what is this control called". The field names come from the page as names.
+    """
+    scan = pick_jqx_item(page, [])
+    try:
+        fields = page.evaluate(_DATE_FIELD_NAMES_JS)
+    except Exception:
+        fields = None
+    fields = [str(f) for f in (fields or []) if f]
+    return ("this report's date filter has not been declared, so it is driven through neither "
+            "another report's controls nor none at all, and the report was not run — "
+            + describe_panel(scan)
+            + ("; the page's date fields are " + ", ".join(fields) if fields
+               else "; the page carries no date field this sweep can name"))
+
+
 def _open_and_download(page, report_id, dest_path, target=None, ledger=None):
     """Open a Commissions report by its menu id, run it, and save the .xlsx.
 
     `target` (optional) describes which slice to fetch:
       {'kind': 'month', 'month_name', 'year'}       -> drive the Month dropdown (best-effort)
-      {'kind': 'day_range', 'begin', 'end'}          -> drive Summarize by = Daily + Start/End Date
-                                                        (VERIFIED; a failure raises)
+      {'kind': 'day_range', 'begin', 'end', 'date_filter'} -> drive THAT REPORT'S OWN date filter,
+                                                        named by its declaration (§COMMCALC-66):
+                                                        comp's Summarize by = Daily + Start/End
+                                                        Date (VERIFIED; a failure raises), or, for
+                                                        a report whose control is not declared yet,
+                                                        report the panel and run nothing
     When omitted the report runs on its own defaults."""
     page.hover("span.k-link:has-text('Commissions')", timeout=20000)
     page.wait_for_timeout(1500)
@@ -1192,6 +1289,13 @@ def _open_and_download(page, report_id, dest_path, target=None, ledger=None):
     page.click(f'[id="{report_id}"]')
     page.wait_for_timeout(5000)
     if target and target.get("kind") == "day_range":
+        # WHICH ROUTINE, FROM THE REPORT'S OWN DECLARATION (§COMMCALC-66). Never from the word
+        # "daily": the two day-grain reports do not share a filter panel.
+        if resolve_date_filter(target) != SUMMARIZE_BY_DAILY:
+            detail = describe_date_controls(page)
+            if ledger is not None:
+                ledger.control_failed(UNDECLARED_DATE_CONTROL, detail)
+            raise EpayPortalError(f"could not set {UNDECLARED_DATE_CONTROL} — {detail}")
         # FATAL on failure, deliberately: without the filter this report returns a header-only
         # workbook, which the caller would otherwise record as "nothing posted that day".
         ok, detail, confirmed = _set_daily_range(page, target["begin"], target["end"])
@@ -1748,6 +1852,7 @@ def _expand_jobs(keys, report_cfg=None, *, tz):
             # split and the empty-pull verdict still speak about the days we meant to pull.
             win = _feed_period.request_window(days[0], days[-1], rc.get("end_boundary"))
             jobs.append((k, {"kind": "day_range", "begin": win["begin"], "end": win["end"],
+                             "date_filter": date_filter_of(REPORTS.get(k)),
                              "covers_through": win["covers_through"],
                              "end_boundary": win["end_boundary"], "end_widened": win["widened"],
                              "days": days, "period": None}))
