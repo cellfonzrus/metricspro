@@ -137,7 +137,14 @@ def test_an_unapplied_column_is_unavailable_with_a_reason_never_a_zero(wired, ap
     by_key = {m["key"]: m for m in body["metrics"]}
     assert by_key["activations_total"]["available"] is True
     missing = by_key["total_trade_ins"]
-    assert missing["available"] is False and "1116" in missing["unavailable_reason"]
+    # The sentence names a migration, so it rides the §19.36 message key `reason` and
+    # SetupNoticeMiddleware may replace it with the neutral house sentence for a non-super-admin
+    # caller. What this endpoint owes either way is the FLAG and a sentence — never silence, and
+    # never a 0 — so that is what is asserted, not the wording.
+    assert missing["available"] is False
+    assert str(missing.get("reason") or "").strip()
+    assert "unavailable_reason" not in missing, \
+        "a setup internal under a key the tenant boundary does not read leaks it"
     # a pre-existing column is never reported unavailable — it cannot be, migration 002 made it
     assert by_key["atu"]["available"] is True
 

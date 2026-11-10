@@ -186,6 +186,17 @@ def by_key():
     return {m["key"]: m for m in catalog()}
 
 
+# WHY THE SENTENCE GOES UNDER `reason` AND NOT `unavailable_reason` (§19.36, caught by CI
+# 2026-11-10 on the first push of this change). It names a migration, which is a SETUP INTERNAL: a
+# tenant must see the one neutral house sentence and the platform super admin the detail. That
+# swap is `SetupNoticeMiddleware`'s job and the boundary reads ONLY the message-shaped keys in
+# `core.setup_notice.MESSAGE_KEYS` — `reason` is one of them, `unavailable_reason` is not. Under the
+# wrong key the internals would have gone straight to the customer, so the key IS the fix, not the
+# wording. `available` carries the machine-readable half, so a surface can still say "not stored yet"
+# without reading the sentence at all.
+UNAVAILABLE_REASON_KEY = "reason"
+
+
 def present_catalog(present_columns):
     """The catalog as it is TRUE OF THIS DATABASE: each entry stamped with whether the column exists
     yet. A figure whose migration has not been applied is reported as unavailable WITH its reason —
@@ -197,5 +208,6 @@ def present_catalog(present_columns):
     for m in catalog():
         avail = (not m["optional"]) or m["key"] in present
         out.append(dict(m, available=avail,
-                        unavailable_reason=None if avail else "column not yet applied (migration 1116)"))
+                        **{UNAVAILABLE_REASON_KEY:
+                           None if avail else "column not yet applied (migration 1116)"}))
     return tuple(out)

@@ -33,11 +33,14 @@ const KPIS = [
 // One entry of `GET /dlar-store-catalog`.metrics — the backend's own declaration, not a shape this
 // page invents. `scored` is the KPI metric_key when the column carries a scored KPI (so the target
 // and the pass/fail colouring apply), null otherwise. `available` is false when the column's
-// migration has not been applied yet, and `unavailable_reason` says so — a figure nobody has given
-// us is reported as unavailable, never as 0, which would read as "the store sold none".
+// migration has not been applied yet, and `reason` says so — a figure nobody has given us is
+// reported as unavailable, never as 0, which would read as "the store sold none". The sentence rides
+// the §19.36 key `reason` because it may name a setup internal: the API boundary gives a tenant the
+// one neutral house sentence there and the platform super admin the detail, so this page renders
+// whatever it is handed and never composes that wording itself.
 type StoreMetric = {
   key: string; label: string; group: string; kind: 'count' | 'rate'
-  scored: string | null; available: boolean; unavailable_reason: string | null
+  scored: string | null; available: boolean; reason: string | null
 }
 
 // One row of `GET /dlar-store/{period}`: store identity plus whatever figures the catalog says this
@@ -414,7 +417,7 @@ export default function KPIPage() {
           <p style={{ fontSize: 12, color: 'var(--text3)', margin: '8px 0 0' }}>
             {unavailable.length} further figure{unavailable.length === 1 ? '' : 's'} the carrier
             sends {unavailable.length === 1 ? 'is' : 'are'} not stored yet
-            ({unavailable.map(m => m.label).join(', ')}) — {unavailable[0].unavailable_reason}.
+            ({unavailable.map(m => m.label).join(', ')}){unavailable[0].reason ? ` — ${unavailable[0].reason}` : '.'}
           </p>
         )}
         </>

@@ -166,3 +166,20 @@ def test_no_carrier_tenant_or_product_name_in_the_module():
     # the module names the SOURCE's field spellings (what a feed mapping is) and no carrier brand
     for word in ("boost", "elevate", "cellfonz", "luxelink", "vzone", "t-mobile", "verizon"):
         assert not re.search(word, src, re.I), f"RULE TWO: {word!r} must not appear in code"
+
+
+# ── §19.36: A SETUP INTERNAL MUST LEAVE UNDER A KEY THE TENANT BOUNDARY READS ───────────────────
+
+def test_the_unavailable_sentence_leaves_under_a_key_the_boundary_reads():
+    """The sentence names migration 1116, which is a setup internal: a tenant gets the one neutral
+    house sentence and the platform super admin the detail, and `SetupNoticeMiddleware` performs that
+    swap ONLY on the message-shaped keys in `core.setup_notice.MESSAGE_KEYS`. Under any other key the
+    internals go straight to the customer. CI caught exactly this on the first push of this change,
+    so the key — not the wording — is pinned here."""
+    from app.core import setup_notice as sn
+    assert sn.is_message_key(cat.UNAVAILABLE_REASON_KEY)
+    entry = [m for m in cat.present_catalog(frozenset()) if m["optional"]][0]
+    assert entry["available"] is False
+    assert "1116" in entry[cat.UNAVAILABLE_REASON_KEY]
+    # the machine-readable half carries no prose, so a surface can say "not stored yet" without it
+    assert all("available" in m for m in cat.present_catalog(frozenset()))
