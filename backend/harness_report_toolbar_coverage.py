@@ -46,7 +46,7 @@ DRILL_LEDGER = "harness_drilldown_pending.txt"
 #: a report shipped without the toolbar, which is what this file exists to refuse.
 #: 2026-10-30: Zero Sales took the send count from 28 to 27 (the owner's reported instance).
 SEND_OWES_MAX = 27
-FILTER_OWES_MAX = 71
+FILTER_OWES_MAX = 70
 
 #: Routes whose answer lives in a shared component rather than in a `page.tsx`. Same overrides the
 #: drill-down gate names, for the same reason: a 20-line wrapper can never answer.

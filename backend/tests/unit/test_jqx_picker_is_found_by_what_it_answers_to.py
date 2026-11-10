@@ -1,4 +1,4 @@
-"""A CONTROL IS FOUND BY WHAT IT ANSWERS TO, NOT BY HOW IT LOOKS (index §COMMCALC-57).
+"""A CONTROL IS FOUND BY WHAT IT ANSWERS TO, NOT BY HOW IT LOOKS (index §COMMCALC-58).
 
 THE DEFECT, settled by a photograph on 2026-11-10. §COMMCALC-56 had just made the comp report's
 failure say which of three things went wrong, and it said this, on every run:

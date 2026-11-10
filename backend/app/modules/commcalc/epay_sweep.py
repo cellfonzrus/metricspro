@@ -676,7 +676,7 @@ def _set_report_month(page, month_name, year):
     yy = str(year)[-2:]
     variants = [label, f"{month_name}-{year}", f"{month_name} - {year}",
                 f"{month_name}- {yy}", f"{month_name}-{yy}", f"{month_name} {yy}", month_name]
-    # 0) THE ONE HOME for driving a jqWidgets picker (§COMMCALC-57). This had its own scan until
+    # 0) THE ONE HOME for driving a jqWidgets picker (§COMMCALC-58). This had its own scan until
     #    2026-11-10 — near-identical to the one in `_set_daily_range`, and the two drifted: this one
     #    had a click-the-control fallback behind it and that one did not, so when the portal
     #    re-skinned "Summarize by" only the comp leg went blind. Two scans answering one question is
@@ -743,7 +743,7 @@ def _set_report_month(page, month_name, year):
 # rather than by typing into a masked input (typing '04/15/2026' into a widget whose formatString is
 # 'M/d/yyyy' produced 12/15/2026 — the mask reinterpreted it).
 #
-# HOW A PICKER IS FOUND (§COMMCALC-57). Until 2026-11-10 this file scanned for exactly one
+# HOW A PICKER IS FOUND (§COMMCALC-58). Until 2026-11-10 this file scanned for exactly one
 # styling class, `.jqx-dropdownlist-state-normal`. The owner photographed the comp report's filter
 # panel on 2026-11-10: "Summarize by" was right there offering Daily / Weekly / Monthly, while every
 # run reported no such control — the portal had re-skinned that one control to the SEARCHABLE
@@ -845,7 +845,7 @@ _SET_DATES_JS = """
 
 
 def pick_jqx_item(page, wants):
-    """THE ONE HOME for "drive this page's jqWidgets picker to one of these labels" (§COMMCALC-57).
+    """THE ONE HOME for "drive this page's jqWidgets picker to one of these labels" (§COMMCALC-58).
 
     `wants` is every acceptable spelling of the one value we want. Matching is on MEANING — case,
     spacing and punctuation are stripped from both sides — because the portal writes "June- 26"
@@ -940,7 +940,7 @@ def _set_daily_range(page, begin_iso, end_iso):
     iv = pick_jqx_item(page, [DAILY_INTERVAL])
     selected = iv.get("selected")
 
-    # (a) nothing on the page offers the value. SAY WHAT THE PANEL DOES OFFER (§COMMCALC-57): on
+    # (a) nothing on the page offers the value. SAY WHAT THE PANEL DOES OFFER (§COMMCALC-58): on
     #     2026-11-10 this sentence sent the owner to photograph a panel that was carrying the
     #     control all along, under a skin the scan did not know. A failure that lists the real
     #     options answers that question without him.

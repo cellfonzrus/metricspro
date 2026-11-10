@@ -34,7 +34,7 @@ class FakePage:
     """The three evaluate() calls `_set_daily_range` makes, and nothing else.
 
     Distinguished by what the script mentions, because the driver passes the script source. Since
-    §COMMCALC-57 the picker scan is the SHARED one (`_PICK_JQX_ITEM_JS`), the corroborating form
+    §COMMCALC-58 the picker scan is the SHARED one (`_PICK_JQX_ITEM_JS`), the corroborating form
     field is read on its own, and the dates are last.
     """
 
@@ -157,7 +157,7 @@ def test_a_dead_page_is_reported_as_itself_never_as_a_quiet_day():
 
 def test_nothing_is_set_without_being_asked_for_daily():
     """The ORDER and the ASK, not the call shape: pick the control first, then read the field
-    beside it, then the dates. (Since §COMMCALC-57 the pick goes through the shared routine, so
+    beside it, then the dates. (Since §COMMCALC-58 the pick goes through the shared routine, so
     what is asserted is that Daily is what we asked for — not how the argument is packed.)"""
     p = FakePage(interval=_iv(selected="Daily"), field="Daily")
     es._set_daily_range(p, BEGIN, END)

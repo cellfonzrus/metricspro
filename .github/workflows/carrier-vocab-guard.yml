@@ -3502,7 +3502,7 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_empty_pull_verdict.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Run the jqx picker proof (the REAL page scan, read out of epay_sweep.py, against a panel shaped like the owner's 2026-11-10 photograph - a control is found by what it answers to, not by one styling class, and a selector shape the fake DOM has not been taught fails loudly here instead of silently matching nothing in production - index COMMCALC-57)
+      - name: Run the jqx picker proof (the REAL page scan, read out of epay_sweep.py, against a panel shaped like the owner's 2026-11-10 photograph - a control is found by what it answers to, not by one styling class, and a selector shape the fake DOM has not been taught fails loudly here instead of silently matching nothing in production - index COMMCALC-58)
         working-directory: backend
         shell: bash
         run: node prove_jqx_picker.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"

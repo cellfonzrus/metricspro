@@ -422,7 +422,7 @@ check("G19 neither the setter nor the rung knows which tenant it is acting for",
       and not re.search(r"\borg\w*", fexec(V.classify_empty_pull)))
 
 
-# ── §H — A CONTROL IS FOUND BY WHAT IT ANSWERS TO (index §COMMCALC-57) ───────────────────────────
+# ── §H — A CONTROL IS FOUND BY WHAT IT ANSWERS TO (index §COMMCALC-58) ───────────────────────────
 print("\n§H  a picker is found by what it answers to, not by how it looks — one home, both callers")
 
 # THE DEFECT, settled by a photograph on 2026-11-10. §COMMCALC-56's new wording said "no

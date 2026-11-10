@@ -1,5 +1,5 @@
 /**
- * THE REGRESSION, EXECUTED (index §COMMCALC-57).
+ * THE REGRESSION, EXECUTED (index §COMMCALC-58).
  *
  * On 2026-11-10 the owner photographed the comp report's filter panel. "Summarize by" was right
  * there, offering Daily / Weekly / Monthly, while every sweep run reported "no 'Summarize by'
