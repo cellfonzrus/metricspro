@@ -34,6 +34,12 @@ from app.modules.commcalc import auto_calc as _auto_calc   # the ONE post-landin
 # every failure a rejected credential, so a portal refusing us at the edge and a changed route both
 # sent the operator to re-type a password. The naming is dereferenced, not re-spelled.
 from app.modules.commcalc import login_outcome as _lo
+# THE DELETE HALF AND THE COLUMN HALF of the 2026-11-10 wipe, each dereferenced rather than
+# re-implemented here. `safe_replace` inserts BEFORE it retires the previous load (index §19.19,
+# built for this exact failure in August 2026 and never wired to this sweep); `column_tolerant`
+# answers which columns the table actually has, BEFORE anything is written (index §4b.1).
+from app.modules.commcalc.safe_replace import safe_replace as _safe_replace, ReplaceFailed as _ReplaceFailed
+from app.core import column_tolerant as _ct
 
 import requests
 
@@ -600,6 +606,13 @@ def status_verdict(res):
     res = res or {}
     if res.get("skipped_guard"):
         return "partial"
+    # A DECLARED COLUMN THE TABLE DOES NOT HAVE YET IS A PARTIAL RUN, NOT AN OK ONE (2026-11-10).
+    # The rows landed and the period moved, and a figure the portal IS sending reached no column —
+    # which is the same shape as `empty_columns` below and must colour the same way. Without this the
+    # schema being behind would read green, and the one thing that fixes it is a person applying a
+    # migration they were never told about.
+    if res.get("columns_not_yet_in_table") or res.get("replace_warnings"):
+        return "partial"
     for tbl in ("raw_dlar_store", "raw_dlar_rep"):
         if ((res.get("content") or {}).get(tbl) or {}).get("empty_columns"):
             return "partial"
@@ -673,6 +686,17 @@ def status_sentence(res):
         line += " · NOT REPLACED (partial-collapse guard, existing->pulled): " + ", ".join(skipped)
     if gone:
         line += " · ⚠ COLUMN STOPPED ARRIVING: " + ", ".join(gone)
+    # OUR SCHEMA IS BEHIND THE FEED — a different sentence from every other one here, because every
+    # other one is about the SOURCE and this one is about US. It names the table and the columns so
+    # the remedy (apply the migration) is obvious, and `_cap` keeps it a line a person reads.
+    behind = []
+    for _t, _cols in (res.get("columns_not_yet_in_table") or {}).items():
+        behind.append(f"{_t}: " + ", ".join(_cap(list(_cols or ()))))
+    if behind:
+        line += (" · ⚠ FIGURES ARRIVED THAT THIS DATABASE HAS NO COLUMN FOR (apply the pending "
+                 "migration; the rest of the row landed): " + " · ".join(behind))
+    for w in res.get("replace_warnings") or ():
+        line += f" · ⚠ {w}"
     if shape:
         line += " · ⚠ PORTAL FIELD CHANGED: " + ", ".join(_cap(shape))
     if unknown:
@@ -750,7 +774,7 @@ def run_dlar_sweep(client, org_id, user, pw, reports=None):
 
     # Wipe-and-insert the period (replaces the manual monthly upload), per table, but never let a
     # drastically-smaller pull REPLACE a populated table (partial-collapse guard).
-    skipped, written = [], {}
+    skipped, written, dropped_columns, replace_warnings = [], {}, {}, []
     for tbl, rows in (("raw_dlar_store", store_rows), ("raw_dlar_rep", rep_rows)):
         existing = _period_count(client, tbl, org_id, period)
         if existing >= REPLACE_MIN_ROWS and len(rows) < existing * REPLACE_MIN_RETAIN:
@@ -763,11 +787,39 @@ def run_dlar_sweep(client, org_id, user, pw, reports=None):
         rows_out = rows
         if as_of.get(tbl) and _as_of_column(client, tbl, org_id):
             rows_out = [{**r, "as_of_date": as_of[tbl]} for r in rows]
-        client.schema("commcalc").table(tbl).delete() \
-            .eq("org_id", org_id).eq("period", period).execute()
-        for i in range(0, len(rows_out), 500):
-            client.schema("commcalc").table(tbl).insert(rows_out[i:i + 500]).execute()
-        written[tbl] = len(rows_out)
+
+        # A DECLARED COLUMN THIS TABLE DOES NOT HAVE YET IS DROPPED AND NAMED, BEFORE ANYTHING IS
+        # WRITTEN (owner defect 2026-11-10). The sweep's field declaration grows the moment the
+        # portal starts sending a figure; the migration that creates the column is applied by hand
+        # and can land hours or days later. Sending the key anyway makes PostgREST refuse the WHOLE
+        # insert (PGRST204), which on 2026-11-10 — with the delete already committed — cost
+        # November's 28 store rows. Probing first costs one select per table per run and makes an
+        # unapplied migration a NAMED, partial landing instead of a month of nothing.
+        _scope = (lambda q, _o=org_id: q.eq("org_id", _o))
+        _table = (lambda _t=tbl: client.schema("commcalc").table(_t))
+        _declared = sorted({k for r in rows_out for k in (r or {})})
+        rows_out, _absent = _ct.drop_absent(
+            rows_out, _ct.writable_columns(_table, _scope, _declared))
+        if _absent:
+            dropped_columns[tbl] = _absent
+
+        # NO EXISTING ROW IS REMOVED UNTIL THE REPLACEMENT HAS LANDED (index §19.19). This sweep
+        # carried its own delete-then-insert for a year after `safe_replace` was written for exactly
+        # this failure — the registry existed and this caller was never wired to it, which §19.18
+        # names as not a fix at all. A failed insert is now a NO-OP: the period keeps the rows it
+        # had, and the run says so instead of leaving a month empty under a red status.
+        try:
+            _res = _safe_replace(
+                client, tbl, rows_out,
+                (lambda q, _o=org_id, _p=period: q.eq("org_id", _o).eq("period", _p)),
+                schema="commcalc", label=f"dlar_sweep {tbl} {period}")
+        except _ReplaceFailed as _rf:
+            raise DlarPortalError(
+                f"{tbl}: the replacement rows could not be written, so {period} was left as it was "
+                f"— {_rf}") from _rf
+        written[tbl] = _res["saved"]
+        if _res.get("warning"):
+            replace_warnings.append(f"{tbl}: {_res['warning']}")
 
     # DATA LANDED (index §6l) — the ONE post-landing hook, per grain that was actually WRITTEN (a grain the
     # partial-collapse guard refused changed nothing, so it queues nothing). Replaces the inline
@@ -798,4 +850,11 @@ def run_dlar_sweep(client, org_id, user, pw, reports=None):
             # kept for compatibility with the status line: these are the PULL counts it has always shown
             "stores": len(store_rows), "reps": len(rep_rows),
             "skipped_guard": skipped or None,
+            # WHICH DECLARED COLUMNS THE TABLE DID NOT HAVE, by table — the machine-readable half of
+            # "a figure arrived and our schema is behind". Absent when every declared column exists,
+            # so a reader cannot mistake "nothing dropped" for "not measured".
+            "columns_not_yet_in_table": dropped_columns or None,
+            # A replace that landed but could not retire the previous load leaves DUPLICATES, which
+            # is a different problem from a failure and must not read as one.
+            "replace_warnings": replace_warnings or None,
             "auto_calc": auto_calc or {"queued": False, "reason": "nothing_landed"}}

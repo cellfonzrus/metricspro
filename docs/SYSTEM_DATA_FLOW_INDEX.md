@@ -202,6 +202,9 @@ Primary code homes:
 | COMMCALC-60 | **A figure the feed sends that nothing reads is not a figure this platform has** | "Use those other 21 columns and make them a part of the kpi reporting also filtered by the kpi and out regular filters and send option". The sweep's own diagnostic had been naming 21 arriving-but-unread store columns every day for weeks, and one of them was the new spelling of a column that had been landing empty since the source renamed it. Reading one meant editing FOUR lists, and the last of them — a hand-typed array in the page — decided what a person could see, so a column could be declared, landed and invisible. |
 | COMMCALC-61 | **A control that is present but not filled in is not absent** | The first run on §COMMCALC-58's new wording (2026-11-10 16:30) reported that the panel had ONE picker, none offering Daily — and listed the dealer/account names. The filter controls had not populated yet, and the scan shipped that morning SKIPPED a picker whose `getItems` came back empty, so a control the page had already built was neither counted nor mentioned: present-but-not-ready was folded into absent. Absent, not-yet-ready and present-but-not-offering are three facts needing three opposite fixes; the scan now counts `candidates`/`pickers`/`ready`/`empty` and says which of the three it saw, and waits up to 4 looks × 1.5s while the panel is still building (never on a ready picker, never on a success), reporting how long it waited. The honest-zero ladder is untouched. |
 | COMMCALC-62 | **The wait follows progress, and no one control may drown the report** | §COMMCALC-61's first tick (2026-11-10 18:30) reported "3 picker(s) with options, none offering it (and 10 still empty) (looked 4 times over 4.5s)" — so the panel carries THIRTEEN controls, not the one reported at 16:30, and ten were still unfilled when the guessed 4-look budget expired: the budget decided the answer rather than measuring it. Worse, `offered` merged every label on the panel and one control is the ~480-account dealer selector, so it filled the sentence and the 600-char recorder elided the two other loaded controls — which is why the panel's real shape took three rounds to see. The wait now follows PROGRESS (`PICKER_PATIENCE` stalls, `PICKER_DEADLINE_MS` ceiling; `PICKER_LOOKS` deleted) and says when a panel stopped filling; each control reports its own identity, real size and a bounded sample through the new one home `describe_panel`. Honest zero untouched. |
+| COMMCALC-63 | **One frame's cost is a declared, measured budget** | "the browser imn browser is not smooth it still very laggy" — the third cause of the same complaint and the only one that is arithmetic rather than scheduling (§COMMCALC-27 input, §COMMCALC-28 poll cadence both still hold). The live view pays one round trip per frame and the frame was 1366x900 at JPEG quality 55 = 154 KB, ~90 KB gzipped, so at a 250ms round trip plus a 300ms gap it delivered 1.8 frames a second. Measured, not guessed: 1024x674 at quality 40 is 72 KB (~40 KB on the wire), 2.8x the frames for the same bandwidth, and the gap came down to 150ms with it. Shrinking the stream provably moves no click because `live_frame.frame_geometry` reads the frame's METADATA (§COMMCALC-47), never the image's pixel size. A measurement also DISPROVED the announced plan: gzip erases the base64 tax, so serving the JPEG as bytes is 99-103% of today's wire bytes — that code was reverted rather than shipped. Still owed: one long-lived connection instead of a round trip per frame. |
+| COMMCALC-64 | **A thing inside a thing is not a second control, and a generated id is not a name** | §COMMCALC-62's first tick (2026-11-10 19:30) named the panel's controls and the names were jqWidgets' own internal pieces with the hashes REPEATING (`listBoxContent…0206f1e1` beside `innerListBox…0206f1e1` beside `jqxWidget0206f1e1`) — one control counted three or four times through its own scaffolding, because those nested divs carry the same `jqx-*` classes and ARIA roles as their host. So the panel never had thirteen controls, and worse, an inner piece can never carry items, so `empty > 0` was permanently true and every tick burnt its whole `PICKER_DEADLINE_MS` budget waiting on scaffolding before reporting a stall. Only the OUTERMOST match is now a control, and each one is named by the caption printed beside it (new one homes `control_name` + `GENERATED_ID_RE`, new `labelOf` in the scan) rather than by a per-page-load id that is comparable across no ticks. The browser proof's fake DOM became a real tree, without which it could not express this defect at all. |
+| COMMCALC-65 | **A period is never emptied by a column the schema does not have yet** | The store-DLAR sweep was taught 20 columns the portal had been sending for weeks (§COMMCALC-60); the hand-applied migration that creates them had not run; PostgREST refused the whole insert — and the sweep deletes the period before it inserts, so November's 28 store rows were gone. Both halves already had an answer somewhere in this repo and neither was wired to this caller: `core.column_tolerant` had governed READS since 2026-09-22, and `safe_replace` was written in August 2026 for this exact delete-then-insert failure. A registry nobody reads is not a fix (§19.18), and the file that worked around the ordering privately for one column said so in its own docstring. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26351,6 +26354,9 @@ status word rather than a blank that reads as nil.
 | COMMCALC-60 | commcalc |
 | COMMCALC-61 | commcalc |
 | COMMCALC-62 | commcalc |
+| COMMCALC-63 | commcalc |
+| COMMCALC-64 | commcalc |
+| COMMCALC-65 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -44542,6 +44548,47 @@ every portal it owns.
   * `backend/tests/unit/test_signed_in_is_the_user_greeted.py` — 24 unit tests, including the two
     false positives the ranking fixes.
 
+### COMMCALC-55.10 ONE PORTAL, THREE REPORTS (owner, 2026-11-10)
+
+Owner, verbatim: *"owners pportal is working that is why Mi and atu sis uploading, please make sure
+this is updated in teh index that owners portal carries all three treports mi & atu, comprehensive
+and commision details"*.
+
+**THE CARRIER OWNERS PORTAL IS THE SINGLE SOURCE FOR ALL THREE CARRIER REPORTS.** One connector, one
+credential, one login — three reports behind it:
+
+| report key (`epay_sweep`) | the owner's name for it | lands in | config toggle |
+| --- | --- | --- | --- |
+| `mi` | **MI & ATU** | `commcalc.raw_mi` | `epay_sweep_config.sweep_mi` |
+| `comp_report` | **Comprehensive Compensation** | `commcalc.raw_comp_report` | `sweep_comp` |
+| `payment_detail` | **Commission Details** (the per-line payment detail) | `commcalc.raw_payment_detail` | `sweep_payment` |
+| `epay_daily_tx` | **Daily Transaction Detail** | `commcalc.raw_epay_daily_tx` | `sweep_daily_tx` |
+
+**FOUR keys, not three.** The owner named the three he works from; `REPORTS` in `epay_sweep.py` also
+carries `epay_daily_tx`, and naming it matters for reading the logs: the **half-hourly** failures that
+drove §COMMCALC-56/58/61/62 are all stamped `Daily Transaction Detail`, because that leg runs on the
+short slot while **comp runs at 23:30**. Both legs call the same `_set_daily_range`, which is why one
+filter defect silenced two reports — and why a fix is measurable within half an hour instead of
+overnight.
+
+Registry: `report_definitions.auto` per report overrides the config toggle (`router._registry_report_cfg`).
+Comp has its own **23:30 America/New_York** slot so it does not ride the 06:00 one (mig `290`).
+
+**WHY THIS BELONGS IN THE INDEX, and it is not bookkeeping.** It tells you what a failure on one of
+them does and does not prove:
+
+* **A LOGIN FAILURE IS SHARED.** It cannot be about one report, because there is one sign-in. If MI
+  landed, the credential worked at the time MI ran.
+* **BUT A LANDING IS EVIDENCE ABOUT ITS OWN MOMENT, NOT ABOUT NOW.** MI lands on the 06:00 slot
+  (≈11:05 UTC) and comp's own leg runs half-hourly. On 2026-11-10 the sign-in failed from 19:00 while
+  that day's MI landing (11:06 UTC, 45,602 rows) sat eight hours earlier in `upload_log`. "MI is
+  uploading, so the login works" was true of 11:06 and said nothing about 19:00 — and in this case
+  the login did recover on its own by 19:30. Read `epay_sweep_config.last_detail` for NOW; read
+  `upload_log` for what landed WHEN.
+* **A REPORT-SHAPED FAILURE IS NOT SHARED.** Comp has been empty since 2026-08-06 while MI lands
+  daily on the same credential, which is what localised §COMMCALC-56/58/61/62 to the comp report's
+  own filter panel rather than to the connector.
+
 ### COMMCALC-55.9 What this does NOT fix
 
 Migration 1114 is **surfaced for owner approval**, not applied. Until it runs, the fourth kind cannot
@@ -46138,6 +46185,340 @@ Cross-references: §COMMCALC-61 (counting the empty control, which produced this
 §COMMCALC-58 (the one home `pick_jqx_item`) · §COMMCALC-56 (verified from the control; the
 honest-zero ladder) · §19.18 (one fact, one home, dereferenced — never copied).
 
+
+
+## §COMMCALC-63. ONE FRAME'S COST IS A DECLARED, MEASURED BUDGET — the third cause of "the live view is laggy" (owner report 2026-11-10)
+
+Owner, verbatim, three weeks after the first two causes shipped: *"the browser imn browser is not
+smooth it still very laggy"*.
+
+### COMMCALC-63.1 WHY THIS IS A THIRD CAUSE AND NOT A RELAPSE
+
+The first two causes were about SCHEDULING and both still hold:
+
+- **§COMMCALC-27** — the operator's input was serviced behind a frame tick and charged for the
+  previous click's ~750ms verification. Fixed; `operator_input_pending` is still the one home.
+- **§COMMCALC-28** — the page polled frames on a fixed-rate `setInterval`, so polls overlapped
+  permanently. Fixed; `pollFrames` is still the one issuer and still times its gap from the moment a
+  response SETTLES.
+
+What was left is ARITHMETIC, and no amount of scheduling fixes it. The view pays **one HTTP round
+trip per frame**, and the frame it carried was 1366×900 at JPEG quality 55. Measured on a real
+Chromium screencast of a dense portal report page (a filter bar plus a 40×9 grid), median of the
+frames a scroll produces:
+
+| stream settings | JPEG | shipped (base64-in-JSON) | gzipped on the wire |
+|---|---|---|---|
+| quality 55 @ 1366×900 | 154 KB | 205 KB | ~90 KB |
+| quality 40 @ 1366×900 | 126 KB | — | — |
+| quality 55 @ 1100×724 | 96 KB | — | — |
+| **quality 40 @ 1024×674** | **72 KB** | 96 KB | **~40 KB** |
+| quality 30 @ 1024×674 | 61 KB | — | — |
+
+Delivered frames per second is `1000 / (gap + round trip)`. At a 250ms round trip the old 300ms gap
+gave **1.8 frames a second** at ~350 KB/s of sustained download. That is the lag the owner can see.
+
+> **THE CLASS, not the instance: a stream's picture size and quality are a BUDGET, and a budget is
+> declared, measured and locked — never a literal left at whatever the first implementation typed.**
+
+### COMMCALC-63.2 A MEASUREMENT THAT DISPROVED THE PLAN, recorded so nobody repeats it
+
+The first plan was to stop shipping the JPEG as base64 inside JSON and serve it as bytes, announced
+as a ~25% saving. **It was measured and it is not one.** `main.py` installs
+`GZipMiddleware(minimum_size=1024)`, and gzip erases the base64 tax almost exactly: a 73 KB frame
+gzips to **41 KB as raw bytes** and to **39 KB as base64-in-JSON** — binary is 99–103% of today's
+wire bytes. The already-written binary endpoint was **reverted rather than shipped**.
+
+A second assumption died the same way: gzip is not wasted CPU on a JPEG here. It takes that 73 KB
+frame to 41 KB for **2.2 ms** of CPU, so it stays on.
+
+### COMMCALC-63.3 WHAT CHANGED
+
+- `live_login._SCREENCAST_QUALITY` 55 → **40**, `_SCREENCAST_MAX_W` 1366 → **1024**,
+  `_SCREENCAST_MAX_H` 900 → **674**, with the measurement table above recorded at the declaration.
+  1024×674 at quality 40 is **2.8× the frames for the same bandwidth**.
+- `email-imports/page.tsx`: `LIVE_FRAME_GAP_MS` 300 → **150**, `LIVE_FRAME_NUDGE_MS` 120 → **90**.
+  Safe to shorten only because §COMMCALC-28's scheduler times the gap from the moment a response
+  settles, so a slow hop still stretches the cadence instead of stacking polls — and because the
+  frames are now under half the bytes, the shorter gap asks no more of the connection than the
+  longer one did. ~1.8 → ~2.5 delivered frames a second at the same round trip.
+
+### COMMCALC-63.4 THE ONE THING THIS MUST NOT DO — and why it cannot
+
+Shrinking the streamed picture must not move the operator's click. It cannot, and that is a design
+fact rather than luck: **`live_frame.frame_geometry` (§COMMCALC-47) derives the page's geometry from
+the frame's own METADATA** — `deviceWidth` / `deviceHeight` in DIP of the visible page, divided by
+`pageScaleFactor` — and the image's pixel size is not an input to the translation at all.
+`live_frame` carries no copy of the stream budget, so the two cannot drift.
+
+**THE TRAP, locked against:** `live_frame.FALLBACK_VIEWPORT` is the **context's** window
+(`vidapay_sweep._new_context`, 1366×900), used only when a frame carries no metadata. Aligning it
+with the new screencast cap would move every no-metadata click. The cap also keeps the context's
+aspect ratio (1024/674 = 1.519 vs 1366/900 = 1.518), so Chrome adds no letterbox strip.
+
+### COMMCALC-63.5 EVERY TENANT
+
+The budget is a POLICY — a rate and a size — not a tenant's vocabulary, so a house constant is the
+right home and the §COMMCALC-49.10 trap does not apply: nothing here names a tenant, a carrier or a
+portal, and every live login on every tenant gets the same stream.
+
+### COMMCALC-63.6 LOCKED
+
+`backend/harness_live_input_latency.py` **§L — 184 checks in the file now**, DB-free and
+browser-free, already wired into the `carrier-vocab-guard` workflow. §L fails the build if the
+quality or either cap leaves the measured budget in either direction (too expensive is the defect,
+too cheap is unreadable), if the cap stops matching the context's aspect ratio, if
+`FALLBACK_VIEWPORT` is aligned with the cap, if the screencast call stops dereferencing the
+constants, if a second copy of the budget appears in `live_frame`, if the page's gap leaves the
+budget the smaller frame paid for, or if either declaration stops recording that the numbers were
+measured. Armed negative controls assert the pre-change values go red.
+
+### COMMCALC-63.7 WHAT THIS DOES NOT FIX, stated plainly
+
+The view still pays **one round trip per frame**. The expensive half of the fix is not paying it at
+all — pushing frames down one long-lived connection with today's polling kept as an automatic
+fallback. That is not in this section, and the blocker is known and named:
+`main._proxy_browser_work` buffers whole responses (`r.content`) and would need
+`client.stream(...)` + a `StreamingResponse`.
+
+Also not measured from here: this container cannot reach `api.metricspro.tech` or
+`app.metricspro.tech`, so the arithmetic is certain but whether it is the WHOLE remaining lag is the
+owner's to report after the deploy.
+
+Cross-references: §COMMCALC-27 (the operator's input leads the tick) · §COMMCALC-28 (a poll's
+cadence is the gap between its RESPONSES) · §COMMCALC-31 (detection yields to the operator) ·
+§COMMCALC-47 (where a click on the streamed image lands — the geometry's one home) · §19.18 (one
+fact, one home, dereferenced — never copied).
+## §COMMCALC-64. A THING INSIDE A THING IS NOT A SECOND CONTROL — and a generated id is not a name (measured 2026-11-10)
+
+### COMMCALC-64.1 HOW IT WAS FOUND
+
+§COMMCALC-62 deployed and the 19:30 tick finally named the panel's controls, one by one:
+
+    the panel has 2 picker(s) with options, none offering it (and 11 still empty) … the panel's
+    controls are … listBoxContentjqxWidget0206f1e1: empty; innerListBoxjqxWidgetaa329b45: empty;
+    innerListBoxjqxWidget5ea7ca38: empty; innerListBoxjqxWidget0206f1e1: empty;
+    jqxWidget349f357e: empty; dropDownButtonContentjqxWidget349f357e: empty
+
+The names settled it in one reading. `innerListBox…`, `listBoxContent…` and `dropDownButtonContent…`
+are **jqWidgets' own internal pieces of a dropdown**, and the hashes **repeat**: `0206f1e1` appears
+twice, `349f357e` twice. We were counting one control several times, through its own scaffolding.
+
+### COMMCALC-64.2 THE TWO DEFECTS
+
+**(a) One control, counted many times.** `JQX_PICKER_SELECTORS` matches on class and ARIA role, and
+jqWidgets builds a dropdown out of nested divs that carry **the same `jqx-*` classes and roles as
+their host**. So each real control matched three or four times. Two consequences, and the second is
+the expensive one:
+
+* the panel never had thirteen controls — it has three or four; and
+* **an inner piece can never carry items**, so `empty > 0` was *permanently* true. Every tick spent
+  its entire `PICKER_DEADLINE_MS` budget waiting on scaffolding that was never going to fill, and
+  then reported a stall. The wait §COMMCALC-62 made progress-aware was being held open by the
+  very thing it was counting.
+
+**(b) A generated id is not a name.** jqWidgets mints `jqxWidget0206f1e1` **per page load**, so every
+name in that sentence was useless to the operator and **not comparable between ticks** — the one
+thing a per-control report exists to allow. What identifies a control to a person is the caption
+printed beside it on screen, and only the browser can see that.
+
+### COMMCALC-64.3 THE RULES
+
+**Only the outermost match is a control.** A matched element that is contained by another matched
+element is a part of that control, not a control.
+
+**What we call a control is read from the page, and never invented.** In order: the caption printed
+beside it, then its id *if the id is a real one*, then nothing — and nothing is reported as
+*"an unnamed jqxComboBox"*, never papered over with a generated id. A name that changes every page
+load is worse than no name, because it looks like information.
+
+### COMMCALC-64.4 WHAT CHANGED
+
+* `_PICK_JQX_ITEM_JS` collects every match into `matched`, then keeps
+  `matched.filter(h => !matched.some(o => o !== h && o.contains(h)))` — the outermost only. The
+  loop and every count (`candidates`, `pickers`, `ready`, `empty`) run on that filtered set.
+* New `labelOf(el)` in the scan reads the caption the three ways this panel writes one:
+  `aria-label`, then `label[for=…]`, then the nearest preceding sibling with text, walking up at
+  most three ancestors. Each `panel` entry gains `label`.
+* **New one home** `control_name(entry)` in `epay_sweep.py` — *"what do we call this control when we
+  tell someone about it"*. `describe_panel` dereferences it; nothing restates it.
+* **New one home** `GENERATED_ID_RE = re.compile(r"jqxWidget[0-9a-f]{6,}", re.I)` — the single
+  declaration of "this is a per-page-load id, not a name".
+
+### COMMCALC-64.5 WHAT STAYED
+
+The honest zero, and the progress-aware wait. This change does not make the wait longer or shorter;
+it stops the wait being held open by elements that could never satisfy it. A control that is
+genuinely still filling in is still waited on, and a `0` row pull is still refused as evidence under
+the §COMMCALC-56 ladder.
+
+### COMMCALC-64.6 TESTS AND THE LOCK
+
+* `backend/tests/unit/test_jqx_picker_is_found_by_what_it_answers_to.py` — **5 new units** (36 in
+  the file): the on-screen caption is what the operator is shown; a generated id is not a name; a
+  real id still is; `GENERATED_ID_RE` is declared; and scaffolding does not keep the wait alive.
+* `backend/prove_jqx_picker.mjs` **§J — 12 checks** (50 in the file), **and the fake DOM is now a
+  real TREE**: `contains`, `parentElement`, `previousElementSibling`, `textContent` and
+  `getAttribute`. That mattered more than the checks — the previous fake was a flat list, so it
+  *could not express this defect at all*, and the first run of §J passed against unfixed code until
+  the tree was built. The §J shape is the measured 19:30 panel: three real controls, each with the
+  inner pieces that carry its own classes and answer its own widget API with nothing in them, plus a
+  date control whose button scaffolding must not be counted either. **9 of the 12 are RED on the
+  unfixed scan** (verified by reverting the filter and the caption and re-running); the other 3
+  guard against future removal.
+* `backend/harness_empty_pull_verdict.py` **H37–H43** (119 checks in the file). Fails the build if
+  the outermost filter is removed, if `GENERATED_ID_RE` gains a second copy or stops matching the
+  real shape, if `control_name` gains a second home or `describe_panel` stops dereferencing it, if a
+  generated id can be reported as a name, if the caption stops being read from the page — **or if
+  the browser proof's fake page goes back to being a flat list**.
+
+### COMMCALC-64.7 WHAT THIS DOES NOT FIX
+
+Whether "Summarize by" is on that panel is **still not settled**, and this is the change that makes
+it answerable: the next tick names three or four real controls by their printed captions, with each
+one's option count. If "Summarize by" is named with options, the scan's matching is the remaining
+question; if it is named and empty past the deadline, the question is the portal's; if it is not
+named at all, it is genuinely not on the page the sweep is standing on.
+
+Cross-references: §COMMCALC-62 (the per-control report that produced this measurement; the
+progress-aware wait this unblocks) · §COMMCALC-61 (counting the empty control) · §COMMCALC-58 (the
+one home `pick_jqx_item`) · §COMMCALC-56 (verified from the control) · §19.18 (one fact, one home,
+dereferenced — never copied).
+
+
+## §COMMCALC-65. A PERIOD IS NEVER EMPTIED BY A COLUMN THE SCHEMA DOES NOT HAVE YET (regression 2026-11-10)
+
+### COMMCALC-65.1 WHAT ACTUALLY HAPPENED, with the clock
+
+§COMMCALC-60 declared the 20 store columns the carrier portal had been sending that nothing read.
+The migration that CREATES those columns (`1118`) is applied by hand, as every migration here is,
+and had not been applied when the code deployed.
+
+```
+2026-11-10 12:00:33 UTC  sweep succeeded — wrote November 2026's 28 raw_dlar_store rows
+2026-11-10 17:16    UTC  §COMMCALC-60 merged and deployed
+2026-11-10 18:30:44 UTC  sweep FAILED —
+                         PGRST204: Could not find the 'activations_total' column of
+                                   'raw_dlar_store' in the schema cache
+```
+
+The write was `delete(period)` then `insert(rows)`. The delete committed. The insert never landed.
+November's store grain went to **zero rows**, under a red status that named a column rather than the
+loss. The rep grain survived only because the store table is written first and the exception stopped
+the run before it reached the rep table — luck, not design.
+
+Recoverable, and recovered: the DLAR is month-to-date cumulative and re-pulled every tick, so the
+next successful sweep re-lands the month in full. The *defect* is not recoverable by waiting.
+
+### COMMCALC-65.2 THE CLASS, not the instance
+
+Two general facts were wrong, and **both already had an answer in this repository that this caller
+did not read** — which §19.18 names as not a fix at all:
+
+| the fact | the one home | written | wired to this sweep |
+|---|---|---|---|
+| which columns this table HAS | `app/core/column_tolerant.py` | 2026-09-22 (§4b.1) | **no** — reads only |
+| no row is removed until the replacement lands | `commcalc/safe_replace.py` | 2026-08-09 (§19.19) | **no** |
+
+`safe_replace` was written for this exact failure: the April 2026 comp upload mapped fine, the
+insert died on row 0, and the month was left with zero rows — *"every retry of a bad file destroyed
+the month again"*, in its own docstring. Fifteen months later a sibling of that path did the same
+thing to a different month because it had never been connected.
+
+The column rule was worse than unwired. `pos/commcalc_feed.py` carried a **private copy** of it —
+its own per-column probe over one hard-coded column name — and its docstring stated the trap
+verbatim: *"`_replace_period` deletes the period before it inserts, so the failure mode would be a
+WIPED period, not a no-op."* It guarded the symptom for the one column somebody had thought of and
+left the ordering alone.
+
+### COMMCALC-65.3 THE RULE NOW, both halves
+
+- **COLUMN.** `column_tolerant.writable_columns(table, scope, columns)` answers which of those
+  columns the table has, **before anything is written** — one `select("*")` when the scope has a row
+  (its keys ARE the columns, NULLs included), the per-column probe when it does not, the same two
+  strategies `read_row` already chose between. `drop_absent(rows, present)` strips what is missing
+  and **returns the names**. Never raises: an unreadable table has no columns, so a caller drops
+  everything and says so rather than destroying what is stored.
+- **DELETE.** The replace goes through `safe_replace`, which inserts first and retires the previous
+  load only once the whole replacement has landed. A failed insert of any kind — unknown column,
+  type mismatch, dropped connection — is a **no-op**.
+- **ORDER.** Probe, then write. A caller that probes after it has deleted has learned nothing in
+  time, and the lock asserts the two in that order in the source.
+
+Two things the rule deliberately does NOT do. A dropped key is **never written back as `NULL`**:
+NULL means "the source did not send this", and using it for "our schema is behind" would make an
+unapplied migration indistinguishable from a figure the portal never published — the
+§COMMCALC-49.10 class of plausible-looking answer. And a missing column never refuses the columns
+that DO exist, because refusing them all is how one unapplied migration hides every arriving figure.
+
+### COMMCALC-65.4 WHAT A PERSON IS TOLD
+
+A run that could not land a declared column is **`partial`, never `ok`** (`dlar_sweep.status_verdict`
+dereferences the same `columns_not_yet_in_table` evidence the status line reads), and the sentence
+names the remedy:
+
+> ⚠ FIGURES ARRIVED THAT THIS DATABASE HAS NO COLUMN FOR (apply the pending migration; the rest of
+> the row landed): raw_dlar_store: activations_total, byod_total, …
+
+`evidence.columns_not_yet_in_table` is the machine-readable half, absent when nothing was dropped so
+"nothing dropped" cannot read as "not measured". `evidence.replace_warnings` carries the different
+failure in which the new rows landed but the old ones could not be retired — duplicates, not loss,
+and it must not colour as loss.
+
+### COMMCALC-65.5 CALLERS FIXED, AND THE ONES NOT FIXED HERE
+
+**Fixed:** `commcalc/dlar_sweep.py` (the regression; both halves) and `pos/commcalc_feed.py`
+(`_replace_period` wired to `safe_replace`, and its private column probe deleted in favour of the
+one home). `commcalc/epay_sweep.py` and the upload path in `commcalc/router.py` were already on
+`safe_replace`.
+
+**NOT fixed here, stated rather than carried silently** — three feeds still replace a scope
+delete-first. Each is the same class; none is in the path of the 2026-11-10 regression, and changing
+four sweeps in the push that repairs a data-loss incident is how the next one happens:
+
+| file | the scope it empties first |
+|---|---|
+| `commcalc/vip_sweep.py` | invoice-id chunks, then inserts two tables |
+| `commcalc/b2b_sweep.py` | `(as_of_date, source)`, then inserts |
+| `commcalc/report_pull.py` | a date window, then inserts |
+
+§E7 of the lock **pins all three** and fails the build if one grows a `safe_replace` call without
+the lock being extended to prove the new path — a half-wired sibling is how §19.18 recurs.
+
+The ~90 other `delete()`-then-`insert()` sites in the tree are **excused by kind**: they replace a
+config row, a mapping, a layout or a derived set (`flags`, `discrepancy_results`, a tile layout),
+all of which are re-entered by hand in seconds or re-derived by a recalculation. The invariant this
+section is about protects data **nobody can retype**: a feed's own rows.
+
+### COMMCALC-65.6 EVERY TENANT (project rule 2026-10-30)
+
+Nothing here is per-tenant and nothing carries a tenant's words. The probe is scoped by `org_id`
+because an unscoped probe is still a read of another tenant's row existence, and the replace scope
+must carry `org_id` — `safe_replace` does not add tenancy for its caller. A tenant whose feed has
+never landed takes the per-column probe path and gets a real answer, rather than "this table has no
+columns", which would drop every figure for exactly the orgs a new feed is being switched on for.
+
+### COMMCALC-65.7 Locked
+
+`backend/harness_write_tolerant_period_replace.py` (40 checks, DB-free) and
+`backend/tests/unit/test_write_tolerant_columns.py` (11). The harness **reproduces the 18:30 wipe**
+and asserts the 28 rows survive it. It fails the build when: the sweep stops importing or calling
+either home; the period write block regains a `.delete()` or a direct `.insert(` (the shipped
+defect, kept as an armed negative control); the probe moves after the write; the evidence stops
+naming the dropped columns; a dropped column stops making the run `partial`; the POS feed's private
+probe or its hard-coded column list returns; or one of the three named siblings quietly changes.
+
+`backend/harness_fakedb.py` gained the refusal that makes all of this provable: **an insert naming a
+column the table does not have raises `PGRST204`**, the whole batch, as PostgREST does. It already
+modelled `42703` on a select. A defect a double cannot reproduce is one the next change restores.
+
+### COMMCALC-65.8 Cross-references
+
+§4b.1 (any-subset column reads — the read side of this rule) · §19.19 (`safe_replace`, the delete
+half) · §19.18 (one fact, one home, dereferenced — the shape of this whole defect) · §19.21 (a
+sweep's status is not a record of what it did) · §COMMCALC-60 (the change that declared the columns)
+· §COMMCALC-49.10 (a plausible-looking zero is the class that hides) · §6l (`auto_calc`, which now
+fires on what `safe_replace` reports saved).
 
 ## §COMMCALC-60. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
 

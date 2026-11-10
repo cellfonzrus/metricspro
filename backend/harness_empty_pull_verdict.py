@@ -576,6 +576,45 @@ check("H36 …and the control we are hunting is named even while it is empty",
       "SummarizeBy: empty" in ES.describe_panel({"panel": [
           {"id": "SummarizeBy", "widget": "jqxComboBox", "options": 0, "sample": []}]}))
 
+# ── COMMCALC-64 — A THING INSIDE A THING IS NOT A SECOND CONTROL ────────────────────────────────
+# Measured 2026-11-10 19:30 on COMMCALC-62's code. The per-control report finally named them, and
+# the names were jqWidgets' own internal pieces with the hashes REPEATING — `listBoxContent…0206f1e1`
+# beside `innerListBox…0206f1e1` beside `jqxWidget0206f1e1`. One control counted three times through
+# its own scaffolding. Two consequences: the panel never had thirteen controls, and an inner piece
+# can never carry items, so `empty > 0` was permanently true and every tick burnt its whole wait
+# budget on scaffolding before reporting a stall.
+check("H37 only the OUTERMOST match is a control",
+      "const hosts = matched.filter(" in ES._PICK_JQX_ITEM_JS
+      and "o.contains(h)" in ES._PICK_JQX_ITEM_JS
+      and "hosts.forEach(" in ES._PICK_JQX_ITEM_JS,
+      "a dropdown's inner divs carry its own jqx-* classes, so they match the same selectors")
+check("H38 a per-page-load generated id is NOT a name, and that rule is declared once",
+      EPAY.count("GENERATED_ID_RE = ") == 1
+      and ES.GENERATED_ID_RE.search("innerListBoxjqxWidget0206f1e1")
+      and ES.GENERATED_ID_RE.search("jqxWidget349f357e")
+      and not ES.GENERATED_ID_RE.search("SummarizeBy"),
+      "a name that changes every page load tells the operator nothing and compares across no ticks")
+check("H39 what we call a control has ONE home, and the description dereferences it",
+      EPAY.count("def control_name(") == 1
+      and "control_name(e)" in fexec(ES.describe_panel)
+      and "GENERATED_ID_RE" in fexec(ES.control_name),
+      "a second naming rule is the divergence the house forbids")
+check("H40 the caption printed beside the control beats its id",
+      ES.control_name({"label": "Summarize by", "id": "jqxWidget0206f1e1",
+                       "widget": "jqxComboBox"}) == "Summarize by"
+      and ES.control_name({"label": "", "id": "SummarizeBy",
+                           "widget": "jqxComboBox"}) == "SummarizeBy")
+check("H41 a control with no real name is reported as unnamed, never as its generated id",
+      "jqxWidget" not in ES.control_name({"id": "jqxWidget0206f1e1", "widget": "jqxComboBox"})
+      and "unnamed" in ES.control_name({"id": "jqxWidget0206f1e1", "widget": "jqxComboBox"})
+      and "unnamed" in ES.control_name({}),
+      "papering a generated id over a missing label is how three rounds went to the wrong question")
+check("H42 the caption is read FROM THE PAGE, by all three of the ways a panel labels a control",
+      "aria-label" in ES._PICK_JQX_ITEM_JS
+      and "label[for=" in ES._PICK_JQX_ITEM_JS
+      and "previousElementSibling" in ES._PICK_JQX_ITEM_JS
+      and "label: labelOf(host)" in ES._PICK_JQX_ITEM_JS,
+      "only the browser can see what is printed beside a control")
 check("H9 ok is never true without the widget's own answer (§COMMCALC-56 holds here too)",
       ES.pick_jqx_item(_FixedPage({"ok": True, "hit": {"id": "a", "selected": None}}),
                        ["x"])["ok"] is False)
@@ -621,6 +660,11 @@ check("H18 …against the panel in the photograph (the searchable flavour)",
 check("H19 …and its fake DOM refuses a selector shape it has not been taught",
       "does not understand the selector" in _proof_src,
       "silently matching nothing is the failure being locked out")
+check("H43 the browser proof's fake page is a real TREE, not a flat list",
+      "contains(other)" in _proof_src and "previousElementSibling" in _proof_src
+      and "children" in _proof_src and "COMMCALC-64" in _proof_src,
+      "a fake with no nesting cannot express this defect, so a proof on it is not a proof")
+
 
 # EVERY TENANT (owner directive 2026-10-30).
 check("H20 the shared routine does not know which tenant it is acting for",

@@ -686,10 +686,17 @@ FACTS: dict[str, dict] = {
                     'viewport — it is an image that knows what it shows, so the geometry travels WITH '
                     'the frame and the click dereferences it. The arithmetic reduces exactly to the '
                     'old formula at scale 1 / offset 0 / device size = window, which is every portal '
-                    'that works today.',
+                    'that works today. '
+                    'AND, from 2026-11-10 (COMMCALC-63): this is WHY the streamed picture may be made '
+                    'smaller to fix the lag. The stream budget (quality and the pixel caps) lives with '
+                    'the stream in live_login, NEVER here, and the image\'s pixel size is not an input '
+                    'to the translation at all — so shrinking the stream moves no click. The TRAP is '
+                    'FALLBACK_VIEWPORT: it is the CONTEXT\'s window, used only when a frame carries no '
+                    'metadata, and aligning it with the screencast cap would move every no-metadata '
+                    'click.',
         "homes": ('app/modules/commcalc/live_frame.py',),
-        "index": ('COMMCALC-47',),
-        "locks": ('harness_live_frame.py',),
+        "index": ('COMMCALC-47', 'COMMCALC-63'),
+        "locks": ('harness_live_frame.py', 'harness_live_input_latency.py'),
         # SNAPSHOT — written BY HAND (§50). Both live screens (the portal login and supply's vendor
         # window) drive the SAME live_login session, so this one translation serves both and there was
         # no sibling to fix.
@@ -2927,8 +2934,11 @@ FACTS: dict[str, dict] = {
     'column_tolerance': {
         "question": 'Which column of this uploaded sheet holds the value I asked for?',
         "homes": ('app/core/column_tolerant.py',),
-        "index": ('2',),
-        "locks": ('harness_any_columns_lock.py',),
+        # §COMMCALC-65 (2026-11-10) — the same home now answers the question on the WRITE side
+        # (`writable_columns` / `drop_absent`), after a write that assumed more than any read dared
+        # to emptied a month of carrier data.
+        "index": ('2', 'COMMCALC-65'),
+        "locks": ('harness_any_columns_lock.py', 'harness_write_tolerant_period_replace.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
             'app/modules/account/billpay_pl.py': ('_ct',),
@@ -2950,10 +2960,48 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/prospect_eval.py': ('_ct',),
             'app/modules/commcalc/setup_documents.py': ('read_row',),
             'app/modules/commcalc/whatif.py': ('_ct',),
+            # §COMMCALC-65. This module kept its OWN per-column probe over one hard-coded column
+            # name (`columns=("tax",)`) — the §19.18 copy of this home's own question — while its
+            # docstring described the wiped-period failure that copy did not prevent. It reads the
+            # home now, and about every key in the payload rather than one remembered column.
+            'app/modules/pos/commcalc_feed.py': ('_ct',),
             'app/modules/pos/customer_master.py': ('_ct',),
             'app/modules/pos/inventory_integrity_router.py': ('_ct',),
             'app/modules/pos/receipt_import.py': ('_ct',),
             'app/modules/supply/store.py': ('present_columns',),
+        },
+    },
+    # ── §COMMCALC-65 — when may an existing row be removed ──────────────────────────────────────
+    'scoped_row_replace': {
+        "question": 'May these stored rows be removed yet, and what happens to them if the '
+                    'replacement fails half-way?',
+        "homes": ('app/modules/commcalc/safe_replace.py',),
+        "index": ('19.19', 'COMMCALC-65'),
+        "locks": ('harness_comp_upload_safety.py', 'harness_ma_slice_replace.py',
+                  'harness_write_tolerant_period_replace.py'),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` strips every
+        # hand-written reason comment from the facts it rewrites).
+        #
+        # WHY IT EXISTS, twice. Written 2026-08-09 after the April comp upload mapped fine, died on
+        # row 0 and left `raw_comp_report` April 2026 with ZERO of its 10,431 rows — and every retry
+        # of the bad file destroyed the month again. The invariant is INSERT FIRST, retire the
+        # previous load only once the whole replacement has landed, so a failure is a no-op.
+        #
+        # WHY IT IS A FACT WITH A HOME AND NOT A HABIT. On 2026-11-10 `dlar_sweep` — a sibling of
+        # that same upload path, in the same module — destroyed November's store grain the same way,
+        # because it had never been wired to this home. Fifteen months, one registry, one unwired
+        # caller: §19.18 exactly. The lock now fails the build if either wired caller stops
+        # dereferencing it, and names the three feeds that still have not been wired so a
+        # half-fixed sibling cannot pass as a fixed one.
+        "callers": {
+            # the upload path this was written for
+            'app/modules/commcalc/router.py': ('ReplaceFailed', 'safe_replace'),
+            'app/modules/commcalc/epay_sweep.py': ('_safe_replace',),
+            # §COMMCALC-65 — wired 2026-11-10, after the wipe. It binds the EXCEPTION too, because a
+            # failed replace must be re-raised as the sweep's own error carrying "the period was
+            # left as it was" — a caller that only binds the function cannot say that.
+            'app/modules/commcalc/dlar_sweep.py': ('_ReplaceFailed', '_safe_replace'),
+            'app/modules/pos/commcalc_feed.py': ('_safe_replace',),
         },
     },
     'multimonth_offer': {
@@ -3543,7 +3591,7 @@ FACTS: dict[str, dict] = {
                     'read THROUGH that session and sending the operator elsewhere meant closing it.',
         "homes": ('app/modules/commcalc/live_login.py',),
         "index": ('COMMCALC-13', 'COMMCALC-24', 'COMMCALC-27', 'COMMCALC-28', 'COMMCALC-30',
-                  'COMMCALC-31'),
+                  'COMMCALC-31', 'COMMCALC-63'),
         "locks": ('harness_terminal_status.py', 'harness_live_login_progress.py',
                   'harness_live_session_host.py', 'harness_live_input_latency.py'),
         # SNAPSHOT — written BY HAND, never blessed (§50). The lock verifies it against the real

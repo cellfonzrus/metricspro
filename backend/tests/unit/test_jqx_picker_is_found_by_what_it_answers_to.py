@@ -423,3 +423,67 @@ def test_the_failure_sentence_names_every_control_and_stays_readable():
     assert "480" in detail, "the dealer list's real size must be stated, not its contents"
     assert "empty" in detail, "the unfilled control must be marked as unfilled"
     assert len(detail) < 1200, f"the sentence is {len(detail)} chars - it will be truncated again"
+
+
+# ── a thing inside a thing is not a second control, and a generated id is not a name (§C-63) ─────
+#
+# Measured live at 2026-11-10 19:30, on the §COMMCALC-62 code — the first tick that named the
+# controls:
+#
+#     the panel has 2 picker(s) with options, none offering it (and 11 still empty) … (
+#     innerListBoxjqxWidgetaa329b45: empty; innerListBoxjqxWidget5ea7ca38: empty;
+#     listBoxContentjqxWidget0206f1e1: empty; jqxWidget349f357e: empty;
+#     dropDownButtonContentjqxWidget349f357e: empty)
+#
+# THOSE ARE NOT THIRTEEN CONTROLS. `innerListBox…`, `listBoxContent…` and `dropDownButtonContent…`
+# are jqWidgets' own internal scaffolding, and the hashes repeat: `jqxWidget0206f1e1` appears twice
+# and `jqxWidget349f357e` appears twice. Our selectors match a widget's host AND its inner list box
+# AND its button content, so ONE control was counted several times.
+#
+# Two consequences, both of which hid the panel further:
+#   * the inner parts can NEVER carry items, so `empty > 0` was permanently true — the wait ran its
+#     whole budget on every tick waiting for scaffolding, and always reported a stall; and
+#   * every "name" in that sentence is a jqWidgets-generated id. It tells the operator nothing, and
+#     it is not stable across page loads, so it cannot even be compared between ticks.
+
+
+def _entry(id=None, label=None, widget="jqxComboBox", options=0, sample=()):
+    return {"id": id, "label": label, "widget": widget, "options": options, "sample": list(sample)}
+
+
+def test_the_on_screen_label_is_what_the_operator_is_shown():
+    d = es.describe_panel({"panel": [_entry(id="jqxWidget349f357e", label="Summarize by")]})
+    assert "Summarize by" in d
+    assert "jqxWidget349f357e" not in d, "a generated id must not be shown when a real name exists"
+
+
+def test_a_GENERATED_id_is_not_a_name():
+    """It changes every page load, so it cannot identify a control even to its next tick."""
+    d = es.describe_panel({"panel": [_entry(id="innerListBoxjqxWidgetaa329b45")]})
+    assert "jqxWidgetaa329b45" not in d
+    assert "unnamed" in d.lower() or "jqxComboBox" in d
+
+
+def test_a_REAL_id_is_still_a_usable_name_when_there_is_no_label():
+    d = es.describe_panel({"panel": [_entry(id="SummarizeByList")]})
+    assert "SummarizeByList" in d
+
+
+def test_the_generated_id_pattern_is_declared_not_inlined():
+    assert es.GENERATED_ID_RE.search("innerListBoxjqxWidgetaa329b45")
+    assert es.GENERATED_ID_RE.search("jqxWidget0206f1e1")
+    assert not es.GENERATED_ID_RE.search("SummarizeBy")
+    assert not es.GENERATED_ID_RE.search("DealerList")
+
+
+def test_scaffolding_that_can_never_fill_does_not_keep_the_wait_alive():
+    """THE COST OF THE DEFECT. `innerListBox` can never carry items, so `empty > 0` never cleared
+    and every tick spent its whole budget before reporting. With nesting dropped at the source the
+    scan sees one control, and a ready panel that simply lacks the value is not waited on at all."""
+    page = _Stages(_with_panel([
+        {"id": None, "label": "Summarize by", "widget": "jqxComboBox", "options": 3,
+         "sample": ["Hourly", "Weekly", "Monthly"]},
+    ], why="the panel has 1 picker(s) with options, none offering it"))
+    r = es.pick_jqx_item(page, ["Daily"])
+    assert r["ok"] is False
+    assert page.asked == 1 and page.waited == [], "it waited on a panel with nothing left to fill"
