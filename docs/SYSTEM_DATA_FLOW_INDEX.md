@@ -206,6 +206,7 @@ Primary code homes:
 | COMMCALC-64 | **A thing inside a thing is not a second control, and a generated id is not a name** | §COMMCALC-62's first tick (2026-11-10 19:30) named the panel's controls and the names were jqWidgets' own internal pieces with the hashes REPEATING (`listBoxContent…0206f1e1` beside `innerListBox…0206f1e1` beside `jqxWidget0206f1e1`) — one control counted three or four times through its own scaffolding, because those nested divs carry the same `jqx-*` classes and ARIA roles as their host. So the panel never had thirteen controls, and worse, an inner piece can never carry items, so `empty > 0` was permanently true and every tick burnt its whole `PICKER_DEADLINE_MS` budget waiting on scaffolding before reporting a stall. Only the OUTERMOST match is now a control, and each one is named by the caption printed beside it (new one homes `control_name` + `GENERATED_ID_RE`, new `labelOf` in the scan) rather than by a per-page-load id that is comparable across no ticks. The browser proof's fake DOM became a real tree, without which it could not express this defect at all. |
 | COMMCALC-65 | **A period is never emptied by a column the schema does not have yet** | The store-DLAR sweep was taught 20 columns the portal had been sending for weeks (§COMMCALC-60); the hand-applied migration that creates them had not run; PostgREST refused the whole insert — and the sweep deletes the period before it inserts, so November's 28 store rows were gone. Both halves already had an answer somewhere in this repo and neither was wired to this caller: `core.column_tolerant` had governed READS since 2026-09-22, and `safe_replace` was written in August 2026 for this exact delete-then-insert failure. A registry nobody reads is not a fix (§19.18), and the file that worked around the ordering privately for one column said so in its own docstring. |
 | COMMCALC-66 | **Which controls set a report's window is a property of that report's page** | §COMMCALC-64's first tick (2026-11-10 21:00) named the panel's controls by their printed captions — account selector, `Username`, `Retailer Account ID`, `Terminal ID`, `Date of most recent transaction to include (mandatory)` — and that is the DAILY TRANSACTION DETAIL panel, which has no "Summarize by" on it and never did. Three rounds of "the control is missing" were measurements of the wrong page; the owner's photograph is of the comp report, where it exists. Cause: both day-grain reports declared `filter: "daily_range"`, one word meaning both "covers a range of days" and "driven by Summarize by + Start/End Date", so comp's routine ran against a page that never carried its control — and both legs wrote one ledger key, so each condemned the other's honest zero. The routine is now DECLARED per report through the one homes `date_filter_of` / `resolve_date_filter`; silence resolves to undeclared, never to another report's page, and undeclared is not a licence to run unfiltered — the leg reports the panel's date field NAMES (never values) through `describe_date_controls` and runs nothing. |
+| COMMCALC-67 | **The fields a report's date window is typed into are declared too** | §COMMCALC-66's first tick (2026-11-10 22:00) answered the question it was built to ask: "the page's date fields are StartDate, EndDate" — while this module's date step had always typed into `BeginDate`/`EndDate`, a name written into a string of browser JavaScript where no report could declare it. A report now declares both facts about its window in one row: whether an interval is set first (comp's "Summarize by") and which two fields carry the dates. `DATE_FILTERS` becomes that declaration, read through the one homes `date_window_plan` / `date_window_fields` / `date_window_interval`; `_set_daily_range` becomes the single `_set_date_window(page, begin, end, routine)` over the shared `_put_date_fields`, so a report with no interval goes straight to its fields and is never asked for a control it has not got; and no field name appears in the JavaScript at all. Comp's behaviour is unchanged — and because ITS page has still never been measured, correcting it when the 23:30 leg reports is a row here rather than an edit to a string. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26359,6 +26360,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-64 | commcalc |
 | COMMCALC-65 | commcalc |
 | COMMCALC-66 | commcalc |
+| COMMCALC-67 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -46620,6 +46622,91 @@ Cross-references: §COMMCALC-64 (naming a control by its caption — the measure
 this) · §COMMCALC-62 (the per-control report) · §COMMCALC-61 · §COMMCALC-58 · §COMMCALC-56 (the
 honest-zero ladder) · §19.41 (a broken control invalidates a zero) · §19.18 (one fact, one home,
 dereferenced — never copied).
+
+
+
+## §COMMCALC-67. THE FIELDS A REPORT'S DATE WINDOW IS TYPED INTO ARE DECLARED TOO (measured 2026-11-10)
+
+### COMMCALC-67.1 HOW IT WAS FOUND
+
+§COMMCALC-66 deployed (`b3ddab3`) and the first tick on its wording answered the question it was
+built to ask:
+
+    could not set this report's own date filter — this report's date filter has not been declared,
+    so it is driven through neither another report's controls nor none at all, and the report was
+    not run — the panel's controls are Run Report: empty; … Username: empty; Date of most recent
+    transaction to include (mandatory): empty; Retailer Account ID: empty; Terminal ID: empty;
+    **the page's date fields are StartDate, EndDate**
+
+So Daily Transaction Detail types its window into **`StartDate` / `EndDate`**, while this module's
+date step has always typed into **`BeginDate` / `EndDate`** — a name written into a string of
+browser JavaScript, where no report could declare it.
+
+### COMMCALC-67.2 THE RULE
+
+**A report declares two things about its window, and neither is a word in the code:** whether an
+interval must be set first (the comp report's "Summarize by"), and **which two fields carry the
+dates**. §COMMCALC-66 declared the first. This declares the second, in the same row.
+
+The consequence that matters more than the fix: **the comp report's own page has still never been
+measured.** It keeps `BeginDate`/`EndDate` because that is what it has always used. When its 23:30
+leg reports its panel, correcting that is a row in `DATE_FILTERS` — not an edit to a string of
+JavaScript, and not a second date step.
+
+### COMMCALC-67.3 WHAT CHANGED
+
+* `DATE_FILTERS` becomes the **declaration** rather than a list of names:
+  `SUMMARIZE_BY_DAILY → {interval: "Daily", fields: ("BeginDate", "EndDate")}`,
+  `START_END_DATES → {interval: None, fields: ("StartDate", "EndDate")}`,
+  `DATE_FILTER_UNDECLARED → None`.
+* **New one homes** `date_window_plan` / `date_window_fields` / `date_window_interval`. An
+  undeclared routine raises; nothing guesses a field name on a live portal.
+* `_set_daily_range` **becomes `_set_date_window(page, begin, end, routine)`** — one routine for
+  both reports, because two near-identical date steps is exactly how one page's controls came to be
+  driven against another's. A report with `interval: None` goes **straight to its fields and is
+  never asked for a control it has not got**.
+* **New one home** `_put_date_fields` — the date step itself, shared. `_SET_DATES_JS` now takes
+  `[beginIso, endIso, beginName, endName]`; **no field name appears in the JavaScript at all**.
+* A failure names the report's **own** fields: *"StartDate/EndDate did not take"*, not the
+  "Start/End Date" that an operator could not find on the page.
+* `epay_daily_tx` declares `START_END_DATES` and carries its own ledger key
+  `START_END_DATES_CONTROL`, so neither leg's failure condemns the other's honest zero.
+
+### COMMCALC-67.4 WHAT STAYED
+
+The comp report's behaviour, exactly: the same interval, the same two fields, the same corroborating
+`DateIntervalOption` read, the same fatal disagreement, and the same §COMMCALC-56 refusal to publish
+an unconfirmed zero as "nothing posted". Also unchanged: an undeclared report is still **not run**.
+
+### COMMCALC-67.5 TESTS AND THE LOCK
+
+* `backend/tests/unit/test_date_window_fields_are_declared.py` — **9 units, RED first**: every
+  routine names two distinct fields; comp keeps the fields it always used; Daily Transaction Detail
+  gets the ones its page actually has; only comp sets an interval; the names are passed into the
+  page rather than written into it; an undeclared routine refuses; there is one setter and both
+  reports go through it; a report with no interval never asks the page for one; and a field that did
+  not take is named back with the report's own name.
+* Fifteen existing units across `test_summarize_by_is_verified_from_the_widget.py` and
+  `test_jqx_picker_is_found_by_what_it_answers_to.py` moved onto the shared setter — updated to the
+  new contract, never loosened.
+* `backend/harness_empty_pull_verdict.py` **H52–H58** (134 checks in the file), plus the earlier
+  checks re-pointed at `_set_date_window` and one that fails the build if `_set_daily_range` comes
+  back. Fails the build if a routine stops naming its fields, if a field name reappears inside the
+  JavaScript, if a non-summarising report is asked for an interval, if the plan gains a second home
+  or stops refusing the undeclared, if a second date step appears, if a failure stops naming the
+  report's own fields, or if the two legs' ledger keys collide again.
+
+### COMMCALC-67.6 WHAT THIS DOES NOT FIX
+
+Whether `StartDate`/`EndDate` are jqWidgets date inputs that `_SET_DATES_JS` can actually drive is
+the next measurement — the names are known, the widget family is not, and the next tick says
+whether they took. And `comp_report` has still never landed a row via the sweep
+(`commcalc.upload_log`, `filename = 'epay auto-sweep'` — only `mi_report`, 3×/day, 45,602 rows on
+2026-11-10).
+
+Cross-references: §COMMCALC-66 (the per-report declaration this extends, and the verdict that
+produced this measurement) · §COMMCALC-64 (naming a control by its caption) · §COMMCALC-56 (verified
+from the control) · RULE TWO (config, never code) · §19.18 (one fact, one home, dereferenced).
 
 ## §COMMCALC-60. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
 
