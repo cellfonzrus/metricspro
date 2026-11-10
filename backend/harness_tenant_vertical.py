@@ -255,7 +255,15 @@ core_src = read("backend/app/modules/core/router.py")
 wiz_src = read("backend/app/modules/commcalc/router.py")
 WIRES = [
     ("entitlements.module_enabled asks the vertical", ent_src, r"def module_enabled[\s\S]{0,900}?module_applies_to_tenant"),
-    ("entitlements.effective_modules drops out-of-vertical", ent_src, r"def effective_modules[\s\S]{0,1400}?hidden_modules"),
+    # Layer 1 was split out of effective_modules on 2026-11-10 (§CORE-41) so the gating dashboard can
+    # show the rules' answer and a human's decision separately instead of re-deriving the first. The
+    # vertical drop lives in that layer now, so BOTH halves are pinned: the drop where it happens, and
+    # effective_modules dereferencing it. Pinning only the first would let the second stop asking.
+    ("entitlements.effective_modules_by_rule drops out-of-vertical", ent_src,
+     # 1550: the function itself is 1554 chars, so the window cannot reach into the next one.
+     r"def effective_modules_by_rule[\s\S]{0,1550}?hidden_modules"),
+    ("entitlements.effective_modules still goes through that layer", ent_src,
+     r"def effective_modules\(client[\s\S]{0,1600}?effective_modules_by_rule\(client, org_id\)"),
     ("/core/me carries tenant.vertical", core_src, r'tenant\["vertical"\] = _vert\.me_payload'),
     ("provisioning writes the vertical before sync_tenant", core_src, r"_set_tenant_vertical\(client, new_org, vertical\)[\s\S]{0,1500}?sync_tenant\(client, new_org\)"),
     ("the vertical write validates against the vocabulary", core_src, r"def _set_tenant_vertical[\s\S]{0,400}?valid_choice"),
@@ -346,8 +354,18 @@ check("H12 the default type can't be deactivated and a type in use can't be reti
       bool(_ep["update_vertical"]) and "cannot be deactivated" in _ep["update_vertical"].group(0)
       and "Companies still use this business type" in _ep["update_vertical"].group(0))
 _cc = read("backend/app/modules/commcalc/router.py")
+# The prefixes a tenant may NOT re-grant for itself got ONE home on 2026-11-10 (§CORE-41), because the
+# inline enumeration here had omitted `connector:` and would have omitted `module:` — a tenant admin
+# could have turned a gated module back on for its own org. So the rule is pinned where it now lives
+# (feature_gate.PLATFORM_WIDEN_PREFIXES, derived from the kind→prefix map so a new kind cannot be
+# forgotten), AND this writer is pinned to dereference it, AND `vertical:`/`closing:` — the two
+# prefixes THIS harness is about — are pinned to be in that list.
+_fg_src = read("backend/app/modules/core/feature_gate.py")
 check("H13 re-showing a business-type-hidden page / closing input is super-admin only (cap re-grant rule)",
-      "key.startswith('vertical:') or key.startswith('closing:')" in _cc)
+      "_feature_gate.widening_is_platform_only(scope, key, label)" in _cc
+      and 'not gc["super_admin"]' in _cc
+      and "def widening_is_platform_only(" in _fg_src
+      and re.search(r"PLATFORM_WIDEN_PREFIXES = [\s\S]{0,200}?\"vertical:\"[\s\S]{0,80}?\"closing:\"", _fg_src))
 _csf = read("frontend/src/components/ClosingSubmitForm.tsx")
 check("H14 the closing form applies the company's 'closing:<input>' cap overrides over the business type's list",
       "k.startsWith('closing:')" in _csf and "tenant?.vertical?.closing_hidden" in _csf)
