@@ -212,9 +212,27 @@ for _f in ("router.py", "vidapay_sweep.py", "report_pull.py"):
     _src = read("backend", "app", "modules", "commcalc", _f)
     for _m in re.finditer(r"\brp\.resolve_report_specs(?=\()", _src):
         _rp_calls.append((_f, _arglist(_src, _m.end())))
-check("F3b every caller NAMES the question it is asking (a bare call cannot reach this home)",
-      len(_rp_calls) >= 5 and all("scoped=" in _a for _f, _a in _rp_calls),
-      "an omitted `scoped` is a pull path that forgot the gate, or a shape read that gained it")
+# DECLARED, not counted: every call site in the tree and which of the two questions it asks. A size
+# bound would let a new caller hide behind the number; an equality makes a subject that arrives or
+# leaves name itself. True = "what may this tenant PULL" (the gate applies); False = "what is this
+# report's SHAPE" (a column map, an upload catalog — not an offer question).
+EXPECTED_RP_CALLS = {
+    ("router.py", True): 1,       # GET /commcalc/report-pull-map — the admin surface, the owner's screen
+    ("router.py", False): 3,      # the same endpoint's `withheld` re-resolve, _ma_effective_spec, _ma_all_specs
+    ("vidapay_sweep.py", True): 1,   # the pull driver itself
+}
+_rp_asked = {}
+for _f, _a in _rp_calls:
+    if "scoped=True" in _a:
+        _rp_asked[(_f, True)] = _rp_asked.get((_f, True), 0) + 1
+    elif "scoped=False" in _a:
+        _rp_asked[(_f, False)] = _rp_asked.get((_f, False), 0) + 1
+    else:
+        _rp_asked[(_f, None)] = _rp_asked.get((_f, None), 0) + 1
+check("F3b the call sites are EXACTLY the declared set, each naming the question it asks",
+      _rp_asked == EXPECTED_RP_CALLS,
+      f"got {sorted((f, q, n) for (f, q), n in _rp_asked.items())} — a `None` is a caller that "
+      "omitted `scoped`; a new entry is a caller that must be declared here with its question")
 check("F3c an unREADABLE registry withholds NOTHING (a mirror verdict never hides a tenant's config)",
       'if not ctx.get("ready"):' in RP and re.search(
           r'if not ctx\.get\("ready"\):\s*\n\s*return set\(\)', RP))
