@@ -115,3 +115,65 @@ def select_list(required, optional, present):
     optional column that `present_columns` found. Spells exactly what the widest block spelled when
     every column exists, in the same order, so the read is byte-identical there."""
     return ",".join(list(required) + [c for c in optional if c in present])
+
+
+# ── THE SAME RULE ON THE WRITE SIDE (owner defect 2026-11-10, index §4b.1) ──────────────────────
+# WHAT HAPPENED. Everything above makes a READ tolerant of a column a hand-applied migration has not
+# created yet. The WRITE side had no such rule, and on 2026-11-10 that cost a month of carrier data:
+# `dlar_sweep` was taught to land 20 newly-declared store columns, the migration that creates them
+# had not been applied, and the insert 400'd with
+#
+#     PGRST204: Could not find the 'activations_total' column of 'raw_dlar_store' in the schema cache
+#
+# The sweep deletes the period's rows and then inserts, so the delete committed, the insert never
+# landed, and November's 28 store rows were gone. (`safe_replace` is the fix for the DELETE half and
+# is dereferenced now; this is the fix for the COLUMN half — otherwise the writer merely fails
+# safely four times a day and still lands nothing until a human applies a migration.)
+#
+# WHY THIS IS THE SAME CLASS AND NOT A SECOND ONE. "Which columns does this table actually have"
+# already has one answer in this module, and a write that assumes MORE than a read dares to is the
+# §19.18 copy wearing a verb. A declared column the table lacks is DROPPED and REPORTED — never
+# guessed, never silently kept, and never allowed to refuse the columns that do exist, because
+# refusing them all is how one unapplied migration hides every arriving figure.
+#
+# ORDERING, stated because it is the whole point: PROBE, then write. A caller that probes after it
+# has already deleted has learned nothing in time.
+def writable_columns(table, scope, columns):
+    """WHICH OF `columns` THIS TABLE HAS, asked BEFORE a write. One `select("*")` when the scope has
+    a row (its keys ARE the table's columns, NULLs included), falling back to the per-column probe
+    when it does not — the same two strategies `read_row` chooses between, for the same reason.
+    NEVER raises: an unreadable table has no columns, so a caller drops everything and says so
+    rather than destroying what is already stored. `scope` is required and must carry the org."""
+    cols = tuple(columns or ())
+    try:
+        rows = (scope(table().select("*")).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    if rows:
+        have = frozenset(dict(rows[0] or {}).keys())
+        return frozenset(c for c in cols if c in have)
+    return present_columns(table, scope, cols)
+
+
+def drop_absent(rows, present):
+    """PURE. `(rows_without_absent_keys, absent_keys_in_first_seen_order)`.
+
+    Byte-identical when every key is present: the SAME row objects are handed back, not copies, so a
+    caller cannot tell this ran. That matters — this sits on the path of every feed write, and a
+    silent re-shaping of rows that needed no re-shaping is its own defect.
+
+    What is dropped is RETURNED, so the run's evidence can name the column and the migration a
+    person must apply. A dropped key is never replaced with None: NULL means "the source did not
+    send this", and writing it for "our schema is behind" would make an unapplied migration
+    indistinguishable from a figure the portal never published."""
+    rows = list(rows or ())
+    present = frozenset(present or ())
+    absent, seen = [], set()
+    for r in rows:
+        for k in (r or {}):
+            if k not in present and k not in seen:
+                seen.add(k)
+                absent.append(k)
+    if not absent:
+        return rows, []
+    return [{k: v for k, v in (r or {}).items() if k in present} for r in rows], absent
