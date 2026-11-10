@@ -469,8 +469,11 @@ export default function EmailImportsPage() {
     if (!srcDraft) return
     setSrcMsg('')
     try {
-      await api('/api/v1/commcalc/data-sources', { method: 'PUT', body: JSON.stringify(srcDraft) })
-      setSrcDraft(null); setSrcMsg('✅ Saved.')
+      // A setting whose migration has not been applied yet is reported by the save, not dropped in
+      // silence: showing '✅ Saved.' over a declaration that never landed is how a store code reads
+      // as one nobody typed in.
+      const sv = (await api('/api/v1/commcalc/data-sources', { method: 'PUT', body: JSON.stringify(srcDraft) })) as { note?: string } | null
+      setSrcDraft(null); setSrcMsg(sv?.note ? '⚠️ ' + sv.note : '✅ Saved.')
       const r: any = await api('/api/v1/commcalc/data-sources'); setSources(r.sources || [])
     } catch (e: any) { setSrcMsg('❌ ' + (e?.message || e)) }
   }

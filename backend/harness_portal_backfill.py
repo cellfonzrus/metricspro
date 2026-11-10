@@ -216,6 +216,20 @@ ok(_out2["delivered"] is False and "store" in (_out2.get("error") or "").lower()
    "a login with no store and no mapping refuses rather than landing homeless money")
 
 
+# ── F2. the SAVE survives a pending migration, and says what it could not store ─────────────────
+section("F2. a save is never refused whole because the schema is behind the code")
+_router_src = read("app/modules/commcalc/router.py")
+ok("write_shape" in _router_src and "_ws.missing_columns(" in _router_src,
+   "save_data_source DEREFERENCES the §PAYABLES-01 column arithmetic instead of copying it")
+ok(not re.search(r"def\s+(live_columns|missing_columns)\b", _router_src),
+   "no second copy of the live-column arithmetic in the router")
+ok('out["unstorable"] = unstorable' in _router_src,
+   "a declaration that could not be stored is NAMED back, never dropped in silence")
+for _f in ("store_code", "history_from", "history_chunk_days"):
+    ok('"%s"' % _f in _router_src, "the login form can save %s" % _f)
+
+
+
 # ── G. the controls: every lock above can go RED ─────────────────────────────────────────────────
 section("G. controls")
 ok(bool(re.search(r"\b45\b", "width = 45")),

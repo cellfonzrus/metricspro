@@ -44745,13 +44745,25 @@ cannot be picked and the columns do not exist, and every read of them is guarded
 
 ### COMMCALC-57.6 Locked
 
-`backend/harness_portal_backfill.py` (40 checks, DB-free, wired into `tests.yml` as *One home for the
+`backend/harness_portal_backfill.py` (46 checks, DB-free, wired into `tests.yml` as *One home for the
 span a pull owes*): the one home is the only module that plans a span or touches the backlog, the
 ceiling is dereferenced and no copy of its VALUE exists in that module, the loop asks it and records,
 the code's `on_conflict` EQUALS migration 1116's primary key, the registry wins over the login, the
 adapter names no vendor and defines no loop. Every check carries a control that must go red.
 Tests: `tests/unit/test_portal_backfill.py` (13), `tests/unit/test_processor_backoffice_sweep.py` (13),
 `tests/integration/test_processor_backoffice_pull.py` (5) — all RED before the code existed.
+
+**A SAVE IS NEVER REFUSED WHOLE BECAUSE THE SCHEMA IS BEHIND THE CODE (§COMMCALC-57.6a).** Found by
+asking what this PR does on a database where 1116 has not been applied yet: `_SOURCE_FIELDS` has
+grown with every additive migration since 083 and the settings form posts every field the build
+knows, so ONE absent column makes PostgREST refuse the entire row (PGRST204) — editing ANY portal
+login, for EVERY tenant, would break between the merge and the migration. `save_data_source` now
+DEREFERENCES `payables/write_shape.live_columns` / `missing_columns` (§PAYABLES-01 — the same "can
+this relation accept this row" arithmetic, no second copy), drops only the columns the relation does
+not have, and NAMES them back as `unstorable` + `note`, which the page shows as a ⚠️ instead of
+*Saved.* — a declaration that did not land must never read as one the operator never made.
+An empty relation answers "cannot be established", so with nothing to lose the save proceeds whole.
+Tests: `tests/unit/test_data_source_save_shape.py` (4). Locked by §F2 of the harness above.
 
 ### COMMCALC-57.7 What this does NOT do, stated plainly
 

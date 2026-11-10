@@ -41701,15 +41701,38 @@ def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization
             except _url_guard.UnsafeUrlError as e:
                 raise HTTPException(400, e.message)
     client = sb()
+    # A SAVE MUST NOT FAIL BECAUSE THE DATABASE IS BEHIND THE CODE. `_SOURCE_FIELDS` has grown with
+    # every additive migration since 083 and the form posts every field this build knows, so ONE
+    # column whose migration has not been applied yet makes PostgREST refuse the WHOLE row
+    # (PGRST204) — editing ANY login, for EVERY tenant, would break between a merge and its
+    # migration. That is the §PAYABLES-01 class ("the code is ahead of the production schema"), and
+    # its column arithmetic is DEREFERENCED from that one home rather than copied here. What could
+    # not be stored is NAMED back to the caller, never dropped in silence: a declaration that did not
+    # land must not read as a declaration the operator never made (owner 2026-10-30).
+    from app.modules.payables import write_shape as _ws
+    unstorable = _ws.missing_columns(row, _ws.live_columns(client, "data_source"))
+    for _col in unstorable:
+        row.pop(_col, None)
+
+    def _saved(sid):
+        out = {"ok": True, "id": sid}
+        if unstorable:
+            out["unstorable"] = unstorable
+            out["note"] = (
+                "Saved, but %d setting(s) could not be stored because the database is behind the "
+                "code: %s. Apply the migration that adds those columns, then save again."
+                % (len(unstorable), ", ".join(unstorable)))
+        return out
+
     try:
         if body.id:
             client.schema("commcalc").table("data_source").update(_psec.seal_row("data_source", row))\
                 .eq("id", body.id).eq("org_id", org_id).execute()
-            return {"ok": True, "id": body.id}
+            return _saved(body.id)
         row["org_id"] = org_id
         r = client.schema("commcalc").table("data_source").insert(
             _psec.seal_row("data_source", row)).execute()
-        return {"ok": True, "id": (r.data or [{}])[0].get("id")}
+        return _saved((r.data or [{}])[0].get("id"))
     except Exception as e:
         raise HTTPException(400, f"Could not save — is migration 083 applied? {e}")
 
