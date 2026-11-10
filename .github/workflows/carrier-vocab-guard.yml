@@ -1412,6 +1412,7 @@ on:
       - "backend/harness_browser_sweep_kinds.py"
       - "backend/harness_feed_watchdog.py"
       - "backend/harness_empty_pull_verdict.py"
+      - "backend/prove_jqx_picker.mjs"
       - "backend/harness_feed_day_grain.py"
       - "backend/harness_sales_recon_basis.py"
       - "backend/harness_period_one_spelling.py"
@@ -3490,6 +3491,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
+      - uses: actions/setup-node@v4
       - name: Install the backend's dependencies
         run: pip install -r backend/requirements.txt
       - name: Run the tenant-day lock (a feed window's day comes from the ORG's zone, never the container's clock - the comp report's 23:30-local slot is 03:30 UTC the NEXT day, so every run asked the portal for a day that had not begun where the portal lives; `tz` is required at every window-building caller - index COMMCALC-53)
@@ -3500,6 +3502,10 @@ jobs:
         working-directory: backend
         shell: bash
         run: python3 harness_empty_pull_verdict.py | tail -30 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the jqx picker proof (the REAL page scan, read out of epay_sweep.py, against a panel shaped like the owner's 2026-11-10 photograph - a control is found by what it answers to, not by one styling class, and a selector shape the fake DOM has not been taught fails loudly here instead of silently matching nothing in production - index COMMCALC-57)
+        working-directory: backend
+        shell: bash
+        run: node prove_jqx_picker.mjs | tail -40 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run the feed day-grain lock (a feed row's month is its OWN day's month, never the period someone picked; one home for the data-date map, dereferenced by the upload and the sweep; all-or-nothing stamping; every declared feed is day-keyed or declared period-grain with a reason — owner 2026-10-05, index §19.44)
         working-directory: backend
         shell: bash

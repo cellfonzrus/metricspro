@@ -37,6 +37,7 @@ Run:  cd backend && python3 harness_empty_pull_verdict.py
 import ast
 import inspect
 import os
+import pathlib
 import re
 import sys
 
@@ -316,6 +317,29 @@ check("F10 DLAR's own empty guard is gone and the shared sentence is used",
       and "_empty_verdict.classify_empty_pull" in SWEEPS["dlar_sweep"])
 
 
+class _DeadPage:
+    """A page that cannot be asked at all."""
+
+    def evaluate(self, script, arg=None):
+        raise RuntimeError("page closed")
+
+    def wait_for_timeout(self, ms):
+        return None
+
+
+class _FixedPage:
+    """A page that answers the scan with exactly this."""
+
+    def __init__(self, result):
+        self._result = result
+
+    def evaluate(self, script, arg=None):
+        return self._result
+
+    def wait_for_timeout(self, ms):
+        return None
+
+
 # ── §G — A CONTROL IS VERIFIED FROM THE CONTROL (index §COMMCALC-56) ──────────────────────────────
 print("\n§G  the control is verified from the thing we set, and an unproven set keeps a zero quiet")
 
@@ -329,7 +353,7 @@ check("G1 the setter no longer gates on the form field alone",
       and "(iv.get('hidden') or '') != 'Daily'" not in EPAY,
       "the field beside the control is corroboration, never the verification")
 check("G2 it reads the WIDGET'S own selected item",
-      "getSelectedItem" in EPAY and "selected" in ES._SET_INTERVAL_JS)
+      "getSelectedItem" in EPAY and "selected" in ES._PICK_JQX_ITEM_JS)
 check("G3 the value it must take is declared once, not spelled at each use",
       ES.DAILY_INTERVAL == "Daily" and EPAY.count('DAILY_INTERVAL = "') == 1)
 check("G4 …and the corroborating field's name is declared too, marked as not ours",
@@ -396,6 +420,104 @@ check("G18 a control nobody declared a dependency on does not touch a zero",
 check("G19 neither the setter nor the rung knows which tenant it is acting for",
       not re.search(r"\borg\w*", fexec(ES._set_daily_range))
       and not re.search(r"\borg\w*", fexec(V.classify_empty_pull)))
+
+
+# ── §H — A CONTROL IS FOUND BY WHAT IT ANSWERS TO (index §COMMCALC-57) ───────────────────────────
+print("\n§H  a picker is found by what it answers to, not by how it looks — one home, both callers")
+
+# THE DEFECT, settled by a photograph on 2026-11-10. §COMMCALC-56's new wording said "no
+# 'Summarize by' dropdown offering Daily was found on the report's filter panel". The owner
+# photographed that panel: the control was there, offering Daily / Weekly / Monthly, re-skinned to
+# the SEARCHABLE jqWidgets flavour. The scan knew one styling class and reported a present control
+# as absent — the one answer an operator cannot act on.
+#: Every place a jqWidgets picker may be looked for, written out by a human. Compared whole, not
+#: counted: a scan that silently GAINS a shape is a shape the executed proof has not been taught,
+#: and one that silently LOSES one is how a present control read as absent on 2026-11-10.
+EXPECTED_PICKER_SELECTORS = {
+    '[class*="jqx-dropdownlist"]',
+    '[class*="jqx-combobox"]',
+    '[role="combobox"]',
+    '[role="listbox"]',
+}
+
+PICK = fsrc(ES.pick_jqx_item)
+
+check("H1 the scan is not keyed on a widget STATE class",
+      "-state-normal" not in ES._PICK_JQX_ITEM_JS
+      and not any("-state-" in sel for sel in ES.JQX_PICKER_SELECTORS),
+      "'-state-normal' is a moment in a control's life, not its identity")
+check("H2 where a picker may BE is exactly the declared set",
+      isinstance(ES.JQX_PICKER_SELECTORS, tuple)
+      and set(ES.JQX_PICKER_SELECTORS) == EXPECTED_PICKER_SELECTORS
+      and EPAY.count("JQX_PICKER_SELECTORS = (") == 1,
+      "a selector that joins or leaves must be taught to prove_jqx_picker.mjs in the same "
+      "change — an untaught shape matches nothing and reports a present control as absent")
+check("H3 how a picker is DRIVEN is declared once, and covers both known families",
+      ES.JQX_PICKER_WIDGETS == ("jqxDropDownList", "jqxComboBox")
+      and EPAY.count("JQX_PICKER_WIDGETS = (") == 1,
+      "the plain list AND the searchable one; dropping either re-opens this defect")
+check("H4 the scan is given the declarations, never its own copy of them",
+      "JQX_PICKER_SELECTORS" in PICK and "JQX_PICKER_WIDGETS" in PICK
+      and "jqx-combobox" not in PICK and "jqx-dropdownlist" not in PICK)
+check("H5 a family is driven through its OWN api, chosen at runtime",
+      "$(host)[w]" in ES._PICK_JQX_ITEM_JS,
+      "naming one widget's method is how the scan got pinned to one family")
+check("H6 the scan reports what the panel DOES offer",
+      "offered" in ES._PICK_JQX_ITEM_JS and "offered" in PICK,
+      "a failure that names only what is missing cost one photograph and a month of empty days")
+check("H7 …and 'no picker at all' is a different sentence from 'none offering it'",
+      "no picker was found" in ES._PICK_JQX_ITEM_JS
+      and "none offering it" in ES._PICK_JQX_ITEM_JS,
+      "opposite fixes: rebuild the leg, or widen the scan")
+check("H8 the wrapper always returns every key its callers unpack",
+      (lambda r: set(r) == {"ok", "selected", "widget", "offered", "pickers", "why"})(
+          ES.pick_jqx_item(_DeadPage(), ["x"])))
+check("H9 ok is never true without the widget's own answer (§COMMCALC-56 holds here too)",
+      ES.pick_jqx_item(_FixedPage({"ok": True, "hit": {"id": "a", "selected": None}}),
+                       ["x"])["ok"] is False)
+
+# ONE HOME, BOTH CALLERS. Two near-identical scans in this file is what let one of them go blind
+# while the other kept working — the duplicate the house forbids, with one copy fixed.
+check("H10 the shared routine is the ONLY picker scan in the module",
+      EPAY.count("_PICK_JQX_ITEM_JS = ") == 1
+      and EPAY.count("jqxDropDownList('getItems')") == 0
+      and EPAY.count('jqxDropDownList("getItems")') == 0,
+      "a second scan is a future divergence")
+check("H11 'Summarize by' dereferences it",
+      "pick_jqx_item(page, [DAILY_INTERVAL])" in fexec(ES._set_daily_range))
+check("H12 the month picker dereferences it too",
+      "pick_jqx_item(page," in fexec(ES._set_report_month))
+check("H13 the failure the operator reads names the panel's real options",
+      "panel's pickers offer" in fexec(ES._set_daily_range))
+
+# MATCHING ON MEANING. The portal writes "June- 26" and re-spells its own labels; a comparison on
+# punctuation fails a control that took the value.
+check("H14 labels are compared on meaning, in one place",
+      EPAY.count("def _same_label(") == 1
+      and "isalnum" in fsrc(ES._same_label)
+      and ES._same_label("Daily", " daily: ") and not ES._same_label("Daily", "Weekly"))
+check("H15 the setter compares the control's answer that way, not by ==",
+      "_same_label(selected, DAILY_INTERVAL)" in fexec(ES._set_daily_range)
+      and 'str(selected).strip() != DAILY_INTERVAL' not in EPAY)
+
+# THE REGRESSION IS EXECUTED, because the defect was in JavaScript no python test runs.
+_PROOF = pathlib.Path(__file__).resolve().parent / "prove_jqx_picker.mjs"
+_proof_src = _PROOF.read_text(encoding="utf-8") if _PROOF.exists() else ""
+check("H16 the executed proof exists beside this lock",
+      _PROOF.exists(),
+      "a scan that no test RUNS is how this shipped")
+check("H17 …and it reads the real source rather than a copy of the scan",
+      "epay_sweep.py" in _proof_src and "_PICK_JQX_ITEM_JS" in _proof_src)
+check("H18 …against the panel in the photograph (the searchable flavour)",
+      "jqx-combobox-state-normal" in _proof_src and "jqxComboBox" in _proof_src)
+check("H19 …and its fake DOM refuses a selector shape it has not been taught",
+      "does not understand the selector" in _proof_src,
+      "silently matching nothing is the failure being locked out")
+
+# EVERY TENANT (owner directive 2026-10-30).
+check("H20 the shared routine does not know which tenant it is acting for",
+      not re.search(r"\borg\w*", fexec(ES.pick_jqx_item))
+      and "org" not in inspect.signature(ES.pick_jqx_item).parameters)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 if FAIL:
