@@ -1216,7 +1216,7 @@ export default function EmailImportsPage() {
                   the login itself the store attribution, and a login that declares where its history
                   starts is caught up one window at a time by the daily pull. Blank = today's
                   behaviour exactly (a company-wide login, recent window only). */}
-              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>This login's store (blank = the whole company)<br />
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Store this login belongs to (blank = the whole company)<br />
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="store code, e.g. B-1115" value={srcDraft.store_code || ''} onChange={e => setSrcDraft({ ...srcDraft, store_code: e.target.value })} /></label>
               <div style={{ display: 'flex', gap: 8 }}>
                 <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', flex: 1 }}>Pull history from (blank = recent days only)<br />
