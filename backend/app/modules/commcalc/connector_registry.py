@@ -59,6 +59,7 @@ from app.modules.commcalc import merchant_portals as _mp
 from app.modules.commcalc.pos_report_sweep import CONNECTOR as POS_REPORT_CONNECTOR
 from app.modules.supply.portal import SUPPLY_PROCESSOR as SUPPLY_CONNECTOR
 from app.modules.commcalc.supplier_invoice_sweep import CONNECTOR as SUPPLIER_INVOICE_CONNECTOR
+from app.modules.commcalc.processor_backoffice_sweep import CONNECTOR as PROCESSOR_BACKOFFICE_CONNECTOR
 
 HOUSE_ORG = _rk.HOUSE_ORG
 # THE SEED'S MIGRATIONS, in apply order. A LIST, not one file, and that is the point: a new house
@@ -67,7 +68,8 @@ HOUSE_ORG = _rk.HOUSE_ORG
 # registry entirely — which is what happened twice (see POS_REPORT / SUPPLY below). A later migration
 # appends; `MIGRATION` stays as the first for the callers that name it.
 MIGRATIONS = ("1014_connector_registry.sql", "1084_connector_registry_dispatchable_kinds.sql",
-              "1099_connector_registry_supplier_invoice.sql")
+              "1099_connector_registry_supplier_invoice.sql",
+              "1117_connector_registry_processor_backoffice.sql")
 MIGRATION = MIGRATIONS[0]
 TABLE = "connector_registry"
 CAP_PREFIX = "connector:"                    # ui_label_override scope 'cap' namespace (beside kind:/carrier:/pos:)
@@ -136,6 +138,12 @@ HOUSE_CONNECTORS = [
     # ANY scope for the reasons stated above — a kind, not a supplier, and any tenant may be invoiced.
     _c(key=SUPPLIER_INVOICE_CONNECTOR, label="Supplier invoices (billing portal)", sort_order=150,
        notes="A supplier's own portal publishing the invoices it has billed us, pulled so every charge can be checked against the sale that should have collected for it (index §COMMCALC-38). The address, the report list, the date filters and the column vocabulary are declared per tenant on its own login row. Supplier-neutral: the distributor-only invoice feed ('vip') is its sibling, and index §COMMCALC-38 states why they are not yet one."),
+    # ── mig 1117 appends from here (owner ask 2026-11-10) ─────────────────────────────────────────
+    # A processor's back office that issues ONE LOGIN PER STORE (index §COMMCALC-57). No host and ANY
+    # scope for the reasons stated above: a kind, not a vendor, and any tenant may have a processor
+    # that works this way. Its door and its dispatcher ship in one PR, as the §I ratchet requires.
+    _c(key=PROCESSOR_BACKOFFICE_CONNECTOR, label="Payment processor back office (per-store logins)", sort_order=160,
+       notes="A payment processor's back office that issues ONE LOGIN PER STORE, pulled per store for the processor reconciliation (index §COMMCALC-57). The address, the report list, each report's filters and landing target, the login's own store and the date its history starts are declared per tenant on its own login row. Sibling of the company-wide owner-portal kind ('epay'), which is one login for the whole tenant and a different report family."),
 ]
 HOUSE_CONNECTOR_KEYS = [r["key"] for r in HOUSE_CONNECTORS]
 

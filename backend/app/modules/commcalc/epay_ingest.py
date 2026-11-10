@@ -112,12 +112,19 @@ def parse_records(records, source_batch=None):
     return out
 
 
-def resolve_stores(rows, terminal_to_store):
+def resolve_stores(rows, terminal_to_store, login_store_code=None):
     """Set store_code on each row from a {terminal_id: store_code} map (built from the merchant registry).
-    Returns the set of terminal_ids that could NOT be resolved (need a store mapping)."""
+    Returns the set of terminal_ids that could NOT be resolved (need a store mapping).
+
+    `login_store_code` is THE STORE WHOSE OWN LOGIN THESE ROWS WERE PULLED THROUGH (added 2026-11-10 for
+    the per-store back-office feed, index §COMMCALC-57). A row pulled through a store's login belongs to
+    that store, which is a fact the terminal registry cannot state and this function previously had no way
+    to be told. The DECLARED registry still wins where it has an answer — a login is what answers when it
+    has none. Callers that pull through a company-wide login pass nothing and are unchanged."""
+    fallback = _s(login_store_code) or None
     unresolved = set()
     for row in rows:
-        code = terminal_to_store.get(_s(row.get("terminal_id")))
+        code = terminal_to_store.get(_s(row.get("terminal_id"))) or fallback
         row["store_code"] = code
         if not code and row.get("terminal_id"):
             unresolved.add(row["terminal_id"])
@@ -158,15 +165,18 @@ def store_rows(client, org_id, rows):
     return saved
 
 
-def ingest(org_id, records, source_batch=None, client=None):
+def ingest(org_id, records, source_batch=None, client=None, store_code=None):
     """Full manual/auto ingest: parse -> resolve stores via the merchant registry -> persist. Returns
     {saved, unresolved_terminals:[{terminal_id, user_name, suggested_store}]}. The unresolved list drives
-    the one-click 'confirm this terminal's store' step so the operator never hand-enters 28 stores."""
+    the one-click 'confirm this terminal's store' step so the operator never hand-enters 28 stores.
+
+    `store_code` is the store whose own login these rows came through (the per-store back-office feed) —
+    see resolve_stores. Omitted by every company-wide caller, which keeps their behaviour identical."""
     from app.modules.storeops import merchant_ids as _mids
     client = client or get_supabase()
     rows = parse_records(records, source_batch=source_batch)
     tmap = _mids.resolve_map(org_id, PROCESSOR)
-    unresolved_ids = resolve_stores(rows, tmap)
+    unresolved_ids = resolve_stores(rows, tmap, login_store_code=store_code)
     saved = store_rows(client, org_id, rows) if rows else 0
     # Attach a suggested store to each unresolved terminal (from its most common UserName).
     by_terminal = {}

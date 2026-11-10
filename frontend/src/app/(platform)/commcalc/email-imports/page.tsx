@@ -1211,6 +1211,19 @@ export default function EmailImportsPage() {
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="https://…" value={srcDraft.portal_url || ''} onChange={e => setSrcDraft({ ...srcDraft, portal_url: e.target.value })} /></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Account ID<br />
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="Processor Account ID" value={srcDraft.account_id || ''} onChange={e => setSrcDraft({ ...srcDraft, account_id: e.target.value })} /></label>
+              {/* A LOGIN CAN BELONG TO A STORE, AND CAN BE ASKED FOR HISTORY (index §COMMCALC-57,
+                  mig 1116). Both are per-login config: a portal that issues one login per store makes
+                  the login itself the store attribution, and a login that declares where its history
+                  starts is caught up one window at a time by the daily pull. Blank = today's
+                  behaviour exactly (a company-wide login, recent window only). */}
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>This login's store (blank = the whole company)<br />
+                <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="store code, e.g. B-1115" value={srcDraft.store_code || ''} onChange={e => setSrcDraft({ ...srcDraft, store_code: e.target.value })} /></label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', flex: 1 }}>Pull history from (blank = recent days only)<br />
+                  <input type="date" style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.history_from || ''} onChange={e => setSrcDraft({ ...srcDraft, history_from: e.target.value })} /></label>
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', width: 150 }}>Days per catch-up run<br />
+                  <input type="number" min={1} max={45} style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="7" value={srcDraft.history_chunk_days ?? ''} onChange={e => setSrcDraft({ ...srcDraft, history_chunk_days: e.target.value === '' ? null : Number(e.target.value) })} /></label>
+              </div>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>User ID<br />
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.username || ''} onChange={e => setSrcDraft({ ...srcDraft, username: e.target.value })} /></label>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Password{srcDraft.id ? ' (blank = keep saved)' : ''}<br />

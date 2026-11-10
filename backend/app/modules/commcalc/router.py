@@ -41038,7 +41038,12 @@ _SOURCE_FIELDS = ["distributor_id", "carrier_id", "processor", "label", "portal_
                   # totp_secret is WRITE-ONLY: it is accepted here but lives in _SOURCE_SECRETS, so it
                   # is stripped from every read (has_totp + an opaque mask is all the UI ever sees).
                   "settlement_role", "portal_reports", "portal_calibration", "portal_window_days",
-                  "session_warn_hours", "totp_secret"]
+                  "session_warn_hours", "totp_secret",
+                  # A login can belong to a STORE, and a pull can owe HISTORY (mig 1116, owner
+                  # 2026-11-10, index §COMMCALC-57). store_code is what places every row pulled
+                  # through a per-store login; history_from / history_chunk_days are the declaration
+                  # `portal_backfill` reads. All three are config, per login — RULE TWO.
+                  "store_code", "history_from", "history_chunk_days"]
 # Columns that never leave the backend (credentials + serialized browser sessions).
 _SOURCE_SECRETS = ("password", "session_state", "pending_state",
                    # The optional authenticator-app (TOTP) shared secret (mig 955). Same posture as the
@@ -41163,6 +41168,29 @@ async def _supplier_invoice_scraper(org_id, src_row):
 from app.modules.commcalc.supplier_invoice_sweep import (  # noqa: E402
     CONNECTOR as _SUPPLIER_INVOICE_CONNECTOR)
 _SOURCE_SCRAPERS[_SUPPLIER_INVOICE_CONNECTOR] = _supplier_invoice_scraper
+
+
+async def _processor_backoffice_scraper(org_id, src_row):
+    """_SOURCE_SCRAPERS handler for a PAYMENT PROCESSOR'S PER-STORE BACK OFFICE (owner 2026-11-10):
+    the processor issues one login per store, and every report it publishes is pulled per store for
+    the processor reconciliation — from the date the login's history is declared to start, and daily
+    after that.
+
+    Same durable-session posture as every other portal here: a human satisfies the portal's second
+    factor ONCE on the live-login screencast, the authenticated storage_state is persisted, and this
+    scheduled pull rides it; a rejected session raises VidaPayAuthError, which run_data_source turns
+    into an actionable needs_2fa prompt rather than a hard error. The portal's address, its report
+    list, each report's filters and landing target, this login's STORE and where its history starts
+    are all declared on the source row (index §COMMCALC-57)."""
+    from app.modules.commcalc import processor_backoffice_sweep as pbs
+    from fastapi.concurrency import run_in_threadpool
+    return await run_in_threadpool(pbs.run_backoffice_sweep, sb(), org_id, dict(src_row or {}))
+
+
+# Named ONCE, by its module — never re-spelled here (index §COMMCALC-57).
+from app.modules.commcalc.processor_backoffice_sweep import (  # noqa: E402
+    CONNECTOR as _PROCESSOR_BACKOFFICE_CONNECTOR)
+_SOURCE_SCRAPERS[_PROCESSOR_BACKOFFICE_CONNECTOR] = _processor_backoffice_scraper
 
 
 def _strip_source_pw(row, policy_rows=None, scope_ctx=None):
@@ -41616,6 +41644,9 @@ class SaveDataSourceIn(LaxModel):
     oob_code_regex: Any = None
     oob_code_length: Any = None
     oob_max_age_seconds: Any = None
+    store_code: Any = None
+    history_from: Any = None
+    history_chunk_days: Any = None
 
 
 @router.put("/data-sources")
@@ -41648,6 +41679,10 @@ def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization
             row["oob_max_age_seconds"] = 300
     if "oob_enabled" in row:
         row["oob_enabled"] = bool(row.get("oob_enabled"))
+    # The store this login belongs to and where its history starts (mig 1116). Cleaned by their ONE
+    # home: a cleared date field arrives as "" and a DATE column answers that with a 500.
+    from app.modules.commcalc import portal_backfill as _bfill
+    row.update(_bfill.clean_declaration(row))
     # SSRF GUARD (finding C4, 2026-08-06). The line that used to live here —
     #     row["portal_url"] = pu if "://" in pu else "https://" + pu.lstrip("/")
     # — only ever ADDED a missing scheme (Playwright rejects a bare host with "Cannot navigate to
