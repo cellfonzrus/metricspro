@@ -49,23 +49,68 @@ const WIDGETS = pyTuple("JQX_PICKER_WIDGETS");
 const SAMPLE = pyInt("PICKER_SAMPLE");
 
 // ── a fake page ──────────────────────────────────────────────────────────────────────────────────
+// A REAL TREE, not a flat list. jqWidgets builds ONE control out of nested divs that carry the same
+// `jqx-*` classes and ARIA roles as their host (§COMMCALC-63), and a fake with no parent/child
+// relationship cannot express that at all — a proof that cannot express the defect is not a proof.
+// The nodes also carry the text and attributes a caption is read from, because "what is this
+// control called" is answered from the page and nowhere else.
 class FakeHost {
-  constructor({ id, cls, role, widget, items, selected }) {
+  constructor({ id, cls, role, widget, items, selected, ariaLabel, tag, htmlFor, text, children }) {
     this.id = id;
     this.className = cls || "";
     this.role = role || null;
     this.widget = widget;          // which jqWidgets family this control answers to
     this.items = items || [];
     this.selected = selected ?? null;
+    this.ariaLabel = ariaLabel || null;
+    this.tagName = (tag || "div").toUpperCase();
+    this.htmlFor = htmlFor || null;
+    this.ownText = text || "";
+    this.children = children || [];
+    this.parentElement = null;
+    for (const kid of this.children) kid.parentElement = this;
+  }
+  get textContent() {
+    return this.ownText + this.children.map((k) => k.textContent).join("");
+  }
+  getAttribute(name) {
+    if (name === "aria-label") return this.ariaLabel;
+    if (name === "role") return this.role;
+    if (name === "for") return this.htmlFor;
+    if (name === "id") return this.id || null;
+    return null;
+  }
+  contains(other) {
+    if (other === this) return true;
+    return this.children.some((k) => k.contains(other));
+  }
+  get previousElementSibling() {
+    const sibs = this.parentElement ? this.parentElement.children : [];
+    const i = sibs.indexOf(this);
+    return i > 0 ? sibs[i - 1] : null;
   }
 }
 
-function makeDocument(hosts) {
+/** A caption printed beside a control — what a person would call it. */
+const caption = (words, extra = {}) => new FakeHost({ tag: "span", text: words, ...extra });
+
+function flatten(nodes, out = []) {
+  for (const n of nodes) { out.push(n); flatten(n.children, out); }
+  return out;
+}
+
+function makeDocument(roots) {
+  // Every page has a body, so a top-level control has somewhere to walk up to, as it does on the
+  // portal. The body carries no jqx class and no role, so it is never a candidate itself.
+  const body = new FakeHost({ id: "body", tag: "body", children: roots });
+  const all = flatten([body]);
   const matchOne = (host, sel) => {
     let m;
     if ((m = sel.match(/^\[class\*=["']([^"']+)["']\]$/))) return host.className.includes(m[1]);
     if ((m = sel.match(/^\[role=["']([^"']+)["']\]$/))) return host.role === m[1];
     if ((m = sel.match(/^\.([A-Za-z0-9_-]+)$/))) return host.className.split(/\s+/).includes(m[1]);
+    if ((m = sel.match(/^label\[for=["']([^"']+)["']\]$/)))
+      return host.tagName === "LABEL" && host.htmlFor === m[1];
     throw new Error(
       `the fake DOM does not understand the selector ${JSON.stringify(sel)}. ` +
       `Teach it that shape here before shipping a scan that uses it — an unparsed selector in ` +
@@ -74,7 +119,7 @@ function makeDocument(hosts) {
   return {
     querySelectorAll(selector) {
       const parts = selector.split(",").map((s) => s.trim()).filter(Boolean);
-      return hosts.filter((h) => parts.some((p) => matchOne(h, p)));
+      return all.filter((h) => parts.some((p) => matchOne(h, p)));
     },
     querySelector(selector) {
       return this.querySelectorAll(selector)[0] || null;
@@ -337,6 +382,115 @@ console.log("§I  no one control may drown the report (COMMCALC-62)");
   ok("I10 the control is still SET, not merely described",
      r.ok === true && hosts[1].selected === "Daily", JSON.stringify(r));
   ok("I11 …and the panel report comes back alongside the hit", r.panel.length === 2);
+}
+
+console.log("§J  a thing inside a thing is not a second control (COMMCALC-63)");
+{
+  // THE LIVE SHAPE, 2026-11-10 19:30, read off production on the §COMMCALC-62 code:
+  //
+  //   the panel has 2 picker(s) with options, none offering it (and 11 still empty) … the panel's
+  //   controls are … listBoxContentjqxWidget0206f1e1: empty; innerListBoxjqxWidgetaa329b45: empty;
+  //   innerListBoxjqxWidget5ea7ca38: empty; innerListBoxjqxWidget0206f1e1: empty;
+  //   jqxWidget349f357e: empty; dropDownButtonContentjqxWidget349f357e: empty
+  //
+  // Two things in that sentence. The names are jqWidgets' own internal pieces, and the hashes
+  // REPEAT — `0206f1e1` twice, `349f357e` twice — so one control was being counted several times
+  // through its own scaffolding. And an inner piece can never carry items, so `empty > 0` was
+  // permanently true: every tick burnt its whole wait budget and then reported a stall.
+  //
+  // The fake reproduces that faithfully: the inner pieces carry the same jqx-* class as their host
+  // AND answer the same widget API, with nothing in them. That is what made them invisible as
+  // scaffolding and countable as controls.
+  const dealers = [];
+  for (let i = 0; i < 480; i++) dealers.push(`${474517 + i} - Wireless 2024 LLC`);
+  const inner = (hash) => new FakeHost({
+    id: "innerListBoxjqxWidget" + hash, cls: "jqx-combobox jqx-combobox-state-normal",
+    widget: "jqxComboBox", items: [], selected: null,
+  });
+  const roots = [
+    caption("Dealer"),
+    new FakeHost({
+      id: "jqxWidgetaa329b45", cls: "jqx-widget jqx-combobox jqx-combobox-state-normal",
+      widget: "jqxComboBox", items: dealers, selected: null,
+      children: [inner("aa329b45")],
+    }),
+    caption("Payment Category"),
+    new FakeHost({
+      id: "jqxWidget5ea7ca38", cls: "jqx-widget jqx-combobox jqx-combobox-state-normal",
+      widget: "jqxComboBox", items: ["All", "Commission", "Residual"], selected: null,
+      children: [inner("5ea7ca38")],
+    }),
+    caption("Summarize by"),
+    new FakeHost({
+      id: "jqxWidget0206f1e1", cls: "jqx-widget jqx-combobox jqx-combobox-state-normal",
+      widget: "jqxComboBox", items: ["Daily", "Weekly", "Monthly"], selected: "Please Choose:",
+      children: [
+        new FakeHost({ id: "listBoxContentjqxWidget0206f1e1",
+                       cls: "jqx-combobox jqx-combobox-state-normal", widget: "jqxComboBox",
+                       items: [], children: [inner("0206f1e1")] }),
+      ],
+    }),
+    caption("Start Date"),
+    // The date control: it matches the selectors but answers to NEITHER declared picker family, so
+    // it is a candidate and never a picker — and its button scaffolding must not be one either.
+    new FakeHost({
+      id: "jqxWidget349f357e", cls: "jqx-widget jqx-dropdownlist jqx-datetimeinput",
+      widget: "jqxDateTimeInput", items: [],
+      children: [new FakeHost({ id: "dropDownButtonContentjqxWidget349f357e",
+                                cls: "jqx-dropdownlist", widget: "jqxDateTimeInput", items: [] })],
+    }),
+  ];
+  const r = run(roots, ["Daily"]);
+
+  ok("J1 only the OUTERMOST matches are candidates — four hosts, not nine",
+     r.candidates === 4, `candidates=${r.candidates}`);
+  ok("J2 three of them are pickers we can drive", r.pickers === 3, `pickers=${r.pickers}`);
+  ok("J3 nothing is reported as empty, because the empties were scaffolding",
+     r.empty === 0 && r.ready === 3, `ready=${r.ready} empty=${r.empty}`);
+  ok("J4 no internal piece appears in the panel report",
+     !r.panel.some((e) => /^(innerListBox|listBoxContent|dropDownButtonContent)/.test(e.id || "")),
+     JSON.stringify(r.panel.map((e) => e.id)));
+  ok("J5 the repeated hashes collapse to one control each",
+     new Set(r.panel.map((e) => (e.id || "").replace(/^\D+/, ""))).size === r.panel.length,
+     JSON.stringify(r.panel.map((e) => e.id)));
+  ok("J6 each control carries the caption printed beside it, not its generated id",
+     r.panel.map((e) => e.label).join("|") === "Dealer|Payment Category|Summarize by",
+     JSON.stringify(r.panel.map((e) => e.label)));
+  ok("J7 and the control the sweep came for is actually SET",
+     r.ok === true && r.panel.length === 3, JSON.stringify(r));
+  ok("J8 the value landed on the real control, not on its inner piece",
+     roots[5].selected === "Daily" && roots[5].children[0].selected === null);
+}
+{
+  // Not every panel labels its controls the same way. All three routes are on the page, so all
+  // three are proven here; an unlabelled control still has to come back describable.
+  const roots = [
+    new FakeHost({ id: "a", cls: "jqx-combobox", widget: "jqxComboBox", items: ["Weekly"],
+                   ariaLabel: "Summarize by", selected: null }),
+    new FakeHost({ id: "b", tag: "label", htmlFor: "c", text: "Payment Category" }),
+    new FakeHost({ id: "c", cls: "jqx-combobox", widget: "jqxComboBox", items: ["All"],
+                   selected: null }),
+    new FakeHost({ id: "d", cls: "jqx-combobox", widget: "jqxComboBox", items: ["x"],
+                   selected: null }),
+  ];
+  const r = run(roots, ["nothing-matches"]);
+  const by = {};
+  r.panel.forEach((e) => { by[e.id] = e.label; });
+  ok("J9 an aria-label is the control's name", by.a === "Summarize by", JSON.stringify(by));
+  ok("J10 a <label for> is the control's name", by.c === "Payment Category", JSON.stringify(by));
+  ok("J11 an unlabelled control comes back with no name rather than a wrong one",
+     by.d === null, JSON.stringify(by));
+}
+{
+  // The nesting rule must not swallow a REAL sibling control that happens to sit inside a panel
+  // div which also matches — the outermost rule is about one control's own parts, and a container
+  // that is itself a picker is not a container.
+  const kid = new FakeHost({ id: "SummarizeBy", cls: "jqx-combobox", widget: "jqxComboBox",
+                             items: ["Daily"], selected: null });
+  const roots = [new FakeHost({ id: "panelwrap", cls: "jqx-widget", children: [kid] })];
+  const r = run(roots, ["Daily"]);
+  ok("J12 a control inside a non-matching wrapper is still found",
+     r.ok === true && kid.selected === "Daily", JSON.stringify(r));
 }
 
 console.log("");
