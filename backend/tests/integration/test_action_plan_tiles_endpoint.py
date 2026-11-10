@@ -156,10 +156,16 @@ def test_each_tenant_gets_its_own_store_rep_and_target_axis(wired, api_client, o
     assert s["store_code"] == OWN_STORE[org]
     assert s["address"] == OWN_ADDRESS[org]
     assert s["market"] == OWN_MARKET[org]
-    # THE STORE-GRAIN AXIS IS THIS TENANT'S: exactly the categories it set a target on.
+    # THE STORE-GRAIN AXIS IS THIS TENANT'S: the categories it set a target on — plus `byod`, which
+    # the engine DERIVES from the activations target and the org's BYOD percentage
+    # (`targets_engine.derive_monthly_by_cat`), so a tenant with an activations target has a BYOD
+    # target whether or not anybody typed one. Asserted rather than tolerated, because the derived
+    # category appearing or vanishing is a real change to what every tile over it can say.
     got = {m["cat"] for m in s["metrics"]}
     want = {c.replace("_monthly", "") for c in OWN_TARGETS[org]}
-    assert got == want, f"{org} axis {got} != declared {want}"
+    if "activations" in want:
+        want.add("byod")
+    assert got == want, f"{org} axis {got} != declared+derived {want}"
     assert [r["rep"] for r in s["reps"]] == [OWN_REP[org]]
 
 
@@ -216,7 +222,46 @@ def test_the_team_roll_up_is_folded_on_the_server_for_the_page_to_read(wired, ap
     body = _get(api_client, org)
     cats = (body.get("team_total") or {}).get("categories") or {}
     want = {c.replace("_monthly", "") for c in OWN_TARGETS[org]}
+    if "activations" in want:
+        want.add("byod")          # derived, exactly as the per-store axis above
     assert set(cats) >= want, f"{org} roll-up {set(cats)} does not cover {want}"
     for cat in want:
         for f in ("monthly", "achieved_mtd", "need"):
             assert f in cats[cat], f"{cat}.{f} missing for {org}"
+
+
+# ── THE DEFECT THIS TEST FOUND ON ITS WAY IN ─────────────────────────────────────────────────────
+#
+# The first CI run of the tests above failed with `TypeError: unhashable type: 'dict'` — a 500 on
+# every tenant. The cause was two characters, in a branch nothing in this repo had ever executed:
+#
+#     declared_by_store = (… if catalog else {{}})       # `{ {} }` — a SET holding a dict
+#
+# `{{}}` is not an empty dict. It is a set literal containing an empty dict, and a dict is not
+# hashable, so evaluating it raises. The branch is the one taken when a tenant has declared NO count
+# fields, so **every tenant with an empty metric catalog got a 500** — from `/targets/{period}/
+# action-plan` AND, on the identical line 4,800 lines earlier, from `/targets/{period}/summary`,
+# which is the Daily Targets page itself.
+#
+# THE CLASS: *the code path for "this tenant has declared nothing" is the one nobody runs.* The house
+# org declares count fields, so both lines were only ever exercised down their truthy side. This is
+# the 2026-10-30 directive's own shape — a feature measured against the house org alone — and it is
+# why these tests run for three orgs that declare different things. The sibling was fixed in the same
+# change rather than left for the next reader to find.
+SUMMARY = "/api/v1/commcalc/targets/{period}/summary"
+
+
+@pytest.mark.parametrize("org", TENANTS)
+def test_a_tenant_with_no_declared_count_fields_still_gets_its_plan(wired, api_client, org):
+    """The reported-defect regression, at the action plan's own grain."""
+    r = api_client.get(TEMPLATE.format(period=PERIOD), params={"org_id": org, "today": AS_OF})
+    assert r.status_code == 200, r.text
+    assert r.json()["stores"], "an empty catalog means the four built-ins, not an empty plan"
+
+
+@pytest.mark.parametrize("org", TENANTS)
+def test_the_sibling_endpoint_survives_an_empty_catalog_too(wired, api_client, org):
+    """THE SIBLING, fixed in the same change: `/targets/{period}/summary` carried the identical
+    literal, so the Daily Targets page 500'd for the same tenants for the same reason."""
+    r = api_client.get(SUMMARY.format(period=PERIOD), params={"org_id": org, "today": AS_OF})
+    assert r.status_code == 200, r.text

@@ -238,6 +238,33 @@ check("H1 the section is in the index", "COMMCALC-57" in idx)
 check("H2 the one home is named there", "action-plan-tiles" in idx)
 check("H3 ...and so is this lock", "harness_action_plan_tiles.py" in idx)
 
+print("\n§J THE PATH NOBODY RUNS — a tenant that has declared NOTHING")
+# Found by the integration test above on its first CI run: `… if catalog else {{}}` is a SET holding
+# an empty dict, not an empty dict, so evaluating it raises `unhashable type: 'dict'`. The branch is
+# the one taken when a tenant has declared no count fields, and the house org declares some — so the
+# action plan AND the Daily Targets summary 500'd for every other tenant, down a line nothing here
+# had ever executed. The class is the 2026-10-30 directive's own: the code path for "this tenant
+# declared nothing" is the path measured against nobody.
+_SET_OF_DICT = re.compile(r"\{\s*\{\s*\}\s*\}")
+_offenders = [rel for rel in ("backend/app/modules/commcalc/router.py",)
+              if _SET_OF_DICT.search(read(rel))]
+check("J1 neither endpoint writes a set-holding-a-dict where it means an empty dict",
+      not _offenders, "found in %s" % _offenders)
+_app = os.path.join(ROOT, "backend", "app")
+_all_offenders = []
+for _dirpath, _dirnames, _filenames in os.walk(_app):
+    for _fn in _filenames:
+        if _fn.endswith(".py"):
+            _rel = os.path.relpath(os.path.join(_dirpath, _fn), ROOT)
+            if _SET_OF_DICT.search(read(_rel)):
+                _all_offenders.append(_rel)
+check("J2 ...and neither does anything else the app runs — the CLASS, not the one line reported",
+      not _all_offenders, "found in %s" % _all_offenders)
+check("J3 the empty-catalog path is REGRESSION-TESTED, at both endpoints that carried the literal",
+      "test_a_tenant_with_no_declared_count_fields_still_gets_its_plan" in itest
+      and "test_the_sibling_endpoint_survives_an_empty_catalog_too" in itest
+      and "/targets/{period}/summary" in itest)
+
 print("\n§I NEGATIVE CONTROLS — every scan above, shown finding its target")
 check("neg-A a page that stopped dereferencing the fold would be RED",
       "buildTiles(" not in page_code.replace("buildTiles(", "groupItMyself("))
@@ -255,6 +282,9 @@ check("neg-E the §E scanner finds a page-level notify call when there is one",
 check("neg-F a COMMENT claiming any of this would NOT satisfy the code scans",
       "buildTiles" not in ts_code("// we call buildTiles( here\n")
       and "<StandardFilterBar" not in ts_code("  // renders <StandardFilterBar/> too\n"))
+check("neg-J the §J scanner finds the literal when it is there",
+      _SET_OF_DICT.search("x = a if b else {{}}") is not None
+      and _SET_OF_DICT.search("x = {}") is None)
 check("neg-G the stripper leaves real code alone, including a URL inside a string",
       "https://example.test" in ts_code("const u = 'https://example.test'\n")
       and "buildTiles(" in ts_code("const t = buildTiles(a, b, c, d)  // grouped\n"))

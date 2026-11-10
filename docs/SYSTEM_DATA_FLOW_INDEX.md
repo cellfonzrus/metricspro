@@ -45638,7 +45638,7 @@ reps and three different target axes, including a test that no tenant's words re
 
 ### COMMCALC-57.6 Locked
 
-- **`backend/harness_action_plan_tiles.py`** (57 checks, 7 negative controls; CI job *One tile fold,
+- **`backend/harness_action_plan_tiles.py`** (61 checks, 8 negative controls; CI job *One tile fold,
   the tenant's own metrics (lock)* in `tests.yml`). It fails the build if the page stops
   dereferencing the fold, keeps a view list of its own, sums a target / achieved / need, stops
   reading `team_total`, spells any metric key or KPI label in either file, gives the declarations
@@ -45654,7 +45654,33 @@ reps and three different target axes, including a test that no tenant's words re
 - **`backend/tests/integration/test_action_plan_tiles_endpoint.py`** — the endpoint contract the
   tiles read, over three tenants through the real app (CI job *Backend integration tests*).
 
-### COMMCALC-57.7 What this does NOT fix, stated plainly
+### COMMCALC-57.7 THE DEFECT THE TESTS FOUND ON THEIR WAY IN — a 500 for every tenant that declared nothing
+
+The new integration test's FIRST CI run failed with `TypeError: unhashable type: 'dict'`, a 500 on
+all three tenants. Two characters, in a branch nothing in this repo had ever executed:
+
+```python
+declared_by_store = (_declared_by_store_day_for_targets(…) if catalog else {{}})   # a SET holding a dict
+```
+
+`{{}}` is not an empty dict. It is a set literal containing an empty dict, and a dict is not
+hashable, so the expression raises the moment it is evaluated. The branch is the one taken when a
+tenant has declared **no count fields** — so `GET /targets/{period}/action-plan` **500'd for every
+such tenant**, and so did the identical line 4,800 lines earlier in
+`GET /targets/{period}/summary`, which is the Daily Targets page itself.
+
+**The class is this file's own subject.** The code path for *"this tenant has declared nothing"* is
+the path measured against nobody: the house org declares count fields, so both lines were only ever
+exercised down their truthy side. That is the 2026-10-30 directive's shape exactly — a feature
+measured against the house org alone — and it is why these tests run for three orgs that declare
+different things.
+
+**Both sites fixed in this change** (the sibling found before shipping, not left for the next
+reader), with the regression at both endpoints and `harness_action_plan_tiles.py` §J failing the
+build if the literal reappears **anywhere under `backend/app`**, not merely on the line that was
+reported.
+
+### COMMCALC-57.8 What this does NOT fix, stated plainly
 
 The DLAR gross adds / activations / upgrades columns are still empty, so the KPIs over them read
 **not measured** here rather than zero — that is this change reporting the defect, not repairing it.
