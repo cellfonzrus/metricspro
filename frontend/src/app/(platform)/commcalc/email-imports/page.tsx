@@ -13,6 +13,7 @@ import { posSquash } from '@/lib/carrier-scope'
 import { useConnectors } from '@/lib/connectors'
 import { SetupNotice } from '@/lib/setupNotice'
 import { sourceLabel } from '@/lib/sourceLabels'
+import DateField from '@/components/DateField'
 import PortalReportEditor from '@/components/commcalc/PortalReportEditor'
 
 // Generic email (IMAP) inbox sweep — sibling of the FTP sweep. Configure a mailbox (host/creds) and
@@ -1220,7 +1221,9 @@ export default function EmailImportsPage() {
                 <input style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="store code, e.g. B-1115" value={srcDraft.store_code || ''} onChange={e => setSrcDraft({ ...srcDraft, store_code: e.target.value })} /></label>
               <div style={{ display: 'flex', gap: 8 }}>
                 <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', flex: 1 }}>Pull history from (blank = recent days only)<br />
-                  <input type="date" style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.history_from || ''} onChange={e => setSrcDraft({ ...srcDraft, history_from: e.target.value })} /></label>
+                  {/* DateField, not a bare date input: the calendar must open on a click anywhere in
+                      the field (§the one home for picking a date). */}
+                  <DateField style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} value={srcDraft.history_from || ''} onChange={e => setSrcDraft({ ...srcDraft, history_from: e.target.value })} /></label>
                 <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', width: 150 }}>Days per catch-up run<br />
                   <input type="number" min={1} max={45} style={{ width: '100%', padding: '7px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, marginTop: 4 }} placeholder="7" value={srcDraft.history_chunk_days ?? ''} onChange={e => setSrcDraft({ ...srcDraft, history_chunk_days: e.target.value === '' ? null : Number(e.target.value) })} /></label>
               </div>
