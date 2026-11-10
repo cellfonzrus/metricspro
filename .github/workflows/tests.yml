@@ -158,6 +158,24 @@ jobs:
         working-directory: backend
         run: python harness_geo_retention_lock.py
 
+  portal-backfill-lock:
+    # The design-fix lock for the portal pull backlog (index §COMMCALC-59): one home for which span a
+    # login still owes, one window ceiling dereferenced from the pull loop, one natural key matching
+    # migration 1116, and one fact for "a row pulled through a store's login belongs to that store".
+    # Wired on the day the harness was written — a harness no workflow runs is a file, not a gate.
+    name: One home for the span a pull owes (lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements-dev.txt }
+      - name: install
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+      - name: harness_portal_backfill
+        working-directory: backend
+        run: python harness_portal_backfill.py
+
   test-discipline:
     # The lock: the framework above cannot quietly come undone. It RUNS conftest's network guard
     # against a production hostname rather than reading the source for it.
