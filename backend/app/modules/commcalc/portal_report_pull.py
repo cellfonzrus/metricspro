@@ -62,7 +62,7 @@ ADAPTER_MODULES = (
     "app.modules.commcalc.merchant_portal_sweep",     # card settlement + funding (mig 955)
     "app.modules.commcalc.pos_report_sweep",          # the POS report of declared categories (mig 1078)
     "app.modules.commcalc.supplier_invoice_sweep",    # what a supplier billed us (§COMMCALC-36)
-    "app.modules.commcalc.processor_backoffice_sweep",  # a processor's per-store back office (§COMMCALC-67)
+    "app.modules.commcalc.processor_backoffice_sweep",  # a processor's per-store back office (§COMMCALC-58)
 )
 
 REQUIRED = ("connector_keys", "portal_descriptor", "report_specs", "ingest_report")
@@ -749,7 +749,7 @@ def pull_reports_on_page(client, org_id, src_row, page, should_stop=None):
                 "error": ("No reports are enabled for this portal source. " + setup_hint(mod, src_row)).strip()}
     # THE WINDOW THIS PULL COVERS. The recent window is still the default and still the clamp; a
     # source that DECLARED where its history starts is handed the oldest span it still owes instead
-    # (`portal_backfill`, index §COMMCALC-67 — one home, imported here because the window is computed
+    # (`portal_backfill`, index §COMMCALC-58 — one home, imported here because the window is computed
     # in exactly one place and a second place to widen a pull is the duplicate defect). Guarded: with
     # nothing declared, no backlog table, or nothing owed, this is byte-identical to before.
     d_from, d_to = date_range(src_row, proc)

@@ -12,7 +12,7 @@ What it proves is the wiring the unit tests next door cannot:
   • the rows land in the feed's existing table, stamped with the store whose login pulled them;
   • a login that declares no history is pulled for the recent window, exactly as before.
 
-Index §COMMCALC-67.
+Index §COMMCALC-58.
 """
 import pytest
 

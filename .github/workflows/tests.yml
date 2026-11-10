@@ -159,7 +159,7 @@ jobs:
         run: python harness_geo_retention_lock.py
 
   portal-backfill-lock:
-    # The design-fix lock for the portal pull backlog (index §COMMCALC-67): one home for which span a
+    # The design-fix lock for the portal pull backlog (index §COMMCALC-58): one home for which span a
     # login still owes, one window ceiling dereferenced from the pull loop, one natural key matching
     # migration 1116, and one fact for "a row pulled through a store's login belongs to that store".
     # Wired on the day the harness was written — a harness no workflow runs is a file, not a gate.

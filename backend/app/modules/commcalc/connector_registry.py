@@ -139,11 +139,11 @@ HOUSE_CONNECTORS = [
     _c(key=SUPPLIER_INVOICE_CONNECTOR, label="Supplier invoices (billing portal)", sort_order=150,
        notes="A supplier's own portal publishing the invoices it has billed us, pulled so every charge can be checked against the sale that should have collected for it (index §COMMCALC-38). The address, the report list, the date filters and the column vocabulary are declared per tenant on its own login row. Supplier-neutral: the distributor-only invoice feed ('vip') is its sibling, and index §COMMCALC-38 states why they are not yet one."),
     # ── mig 1117 appends from here (owner ask 2026-11-10) ─────────────────────────────────────────
-    # A processor's back office that issues ONE LOGIN PER STORE (index §COMMCALC-67). No host and ANY
+    # A processor's back office that issues ONE LOGIN PER STORE (index §COMMCALC-58). No host and ANY
     # scope for the reasons stated above: a kind, not a vendor, and any tenant may have a processor
     # that works this way. Its door and its dispatcher ship in one PR, as the §I ratchet requires.
     _c(key=PROCESSOR_BACKOFFICE_CONNECTOR, label="Payment processor back office (per-store logins)", sort_order=160,
-       notes="A payment processor's back office that issues ONE LOGIN PER STORE, pulled per store for the processor reconciliation (index §COMMCALC-67). The address, the report list, each report's filters and landing target, the login's own store and the date its history starts are declared per tenant on its own login row. Sibling of the company-wide owner-portal kind ('epay'), which is one login for the whole tenant and a different report family."),
+       notes="A payment processor's back office that issues ONE LOGIN PER STORE, pulled per store for the processor reconciliation (index §COMMCALC-58). The address, the report list, each report's filters and landing target, the login's own store and the date its history starts are declared per tenant on its own login row. Sibling of the company-wide owner-portal kind ('epay'), which is one login for the whole tenant and a different report family."),
 ]
 HOUSE_CONNECTOR_KEYS = [r["key"] for r in HOUSE_CONNECTORS]
 

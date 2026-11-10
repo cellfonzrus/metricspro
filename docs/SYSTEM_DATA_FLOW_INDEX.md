@@ -197,7 +197,7 @@ Primary code homes:
 | COMMCALC-55 | **A successful login is recognised by evidence, never by a guessed vocabulary** | The owner signed in to the carrier owners portal himself and sent the screenshot: the signed-in shell, greeting him by his e-mail address, offering "Multi-Door Owner Portal", "Commissions" and "Boost Activations" — and the sweep still reported "The sign-in page went away and we did not recognise what replaced it", with three carrier feeds frozen on a login that worked. §COMMCALC-52 was right to delete the old test (the vendor's name in the document title — a carrier name in code) and wrong to replace it with six house words: that is the platform guessing at a vocabulary it does not own, the same shape as a report defaulting to one tenant's POS labels. |
 | COMMCALC-56 | **A control is verified from the control, not from a field beside it** | With the login fixed (§COMMCALC-55), two of the three carrier feeds came back by themselves — MI/ATU daily, and the payment detail back-filled October to the 31st unaided. The comprehensive comp report stayed empty for a different reason: the sweep SET the "Summarize by" dropdown and then proved it by reading `input[name="DateIntervalOption"]`, the portal's own form plumbing under a name this platform does not own. That input is no longer on the page, so a settable filter read as unsettable on every tick, and one sentence ("hidden field = None") covered three different states an operator needed told apart. |
 | COMMCALC-57 | **A tile counts the list it prints, over the metrics the tenant declared** | "Need to organize the daily action plan to a more presentable way, it is right now a long report, collapse it per store, give our standard filters for store rep market date range, which metrics needs to be improved / all/ family plan etc. Make it tiled with focused metrics - cells on the all line metrics and it shows who needs improvement and so forth with the details at the bottom, the tiles should be switched between kpi / stores / sales reps" — a report nobody could read at a glance. The tempting build gives each tile a summed figure (a second fold of a number the server already folded) and a built-in metric list (one tenant's POS words answering for every tenant, §COMMCALC-49.10's class). What may a tile's headline figure BE, whose words name the metrics, and what does a tile over a feed that landed nothing have to say? |
-| COMMCALC-67 | **A pull can owe history, and a login can belong to a store** | A processor back office that issues ONE LOGIN PER STORE, asked for every report from the first of the year and daily after that. The pull loop could not be asked for history at all — its only window is "the last N days, clamped" — so the span a login still owes is now its own fact (`portal_backfill`) rather than a second pull loop, and a login can carry the store every row pulled through it belongs to. Universal, on for nobody until a tenant declares its logins. |
+| COMMCALC-58 | **A pull can owe history, and a login can belong to a store** | A processor back office that issues ONE LOGIN PER STORE, asked for every report from the first of the year and daily after that. The pull loop could not be asked for history at all — its only window is "the last N days, clamped" — so the span a login still owes is now its own fact (`portal_backfill`) rather than a second pull loop, and a login can carry the store every row pulled through it belongs to. Universal, on for nobody until a tenant declares its logins. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -240,7 +240,7 @@ email), (c) **RPC/manual entry**.
 | `raw_payment_detail` | `002_commcalc.sql:34` | `business_address, payment_type, amount, mdn, imei, payment_date, rep_username, sequence` | GP (payment categorization), commission reimbursement; **per-LINE commission** for the event ROI via `mdn` (99.85% populated) and `imei` — note the CHARGEBACK leg (`Commission Withholding`) is keyed by `imei` with NO `mdn` at all (349 house rows, 349 imei, 0 mdn), so a number-only join reports GROSS as if it were net (§23s.8) |
 | `merchant_settlement_day` | `955_merchant_portal_settlement.sql` | `org_id, source_id, portal_key, settlement_role, business_date, merchant_id, terminal_id, store_code, card_brand, gross_amount, refund_amount, net_amount, fee_amount, txn_count, batch_ref, raw` | **Merchant-processor card settlement** — the PROCESSOR side of the daily-closing card tally (§12a). Grain = org × source × merchant × business_date × card_brand |
 | `portal_metric_day` | `1078_portal_metric_day.sql` | `org_id, source_id, portal_key, report_key, business_date, store_code, store_key, store_label, employee_name, employee_key, metric_key, metric_basis, line_label, units, amount, source_line` | **What an external POS report says a store sold** — per worker, per DECLARED category (§COMMCALC-07). Grain = org × source × business_date × store × worker × category. Never merged into `closing_metric_line`, which is what the reps declared |
-| `portal_pull_backlog` | `1116_portal_pull_backlog.sql` | `org_id, source_id, report_key, window_from, window_to, state, attempts, rows_landed, last_error, last_attempt_at` | **Which spans of a portal login's declared history have been ANSWERED** (§COMMCALC-67). Grain = org × login × report set × date span. `done`/`empty` are answers, `failed` is retried to MAX_ATTEMPTS then reported as stuck. Written and read ONLY by `commcalc/portal_backfill.py`; not a feed and not evidence (`core.job_run` holds what a run did, this holds what is still owed) |
+| `portal_pull_backlog` | `1116_portal_pull_backlog.sql` | `org_id, source_id, report_key, window_from, window_to, state, attempts, rows_landed, last_error, last_attempt_at` | **Which spans of a portal login's declared history have been ANSWERED** (§COMMCALC-58). Grain = org × login × report set × date span. `done`/`empty` are answers, `failed` is retried to MAX_ATTEMPTS then reported as stuck. Written and read ONLY by `commcalc/portal_backfill.py`; not a feed and not evidence (`core.job_run` holds what a run did, this holds what is still owed) |
 | `merchant_settlement_batch` | `955_merchant_portal_settlement.sql` | `org_id, source_id, portal_key, settlement_role, deposit_date, batch_date, merchant_id, store_code, batch_ref, deposit_amount, fee_amount, raw` | Processor **funding** events (money to the bank) — cash/deposit recon (§12). A DIFFERENT grain from settlement; never sum the two |
 | `raw_mi` | `002_commcalc.sql:46` | `salesforce_id, actual_mi_payout, actual_atu_payout, phone_number, subscriber_status` | Carrier residual gate (paid-proof), MI/ATU |
 | `raw_dlar_rep` | `002_commcalc.sql:56` (+`012`,`031`, `1026`) | `rep_name, store, atu_pct, protect_pct, byod_pct, family_plan_pct, tmr3, aal_conversion, bounty, split, ga_prepaid` **+ `as_of_date`** (mig `1026`, the ADVOCATE report's own date — §19.28; NULL on rows written before it, where `created_at` is an upper bound only) | Rep KPI, comp trend, the pay engine's tier |
@@ -26340,7 +26340,8 @@ status word rather than a blank that reads as nil.
 | COMMCALC-54 | commcalc |
 | COMMCALC-55 | commcalc |
 | COMMCALC-56 | commcalc |
-| COMMCALC-67 | commcalc |
+| COMMCALC-57 | commcalc |
+| COMMCALC-58 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -29253,7 +29254,7 @@ card brand, settlement role or declared category.
 
 Adapters, in registry order: the card-settlement feed, the POS report (§COMMCALC-07), the supplier
 invoice (§COMMCALC-38) and — since 2026-11-10 — a payment processor's **per-store** back office
-(§COMMCALC-67), which is also the feed that made "this pull owes HISTORY" a fact with its own home
+(§COMMCALC-58), which is also the feed that made "this pull owes HISTORY" a fact with its own home
 (`portal_backfill`) instead of a second pull loop.
 
 **`backend/app/modules/commcalc/pos_report_feed.py`** (PURE) — "what does a report line MEAN in this
@@ -44665,14 +44666,14 @@ The comp report's own 14-day refresh window still does not reach 7 October, so t
 one widening by hand once the leg is pulling.
 
 
-## §COMMCALC-67. A PULL CAN OWE HISTORY, AND A LOGIN CAN BELONG TO A STORE (owner ask 2026-11-10)
+## §COMMCALC-58. A PULL CAN OWE HISTORY, AND A LOGIN CAN BELONG TO A STORE (owner ask 2026-11-10)
 
 **Owner, verbatim:** *"Create access to these back office to pull reports from epay for each
 individual store for epay reconciliation in boost, make it universal but turn it on for boost only …
 Each store has their individual logins, we will pull all avaibake reports very day and first time
 from the beginning of the year 2026 till date then update very day autonomously"*.
 
-### COMMCALC-67.1 THE CLASS, not the instance
+### COMMCALC-58.1 THE CLASS, not the instance
 
 The platform already has ONE portal pull loop (§COMMCALC-07) that three feeds ride as adapters. Two
 general facts it could not state are what this ask needed, and **neither is this tenant's or this
@@ -44690,7 +44691,7 @@ vendor's**:
    it except a second pull loop with its own window arithmetic: the duplicate defect the index rules
    forbid, which would have arrived with the first tenant who said *catch me up*.
 
-### COMMCALC-67.2 THE ONE HOMES
+### COMMCALC-58.2 THE ONE HOMES
 
 **`backend/app/modules/commcalc/portal_backfill.py`** — "which span of days does this login still owe,
 and which has it answered". `plan_windows` / `owed_windows` / `stuck_windows` / `choose` / `state_of` /
@@ -44718,7 +44719,7 @@ on the source row, and no vendor, portal, carrier or tenant name exists in the m
 the DECLARED registry still wins where it has an answer, and the login answers where it has none.
 A company-wide caller passes nothing and is unchanged.
 
-### COMMCALC-67.3 WHAT LANDS, AND WHAT IS ONLY EVIDENCE
+### COMMCALC-58.3 WHAT LANDS, AND WHAT IS ONLY EVIDENCE
 
 A declared report names its `target`; `TARGETS` is the registry of the ones this version knows. Today
 that is the processor's transaction detail, landing through the feed's EXISTING ingest into
@@ -44728,7 +44729,7 @@ is reported with the columns it published, so the next report is mapped from wha
 contains. A login with no store and no terminal mapping REFUSES: money under no store is worse than
 money that waited. A zero-row pull is never a green tick.
 
-### COMMCALC-67.4 UNIVERSAL, AND LIVE WHERE A TENANT DECLARES IT
+### COMMCALC-58.4 UNIVERSAL, AND LIVE WHERE A TENANT DECLARES IT
 
 Every column is per-login config; the connector registry row (mig 1117) carries NO host and ANY
 POS/carrier scope, so any tenant can use it the day it declares a login. Which tenant it is LIVE for
@@ -44737,7 +44738,7 @@ Cross-tenant tests assert both halves: each tenant's declaration produces its ow
 tenant's declaration never produces rows for another (`tests/unit/
 test_processor_backoffice_sweep.py::test_two_tenants_each_get_their_own_declaration_and_never_each_others`).
 
-### COMMCALC-67.5 MIGRATIONS
+### COMMCALC-58.5 MIGRATIONS
 
 `1116_portal_pull_backlog.sql` — `commcalc.portal_pull_backlog` (one row per org × login × report set ×
 span) + `data_source.store_code` / `.history_from` / `.history_chunk_days`. `1117_connector_registry_
@@ -44745,7 +44746,7 @@ processor_backoffice.sql` — the connector's door. Both additive, idempotent, g
 only, and NOT money-touching. **SURFACED FOR APPROVAL, not applied** — until they are, the connector
 cannot be picked and the columns do not exist, and every read of them is guarded.
 
-### COMMCALC-67.6 Locked
+### COMMCALC-58.6 Locked
 
 `backend/harness_portal_backfill.py` (46 checks, DB-free, wired into `tests.yml` as *One home for the
 span a pull owes*): the one home is the only module that plans a span or touches the backlog, the
@@ -44755,7 +44756,7 @@ adapter names no vendor and defines no loop. Every check carries a control that 
 Tests: `tests/unit/test_portal_backfill.py` (13), `tests/unit/test_processor_backoffice_sweep.py` (13),
 `tests/integration/test_processor_backoffice_pull.py` (5) — all RED before the code existed.
 
-**A SAVE IS NEVER REFUSED WHOLE BECAUSE THE SCHEMA IS BEHIND THE CODE (§COMMCALC-67.6a).** Found by
+**A SAVE IS NEVER REFUSED WHOLE BECAUSE THE SCHEMA IS BEHIND THE CODE (§COMMCALC-58.6a).** Found by
 asking what this PR does on a database where 1116 has not been applied yet: `_SOURCE_FIELDS` has
 grown with every additive migration since 083 and the settings form posts every field the build
 knows, so ONE absent column makes PostgREST refuse the entire row (PGRST204) — editing ANY portal
@@ -44767,7 +44768,7 @@ not have, and NAMES them back as `unstorable` + `note`, which the page shows as 
 An empty relation answers "cannot be established", so with nothing to lose the save proceeds whole.
 Tests: `tests/unit/test_data_source_save_shape.py` (4). Locked by §F2 of the harness above.
 
-### COMMCALC-67.7 What this does NOT do, stated plainly
+### COMMCALC-58.7 What this does NOT do, stated plainly
 
 - **Nothing is switched on.** No credential is stored by this change, no schedule is registered, and
   no feed pulls until a tenant creates its logins and authenticates once on the live login.
