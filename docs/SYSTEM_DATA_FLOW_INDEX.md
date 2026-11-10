@@ -196,6 +196,7 @@ Primary code homes:
 | COMMCALC-54 | **"Which plan am I on?" is a question with one answer and three steps** | "the plan which is active in incentive payout when you click on it it takes you to the page which has all kinds of Incentive structure listed which becomes confusing even to me ... all of this should be a work flow than random data seen on the screen" — the confusing page is the symptom. Nothing in the platform ANSWERED "which plan am I on": three surfaces showed the operator the raw plan table and left the question to them, and one of them owned the live/belongs predicate privately. An unassigned plan pays nobody, so calling it active is the plausible-looking answer that hides the class. |
 | COMMCALC-55 | **A successful login is recognised by evidence, never by a guessed vocabulary** | The owner signed in to the carrier owners portal himself and sent the screenshot: the signed-in shell, greeting him by his e-mail address, offering "Multi-Door Owner Portal", "Commissions" and "Boost Activations" — and the sweep still reported "The sign-in page went away and we did not recognise what replaced it", with three carrier feeds frozen on a login that worked. §COMMCALC-52 was right to delete the old test (the vendor's name in the document title — a carrier name in code) and wrong to replace it with six house words: that is the platform guessing at a vocabulary it does not own, the same shape as a report defaulting to one tenant's POS labels. |
 | COMMCALC-56 | **A control is verified from the control, not from a field beside it** | With the login fixed (§COMMCALC-55), two of the three carrier feeds came back by themselves — MI/ATU daily, and the payment detail back-filled October to the 31st unaided. The comprehensive comp report stayed empty for a different reason: the sweep SET the "Summarize by" dropdown and then proved it by reading `input[name="DateIntervalOption"]`, the portal's own form plumbing under a name this platform does not own. That input is no longer on the page, so a settable filter read as unsettable on every tick, and one sentence ("hidden field = None") covered three different states an operator needed told apart. |
+| COMMCALC-57 | **A tile counts the list it prints, over the metrics the tenant declared** | "Need to organize the daily action plan to a more presentable way, it is right now a long report, collapse it per store, give our standard filters for store rep market date range, which metrics needs to be improved / all/ family plan etc. Make it tiled with focused metrics - cells on the all line metrics and it shows who needs improvement and so forth with the details at the bottom, the tiles should be switched between kpi / stores / sales reps" — a report nobody could read at a glance. The tempting build gives each tile a summed figure (a second fold of a number the server already folded) and a built-in metric list (one tenant's POS words answering for every tenant, §COMMCALC-49.10's class). What may a tile's headline figure BE, whose words name the metrics, and what does a tile over a feed that landed nothing have to say? |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -7857,6 +7858,7 @@ Cross-ref §14s (the three hours states), §14y, §13d/§64 (the store resolver)
 | **Clock variance** (ours vs the B2B report), per store-employee-day | both numbers, our basis, the classified kind, and whether it blocks | `storeops/clock_variance.compare` — nine kinds, an unruled kind BLOCKS, a day with no file is its own kind (§14z) |
 | **Reconciled paid hours**, and the sentence saying why | the window the two clock records agree on (house default), or the ruling read literally, or ours alone — declared per org | `payroll_hours_basis.reconcile_clock_records`. Measured 2026-10-09 across 16 pairs: today 146.42h/$2,156.45 · literal 143.63h/$2,113.60 · house default 142.98h/$2,102.63 (§14z) |
 | **Employees a payroll run would price at $0.00** | an active hourly employee with no `pay_rate` | `clock_variance.employees_without_rate` → `payroll_run_gate`, which REFUSES and names them. Measured 2026-10-10: 13 of 46 house hourly employees (§14z) |
+| **Who needs improvement — by metric, by store, or by sales rep?** | the verdicts the action-plan endpoint already reached (a category's severity from `targets_engine.build_action_items`, a KPI's pass/fail AND what nothing fed from `kpi_failing.evaluate`, at-risk dollars from the calculated commission rows), grouped three ways | `frontend/src/lib/action-plan-tiles.ts` — `planMetrics` reads THIS tenant's declared axis off the payload and `buildTiles` takes it as a REQUIRED argument, so nothing declared means no tiles rather than house words. A tile's figure is the CARDINALITY of the list it prints (never a re-summed target, achieved or need — that fold stays `targets_drilldown.team_totals`'), and a metric nothing fed reads `not measured` with no figure at all. Lock: `harness_action_plan_tiles.py` (§COMMCALC-57) |
 
 - **Which of my stores is running down, and in which month-of-life rung?** — ONE home `commcalc/commission_leg_store_trend` (`pivot` / `partial_months` / `totals_row` / `ties_to` / `ladder_public`), a PURE pivot of `router._commission_leg_trend_compute`'s own money; the rungs are `commission_legs.months_present`'s, from the DATA. Lock `harness_commission_leg_store_trend.py` (76). Live 2026-10-15, house org, May–Sep complete months: 28 stores, every month ties exactly; company **−$25,534.27 / −19.4%** of which M1 is only −3.7% — M2–M12 −17.9% and the Unlabelled rung **−50.6%**; `1710 W 4th St` −46.1% with its M1 −38.9% (shrinking now) against `117 E Burnside Ave` whose **M1 moved 0.0%** while M2–M12 fell 35.9% and **M4 fell $594.60** (a cohort lost four months ago) — §COMMCALC-12.
 - **Where is the M2–M12 commission on the P&L, and which store's trailing legs are running down?** — the commission line is shown in TWO parts: the money this month's own activations earned, and `account/ma_store_pnl.CARRIER_COMM_TRAILING_LINE` ("Carrier commissions & incentives — M2–M12 (trailing legs, activated in an earlier month)"), an `auto_opt` revenue line INSERTED into `coa.PL_SPEC` beside the line it divides. ONE home for the split: `ma_store_pnl.split_leg_bookings`, re-pointing the trailing-rung dollars of bookings that already exist — the rung is the booking's OWN (`ma_commission_bookings` / `ma_tx_bookings` emit a lockstep `legs` tag from the `ma_field_leg` / `month_leg_of` call they already make), the bucket is `commission_legs.bucket_for_leg`, the switch is `pl_carrier_comm_leg_split` (mig `1086`, house answer ON). **Every P&L total is identical to the cent either way** — both halves are revenue lines of one section — and `harness_prospect_eval.py` §V2 (`no_total_moved`) asserts it by name. Per STORE with every uploaded month side by side: `prospect_eval.commission_leg_store_months`, which is §COMMCALC-12's own pivot fed by the prospect's uploads (no second pivot, no second money path). Today's only caller is the Store Takeover Evaluation; the live P&L is excused in writing — §COMMCALC-15.5. — §COMMCALC-15.
@@ -26336,6 +26338,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-54 | commcalc |
 | COMMCALC-55 | commcalc |
 | COMMCALC-56 | commcalc |
+| COMMCALC-57 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -45547,3 +45550,112 @@ RED before the home existed. Cross-references: §19.18 (one fact, one home, dere
 copied) · §PAYABLES-02 (the report that surfaced it) · §CORE-17.3h (a figure no rows add up to) ·
 §4c (the 2026-09-26 Excel half of the 2026-09-10 fix) · §CORE-10 gate B (a derived subject set is
 asserted by name, never by a lower bound).
+
+## §COMMCALC-57. A TILE COUNTS THE LIST IT PRINTS, OVER THE METRICS THE TENANT DECLARED (owner ask 2026-11-10)
+
+Owner, verbatim: *"Need to organize the daily action plan to a more presentable way , it is right
+now a long report , collapse it per store , give our standard filters for store rep market date
+range , which metrics needs to be improved / all/ family plan etc. Make it tiled with focused
+metrics - cells on the all line metrics and it shows who needs improvement and so forth with the
+details at the bottom , the tiles should be switched between kpi / stores / sales reps"*.
+
+### COMMCALC-57.1 WHAT WAS ALREADY THERE, so was not built again
+
+The duplicate check, stated for the PR: **nothing in this change derives a figure.** The endpoint
+`GET /commcalc/targets/{period}/action-plan` (§5, §59.7, §CORE-17.3m) had already decided every
+verdict the new tiles show —
+
+| the question a tile asks | who already answered it |
+| --- | --- |
+| is this store behind on a declared category, and how badly | `targets_engine.build_action_items` (the item AND its severity) |
+| did this rep meet a KPI | `kpi_failing.evaluate` → `commission.kpis` |
+| **did anything FEED that KPI** | the same call → `commission.kpis_no_data` |
+| how much of this rep's commission is at risk | the calculated `rep_commissions` rows |
+| what has the team achieved against its target | `targets_drilldown.team_totals` (`team_total`) |
+
+and so had every surface the redesign needed: the standard filters (`components/StandardFilterBar`
+over `lib/standard-filters`, §CORE-27/§CORE-28), the sender (`lib/send-report.SendReportButton`), the
+mailed tile row (`lib/tile-snapshot.tileSnapshotSheet`, §COMMCALC-19) and the drill panels
+(`components/DrillDownPanel`, §CORE-17.3m). **No new endpoint, no migration, no money moved.**
+
+### COMMCALC-57.2 THE CLASS, not the instance
+
+Three ways the obvious build goes wrong, each already a defect this house has paid for:
+
+1. **A tile with a summed headline is a SECOND FOLD.** "Boxes: 1,240 of 1,800" on a screen is the
+   same figure `team_total` folds on the server — two numbers hoping to agree (§CORE-17.3m's own
+   reason for existing), and the moment a filter narrows the view they stop agreeing. So **a tile's
+   figure is the CARDINALITY of the list it prints** — how many stores or reps need improvement —
+   which is true under every narrowing, and the roll-up keeps its one home.
+2. **A metric list written into a screen is one tenant's vocabulary answering for all of them**
+   (directive 2026-10-30; §COMMCALC-49.10 is the instance that read 1,034 handsets as zero). The
+   axis is READ off the payload (`planMetrics`) and is a **required argument** to the fold; nothing
+   declared means **no tiles**, never house words.
+3. **"0 behind" over a feed that landed nothing reads as a clean sheet.** This is live: the DLAR
+   gross adds / activations / upgrades columns stopped arriving with the Elevate Go renames, so the
+   KPIs over them arrive as `kpis_no_data`. A tile for one of those says **not measured** and carries
+   no figure — and so does the mailed copy, which has no small print to question it.
+
+### COMMCALC-57.3 THE ONE HOME
+
+**`frontend/src/lib/action-plan-tiles.ts`** — "how the Daily Action Plan is grouped into tiles",
+pure (no React, no fetch, no clock) and therefore provable away from the DOM:
+
+| export | what it is the one home for |
+| --- | --- |
+| `planMetrics(stores)` | THIS tenant's focusable metrics, read off their own payload: the target categories they declared plus the KPIs their pay engine scored. A KPI that arrived only as no-data **is** declared — reporting that nothing fed it is the tile's job |
+| `metricKey(grain, key)` | the composite identity, so a word shared by a target category and a rep KPI cannot collide |
+| `buildTiles(stores, decls, view, selected)` | the three views. `decls` is REQUIRED; `selected` is the picker's narrowing, and a selection of keys this tenant never declared narrows to **nothing** rather than widening back to all |
+| `filterPlan(stores, sel)` | the standard filters over the plan. Store and market go through the shared `matchesStandardFilter`; the rep half cannot, because a plan row is a STORE carrying many reps — a store matches when any of its reps does. A rep picked WITHOUT a store still drops the store-wide items (a store-wide figure is a cross-rep figure), and the peer-gap item still survives, because it names a store and never a colleague (§59.7) |
+| `tilesToSnapshot(tiles)` | the tile row as `tileSnapshotSheet` takes it. `measured` is false on every row because **this report compares no two periods** — the Zero Sales posture (§CORE-27) — and whether the tile's own figure was measured is in the note |
+
+**A rep working two stores is folded ONCE.** The endpoint keys commission rows by REP, so the same
+row rides both store rows: summing their at-risk dollars would invent money that is not at risk.
+`repsFolded` takes the first non-null commission and lists the stores.
+
+### COMMCALC-57.4 The screen
+
+`frontend/src/app/(platform)/commcalc/targets/action-plan/page.tsx` — the tile row with its
+KPI / Stores / Sales reps toggle (rendered off `TILE_VIEWS`, so the toggle and the fold cannot
+disagree about which views exist), the metric picker over `planMetrics`, `<StandardFilterBar>` in
+month mode with the store/market cascade and the people picker, and **the detail collapsed per store
+at the bottom**, closed until opened, with expand-all / collapse-all.
+
+**The month and the "as of" day are the SERVER'S parameters, not client narrowings.** The month lives
+in the shared period context (no copy in this page's filter state — a copy is a second home for the
+month) and the "as of" day is the engine's own `today=`, which moves pace, what is left and today's
+share. A free date RANGE is deliberately not offered: the targets engine spreads a MONTH, so a range
+across two months has no single target to be behind on, and inventing one would be a fabricated
+denominator.
+
+### COMMCALC-57.5 Every tenant
+
+`buildTiles` cannot answer without the declarations, and a declaration no row in the plan carries
+yields no tile at all — so one tenant's words over another tenant's plan produce **nothing**, in
+both directions. Proved both ways round in the unit file, and proved at the endpoint for THREE orgs
+with three different declared KPI vocabularies (`commcalc.carrier_kpi_metric`), three stores, three
+reps and three different target axes, including a test that no tenant's words reach another's plan.
+
+### COMMCALC-57.6 Locked
+
+- **`backend/harness_action_plan_tiles.py`** (57 checks, 7 negative controls; CI job *One tile fold,
+  the tenant's own metrics (lock)* in `tests.yml`). It fails the build if the page stops
+  dereferencing the fold, keeps a view list of its own, sums a target / achieved / need, stops
+  reading `team_total`, spells any metric key or KPI label in either file, gives the declarations
+  argument a default, lets an unmeasured tile carry a figure, drops the standard filter bar or the
+  one sender, mails a second snapshot shape, or stops collapsing the detail per store. Every scan is
+  shown finding its target in a control string, and a comment quoting the rule is shown NOT to
+  satisfy it.
+- **`frontend/src/lib/__tests__/action-plan-tiles.test.ts`** — 26 vitest units, written before the
+  module, over two tenants with different vocabularies (CI job *Frontend unit and component tests*).
+- **`frontend/src/app/(platform)/commcalc/targets/action-plan/__tests__/page.test.tsx`** — 8
+  component tests that RENDER the real page over two tenants' words: the tile row, the toggle, the
+  detail starting collapsed, and an unfed KPI saying so on screen.
+- **`backend/tests/integration/test_action_plan_tiles_endpoint.py`** — the endpoint contract the
+  tiles read, over three tenants through the real app (CI job *Backend integration tests*).
+
+### COMMCALC-57.7 What this does NOT fix, stated plainly
+
+The DLAR gross adds / activations / upgrades columns are still empty, so the KPIs over them read
+**not measured** here rather than zero — that is this change reporting the defect, not repairing it.
+The feed itself is the portal-download thread's work.
