@@ -137,6 +137,11 @@ check("C3 the connector registry's cap loader DEREFERENCES that reader rather th
       not re.search(r'table\("ui_label_override"\)', code_only(CR)))
 check("C4 a grant has THREE states and absence is one of them",
       "def grant_state(" in FG and "if value is None:" in FG and "return None" in FG)
+check("C4b what is READ OUT of the shared grant home is read STRICTLY — only the two words this "
+      "module writes, so another writer's synonym cannot mean 'granted'",
+      "def stored_grant(" in FG and "g = stored_grant(r.get(\"label\"))" in FG,
+      "load_grants must use the strict reader, not the lenient inbound one")
+ctl("C4b can go red", 'g = stored_grant(r.get("label"))' in FG)
 check("C5 clearing a decision DELETES the row rather than storing the opposite",
       re.search(r"if value is None:\s*\n\s*tbl\.delete\(\)", FG) is not None)
 
@@ -210,6 +215,26 @@ check("G7 the board takes an explicit org, never the middleware-rewritten org_id
 check("G8 the page is registered in NAV as platform-only",
       "/admin/tenant-gates" in RBAC and
       re.search(r"/admin/tenant-gates'[^}]*platformOnly: true", RBAC) is not None)
+
+print("\nG2. who may widen — the escalation path the security pass found")
+RT = read("backend", "app", "modules", "commcalc", "router.py")
+check("G2a the list of namespaces whose widening is platform-only has ONE home, in the gate",
+      "PLATFORM_WIDEN_PREFIXES" in FG and "def widening_is_platform_only(" in FG)
+check("G2b every gate KIND is in that list, derived from CAP_PREFIX rather than re-spelled",
+      "tuple(CAP_PREFIX[k] for k in KINDS)" in FG)
+check("G2c the cap WRITER dereferences it instead of enumerating the prefixes",
+      "_feature_gate.widening_is_platform_only(scope, key, label)" in RT and
+      not re.search(r"key\.startswith\('(carrier|pos|vertical|closing):'\)", RT),
+      "an inline enumeration is the copy that fell behind `connector:`")
+ctl("G2c can go red", "_feature_gate.widening_is_platform_only(scope, key, label)" in RT)
+check("G2d the refusal asks what the value MEANS, never whether it spells one word",
+      "if grant_state(label) is not True:" in FG and
+      re.search(r"def widening_is_platform_only[\s\S]{0,700}?!=\s*GRANT_ON", FG) is None,
+      "a == 'show' test leaves 'yes' / 'on' / '1' / true walking past it")
+check("G2e narrowing is still the tenant's own — the asymmetry is the safety property",
+      "GRANT_OFF" in FG and "def starter_grants(" in FG)
+check("G2f no OTHER caller-controlled-scope writer reaches the cap scope",
+      len(re.findall(r"\.table\('ui_label_override'\)[\s\S]{0,200}?upsert", RT)) <= 2)
 
 print("\nH. RULE TWO, and the house-org trap that produced the bug")
 VENDORS = ("cellfonz", "luxelink", "vzone", "boost", "vidapay", "epay", "b2bsoft", "t-cetra")

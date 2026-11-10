@@ -125,10 +125,15 @@ check("A3 a GRANT opens a gated tenant, and is recorded as a human's decision",
 check("A4 a DENY shuts a thing the declaration would have shown — a gate a rule cannot re-open",
       FG.decide(grant=False, posture=FG.POSTURE_INHERIT, by_rule=True) ==
       {"allowed": False, "basis": FG.BASIS_DENY, "decided": True})
-check("A5 the grant homes' own spellings read as the same three states",
+check("A5 an inbound value reads as the same three states",
       (FG.grant_state("show"), FG.grant_state("hide"), FG.grant_state(None),
        FG.grant_state(True), FG.grant_state(False), FG.grant_state("whatever")) ==
       (True, False, None, True, False, None))
+check("A6 a STORED label is read STRICTLY — only the two words this module writes are a decision, "
+      "because the grant home is shared with another writer",
+      (FG.stored_grant("show"), FG.stored_grant("hide"), FG.stored_grant("yes"),
+       FG.stored_grant("on"), FG.stored_grant("1"), FG.stored_grant(True),
+       FG.stored_grant(None)) == (True, False, None, None, None, None, None))
 ctl("A can go red", FG.allowed(grant=None, posture=FG.POSTURE_GATED) is False)
 
 print("\nB. the degrade direction — a gate must never start refusing on its own")
@@ -262,6 +267,33 @@ check("G4 nothing else is pre-decided — absence means nobody has decided yet",
 check("G5 the starter policy is a module policy only, never a connector or a report kind",
       FG.starter_grants(FG.KIND_CONNECTOR, ["epay"]) == {} and
       FG.starter_grants(FG.KIND_REPORT_KIND, ["x"]) == {})
+
+print("\nH. WHO MAY WIDEN — the escalation the security pass found")
+check("H1 widening ANY gate namespace is the platform's call",
+      all(FG.widening_is_platform_only("cap", p + "whatever", FG.GRANT_ON)
+          for p in FG.PLATFORM_WIDEN_PREFIXES))
+check("H2 the gate's own three kinds are in that list — a grant namespace missing from it is a "
+      "tenant granting itself what its configuration withheld",
+      all(FG.CAP_PREFIX[k] in FG.PLATFORM_WIDEN_PREFIXES for k in FG.KINDS))
+check("H3 NARROWING stays the tenant's own business — it can only ever show less",
+      not FG.widening_is_platform_only("cap", "module:account", FG.GRANT_OFF) and
+      not FG.widening_is_platform_only("cap", "connector:anything", FG.GRANT_OFF))
+check("H4 clearing a row is narrowing too (no label = no widening)",
+      not FG.widening_is_platform_only("cap", "module:account", "") and
+      not FG.widening_is_platform_only("cap", "module:account", None))
+check("H5 a display nickname is untouched — this is about the cap scope alone",
+      not FG.widening_is_platform_only("nav", "module:account", FG.GRANT_ON) and
+      not FG.widening_is_platform_only("group", "Commissions", FG.GRANT_ON))
+check("H6 the answer does not depend on spelling or padding",
+      FG.widening_is_platform_only(" CAP ", "module:account", " SHOW "))
+check("H7 a SYNONYM for yes is refused too — the test asks what the value MEANS, never whether it "
+      "spells one word (the gap the security pass found in the first fix)",
+      all(FG.widening_is_platform_only("cap", "module:account", v)
+          for v in ("yes", "on", "1", "true", "enabled", True)),
+      "a == 'show' test lets every synonym walk past the refusal")
+check("H8 …and such a row would not be a grant even if it were stored",
+      all(FG.stored_grant(v) is None for v in ("yes", "on", "1", "true", "enabled")))
+ctl("H can go red", FG.widening_is_platform_only("cap", "module:x", "show") is True)
 
 print("\n" + "=" * 100)
 print("%d passed, %d failed" % (P, F))

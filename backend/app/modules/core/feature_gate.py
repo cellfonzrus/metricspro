@@ -103,6 +103,45 @@ GRANT_HOME = {k: f"commcalc.ui_label_override scope '{CAP_SCOPE}' key '{p}<key>'
 GRANT_ON = "show"
 GRANT_OFF = "hide"
 
+# ── WHO MAY WIDEN — THE one list of `cap` namespaces whose "show" is the PLATFORM'S decision ──────
+# Owner directive 2026-09-13, which `POST /commcalc/nav-labels` already enforces: *"if they need them
+# then the super admin should have a full role permission exclusively for super admin to assign to
+# the new or existing tenants which have been gated out due to carrier or pos settings."* The rule is
+# asymmetric on purpose and the asymmetry IS the safety property: NARROWING (`hide`, or clearing the
+# row) is a tenant's own business and can only ever show LESS, so it stays open to a menu-layout
+# admin; WIDENING past a gate re-grants something the tenant's own configuration says it does not
+# have, so it is the platform's call.
+#
+# THIS LIST IS WHY IT LIVES HERE (found by the security pass this feature's own PR required). That
+# writer ENUMERATED the namespaces inline, and the enumeration had fallen behind the mechanisms:
+# `connector:` was already missing, and making `module:` a grant namespace would have let any
+# menu-layout admin POST `cap` / `module:<key>` / `show` and hand their own tenant a module its
+# billing plan or business type excludes. A list of "which gates may a tenant re-open for itself"
+# with two copies is a privilege-escalation path waiting for the next namespace. One home, and the
+# lock fails the build if the writer stops dereferencing it.
+PLATFORM_WIDEN_PREFIXES = tuple(CAP_PREFIX[k] for k in KINDS) + (
+    "carrier:",     # commcalc/report_kinds — the carrier a tenant declared
+    "pos:",         # commcalc/report_kinds — the POS a tenant declared
+    "vertical:",    # core/verticals (migs 1020/1024) — the kind of business, per PAGE
+    "closing:",     # core/verticals — the kind of business, per closing-form input
+)
+
+
+def widening_is_platform_only(scope, key, label):
+    """Does this `ui_label_override` write RE-GRANT something a gate withheld? True = super admin
+    only. PURE, and the ONE answer: a writer that asks this cannot fall behind the namespaces.
+
+    The label is judged by `grant_state`, NOT by comparing it to the one word `show` — the security
+    pass on this feature pointed out that a `== "show"` test leaves every synonym a caller might
+    send ('yes', 'on', '1', `true`) walking straight past a refusal. Asking the same function that
+    decides what a value MEANS is the only version of this test that cannot drift from it."""
+    if str(scope or "").strip().lower() != CAP_SCOPE:
+        return False
+    if grant_state(label) is not True:
+        return False
+    k = str(key or "").strip()
+    return any(k.startswith(p) for p in PLATFORM_WIDEN_PREFIXES)
+
 # ── THE BASIS VOCABULARY — WHY the answer is what it is. A surface prints these words. ────────────
 BASIS_GRANT = "granted to this tenant by a super admin"
 BASIS_DENY = "gated off for this tenant by a super admin"
@@ -131,10 +170,23 @@ def gated(value):
     return posture(value) == POSTURE_GATED
 
 
+def stored_grant(value):
+    """A grant as it was STORED, read strictly: only the two words this module writes (`show` /
+    `hide`) are a decision; anything else is None, "nobody has decided".
+
+    Deliberately stricter than `grant_state` below, and the strictness is a security property found
+    by this feature's own security pass: the grant home is a shared display-config table with
+    another writer, so a row whose label this module did not write must not be able to mean
+    "granted" by being a synonym for yes. PURE."""
+    v = str(value or "").strip().lower()
+    return True if v == GRANT_ON else (False if v == GRANT_OFF else None)
+
+
 def grant_state(value):
-    """A stored grant as the truth table reads it: True (granted) / False (gated off) / None (no
-    decision). Accepts the three shapes the grant homes return — a bool, the `cap` row's
-    'show'/'hide' label, and absence. PURE."""
+    """A grant as an API CALLER expressed it: True (granted) / False (gated off) / None (no
+    decision). Lenient on purpose — it reads a bool, the two stored words, and the ordinary
+    synonyms — because it is what validates an inbound request before `save_grant` normalises it to
+    one of the two words. For a value READ BACK OUT of the grant home, use `stored_grant`. PURE."""
     if value is None:
         return None
     if isinstance(value, bool):
@@ -226,7 +278,7 @@ def load_grants(client, org_id, kind):
         k = str(r.get("key") or "")
         if not k.startswith(prefix):
             continue
-        g = grant_state(r.get("label"))
+        g = stored_grant(r.get("label"))
         if g is not None:
             out[k[len(prefix):]] = g
     return out

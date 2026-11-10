@@ -21298,10 +21298,13 @@ def set_nav_label(body: NavLabelIn, org_id: str = ORG_ID,
     # The tenant's BUSINESS TYPE (mig 1020/1024, index §35) is the same kind of gate: 'vertical:<href>' (a page)
     # and 'closing:<input>' (a closing-form input) — re-showing what the business type hides is the platform's
     # call; hiding more, or resetting to follow the business type, stays the tenant's own.
-    if scope == 'cap' and label.lower() == 'show' and not gc["super_admin"] \
-            and (key.startswith('carrier:') or key.startswith('pos:') or key.startswith(_report_kinds.CAP_PREFIX)
-                 or key.startswith('vertical:') or key.startswith('closing:')):
-        raise HTTPException(403, "Turning a carrier-, POS- or business-type-gated option back on is reserved for "
+    # THE list of namespaces whose widening is the platform's call is DEREFERENCED, not enumerated
+    # here (owner 2026-11-10, found by §CORE-41's security pass): this test used to spell the
+    # prefixes, and the spelling had already fallen behind `connector:`. A gate namespace missing
+    # from it is a tenant granting itself what its own configuration withheld.
+    from app.modules.core import feature_gate as _feature_gate
+    if not gc["super_admin"] and _feature_gate.widening_is_platform_only(scope, key, label):
+        raise HTTPException(403, "Turning a gated option back on is reserved for "
                                  "a platform super-admin. You can still hide it, or reset it to follow your "
                                  "settings. Ask the platform team to re-grant it.")
     client = sb()

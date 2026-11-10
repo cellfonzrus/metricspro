@@ -46340,6 +46340,29 @@ BELOW this question) · `core/verticals` (1020 — a fact about the module, feed
 `storeops.tenants.plan_status` / `package_key` (billing state, not reach). None held "a human decided
 this tenant may or may not have this".
 
+**THE SECURITY PASS (required before go-live, owner 2026-10-30) FOUND A PRIVILEGE ESCALATION IN THIS
+FEATURE'S OWN FIX, and it is the reason `feature_gate.PLATFORM_WIDEN_PREFIXES` exists.** The grant
+home is a SHARED display-config table with another writer: `POST /commcalc/nav-labels` takes a
+caller-controlled `scope`, is gated only on the tenant-level `menu_layout` area, and has refused to
+WIDEN a gated option since the owner's 2026-09-13 directive — but it ENUMERATED the namespaces
+inline, and the enumeration had already fallen behind `connector:`. Adding `module:` as a grant
+namespace would therefore have let any menu-layout admin POST `cap` / `module:<key>` / `show` for
+their own tenant, and `effective_modules` → `sync_tenant` → `tenant_modules` would have turned it
+into real access to a module their billing plan or posture excluded — the "from the get go" gate
+defeated by the tenant it gates. Two things were wrong and both are closed:
+  · the list of "which gates may a tenant re-open for itself" had two copies. It has ONE home now
+    (`PLATFORM_WIDEN_PREFIXES`, DERIVED from `CAP_PREFIX` so a new kind cannot be forgotten) and
+    `set_nav_label` dereferences `widening_is_platform_only`; the lock fails the build if it stops.
+  · the refusal compared the label to the one word `show`, while `grant_state` also reads
+    `yes` / `on` / `1` / `true` as a grant — every synonym walked past it. The refusal asks what the
+    value MEANS now. Belt and braces on the read side too: `stored_grant` (what `load_grants` uses)
+    accepts ONLY the two words this module writes, so a label another writer put there cannot mean
+    "granted" by being a synonym for yes.
+NARROWING stays the tenant's own business — `hide`, or clearing the row, can only ever show LESS —
+and that asymmetry is the safety property, not an oversight. Regressions: `harness_feature_gate.py`
+§A6/§H7/§H8, `harness_feature_gate_lock.py` §C4b/§G2d-f, and nine integration cases over the real
+`nav-labels` endpoint.
+
 Cross-references: §CORE-13 (the connector registry whose predicate this extends by one axis) ·
 §19.18 (one fact, one home, dereferenced — never copied) · §COMMCALC-49.10 (a feature is not finished
 until it works for every tenant) · §CORE-33 (what a PERSON may reach — the sibling subject) · §35

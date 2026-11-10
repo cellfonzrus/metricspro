@@ -169,6 +169,50 @@ def test_a_kind_the_vocabulary_does_not_name_is_refused(api_client, wired):
                 {"org": ORG_A, "kind": "whatever", "key": "x", "grant": True}).status_code == 400
 
 
+# ── THE ESCALATION PATH THE SECURITY PASS FOUND ──────────────────────────────────────────────────
+# The grant home is `ui_label_override` scope 'cap', a table a TENANT admin can already write through
+# `POST /commcalc/nav-labels`. That writer has refused to WIDEN a gated option since the owner's
+# 2026-09-13 directive — but it enumerated the namespaces inline, and the enumeration had already
+# fallen behind `connector:`. Making `module:` a grant namespace would therefore have handed any
+# menu-layout admin a way to grant their own tenant a module its plan or business type excludes.
+# These two tests are the regression: the refusal is derived from the gate's own namespaces now.
+@pytest.mark.parametrize("label", ["show", "yes", "on", "1", "true", "SHOW"])
+def test_a_synonym_for_yes_is_refused_too(api_client, monkeypatch, wired, label):
+    """The first version of the fix compared the label to the one word `show`; the security pass
+    pointed out that `grant_state` also reads yes / on / 1 / true as a grant. The refusal asks what
+    the value MEANS now, so every spelling of it is one refusal."""
+    monkeypatch.setattr("app.modules.commcalc.router.sb", lambda: wired, raising=False)
+    monkeypatch.setattr("app.modules.commcalc.router._require_menu_layout_admin",
+                        lambda auth, org: {"super_admin": False, "org_id": ORG_A}, raising=False)
+    r = api_client.post(f"/api/v1/commcalc/nav-labels?org_id={ORG_A}",
+                        headers={"Authorization": PLAIN},
+                        json={"scope": "cap", "key": "module:account", "label": label})
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.parametrize("key", ["module:account", "connector:anything", "kind:anything"])
+def test_a_tenant_admin_cannot_grant_itself_a_gated_thing(api_client, monkeypatch, wired, key):
+    monkeypatch.setattr("app.modules.commcalc.router.sb", lambda: wired, raising=False)
+    monkeypatch.setattr("app.modules.commcalc.router._require_menu_layout_admin",
+                        lambda auth, org: {"super_admin": False, "org_id": ORG_A}, raising=False)
+    r = api_client.post(f"/api/v1/commcalc/nav-labels?org_id={ORG_A}",
+                        headers={"Authorization": PLAIN},
+                        json={"scope": "cap", "key": key, "label": "show"})
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.parametrize("key", ["module:account", "connector:anything"])
+def test_a_tenant_admin_may_still_narrow_its_own_reach(api_client, monkeypatch, wired, key):
+    """The asymmetry IS the safety property: hiding can only ever show less, so it stays theirs."""
+    monkeypatch.setattr("app.modules.commcalc.router.sb", lambda: wired, raising=False)
+    monkeypatch.setattr("app.modules.commcalc.router._require_menu_layout_admin",
+                        lambda auth, org: {"super_admin": False, "org_id": ORG_A}, raising=False)
+    r = api_client.post(f"/api/v1/commcalc/nav-labels?org_id={ORG_A}",
+                        headers={"Authorization": PLAIN},
+                        json={"scope": "cap", "key": key, "label": "hide"})
+    assert r.status_code == 200, r.text
+
+
 # ── the owner's own surface: the connector-keyed report-pull rows ─────────────────────────────────
 def test_the_report_pull_map_is_connector_scoped_per_tenant(api_client, monkeypatch, wired):
     """THE OWNER'S CASE, end to end. The house defaults include rows belonging to a connector that
