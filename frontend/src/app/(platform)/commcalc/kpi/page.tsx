@@ -5,31 +5,55 @@ import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 
-// KPI definitions. repKey = key inside rep_commissions.kpi_values; storeKey = raw_dlar_store column.
-// All values are whole-number percents (e.g. 70.6), compared directly to the target.
+// KPI definitions AT REP GRAIN. repKey = key inside rep_commissions.kpi_values. All values are
+// whole-number percents (e.g. 70.6), compared directly to the target.
 //
 // SEVEN, not six (owner 2026-09-24: "what are the seven kpis, it shows only 6"). The commission tier
 // is scored over the seven in calculator.py's KPI dict — the same seven the Settings → KPI tab edits
 // and mig 002 stores as kpi_*_target — so a rep read "4/7" against six columns and could not see
 // which one they missed. `boostapp` was the missing one.
 //
-// storeKey is NULL for it ON PURPOSE. raw_dlar_store carries no column for this metric — the same
-// reason kpi_failing.STORE_KPI_COLUMNS omits it — so at STORE grain it has no measurement and the
-// cell says so, rather than rendering a 0 that would read as "they sold none". At REP grain it is
-// measured, in rep_commissions.kpi_values, and shows like any other.
+// THE STORE-GRAIN COLUMN MAP USED TO BE HERE TOO, as a `storeKey` on each row, and it was the FOURTH
+// copy of "which raw_dlar_store column carries which metric" (backend: dlar_sweep.STORE_FIELDS,
+// kpi_failing.STORE_KPI_COLUMNS, two select literals in commcalc/router.py). It is deleted: the store
+// view is built from `GET /dlar-store-catalog`, the one home (index §COMMCALC-60). That is why the 21
+// columns the carrier portal was already sending could sit unread for weeks — a column could be
+// declared, landed, and still invisible, because this array decided what a person could see.
+// `backend/harness_dlar_metric_catalog.py` fails the build if `storeKey` comes back.
 const KPIS = [
-  { k: 'atu',        label: 'ATU %',         repKey: 'atu',        storeKey: 'atu',             tcfg: 'kpi_atu_target',        def: 55 },
-  { k: 'protect',    label: 'Protect %',     repKey: 'protect',    storeKey: 'protect_pct',     tcfg: 'kpi_protect_target',    def: 80 },
-  { k: 'boostapp',   label: 'Carrier App %', repKey: 'boostapp',   storeKey: null,              tcfg: 'kpi_boostapp_target',   def: 65 },
-  { k: 'byod',       label: 'BYOD %',        repKey: 'byod',       storeKey: 'byod_pct',        tcfg: 'kpi_byod_target',       def: 35 },
-  { k: 'familyplan', label: 'Family Plan %', repKey: 'familyplan', storeKey: 'family_plan_pct', tcfg: 'kpi_familyplan_target', def: 45 },
-  { k: 'tmr3',       label: '3MR %',         repKey: 'tmr3',       storeKey: 'tmr3',            tcfg: 'kpi_tmr3_target',       def: 70 },
-  { k: 'aal',        label: 'AAL %',         repKey: 'aal',        storeKey: 'aal_conversion',  tcfg: 'kpi_aal_target',        def: 5 },
+  { k: 'atu',        label: 'ATU %',         repKey: 'atu',        tcfg: 'kpi_atu_target',        def: 55 },
+  { k: 'protect',    label: 'Protect %',     repKey: 'protect',    tcfg: 'kpi_protect_target',    def: 80 },
+  { k: 'boostapp',   label: 'Carrier App %', repKey: 'boostapp',   tcfg: 'kpi_boostapp_target',   def: 65 },
+  { k: 'byod',       label: 'BYOD %',        repKey: 'byod',       tcfg: 'kpi_byod_target',       def: 35 },
+  { k: 'familyplan', label: 'Family Plan %', repKey: 'familyplan', tcfg: 'kpi_familyplan_target', def: 45 },
+  { k: 'tmr3',       label: '3MR %',         repKey: 'tmr3',       tcfg: 'kpi_tmr3_target',       def: 70 },
+  { k: 'aal',        label: 'AAL %',         repKey: 'aal',        tcfg: 'kpi_aal_target',        def: 5 },
 ]
 
-// The KPIs that have a store-grain measurement. The store view counts and scores over THESE, so its
-// "KPIs met" denominator is what was actually measurable at that grain — never a fixed number.
-const STORE_KPIS = KPIS.filter(d => d.storeKey)
+// One entry of `GET /dlar-store-catalog`.metrics — the backend's own declaration, not a shape this
+// page invents. `scored` is the KPI metric_key when the column carries a scored KPI (so the target
+// and the pass/fail colouring apply), null otherwise. `available` is false when the column's
+// migration has not been applied yet, and `reason` says so — a figure nobody has given us is
+// reported as unavailable, never as 0, which would read as "the store sold none". The sentence rides
+// the §19.36 key `reason` because it may name a setup internal: the API boundary gives a tenant the
+// one neutral house sentence there and the platform super admin the detail, so this page renders
+// whatever it is handed and never composes that wording itself.
+type StoreMetric = {
+  key: string; label: string; group: string; kind: 'count' | 'rate'
+  scored: string | null; available: boolean; reason: string | null
+}
+
+// One row of `GET /dlar-store/{period}`: store identity plus whatever figures the catalog says this
+// database carries. Flat by construction — a figure is a number the carrier published, a string the
+// endpoint echoed, or null/absent meaning NOBODY PUBLISHED ONE. Never 0 for the last of those.
+type StoreRow = Record<string, string | number | null | undefined>
+
+// The groups a person picks between, labelled. Order and membership come from the catalog; only the
+// words are here, and 'all' is this page's own option rather than one of the backend's groups.
+const GROUP_LABELS: Record<string, string> = {
+  all: 'All figures', scored: 'Scored KPIs', activations: 'Activations', trade_ins: 'Trade-ins',
+  attach: 'Attach & quality', loyalty: 'Loyalty', target: 'Target & projection', trend: 'Trend',
+}
 
 const cellBase = { textAlign: 'right' as const, padding: '8px 10px', borderBottom: '1px solid var(--border)' }
 
@@ -42,6 +66,15 @@ export default function KPIPage() {
   const [view, setView] = useState<'rep' | 'store'>('rep')
   const [storeFilter, setStoreFilter] = useState('')
   const [repFilter, setRepFilter] = useState('')
+  // STANDARD FILTERS (project report rule 2026-10-30) + the metric picker the owner asked for on
+  // 2026-11-10 ("filtered by the kpi and out regular filters"). The date/look-back filter is the
+  // period selector in the page chrome (`usePeriod`), shared by every report — not a second one here.
+  const [marketFilter, setMarketFilter] = useState('')
+  const [metricGroup, setMetricGroup] = useState('all')
+  const [kpiFilter, setKpiFilter] = useState('')              // a scored metric_key, or ''
+  const [kpiFilterMode, setKpiFilterMode] = useState<'missed' | 'met'>('missed')
+  const [catalog, setCatalog] = useState<{ metrics: StoreMetric[]; groups: string[]; markets: string[]; has_rows: boolean; note: string | null }>(
+    { metrics: [], groups: [], markets: [], has_rows: true, note: null })
 
   useEffect(() => {
     setLoading(true)
@@ -49,16 +82,45 @@ export default function KPIPage() {
       api(`/api/v1/commcalc/commissions/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => []),
       api(`/api/v1/commcalc/config/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => ({})),
       api(`/api/v1/commcalc/dlar-store/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => []),
-    ]).then(([comms, config, stores]) => {
+      // WHICH FIGURES EXIST — the backend's own declaration (index §COMMCALC-60). Fetched rather
+      // than hardcoded so a column the feed starts landing appears here without a frontend change.
+      api(`/api/v1/commcalc/dlar-store-catalog?org_id=${ORG_ID}`).catch(() => null),
+    ]).then(([comms, config, stores, cat]) => {
       setRepData(comms || [])
       setCfg(config || {})
       setStoreData(stores || [])
+      if (cat) setCatalog(cat)
     }).catch(console.error).finally(() => setLoading(false))
   }, [period])
 
   const targets: Record<string, number> = Object.fromEntries(
     KPIS.map(d => [d.k, Number(cfg[d.tcfg]) || d.def])
   )
+
+  // ── THE STORE VIEW'S COLUMNS, from the catalog ────────────────────────────────────────────────
+  // A figure whose column the database has not been given yet is kept OUT of the grid and named
+  // under it with its reason, rather than rendered as an empty column a person has to interpret.
+  const storeMetrics = catalog.metrics.filter(m => m.available)
+  const unavailable = catalog.metrics.filter(m => !m.available)
+  const scoredMetrics = storeMetrics.filter(m => m.scored)
+  const shownMetrics = metricGroup === 'all' ? storeMetrics
+    : storeMetrics.filter(m => m.group === metricGroup)
+  const groupOptions = ['all', ...catalog.groups.filter(g => storeMetrics.some(m => m.group === g))]
+
+  function storeVal(s: StoreRow, key: string): number | undefined {
+    const raw = s?.[key]
+    const n = Number(raw)
+    return raw == null || raw === '' || isNaN(n) ? undefined : n
+  }
+
+  // "KPIs met" at store grain counts over the SCORED figures that were actually measurable here —
+  // never a fixed denominator, because three of the seven are not published at this grain.
+  function storeMet(s: StoreRow) {
+    return scoredMetrics.filter(m => {
+      const v = storeVal(s, m.key)
+      return v != null && v >= (targets[m.scored as string] ?? Infinity)
+    }).length
+  }
 
   // KPI cell — value is a whole-number percent (e.g. 70.6) or undefined.
   function KPICell({ val, target }: { val: number | undefined; target: number }) {
@@ -76,28 +138,47 @@ export default function KPIPage() {
     )
   }
 
-  function metCount(vals: (number | undefined)[]) {
-    return vals.filter((v, i) => v != null && !isNaN(v as number) && (v as number) >= targets[KPIS[i].k]).length
-  }
-
   // Rep rows: only reps that have KPI data, then apply the store + rep filters.
   const repRows = repData
     .filter(r => r.kpi_values && Object.keys(r.kpi_values).length > 0)
     .filter(r => !storeFilter || r.store === storeFilter)
     .filter(r => !repFilter || (r.storeops_name || r.epay_salesperson) === repFilter)
 
-  // Store rows: apply the store filter. address is the unique store key (location is a
-  // coarse dealer name shared across stores), so filter + label on address.
-  const storeRows = storeData.filter(s => !storeFilter || s.address === storeFilter)
+  // Store rows: the standard filters, then the KPI filter. address is the unique store key
+  // (location is a coarse dealer name shared across stores), so filter + label on address.
+  //
+  // THE KPI FILTER (owner 2026-11-10, "filtered by the kpi"). A store with NO value for the chosen
+  // KPI is excluded from both directions rather than counted as missing it: nobody published a
+  // figure for it, and calling that a miss would accuse a store of something nobody measured.
+  const storeRows = storeData
+    .filter(s => !storeFilter || s.address === storeFilter)
+    .filter(s => !marketFilter || (s.market || '') === marketFilter)
+    .filter(s => {
+      if (!kpiFilter) return true
+      const m = scoredMetrics.find(x => x.scored === kpiFilter)
+      if (!m) return true
+      const v = storeVal(s, m.key)
+      if (v == null) return false
+      const t = targets[kpiFilter] ?? 0
+      return kpiFilterMode === 'met' ? v >= t : v < t
+    })
 
-  // Filter dropdown options (store list depends on the active view).
+  // Filter dropdown options (store list depends on the active view). Markets come from the
+  // catalog — the canonical union list the backend resolver can actually bind, so a market option
+  // here can never be one no store resolves to.
   const storeOptions = (view === 'rep'
     ? Array.from(new Set(repData.map(r => r.store).filter(Boolean)))
     : Array.from(new Set(storeData.map(s => s.address).filter(Boolean)))
   ).sort()
   const repOptions = Array.from(new Set(repData.map(r => r.storeops_name || r.epay_salesperson).filter(Boolean))).sort()
+  const marketOptions = (catalog.markets.length
+    ? catalog.markets
+    : Array.from(new Set(storeData.map(s => s.market).filter(Boolean)))).slice().sort()
 
-  function switchView(v: 'rep' | 'store') { setView(v); setStoreFilter(''); setRepFilter('') }
+  function switchView(v: 'rep' | 'store') {
+    setView(v); setStoreFilter(''); setRepFilter('')
+    setMarketFilter(''); setKpiFilter(''); setMetricGroup('all')
+  }
 
   const count = view === 'rep' ? repRows.length : storeRows.length
 
@@ -120,21 +201,29 @@ export default function KPIPage() {
       rows = repRows
       sheetName = 'KPI by Rep'
     } else {
+      // The EXPORT IS THE VIEW (and so is what the Send bar sends): the same catalog-derived
+      // columns, the same filters. A figure a person can see is a figure they can send.
       cols = [
         { header: 'Store', get: s => s.address || s.location },
         { header: 'Dealer', get: s => s.location },
-        ...STORE_KPIS.map(d => ({
-          header: d.label, align: 'right' as const,
-          get: (s: any) => { const n = Number(s[d.storeKey as string]); return isNaN(n) ? '' : Math.round(n * 10) / 10 },
+        { header: 'Market', get: s => s.market || '' },
+        ...shownMetrics.map(m => ({
+          header: m.label, align: 'right' as const,
+          get: (s: StoreRow) => { const v = storeVal(s, m.key); return v == null ? '' : Math.round(v * 100) / 100 },
         })),
-        { header: 'Conv %', align: 'right', get: s => { const n = Number(s.conversion_rate); return isNaN(n) ? '' : Math.round(n * 10) / 10 } },
-        { header: 'Total Acts', align: 'right', get: s => s.total_acts ?? '' },
-        { header: 'KPIs Met', align: 'right', get: s => `${metCount(STORE_KPIS.map(d => { const n = Number(s[d.storeKey as string]); return isNaN(n) ? undefined : n }))}/${STORE_KPIS.length}` },
+        { header: 'KPIs Met', align: 'right', get: s => `${storeMet(s)}/${scoredMetrics.length}` },
       ]
       rows = storeRows
       sheetName = 'KPI by Store'
     }
-    const filterParts = [storeFilter || null, view === 'rep' ? (repFilter || null) : null].filter(Boolean)
+    const filterParts = [
+      storeFilter || null,
+      view === 'rep' ? (repFilter || null) : (marketFilter || null),
+      view === 'store' && kpiFilter
+        ? `${scoredMetrics.find(m => m.scored === kpiFilter)?.label ?? kpiFilter} ${kpiFilterMode}`
+        : null,
+      view === 'store' && metricGroup !== 'all' ? GROUP_LABELS[metricGroup] ?? metricGroup : null,
+    ].filter(Boolean)
     const filterLabel = filterParts.length ? filterParts.join(' · ') : (view === 'rep' ? 'All reps' : 'All stores')
     return {
       title: `KPI Metrics — ${view === 'rep' ? 'By Rep' : 'By Store'}`,
@@ -185,9 +274,42 @@ export default function KPIPage() {
           </select>
         )}
 
-        {(storeFilter || repFilter) && (
+        {/* STANDARD FILTERS + THE KPI FILTER (owner 2026-11-10). The market list is the canonical
+            union the backend resolver binds, so no option here can match nothing. */}
+        {view === 'store' && marketOptions.length > 0 && (
+          <select className="select" value={marketFilter} onChange={e => setMarketFilter(e.target.value)}>
+            <option value="">All markets</option>
+            {marketOptions.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        )}
+
+        {view === 'store' && groupOptions.length > 1 && (
+          <select className="select" value={metricGroup} onChange={e => setMetricGroup(e.target.value)}
+            title="Which figures to show">
+            {groupOptions.map(g => <option key={g} value={g}>{GROUP_LABELS[g] ?? g}</option>)}
+          </select>
+        )}
+
+        {view === 'store' && scoredMetrics.length > 0 && (
+          <>
+            <select className="select" value={kpiFilter} onChange={e => setKpiFilter(e.target.value)}
+              title="Show only stores by how they did on one KPI">
+              <option value="">Any KPI</option>
+              {scoredMetrics.map(m => <option key={m.key} value={m.scored as string}>{m.label}</option>)}
+            </select>
+            {kpiFilter && (
+              <select className="select" value={kpiFilterMode}
+                onChange={e => setKpiFilterMode(e.target.value as 'met' | 'missed')}>
+                <option value="missed">below target</option>
+                <option value="met">at or above target</option>
+              </select>
+            )}
+          </>
+        )}
+
+        {(storeFilter || repFilter || marketFilter || kpiFilter || metricGroup !== 'all') && (
           <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px' }}
-            onClick={() => { setStoreFilter(''); setRepFilter('') }}>✕ Clear</button>
+            onClick={() => { setStoreFilter(''); setRepFilter(''); setMarketFilter(''); setKpiFilter(''); setMetricGroup('all') }}>✕ Clear</button>
         )}
       </div>
 
@@ -195,8 +317,15 @@ export default function KPIPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : count === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
+          {/* NOTHING MEASURED MEANS NOTHING IDENTIFIED, AND THE SURFACE SAYS SO (§COMMCALC-49.10).
+              When the catalog reports this organisation has no store rows at all, that sentence is
+              the backend's — one tenant must never be told "0" because another tenant's carrier is
+              the only one publishing. */}
           {view === 'store'
-            ? 'No store KPI data — the Store KPI report (DLAR) is empty for this period.'
+            ? (catalog.note
+               || (storeData.length
+                   ? 'No store matches these filters for this period.'
+                   : 'No store KPI data — the store KPI feed is empty for this period.'))
             : 'No rep KPI data — import the DLAR report and run the calculation.'}
         </div>
       ) : view === 'rep' ? (
@@ -233,32 +362,48 @@ export default function KPIPage() {
           </table>
         </div>
       ) : (
+        <>
         <div className="table-wrapper">
           <table>
             <thead>
               <tr>
                 <th>Store</th>
-                {STORE_KPIS.map(d => <th key={d.k} style={{ textAlign: 'right' }}>{d.label}</th>)}
-                <th style={{ textAlign: 'right' }}>Conv %</th>
-                <th style={{ textAlign: 'right' }}>Total Acts</th>
+                <th style={{ textAlign: 'left' }}>Market</th>
+                {shownMetrics.map(m => (
+                  <th key={m.key} style={{ textAlign: 'right' }}>{m.label}</th>
+                ))}
                 <th style={{ textAlign: 'right' }}>KPIs Met</th>
               </tr>
             </thead>
             <tbody>
               {storeRows.map((s, i) => {
-                const vals = STORE_KPIS.map(d => { const n = Number(s[d.storeKey as string]); return isNaN(n) ? undefined : n })
-                const met = metCount(vals)
+                const met = storeMet(s)
                 return (
                   <tr key={i}>
                     <td style={{ fontWeight: 500 }}>
                       {s.address || s.location}
                       {s.location && <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>{s.location}</div>}
                     </td>
-                    {STORE_KPIS.map((d, j) => <KPICell key={d.k} val={vals[j]} target={targets[d.k]} />)}
-                    <td style={{ ...cellBase, fontSize: 13 }}>{s.conversion_rate != null ? Number(s.conversion_rate).toFixed(1) + '%' : '—'}</td>
-                    <td style={{ ...cellBase, fontSize: 13 }}>{s.total_acts ?? '—'}</td>
+                    <td style={{ fontSize: 12, color: 'var(--text3)' }}>{s.market || '—'}</td>
+                    {/* A SCORED figure gets its target and its colour; an unscored one is just the
+                        number the carrier published, and `—` where it published none. A zero here
+                        would say the store sold none, which is the defect this whole change came
+                        from — so an absent figure stays absent. */}
+                    {shownMetrics.map(m => {
+                      const v = storeVal(s, m.key)
+                      if (m.scored) {
+                        return <KPICell key={m.key} val={v} target={targets[m.scored] ?? 0} />
+                      }
+                      return (
+                        <td key={m.key} style={{ ...cellBase, fontSize: 13 }}>
+                          {v == null ? <span style={{ color: 'var(--text3)' }}>—</span>
+                            : m.kind === 'rate' ? v.toFixed(1) + '%'
+                            : Number.isInteger(v) ? String(v) : v.toFixed(2)}
+                        </td>
+                      )
+                    })}
                     <td style={{ ...cellBase, fontWeight: 700 }}>
-                      <span style={{ color: met >= STORE_KPIS.length ? 'var(--green)' : met >= STORE_KPIS.length - 2 ? 'var(--amber)' : 'var(--red)' }}>{met}/{STORE_KPIS.length}</span>
+                      <span style={{ color: met >= scoredMetrics.length ? 'var(--green)' : met >= scoredMetrics.length - 2 ? 'var(--amber)' : 'var(--red)' }}>{met}/{scoredMetrics.length}</span>
                     </td>
                   </tr>
                 )
@@ -266,6 +411,16 @@ export default function KPIPage() {
             </tbody>
           </table>
         </div>
+        {/* A FIGURE WHOSE COLUMN DOES NOT EXIST YET IS NAMED, WITH ITS REASON. Leaving it out would
+            read as "the carrier does not publish this"; showing it empty would read as zero. */}
+        {unavailable.length > 0 && (
+          <p style={{ fontSize: 12, color: 'var(--text3)', margin: '8px 0 0' }}>
+            {unavailable.length} further figure{unavailable.length === 1 ? '' : 's'} the carrier
+            sends {unavailable.length === 1 ? 'is' : 'are'} not stored yet
+            ({unavailable.map(m => m.label).join(', ')}){unavailable[0].reason ? ` — ${unavailable[0].reason}` : '.'}
+          </p>
+        )}
+        </>
       )}
 
       <ParamountImport period={period} />

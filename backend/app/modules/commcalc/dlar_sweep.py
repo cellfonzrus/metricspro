@@ -304,8 +304,49 @@ STORE_FIELDS = (
     ("acc_attach_rate",       RATE,  "accessory_attach_rate"),
     ("avg_first_mrc",         COUNT, "avg_first_mrc"),
     ("sales_target",          COUNT, "sales_target"),
-    ("zero_selling_days",     COUNT, "zero_selling_days"),
+    # RENAMED UPSTREAM, measured 2026-11-10: the portal stopped sending `zero_selling_days` and now
+    # sends `non_selling_days`. The SAME fact, so it is the same column with the new spelling in
+    # front — a second column here would split one measurement into two and is exactly the
+    # divergence the one-home rule forbids. The old spelling stays so a re-pull of a historical
+    # period still reads. (This is the repair the §COMMCALC-16 diagnostic was built to make possible:
+    # the new name came from the feed's own status line, not from a guess — §19.26.)
+    ("zero_selling_days",     COUNT, "non_selling_days", "zero_selling_days"),
     ("shopper_trak_conversion", RATE, "shopper_trak_conversion"),
+
+    # ── THE 21 FIELDS THE PORTAL WAS SENDING THAT NOTHING READ (owner 2026-11-10) ───────────────
+    # EVIDENCE, not a wish list: `core.job_run.detail.evidence.fields.dlar.unconsumed` from the
+    # 2026-11-10 12:00 UTC run over 28 stores named exactly these. `field_arrival` has been printing
+    # them beside the renamed fields since §COMMCALC-16 shipped; reading them is what that
+    # diagnostic was for. Our column takes the SOURCE's own spelling wherever one exists, because a
+    # translation is one more fact that can be got wrong for no gain.
+    #
+    # `activations_total` is DELIBERATELY its own column and NOT a spelling of `gross_adds`. It
+    # appeared in the same run in which `gross_activation_quantity` stopped arriving, so it is the
+    # likely successor — but "likely" is not a basis for restating a figure reps are scored against.
+    # Owner decision requested 2026-11-10; until it lands, both columns are visible and the answer
+    # is one declared spelling away.
+    ("activations_total",     COUNT, "activations_total"),
+    ("auxiliary_device_acts", COUNT, "auxiliary_device_acts"),
+    ("swaps_total",           COUNT, "swaps_total"),
+    ("rpl_count",             COUNT, "rpl_count"),
+    ("starlink_activations",  COUNT, "starlink_activations"),
+    ("starlink_sales",        COUNT, "starlink_sales"),
+    ("total_trade_ins",       COUNT, "total_trade_ins"),
+    ("value_trade_ins",       COUNT, "value_trade_ins"),
+    ("upgrade_value_trade_ins", COUNT, "upgrade_value_trade_ins"),
+    ("offer_trade_ins",       COUNT, "offer_trade_ins"),
+    ("trade_in_unlocked_activations", COUNT, "trade_in_unlocked_activations"),
+    ("byod_total",            COUNT, "byod_total"),
+    ("byod_unlocked_activations", COUNT, "byod_unlocked_activations"),
+    ("protection_dop",        COUNT, "protection_dop"),
+    ("protection_upgrades",   COUNT, "protection_upgrades"),
+    ("avg_platinum_points",   COUNT, "avg_platinum_points"),
+    ("total_health_checks",   COUNT, "total_health_checks"),
+    # `projection` is the portal's projected UNIT figure; the projected PERCENT to target is the
+    # separate field `psa_projected` already reads. Declared COUNT for that reason.
+    ("projection",            COUNT, "projection"),
+    ("mom_percent_change",    RATE,  "mom_percent_change"),
+    ("yoy_percent_change",    RATE,  "yoy_percent_change"),
 )
 
 REP_FIELDS = (

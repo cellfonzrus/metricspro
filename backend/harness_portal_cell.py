@@ -80,6 +80,24 @@ OCT_STORE = {
     "activation_quantity": "61", "upgrade_quantity": "29",
 }
 
+# THE FIELDS DECLARED ON 2026-11-10, when the owner asked for the 21 columns the portal was sending
+# that nothing read (index §COMMCALC-50). THIS PIN WAS RE-AIMED, NOT RELAXED. Its subject is "a
+# record carrying every DECLARED field is quiet" — not the September bytes. The September capture
+# predates the declaration, so once those 20 columns were declared the same capture was legitimately
+# incomplete and C1/C3/E1/E2/F3 went red for the right reason. The fixture therefore carries the
+# newly declared fields too, at the values the 2026-11-10 run shows the portal sending. (CLAUDE.md:
+# a lock whose subject moves is re-aimed at the new form, never left to pass — the fourth time this
+# pattern has come up here, see §19.18.)
+DECLARED_2026_11_10 = {
+    "activations_total": "134", "auxiliary_device_acts": "8", "swaps_total": "9", "rpl_count": "2",
+    "starlink_activations": "5", "starlink_sales": "6", "total_trade_ins": "11",
+    "value_trade_ins": "7", "upgrade_value_trade_ins": "3", "offer_trade_ins": "1",
+    "trade_in_unlocked_activations": "4", "byod_total": "21", "byod_unlocked_activations": "12",
+    "protection_dop": "40", "protection_upgrades": "15", "avg_platinum_points": "3.5",
+    "total_health_checks": "77", "projection": "150", "mom_percent_change": "12.5",
+    "yoy_percent_change": "-4.25",
+}
+
 # the September 2026 shape — every declared field present
 SEP_STORE = dict(OCT_STORE)
 SEP_STORE.pop("activation_quantity")
@@ -87,6 +105,7 @@ SEP_STORE.pop("upgrade_quantity")
 SEP_STORE.update({"gross_activation_quantity": "61", "upgrades": "29",
                   "prepaid_activations": "58", "postpaid_activations": "3",
                   "zero_selling_days": "0"})
+SEP_STORE.update(DECLARED_2026_11_10)
 
 print("A. the one reading rule: absent is not zero, for a count as much as for a rate")
 check("A1 an absent count is None", pc.count(None) is None and pc.count("") is None)
@@ -189,6 +208,16 @@ expect_store_full = {
     "atu": 66.67, "byod_pct": 33.33, "port_pct": 66.67, "conversion_rate": 3.85,
     "acc_attach_rate": 416.67, "avg_first_mrc": 52.67, "sales_target": 25.0,
     "zero_selling_days": 0.0, "shopper_trak_conversion": 0.0,
+    # the figures declared 2026-11-10 — each read by the SAME rule as every count/rate above, which
+    # is the property this check exists to hold: a wider declaration must not change how any of it
+    # is read.
+    "activations_total": 134.0, "auxiliary_device_acts": 8.0, "swaps_total": 9.0, "rpl_count": 2.0,
+    "starlink_activations": 5.0, "starlink_sales": 6.0, "total_trade_ins": 11.0,
+    "value_trade_ins": 7.0, "upgrade_value_trade_ins": 3.0, "offer_trade_ins": 1.0,
+    "trade_in_unlocked_activations": 4.0, "byod_total": 21.0, "byod_unlocked_activations": 12.0,
+    "protection_dop": 40.0, "protection_upgrades": 15.0, "avg_platinum_points": 3.5,
+    "total_health_checks": 77.0, "projection": 150.0, "mom_percent_change": 12.5,
+    "yoy_percent_change": -4.25,
 }
 got_store = ds.normalize_store(SEP_STORE)
 check("F3 the store mapping produces exactly the same columns",

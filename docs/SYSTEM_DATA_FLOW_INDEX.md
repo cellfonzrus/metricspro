@@ -199,6 +199,7 @@ Primary code homes:
 | COMMCALC-57 | **A tile counts the list it prints, over the metrics the tenant declared** | "Need to organize the daily action plan to a more presentable way, it is right now a long report, collapse it per store, give our standard filters for store rep market date range, which metrics needs to be improved / all/ family plan etc. Make it tiled with focused metrics - cells on the all line metrics and it shows who needs improvement and so forth with the details at the bottom, the tiles should be switched between kpi / stores / sales reps" — a report nobody could read at a glance. The tempting build gives each tile a summed figure (a second fold of a number the server already folded) and a built-in metric list (one tenant's POS words answering for every tenant, §COMMCALC-49.10's class). What may a tile's headline figure BE, whose words name the metrics, and what does a tile over a feed that landed nothing have to say? |
 | COMMCALC-58 | **A control is found by what it answers to, not by how it looks** | §COMMCALC-56 made the comp report's failure specific, and it then said, on every run, that no "Summarize by" dropdown offering Daily was on the filter panel. The owner photographed that panel on 2026-11-10: the control was there, offering Daily / Weekly / Monthly, re-skinned to the SEARCHABLE jqWidgets flavour (its popup carries a "Looking for" box). The scan knew one styling class, `.jqx-dropdownlist-state-normal`, so a present control read as ABSENT — and "not found" is indistinguishable from "not there" while only the second is actionable. One home now finds a picker by offering each candidate every declared widget API and keeping whichever answers; both callers in the file read it, and a failure lists what the panel DOES offer. |
 | COMMCALC-59 | **A pull can owe history, and a login can belong to a store** | A processor back office that issues ONE LOGIN PER STORE, asked for every report from the first of the year and daily after that. The pull loop could not be asked for history at all — its only window is "the last N days, clamped" — so the span a login still owes is now its own fact (`portal_backfill`) rather than a second pull loop, and a login can carry the store every row pulled through it belongs to. Universal, on for nobody until a tenant declares its logins. |
+| COMMCALC-60 | **A figure the feed sends that nothing reads is not a figure this platform has** | "Use those other 21 columns and make them a part of the kpi reporting also filtered by the kpi and out regular filters and send option". The sweep's own diagnostic had been naming 21 arriving-but-unread store columns every day for weeks, and one of them was the new spelling of a column that had been landing empty since the source renamed it. Reading one meant editing FOUR lists, and the last of them — a hand-typed array in the page — decided what a person could see, so a column could be declared, landed and invisible. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26344,6 +26345,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-57 | commcalc |
 | COMMCALC-58 | commcalc |
 | COMMCALC-59 | commcalc |
+| COMMCALC-60 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -45930,3 +45932,148 @@ reported.
 The DLAR gross adds / activations / upgrades columns are still empty, so the KPIs over them read
 **not measured** here rather than zero — that is this change reporting the defect, not repairing it.
 The feed itself is the portal-download thread's work.
+
+## §COMMCALC-60. A FIGURE THE FEED SENDS THAT NOTHING READS IS NOT A FIGURE THIS PLATFORM HAS — one home for which store-DLAR column is which metric (owner ask 2026-11-10)
+
+Owner, verbatim: *"Use those other 21 columns and make them a part of the kpi reporting also filtered
+by the kpi and out regular filters and send option"*.
+
+### COMMCALC-60.1 WHAT WAS ACTUALLY WRONG
+
+Not the columns. Measured on the live 2026-11-10 12:00 UTC DLAR sweep (28 stores, house org, read
+from `core.job_run.detail.evidence.fields.dlar.unconsumed`): the carrier portal was sending **21
+store-grain fields the mapping did not read** —
+
+`activations_total` · `auxiliary_device_acts` · `avg_platinum_points` · `byod_total` ·
+`byod_unlocked_activations` · `mom_percent_change` · `non_selling_days` · `offer_trade_ins` ·
+`projection` · `protection_dop` · `protection_upgrades` · `rpl_count` · `starlink_activations` ·
+`starlink_sales` · `swaps_total` · `total_health_checks` · `total_trade_ins` ·
+`trade_in_unlocked_activations` · `upgrade_value_trade_ins` · `value_trade_ins` ·
+`yoy_percent_change`
+
+— and one of them, `non_selling_days`, is the source's **new spelling of `zero_selling_days`**, a
+column we already had and which had been landing empty since the rename. The §COMMCALC-16 diagnostic
+built for exactly this had been printing all of it correctly, every day, since 2026-10-16. Nothing
+read it, because reading a new column meant editing FOUR lists:
+
+| # | home | what it held |
+|---|---|---|
+| 1 | `dlar_sweep.STORE_FIELDS` | which SOURCE field feeds which of our columns (§COMMCALC-16) |
+| 2 | `kpi_failing.STORE_KPI_COLUMNS` | which of our columns carries a SCORED KPI (§19.28) |
+| 3 | `router.get_dlar_store_kpis` | a `select("location,address,store_code,atu,…")` literal |
+| 4 | `router._cr_resolve_kpi_metrics` | the SAME literal, written out a second time |
+| 5 | `frontend/src/app/(platform)/commcalc/kpi/page.tsx` | a hand-typed `KPIS` array with a `storeKey` per row |
+
+Five places, one fact — and the LAST of them decided what a person could actually see. So a column
+could be declared, landed in the table, and invisible. That is why 21 figures sat unread for weeks
+while the feed itself named them nightly.
+
+### COMMCALC-60.2 THE CLASS, not the instance
+
+The instance is "trade-in counts are not on the KPI page". The class is **a fact with one meaning and
+five homes, the furthest of which gates what a person can see.** It has cost this platform a month of
+activations read as zeros (§COMMCALC-16), a tenant's whole device-line report (§COMMCALC-49.10), and
+a registry written without its callers wired, three times (§19.18).
+
+So the fix is not 21 columns. It is ONE home for *which store-DLAR column is which metric*, DERIVED
+from the two declarations that already exist and copying neither, with every reader dereferencing it
+and a lock that fails the build if one stops.
+
+### COMMCALC-60.3 THE ONE HOME
+
+`backend/app/modules/commcalc/dlar_metric_catalog.py` — PURE, stdlib only, no DB.
+
+```
+dlar_sweep.STORE_FIELDS ─┐
+                         ├─ catalog() → display rows · select_columns() · filter_keys()
+kpi_failing.STORE_KPI_COLUMNS ─┘
+```
+
+- `catalog()` — one entry per measurable column: `key`, `label`, `group`, `kind` (count/rate),
+  `scored` (the KPI metric_key, from `kpi_failing`), `source` (the sweep's declared spellings),
+  `derived`, `optional`. A column the sweep declares and this module cannot NAME is a build failure,
+  not a silently unnamed metric.
+- `select_columns()` / `REQUIRED_COLUMNS` / `OPTIONAL_COLUMNS` — the ONE spelling of the column list.
+  Both router readers dereference it; neither spells a column again.
+- `present_catalog(present)` — the catalog as it is true of THIS database. A figure whose migration
+  has not been applied is reported **unavailable with its reason** — never omitted (which reads as
+  "this carrier does not publish it") and never shown as 0 (which reads as "the store sold none").
+- `filter_keys()` — what a "filter by the KPI" picker may offer, so it can never offer a figure the
+  read does not return.
+
+It names no carrier, tenant or product (RULE TWO): the only proper nouns are the SOURCE's own field
+spellings, which is what a feed mapping is made of.
+
+### COMMCALC-60.4 WHAT WAS NOT GUESSED
+
+`activations_total` appeared in the same run in which `gross_activation_quantity` stopped arriving,
+so it is the likely successor to `gross_adds`. It is landed **under its own name** and is NOT declared
+as a spelling of `gross_adds`: that figure is what reps are scored against, and §19.26 (missing beats
+wrong on a money gate) applies. Owner decision requested 2026-11-10; until it lands, both columns are
+visible side by side and the answer is one declared spelling away.
+
+`non_selling_days` needed no decision — it is the same measurement under a new name, so it is a
+SPELLING on the existing column and not a second column. A second column for one fact is the
+divergence §19.18 forbids.
+
+### COMMCALC-60.5 Surfaces
+
+- `GET /api/v1/commcalc/dlar-store/{period}` — unchanged shape, now returning every catalogued
+  column plus `market` (stamped through the canonical union resolver, §13a — CANONICAL).
+- `GET /api/v1/commcalc/dlar-store-catalog` — NEW. `{metrics, groups, markets, has_rows, note}`.
+- `/commcalc/kpi` Store view — rebuilt from the catalog. Standard filters (store, **market**, the
+  shared period selector) + the metric-group picker + **the KPI filter** (one scored KPI, at/above or
+  below target). Export and the Send bar reflect exactly what is on screen.
+- `commcalc.raw_dlar_store` gains 20 columns by **migration 1118** (additive, nullable, no default,
+  no backfill, no money column; the table's `service_role` grant restated).
+
+### COMMCALC-60.6 EVERY TENANT (project rule 2026-10-30)
+
+The catalog is a statement about the feed's SHAPE and is byte-identical for every org — it is not a
+tenant vocabulary and carries no tenant's words, so the §COMMCALC-49.10 trap (a house default that is
+really one tenant's labels) cannot arise here. What differs per tenant is whether that org has rows,
+and `has_rows` + `note` say so in the backend's own sentence: *"This organisation has no store-level
+carrier KPI rows. Nothing is being measured at store grain here — these figures are unavailable, not
+zero."* Proved by `test_one_tenants_rows_never_reach_another_tenants_read` and
+`test_a_tenant_with_no_store_dlar_is_told_so_rather_than_shown_zeros`.
+
+### COMMCALC-60.7 Locked
+
+`backend/harness_dlar_metric_catalog.py` — 35 checks, DB-free, run by the lock-harness job of
+`.github/workflows/carrier-vocab-guard.yml`. It fails the build on: a declared column the catalog
+cannot name; the `select(...)` literal returning to either reader (kept as an armed negative control);
+either reader no longer dereferencing the catalog; the frontend carrying a `storeKey:` map again; the
+scored set being restated instead of read from `kpi_failing`; any of the 21 fields going undeclared;
+`non_selling_days` becoming a second column; `activations_total` being folded into `gross_adds`; a
+carrier name in the module; an optional column read without the per-column probe.
+
+Plus `backend/tests/unit/test_dlar_metric_catalog.py` (13) and
+`backend/tests/integration/test_dlar_store_metrics_endpoint.py` (8).
+
+**Two stale pins RE-AIMED, not relaxed** (the fourth time this pattern has appeared — §19.18).
+`harness_portal_cell.py` §C1/C3/E1/E2/F3 used the September 2026 record capture as "a record carrying
+every DECLARED field". Declaring 20 more columns made that capture legitimately incomplete, so the
+checks went red for the right reason. The fixture now carries the newly declared fields too, at the
+values the 2026-11-10 run shows the portal sending; the pin's subject is "a complete record is quiet",
+not the September bytes.
+
+### COMMCALC-60.8 NOT done here
+
+- Migration 1118 is written and **surfaced for owner approval, not applied**. Until it runs, the 20
+  figures read as unavailable-with-a-reason; nothing shows a zero.
+- The rep grain (`raw_dlar_rep`) has **20 arriving-but-unread fields of its own** — `aal`,
+  `accessory_revenue`, `credit_checks`, `family_plans`, `port_in_rate`, `vas_activations` and the
+  rest, measured in the same run. Same class, same cure, its own PR: this one is store grain only,
+  and that is stated rather than left to be discovered.
+- The three source fields that stopped arriving with no successor in the unread list
+  (`prepaid_activations`, `postpaid_activations`, `upgrades` at store grain) remain absent. They are
+  REPORTED by the feed's own diagnostic, never filled in by code.
+
+### COMMCALC-60.9 Cross-references
+
+§COMMCALC-16 (a portal field that stopped arriving names itself — the diagnostic that found these
+21) · §COMMCALC-40 (a computed verdict must be the stored one) · §19.28 (which column carries which
+KPI, at both grains) · §19.18 (one fact, one home, dereferenced — never copied) · §19.26 (missing
+beats wrong) · §COMMCALC-49.10 (a feature is not finished until it works for every tenant) ·
+§4b.1 (any-subset column reads) · §13a (the canonical store→market resolver) · §10 (the KPI system) ·
+§CORE-34/35/36 (the gate index that now lists this lock).

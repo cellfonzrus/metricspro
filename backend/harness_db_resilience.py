@@ -1563,7 +1563,23 @@ _all_routes = _flatten_routes(real_app.routes)
 # `.eq("org_id", <the acting membership's org>)` — never the request's `org_id` parameter — so
 # another tenant's roles, people or recipients are unreachable, pinned by the three-tenant cross-org
 # negative in backend/tests/integration/test_fix_guide_endpoint.py (§D).
-_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1840"))
+# Re-pinned 1840 -> 1841 on 2026-11-10 (§COMMCALC-59, the store-DLAR metric catalog). Verified the
+# house way, NOT by arithmetic: `git diff origin/main...HEAD -- backend/ | grep -E '^[+-].*@router\.'`
+# printed exactly ONE added decorator and NONE removed (the only other hit is that decorator quoted
+# inside harness_dlar_metric_catalog.py §C3, which asserts the route has not been un-wired) —
+#     + /commcalc/dlar-store-catalog  GET   (what the store KPI report can show: the metric catalog
+#                                            derived from the feed's own field declaration, stamped
+#                                            with which optional columns this database has yet to be
+#                                            given, plus the caller's market options)
+# It is READ-ONLY and computes nothing: it folds the static declaration in
+# `commcalc/dlar_metric_catalog.py` against `core.column_tolerant.present_columns` (a `select(col)
+# .limit(1)` probe per optional column) and a one-row existence probe. It writes no row, so no stored
+# total, statement, GP, commission, payable or tax figure can move. Every read is
+# `.eq("org_id", org_id)` behind `require_org`, it returns NO row data at all (only the feed's shape,
+# a boolean and market NAMES), and the market option list is additionally narrowed to the caller's
+# own `scope_keyset` — pinned by the cross-tenant and scope negatives in
+# backend/tests/integration/test_dlar_store_metrics_endpoint.py.
+_expect_routes = int(os.environ.get("EXPECT_ROUTES", "1841"))
 print(f"   (app.main leaf route count = {len(_all_routes)}, top-level entries = "
       f"{len(real_app.routes)}, expecting {_expect_routes})")
 check(f"I0. app.main imports and exposes {_expect_routes} routes — this package adds none",
