@@ -199,6 +199,7 @@ Primary code homes:
 | COMMCALC-57 | **A tile counts the list it prints, over the metrics the tenant declared** | "Need to organize the daily action plan to a more presentable way, it is right now a long report, collapse it per store, give our standard filters for store rep market date range, which metrics needs to be improved / all/ family plan etc. Make it tiled with focused metrics - cells on the all line metrics and it shows who needs improvement and so forth with the details at the bottom, the tiles should be switched between kpi / stores / sales reps" — a report nobody could read at a glance. The tempting build gives each tile a summed figure (a second fold of a number the server already folded) and a built-in metric list (one tenant's POS words answering for every tenant, §COMMCALC-49.10's class). What may a tile's headline figure BE, whose words name the metrics, and what does a tile over a feed that landed nothing have to say? |
 | COMMCALC-58 | **A control is found by what it answers to, not by how it looks** | §COMMCALC-56 made the comp report's failure specific, and it then said, on every run, that no "Summarize by" dropdown offering Daily was on the filter panel. The owner photographed that panel on 2026-11-10: the control was there, offering Daily / Weekly / Monthly, re-skinned to the SEARCHABLE jqWidgets flavour (its popup carries a "Looking for" box). The scan knew one styling class, `.jqx-dropdownlist-state-normal`, so a present control read as ABSENT — and "not found" is indistinguishable from "not there" while only the second is actionable. One home now finds a picker by offering each candidate every declared widget API and keeping whichever answers; both callers in the file read it, and a failure lists what the panel DOES offer. |
 | COMMCALC-59 | **A pull can owe history, and a login can belong to a store** | A processor back office that issues ONE LOGIN PER STORE, asked for every report from the first of the year and daily after that. The pull loop could not be asked for history at all — its only window is "the last N days, clamped" — so the span a login still owes is now its own fact (`portal_backfill`) rather than a second pull loop, and a login can carry the store every row pulled through it belongs to. Universal, on for nobody until a tenant declares its logins. |
+| COMMCALC-60 | **A control that is present but not filled in is not absent** | The first run on §COMMCALC-58's new wording (2026-11-10 16:30) reported that the panel had ONE picker, none offering Daily — and listed the dealer/account names. The filter controls had not populated yet, and the scan shipped that morning SKIPPED a picker whose `getItems` came back empty, so a control the page had already built was neither counted nor mentioned: present-but-not-ready was folded into absent. Absent, not-yet-ready and present-but-not-offering are three facts needing three opposite fixes; the scan now counts `candidates`/`pickers`/`ready`/`empty` and says which of the three it saw, and waits up to 4 looks × 1.5s while the panel is still building (never on a ready picker, never on a success), reporting how long it waited. The honest-zero ladder is untouched. |
 | PAYABLES-02 | **A payment date nobody declared is not a payment date** | "i need a report for the expected payments for teh next payout cycle by the day as acalender display for all tenants, also the foloowing report will be how much is owed, which we already ahave and the thent eh irs will be after offseting the payments what isteh cash flow" — and he is right that the owed half exists. The inbound half never did: *when does a carrier pay us* has never been a fact anywhere in this platform. The obvious build puts a day-of-month literal in the report, or infers a weekday from the last few statements, which is one tenant's commercial arrangement answering for all four. What may a calendar draw on a day nobody named, and which way must a cash position point when half of it was never measured? |
 | STOREOPS-01 | **A typed payroll figure saves on its own, and a save says what it will cost before it lands** | "i havd to enter hours for simarjyot 3 times to get the correct horus and still i cannot see the correnct hours" — and the board had no Save button at all: the only way to persist a figure was to approve in the same click, and every reload threw the typed boxes away, including the reload after a refusal. Three attempts, one change-log row. Which click is a measurement and which is a signature, and what may a screen show a reviewer that is not the number the server will pay? |
 | STOREOPS-02 | **A card for many stores costs a fixed number of reads** | "Give me the fixes [for the extra round trips]. Which screens ask the database once per store, what does one store's card cost, and what stops the next caller from looping over it again?" |
@@ -26344,6 +26345,7 @@ status word rather than a blank that reads as nil.
 | COMMCALC-57 | commcalc |
 | COMMCALC-58 | commcalc |
 | COMMCALC-59 | commcalc |
+| COMMCALC-60 | commcalc |
 | PAYABLES-02 | payables |
 | POS-01 | pos |
 | POS-02 | pos |
@@ -45795,6 +45797,107 @@ RED before the home existed. Cross-references: §19.18 (one fact, one home, dere
 copied) · §PAYABLES-02 (the report that surfaced it) · §CORE-17.3h (a figure no rows add up to) ·
 §4c (the 2026-09-26 Excel half of the 2026-09-10 fix) · §CORE-10 gate B (a derived subject set is
 asserted by name, never by a lower bound).
+
+## §COMMCALC-60. A CONTROL THAT IS PRESENT BUT NOT FILLED IN IS NOT ABSENT (measured 2026-11-10)
+
+### COMMCALC-60.1 HOW IT WAS FOUND
+
+§COMMCALC-58 shipped at 15:50 on 2026-11-10 and made the failure name what the panel DOES offer.
+The first run on it, 16:30:33, said:
+
+    Login OK · Daily Transaction Detail [2026-11-10]: EpayPortalError: could not set the report's
+    daily date filter — no 'Summarize by' picker offering Daily was found on the report's filter
+    panel (the panel has 1 picker(s), none offering it; the panel's pickers offer: 474517 - Passaic
+    wireless 2022 LLC(230), … 498258 - supernova Wireless 2022 LLC); the report returns an empty
+    workbook without it
+
+That list is the DEALER/ACCOUNT selector. So at the moment we read the page, the only control that
+existed AND carried anything was the account list — and the owner's photograph of the same panel,
+taken the same day, shows "Summarize by" sitting right beside it. The page was being read before it
+had finished building itself.
+
+### COMMCALC-60.2 THE DEFECT, AND IT IS IN WHAT §COMMCALC-58 SHIPPED
+
+The scan skipped an unpopulated control and did not count it:
+
+```js
+try { items = $(host)[w]('getItems'); } catch (e) { return; }
+if (!items || !items.length) return;        // ← present, drivable, and now INVISIBLE
+pickers += 1;
+```
+
+A `jqxComboBox` that the page has constructed but not yet filled answers `getItems` with `[]`. It
+is a picker; we can drive it; it simply has nothing in it YET. That line made it indistinguishable
+from an element that is not a picker at all, so it never reached `pickers`, never reached `why`, and
+the operator was told the panel "has 1 picker(s), none offering it" about a panel that had two.
+
+Two separate wrongs, and they compound:
+
+* **a present-but-empty control read as absent** — so the one fact that would have explained the
+  failure ("it is there, it has not loaded") was the one fact the message could not carry; and
+* **no wait at all** — the scan asked once. A staged panel is a RACE, and asking a race once and
+  reporting the answer as a property of the page is how §COMMCALC-56's "no matching control" and
+  §COMMCALC-58's "none offering it" both came to be measured on a page that was still filling in.
+
+### COMMCALC-60.3 THE RULE
+
+**Absent, not-yet-ready, and present-but-not-offering are three different facts, and a scan says
+which.** They need opposite fixes — a selector change, a wait, a vocabulary change — and they read
+identically when the middle one is folded into either neighbour.
+
+**And a page that builds in stages is waited for, once, with a budget.** Only while waiting can
+still help: nothing matched the selectors yet, or something did and has not filled in. A picker that
+is READY and does not offer the value will not start offering it, so the scan returns at once rather
+than proving the same thing four times.
+
+### COMMCALC-60.4 WHAT CHANGED
+
+`pick_jqx_item` (the §COMMCALC-58 one home — both callers still dereference it, nothing forked):
+
+* the scan now counts four things instead of one — `candidates` (elements matching the declared
+  selectors), `pickers` (of those, how many answered a declared widget API), `ready` (carried
+  options) and `empty` (**present but not ready**);
+* three distinct `why` sentences, one per state:
+  * `no picker was found on the panel at all`
+  * `the panel has N picker(s) and not one has loaded its options yet - the page was read before it
+    finished filling`
+  * `the panel has N picker(s) with options, none offering it (and M still empty)`
+* `PICKER_LOOKS = 4` looks at `PICKER_SETTLE_MS = 1500` apart — at most 4.5s of waiting, spent only
+  while `candidates == 0 or empty > 0`;
+* `looked` in the returned dict, and the failure says so: *"(looked 3 times over 3s while the panel
+  settled)"*. A slow panel is then visible in the log instead of being inferred.
+
+A success never waits: the first look that drives the control returns from the loop.
+
+### COMMCALC-60.5 WHAT STAYED
+
+The honest zero. A bounded wait makes the control more likely to be found, never more likely to be
+BELIEVED: the §COMMCALC-56 ladder is untouched, so a zero-row pull behind an unconfirmed or
+unsettable control still refuses to publish as "nothing posted" (`empty_pull_verdict`).
+
+### COMMCALC-60.6 TESTS AND THE LOCK
+
+* `backend/tests/unit/test_jqx_picker_is_found_by_what_it_answers_to.py` — 6 new units (24 in the
+  file): the wait happens on a filling panel, does NOT happen on a ready one, the empty picker is
+  counted, the operator is told how long it waited, the wait is bounded, and a success never waits.
+  RED before the change.
+* `backend/prove_jqx_picker.mjs` **§H — 8 checks** against the LIVE 16:30 shape: a loaded
+  `DealerList` beside an empty `SummarizeBy`, read out of the real `epay_sweep.py` source.
+* `backend/harness_empty_pull_verdict.py` **§H21–H27** (103 checks in the file). Fails the build if
+  an empty picker goes back to being skipped, if "read too early" is folded into "none offering it",
+  if the wait loses its bound or its declaration, if a success starts waiting, or if the number of
+  looks stops reaching the operator.
+
+### COMMCALC-60.7 WHAT THIS DOES NOT FIX
+
+Whether 4.5s is ENOUGH is a statement about the portal, and only a run settles it. If the panel is
+slower than that, the failure now says so in its own words — "not one has loaded its options yet …
+looked 4 times over 4.5s" — which is the measurement needed to raise the budget, rather than another
+round of guessing at the selector.
+
+Cross-references: §COMMCALC-58 (the one home this extends) · §COMMCALC-56 (the control is verified
+from the control; the honest-zero ladder) · §COMMCALC-55 (login by evidence) · §19.18 (one fact, one
+home, dereferenced — never copied).
 
 ## §COMMCALC-57. A TILE COUNTS THE LIST IT PRINTS, OVER THE METRICS THE TENANT DECLARED (owner ask 2026-11-10)
 

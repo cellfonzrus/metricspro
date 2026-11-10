@@ -773,7 +773,8 @@ JQX_PICKER_WIDGETS = ("jqxDropDownList", "jqxComboBox")
 _PICK_JQX_ITEM_JS = """
 ([wants, selectors, widgets]) => {
   const $ = window.jQuery || window.$;
-  if (!$) return {ok:false, why:'no jQuery on the page', offered:[], pickers:0, hit:null};
+  if (!$) return {ok:false, why:'no jQuery on the page', offered:[], candidates:0,
+                  pickers:0, ready:0, empty:0, hit:null};
   const norm = s => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
   const want = wants.map(norm).filter(w => w.length > 0);
   const hosts = [];
@@ -781,33 +782,50 @@ _PICK_JQX_ITEM_JS = """
     if (hosts.indexOf(h) < 0) hosts.push(h);
   });
   const offered = [];
-  let hit = null, pickers = 0;
+  let hit = null, pickers = 0, ready = 0, empty = 0;
   hosts.forEach(host => {
-    widgets.forEach(w => {
-      if (hit) return;
-      let items = null;
-      // Ask through this family's own API. A control that is not of this family throws, and that
-      // is the ANSWER, not an error: it tells us what this element is not.
-      try { items = $(host)[w]('getItems'); } catch (e) { return; }
-      if (!items || !items.length) return;
-      pickers += 1;
-      const labels = items.map(i => (i && i.label != null) ? String(i.label) : '');
-      labels.forEach(l => { if (l && offered.indexOf(l) < 0) offered.push(l); });
-      const m = labels.find(l => want.indexOf(norm(l)) >= 0);
-      if (!m) return;
-      try { $(host)[w]('selectItem', m); } catch (e) { return; }
-      let s = null;
-      try { s = $(host)[w]('getSelectedItem'); } catch (e) {}
-      hit = {id: host.id || null, widget: w,
-             selected: (s && s.label != null) ? String(s.label) : null};
-    });
+    // Ask through each family's own API. A control that is not of this family throws, and that
+    // is the ANSWER, not an error: it tells us what this element is not.
+    let family = null, items = [];
+    for (let i = 0; i < widgets.length; i++) {
+      const w = widgets[i];
+      try { items = $(host)[w]('getItems') || []; family = w; break; } catch (e) { /* not this */ }
+    }
+    if (family === null) return;              // not a picker we know how to drive
+    pickers += 1;
+    // A PICKER THAT EXISTS BUT CARRIES NOTHING IS NOT ABSENT, IT IS NOT READY (COMMCALC-60).
+    // These panels build in stages - the account list arrives first and the filter controls fill
+    // in after - so a scan that skips an empty control reports a control it is looking straight
+    // at as missing. Counted separately, and the caller waits on it.
+    if (!items.length) { empty += 1; return; }
+    ready += 1;
+    if (hit) return;
+    const labels = items.map(i => (i && i.label != null) ? String(i.label) : '');
+    labels.forEach(l => { if (l && offered.indexOf(l) < 0) offered.push(l); });
+    const m = labels.find(l => want.indexOf(norm(l)) >= 0);
+    if (!m) return;
+    try { $(host)[family]('selectItem', m); } catch (e) { return; }
+    let sel = null;
+    try { sel = $(host)[family]('getSelectedItem'); } catch (e) {}
+    hit = {id: host.id || null, widget: family,
+           selected: (sel && sel.label != null) ? String(sel.label) : null};
   });
-  return {ok: !!hit, hit, offered, pickers,
-          why: hit ? null
-                   : (pickers ? 'the panel has ' + pickers + ' picker(s), none offering it'
-                              : 'no picker was found on the panel at all')};
+  let why = null;
+  if (!hit) {
+    if (!pickers) {
+      why = 'no picker was found on the panel at all';
+    } else if (!ready) {
+      why = 'the panel has ' + pickers + ' picker(s) and not one has loaded its options yet - ' +
+            'the page was read before it finished filling';
+    } else {
+      why = 'the panel has ' + ready + ' picker(s) with options, none offering it' +
+            (empty ? ' (and ' + empty + ' still empty)' : '');
+    }
+  }
+  return {ok: !!hit, hit, offered, candidates: hosts.length, pickers, ready, empty, why};
 }
 """
+
 
 #: The form field that CORROBORATES the "Summarize by" set, when the portal still renders it. A name
 #: this platform does not own, which is exactly why it is corroboration and not the verification
@@ -844,47 +862,87 @@ _SET_DATES_JS = """
 """
 
 
-def pick_jqx_item(page, wants):
+#: How long to let a filter panel finish filling itself in, and in how many looks. These portal
+#: pages build in STAGES — on 2026-11-10 the 16:30 run found exactly one picker on the panel and it
+#: was the dealer list, because the filter controls had not populated yet (index §COMMCALC-60).
+#: Bounded on purpose: waiting cannot turn a control that is absent into one that is present, so
+#: after this budget the scan reports what it saw, and says that it waited.
+PICKER_SETTLE_MS = 1500
+PICKER_LOOKS = 4
+
+
+def pick_jqx_item(page, wants, *, looks=PICKER_LOOKS, settle_ms=PICKER_SETTLE_MS):
     """THE ONE HOME for "drive this page's jqWidgets picker to one of these labels" (§COMMCALC-58).
 
     `wants` is every acceptable spelling of the one value we want. Matching is on MEANING — case,
     spacing and punctuation are stripped from both sides — because the portal writes "June- 26"
     where the caller thinks "June 2026", and wrote "Daily" in a control it later re-skinned.
 
+    IT WAITS FOR THE PANEL (§COMMCALC-60), and only while waiting can still help: when no candidate
+    element exists yet, or when one does but has not loaded its options. Once a picker is READY and
+    simply does not offer the value, another look cannot change that, so it returns at once rather
+    than spending the budget proving the same thing four times.
+
     Returns a dict, always, with these keys:
 
-      ok        a picker offering one of `wants` was found AND driven to it
-      selected  the WIDGET'S OWN answer afterwards — what the thing we set says it is set to.
-                This is the verification; anything read elsewhere on the page is corroboration
-                (§COMMCALC-56).
-      widget    which declared family answered, so a change of flavour is visible in the log
-      offered   every label the page's pickers actually carry. On a failure this is the whole
-                point: an operator reads what the panel DOES offer instead of being told only
-                that it does not offer what we asked for.
-      pickers   how many controls answered a declared API at all. It separates "the panel has no
-                picker we can drive" from "it has pickers and none of them offers this", which
-                need opposite fixes and read identically without it.
-      why       the sentence for a failure, None on success.
+      ok          a picker offering one of `wants` was found AND driven to it
+      selected    the WIDGET'S OWN answer afterwards — what the thing we set says it is set to.
+                  This is the verification; anything read elsewhere on the page is corroboration
+                  (§COMMCALC-56).
+      widget      which declared family answered, so a change of flavour is visible in the log
+      offered     every label the page's READY pickers actually carry. On a failure this is the
+                  point: an operator reads what the panel DOES offer instead of being told only
+                  that it does not offer what we asked for.
+      candidates  elements matching the declared selectors at all
+      pickers     of those, how many answered a declared widget API
+      ready       of those, how many carried any options
+      empty       of those, how many were still empty — PRESENT BUT NOT READY, which is a
+                  different fact from absent and needs the opposite fix
+      looked      how many times the page was asked, so a slow panel is visible in the log
+      why         the sentence for a failure, None on success.
 
     Both callers in this file dereference THIS — `_set_daily_range` for "Summarize by" and
     `_set_report_month` for the month list. They had their own near-identical scans until
     2026-11-10, one of which had been widened and the other not, which is why one of them went
     blind when the portal re-skinned a control. Locked in `harness_empty_pull_verdict.py` §H.
     """
-    try:
-        raw = page.evaluate(_PICK_JQX_ITEM_JS,
-                            [list(wants), list(JQX_PICKER_SELECTORS), list(JQX_PICKER_WIDGETS)])
-    except Exception as e:
-        return {"ok": False, "selected": None, "widget": None, "offered": [], "pickers": 0,
-                "why": f"the page could not be asked ({type(e).__name__}: {e})"}
-    raw = raw if isinstance(raw, dict) else {}
-    hit = raw.get("hit") if isinstance(raw.get("hit"), dict) else {}
-    return {"ok": bool(raw.get("ok")) and (hit or {}).get("selected") is not None,
-            "selected": (hit or {}).get("selected"),
-            "widget": (hit or {}).get("widget"),
-            "offered": list(raw.get("offered") or []),
-            "pickers": int(raw.get("pickers") or 0),
-            "why": raw.get("why")}
+    looks = max(1, int(looks))
+    out, n = None, 0
+    for attempt in range(looks):
+        n = attempt + 1
+        try:
+            raw = page.evaluate(_PICK_JQX_ITEM_JS,
+                                [list(wants), list(JQX_PICKER_SELECTORS),
+                                 list(JQX_PICKER_WIDGETS)])
+        except Exception as e:
+            return {"ok": False, "selected": None, "widget": None, "offered": [],
+                    "candidates": 0, "pickers": 0, "ready": 0, "empty": 0, "looked": n,
+                    "why": f"the page could not be asked ({type(e).__name__}: {e})"}
+        raw = raw if isinstance(raw, dict) else {}
+        hit = raw.get("hit") if isinstance(raw.get("hit"), dict) else {}
+        out = {"ok": bool(raw.get("ok")) and (hit or {}).get("selected") is not None,
+               "selected": (hit or {}).get("selected"),
+               "widget": (hit or {}).get("widget"),
+               "offered": list(raw.get("offered") or []),
+               "candidates": int(raw.get("candidates") or 0),
+               "pickers": int(raw.get("pickers") or 0),
+               "ready": int(raw.get("ready") or 0),
+               "empty": int(raw.get("empty") or 0),
+               "looked": n,
+               "why": raw.get("why")}
+        if out["ok"]:
+            break
+        # Another look only helps while the panel might still be BUILDING: nothing matched the
+        # selectors yet, or something did and has not filled in. A picker that is ready and does
+        # not offer the value will not start offering it, so do not spend the budget on it.
+        still_building = out["candidates"] == 0 or out["empty"] > 0
+        if not still_building or attempt == looks - 1:
+            break
+        page.wait_for_timeout(settle_ms)
+    if out and not out["ok"] and n > 1:
+        out["why"] = f"{out['why']} (looked {n} times over "
+        out["why"] += f"{(n - 1) * settle_ms / 1000:g}s while the panel settled)"
+    return out
 
 
 def _same_label(a, b):

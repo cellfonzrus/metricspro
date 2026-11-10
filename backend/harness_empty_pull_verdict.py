@@ -317,6 +317,22 @@ check("F10 DLAR's own empty guard is gone and the shared sentence is used",
       and "_empty_verdict.classify_empty_pull" in SWEEPS["dlar_sweep"])
 
 
+class _StagedPage:
+    """A page that answers differently each time it is asked - a panel filling itself in."""
+
+    def __init__(self, stages):
+        self._stages = list(stages)
+        self.asked = 0
+        self.waited = []
+
+    def evaluate(self, script, arg=None):
+        self.asked += 1
+        return self._stages[min(self.asked, len(self._stages)) - 1]
+
+    def wait_for_timeout(self, ms):
+        self.waited.append(ms)
+
+
 class _DeadPage:
     """A page that cannot be asked at all."""
 
@@ -470,8 +486,41 @@ check("H7 …and 'no picker at all' is a different sentence from 'none offering 
       and "none offering it" in ES._PICK_JQX_ITEM_JS,
       "opposite fixes: rebuild the leg, or widen the scan")
 check("H8 the wrapper always returns every key its callers unpack",
-      (lambda r: set(r) == {"ok", "selected", "widget", "offered", "pickers", "why"})(
+      (lambda r: set(r) == {"ok", "selected", "widget", "offered", "candidates", "pickers",
+                            "ready", "empty", "looked", "why"})(
           ES.pick_jqx_item(_DeadPage(), ["x"])))
+
+# ── COMMCALC-60 — PRESENT BUT NOT READY IS NOT ABSENT ────────────────────────────────────────────
+# Measured 2026-11-10 16:30, the first run on COMMCALC-58's wording: the panel reported ONE picker
+# and it was the dealer list. The filter control was on the page and had not populated, and an
+# empty control was skipped entirely — so a control we were looking straight at read as missing.
+check("H21 an empty picker is COUNTED, not skipped",
+      "empty += 1" in ES._PICK_JQX_ITEM_JS and "ready += 1" in ES._PICK_JQX_ITEM_JS)
+check("H22 'read too early' is its OWN sentence, not folded into 'none offering it'",
+      "finished filling" in ES._PICK_JQX_ITEM_JS
+      and "none offering it" in ES._PICK_JQX_ITEM_JS
+      and "no picker was found" in ES._PICK_JQX_ITEM_JS)
+check("H23 the wait is BOUNDED and declared once each",
+      isinstance(ES.PICKER_LOOKS, int) and 2 <= ES.PICKER_LOOKS <= 10
+      and isinstance(ES.PICKER_SETTLE_MS, int) and 0 < ES.PICKER_SETTLE_MS <= 5000
+      and EPAY.count("PICKER_LOOKS = ") == 1 and EPAY.count("PICKER_SETTLE_MS = ") == 1,
+      "a wait with no ceiling is a sweep that never reports")
+check("H24 …and a look that cannot help is not taken",
+      "still_building" in PICK and "out[\"empty\"] > 0" in PICK,
+      "a READY picker will not start offering a value it does not have")
+check("H25 a success never waits",
+      (lambda p: (ES.pick_jqx_item(p, ["Daily"]), p.waited == [])[-1])(_StagedPage(
+          [{"ok": True, "hit": {"id": "x", "widget": "jqxComboBox", "selected": "Daily"},
+            "offered": ["Daily"], "candidates": 1, "pickers": 1, "ready": 1, "empty": 0}])))
+check("H26 …and a panel that fills in on the second look IS found",
+      (lambda p: ES.pick_jqx_item(p, ["Daily"])["ok"])(_StagedPage([
+          {"ok": False, "hit": None, "offered": [], "candidates": 2, "pickers": 2, "ready": 1,
+           "empty": 1, "why": "still empty"},
+          {"ok": True, "hit": {"id": "x", "widget": "jqxComboBox", "selected": "Daily"},
+           "offered": ["Daily"], "candidates": 2, "pickers": 2, "ready": 2, "empty": 0}])))
+check("H27 the operator is told how many looks it took",
+      "looked" in PICK and "while the panel settled" in PICK,
+      "a slow panel and an absent control read identically without it")
 check("H9 ok is never true without the widget's own answer (§COMMCALC-56 holds here too)",
       ES.pick_jqx_item(_FixedPage({"ok": True, "hit": {"id": "a", "selected": None}}),
                        ["x"])["ok"] is False)

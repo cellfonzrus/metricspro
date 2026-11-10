@@ -108,7 +108,8 @@ def test_a_dead_page_is_reported_as_itself():
 def test_a_scan_that_returns_rubbish_still_returns_the_promised_keys():
     """Every caller unpacks the same keys; a page that answers oddly must not make them absent."""
     r = es.pick_jqx_item(FakePicker("not a dict"), ["Daily"])
-    assert set(r) == {"ok", "selected", "widget", "offered", "pickers", "why"}
+    assert set(r) == {"ok", "selected", "widget", "offered", "candidates", "pickers", "ready",
+                      "empty", "looked", "why"}
     assert r["ok"] is False
 
 
@@ -203,3 +204,83 @@ def test_neither_home_learns_which_tenant_it_is_acting_for():
     import inspect
     for fn in (es.pick_jqx_item, es._set_daily_range, es._set_report_month):
         assert "org" not in inspect.signature(fn).parameters
+
+
+# ── a picker that exists but has not filled in is NOT absent (§COMMCALC-60) ──────────────────────
+
+def _panel(candidates=1, pickers=1, ready=0, empty=1, offered=(), selected=None, why=None):
+    return {"ok": bool(selected),
+            "hit": ({"id": "x", "widget": "jqxComboBox", "selected": selected} if selected else None),
+            "offered": list(offered), "candidates": candidates, "pickers": pickers,
+            "ready": ready, "empty": empty, "why": why}
+
+
+class _Stages:
+    """A page that answers differently each time it is asked — a panel filling itself in."""
+
+    def __init__(self, *stages):
+        self._stages = list(stages)
+        self.asked = 0
+        self.waited = []
+
+    def evaluate(self, script, arg=None):
+        self.asked += 1
+        return self._stages[min(self.asked, len(self._stages)) - 1]
+
+    def wait_for_timeout(self, ms):
+        self.waited.append(ms)
+
+
+def test_a_panel_still_filling_in_is_waited_for_and_then_found():
+    """THE LIVE SHAPE, 2026-11-10 16:30. The dealer list had loaded and the filter control had not,
+    so the only picker carrying anything was the account selector."""
+    page = _Stages(_panel(empty=1, ready=1, pickers=2,
+                          offered=["474517 - Passaic wireless 2022 LLC(230)"]),
+                   _panel(empty=0, ready=2, pickers=2, selected="Daily",
+                          offered=["Daily", "Weekly", "Monthly"]))
+    r = es.pick_jqx_item(page, ["Daily"])
+    assert r["ok"] is True
+    assert r["selected"] == "Daily"
+    assert page.asked == 2 and page.waited, "it must actually have waited"
+
+
+def test_a_ready_panel_that_simply_does_not_offer_it_is_NOT_waited_on():
+    """Another look cannot make a loaded control start offering a value it does not have. Spending
+    the budget proving that four times only delays the honest answer."""
+    page = _Stages(_panel(pickers=1, ready=1, empty=0, offered=["Weekly", "Monthly"],
+                          why="the panel has 1 picker(s) with options, none offering it"))
+    r = es.pick_jqx_item(page, ["Daily"])
+    assert r["ok"] is False
+    assert page.asked == 1 and page.waited == []
+
+
+def test_an_empty_picker_is_counted_and_reported_as_not_ready():
+    """Before this it was invisible: skipped, uncounted, and the operator was told the panel had
+    one fewer control than it really had."""
+    page = _Stages(_panel(pickers=2, ready=1, empty=1,
+                          why="the panel has 1 picker(s) with options, none offering it "
+                              "(and 1 still empty)"))
+    r = es.pick_jqx_item(page, ["Daily"])
+    assert r["pickers"] == 2 and r["ready"] == 1 and r["empty"] == 1
+    assert "still empty" in r["why"]
+
+
+def test_the_failure_says_how_long_it_waited():
+    """A slow panel and an absent control read identically without it."""
+    page = _Stages(_panel(candidates=0, pickers=0, ready=0, empty=0,
+                          why="no picker was found on the panel at all"))
+    r = es.pick_jqx_item(page, ["Daily"], looks=3, settle_ms=1000)
+    assert r["looked"] == 3
+    assert "looked 3 times" in r["why"] and "2s" in r["why"]
+
+
+def test_the_wait_is_bounded_and_cannot_be_switched_off_into_an_infinite_one():
+    page = _Stages(_panel(candidates=0, pickers=0, empty=0, why="none"))
+    assert es.pick_jqx_item(page, ["x"], looks=0)["looked"] == 1
+    assert es.PICKER_LOOKS >= 2 and es.PICKER_SETTLE_MS > 0
+
+
+def test_a_success_on_the_first_look_never_waits():
+    page = _Stages(_panel(ready=1, pickers=1, empty=0, selected="Daily", offered=["Daily"]))
+    assert es.pick_jqx_item(page, ["Daily"])["ok"] is True
+    assert page.asked == 1 and page.waited == []
