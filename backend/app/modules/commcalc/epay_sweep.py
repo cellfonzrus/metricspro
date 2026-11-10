@@ -32,6 +32,8 @@ EpayLoginError telling the operator to add it (graceful degradation). The portal
 WAF-protected, so Railway's datacenter IP must be allowed to reach it; if a run reports a WAF
 "Request Rejected", the sweep can be pointed at a residential/allow-listed egress.
 """
+import re
+
 from datetime import datetime, timedelta, timezone
 from app.modules.commcalc import feed_period as _feed_period  # THE feed-row month + per-day stamp (one home, pure)
 from app.modules.notify import report_filters as _report_filters  # THE tenant's-today home (pure leaf; see feed_today)
@@ -777,10 +779,36 @@ _PICK_JQX_ITEM_JS = """
                   pickers:0, ready:0, empty:0, hit:null};
   const norm = s => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
   const want = wants.map(norm).filter(w => w.length > 0);
-  const hosts = [];
+  const matched = [];
   document.querySelectorAll(selectors.join(',')).forEach(h => {
-    if (hosts.indexOf(h) < 0) hosts.push(h);
+    if (matched.indexOf(h) < 0) matched.push(h);
   });
+  // A THING INSIDE A THING IS NOT A SECOND CONTROL (COMMCALC-64). jqWidgets builds a dropdown out
+  // of nested divs that carry the same jqx-* classes and ARIA roles as its host, so the selectors
+  // match the host AND its innerListBox AND its dropDownButtonContent - one control counted three
+  // times. Worse, those inner parts can never carry items, so `empty > 0` never cleared and the
+  // wait spent its whole budget on scaffolding every tick. Keep only the OUTERMOST match.
+  const hosts = matched.filter(h => !matched.some(
+    o => o !== h && typeof o.contains === 'function' && o.contains(h)));
+  // A GENERATED ID IS NOT A NAME. What identifies a control to a person is the text printed beside
+  // it, so read that here, where the page is.
+  const labelOf = (el) => {
+    const aria = (el.getAttribute && el.getAttribute('aria-label')) || '';
+    if (aria.trim()) return aria.trim();
+    if (el.id && document.querySelector) {
+      let lab = null;
+      try { lab = document.querySelector('label[for="' + el.id + '"]'); } catch (e) {}
+      if (lab && (lab.textContent || '').trim()) return lab.textContent.trim();
+    }
+    let node = el;
+    for (let up = 0; up < 3 && node; up++) {
+      const prev = node.previousElementSibling;
+      const txt = prev && (prev.textContent || '').trim();
+      if (txt) return txt.slice(0, 60);
+      node = node.parentElement;
+    }
+    return null;
+  };
   const offered = [], panel = [];
   let hit = null, pickers = 0, ready = 0, empty = 0;
   hosts.forEach(host => {
@@ -799,7 +827,8 @@ _PICK_JQX_ITEM_JS = """
     // at as missing. Counted separately, and the caller waits on it.
     if (!items.length) {
       empty += 1;
-      panel.push({id: host.id || null, widget: family, options: 0, sample: []});
+      panel.push({id: host.id || null, label: labelOf(host), widget: family,
+                  options: 0, sample: []});
       return;
     }
     ready += 1;
@@ -810,7 +839,8 @@ _PICK_JQX_ITEM_JS = """
     // controls were in the message and neither could be read. Each control reports its own SIZE
     // and a bounded SAMPLE, and the sentence is built per control.
     const few = labels.filter(l => l).slice(0, sample);
-    panel.push({id: host.id || null, widget: family, options: labels.length, sample: few});
+    panel.push({id: host.id || null, label: labelOf(host), widget: family,
+                options: labels.length, sample: few});
     few.forEach(l => { if (offered.indexOf(l) < 0) offered.push(l); });
     if (hit) return;
     const m = labels.find(l => want.indexOf(norm(l)) >= 0);
@@ -989,6 +1019,32 @@ def pick_jqx_item(page, wants, *, settle_ms=PICKER_SETTLE_MS):
     return out
 
 
+#: A jqWidgets-GENERATED element id, which is not a name (index §COMMCALC-64). The portal's panel
+#: reports ids like `innerListBoxjqxWidgetaa329b45`, `listBoxContentjqxWidget0206f1e1` and
+#: `dropDownButtonContentjqxWidget349f357e`: the widget library mints them per page load, so such an
+#: id tells an operator nothing AND cannot be compared between two ticks of the same sweep. A
+#: control is named by what is printed beside it on screen; this pattern is how we know we have no
+#: name rather than a useless one.
+GENERATED_ID_RE = re.compile(r"jqxWidget[0-9a-f]{6,}", re.I)
+
+
+def control_name(entry):
+    """THE ONE HOME for "what do we call this control when we tell someone about it".
+
+    In order: the label printed beside it on the page, then its id if the id is a real one, then
+    nothing — and "nothing" is reported as such, never papered over with a generated id.
+    """
+    entry = entry if isinstance(entry, dict) else {}
+    label = (entry.get("label") or "").strip()
+    if label:
+        return label
+    ident = (entry.get("id") or "").strip()
+    if ident and not GENERATED_ID_RE.search(ident):
+        return ident
+    widget = (entry.get("widget") or "").strip()
+    return f"an unnamed {widget}" if widget else "an unnamed control"
+
+
 def describe_panel(scan):
     """THE PANEL, CONTROL BY CONTROL — the sentence an operator reads on a failure.
 
@@ -1010,7 +1066,7 @@ def describe_panel(scan):
         return f"the panel's pickers offer: {flat or 'nothing'}"
     parts = []
     for e in entries:
-        name = e.get("id") or e.get("widget") or "an unnamed control"
+        name = control_name(e)
         n = int(e.get("options") or 0)
         if not n:
             parts.append(f"{name}: empty")

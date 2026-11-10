@@ -2934,10 +2934,10 @@ FACTS: dict[str, dict] = {
     'column_tolerance': {
         "question": 'Which column of this uploaded sheet holds the value I asked for?',
         "homes": ('app/core/column_tolerant.py',),
-        # §COMMCALC-64 (2026-11-10) — the same home now answers the question on the WRITE side
+        # §COMMCALC-65 (2026-11-10) — the same home now answers the question on the WRITE side
         # (`writable_columns` / `drop_absent`), after a write that assumed more than any read dared
         # to emptied a month of carrier data.
-        "index": ('2', 'COMMCALC-64'),
+        "index": ('2', 'COMMCALC-65'),
         "locks": ('harness_any_columns_lock.py', 'harness_write_tolerant_period_replace.py'),
         # SNAPSHOT — regenerate with `python3 harness_module_graph_guard.py --bless`.
         "callers": {
@@ -2960,7 +2960,7 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/prospect_eval.py': ('_ct',),
             'app/modules/commcalc/setup_documents.py': ('read_row',),
             'app/modules/commcalc/whatif.py': ('_ct',),
-            # §COMMCALC-64. This module kept its OWN per-column probe over one hard-coded column
+            # §COMMCALC-65. This module kept its OWN per-column probe over one hard-coded column
             # name (`columns=("tax",)`) — the §19.18 copy of this home's own question — while its
             # docstring described the wiped-period failure that copy did not prevent. It reads the
             # home now, and about every key in the payload rather than one remembered column.
@@ -2971,12 +2971,12 @@ FACTS: dict[str, dict] = {
             'app/modules/supply/store.py': ('present_columns',),
         },
     },
-    # ── §COMMCALC-64 — when may an existing row be removed ──────────────────────────────────────
+    # ── §COMMCALC-65 — when may an existing row be removed ──────────────────────────────────────
     'scoped_row_replace': {
         "question": 'May these stored rows be removed yet, and what happens to them if the '
                     'replacement fails half-way?',
         "homes": ('app/modules/commcalc/safe_replace.py',),
-        "index": ('19.19', 'COMMCALC-64'),
+        "index": ('19.19', 'COMMCALC-65'),
         "locks": ('harness_comp_upload_safety.py', 'harness_ma_slice_replace.py',
                   'harness_write_tolerant_period_replace.py'),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` strips every
@@ -2997,7 +2997,7 @@ FACTS: dict[str, dict] = {
             # the upload path this was written for
             'app/modules/commcalc/router.py': ('ReplaceFailed', 'safe_replace'),
             'app/modules/commcalc/epay_sweep.py': ('_safe_replace',),
-            # §COMMCALC-64 — wired 2026-11-10, after the wipe. It binds the EXCEPTION too, because a
+            # §COMMCALC-65 — wired 2026-11-10, after the wipe. It binds the EXCEPTION too, because a
             # failed replace must be re-raised as the sweep's own error carrying "the period was
             # left as it was" — a caller that only binds the function cannot say that.
             'app/modules/commcalc/dlar_sweep.py': ('_ReplaceFailed', '_safe_replace'),
