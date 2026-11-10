@@ -70,10 +70,11 @@ def test_the_page_is_asked_with_every_declared_selector_and_family():
     """Adding a flavour must be a declaration, not an edit buried in a string of JavaScript."""
     p = FakePicker(_scan())
     es.pick_jqx_item(p, ["Daily"])
-    wants, selectors, widgets = p.asked[0]
+    wants, selectors, widgets, sample = p.asked[0]
     assert wants == ["Daily"]
     assert selectors == list(es.JQX_PICKER_SELECTORS)
     assert widgets == list(es.JQX_PICKER_WIDGETS)
+    assert sample == es.PICKER_SAMPLE, "the per-control sample size is DECLARED, not inlined"
 
 
 def test_both_widget_families_are_declared():
@@ -108,8 +109,8 @@ def test_a_dead_page_is_reported_as_itself():
 def test_a_scan_that_returns_rubbish_still_returns_the_promised_keys():
     """Every caller unpacks the same keys; a page that answers oddly must not make them absent."""
     r = es.pick_jqx_item(FakePicker("not a dict"), ["Daily"])
-    assert set(r) == {"ok", "selected", "widget", "offered", "candidates", "pickers", "ready",
-                      "empty", "looked", "why"}
+    assert set(r) == {"ok", "selected", "widget", "offered", "panel", "candidates", "pickers",
+                      "ready", "empty", "looked", "waited_ms", "why"}
     assert r["ok"] is False
 
 
@@ -269,18 +270,156 @@ def test_the_failure_says_how_long_it_waited():
     """A slow panel and an absent control read identically without it."""
     page = _Stages(_panel(candidates=0, pickers=0, ready=0, empty=0,
                           why="no picker was found on the panel at all"))
-    r = es.pick_jqx_item(page, ["Daily"], looks=3, settle_ms=1000)
-    assert r["looked"] == 3
-    assert "looked 3 times" in r["why"] and "2s" in r["why"]
+    r = es.pick_jqx_item(page, ["Daily"], settle_ms=1000)
+    assert r["looked"] == es.PICKER_PATIENCE + 1
+    assert f"looked {r['looked']} times" in r["why"]
+    assert f"{r['waited_ms'] / 1000:g}s" in r["why"]
 
 
 def test_the_wait_is_bounded_and_cannot_be_switched_off_into_an_infinite_one():
+    """Since §COMMCALC-62 the bound is PATIENCE (progress) and a DEADLINE, not a look count, so
+    there is no caller-supplied number that can turn the wait into an unbounded one."""
     page = _Stages(_panel(candidates=0, pickers=0, empty=0, why="none"))
-    assert es.pick_jqx_item(page, ["x"], looks=0)["looked"] == 1
-    assert es.PICKER_LOOKS >= 2 and es.PICKER_SETTLE_MS > 0
+    r = es.pick_jqx_item(page, ["x"], settle_ms=1)
+    assert r["looked"] <= es.PICKER_PATIENCE + 1
+    assert es.PICKER_SETTLE_MS > 0 and es.PICKER_PATIENCE >= 1 and es.PICKER_DEADLINE_MS > 0
+    import inspect
+    assert "looks" not in inspect.signature(es.pick_jqx_item).parameters, \
+        "a parameter that bounds nothing misleads the next reader"
 
 
 def test_a_success_on_the_first_look_never_waits():
     page = _Stages(_panel(ready=1, pickers=1, empty=0, selected="Daily", offered=["Daily"]))
     assert es.pick_jqx_item(page, ["Daily"])["ok"] is True
     assert page.asked == 1 and page.waited == []
+
+
+# ── the wait follows PROGRESS, and no one control may drown the report (§COMMCALC-62) ────────────
+#
+# Measured live at 2026-11-10 18:30, on the §COMMCALC-61 code:
+#
+#     the panel has 3 picker(s) with options, none offering it (and 10 still empty)
+#     (looked 4 times over 4.5s while the panel settled)
+#
+# TWO facts in one sentence, and both were new. The panel has THIRTEEN controls, not the one the
+# 16:30 run reported. And ten of them were STILL empty when the fixed 4.5s budget ran out, which
+# says the budget expired while the page was still working — a fixed number guessed at once cannot
+# know how slow the portal is today.
+#
+# The second fact is why this took three rounds to see. `offered` was one merged list, and one of
+# those controls is the DEALER list carrying hundreds of accounts, so it filled the whole sentence
+# and the recorder truncated the rest. Both other loaded controls were in that message and neither
+# could be read. A report in which the biggest control wins is a report that hides the panel.
+
+
+class _Filling:
+    """A panel that fills one control in per look, then stops — and counts what it was asked."""
+
+    def __init__(self, *, empty, ready=0, fills=True, selected_at=None, pickers=None):
+        self._empty, self._ready, self._fills = empty, ready, fills
+        self._selected_at, self._pickers = selected_at, pickers or (empty + ready)
+        self.asked, self.waited = 0, []
+
+    def evaluate(self, script, arg=None):
+        self.asked += 1
+        if self.asked > 1 and self._fills and self._empty > 0:
+            self._empty -= 1
+            self._ready += 1
+        sel = "Daily" if (self._selected_at and self.asked >= self._selected_at) else None
+        return _panel(candidates=self._pickers, pickers=self._pickers, ready=self._ready,
+                      empty=self._empty, selected=sel,
+                      offered=(["Daily"] if sel else []),
+                      why="the panel has pickers, none offering it")
+
+    def wait_for_timeout(self, ms):
+        self.waited.append(ms)
+
+
+def test_the_wait_keeps_going_while_the_panel_is_STILL_FILLING_past_the_old_cap():
+    """THE 18:30 SHAPE. Ten controls still unfilled when the budget ran out means the budget, not
+    the portal, decided the answer. While controls keep arriving, keep looking."""
+    page = _Filling(empty=10, ready=3, selected_at=9)
+    r = es.pick_jqx_item(page, ["Daily"])
+    assert r["ok"] is True, r["why"]
+    assert page.asked >= 9, f"gave up after {page.asked} looks while the panel was still filling"
+
+
+def test_a_panel_that_STOPS_filling_is_not_waited_on_for_ever():
+    """Progress is the licence to wait. When nothing new fills in, waiting has become guessing."""
+    page = _Filling(empty=6, ready=1, fills=False)
+    r = es.pick_jqx_item(page, ["Daily"])
+    assert r["ok"] is False
+    assert page.asked <= es.PICKER_PATIENCE + 2, f"kept looking {page.asked} times at a dead panel"
+
+
+def test_and_a_stalled_panel_SAYS_it_stopped_filling_with_controls_still_empty():
+    """Its own fact, and the actionable one: the controls exist, the page gave up on them."""
+    page = _Filling(empty=6, ready=1, fills=False)
+    why = es.pick_jqx_item(page, ["Daily"])["why"]
+    assert "6" in why and "stopped filling" in why
+
+
+def test_the_whole_wait_is_capped_by_a_DEADLINE_however_much_progress_there_is():
+    """A panel that fills one control per look for ever must not hold the sweep open for ever."""
+    page = _Filling(empty=10_000, ready=1)
+    es.pick_jqx_item(page, ["Daily"])
+    assert sum(page.waited) <= es.PICKER_DEADLINE_MS
+    assert 0 < es.PICKER_DEADLINE_MS <= 60_000, "a deadline nobody can read is not a deadline"
+
+
+# ── no single control may drown the report ───────────────────────────────────────────────────────
+
+def _with_panel(entries, selected=None, why="none offering it"):
+    """The scan's per-picker report: one entry per control, as the page describes itself."""
+    p = _panel(candidates=len(entries), pickers=len(entries),
+               ready=sum(1 for e in entries if e.get("options")),
+               empty=sum(1 for e in entries if not e.get("options")),
+               selected=selected, why=why)
+    p["panel"] = entries
+    p["offered"] = [lab for e in entries for lab in e.get("sample", [])]
+    return p
+
+
+def test_the_scan_describes_each_control_separately_not_as_one_merged_list():
+    page = _Stages(_with_panel([
+        {"id": "DealerList", "widget": "jqxComboBox", "options": 480,
+         "sample": [f"4745{n} - Wireless LLC" for n in range(8)]},
+        {"id": "PaymentCategory", "widget": "jqxDropDownList", "options": 3,
+         "sample": ["All", "Commission", "Residual"]},
+        {"id": "SummarizeBy", "widget": "jqxComboBox", "options": 0, "sample": []},
+    ]))
+    r = es.pick_jqx_item(page, ["Daily"])
+    assert [e["id"] for e in r["panel"]] == ["DealerList", "PaymentCategory", "SummarizeBy"]
+    assert r["panel"][0]["options"] == 480, "the real size must still be reported"
+
+
+def test_a_control_with_hundreds_of_options_contributes_only_a_SAMPLE():
+    """The whole defect in one assertion: 480 dealer names must not be able to fill the sentence."""
+    page = _Stages(_with_panel([
+        {"id": "DealerList", "widget": "jqxComboBox", "options": 480,
+         "sample": [f"4745{n} - Wireless LLC" for n in range(es.PICKER_SAMPLE)]},
+        {"id": "PaymentCategory", "widget": "jqxDropDownList", "options": 2,
+         "sample": ["All", "Commission"]},
+    ]))
+    r = es.pick_jqx_item(page, ["Daily"])
+    assert len(r["offered"]) <= 2 * es.PICKER_SAMPLE
+    assert "All" in r["offered"], "the SMALL control's options must survive the big one"
+    assert 0 < es.PICKER_SAMPLE <= 20
+
+
+def test_the_failure_sentence_names_every_control_and_stays_readable():
+    """What the operator reads. Before this, one control's contents WERE the whole sentence."""
+    page = _Stages(_with_panel([
+        {"id": "DealerList", "widget": "jqxComboBox", "options": 480,
+         "sample": [f"4745{n} - Wireless LLC" for n in range(es.PICKER_SAMPLE)]},
+        {"id": "PaymentCategory", "widget": "jqxDropDownList", "options": 2,
+         "sample": ["All", "Commission"]},
+        {"id": "SummarizeBy", "widget": "jqxComboBox", "options": 0, "sample": []},
+    ]))
+    ok, detail, confirmed = es._set_daily_range(page, "2026-11-01", "2026-11-08")
+    assert (ok, confirmed) == (False, False)
+    for name in ("DealerList", "PaymentCategory", "SummarizeBy"):
+        assert name in detail, f"{name} is not named in the failure"
+    assert "480" in detail, "the dealer list's real size must be stated, not its contents"
+    assert "empty" in detail, "the unfilled control must be marked as unfilled"
+    assert len(detail) < 1200, f"the sentence is {len(detail)} chars - it will be truncated again"
