@@ -28,6 +28,7 @@ from app.modules.core import relation_home as _relation_home   # 2026-10-31 — 
 from app.modules.commcalc import pay_data_quality as _pdq   # 2026-10-06 — THE pay-feed balance: placed, or reported unplaced (index §19.48)
 from app.modules.commcalc import device_reimb_recon as _drr   # 2026-10-08 — ePay-paid vs distributor-claimed device reimbursement (index §19.52; pure)
 from app.modules.commcalc import carrier_device_money as _cdm   # THE device-financing dollars per device (index §COMMCALC-44)
+from app.modules.commcalc import report_status   # 2026-11-10 — THE per-report sweep verdict writer (index §COMMCALC-68)
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_line
 from app.modules.commcalc import metric_recon as _mr_cfg  # THE bill-payment fee policy vocabulary (mig 1046; one home — no caller spells a policy value)
 from app.modules.commcalc import daily_incentive as _daily_incentive   # 2026-10-10 — THE daily-incentive shapes (mig 1072); every rule is a config row (index §74)
@@ -15903,11 +15904,18 @@ def _do_epay_sweep(org_id, only=None):
         _epay_set_status(client, org_id, 'partial' if _errs else 'ok',
                          (f"PARTIAL — {res}" if _errs else f"OK — {res}"), mark_run=True,
                          success=_landed > 0)
+        # AND EACH REPORT'S OWN VERDICT ON ITS OWN ROW (index §COMMCALC-68). The line above is the
+        # CONNECTOR's; it is one column shared by every leg, so whichever leg ran last erases the
+        # rest. `report_definitions.sweep_last_status/_detail` are per report and are what
+        # `_setup_documents` reads to flag a report urgent — they were NULL everywhere until now.
+        report_status.write(client, org_id, (res or {}).get('per_report') if isinstance(res, dict) else None)
     except epay_sweep.EpayLoginError as e:
         _epay_set_status(client, org_id, 'error', str(e), mark_run=True)
     except epay_sweep.EpayPortalError as e:
         # Login worked, but a later step (report run/download/parse) failed — surface the detail.
         _epay_set_status(client, org_id, 'error', f"Login OK · {e}", mark_run=True)
+        # EVERY report failed is the one case where no report's row would otherwise get its reason.
+        report_status.write(client, org_id, getattr(e, 'per_report', None))
     except Exception as e:
         _epay_set_status(client, org_id, 'error', f"Sweep failed: {e}", mark_run=True)
 

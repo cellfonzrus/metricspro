@@ -2292,6 +2292,10 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/auto_calc.py': ('_status_detail',),
             'app/modules/commcalc/router.py': ('_status_detail',),
             'app/modules/commcalc/vidapay_sweep.py': ('_status_detail',),
+            # A REPORT'S own sweep verdict, written to that report's own `report_definitions` row
+            # (§COMMCALC-68). The sentence it records ends with the conclusion — 0 rows, and why —
+            # so a head cut would throw away the only part an operator reads.
+            'app/modules/commcalc/report_status.py': ('_status_detail',),
         },
     },
     'feed_lineage': {

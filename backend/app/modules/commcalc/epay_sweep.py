@@ -90,7 +90,15 @@ class EpayLoginError(Exception):
 
 
 class EpayPortalError(Exception):
-    """Portal reached + logged in, but a later step (run/download/parse) failed."""
+    """Portal reached + logged in, but a later step (run/download/parse) failed.
+
+    Carries `per_report` — `{report_key: (status, detail)}` — so a run that failed ENTIRELY still
+    tells the caller which report said what. Without it, the one case where every report failed is
+    the one case where no report's own row gets its reason (index §COMMCALC-68)."""
+
+    def __init__(self, *args, per_report=None):
+        super().__init__(*args)
+        self.per_report = dict(per_report or {})
 
 
 # ── MI/ATU column mapping (shared by the manual upload AND this sweep) ─────────────────────
@@ -400,6 +408,24 @@ def ingest_daily_tx(client, org_id, xlsx_path, source_batch=None, ledger=None, t
     return out
 
 
+def _outcome_sentence(result, tgt=""):
+    """What ONE report's completed pull says about itself, in one line. PURE.
+
+    Not a restatement of the run: a report's own row is read on its own, so the line names the
+    report's window and what landed in it. A zero that the ledger later refuses to vouch for
+    overwrites this with its refusal (index §COMMCALC-68)."""
+    r = result if isinstance(result, dict) else {}
+    rows = int(r.get("rows") or 0)
+    where = (tgt or "").strip() or (f"[{r.get('period')}]" if r.get("period") else "")
+    mode = str(r.get("mode") or "").strip()
+    bits = [f"{rows} rows"]
+    if where:
+        bits.append(where)
+    if mode:
+        bits.append(f"({mode})")
+    return " ".join(bits)
+
+
 def _defer_empty(ledger, result, spec, target, evidence=None):
     """Hand ONE zero-row leg to the run's ledger, or settle it immediately when there is no run
     ledger (a direct/standalone call). Every empty_ok leg goes through here — there is no second
@@ -481,6 +507,21 @@ REPORTS = {
                       "label": "Daily Transaction Detail",
                       "ingest": ingest_daily_tx},
 }
+
+
+def registry_key_of(key):
+    """THE ONE HOME for "which `commcalc.report_definitions` row configures this sweep report".
+
+    A sweep key is not a registry key — `mi` is configured as `mi_report` — and that mapping is
+    DECLARED, once, on the report itself. Three places used to re-derive it inline, falling back to
+    the sweep key when the declaration was missing, which silently invents a row name for any
+    report that forgot to declare one. An undeclared report RAISES here instead, because a verdict
+    written to a guessed row is worse than one not written at all."""
+    spec = REPORTS[key]            # KeyError for an unknown report — never a guessed row
+    rkey = (spec.get("registry_key") or "").strip()
+    if not rkey:
+        raise KeyError(f"report {key!r} declares no registry_key")
+    return rkey
 
 
 def _iso_day(v):
@@ -1894,7 +1935,7 @@ def _expand_jobs(keys, report_cfg=None, *, tz):
     jobs = []
     for k in keys:
         spec = REPORTS.get(k) or {}
-        rc = cfg.get(spec.get("registry_key") or k) or {}
+        rc = cfg.get(registry_key_of(k)) or {}
         grain = spec.get("grain")
         if grain == "month":
             n = int(rc.get("refresh_months") or DEFAULT_REFRESH_MONTHS)
@@ -1956,6 +1997,12 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None,
     keys = [k for k in (reports or ["mi"]) if k in REPORTS] or ["mi"]
     base_url = _safe_base(url)
     results, errors = [], []
+    # A RUN THAT PULLS N REPORTS AND RECORDS ONE VERDICT CANNOT SAY WHICH REPORT IT IS ABOUT
+    # (index §COMMCALC-68). Every outcome is recorded HERE, keyed by the report it belongs to, at
+    # the point where that key is in scope — and `report_status.write` puts each one on its own
+    # `report_definitions` row. The shared connector column still gets the run's summary line; it
+    # is just no longer the only record, so comp's reason stops being erased by the next leg.
+    outcomes = {}
     # ONE ledger for the whole run: every zero-row leg defers its verdict into it and every broken
     # control is recorded on it, so the legs are judged against each other's evidence rather than
     # each one vouching for itself (index §19.41).
@@ -1986,7 +2033,7 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None,
                 if spec.get("report_id"):
                     resolved_ids[k] = spec["report_id"]
                     continue
-                pinned = ((report_cfg or {}).get(spec.get("registry_key") or k) or {}).get("portal_report_id")
+                pinned = ((report_cfg or {}).get(registry_key_of(k)) or {}).get("portal_report_id")
                 if pinned:
                     resolved_ids[k] = str(pinned)
                     continue
@@ -1995,15 +2042,19 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None,
                         menu_items = _enumerate_commissions_menu(page)
                     except Exception as e:
                         menu_items = []
-                        errors.append(f"{spec['label']}: could not read the Commissions menu to "
-                                      f"resolve its report id ({type(e).__name__}: {e})")
+                        _why = (f"{spec['label']}: could not read the Commissions menu to "
+                                f"resolve its report id ({type(e).__name__}: {e})")
+                        errors.append(_why)
+                        outcomes[k] = ("error", _why)
                 rid = _resolve_report_id(spec.get("label_match"), menu_items)
                 if rid:
                     resolved_ids[k] = rid
                 else:
-                    errors.append(f"{spec['label']}: could not resolve a report id — no live menu row "
-                                  f"matched label {spec.get('label_match')!r} and no "
-                                  f"report_definitions override (portal_report_id) was set")
+                    _why = (f"{spec['label']}: could not resolve a report id — no live menu row "
+                            f"matched label {spec.get('label_match')!r} and no "
+                            f"report_definitions override (portal_report_id) was set")
+                    errors.append(_why)
+                    outcomes[k] = ("error", _why)
             jobs = _expand_jobs([k for k in keys if k in resolved_ids], report_cfg, tz=tz)
             for idx, (key, target) in enumerate(jobs):
                 if idx > 0:
@@ -2029,7 +2080,7 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None,
                     tgt = f" [{target['period']}]"
 
                 spec = REPORTS[key]
-                _cfg_ev = _empty_cfg_evidence(_rc.get(spec.get("registry_key") or key))
+                _cfg_ev = _empty_cfg_evidence(_rc.get(registry_key_of(key)))
                 try:
                     if spec.get("ingest"):
                         # DTD path: download the workbook, then hand it to the report's own ingest
@@ -2038,16 +2089,22 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None,
                         _open_and_download(page, resolved_ids[key], tmp.name, target=target,
                                            ledger=ledger)
                         source_batch = f"epay-sweep {key}{tgt}".strip()
-                        results.append(spec["ingest"](client, org_id, tmp.name, source_batch,
-                                                      ledger=ledger, target=target,
-                                                      evidence={**_landing_evidence(client, org_id, spec, tz=tz),
-                                                                **_cfg_ev}))
+                        _r = spec["ingest"](client, org_id, tmp.name, source_batch,
+                                            ledger=ledger, target=target,
+                                            evidence={**_landing_evidence(client, org_id, spec, tz=tz),
+                                                      **_cfg_ev})
+                        results.append(_r)
+                        outcomes[key] = ("ok", _outcome_sentence(_r, tgt))
                     else:
-                        results.append(_process_report(client, org_id, page, key, tmp.name,
-                                                       target=target, report_id=resolved_ids[key],
-                                                       ledger=ledger, cfg_evidence=_cfg_ev, tz=tz))
+                        _r = _process_report(client, org_id, page, key, tmp.name,
+                                             target=target, report_id=resolved_ids[key],
+                                             ledger=ledger, cfg_evidence=_cfg_ev, tz=tz)
+                        results.append(_r)
+                        outcomes[key] = ("ok", _outcome_sentence(_r, tgt))
                 except Exception as e:
-                    errors.append(f"{REPORTS[key]['label']}{tgt}: {type(e).__name__}: {e}")
+                    _why = f"{REPORTS[key]['label']}{tgt}: {type(e).__name__}: {e}"
+                    errors.append(_why)
+                    outcomes[key] = ("error", _why)
                 finally:
                     try:
                         os.unlink(tmp.name)
@@ -2063,12 +2120,20 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None,
     for _res, _v in ledger.settle():
         if not _v["trusted"]:
             errors.append(f"{_res.get('label') or _res.get('report')}: {_v['sentence']}")
+            # The zero this leg reported as a success is not one. Its own row must say so, or the
+            # surface shows 'ok' for a report that has landed nothing for weeks.
+            _k = _res.get("report")
+            if _k in REPORTS:
+                outcomes[_k] = ("partial", _v["sentence"])
 
     if not results and errors:
-        raise EpayPortalError("; ".join(errors))
+        raise EpayPortalError("; ".join(errors), per_report=outcomes)
     # A day-grain report whose zero the run CAN vouch for returns mode='no_data'; that is a completed
     # pull, not a partial run, and must not flag the connector as degraded.
     summary = {"reports": results}
+    # EACH REPORT'S OWN VERDICT, keyed by the report it belongs to. `router._do_epay_sweep` hands
+    # this to `report_status.write`, which puts each sentence on that report's own row.
+    summary["per_report"] = outcomes
     if errors:
         summary["errors"] = errors
     # WHAT WAS WRITTEN, NOT WHAT WAS ATTEMPTED (§19.21): the caller stamps `last_run_at` only when a
