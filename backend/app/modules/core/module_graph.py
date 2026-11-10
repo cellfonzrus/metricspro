@@ -1386,7 +1386,7 @@ FACTS: dict[str, dict] = {
             # no port-in reading of its own: every per-metric verdict is the classifier's own
             # `failing` / `met` / `no_data` list, read off the row.
             'app/modules/commcalc/performance_coaching_drilldown.py': ('_kpif',),
-            # §COMMCALC-59. The store metric catalog asks this home WHICH COLUMNS CARRY A SCORED KPI
+            # §COMMCALC-60. The store metric catalog asks this home WHICH COLUMNS CARRY A SCORED KPI
             # rather than keeping its own list, so the figures the KPI report colours against a
             # target and the set the pay engine tiers on can never be a different set — the §19.28
             # defect, which would otherwise have returned the moment the report grew 20 columns.
@@ -1397,7 +1397,7 @@ FACTS: dict[str, dict] = {
         "question": 'What figures does the carrier\'s store-grain KPI feed carry, what is each one '
                     'called, which of them are scored, and which exist in this database yet?',
         "homes": ('app/modules/commcalc/dlar_metric_catalog.py',),
-        "index": ('COMMCALC-59',),
+        "index": ('COMMCALC-60',),
         "locks": ('harness_dlar_metric_catalog.py',),
         # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
         # of 12 facts on 2026-10-04). The lock verifies it against the real import graph.
@@ -2222,7 +2222,7 @@ FACTS: dict[str, dict] = {
             # detail line that said "⚠ PARTIAL". §H of the lock reads this file as source and keeps
             # the literal as an armed negative control.
             'app/modules/commcalc/router.py': ('dlar_sweep',),
-            # §COMMCALC-59. The store metric catalog imports this module for its DECLARATION
+            # §COMMCALC-60. The store metric catalog imports this module for its DECLARATION
             # (`STORE_FIELDS`) and its two reading KINDS, not for the verdict — the catalog is
             # derived from the field mapping so that a column the sweep lands reaches the report
             # without a second list. It computes no verdict of its own.

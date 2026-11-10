@@ -46024,7 +46024,7 @@ divergence §19.18 forbids.
 - `/commcalc/kpi` Store view — rebuilt from the catalog. Standard filters (store, **market**, the
   shared period selector) + the metric-group picker + **the KPI filter** (one scored KPI, at/above or
   below target). Export and the Send bar reflect exactly what is on screen.
-- `commcalc.raw_dlar_store` gains 20 columns by **migration 1116** (additive, nullable, no default,
+- `commcalc.raw_dlar_store` gains 20 columns by **migration 1118** (additive, nullable, no default,
   no backfill, no money column; the table's `service_role` grant restated).
 
 ### COMMCALC-60.6 EVERY TENANT (project rule 2026-10-30)
@@ -46059,7 +46059,7 @@ not the September bytes.
 
 ### COMMCALC-60.8 NOT done here
 
-- Migration 1116 is written and **surfaced for owner approval, not applied**. Until it runs, the 20
+- Migration 1118 is written and **surfaced for owner approval, not applied**. Until it runs, the 20
   figures read as unavailable-with-a-reason; nothing shows a zero.
 - The rep grain (`raw_dlar_rep`) has **20 arriving-but-unread fields of its own** — `aal`,
   `accessory_revenue`, `credit_checks`, `family_plans`, `port_in_rate`, `vas_activations` and the

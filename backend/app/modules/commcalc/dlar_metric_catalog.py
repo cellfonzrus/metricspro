@@ -1,4 +1,4 @@
-"""WHICH STORE-DLAR COLUMN IS WHICH METRIC — ONE HOME (index §COMMCALC-59).
+"""WHICH STORE-DLAR COLUMN IS WHICH METRIC — ONE HOME (index §COMMCALC-60).
 
 WHY THIS MODULE EXISTS. On 2026-11-10 the owner asked for the 21 columns the carrier portal sends at
 store grain that nothing read to become part of KPI reporting, filterable by KPI alongside the
@@ -117,7 +117,7 @@ IDENTITY_COLUMNS = ("location", "address", "store_code")
 DERIVED_COLUMNS = ("total_acts",)
 
 # WHICH COLUMNS MIGRATION 002 ALREADY CREATED. Everything else arrives by hand-applied migration
-# 1116 and is therefore PROBED per column before the one real select (`core.column_tolerant`,
+# 1118 and is therefore PROBED per column before the one real select (`core.column_tolerant`,
 # index §4b.1) — never assumed, because an unapplied migration would otherwise 400 the whole read
 # and the page would show nothing rather than the columns that do exist.
 PREEXISTING_COLUMNS = (
@@ -209,5 +209,5 @@ def present_catalog(present_columns):
         avail = (not m["optional"]) or m["key"] in present
         out.append(dict(m, available=avail,
                         **{UNAVAILABLE_REASON_KEY:
-                           None if avail else "column not yet applied (migration 1116)"}))
+                           None if avail else "column not yet applied (migration 1118)"}))
     return tuple(out)

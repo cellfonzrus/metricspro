@@ -176,7 +176,7 @@ check("J6 an unapplied column is reported unavailable WITH a reason, never dropp
       len(_unapplied) == len(cat.catalog())
       and all((m["available"] is False and m[cat.UNAVAILABLE_REASON_KEY])
               for m in _unapplied if m["optional"]))
-# §19.36 — WHY THE KEY IS PINNED AND NOT THE WORDING. The sentence names migration 1116, which is a
+# §19.36 — WHY THE KEY IS PINNED AND NOT THE WORDING. The sentence names migration 1118, which is a
 # setup internal: a tenant gets the one neutral house sentence and the platform super admin the
 # detail, and `SetupNoticeMiddleware` performs that swap ONLY on `core.setup_notice.MESSAGE_KEYS`.
 # The first push of this change shipped it under `unavailable_reason`, which the boundary does not

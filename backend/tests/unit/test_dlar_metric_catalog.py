@@ -1,4 +1,4 @@
-"""WHICH STORE-DLAR COLUMN IS WHICH METRIC — the one home, proved (index §COMMCALC-59).
+"""WHICH STORE-DLAR COLUMN IS WHICH METRIC — the one home, proved (index §COMMCALC-60).
 
 WHY THESE TESTS EXIST. On 2026-11-10 the owner asked for the 21 columns Elevate Go sends at store
 grain that nothing reads to become part of KPI reporting. The obstacle was not the columns: it was
@@ -142,7 +142,7 @@ def test_select_columns_is_one_list_with_identity_first_and_no_duplicates():
 
 
 def test_optional_columns_are_exactly_the_ones_a_migration_has_yet_to_add():
-    """The new columns arrive by hand-applied migration (1116), so they are PROBED, never assumed.
+    """The new columns arrive by hand-applied migration (1118), so they are PROBED, never assumed.
     `REQUIRED_COLUMNS` are the ones migration 002 already created — a read of those can never 400."""
     assert set(cat.OPTIONAL_COLUMNS).isdisjoint(cat.REQUIRED_COLUMNS)
     assert set(cat.OPTIONAL_COLUMNS) | set(cat.REQUIRED_COLUMNS) == set(cat.select_columns())
@@ -171,7 +171,7 @@ def test_no_carrier_tenant_or_product_name_in_the_module():
 # ── §19.36: A SETUP INTERNAL MUST LEAVE UNDER A KEY THE TENANT BOUNDARY READS ───────────────────
 
 def test_the_unavailable_sentence_leaves_under_a_key_the_boundary_reads():
-    """The sentence names migration 1116, which is a setup internal: a tenant gets the one neutral
+    """The sentence names migration 1118, which is a setup internal: a tenant gets the one neutral
     house sentence and the platform super admin the detail, and `SetupNoticeMiddleware` performs that
     swap ONLY on the message-shaped keys in `core.setup_notice.MESSAGE_KEYS`. Under any other key the
     internals go straight to the customer. CI caught exactly this on the first push of this change,
@@ -180,6 +180,6 @@ def test_the_unavailable_sentence_leaves_under_a_key_the_boundary_reads():
     assert sn.is_message_key(cat.UNAVAILABLE_REASON_KEY)
     entry = [m for m in cat.present_catalog(frozenset()) if m["optional"]][0]
     assert entry["available"] is False
-    assert "1116" in entry[cat.UNAVAILABLE_REASON_KEY]
+    assert "1118" in entry[cat.UNAVAILABLE_REASON_KEY]
     # the machine-readable half carries no prose, so a surface can say "not stored yet" without it
     assert all("available" in m for m in cat.present_catalog(frozenset()))

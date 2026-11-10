@@ -1,4 +1,4 @@
-"""Integration: the store-DLAR KPI read and its catalog, through the REAL app (index §COMMCALC-59).
+"""Integration: the store-DLAR KPI read and its catalog, through the REAL app (index §COMMCALC-60).
 
 Real routing, real middleware, the real endpoint bodies, over the in-memory database double, with
 conftest blocking every outbound socket. There is no staging Supabase, so "integration" here means
@@ -12,7 +12,7 @@ these is a way this feature could be live and still wrong:
     owner's 2026-11-10 ask, and the thing four separate column lists used to be able to break;
   * `GET /dlar-store-catalog` exists at its documented path and offers exactly what the read returns,
     so a "filter by the KPI" picker cannot offer a dead option;
-  * a column migration 1116 has not yet added is reported UNAVAILABLE WITH A REASON — not omitted
+  * a column migration 1118 has not yet added is reported UNAVAILABLE WITH A REASON — not omitted
     (which reads as "this carrier does not publish it") and not 0 (which reads as "sold none");
   * EVERY TENANT (project rule 2026-10-30): a second org's rows never reach the first org's read,
     and a tenant with no store DLAR at all is TOLD its feed published nothing rather than shown an
@@ -127,7 +127,7 @@ def test_catalog_offers_exactly_what_the_read_returns(wired, api_client):
 
 def test_an_unapplied_column_is_unavailable_with_a_reason_never_a_zero(wired, api_client,
                                                                       monkeypatch):
-    """Migration 1116 is applied by hand. Until it runs, the figures it adds do not exist — and the
+    """Migration 1118 is applied by hand. Until it runs, the figures it adds do not exist — and the
     surface must say so. Omitting them would read as "this carrier publishes no trade-in figure"."""
     _seed_stores(wired)
     wired.seed("commcalc.raw_dlar_store", [_store_row()])
