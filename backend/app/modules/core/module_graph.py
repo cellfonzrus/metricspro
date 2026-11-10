@@ -756,7 +756,7 @@ FACTS: dict[str, dict] = {
             'app/modules/commcalc/router.py': ('rd',),
         },
     },
-    # ── §COMMCALC-50 — what a page is telling us instead of showing a form ──────────────────────
+    # ── §COMMCALC-57 — what a page is telling us instead of showing a form ──────────────────────
     'portal_page_verdict': {
         "question": 'Is this page REFUSING us, CHALLENGING us, or THROTTLING us, rather than showing '
                     'us a form \u2014 and what should the operator be told? Four vocabularies '
@@ -791,7 +791,7 @@ FACTS: dict[str, dict] = {
                     'its own home (human_check_on_sign_in) \u2014 this marker list must not answer '
                     'it a second time by text search over markup.',
         "homes": ('app/modules/commcalc/portal_backoff.py',),
-        "index": ('COMMCALC-50',),
+        "index": ('COMMCALC-57',),
         "locks": ('harness_portal_page_verdict.py',),
         # SNAPSHOT \u2014 written BY HAND (\u00a750). The driver keeps the predicates every caller already
         # asks (_looks_like_bot_wall / _looks_like_cloudflare) and dereferences the vocabulary; the
@@ -841,7 +841,7 @@ FACTS: dict[str, dict] = {
                     'caller that has not looked at the page cannot get an answer; '
                     'is_credential_problem is an ALLOWLIST, so an outcome nobody has ruled on stays '
                     'quiet about the password rather than blaming it. A challenge or refusal is '
-                    'believed only when the form is ABSENT — §COMMCALC-50.8\'s rule applied '
+                    'believed only when the form is ABSENT — §COMMCALC-57.8\'s rule applied '
                     'here, not copied here. EXCUSED SIBLING, pinned shrink-only: router.py\'s '
                     'MAILBOX sweep says "login rejected" for an IMAP [AUTHENTICATIONFAILED], which '
                     'is a protocol answer with no page to misread. '
@@ -1375,6 +1375,31 @@ FACTS: dict[str, dict] = {
             # no port-in reading of its own: every per-metric verdict is the classifier's own
             # `failing` / `met` / `no_data` list, read off the row.
             'app/modules/commcalc/performance_coaching_drilldown.py': ('_kpif',),
+            # §COMMCALC-57. The store metric catalog asks this home WHICH COLUMNS CARRY A SCORED KPI
+            # rather than keeping its own list, so the figures the KPI report colours against a
+            # target and the set the pay engine tiers on can never be a different set — the §19.28
+            # defect, which would otherwise have returned the moment the report grew 20 columns.
+            'app/modules/commcalc/dlar_metric_catalog.py': ('_kf',),
+        },
+    },
+    'dlar_store_metric_catalog': {
+        "question": 'What figures does the carrier\'s store-grain KPI feed carry, what is each one '
+                    'called, which of them are scored, and which exist in this database yet?',
+        "homes": ('app/modules/commcalc/dlar_metric_catalog.py',),
+        "index": ('COMMCALC-57',),
+        "locks": ('harness_dlar_metric_catalog.py',),
+        # SNAPSHOT — written BY HAND, multi-line, never blessed (§50: `--bless` silently deleted 11
+        # of 12 facts on 2026-10-04). The lock verifies it against the real import graph.
+        #
+        # WHY IT EXISTS (owner 2026-11-10). The live sweep had been reporting 21 source fields
+        # arriving that nothing read. Reading one meant editing FOUR lists — the sweep's field
+        # declaration, `kpi_failing`'s scored map, two `select(...)` literals in `commcalc/router.py`
+        # and a hand-typed array in the KPI page — and the LAST of them decided what a person could
+        # see, so a column could be declared, landed and invisible. This home is derived from the
+        # first two and the other two now dereference it; the frontend reads it over
+        # `GET /dlar-store-catalog` instead of carrying its own copy.
+        "callers": {
+            'app/modules/commcalc/router.py': ('_cat',),
         },
     },
     'spiff_store_impact': {
@@ -2180,6 +2205,11 @@ FACTS: dict[str, dict] = {
             # detail line that said "⚠ PARTIAL". §H of the lock reads this file as source and keeps
             # the literal as an armed negative control.
             'app/modules/commcalc/router.py': ('dlar_sweep',),
+            # §COMMCALC-57. The store metric catalog imports this module for its DECLARATION
+            # (`STORE_FIELDS`) and its two reading KINDS, not for the verdict — the catalog is
+            # derived from the field mapping so that a column the sweep lands reaches the report
+            # without a second list. It computes no verdict of its own.
+            'app/modules/commcalc/dlar_metric_catalog.py': ('_ds',),
         },
     },
     'portal_cell': {

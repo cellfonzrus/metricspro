@@ -18040,18 +18040,88 @@ def get_dlar_store_kpis(period: str, authorization: str = Header(default=""), or
 
     The sweep/upload store the period as 'June 2026', but the page may pass '2026-06' — so we
     match on period_month/period_year (parsed from either spelling) rather than the raw string,
-    which previously returned [] on a format mismatch."""
+    which previously returned [] on a format mismatch.
+
+    WHICH COLUMNS (index §COMMCALC-57, owner 2026-11-10). The column list is NOT spelled here. It is
+    `dlar_metric_catalog.select_columns()` — derived from the sweep's own field declaration — so a
+    column the feed lands reaches this report the moment it is declared, instead of needing this
+    literal, the sibling literal in `_cr_resolve_kpi_metrics`, and a hand-typed array in the page
+    to be edited in step. Four lists was the shape that let 21 arriving columns sit unread.
+
+    The newest columns arrive by hand-applied migration 1116, so each OPTIONAL one is PROBED before
+    the real select (`core.column_tolerant`, §4b.1). Without that, one unapplied column would 400
+    the whole read and the page would show NOTHING rather than the figures that do exist.
+
+    MARKET is stamped through the canonical union resolver (§13a) — CANONICAL per
+    harness_market_resolution_guard — so the market filter on this report binds the same stores every
+    other market filter binds."""
     require_org(org_id)
+    from app.modules.commcalc import dlar_metric_catalog as _cat
+    from app.core import column_tolerant as _ct
     mo, yr = _month_year(period)
-    q = sb().schema('commcalc').table('raw_dlar_store').select(
-        'location,address,store_code,atu,protect_pct,byod_pct,family_plan_pct,tmr3,'
-        'aal_conversion,conversion_rate,total_acts,gross_adds,total_upgrades'
-    ).eq('org_id', org_id)
+    client = sb()
+    present = _ct.present_columns(lambda: client.schema('commcalc').table('raw_dlar_store'),
+                                  lambda q: q.eq('org_id', org_id), _cat.OPTIONAL_COLUMNS)
+    cols = _ct.select_list(_cat.REQUIRED_COLUMNS, _cat.OPTIONAL_COLUMNS, present)
+    q = client.schema('commcalc').table('raw_dlar_store').select(cols).eq('org_id', org_id)
     q = q.eq('period_month', mo).eq('period_year', yr) if mo and yr else q.in_('period', _pvariants(period))
     rows = q.order('location').execute().data or []
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
-    return [r for r in rows if in_keyset(ks, r.get('store_code'), r.get('address'), r.get('location'))]
+    rows = [r for r in rows if in_keyset(ks, r.get('store_code'), r.get('address'), r.get('location'))]
+    resolve_market, _mk = _store_market_resolver(client, org_id)
+    for r in rows:
+        r['market'] = resolve_market(r.get('store_code') or r.get('address') or r.get('location'))
+    return rows
+
+
+@router.get("/dlar-store-catalog")
+def get_dlar_store_catalog(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """WHAT THE STORE KPI REPORT CAN SHOW — the catalog, as it is true of THIS database (§COMMCALC-57).
+
+    Owner 2026-11-10: the 21 columns the carrier portal sends that nothing read become part of KPI
+    reporting, "filtered by the kpi and out regular filters and send option". A picker needs to know
+    what it may offer, and the only honest source of that is the same declaration the read uses — so
+    this endpoint IS `dlar_metric_catalog`, stamped with which optional columns the database has yet
+    to be given (migration 1116) and with the canonical market options.
+
+    WHY THE FRONTEND MUST NOT CARRY ITS OWN LIST. It did: a hand-typed `KPIS` array in
+    `commcalc/kpi/page.tsx` was the fourth copy of this fact, and the one that decided what a person
+    could actually see. A column could be declared, landed and still invisible.
+
+    EVERY TENANT (project rule 2026-10-30). The catalog is a statement about the feed's SHAPE and is
+    the same for every org — it is not a tenant vocabulary and carries no tenant's words. What
+    differs is `has_rows`: a tenant whose carrier publishes no store DLAR is told so, rather than
+    shown an empty grid that reads as a month of zeros (§COMMCALC-49.10)."""
+    require_org(org_id)
+    from app.modules.commcalc import dlar_metric_catalog as _cat
+    from app.core import column_tolerant as _ct
+    client = sb()
+    present = _ct.present_columns(lambda: client.schema('commcalc').table('raw_dlar_store'),
+                                  lambda q: q.eq('org_id', org_id), _cat.OPTIONAL_COLUMNS)
+    try:
+        probe = (client.schema('commcalc').table('raw_dlar_store').select('id')
+                 .eq('org_id', org_id).limit(1).execute().data) or []
+    except Exception:
+        probe = []
+    # THE MARKET OPTIONS ARE SCOPED TO THE CALLER, not just to the org. A market-restricted manager
+    # must not read the estate's market names off a filter dropdown, and an option they cannot bind
+    # is a dead filter besides. Unrestricted callers (admin / rbac off) get the whole canonical union
+    # list, which is the only set the resolver can actually bind (§13a).
+    resolve_market, markets = _store_market_resolver(client, org_id)
+    from app.modules.storeops.router import scope_keyset as _sk
+    _ks = _sk(authorization, org_id)
+    if _ks is not None:
+        _allowed = {(resolve_market(k) or "").lower() for k in _ks}
+        markets = [m for m in markets if str(m).lower() in _allowed]
+    return {"metrics": list(_cat.present_catalog(present)),
+            "groups": list(_cat.GROUPS),
+            "markets": list(markets),
+            "has_rows": bool(probe),
+            # Said in one sentence so a surface never has to decide what an empty read means.
+            "note": None if probe else
+                    ("This organisation has no store-level carrier KPI rows. Nothing is being "
+                     "measured at store grain here — these figures are unavailable, not zero.")}
 
 
 def _dlar_slice_vintage(client, org_id, period):
@@ -44211,12 +44281,21 @@ def _cr_resolve_targets_actuals(client, org_id, period, ctx):
 
 
 def _cr_resolve_kpi_metrics(client, org_id, period, ctx):
-    """Store KPI metrics — the SAME raw_dlar_store read `get_dlar_store_kpis` serves."""
+    """Store KPI metrics — the SAME raw_dlar_store read `get_dlar_store_kpis` serves.
+
+    THE COLUMN LIST IS DEREFERENCED, NOT RESTATED (§COMMCALC-57). This function used to carry a
+    byte-identical copy of the other reader's `select(...)` literal, which is the sibling half of the
+    defect that left 21 arriving columns unread: fixing one reader and not the other is the same
+    defect wearing a hat. Optional columns are probed for the same reason they are there — migration
+    1116 is applied by hand and one missing column must not 400 the whole read."""
     market_for = ctx["market_for"]
+    from app.modules.commcalc import dlar_metric_catalog as _cat
+    from app.core import column_tolerant as _ct
     mo, yr = _month_year(period)
+    _present = _ct.present_columns(lambda: client.schema("commcalc").table("raw_dlar_store"),
+                                   lambda q: q.eq("org_id", org_id), _cat.OPTIONAL_COLUMNS)
     q = (client.schema("commcalc").table("raw_dlar_store")
-         .select("location,address,store_code,atu,protect_pct,byod_pct,family_plan_pct,tmr3,"
-                 "aal_conversion,conversion_rate,total_acts,gross_adds,total_upgrades")
+         .select(_ct.select_list(_cat.REQUIRED_COLUMNS, _cat.OPTIONAL_COLUMNS, _present))
          .eq("org_id", org_id))
     q = q.eq("period_month", mo).eq("period_year", yr) if mo and yr else q.in_("period", _pvariants(period))
     rows = q.order("location").execute().data or []

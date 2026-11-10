@@ -32,7 +32,7 @@ neither and which holds 49 jobs. Workflow filenames are not a map. This is. (§C
 | `vision-health-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 | `watchdog-guard.yml` | 1 | `pull_request`, `push`, `workflow_dispatch` |
 
-## Gated — 609 gates
+## Gated — 610 gates
 
 A gate whose workflow does not run on `pull_request` is **not** gating your PR, and
 the Runs on column is how you can tell.
@@ -223,6 +223,7 @@ the Runs on column is how you can tell.
 | `harness_device_reimb_recon.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_discrepancy_appeals.py` | `org-scope-guard.yml` | Actor columns get a UUID or NULL, never a sentinel (`actor-uid-lock`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_distributor_chargebacks.py` | `tests.yml` | Proof harnesses, group 4 of 4 (`harness-suite-4`) | `pull_request`, `push`, `workflow_dispatch` |
+| `harness_dlar_metric_catalog.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_dlar_vs_platform.py` | `carrier-vocab-guard.yml` | No cross-side carrier vocabulary in page copy (`carrier-vocab-guard`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_dm_checklist_carrier_review.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
 | `harness_dm_target_attribution.py` | `tests.yml` | Proof harnesses, group 3 of 4 (`harness-suite-3`) | `pull_request`, `push`, `workflow_dispatch` |
