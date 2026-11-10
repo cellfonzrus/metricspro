@@ -467,29 +467,55 @@ def cap_override(caps, key, cap_prefix=CAP_PREFIX):
     return True if v is True else (False if v is False else None)
 
 
-def visible_kinds(rows, declaration, caps=None, org_id=None, confirmations=None, cap_prefix=CAP_PREFIX):
+def _gate(*, grant, posture, by_rule):
+    """THE gate, dereferenced — never a copy of its truth table. A `feature_gate` that cannot be
+    imported (a trimmed deployment) leaves this function answering exactly as it did before the gate
+    existed, which is the degrade direction that module declares."""
+    try:
+        from app.modules.core import feature_gate as _fg
+    except Exception:
+        return True if grant is True else (False if grant is False else bool(by_rule))
+    return _fg.allowed(grant=grant, posture=posture, by_rule=by_rule)
+
+
+def _gate_basis(*, grant, posture, by_rule):
+    """The WORDS for why the gate refused — so `hidden_kinds` states the gate's reason rather than
+    inventing a second vocabulary for it."""
+    try:
+        from app.modules.core import feature_gate as _fg
+    except Exception:
+        return PROV_HIDDEN
+    return _fg.decide(grant=grant, posture=posture, by_rule=by_rule)["basis"]
+
+
+def visible_kinds(rows, declaration, caps=None, org_id=None, confirmations=None, cap_prefix=CAP_PREFIX,
+                  posture=None):
     """Rows visible to a tenant, each with its provenance — THE rule every surface dereferences.
 
       · inactive → never;
-      · cap override `kind:<key>` hide → hidden (recorded); show → shown as 'widened by super-admin';
-      · else shown iff applies(row, declaration).
+      · else the gate's truth table (`core/feature_gate.decide`): the cap override `kind:<key>` is
+        the GRANT (hide = gated off, show = granted), `applies(row, declaration)` is `by_rule`, and
+        `posture` is the tenant's own (mig 1119). `posture=None` resolves to `inherit`, which is what
+        this function answered before the gate existed — byte-identical for every existing caller.
     `rows` are already merged per key (merge_rows). `confirmations` = {kind_key: N} from this org's
     own signature rows, for the "confirmed by you N times" provenance.
 
     GENERALISED, NOT COPIED (2026-09-21, the connector class): any registry whose rows carry `key`,
     `is_active`, `applies_to_pos`, `applies_to_carrier`, `defined_by` and `_source` runs through THIS
     function — connector_registry.visible calls it with `cap_prefix='connector:'`. The default keeps
-    report kinds byte-identical."""
+    report kinds byte-identical.
+
+    THE GATE IS NOT RE-DERIVED HERE (owner 2026-11-10, `feature_gate`'s docstring): the three
+    mechanisms that answer "is this on for this tenant" share one truth table, so a posture cannot
+    mean one thing to a connector and another to a report kind."""
     out = []
     conf = confirmations or {}
     for r in rows or []:
         if not r["is_active"]:
             continue
         ov = cap_override(caps, r["key"], cap_prefix)
-        if ov is False:
-            continue
         by_rule = applies(r, declaration)
-        if not by_rule and ov is not True:
+        if not _gate(grant=ov, posture=posture, by_rule=by_rule):
             continue
         if ov is True and not by_rule:
             prov = PROV_WIDENED
@@ -508,18 +534,26 @@ def visible_kinds(rows, declaration, caps=None, org_id=None, confirmations=None,
     return out
 
 
-def hidden_kinds(rows, declaration, caps=None, cap_prefix=CAP_PREFIX):
+def hidden_kinds(rows, declaration, caps=None, cap_prefix=CAP_PREFIX, posture=None):
     """The rows NOT shown and why — so a surface can say 'N kinds hidden because …' instead of nothing.
-    Shared with the connector registry through `cap_prefix`, like visible_kinds."""
+    Shared with the connector registry through `cap_prefix`, like visible_kinds.
+
+    A row withheld because the TENANT IS GATED says so in the gate's own words: a gated tenant's
+    empty surface must never read as 'you declared nothing', because that sends somebody to fix a
+    declaration that was never the reason (owner 2026-11-10)."""
     out = []
     for r in rows or []:
         if not r["is_active"]:
             out.append({"key": r["key"], "label": r["label"], "why": "inactive"})
             continue
         ov = cap_override(caps, r["key"], cap_prefix)
-        if ov is False:
+        by_rule = applies(r, declaration)
+        if ov is None and by_rule and not _gate(grant=ov, posture=posture, by_rule=by_rule):
+            out.append({"key": r["key"], "label": r["label"],
+                        "why": _gate_basis(grant=ov, posture=posture, by_rule=by_rule)})
+        elif ov is False:
             out.append({"key": r["key"], "label": r["label"], "why": PROV_HIDDEN})
-        elif ov is not True and not applies(r, declaration):
+        elif ov is not True and not by_rule:
             why = []
             if r["applies_to_pos"] and not (set(r["applies_to_pos"]) & set(declaration.get("pos") or [])):
                 why.append("applies to POS " + "/".join(r["applies_to_pos"]) + " — you declared " + ("/".join(declaration.get("pos") or []) or "no POS"))

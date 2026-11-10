@@ -219,6 +219,7 @@ Primary code homes:
 | CORE-38 | **Every path that ships this app carries its configuration** | "when i open it it crashed" — TestFlight build 14, on open, every time. The binary was fine; an auto-published over-the-air update had been bundled with NO configuration, because `eas build` reads `build.<profile>.env` out of eas.json and `eas update` does not. Which delivery paths exist, what does each of them carry, and what refuses to ship a bundle that carries nothing? |
 | CORE-39 | **A setup gap carries the steps that close it, the page that closes it, and whoever may** | A financing row read "⚠️ Detection not configured" with nothing to press, and 29 files say a setup gap is open the same dead-end way. What closes this gap, where, may I — and when I may not, who in MY company can, and how do they get the same steps and a link to the exact screen? |
 | CORE-40 | **A money column that says a word is not saying zero** | Reported on the Cash Calendar: the day grid read "in: not measured" while the table directly beneath it read Expected in \$0.00, Net \$0.00 and TOTAL \$0.00. The report exists to never print a figure for money nobody measured, and its own table printed four. Nothing was wrong with the report: "how is a money value rendered" had SIX implementations, every one of them `Number(v) || 0`. How many states does a money cell have, and which of them is a claim about measurement rather than about money? |
+| CORE-41 | **Inheritance is not a decision — what each tenant is OFFERED** | "why is vidapay connector showing in boost ? we need to get these things under control before we roll out for outside customers — have an agent asses and create a dashboard for the super admin whereby these things can be gated out for the respective tenants right from the get go". Three mechanisms answered "is this on for this tenant" and all three answered by INHERITING a house row — on an org id that IS a real tenant, so that tenant could not be gated at all, and a new tenant arrived holding everything. Where does a human's decision about one tenant live, which mechanisms read it, and what stops one of them answering differently? |
 | CORE-29 | **An app can always say which code it is running** | A merged, published, correct mobile fix did not reach an installed phone for six weeks, and no surface anywhere said so — `expo-updates` reverts to the bundle built into the binary in silence when an update cannot be applied. Who owns "which code is this app running", what does the phone show, and what fails the build when the over-the-air compatibility policy changes quietly? |
 | CORE-25 | **A pane the viewport cannot afford is not a layout** | "On the POs on the mobile app on Apple it shows no products when I am logged into Vzone" — the catalog was fine. The register's cart pane measured 0px on an iPhone and was clipped away, because a 340px pane was pinned beside it inside a page the 248px sidebar had already spent. What is "too narrow for a desk layout" a fact ABOUT, who owns it, and what fails the build when the next screen pins a width of its own? |
 | CORE-27 | **A report arrives with the standard filters and the send bar, or it does not arrive** | "Zero Sales does not have send notification bar, please note this also in teh indsex all reports must have the satandard filters and the send bar by default" — the sender and the filter bar each already had one home; what was missing was the content to send and anything that made either a default. What is a figure nobody can mail worth, and what fails the build when the 129th report ships without a toolbar? |
@@ -26381,6 +26382,7 @@ status word rather than a blank that reads as nil.
 | CORE-38 | core |
 | CORE-39 | core |
 | CORE-40 | core |
+| CORE-41 | core |
 | CORE-32 | core |
 | CORE-33 | core |
 | CORE-34 | core |
@@ -46281,3 +46283,66 @@ KPI, at both grains) · §19.18 (one fact, one home, dereferenced — never copi
 beats wrong) · §COMMCALC-49.10 (a feature is not finished until it works for every tenant) ·
 §4b.1 (any-subset column reads) · §13a (the canonical store→market resolver) · §10 (the KPI system) ·
 §CORE-34/35/36 (the gate index that now lists this lock).
+
+---
+
+## §CORE-41. INHERITANCE IS NOT A DECISION — WHAT EACH TENANT IS OFFERED (owner directive 2026-11-10)
+
+Owner, verbatim: *"why is vidapay connector showing in boost ? we need to get these things under
+control before we roll out for outside customers — have an agent asses and create a dashboard for the
+super admin whereby these things can be gated out for the respective tenants right from the get go"*.
+
+**WHY HIS CASE HAPPENED, and it is not a bug in the VidaPay code.** Measured in production before
+building:
+
+1. The platform keeps its DEFAULTS on org `00000000-0000-0000-0000-000000000001`, which every tenant
+   inherits (the mig-207 / 998 / 1010 / 1014 shape). **That org id IS a real tenant** —
+   `storeops.tenants` names it — so "the house default" and "that tenant's own row" are THE SAME ROW.
+   Five `commcalc.report_pull_map` rows carry `processor = 'vidapay'`; the carrier-vocabulary rows
+   `report_term:total` (mig 953) spell the vendor. A tenant that doubles as the house org cannot be
+   gated at all, because gating it would gate everybody.
+2. The gate that WOULD have hidden them exists and is right: `commcalc.connector_registry` (mig 1014,
+   §CORE-13 sibling) says that connector applies to one carrier, and the tenant declares another.
+   Every connector surface asks it. **`GET /commcalc/report-pull-map` did not** — connector-keyed
+   config rows listed with no connector predicate. That is the surface he was looking at.
+3. Underneath both: entitlement was **all-access by default** (`entitlements.effective_modules` —
+   "a tenant with no billing_plan … automatically receives EVERY module, including every module that
+   ships in the future"). Measured: all four tenants held all 15 modules enabled and
+   `storeops.billing_plan` was empty. A new tenant got everything.
+
+**THE CLASS (CLAUDE.md "A fix is a DESIGN fix"), named so nobody re-derives it: inheritance is not a
+decision.** Three mechanisms answered "is this on for this tenant" — module entitlement, the
+connector registry, the report-kind registry — and all three answered by INHERITING a house row, so
+nothing anywhere recorded that a human had decided. One truth table now does.
+
+| What | Where |
+|---|---|
+| **THE truth table + the posture vocabulary + the grid row and its fold** (PURE, no I/O in `decide`) | `backend/app/modules/core/feature_gate.py`. `decide(grant, posture, by_rule)`: a grant `False` DENIES whatever the rules say, a grant `True` ALLOWS whatever they say, no grant + `gated` DENIES (the owner's "from the get go"), no grant + `inherit` returns `by_rule` — byte-identical to the answer before the gate existed. **`inherit` is the degrade direction**: an unknown posture, an unapplied migration and an unreachable table all resolve to it, so the gate never starts refusing on its own |
+| **The tenant's POSTURE** (the one new fact) | `storeops.tenants.feature_gate_posture` (mig `1119`, **surfaced NOT applied**). Column default `'gated'`; every tenant alive at a FIXED cutoff backfilled to `'inherit'`, so nothing moves on apply and only a NEW tenant starts gated. CHECK pins the two words. ONE reader: `feature_gate.load_posture` |
+| **The GRANT home — reused, not created** | `commcalc.ui_label_override` scope `'cap'` (mig `068`), which has been THE super-admin override table since it shipped and already carried `connector:<key>` / `kind:<key>` / `carrier:` / `pos:`. `module:<key>` is one more namespace in it. Deliberately **not** `storeops.tenant_modules`, which `sync_tenant` DERIVES from the answer and would therefore overwrite the decision it was meant to record. ONE reader/writer: `feature_gate.load_grants` / `save_grant` (clearing DELETES the row — a cleared decision returns the thing to the posture, never stores its opposite) |
+| **The three callers, dereferencing it** | `core/entitlements.effective_modules` (layer 1 split out as `effective_modules_by_rule`, so the board shows the platform rule and the human decision separately) · `commcalc/report_kinds.visible_kinds` / `hidden_kinds` (the SHARED predicate, so connectors and report kinds cannot mean different things by one posture) · `commcalc/connector_registry.visible` / `hidden` / `scope` / `scope_context`, which passes the posture straight through to that predicate and keeps no rule of its own |
+| **The owner's leak, fixed at its one home** | `commcalc/report_pull.resolve_report_specs` now asks the registry (`withheld_processors` → `connector_registry.scope_for`) and is **scoped by default**; `connector_family` DEREFERENCES the registry's `key` + `aliases` where a literal pair of vendor slugs used to sit in code (RULE TWO). Every caller inherits it — the admin page, the sweep driver and the two other list endpoints. What is withheld is **REPORTED** (`GET /commcalc/report-pull-map` → `withheld[]`, rendered as "Not offered to this company"), never dropped silently |
+| **The surface** | `GET /api/v1/core/tenant-gates` (board, or one tenant's grid) · `PUT /core/tenant-gates/posture` · `PUT /core/tenant-gates/grant` — `backend/app/modules/core/tenant_gates_api.py`, I/O only, every endpoint on THE one gate `core.router._require_super_admin` and taking an EXPLICIT `org` rather than the middleware-rewritten `org_id` (it is cross-tenant by design, so a tenant admin switching their active org must not reach another tenant's gates). Page `frontend/src/app/(platform)/admin/tenant-gates/page.tsx`, NAV `platformOnly` under Super Admin Toolbox → Companies & Onboarding. The page decides nothing: it renders `allowed` / `basis` and posts toggles |
+| **Proofs + the lock** | `backend/harness_feature_gate.py` (48, DB-free: the truth table, the degrade direction, each of the three callers, EVERY TENANT both ways, the grid fold) · `backend/harness_feature_gate_lock.py` (47, static: one truth table, the three dereferences incl. the posture in the pinned call signature, one grant reader, one posture reader, the degrade direction, the leak's predicate, the dashboard deciding nothing, RULE TWO) · `backend/tests/integration/test_tenant_gates_endpoint.py` (12, real app + two tenants with different declared carriers: authority, a gated tenant's zero reported as gated, a grant reaching one tenant only, a cleared decision, and the report-pull leak end to end) |
+
+**What a gated tenant's empty surface says.** Not "you declared nothing" — that sends somebody to fix
+a declaration that was never the reason. `hidden_kinds` reports the gate's own basis words, and
+`connector_registry.scope` reports the axis `not_granted` (deliberately not spelled with the
+posture's own word: it is an axis, not a posture) so `not_applicable_copy` prints the sentence that
+names where it is switched on.
+
+**Not a fourth registry — the duplicate check, stated.** Searched: `core.module_catalog` (700) +
+`storeops.tenant_modules` (053) + `billing_plan` (REUSED as the entitlement mirror, not as the
+decision) · `ui_label_override` scope `cap` (068 — REUSED as the grant home) · `connector_registry`
+(1014) and `report_kind` (1010), whose predicate is CALLED · `connector_route_policy` (998 — a policy
+BELOW this question) · `core/verticals` (1020 — a fact about the module, feeding `by_rule`) ·
+`core/rep_surface` (§CORE-33 — a different subject: a person, not a tenant) ·
+`storeops.tenants.plan_status` / `package_key` (billing state, not reach). None held "a human decided
+this tenant may or may not have this".
+
+Cross-references: §CORE-13 (the connector registry whose predicate this extends by one axis) ·
+§19.18 (one fact, one home, dereferenced — never copied) · §COMMCALC-49.10 (a feature is not finished
+until it works for every tenant) · §CORE-33 (what a PERSON may reach — the sibling subject) · §35
+(the vertical, which decides what a KIND OF BUSINESS sees) · §39 (setup documents, the other
+registry keyed on report kinds) · §CORE-34/35 (the gate index that lists these two locks) · §19.36
+(the one customer sentence for "not switched on").

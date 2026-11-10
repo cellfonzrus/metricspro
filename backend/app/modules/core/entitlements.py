@@ -220,9 +220,13 @@ def require_module(key: str):
     return _guard
 
 
-def effective_modules(client, org_id: str) -> set:
-    """Modules a tenant is ENTITLED to. All-access unless an explicit pay-per-module plan restricts.
-    A billing_plan with modules NULL/empty (or no plan at all) = all-access = every module."""
+def effective_modules_by_rule(client, org_id: str) -> set:
+    """LAYER 1 — what the platform's own RULES say, with no super-admin decision applied: all-access
+    unless an explicit pay-per-module plan restricts, minus the modules outside the tenant's vertical.
+    Byte-identical to what `effective_modules` answered before the gate existed.
+
+    Split out (2026-11-10) so the gating dashboard can show an operator BOTH halves — what the rules
+    give this tenant and what a human decided on top — instead of re-deriving the first half."""
     catalog = load_module_catalog(client)
     try:
         rows = (client.schema("storeops").table("billing_plan")
@@ -245,10 +249,48 @@ def effective_modules(client, org_id: str) -> set:
     return mods
 
 
+def effective_modules(client, org_id: str) -> set:
+    """Modules a tenant is ENTITLED to — TWO layers, the second new (owner 2026-11-10, see
+    `core/feature_gate`):
+
+      1. `effective_modules_by_rule` — the platform's own rules (plan + vertical). What this
+         function answered before.
+      2. THE GATE — `feature_gate.decide` per module, with this tenant's POSTURE (mig 1119) and the
+         super admin's own GRANT rows. A tenant on the `inherit` posture with no grant row gets
+         layer 1 verbatim, so this is byte-identical for every tenant alive today; a `gated`
+         tenant — which is what a NEW tenant is — gets only what a super admin granted.
+
+    The gate is DEREFERENCED, never re-derived here: a second copy of that truth table is how one
+    mechanism ends up meaning something different from another (CLAUDE.md, "one fact, one home")."""
+    catalog = load_module_catalog(client)
+    mods = effective_modules_by_rule(client, org_id)
+    try:
+        from app.modules.core import feature_gate as _fg
+    except Exception:
+        return mods
+    posture = _fg.load_posture(client, org_id)
+    grants = _fg.load_grants(client, org_id, _fg.KIND_MODULE)
+    if not _fg.gated(posture) and not grants:
+        return mods
+    return {m for m in catalog
+            if _fg.allowed(grant=grants.get(m), posture=posture, by_rule=(m in mods))}
+
+
 def sync_tenant(client, org_id: str) -> dict:
     """Reconcile ONE tenant to its entitlement + seed tenant-safe default content. Idempotent and
     safe to re-run. Only stamps seed_version once the content seed actually succeeded, so a tenant
     keeps retrying on each /core/me until migration 076 has been run."""
+    # A tenant that has never been granted anything AND is in the gated posture is being provisioned
+    # for the first time: write the STARTER grants (feature_gate's policy) so somebody can sign in and
+    # set it up. Written ONCE — only when there is no decision of any kind on record — so a super
+    # admin who deliberately gated a starter module off is never overruled by the next sync.
+    try:
+        from app.modules.core import feature_gate as _fg
+        if _fg.gated(_fg.load_posture(client, org_id)) and not _fg.load_grants(client, org_id, _fg.KIND_MODULE):
+            for k, v in _fg.starter_grants(_fg.KIND_MODULE, all_modules(client)).items():
+                _fg.save_grant(client, org_id, _fg.KIND_MODULE, k, v)
+    except Exception:
+        pass
     mods = effective_modules(client, org_id)
     rows = [{"org_id": org_id, "module_key": m, "is_enabled": (m in mods)} for m in all_modules(client)]
     try:
